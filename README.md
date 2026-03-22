@@ -77,4 +77,4 @@ let connector = get("my_connector");
 
 ## License
 
-Apache 2.0
+BSD 3-Clause
