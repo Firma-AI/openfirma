@@ -10,7 +10,7 @@ Defines the core protocol messages for the Firma execution flow:
 
 - **ExecutionIntent**: action, resource, params
 - **ExecutionMetadata**: session_id, agent_id, timestamp, trace_id, budget_consumed, risk_score
-- **ExecutionEnvelope**: intent, capability (PASETO v4 / JWT RS256), metadata, provenance
+- **ExecutionEnvelope**: intent, capability (PASETO v4 / JWT RS256), metadata, provenance. **This is the core protocol unit that flows through the entire system.**
 - **ConnectorResponse**: status_code, body, headers, latency_micros, response_size_bytes
 
 ### Connector Plugin Kit (`firma_connector`)
@@ -36,9 +36,11 @@ A Rust crate providing:
                     └─────────────┘
 ```
 
-- **Authority**: Evaluates Cedar policies at issuance (pre-flight)
-- **Gate (Sidecar)**: Evaluates Cedar policies at runtime for each call
-- **Connector**: Protocol translation and technical constraints only
+- **Authority**: Evaluates Cedar policies at issuance (pre-flight). **Defines the permission perimeter** — the Gate can only operate within that boundary and can never extend it.
+- **Gate (Sidecar)**: Evaluates Cedar policies at runtime for each call. Operates in two stages:
+  - **Stage 1 (Capability Validation)**: Crypto verification + revocation check. No network calls.
+  - **Stage 2 (Cedar + Constraints)**: Full Cedar policy evaluation (CEE - Capability Enforced Execution).
+- **Connector**: Protocol translation and technical constraints only. **Hard boundary: No business/policy logic in connectors.** Business logic must remain in Cedar/Authority/Gate, otherwise the model breaks over time.
 
 ## Key Design Principles
 
