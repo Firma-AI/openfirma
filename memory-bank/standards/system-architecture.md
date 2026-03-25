@@ -25,7 +25,7 @@ The Sidecar runs as a co-located process alongside each AI agent. All agent outb
 │                                 │         │          │  │
 │                                 │  ┌──────▼───────┐  │  │
 │                                 │  │   Stage 1    │  │  │
-│                                 │  │  (Cap Valid)  │  │  │
+│                                 │  │  (Cap Valid) │  │  │
 │                                 │  └──────┬───────┘  │  │
 │                                 │         │          │  │
 │                                 │  ┌──────▼───────┐  │  │
@@ -54,14 +54,14 @@ The Sidecar runs as a co-located process alongside each AI agent. All agent outb
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Key invariant**: The Authority is contacted only during pre-flight (capability issuance). Stage 1 and Stage 2 are fully local — no network calls on the hot path.
+**Key invariant**: Mini Authority is contacted only during pre-flight (capability issuance). Stage 1 and Stage 2 are fully local — no network calls on the hot path.
 
 ## Component Architecture
 
 ### Workspace Crates
 
 | Crate | Type | Responsibility |
-|-------|------|----------------|
+| ------- | ------ | ---------------- |
 | `firma-sidecar` | Binary | HTTP proxy, enforcement pipeline, audit, credential injection |
 | `firma-authority` | Binary | Mini Authority — policy loading, capability issuance, gRPC streams |
 | `firma-core` | Library | Shared types, Execution Envelope, capability tokens, Cedar wrapper, error types |
@@ -70,12 +70,13 @@ The Sidecar runs as a co-located process alongside each AI agent. All agent outb
 ### Sidecar Internal Components
 
 | Component | Responsibility | Performance Target |
-|-----------|---------------|--------------------|
+| ----------- | --------------- | -------------------- |
 | **Interceptor** | Capture outbound traffic, parse into Execution Envelope | — |
 | **Stage 1** | Token parse, signature verify, expiry check, revocation bloom filter | < 1ms p95 |
 | **Stage 2 (CEE)** | Cedar context build, policy eval, budget/scope/threshold checks | < 200µs p95 |
 | **Credential Injector** | Inject secrets after ALLOW, before Connector dispatch | — |
 | **Connector** | Translate Envelope → target protocol, apply technical constraints | — |
+| **LLM Response Parser** | Parse provider-specific LLM responses (tool calls) into canonical Execution Envelopes for response-path evaluation | — |
 | **Audit Emitter** | Emit signed enforcement events to stdout/file sinks | Async, non-blocking |
 | **Policy Bundle Cache** | In-memory Cedar policy set, refreshed via WatchPolicyBundle stream | Hot-reload < 500ms |
 | **Revocation Cache** | Bloom filter + LRU cache, updated via WatchRevocations stream | Propagation < 1s p99 |
@@ -83,7 +84,7 @@ The Sidecar runs as a co-located process alongside each AI agent. All agent outb
 ### Mini Authority Internal Components
 
 | Component | Responsibility |
-|-----------|---------------|
+| ----------- | --------------- |
 | **Cedar Policy Loader** | Read `.cedar` files from disk at startup, watch for changes |
 | **IssueCapability RPC** | Evaluate issuance request against policies, return signed PASETO v4/JWT token |
 | **WatchPolicyBundle RPC** | Server-streaming: push current bundle on connect, then incremental updates |
@@ -119,7 +120,7 @@ Every outbound call passes through both phases sequentially in the same process:
 
 1. Build Cedar request context from envelope fields + local state + runtime signals
 2. Evaluate Cedar policies (deterministic: same context + same bundle = same result)
-3. Apply budget/scope checks via pre-computed context attributes
+3. Apply budget/scope/threshold checks via pre-computed context attributes (risk is a static attribute in V1, not dynamic scoring)
 4. Outcomes: ALLOW → Connector, DENY → structured response, ABORT → kill in-flight
 
 **Response-path evaluation** (for LLM tool calls):
@@ -134,7 +135,7 @@ Every outbound call passes through both phases sequentially in the same process:
 The core protocol unit. Immutable once created — enrichment produces derived structures.
 
 | Field | Contents |
-|-------|----------|
+| ------- | ---------- |
 | `intent` | Action type, target resource, action-specific parameters |
 | `capability` | Signed capability token (PASETO v4 or JWT RS256) |
 | `metadata` | Session ID, agent ID, timestamp, trace ID, budget consumed |
@@ -143,7 +144,7 @@ The core protocol unit. Immutable once created — enrichment produces derived s
 ## Failure Modes
 
 | Scenario | Default Behavior |
-|----------|-----------------|
+| ---------- | ----------------- |
 | Authority down at session start | Fail closed — DENY with AUTHORITY_UNAVAILABLE |
 | Policy bundle stream disconnected, TTL valid | Continue degraded — serve from cache, log warnings |
 | Policy bundle stream disconnected, TTL expired | Fail closed — deny all with POLICY_BUNDLE_STALE |
@@ -194,7 +195,7 @@ ISSUED → ACTIVE → IN USE → ACTIVE (reuse) → EXPIRED
 ## Performance Targets (V1)
 
 | Metric | Target |
-|--------|--------|
+| -------- | -------- |
 | Stage 1 latency | < 1ms p95 |
 | Stage 2 latency (CEE) | < 200µs p95 |
 | End-to-end Sidecar overhead | < 3ms p95 |

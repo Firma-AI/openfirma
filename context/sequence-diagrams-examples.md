@@ -236,8 +236,8 @@ sequenceDiagram
 
     Note right of SC: ── OUTBOUND (request path) ── Interceptor: parse HTTP POST + body → build Execution Envelope   intent: http_post   target: slack.com   path: /api/chat.postMessage   body.channel: #general   cap: tok_01  Stage 1: tok_01 valid ✓ Stage 2: Cedar eval   principal = Agent::weather-bot   action = Action::http_post   resource = Endpoint::slack.com/api/chat.postMessage   context.channel = "#general"   when clause requires: "#weather-alerts"   → DENY
 
-    SC->>SC: Audit emit: DENY (http_post: slack.com, reason: RESOURCE_SCOPE_VIOLATION, detail: channel #general not permitted, 0.2ms)
-    SC-->>A: 403 DENY {reason: RESOURCE_SCOPE_VIOLATION, detail: "channel #general not in allowed scope. Permitted: #weather-alerts"}
+    SC->>SC: Audit emit: DENY (http_post: slack.com, reason: SCOPE_VIOLATION, detail: channel #general not permitted, 0.2ms)
+    SC-->>A: 403 DENY {reason: SCOPE_VIOLATION, detail: "channel #general not in allowed scope. Permitted: #weather-alerts"}
 
     Note over S: Request never reaches Slack API
     Note over A: Tool code receives 403 error

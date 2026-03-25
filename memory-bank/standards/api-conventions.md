@@ -140,7 +140,8 @@ All Firma error responses follow a consistent JSON structure:
 | `TOKEN_REVOKED` | Stage 1 | Token found in revocation cache |
 | `POLICY_DENIED` | Stage 2 | Cedar evaluation returned DENY |
 | `BUDGET_EXCEEDED` | Stage 2 | Budget constraint violated |
-| `SCOPE_VIOLATION` | Stage 2 | Action/resource outside capability scope |
+| `SCOPE_VIOLATION` | Stage 2 | Action, resource, or context attribute outside capability scope |
+| `RISK_THRESHOLD` | Stage 2 | Static risk attribute exceeds configured threshold (V1: no dynamic scoring) |
 | `TOOL_NOT_IN_SCOPE` | Stage 2 | LLM-requested tool not in capability scope |
 | `MALFORMED_REQUEST` | Interceptor | Cannot parse request into Execution Envelope |
 | `AUTHORITY_UNAVAILABLE` | Pre-flight | Cannot reach Authority for capability issuance |
@@ -166,7 +167,7 @@ Audit events are structured, signed records emitted for every enforcement decisi
   "context_hash": "sha256 of Cedar eval context",
   "bundle_version": "v1.2.3",
   "timestamp_ns": 1711360800000000000,
-  "signature": "Ed25519 signature over all preceding fields"
+  "signature": "ECDSA signature over all preceding fields"
 }
 ```
 
