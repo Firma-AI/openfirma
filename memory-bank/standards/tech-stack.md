@@ -12,14 +12,13 @@ Performance-critical proxy with strict latency requirements (<1ms p95 Stage 1, <
 
 ## Framework
 
-Axum + Hyper + Tonic (Tower middleware ecosystem)
+Pingora + Tonic + Tower
 
-- **Axum** — HTTP routing, request/response interception via Tower middleware, forward proxy handling. Official http-proxy example supports CONNECT tunneling.
-- **Hyper** — Raw HTTP connection lifecycle for CONNECT/MITM upgrade path. Axum is built on Hyper, so they compose naturally.
-- **Tonic** — gRPC client for Authority communication (IssueCapability, WatchPolicyBundle, WatchRevocations streaming RPCs). Co-hosted with Axum on same Hyper server via content-type routing.
-- **Tower** — Middleware composition shared across Axum and Tonic. Request/response body inspection, audit emission, credential injection as Tower layers.
+- **Pingora** — HTTP proxy engine for `firma-sidecar`. `ProxyHttp` trait hooks map directly to enforcement phases: `request_filter()` for identity/provider detection, `upstream_request_filter()` for credential injection, `upstream_response_body_filter()` for LLM response parsing and Cedar evaluation. Chunk-oriented body filters are ideal for SSE event-level filtering (tool call events get Cedar eval; text events pass through at zero added latency). Synchronous filters are sufficient — Cedar eval is in-process, sub-millisecond. Proven at 40M+ req/s at Cloudflare.
+- **Tonic** — gRPC for Authority communication (IssueCapability, WatchPolicyBundle, WatchRevocations). Also the preferred path for any gRPC-based tool execution interception.
+- **Tower** — Composable `Service`/`Layer` pipeline shared across Pingora and Tonic for cross-cutting concerns (audit, credential injection).
 
-Why this stack: Linkerd2-proxy validates this architecture at scale. Pingora (Cloudflare) appears better aligned with streaming reverse-proxy workloads than with Firma's interception-heavy sidecar needs: body filters are chunk-oriented, full-response buffering is not a first-class abstraction, response body filters remain synchronous, and forward-proxy/CONNECT support is less mature. Actix-web lacks Tower/Tonic interop. Rama is too immature (pre-1.0).
+Why Pingora over Axum/Hyper: The sidecar's critical path is LLM response inspection and tool call extraction — a response-inspecting proxy workload. Pingora's `ProxyHttp` trait provides purpose-built lifecycle hooks for this, vs. Axum/Hyper which require more custom plumbing for proxy-style response body interception. Actix-web lacks Tower/Tonic interop. Rama is pre-1.0.
 
 ## TLS & Crypto
 
@@ -37,7 +36,7 @@ Why this stack: Linkerd2-proxy validates this architecture at scale. Pingora (Cl
 
 Tokio
 
-Shared runtime across Axum, Tonic, and Hyper. Each agent connection is a Tokio task. Enables concurrent handling of multiple agent sessions.
+Shared runtime across Pingora, Tonic, and Tower. Each agent connection is a Tokio task.
 
 ## Authentication
 
@@ -67,50 +66,9 @@ Distribution channels (prioritized):
 
 Cargo
 
-## Key Crate Dependencies
-
-```toml
-# Core HTTP proxy
-axum = "0.8"
-hyper = { version = "1", features = ["full"] }
-hyper-util = { version = "0.1", features = ["full"] }
-http-body-util = "0.1"
-
-# gRPC
-tonic = "0.13"
-prost = "0.13"
-
-# TLS interception (MITM)
-rustls = "0.23"
-rcgen = "0.13"
-tokio-rustls = "0.26"
-
-# Async runtime
-tokio = { version = "1", features = ["full"] }
-tower = "0.5"
-
-# Policy evaluation
-cedar-policy = "4"
-
-# Token validation
-rusty_paseto = "0.7"
-jsonwebtoken = "9"
-
-# Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
-
-# Audit signing
-p256 = "0.13"                        # ECDSA P-256 for audit event signatures
-
-# Utilities
-uuid = { version = "1", features = ["v7"] }
-```
-
 ## Decision Relationships
 
-- Framework choice (Axum/Hyper/Tonic) supports the compact two-binary OSS architecture without requiring separate gateway processes
+- Pingora for sidecar HTTP + Tonic for Authority gRPC supports the compact two-binary architecture without separate gateway processes
 - rustls + rcgen enables transparent HTTPS interception without OpenSSL dependency, simplifying static binary distribution
 - Cedar policy engine is the same engine used by AWS Verified Permissions — strong formal verification properties for security-critical eval
 - Tower middleware ecosystem is shared across all framework components, enabling consistent request/response interception patterns
