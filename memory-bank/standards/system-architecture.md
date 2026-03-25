@@ -119,7 +119,7 @@ Every outbound call passes through both phases sequentially in the same process:
 
 1. Build Cedar request context from envelope fields + local state + runtime signals
 2. Evaluate Cedar policies (deterministic: same context + same bundle = same result)
-3. Apply budget/scope/threshold checks via pre-computed context attributes
+3. Apply budget/scope checks via pre-computed context attributes
 4. Outcomes: ALLOW → Connector, DENY → structured response, ABORT → kill in-flight
 
 **Response-path evaluation** (for LLM tool calls):
@@ -151,6 +151,9 @@ The core protocol unit. Immutable once created — enrichment produces derived s
 | Audit file sink unavailable | Log error and fall back to stdout if configured; OSS V1 has no remote replay/WAL path |
 | Connector timeout | Abort in-flight — CONNECTOR_TIMEOUT to agent |
 | Credential injection failed | Fail closed — DENY, no call dispatched |
+| Sidecar restart | In-process state lost — budget counters reset, sessions cleared. Agents must re-issue capabilities. Known V1 limitation (no persistent state). |
+| Policy files malformed at startup | Fail fast — refuse to start with clear error. No partial policy loading. |
+| Config invalid at startup | Fail fast — refuse to start. Validate all config before binding ports or accepting connections. |
 
 **Fail-closed by default.** The Sidecar denies requests when uncertain rather than allowing potentially unauthorized actions.
 
@@ -199,6 +202,37 @@ ISSUED → ACTIVE → IN USE → ACTIVE (reuse) → EXPIRED
 | Throughput (single instance) | 5k–20k req/s |
 | Policy hot-reload | < 500ms |
 | Revocation propagation | < 1s p99 |
+
+## Operational Concerns
+
+### Health & Readiness
+
+Both `firma-sidecar` and `firma-authority` (Mini Authority) expose health and readiness endpoints:
+
+- **Liveness** (`/healthz`): Process is alive and responding
+- **Readiness** (`/readyz`): Ready to serve traffic — policy bundle loaded, Authority connection established (Sidecar), policy files parsed (Mini Authority)
+
+Required for Kubernetes liveness/readiness probes and useful for Docker health checks.
+
+### Graceful Shutdown
+
+On SIGTERM:
+
+1. Stop accepting new connections
+2. Drain in-flight requests (configurable timeout, default 30s)
+3. Close gRPC streams (WatchPolicyBundle, WatchRevocations)
+4. Flush pending audit events
+5. Exit
+
+### Metrics
+
+Prometheus-compatible metrics endpoint (`/metrics`) exposing:
+
+- Enforcement decision counters (ALLOW/DENY/ABORT by stage and reason)
+- Enforcement latency histograms (Stage 1, Stage 2, end-to-end)
+- Active sessions / connections
+- Policy bundle version and age
+- Revocation cache size
 
 ## V1 Scope Boundary
 

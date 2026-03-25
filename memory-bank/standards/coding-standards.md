@@ -56,46 +56,6 @@ Standard Rust conventions (enforced by compiler and Clippy):
 
 **Pattern**: Domain-driven with Rust workspace
 
-```text
-firma-oss/
-├── Cargo.toml                    # Workspace root
-├── crates/
-│   ├── firma-sidecar/            # Main sidecar binary
-│   │   ├── src/
-│   │   │   ├── main.rs
-│   │   │   ├── proxy/            # HTTP proxy + CONNECT/MITM
-│   │   │   ├── interceptor/      # Request/response interception
-│   │   │   ├── enforcement/      # Stage 1 + Stage 2 pipeline
-│   │   │   ├── audit/            # Audit event emission
-│   │   │   ├── credentials/      # Credential injection
-│   │   │   └── config.rs
-│   │   └── tests/                # Integration tests
-│   ├── firma-authority/          # Mini Authority binary
-│   │   ├── src/
-│   │   │   ├── main.rs
-│   │   │   ├── issuance/         # Capability issuance
-│   │   │   ├── policy/           # Policy bundle management
-│   │   │   ├── revocation/       # Revocation management
-│   │   │   └── config.rs
-│   │   └── tests/
-│   ├── firma-core/               # Shared library crate
-│   │   ├── src/
-│   │   │   ├── lib.rs
-│   │   │   ├── envelope/         # Execution Envelope types
-│   │   │   ├── capability/       # Capability token types + validation
-│   │   │   ├── cedar/            # Cedar policy evaluation wrapper
-│   │   │   ├── connector/        # Connector trait + built-in connectors
-│   │   │   └── error.rs          # Shared error types
-│   │   └── tests/
-│   └── firma-proto/              # Protobuf/gRPC definitions
-│       ├── proto/
-│       └── src/
-├── policies/                     # Example Cedar policies
-├── examples/                     # Example configurations and demos
-├── docker/                       # Dockerfiles
-└── docs/                         # Documentation
-```
-
 **Conventions**:
 
 - Each domain concept gets its own module directory

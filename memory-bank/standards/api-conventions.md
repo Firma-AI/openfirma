@@ -26,24 +26,7 @@ package firma.audit.v1;
 
 ### File Organization
 
-```text
-crates/firma-proto/proto/
-├── firma/
-│   ├── authority/
-│   │   └── v1/
-│   │       └── authority.proto      # Authority service definition
-│   ├── sidecar/
-│   │   └── v1/
-│   │       └── sidecar.proto        # Sidecar session management
-│   ├── audit/
-│   │   └── v1/
-│   │       └── audit.proto          # Audit event schema
-│   └── common/
-│       └── v1/
-│           ├── envelope.proto       # Execution Envelope
-│           ├── capability.proto     # Capability token schema
-│           └── types.proto          # Shared types (Decision, ReasonCode, etc.)
-```
+Proto files live under `crates/firma-proto/proto/` following the package hierarchy (`firma/{domain}/v1/*.proto`). Shared types (Execution Envelope, capability token schema, common enums) live under `firma/common/v1/`. Each service domain gets its own subdirectory.
 
 ### Naming Rules
 
@@ -119,8 +102,7 @@ The Sidecar is a transparent HTTP proxy. On enforcement denial, it returns struc
 | DENY (Stage 1) | 403 Forbidden | `{"firma_decision": "DENY", "reason": "TOKEN_EXPIRED", "detail": "..."}` |
 | DENY (Stage 2) | 403 Forbidden | `{"firma_decision": "DENY", "reason": "POLICY_DENIED", "detail": "...", "action": "...", "resource": "..."}` |
 | DENY (malformed) | 400 Bad Request | `{"firma_decision": "DENY", "reason": "MALFORMED_REQUEST", "detail": "..."}` |
-| ABORT | 503 Service Unavailable | `{"firma_decision": "ABORT", "reason": "...", "detail": "..."}` |
-| Credential injection failed | 502 Bad Gateway | `{"firma_decision": "DENY", "reason": "CREDENTIAL_INJECTION_FAILED"}` |
+| ABORT / Internal failure | 503 Service Unavailable | `{"firma_decision": "ABORT", "reason": "...", "detail": "..."}` |
 
 `AUTHORITY_UNAVAILABLE` is a pre-flight issuance failure, not a normal hot-path proxy denial. If capability issuance fails before a proxied request is sent, the initiating component surfaces that error outside the table above.
 
@@ -128,10 +110,12 @@ The Sidecar is a transparent HTTP proxy. On enforcement denial, it returns struc
 
 When the Sidecar denies a tool call detected in an LLM response:
 
-- Denied `function_call` is stripped from the response
-- A `function_call_output` with `FIRMA_DENY` marker is injected
+- The denied tool call is stripped from the response
+- A denial marker (`FIRMA_DENY`) is injected in the provider-appropriate format
 - Agent sees a normal-looking response (no Firma-specific handling needed)
 - LLM self-corrects on the next turn
+
+The rewriting logic is provider-agnostic: a pluggable LLM Response Parser normalizes provider-specific formats (e.g., OpenAI `function_call`, Anthropic `tool_use`) before enforcement, and re-serializes after.
 
 ## Error Response Format
 
@@ -157,7 +141,6 @@ All Firma error responses follow a consistent JSON structure:
 | `POLICY_DENIED` | Stage 2 | Cedar evaluation returned DENY |
 | `BUDGET_EXCEEDED` | Stage 2 | Budget constraint violated |
 | `SCOPE_VIOLATION` | Stage 2 | Action/resource outside capability scope |
-| `RISK_THRESHOLD` | Stage 2 | Risk attribute exceeds configured threshold |
 | `TOOL_NOT_IN_SCOPE` | Stage 2 | LLM-requested tool not in capability scope |
 | `MALFORMED_REQUEST` | Interceptor | Cannot parse request into Execution Envelope |
 | `AUTHORITY_UNAVAILABLE` | Pre-flight | Cannot reach Authority for capability issuance |
@@ -183,7 +166,7 @@ Audit events are structured, signed records emitted for every enforcement decisi
   "context_hash": "sha256 of Cedar eval context",
   "bundle_version": "v1.2.3",
   "timestamp_ns": 1711360800000000000,
-  "signature": "ECDSA signature over all preceding fields"
+  "signature": "Ed25519 signature over all preceding fields"
 }
 ```
 
