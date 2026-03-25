@@ -101,6 +101,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 
+# Audit signing
+p256 = "0.13"                        # ECDSA P-256 for audit event signatures
+
 # Utilities
 uuid = { version = "1", features = ["v7"] }
 ```
