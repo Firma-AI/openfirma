@@ -51,7 +51,7 @@ Layered adoption funnel (local process pair → Docker → Kubernetes):
 
 - **Tier 1 — Try it**: Run `firma-sidecar` and `firma-authority` as two local processes with file-based Cedar policies. Zero external dependencies. Target: under 5 minutes to first policy enforcement.
 - **Tier 2 — Evaluate it**: Docker images (GHCR + Docker Hub) with `docker-compose.yml` example showing sample AI agent + Sidecar + Mini Authority + mock tool endpoint.
-- **Tier 3 — Run it**: Helm chart with sidecar injection support for Kubernetes production deployments, with Authority deployed as a separate service.
+- **Tier 3 — Run it**: Helm chart with sidecar injection support for Kubernetes production deployments, with Mini Authority deployed as a separate service.
 
 Distribution channels (prioritized):
 
@@ -95,6 +95,14 @@ cedar-policy = "4"
 # Token validation
 rusty_paseto = "0.7"
 jsonwebtoken = "9"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Utilities
+uuid = { version = "1", features = ["v7"] }
 ```
 
 ## Decision Relationships
