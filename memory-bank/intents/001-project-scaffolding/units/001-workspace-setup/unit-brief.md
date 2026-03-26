@@ -2,11 +2,11 @@
 unit: 001-workspace-setup
 intent: 001-project-scaffolding
 phase: inception
-status: ready
+status: complete
 unit_type: backend
 default_bolt_type: simple-construction-bolt
-created: 2026-03-26T10:15:00Z
-updated: 2026-03-26T10:15:00Z
+created: 2026-03-26T10:15:00.000Z
+updated: 2026-03-26T10:15:00.000Z
 ---
 
 # Unit Brief: Workspace Setup

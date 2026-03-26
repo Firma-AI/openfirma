@@ -2,11 +2,11 @@
 id: 001-workspace-and-crates
 unit: 001-workspace-setup
 intent: 001-project-scaffolding
-status: draft
+status: complete
 priority: must
-created: 2026-03-26T10:15:00Z
+created: 2026-03-26T10:15:00.000Z
 assigned_bolt: null
-implemented: false
+implemented: true
 ---
 
 # Story: 001-workspace-and-crates
