@@ -1,16 +1,16 @@
 ---
 intent: 001-project-scaffolding
 phase: inception
-status: draft
+status: inception-complete
 created: 2026-03-26T10:00:00Z
-updated: 2026-03-26T10:00:00Z
+updated: 2026-03-26T10:15:00Z
 ---
 
 # Requirements: Project Scaffolding
 
 ## Intent Overview
 
-Set up the Cargo workspace with all four crates (`firma-core`, `firma-proto`, `firma-sidecar`, `firma-authority`), establish crate boundaries and dependency graph, configure CI, and provide stub implementations with key trait definitions and mock impls. This gives every subsequent intent a working project structure to build on.
+Set up the Cargo workspace with all four crates (`firma-core`, `firma-proto`, `firma-sidecar`, `firma-authority`), establish crate boundaries and dependency graph, configure CI, and provide a Makefile for local checks. Keep stubs minimal — this is the foundation for a team of 3 to start building on.
 
 ## Business Goals
 
@@ -19,7 +19,7 @@ Set up the Cargo workspace with all four crates (`firma-core`, `firma-proto`, `f
 | All 4 crates compile and link | `cargo build --workspace` succeeds | Must |
 | CI pipeline catches regressions from day one | CI runs fmt, clippy, test, build on every push | Must |
 | Crate boundaries match architecture | Dependency graph enforces no circular deps, sidecar/authority depend on core+proto | Must |
-| Key traits defined for downstream mocking | Storage traits (`PolicyStore`, `AuditSink`, `RevocationStore`, `CredentialStore`) exist with mock impls | Should |
+| Local check parity with CI | `make check` runs same checks as CI | Must |
 
 ---
 
@@ -43,40 +43,35 @@ Set up the Cargo workspace with all four crates (`firma-core`, `firma-proto`, `f
 - **Acceptance Criteria**: `cargo run --bin firma-sidecar` and `cargo run --bin firma-authority` both start and exit cleanly
 - **Priority**: Must
 
-### FR-4: Core Trait Definitions
-
-- **Description**: Define key storage/abstraction traits in `firma-core`: `PolicyStore`, `AuditSink`, `RevocationStore`, `CredentialStore` with minimal method signatures
-- **Acceptance Criteria**: Traits compile; each has at least one mock/stub implementation in a `mock` module
-- **Priority**: Should
-
-### FR-5: Clippy and Formatting Configuration
+### FR-4: Clippy and Formatting Configuration
 
 - **Description**: Configure workspace-level Clippy lints per coding standards (`pedantic`, `deny(unwrap_used)`, `deny(expect_used)`, `deny(panic)`, `deny(unsafe_code)`)
 - **Acceptance Criteria**: `cargo clippy --workspace -- -D warnings` passes; `cargo fmt --check` passes
 - **Priority**: Must
 
-### FR-6: CI Pipeline
+### FR-5: CI Pipeline
 
 - **Description**: GitHub Actions workflow that runs `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --workspace`, and `cargo build --workspace` on push and PR
 - **Acceptance Criteria**: CI runs on push to main and on PRs; all checks pass on the scaffolded codebase
 - **Priority**: Must
 
+### FR-6: Makefile for Local Checks
+
+- **Description**: A Makefile at workspace root with targets mirroring CI: `make fmt`, `make lint`, `make test`, `make build`, and a `make check` that runs all of them in sequence
+- **Acceptance Criteria**: `make check` runs all checks locally and passes; targets match what CI runs
+- **Priority**: Must
+
 ### FR-7: Proto Stub
 
-- **Description**: `firma-proto` crate with placeholder module structure ready for Protobuf definitions in intent 003
-- **Acceptance Criteria**: Crate compiles; has a stub module that re-exports placeholder types
-- **Priority**: Should
+- **Description**: `firma-proto` crate with a minimal `lib.rs` stub. No `prost`/`tonic` build deps, no Protobuf files. Real proto setup deferred to intent 003.
+- **Acceptance Criteria**: Crate compiles as part of workspace; no external build dependencies beyond what's in `firma-core`
+- **Priority**: Must
 
 ---
 
 ## Non-Functional Requirements
 
-### Build Performance
-
-| Requirement | Metric | Target |
-|-------------|--------|--------|
-| Clean build time | Wall clock | < 60s on CI |
-| Incremental build | Wall clock | < 10s locally |
+None for this intent. Build performance and code quality standards are covered by project-wide standards.
 
 ---
 
@@ -88,13 +83,15 @@ Set up the Cargo workspace with all four crates (`firma-core`, `firma-proto`, `f
 
 **Intent-specific constraints**:
 
-- Workspace must use latest Rust
+- Workspace must use Rust 2021 edition
 - Binary crates use `tokio` runtime with `#[tokio::main]`
 - No external service dependencies — scaffolding must compile and test offline
+- Keep stubs minimal — avoid over-engineering interfaces that will be designed in intent 002/003
 
 ### Business Constraints
 
-- This is the foundation for all subsequent intents — correctness of crate boundaries is more important than feature completeness
+- Team of 3 developers will be working from this foundation
+- Correctness of crate boundaries is more important than feature completeness
 
 ---
 
@@ -104,12 +101,3 @@ Set up the Cargo workspace with all four crates (`firma-core`, `firma-proto`, `f
 |------------|-----------------|------------|
 | Four-crate split matches final architecture | Refactoring crate boundaries later is expensive | Validated against system-architecture.md and component reference |
 | Rust stable toolchain is sufficient | Nightly features would complicate CI | Avoid nightly-only features |
-
----
-
-## Open Questions
-
-| Question | Owner | Due Date | Resolution |
-|----------|-------|----------|------------|
-| Should `firma-proto` include prost/tonic build deps now or defer to intent 003? | Team | Before construction | Pending |
-| Should workspace include a `tests/e2e/` directory stub? | Team | Before construction | Pending |
