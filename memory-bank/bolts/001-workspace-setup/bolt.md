@@ -3,16 +3,16 @@ id: 001-workspace-setup
 unit: 001-workspace-setup
 intent: 001-project-scaffolding
 type: simple-construction-bolt
-status: planned
+status: in-progress
 stories:
   - 001-workspace-and-crates
   - 002-clippy-and-fmt
   - 003-ci-pipeline
   - 004-makefile
 created: 2026-03-26T10:15:00Z
-started: null
+started: 2026-03-26T10:30:00Z
 completed: null
-current_stage: null
+current_stage: plan
 stages_completed: []
 
 requires_bolts: []
