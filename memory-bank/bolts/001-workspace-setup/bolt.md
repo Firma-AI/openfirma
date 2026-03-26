@@ -3,26 +3,27 @@ id: 001-workspace-setup
 unit: 001-workspace-setup
 intent: 001-project-scaffolding
 type: simple-construction-bolt
-status: in-progress
+status: complete
 stories:
   - 001-workspace-and-crates
   - 002-clippy-and-fmt
   - 003-ci-pipeline
   - 004-makefile
-created: 2026-03-26T10:15:00Z
-started: 2026-03-26T10:30:00Z
-completed: null
-current_stage: implement
+created: 2026-03-26T10:15:00.000Z
+started: 2026-03-26T10:30:00.000Z
+completed: "2026-03-26T08:41:42Z"
+current_stage: null
 stages_completed:
   - name: plan
-    completed: 2026-03-26T10:35:00Z
+    completed: 2026-03-26T10:35:00.000Z
     artifact: implementation-plan.md
-
+  - name: implement
+    completed: 2026-03-26T10:45:00.000Z
+    artifact: implementation-walkthrough.md
 requires_bolts: []
 enables_bolts: []
 requires_units: []
 blocks: false
-
 complexity:
   avg_complexity: 1
   avg_uncertainty: 1
