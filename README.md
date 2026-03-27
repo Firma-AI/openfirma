@@ -8,23 +8,23 @@ Firma OSS is the open-source release of the Firma security architecture for AI a
                     ┌──────────────────────────────────────────────┐
                     │  Agent Host / Container                      │
                     │                                              │
-                    │  ┌──────────┐  HTTP_PROXY   ┌─────────────┐ │
-                    │  │ AI Agent │ ────────────── │   Sidecar   │ │
-                    │  └──────────┘               │ (Gate)      │ │
-                    │                             │             │ │
-                    │                             │ ┌─────────┐ │ │
-                    │                             │ │ Stage 1 │ │ │──── External
-                    │                             │ │ crypto  │ │ │     System
-                    │                             │ ├─────────┤ │ │
-                    │                             │ │ Stage 2 │ │ │
-                    │                             │ │ Cedar   │ │ │
-                    │                             │ └─────────┘ │ │
-                    │                             └──────┬──────┘ │
-                    │                                    │ gRPC   │
-                    │                             ┌──────┴──────┐ │
-                    │                             │  Authority  │ │
-                    │                             │ (pre-flight)│ │
-                    │                             └─────────────┘ │
+                    │  ┌──────────┐  HTTP_PROXY   ┌─────────────┐  │
+                    │  │ AI Agent │ ──────────────│   Sidecar   │  │
+                    │  └──────────┘               │ (Gate)      │  │
+                    │                             │             │  │
+                    │                             │ ┌─────────┐ │  │
+                    │                             │ │ Stage 1 │ │  │──── External
+                    │                             │ │ crypto  │ │  │     System
+                    │                             │ ├─────────┤ │  │
+                    │                             │ │ Stage 2 │ │  │
+                    │                             │ │ Cedar   │ │  │
+                    │                             │ └─────────┘ │  │
+                    │                             └──────┬──────┘  │
+                    │                                    │ gRPC    │
+                    │                             ┌──────┴──────┐  │
+                    │                             │  Authority  │  │
+                    │                             │ (pre-flight)│  │
+                    │                             └─────────────┘  │
                     └──────────────────────────────────────────────┘
 ```
 
