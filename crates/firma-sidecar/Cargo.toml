@@ -1,0 +1,17 @@
+[package]
+name = "firma-sidecar"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "HTTP proxy sidecar with enforcement pipeline for Firma OSS"
+
+[dependencies]
+firma-core = { path = "../firma-core" }
+firma-proto = { path = "../firma-proto" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true
