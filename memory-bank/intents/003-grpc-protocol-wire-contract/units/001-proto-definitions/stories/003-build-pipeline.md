@@ -3,7 +3,7 @@ story: 003-build-pipeline
 unit: 001-proto-definitions
 intent: 003-grpc-protocol-wire-contract
 priority: must
-status: planned
+status: complete
 created: 2026-03-27T09:00:00.000Z
 ---
 
@@ -15,11 +15,11 @@ Set up the `build.rs` and `Cargo.toml` configuration to compile `.proto` files i
 
 ## Acceptance Criteria
 
-- [ ] `build.rs` compiles both `authority.proto` and `types.proto`
-- [ ] `Cargo.toml` has prost and tonic as dependencies, tonic-build as build-dependency
-- [ ] `lib.rs` re-exports generated code via `tonic::include_proto!`
-- [ ] Generated code passes clippy (with appropriate allows for generated code)
-- [ ] No `firma-core` dependency in `firma-proto` (dependency goes the other way)
+- [x] `build.rs` compiles both `authority.proto` and `types.proto`
+- [x] `Cargo.toml` has prost and tonic as dependencies, tonic-build as build-dependency
+- [x] `lib.rs` re-exports generated code via `tonic::include_proto!`
+- [x] Generated code passes clippy (with appropriate allows for generated code)
+- [x] No `firma-core` dependency in `firma-proto` (dependency goes the other way)
 
 ## Technical Notes
 

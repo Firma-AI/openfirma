@@ -3,7 +3,7 @@ story: 001-authority-service-proto
 unit: 001-proto-definitions
 intent: 003-grpc-protocol-wire-contract
 priority: must
-status: planned
+status: complete
 created: 2026-03-27T09:00:00.000Z
 ---
 
@@ -15,11 +15,11 @@ Define the `AuthorityService` gRPC service in `authority.proto` with three RPCs 
 
 ## Acceptance Criteria
 
-- [ ] `IssueCapability` unary RPC defined with request/response messages
-- [ ] `WatchPolicyBundle` server-streaming RPC defined
-- [ ] `WatchRevocations` server-streaming RPC defined
-- [ ] Proto comments document the permission perimeter model: Authority defines the ceiling, Gate enforces within it
-- [ ] Proto comments document that Authority is contacted only at pre-flight, never on the hot path
+- [x] `IssueCapability` unary RPC defined with request/response messages
+- [x] `WatchPolicyBundle` server-streaming RPC defined
+- [x] `WatchRevocations` server-streaming RPC defined
+- [x] Proto comments document the permission perimeter model: Authority defines the ceiling, Gate enforces within it
+- [x] Proto comments document that Authority is contacted only at pre-flight, never on the hot path
 
 ## Technical Notes
 
