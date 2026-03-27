@@ -2,7 +2,7 @@
 unit: 001-proto-definitions
 intent: 003-grpc-protocol-wire-contract
 phase: inception
-status: planned
+status: complete
 unit_type: backend
 default_bolt_type: simple-construction-bolt
 created: 2026-03-27T09:00:00.000Z
@@ -84,10 +84,10 @@ Define the Protobuf service and message types that form the Firma wire contract,
 
 | Story ID | Title | Priority | Status |
 |----------|-------|----------|--------|
-| 001-authority-service-proto | AuthorityService RPC definitions | Must | Planned |
-| 002-execution-envelope-proto | ExecutionEnvelope and shared messages | Must | Planned |
-| 003-build-pipeline | prost/tonic build pipeline | Must | Planned |
-| 004-workspace-integration | Workspace integration and CI validation | Must | Planned |
+| 001-authority-service-proto | AuthorityService RPC definitions | Must | Complete |
+| 002-execution-envelope-proto | ExecutionEnvelope and shared messages | Must | Complete |
+| 003-build-pipeline | prost/tonic build pipeline | Must | Complete |
+| 004-workspace-integration | Workspace integration and CI validation | Must | Complete |
 
 ---
 
@@ -129,15 +129,21 @@ Define the Protobuf service and message types that form the Firma wire contract,
 
 ### Functional
 
-- [ ] `cargo build -p firma-proto` generates code from proto files
-- [ ] `cargo build --workspace` succeeds
-- [ ] `cargo clippy --workspace -- -D warnings` passes
-- [ ] `cargo fmt --check` passes
-- [ ] `cargo test --workspace` passes
-- [ ] Generated `AuthorityServiceClient` and `AuthorityServiceServer` traits available
-- [ ] `ExecutionEnvelope`, `CapabilityToken`, `PolicyBundle` types importable
+- [x] `cargo build -p firma-proto` generates code from proto files
+- [x] `cargo build --workspace` succeeds
+- [x] `cargo clippy --workspace -- -D warnings` passes
+- [x] `cargo fmt --check` passes
+- [x] `cargo test --workspace` passes
+- [x] Generated `AuthorityServiceClient` and `AuthorityServiceServer` traits available
+- [x] `ExecutionEnvelope`, `CapabilityToken`, `PolicyBundle` types importable
 
 ### Quality
 
-- [ ] All proto messages and RPCs have doc comments
-- [ ] Security model invariants documented in proto comments (Stage 1/2, permission perimeter)
+- [x] All proto messages and RPCs have doc comments
+- [x] Security model invariants documented in proto comments (Stage 1/2, permission perimeter)
+
+---
+
+## Notes
+
+Extends initial proto work with AuthorityService RPCs. Security model review feedback integrated: Stage 1/2 distinction, permission perimeter semantics, ExecutionEnvelope as core protocol unit, connector boundary rule.

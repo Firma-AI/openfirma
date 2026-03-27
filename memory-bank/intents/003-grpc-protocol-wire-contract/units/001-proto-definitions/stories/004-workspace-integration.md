@@ -3,7 +3,7 @@ story: 004-workspace-integration
 unit: 001-proto-definitions
 intent: 003-grpc-protocol-wire-contract
 priority: must
-status: planned
+status: complete
 created: 2026-03-27T09:00:00.000Z
 ---
 
@@ -15,12 +15,12 @@ Ensure the updated `firma-proto` crate integrates cleanly with the existing work
 
 ## Acceptance Criteria
 
-- [ ] `cargo build --workspace` succeeds
-- [ ] `cargo clippy --workspace -- -D warnings` passes
-- [ ] `cargo fmt --check` passes
-- [ ] `cargo test --workspace` passes
-- [ ] `make check` passes
-- [ ] Generated types are importable from `firma_proto` by downstream crates
+- [x] `cargo build --workspace` succeeds
+- [x] `cargo clippy --workspace -- -D warnings` passes
+- [x] `cargo fmt --check` passes
+- [x] `cargo test --workspace` passes
+- [x] `make check` passes
+- [x] Generated types are importable from `firma_proto` by downstream crates
 
 ## Technical Notes
 

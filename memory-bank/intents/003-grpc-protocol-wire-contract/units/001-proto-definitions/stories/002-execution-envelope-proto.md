@@ -3,7 +3,7 @@ story: 002-execution-envelope-proto
 unit: 001-proto-definitions
 intent: 003-grpc-protocol-wire-contract
 priority: must
-status: planned
+status: complete
 created: 2026-03-27T09:00:00.000Z
 ---
 
@@ -15,14 +15,14 @@ Define the core protocol messages in `types.proto`. Extends the initial `executi
 
 ## Acceptance Criteria
 
-- [ ] `ExecutionEnvelope` message defined as the core protocol unit (documented as such)
-- [ ] `ExecutionIntent`, `ExecutionMetadata` sub-messages defined
-- [ ] `CapabilityToken` message with format enum (PASETO_V4 / JWT_RS256)
-- [ ] `PolicyBundle` message (version, policies, schema, ttl)
-- [ ] `RevocationEvent` message (token_id, reason, timestamp)
-- [ ] `EnforcementDecision` enum (ALLOW, DENY, ABORT)
-- [ ] `ConnectorResponse` message
-- [ ] Proto comments capture: ExecutionEnvelope is immutable once created, provenance is V1 placeholder
+- [x] `ExecutionEnvelope` message defined as the core protocol unit (documented as such)
+- [x] `ExecutionIntent`, `ExecutionMetadata` sub-messages defined
+- [x] `CapabilityToken` message with format enum (PASETO_V4 / JWT_RS256)
+- [x] `PolicyBundle` message (version, policies, schema, ttl)
+- [x] `RevocationEvent` message (token_id, reason, timestamp)
+- [x] `EnforcementDecision` enum (ALLOW, DENY, ABORT)
+- [x] `ConnectorResponse` message
+- [x] Proto comments capture: ExecutionEnvelope is immutable once created, provenance is V1 placeholder
 
 ## Technical Notes
 
