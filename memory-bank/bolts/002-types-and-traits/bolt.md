@@ -3,28 +3,31 @@ id: 002-types-and-traits
 unit: 001-types-and-traits
 intent: 002-core-types-shared-library
 type: ddd-construction-bolt
-status: in-progress
-started: 2026-03-28T10:00:00Z
-current_stage: test
+status: complete
+started: 2026-03-28T10:00:00.000Z
+current_stage: null
 stories:
   - 001-capability-token-types
   - 002-execution-types
   - 003-decision-and-errors
   - 004-trait-interfaces
-created: 2026-03-26T14:10:00Z
+created: 2026-03-26T14:10:00.000Z
 stages_completed:
   - name: domain-model
-    completed: 2026-03-28T10:10:00Z
+    completed: 2026-03-28T10:10:00.000Z
     artifact: ddd-01-domain-model.md
   - name: technical-design
-    completed: 2026-03-28T10:20:00Z
+    completed: 2026-03-28T10:20:00.000Z
     artifact: ddd-02-technical-design.md
   - name: adr-analysis
-    completed: 2026-03-28T10:25:00Z
+    completed: 2026-03-28T10:25:00.000Z
     artifact: null
   - name: implement
-    completed: 2026-03-28T10:35:00Z
+    completed: 2026-03-28T10:35:00.000Z
     artifact: source code
+  - name: test
+    completed: 2026-03-28T10:40:00.000Z
+    artifact: ddd-03-test-report.md
 requires_bolts:
   - 001-workspace-setup
 enables_bolts:
@@ -36,6 +39,7 @@ complexity:
   avg_uncertainty: 1
   max_dependencies: 1
   testing_scope: 1
+completed: "2026-03-28T10:26:46Z"
 ---
 
 # Bolt: 002-types-and-traits
