@@ -5,7 +5,7 @@ intent: 002-core-types-shared-library
 type: ddd-construction-bolt
 status: in-progress
 started: 2026-03-28T10:45:00Z
-current_stage: technical-design
+current_stage: adr-analysis
 stories:
   - 001-paseto-signer
   - 002-paseto-verifier
@@ -15,6 +15,9 @@ stages_completed:
   - name: domain-model
     completed: 2026-03-28T10:55:00Z
     artifact: ddd-01-domain-model.md
+  - name: technical-design
+    completed: 2026-03-28T11:05:00Z
+    artifact: ddd-02-technical-design.md
 requires_bolts:
   - 002-types-and-traits
 enables_bolts: []
