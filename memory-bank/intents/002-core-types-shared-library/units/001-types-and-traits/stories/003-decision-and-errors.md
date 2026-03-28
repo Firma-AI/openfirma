@@ -20,7 +20,7 @@ implemented: false
 ## Acceptance Criteria
 
 - [ ] **Given** the `Decision` enum, **When** I construct Allow, Deny, or Abort variants, **Then** they compile and can be matched exhaustively
-- [ ] **Given** a `Deny` decision, **When** I access its `DenyReason`, **Then** I get one of the 13 reason codes from the domain design decisions
+- [ ] **Given** a `Deny` decision, **When** I access its `DenyReason`, **Then** I get one of the 11 reason codes (BudgetExceeded and RiskThreshold deferred per PR #5 review)
 - [ ] **Given** any `DenyReason` variant, **When** I call `Display` on it, **Then** it returns a human-readable message
 - [ ] **Given** a `TokenError`, **When** I construct any variant (ParseFailure, SignatureInvalid, Expired, Revoked, Malformed), **Then** it includes structured context fields (e.g., token_id)
 - [ ] **Given** an `EvaluationError`, **When** I construct any variant (PolicyLoadFailure, ContextBuildFailure, InternalError), **Then** it includes a descriptive message
@@ -28,7 +28,7 @@ implemented: false
 
 ## Technical Notes
 
-- `DenyReason` variants: TokenInvalid, TokenExpired, TokenRevoked, PolicyDenied, BudgetExceeded, ScopeViolation, RiskThreshold, ToolNotInScope, MalformedRequest, AuthorityUnavailable, PolicyBundleStale, CredentialInjectionFailed, ConnectorTimeout
+- `DenyReason` variants: TokenInvalid, TokenExpired, TokenRevoked, PolicyDenied, ScopeViolation, ToolNotInScope, MalformedRequest, AuthorityUnavailable, PolicyBundleStale, CredentialInjectionFailed, ConnectorTimeout. Deferred: BudgetExceeded, RiskThreshold (per PR #5 review — add back when budget/risk mechanisms exist)
 - Error types follow coding standards pattern: `thiserror` derive, structured context fields, `?` propagation
 - `TokenError` is used by `TokenVerifier::verify` return type
 - `EvaluationError` is used by `PolicyEvaluator::evaluate` return type

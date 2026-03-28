@@ -56,6 +56,11 @@ status: complete
 | 2026-03-26 | Cedar entity mappings deferred to 005/006 | Domain fields already in Envelope/Context; Cedar-specific conversion needs cedar-policy dep | Yes |
 | 2026-03-26 | Error types scoped to firma-core only | Each crate defines its own errors per coding standards; firma-core errors cover tokens and evaluation | Yes |
 | 2026-03-26 | Shared types only for Cedar wrapper (Option B) | firma-core provides ExecutionContext and Decision types; actual Cedar eval logic in 005/006 | Yes |
+| 2026-03-28 | Typed action params (HttpParams/DbQueryParams/ToolUseParams) instead of generic map | PR #5 review: generic Struct allows injection attacks. Typed oneof enforces schema at proto level | Yes |
+| 2026-03-28 | Remove budget_consumed from ExecutionMetadata | PR #5 review: unclear how to compute/track. Defer until mechanism is designed | Yes |
+| 2026-03-28 | Remove risk_score from ExecutionMetadata | PR #5 review: defer until anomaly detection model exists | Yes |
+| 2026-03-28 | Remove provenance field from ExecutionEnvelope | PR #5 review: V1 placeholder with no implementation, confusing. Add back when designed | Yes |
+| 2026-03-28 | Defer BudgetExceeded and RiskThreshold deny reasons | Corresponding fields removed; deny reasons re-added when fields return | Yes |
 
 ## Scope Changes
 

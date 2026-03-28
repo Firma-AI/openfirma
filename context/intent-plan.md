@@ -31,6 +31,9 @@ Keep mocks thin — just enough to prove wiring works. The value is in the feedb
 Decisions made during inception that are explicitly out of scope for V1:
 
 - **Capability Library in Go/Python/TypeScript**: V1 is Rust-only (`firma-core`). Agents interact via HTTP_PROXY — no agent-side SDK needed. Agent-side token inspection is a post-V1 nice-to-have.
+- **budget_consumed / risk_score fields**: Removed from ExecutionMetadata/Context. Add back when computation/tracking mechanisms are designed.
+- **provenance field**: Removed from ExecutionEnvelope. V1 placeholder with no implementation — add back when hash chain is designed.
+- **BudgetExceeded / RiskThreshold deny reasons**: Deferred — corresponding data fields not yet present.
 
 ## Key Principles
 
