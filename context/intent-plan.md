@@ -26,6 +26,12 @@ Keep mocks thin — just enough to prove wiring works. The value is in the feedb
 | 006 | Sidecar proxy & enforcement | Real `firma-sidecar` — Pingora HTTP proxy, Stage 1 (token parse, sig verify, revocation bloom filter), Stage 2 / CEE (context build, Cedar eval, budget/scope/threshold), generic HTTP connector, credential injector, audit emitter | 002, 003 |
 | 007 | Local dev mode | `firma dev up` orchestration — wires Mini Authority (:50051) + Sidecar (:8080) + Example Agent, Cedar hot-reload, audit to stdout, end-to-end demo in under 2 minutes | 004, 005, 006 |
 
+## V1 Scope Exclusions
+
+Decisions made during inception that are explicitly out of scope for V1:
+
+- **Capability Library in Go/Python/TypeScript**: V1 is Rust-only (`firma-core`). Agents interact via HTTP_PROXY — no agent-side SDK needed. Agent-side token inspection is a post-V1 nice-to-have.
+
 ## Key Principles
 
 - **No sandbox required**: Firma's security model is proxy-based (HTTP_PROXY), not sandbox-based. Agents don't need containerization for Firma to work. The sandbox/container layer is orthogonal — provides runtime containment, not policy enforcement.
@@ -42,7 +48,7 @@ How intents map to components from `firma_oss_component_reference.md`:
 |----------------------------|-------------------|
 | Section 3 — Mini Authority (policy loader, IssueCapability, WatchPolicyBundle, WatchRevocations, token gen) | 005 |
 | Section 4 — Firma Sidecar (interceptor, execution envelope, Stage 1, Stage 2/CEE, local state, audit emitter, credential injector) | 006 |
-| Section 5 — Capability Library (token validation, parse/verify/sign, PASETO/JWT, expiry/scope checks) | 002 (Rust core), 004 (agent-side helpers) |
+| Section 5 — Capability Library (token validation, parse/verify/sign, PASETO/JWT, expiry/scope checks) | 002 (Rust core only — Go/Python/TS SDKs out of V1 scope) |
 | Section 6 — Example Agents (Python, TypeScript) | 004 |
 | Section 7 — Connector/Adapter Layer (generic HTTP connector) | 006 |
 | Section 9 — Cedar Policies/Schema/Examples | 004 (base schema + examples), 005 (runtime loading) |
