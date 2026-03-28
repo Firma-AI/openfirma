@@ -2,11 +2,11 @@
 id: 001-paseto-signer
 unit: 002-paseto-v4
 intent: 002-core-types-shared-library
-status: draft
+status: complete
 priority: must
-created: 2026-03-26T14:10:00Z
+created: 2026-03-26T14:10:00.000Z
 assigned_bolt: null
-implemented: false
+implemented: true
 ---
 
 # Story: 001-paseto-signer

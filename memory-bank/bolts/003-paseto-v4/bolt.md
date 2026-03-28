@@ -3,21 +3,30 @@ id: 003-paseto-v4
 unit: 002-paseto-v4
 intent: 002-core-types-shared-library
 type: ddd-construction-bolt
-status: in-progress
-started: 2026-03-28T10:45:00Z
-current_stage: adr-analysis
+status: complete
+started: 2026-03-28T10:45:00.000Z
+current_stage: null
 stories:
   - 001-paseto-signer
   - 002-paseto-verifier
   - 003-token-round-trip-tests
-created: 2026-03-26T14:10:00Z
+created: 2026-03-26T14:10:00.000Z
 stages_completed:
   - name: domain-model
-    completed: 2026-03-28T10:55:00Z
+    completed: 2026-03-28T10:55:00.000Z
     artifact: ddd-01-domain-model.md
   - name: technical-design
-    completed: 2026-03-28T11:05:00Z
+    completed: 2026-03-28T11:05:00.000Z
     artifact: ddd-02-technical-design.md
+  - name: adr-analysis
+    completed: 2026-03-28T11:15:00.000Z
+    artifact: adr-001-pasetors-over-rusty-paseto.md
+  - name: implement
+    completed: 2026-03-28T11:25:00.000Z
+    artifact: source code
+  - name: test
+    completed: 2026-03-28T11:30:00.000Z
+    artifact: ddd-03-test-report.md
 requires_bolts:
   - 002-types-and-traits
 enables_bolts: []
@@ -28,6 +37,7 @@ complexity:
   avg_uncertainty: 2
   max_dependencies: 2
   testing_scope: 2
+completed: "2026-03-28T10:50:22Z"
 ---
 
 # Bolt: 003-paseto-v4

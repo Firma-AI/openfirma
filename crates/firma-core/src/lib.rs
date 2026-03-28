@@ -3,6 +3,7 @@
 mod decision;
 mod envelope;
 mod error;
+mod paseto;
 mod token;
 mod traits;
 
@@ -12,6 +13,7 @@ pub use envelope::{
     RequestMetadata, ToolUseParams,
 };
 pub use error::{EvaluationError, TokenError};
+pub use paseto::{PasetoV4Signer, PasetoV4Verifier};
 pub use token::{CapabilityClaims, TokenState};
 pub use traits::{
     PolicyBundle, PolicyBundleStore, PolicyEvaluator, RevocationStore, TokenSigner, TokenVerifier,

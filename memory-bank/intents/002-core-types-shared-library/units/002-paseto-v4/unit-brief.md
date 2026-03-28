@@ -2,9 +2,9 @@
 unit: 002-paseto-v4
 intent: 002-core-types-shared-library
 phase: inception
-status: ready
-created: 2026-03-26T14:10:00Z
-updated: 2026-03-26T14:10:00Z
+status: complete
+created: 2026-03-26T14:10:00.000Z
+updated: 2026-03-26T14:10:00.000Z
 ---
 
 # Unit Brief: PASETO v4 Implementation
