@@ -2,7 +2,6 @@ syntax = "proto3";
 
 package firma.v1;
 
-import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
 // =============================================================================
@@ -24,14 +23,46 @@ import "google/protobuf/timestamp.proto";
 // The Gate (Sidecar) enforces within that perimeter but cannot extend it.
 // =============================================================================
 
+// HttpParams carries parameters for an HTTP action.
+message HttpParams {
+  // HTTP method (GET, POST, PUT, DELETE, PATCH).
+  string method = 1;
+  // Request headers — allowlisted keys only.
+  map<string, string> headers = 2;
+  // Request body as raw bytes (empty for GET/DELETE).
+  bytes body = 3;
+  // Query parameters.
+  map<string, string> query = 4;
+}
+
+// DbQueryParams carries parameters for a database query action.
+message DbQueryParams {
+  // Named query identifier — no raw SQL allowed.
+  string query_name = 1;
+  // Bound parameters — scalar values only, keyed by placeholder name.
+  map<string, string> bindings = 2;
+}
+
+// ToolUseParams carries parameters for an agent tool invocation.
+message ToolUseParams {
+  // Registered tool name.
+  string tool_name = 1;
+  // Tool input — scalar values only, schema validated against tool registry.
+  map<string, string> input = 2;
+}
+
 // ExecutionIntent describes the action the agent wants to perform.
+// The oneof params field enforces that exactly one action kind is present,
+// with schema validation at the proto level — no arbitrary key-value blobs.
 message ExecutionIntent {
-  // Action type (e.g., "http_get", "db_query", "tool_use").
-  string action = 1;
   // Target resource identifier (e.g., URL, table name, tool name).
-  string resource = 2;
-  // Action-specific parameters as a flexible key-value structure.
-  google.protobuf.Struct params = 3;
+  string resource = 1;
+  // Typed action parameters — only one action kind is valid per intent.
+  oneof params {
+    HttpParams    http = 2;
+    DbQueryParams db   = 3;
+    ToolUseParams tool = 4;
+  }
 }
 
 // ExecutionMetadata carries session and runtime context for an execution.
