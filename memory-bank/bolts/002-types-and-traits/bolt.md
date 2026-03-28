@@ -3,13 +3,19 @@ id: 002-types-and-traits
 unit: 001-types-and-traits
 intent: 002-core-types-shared-library
 type: ddd-construction-bolt
-status: planned
+status: in-progress
+started: 2026-03-28T10:00:00Z
+current_stage: technical-design
 stories:
   - 001-capability-token-types
   - 002-execution-types
   - 003-decision-and-errors
   - 004-trait-interfaces
 created: 2026-03-26T14:10:00Z
+stages_completed:
+  - name: domain-model
+    completed: 2026-03-28T10:10:00Z
+    artifact: ddd-01-domain-model.md
 requires_bolts:
   - 001-workspace-setup
 enables_bolts:
