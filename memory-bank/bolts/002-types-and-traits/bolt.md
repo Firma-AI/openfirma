@@ -5,7 +5,7 @@ intent: 002-core-types-shared-library
 type: ddd-construction-bolt
 status: in-progress
 started: 2026-03-28T10:00:00Z
-current_stage: technical-design
+current_stage: adr-analysis
 stories:
   - 001-capability-token-types
   - 002-execution-types
@@ -16,6 +16,9 @@ stages_completed:
   - name: domain-model
     completed: 2026-03-28T10:10:00Z
     artifact: ddd-01-domain-model.md
+  - name: technical-design
+    completed: 2026-03-28T10:20:00Z
+    artifact: ddd-02-technical-design.md
 requires_bolts:
   - 001-workspace-setup
 enables_bolts:
