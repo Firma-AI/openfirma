@@ -61,6 +61,7 @@ status: complete
 | 2026-03-28 | Remove risk_score from ExecutionMetadata | PR #5 review: defer until anomaly detection model exists | Yes |
 | 2026-03-28 | Remove provenance field from ExecutionEnvelope | PR #5 review: V1 placeholder with no implementation, confusing. Add back when designed | Yes |
 | 2026-03-28 | Defer BudgetExceeded and RiskThreshold deny reasons | Corresponding fields removed; deny reasons re-added when fields return | Yes |
+| 2026-03-28 | firma-core depends on firma-proto (not the reverse) | Typed action params (HttpParams etc) are proto-generated wire types; firma-core builds domain logic on top | Yes |
 
 ## Scope Changes
 

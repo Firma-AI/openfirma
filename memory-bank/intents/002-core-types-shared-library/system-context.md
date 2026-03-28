@@ -9,15 +9,15 @@ updated: 2026-03-26T14:10:00Z
 
 ## System Overview
 
-`firma-core` is the shared library crate at the bottom of the Firma workspace dependency graph. It defines the types, traits, and crypto primitives that both `firma-sidecar` and `firma-authority` depend on. It has no runtime behavior of its own — it is pure types, traits, and computation (token signing/verification).
+`firma-core` is the shared library crate that defines the domain types, traits, and crypto primitives that both `firma-sidecar` and `firma-authority` depend on. It depends on `firma-proto` for the wire types (typed action params, proto-generated structs) and adds domain logic, trait interfaces, and PASETO v4 crypto on top. It has no runtime behavior of its own — it is pure types, traits, and computation (token signing/verification).
 
 ## Context Diagram
 
 ```mermaid
 graph TD
     subgraph "Firma Workspace"
-        CORE["firma-core (this intent)"]
-        PROTO["firma-proto (intent 003)"]
+        PROTO["firma-proto (intent 003) — wire types"]
+        CORE["firma-core (this intent) — domain types, traits, crypto"]
         SIDECAR["firma-sidecar (intent 006)"]
         AUTHORITY["firma-authority (intent 005)"]
     end
@@ -29,17 +29,17 @@ graph TD
         CHRONO["chrono"]
     end
 
+    CORE --> PROTO
     SIDECAR --> CORE
-    SIDECAR --> PROTO
     AUTHORITY --> CORE
-    AUTHORITY --> PROTO
-    PROTO --> CORE
 
     CORE --> PASETO
     CORE --> THISERROR
     CORE --> SERDE
     CORE --> CHRONO
 ```
+
+**Dependency direction**: `firma-proto` is the foundation (pure proto-generated types, no workspace deps). `firma-core` depends on `firma-proto` and adds domain logic, traits, and crypto. Sidecar and Authority depend on `firma-core` (which transitively includes proto types).
 
 ## External Integrations
 
