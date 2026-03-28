@@ -3,12 +3,15 @@ id: 003-paseto-v4
 unit: 002-paseto-v4
 intent: 002-core-types-shared-library
 type: ddd-construction-bolt
-status: planned
+status: in-progress
+started: 2026-03-28T10:45:00Z
+current_stage: domain-model
 stories:
   - 001-paseto-signer
   - 002-paseto-verifier
   - 003-token-round-trip-tests
 created: 2026-03-26T14:10:00Z
+stages_completed: []
 requires_bolts:
   - 002-types-and-traits
 enables_bolts: []
