@@ -32,6 +32,7 @@ last_updated: 2026-03-28T10:45:00Z
 | Date | Bolt | Event | Details |
 |------|------|-------|---------|
 | 2026-03-28T10:45:00Z | 003-paseto-v4 | started | Stage 1: Domain Model |
+| 2026-03-28T10:55:00Z | 003-paseto-v4 | stage-complete | Domain Model → Technical Design |
 
 ## Execution Summary
 

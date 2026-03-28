@@ -5,13 +5,16 @@ intent: 002-core-types-shared-library
 type: ddd-construction-bolt
 status: in-progress
 started: 2026-03-28T10:45:00Z
-current_stage: domain-model
+current_stage: technical-design
 stories:
   - 001-paseto-signer
   - 002-paseto-verifier
   - 003-token-round-trip-tests
 created: 2026-03-26T14:10:00Z
-stages_completed: []
+stages_completed:
+  - name: domain-model
+    completed: 2026-03-28T10:55:00Z
+    artifact: ddd-01-domain-model.md
 requires_bolts:
   - 002-types-and-traits
 enables_bolts: []
