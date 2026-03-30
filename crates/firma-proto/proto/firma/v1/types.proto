@@ -1,0 +1,194 @@
+syntax = "proto3";
+
+package firma.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// =============================================================================
+// Firma Wire Contract — Shared Message Types
+// =============================================================================
+//
+// These messages define the core protocol types used across the Firma system.
+// Proto files are the single source of truth for the wire contract.
+//
+// Security Model (two-stage enforcement):
+//
+//   Stage 1 — Capability Validation (< 1ms, no network):
+//     Token parse, signature verify, expiry check, revocation bloom filter.
+//
+//   Stage 2 — Constraint / Policy Enforcement (CEE, < 200µs):
+//     Context build, Cedar eval, budget/scope/threshold checks.
+//
+// The Authority defines the permission perimeter at issuance time.
+// The Gate (Sidecar) enforces within that perimeter but cannot extend it.
+// =============================================================================
+
+// HttpParams carries parameters for an HTTP action.
+message HttpParams {
+  // HTTP method (GET, POST, PUT, DELETE, PATCH).
+  string method = 1;
+  // Request headers — allowlisted keys only.
+  map<string, string> headers = 2;
+  // Request body as raw bytes (empty for GET/DELETE).
+  bytes body = 3;
+  // Query parameters.
+  map<string, string> query = 4;
+}
+
+// DbQueryParams carries parameters for a database query action.
+message DbQueryParams {
+  // Named query identifier — no raw SQL allowed.
+  string query_name = 1;
+  // Bound parameters — scalar values only, keyed by placeholder name.
+  map<string, string> bindings = 2;
+}
+
+// ToolUseParams carries parameters for an agent tool invocation.
+message ToolUseParams {
+  // Registered tool name.
+  string tool_name = 1;
+  // Tool input — scalar values only, schema validated against tool registry.
+  map<string, string> input = 2;
+}
+
+// ExecutionIntent describes the action the agent wants to perform.
+// The oneof params field enforces that exactly one action kind is present,
+// with schema validation at the proto level — no arbitrary key-value blobs.
+message ExecutionIntent {
+  // Target resource identifier (e.g., URL, table name, tool name).
+  string resource = 1;
+  // Typed action parameters — only one action kind is valid per intent.
+  oneof params {
+    HttpParams    http = 2;
+    DbQueryParams db   = 3;
+    ToolUseParams tool = 4;
+  }
+}
+
+// ExecutionMetadata carries session and runtime context for an execution.
+message ExecutionMetadata {
+  string session_id = 1;
+  string agent_id = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  optional string trace_id = 4;
+  // Cumulative budget consumed in this session (e.g., API cost in USD).
+  double budget_consumed = 5;
+  // Static or pre-computed risk attribute. V1 does not compute risk dynamically;
+  // this is a numeric value injected by the agent runtime (or defaulting to 0)
+  // and checked against a configured threshold in Cedar.
+  optional double risk_score = 6;
+}
+
+// ExecutionEnvelope is the core protocol unit of the Firma system.
+//
+// Every outbound call from an agent is represented as a distinct
+// ExecutionEnvelope, evaluated independently by the Sidecar. Each request
+// is evaluated, enforced, and audited as an ExecutionEnvelope.
+//
+// Treated as immutable once created — any enrichment (e.g., credential
+// injection) produces a derived structure, not a mutation.
+message ExecutionEnvelope {
+  // The action the agent intends to perform.
+  ExecutionIntent intent = 1;
+  // Capability token string (PASETO v4 or JWT RS256) as issued by the Authority.
+  // The Gate validates this token at Stage 1 but does not modify it.
+  string capability = 2;
+  // Session and runtime metadata.
+  ExecutionMetadata metadata = 3;
+  // Provenance: reserved, nullable field.
+  // V1 does not implement a hash chain. Callers must treat this as optional.
+  // Intended as a forward-compatible field for anchoring the envelope to
+  // the session's prior calls in future versions.
+  optional string provenance = 4;
+}
+
+// TokenFormat identifies the encoding format of a capability token.
+enum TokenFormat {
+  TOKEN_FORMAT_UNSPECIFIED = 0;
+  // PASETO v4 — preferred format (Ed25519 or XChaCha20-Poly1305).
+  TOKEN_FORMAT_PASETO_V4 = 1;
+  // JWT RS256 — fallback for environments with existing JWT infrastructure.
+  TOKEN_FORMAT_JWT_RS256 = 2;
+}
+
+// CapabilityToken represents a signed, scoped, time-bounded permission
+// granted to an agent for a specific action class.
+//
+// Issued by the Authority before execution begins. Defines the permission
+// perimeter: the Sidecar enforces constraints within it but cannot extend
+// or override it.
+message CapabilityToken {
+  // Unique identifier for tracking and revocation lookups.
+  string token_id = 1;
+  // Identity of the agent this token was issued to.
+  string agent_id = 2;
+  // Set of actions this token authorizes (e.g., ["http_get", "db_read"]).
+  repeated string action_set = 3;
+  // Resource scope this token covers (e.g., "api.example.com/*").
+  string resource_scope = 4;
+  // When this token was issued.
+  google.protobuf.Timestamp issued_at = 5;
+  // When this token expires. After expiry, the agent must call
+  // IssueCapability again to obtain a replacement.
+  google.protobuf.Timestamp expiry = 6;
+  // Integrity hash of the Cedar context used at issuance.
+  string context_hash = 7;
+  // The raw signed token bytes.
+  bytes signature = 8;
+  // Token encoding format.
+  TokenFormat format = 9;
+}
+
+// EnforcementDecision is the outcome of Sidecar evaluation.
+enum EnforcementDecision {
+  ENFORCEMENT_DECISION_UNSPECIFIED = 0;
+  // ALLOW — envelope forwarded to Connector.
+  ENFORCEMENT_DECISION_ALLOW = 1;
+  // DENY — call blocked, structured response returned to agent.
+  ENFORCEMENT_DECISION_DENY = 2;
+  // ABORT — mid-flight kill sent to agent and Connector.
+  ENFORCEMENT_DECISION_ABORT = 3;
+}
+
+// PolicyBundle is the set of Cedar policy files distributed from
+// Authority to Sidecar. Stored as human-readable text; compiled into
+// an in-memory policy set at load time. Treated as immutable during
+// evaluation — Stage 2 evaluates against a stable snapshot.
+message PolicyBundle {
+  // Bundle version identifier for debugging and audit correlation.
+  string version = 1;
+  // Serialized Cedar policy files.
+  bytes policies = 2;
+  // Serialized Cedar entity schema.
+  bytes entity_schema = 3;
+  // Time-to-live in seconds. If TTL expires without refresh,
+  // the Sidecar enters fail-closed mode.
+  int32 ttl_seconds = 4;
+}
+
+// RevocationEvent signals the invalidation of a previously issued
+// capability token. Propagated from Authority to Sidecar via streaming.
+// Enforced locally in Stage 1 with no network calls at decision time.
+message RevocationEvent {
+  // The token_id being revoked.
+  string token_id = 1;
+  // Reason for revocation.
+  string reason = 2;
+  // When the revocation was issued.
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// ConnectorResponse wraps the response from an external system after
+// the Connector translates and forwards the ExecutionEnvelope.
+//
+// Connectors apply technical constraints only (rate limits, schema
+// validation, protocol translation). Business logic and authorization
+// must remain in Cedar / Authority / Gate. A connector that becomes a
+// second policy engine breaks auditability and system guarantees.
+message ConnectorResponse {
+  int32 status_code = 1;
+  bytes body = 2;
+  map<string, string> headers = 3;
+  int64 latency_micros = 4;
+  int64 response_size_bytes = 5;
+}
