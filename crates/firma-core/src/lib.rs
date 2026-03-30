@@ -9,7 +9,7 @@ mod traits;
 
 pub use decision::{Decision, DenyReason};
 pub use envelope::{
-    DbQueryParams, ExecutionContext, ExecutionEnvelope, ExecutionIntent, HttpParams,
+    DbQueryParams, ExecutionContext, ExecutionEnvelope, ExecutionIntent, HttpMethod, HttpParams,
     RequestMetadata, ToolUseParams,
 };
 pub use error::{EvaluationError, TokenError};

@@ -30,11 +30,26 @@ pub enum ExecutionIntent {
     ToolUse(ToolUseParams),
 }
 
+/// HTTP methods that can appear in an outbound request.
+///
+/// Restricts the method to known values so that invalid strings
+/// (e.g., `"WHATEVER"`) are rejected at the type level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HttpMethod {
+    GET,
+    POST,
+    PUT,
+    DELETE,
+    PATCH,
+    HEAD,
+    OPTIONS,
+}
+
 /// Parameters for an outbound HTTP request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpParams {
-    /// HTTP method (e.g., "GET", "POST").
-    pub method: String,
+    /// HTTP method.
+    pub method: HttpMethod,
     /// Target URL.
     pub url: String,
     /// HTTP headers.
@@ -42,10 +57,16 @@ pub struct HttpParams {
 }
 
 /// Parameters for a database query.
+///
+/// Uses a named query plus bindings instead of a raw SQL statement,
+/// aligning with the intent-003 proto definition and preventing
+/// raw SQL injection at the type level.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbQueryParams {
-    /// SQL or query statement.
-    pub statement: String,
+    /// Registered query name (looked up in a query registry).
+    pub query_name: String,
+    /// Positional bind parameters for the query.
+    pub bindings: Vec<String>,
     /// Target database name.
     pub db_name: String,
     /// Hint for policy: is this a read-only query?
@@ -53,12 +74,16 @@ pub struct DbQueryParams {
 }
 
 /// Parameters for a tool/function invocation.
+///
+/// Input is a flat `String → String` map (scalar values only),
+/// schema-validated against the tool registry. Aligns with the
+/// intent-003 proto definition and keeps the core→proto conversion trivial.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolUseParams {
     /// Name of the tool to invoke.
     pub tool_name: String,
-    /// Tool-specific input payload. Schema validated downstream.
-    pub input: serde_json::Value,
+    /// Scalar tool inputs, validated against the tool registry schema.
+    pub input: HashMap<String, String>,
 }
 
 /// Correlation and audit metadata attached to every execution envelope.
@@ -105,7 +130,7 @@ mod tests {
     fn sample_http_envelope() -> ExecutionEnvelope {
         ExecutionEnvelope {
             intent: ExecutionIntent::Http(HttpParams {
-                method: "GET".to_string(),
+                method: HttpMethod::GET,
                 url: "https://api.example.com/data".to_string(),
                 headers: HashMap::from([("Authorization".to_string(), "Bearer tok".to_string())]),
             }),
@@ -129,7 +154,7 @@ mod tests {
     #[test]
     fn test_execution_intent_http() {
         let intent = ExecutionIntent::Http(HttpParams {
-            method: "POST".to_string(),
+            method: HttpMethod::POST,
             url: "https://api.example.com".to_string(),
             headers: HashMap::new(),
         });
@@ -139,7 +164,8 @@ mod tests {
     #[test]
     fn test_execution_intent_db_query() {
         let intent = ExecutionIntent::DbQuery(DbQueryParams {
-            statement: "SELECT 1".to_string(),
+            query_name: "get_user_by_id".to_string(),
+            bindings: vec!["42".to_string()],
             db_name: "main".to_string(),
             read_only: true,
         });
@@ -150,7 +176,7 @@ mod tests {
     fn test_execution_intent_tool_use() {
         let intent = ExecutionIntent::ToolUse(ToolUseParams {
             tool_name: "calculator".to_string(),
-            input: serde_json::json!({"expression": "2+2"}),
+            input: HashMap::from([("expression".to_string(), "2+2".to_string())]),
         });
         assert!(matches!(intent, ExecutionIntent::ToolUse(_)));
     }
