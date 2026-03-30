@@ -27,7 +27,7 @@ Pingora + Tonic + Tower
 ## Policy & Token
 
 - **cedar-policy** — Cedar policy evaluation engine
-- **rusty_paseto** — PASETO v4 token validation (preferred token format)
+- **pasetors** — PASETO v4 token signing and verification (preferred token format; see ADR-001)
 - **jsonwebtoken** — JWT RS256 validation (fallback token format)
 
 ## Async Runtime

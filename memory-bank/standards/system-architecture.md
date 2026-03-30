@@ -37,5 +37,15 @@ The Sidecar runs as a co-located process alongside each AI agent. All agent outb
 | ------- | ------ | ---------------- |
 | `firma-sidecar` | Binary | HTTP proxy, enforcement pipeline, audit, credential injection |
 | `firma-authority` | Binary | Mini Authority — policy loading, capability issuance, gRPC streams |
-| `firma-core` | Library | Shared types, capability tokens, Cedar wrapper, error types |
-| `firma-proto` | Library | Protobuf/gRPC service definitions, generated code |
+| `firma-core` | Library | Domain types, traits, capability tokens (PASETO v4), error types. Depends on `firma-proto`. |
+| `firma-proto` | Library | Protobuf/gRPC service definitions, generated wire types. No workspace deps (foundation crate). |
+
+### Crate Dependency Graph
+
+```text
+firma-proto  (foundation — wire types, no workspace deps)
+    ↑
+firma-core   (domain types, traits, crypto — depends on proto)
+    ↑
+firma-sidecar / firma-authority  (binaries — depend on core)
+```
