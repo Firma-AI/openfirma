@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 /// The core protocol unit wrapping each outbound agent call.
 ///
 /// Built by the Sidecar when intercepting an agent's request. Contains the
-/// typed action intent, the raw capability token, and request metadata.
+/// typed action intent, the raw capability token, metadata, and provenance.
+/// Immutable once created — any enrichment produces a derived structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionEnvelope {
     /// Typed action parameters describing what the agent wants to do.
@@ -15,6 +16,10 @@ pub struct ExecutionEnvelope {
     pub capability: String,
     /// Session and runtime metadata for correlation and audit.
     pub metadata: ExecutionMetadata,
+    /// Schema-reserved provenance field. V1 does not populate this.
+    /// Intended for anchoring the envelope to the session's prior calls
+    /// in future versions (causal chain, replay, attestation).
+    pub provenance: Option<String>,
 }
 
 /// Typed description of the action an agent intends to perform.
@@ -149,6 +154,7 @@ mod tests {
                 budget_consumed: 0.0,
                 risk_score: None,
             },
+            provenance: None,
         }
     }
 
