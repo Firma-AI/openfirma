@@ -13,8 +13,8 @@ pub struct ExecutionEnvelope {
     pub intent: ExecutionIntent,
     /// Raw signed token string. Parsing happens in Stage 1 of the enforcement pipeline.
     pub capability: String,
-    /// Session and request metadata for correlation and audit.
-    pub metadata: RequestMetadata,
+    /// Session and runtime metadata for correlation and audit.
+    pub metadata: ExecutionMetadata,
 }
 
 /// Typed description of the action an agent intends to perform.
@@ -86,9 +86,9 @@ pub struct ToolUseParams {
     pub input: HashMap<String, String>,
 }
 
-/// Correlation and audit metadata attached to every execution envelope.
+/// Session and runtime context attached to every execution envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RequestMetadata {
+pub struct ExecutionMetadata {
     /// Session this request belongs to.
     pub session_id: String,
     /// Agent that initiated this request.
@@ -97,6 +97,12 @@ pub struct RequestMetadata {
     pub timestamp: DateTime<Utc>,
     /// Optional distributed tracing correlation ID.
     pub trace_id: Option<String>,
+    /// Cumulative budget consumed in this session (e.g., API cost in USD).
+    /// Schema-reserved; populated when budget tracking is implemented.
+    pub budget_consumed: f64,
+    /// Static or pre-computed risk attribute. Defaults to None.
+    /// Schema-reserved; populated when risk scoring is implemented.
+    pub risk_score: Option<f64>,
 }
 
 /// Flattened attribute set consumed by policy evaluation (Stage 2).
@@ -135,11 +141,13 @@ mod tests {
                 headers: HashMap::from([("Authorization".to_string(), "Bearer tok".to_string())]),
             }),
             capability: "v4.public.eyJ0...".to_string(),
-            metadata: RequestMetadata {
+            metadata: ExecutionMetadata {
                 session_id: "sess_001".to_string(),
                 agent_id: "agent_abc".to_string(),
                 timestamp: Utc::now(),
                 trace_id: Some("trace_123".to_string()),
+                budget_consumed: 0.0,
+                risk_score: None,
             },
         }
     }
@@ -182,12 +190,14 @@ mod tests {
     }
 
     #[test]
-    fn test_request_metadata_optional_trace_id() {
-        let meta = RequestMetadata {
+    fn test_execution_metadata_optional_trace_id() {
+        let meta = ExecutionMetadata {
             session_id: "sess_001".to_string(),
             agent_id: "agent_abc".to_string(),
             timestamp: Utc::now(),
             trace_id: None,
+            budget_consumed: 0.0,
+            risk_score: None,
         };
         assert!(meta.trace_id.is_none());
     }

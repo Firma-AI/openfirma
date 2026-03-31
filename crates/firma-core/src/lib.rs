@@ -9,8 +9,8 @@ mod traits;
 
 pub use decision::{Decision, DenyReason};
 pub use envelope::{
-    DbQueryParams, ExecutionContext, ExecutionEnvelope, ExecutionIntent, HttpMethod, HttpParams,
-    RequestMetadata, ToolUseParams,
+    DbQueryParams, ExecutionContext, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata,
+    HttpMethod, HttpParams, ToolUseParams,
 };
 pub use error::{EvaluationError, TokenError};
 pub use paseto::{PasetoV4Signer, PasetoV4Verifier};
