@@ -87,8 +87,8 @@ pub struct HttpParams {
 pub struct DbQueryParams {
     /// Registered query name (looked up in a query registry).
     pub query_name: String,
-    /// Positional bind parameters for the query.
-    pub bindings: Vec<String>,
+    /// Bound parameters — scalar values only, keyed by placeholder name.
+    pub bindings: HashMap<String, String>,
     /// Target database name.
     pub db_name: String,
     /// Hint for policy: is this a read-only query?
@@ -206,7 +206,7 @@ mod tests {
             resource: "main".to_string(),
             params: ActionParams::DbQuery(DbQueryParams {
                 query_name: "get_user_by_id".to_string(),
-                bindings: vec!["42".to_string()],
+                bindings: HashMap::from([("id".to_string(), "42".to_string())]),
                 db_name: "main".to_string(),
                 read_only: true,
             }),
