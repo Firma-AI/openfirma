@@ -24,9 +24,21 @@ pub struct ExecutionEnvelope {
 
 /// Typed description of the action an agent intends to perform.
 ///
+/// Mirrors the proto `ExecutionIntent` message: a top-level `resource`
+/// identifier plus a `oneof params` for the typed action kind.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionIntent {
+    /// Target resource identifier (e.g., URL, table name, tool name).
+    pub resource: String,
+    /// Typed action parameters — exactly one action kind per intent.
+    pub params: ActionParams,
+}
+
+/// Typed action parameters (maps to the proto `oneof params`).
+///
 /// Uses an enum with typed variants to prevent injection via untyped maps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ExecutionIntent {
+pub enum ActionParams {
     /// Outbound HTTP request.
     Http(HttpParams),
     /// Database query.
@@ -51,12 +63,13 @@ pub enum HttpMethod {
 }
 
 /// Parameters for an outbound HTTP request.
+///
+/// The target URL lives on `ExecutionIntent.resource`, not here —
+/// matching the proto where `HttpParams` carries method, headers, body, and query.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpParams {
     /// HTTP method.
     pub method: HttpMethod,
-    /// Target URL.
-    pub url: String,
     /// HTTP headers — allowlisted keys only.
     pub headers: HashMap<String, String>,
     /// Request body as raw bytes (empty for GET/DELETE).
@@ -144,13 +157,15 @@ mod tests {
 
     fn sample_http_envelope() -> ExecutionEnvelope {
         ExecutionEnvelope {
-            intent: ExecutionIntent::Http(HttpParams {
-                method: HttpMethod::GET,
-                url: "https://api.example.com/data".to_string(),
-                headers: HashMap::from([("Authorization".to_string(), "Bearer tok".to_string())]),
-                body: None,
-                query: HashMap::new(),
-            }),
+            intent: ExecutionIntent {
+                resource: "https://api.example.com/data".to_string(),
+                params: ActionParams::Http(HttpParams {
+                    method: HttpMethod::GET,
+                    headers: HashMap::from([("Authorization".to_string(), "Bearer tok".to_string())]),
+                    body: None,
+                    query: HashMap::new(),
+                }),
+            },
             capability: "v4.public.eyJ0...".to_string(),
             metadata: ExecutionMetadata {
                 session_id: "sess_001".to_string(),
@@ -173,34 +188,42 @@ mod tests {
 
     #[test]
     fn test_execution_intent_http() {
-        let intent = ExecutionIntent::Http(HttpParams {
-            method: HttpMethod::POST,
-            url: "https://api.example.com".to_string(),
-            headers: HashMap::new(),
-            body: None,
-            query: HashMap::new(),
-        });
-        assert!(matches!(intent, ExecutionIntent::Http(_)));
+        let intent = ExecutionIntent {
+            resource: "https://api.example.com".to_string(),
+            params: ActionParams::Http(HttpParams {
+                method: HttpMethod::POST,
+                headers: HashMap::new(),
+                body: None,
+                query: HashMap::new(),
+            }),
+        };
+        assert!(matches!(intent.params, ActionParams::Http(_)));
     }
 
     #[test]
     fn test_execution_intent_db_query() {
-        let intent = ExecutionIntent::DbQuery(DbQueryParams {
-            query_name: "get_user_by_id".to_string(),
-            bindings: vec!["42".to_string()],
-            db_name: "main".to_string(),
-            read_only: true,
-        });
-        assert!(matches!(intent, ExecutionIntent::DbQuery(_)));
+        let intent = ExecutionIntent {
+            resource: "main".to_string(),
+            params: ActionParams::DbQuery(DbQueryParams {
+                query_name: "get_user_by_id".to_string(),
+                bindings: vec!["42".to_string()],
+                db_name: "main".to_string(),
+                read_only: true,
+            }),
+        };
+        assert!(matches!(intent.params, ActionParams::DbQuery(_)));
     }
 
     #[test]
     fn test_execution_intent_tool_use() {
-        let intent = ExecutionIntent::ToolUse(ToolUseParams {
-            tool_name: "calculator".to_string(),
-            input: HashMap::from([("expression".to_string(), "2+2".to_string())]),
-        });
-        assert!(matches!(intent, ExecutionIntent::ToolUse(_)));
+        let intent = ExecutionIntent {
+            resource: "calculator".to_string(),
+            params: ActionParams::ToolUse(ToolUseParams {
+                tool_name: "calculator".to_string(),
+                input: HashMap::from([("expression".to_string(), "2+2".to_string())]),
+            }),
+        };
+        assert!(matches!(intent.params, ActionParams::ToolUse(_)));
     }
 
     #[test]
