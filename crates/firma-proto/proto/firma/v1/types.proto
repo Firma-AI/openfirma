@@ -20,7 +20,7 @@ import "google/protobuf/timestamp.proto";
 //     Context build, Cedar eval, budget/scope/threshold checks.
 //
 // The Authority defines the permission perimeter at issuance time.
-// The Gate (Sidecar) enforces within that perimeter but cannot extend it.
+// The Sidecar enforces within that perimeter but cannot extend it.
 // =============================================================================
 
 // HttpParams carries parameters for an HTTP action.
@@ -95,7 +95,7 @@ message ExecutionEnvelope {
   // The action the agent intends to perform.
   ExecutionIntent intent = 1;
   // Capability token string (PASETO v4 or JWT RS256) as issued by the Authority.
-  // The Gate validates this token at Stage 1 but does not modify it.
+  // The Sidecar validates this token at Stage 1 but does not modify it.
   string capability = 2;
   // Session and runtime metadata.
   ExecutionMetadata metadata = 3;
@@ -187,7 +187,7 @@ message RevocationEvent {
 //
 // Connectors apply technical constraints only (rate limits, schema
 // validation, protocol translation). Business logic and authorization
-// must remain in Cedar / Authority / Gate. A connector that becomes a
+// must remain in Cedar / Authority / Sidecar. A connector that becomes a
 // second policy engine breaks auditability and system guarantees.
 message ConnectorResponse {
   int32 status_code = 1;
