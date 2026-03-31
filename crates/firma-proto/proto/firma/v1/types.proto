@@ -41,6 +41,10 @@ message DbQueryParams {
   string query_name = 1;
   // Bound parameters — scalar values only, keyed by placeholder name.
   map<string, string> bindings = 2;
+  // Target database name.
+  string db_name = 3;
+  // Hint for policy: is this a read-only query?
+  bool read_only = 4;
 }
 
 // ToolUseParams carries parameters for an agent tool invocation.
