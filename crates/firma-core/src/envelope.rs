@@ -57,8 +57,12 @@ pub struct HttpParams {
     pub method: HttpMethod,
     /// Target URL.
     pub url: String,
-    /// HTTP headers.
+    /// HTTP headers — allowlisted keys only.
     pub headers: HashMap<String, String>,
+    /// Request body as raw bytes (empty for GET/DELETE).
+    pub body: Option<Vec<u8>>,
+    /// Query parameters.
+    pub query: HashMap<String, String>,
 }
 
 /// Parameters for a database query.
@@ -144,6 +148,8 @@ mod tests {
                 method: HttpMethod::GET,
                 url: "https://api.example.com/data".to_string(),
                 headers: HashMap::from([("Authorization".to_string(), "Bearer tok".to_string())]),
+                body: None,
+                query: HashMap::new(),
             }),
             capability: "v4.public.eyJ0...".to_string(),
             metadata: ExecutionMetadata {
@@ -171,6 +177,8 @@ mod tests {
             method: HttpMethod::POST,
             url: "https://api.example.com".to_string(),
             headers: HashMap::new(),
+            body: None,
+            query: HashMap::new(),
         });
         assert!(matches!(intent, ExecutionIntent::Http(_)));
     }
