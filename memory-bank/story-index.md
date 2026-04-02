@@ -2,10 +2,10 @@
 
 ## Overview
 
-- **Total stories**: 11
+- **Total stories**: 17
 - **Generated**: 4
-- **Planned**: 7
-- **Last updated**: 2026-03-26
+- **Planned**: 13
+- **Last updated**: 2026-04-01
 
 ---
 
@@ -24,22 +24,40 @@
 
 #### Unit: 001-types-and-traits
 
-- [ ] **001-capability-token-types** (002-types-and-traits): CapabilityClaims struct, TokenState enum - Must - Planned
-- [ ] **002-execution-types** (002-types-and-traits): ExecutionEnvelope, ExecutionContext, sub-structs - Must - Planned
-- [ ] **003-decision-and-errors** (002-types-and-traits): Decision enum, DenyReason, TokenError, EvaluationError - Must - Planned
-- [ ] **004-trait-interfaces** (002-types-and-traits): PolicyEvaluator, TokenSigner, TokenVerifier, PolicyBundleStore, RevocationStore - Must - Planned
+- [x] **001-capability-token-types** (002-types-and-traits): CapabilityClaims struct, TokenState enum - Must - GENERATED
+- [x] **002-execution-types** (002-types-and-traits): ExecutionEnvelope, ExecutionContext, sub-structs - Must - GENERATED
+- [x] **003-decision-and-errors** (002-types-and-traits): Decision enum, DenyReason, TokenError, EvaluationError - Must - GENERATED
+- [x] **004-trait-interfaces** (002-types-and-traits): PolicyEvaluator, TokenSigner, TokenVerifier, PolicyBundleStore, RevocationStore - Must - GENERATED
 
 #### Unit: 002-paseto-v4
 
-- [ ] **001-paseto-signer** (003-paseto-v4): PasetoV4Signer implementing TokenSigner - Must - Planned
-- [ ] **002-paseto-verifier** (003-paseto-v4): PasetoV4Verifier implementing TokenVerifier - Must - Planned
-- [ ] **003-token-round-trip-tests** (003-paseto-v4): Comprehensive sign/verify/reject test suite - Must - Planned
+- [x] **001-paseto-signer** (003-paseto-v4): PasetoV4Signer implementing TokenSigner - Must - GENERATED
+- [x] **002-paseto-verifier** (003-paseto-v4): PasetoV4Verifier implementing TokenVerifier - Must - GENERATED
+- [x] **003-token-round-trip-tests** (003-paseto-v4): Comprehensive sign/verify/reject test suite - Must - GENERATED
+
+### 003-grpc-protocol-wire-contract
+
+*(No stories tracked — construction was completed directly)*
+
+### 004-example-agents
+
+#### Unit: 001-python-openai-agent
+
+- [ ] **001-agent-scaffold** (004-python-openai-agent): Agent definition, REPL, Makefile, .env.sample - Must - Planned
+- [ ] **002-tool-definitions** (004-python-openai-agent): 9 tools across 5 categories (network, DB, file, email, shell) - Must - Planned
+- [ ] **003-database-seed** (004-python-openai-agent): SQLite seed data and database service - Must - Planned
+
+#### Unit: 002-typescript-adk-agent
+
+- [ ] **001-agent-scaffold** (005-typescript-adk-agent): Agent definition, session loop, Makefile, .env.sample - Must - Planned
+- [ ] **002-tool-definitions** (005-typescript-adk-agent): 9 tools with Zod schemas across 5 categories - Must - Planned
+- [ ] **003-database-seed** (005-typescript-adk-agent): SQLite seed data and database service - Must - Planned
 
 ---
 
 ## Stories by Status
 
-- **Planned**: 7
-- **Generated**: 4
+- **Planned**: 6
+- **Generated**: 11
 - **In Progress**: 0
 - **Completed**: 0
