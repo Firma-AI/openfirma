@@ -2,7 +2,7 @@
 intent: 004-example-agents
 unit: 001-python-openai-agent
 story: 003-database-seed
-status: planned
+status: complete
 priority: Must
 complexity: 1
 uncertainty: 1
@@ -19,11 +19,11 @@ dependencies: 0
 
 ## Acceptance Criteria
 
-- [ ] `seed.sql` creates `products` table with 10 rows (Electronics, Furniture, Office Supplies)
-- [ ] `agent/services/database.py` provides `get_engine()` with lazy init and `initialize_database()`
-- [ ] Database stored at `.data/firma.db` (gitignored)
-- [ ] `.data/` directory auto-created if missing
-- [ ] Seed runs automatically on first agent startup
+- [x] `seed.sql` creates `products` table with 10 rows (Electronics, Furniture, Office Supplies)
+- [x] `agent/services/database.py` provides `get_engine()` with lazy init and `initialize_database()`
+- [x] Database stored at `.data/firma.db` (gitignored)
+- [x] `.data/` directory auto-created if missing
+- [x] Seed runs automatically on first agent startup
 
 ## Notes
 

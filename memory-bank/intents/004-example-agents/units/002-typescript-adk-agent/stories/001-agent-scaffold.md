@@ -2,7 +2,7 @@
 intent: 004-example-agents
 unit: 002-typescript-adk-agent
 story: 001-agent-scaffold
-status: planned
+status: complete
 priority: Must
 complexity: 1
 uncertainty: 1
@@ -19,12 +19,12 @@ dependencies: 0
 
 ## Acceptance Criteria
 
-- [ ] `package.json` with `@google/adk` v0.6.1, `better-sqlite3`, `zod` dependencies
-- [ ] `src/main.ts` defines the agent with name, model, instructions, and tool list
-- [ ] Interactive session starts with `pnpm start`
-- [ ] Makefile with `install` (pnpm install) and `run` targets
-- [ ] `.env.sample` with Google AI API key and `IPINFO_TOKEN` documented
-- [ ] `tsconfig.json` configured for ESM output
+- [x] `package.json` with `@google/adk` v0.6.1, `better-sqlite3`, `zod` dependencies
+- [x] `src/agent.ts` defines the agent with name, model, instructions, and tool list
+- [x] Interactive session starts via `pnpm exec adk run`
+- [x] Makefile with `install` (pnpm install) and `run` targets
+- [x] `.env.sample` with Google AI API key and `IPINFO_TOKEN` documented
+- [x] `tsconfig.json` configured for ESM output
 
 ## Notes
 

@@ -3,9 +3,9 @@
 ## Overview
 
 - **Total stories**: 17
-- **Generated**: 4
-- **Planned**: 13
-- **Last updated**: 2026-04-01
+- **Complete**: 17
+- **Planned**: 0
+- **Last updated**: 2026-04-02
 
 ---
 
@@ -43,21 +43,21 @@
 
 #### Unit: 001-python-openai-agent
 
-- [ ] **001-agent-scaffold** (004-python-openai-agent): Agent definition, REPL, Makefile, .env.sample - Must - Planned
-- [ ] **002-tool-definitions** (004-python-openai-agent): 9 tools across 5 categories (network, DB, file, email, shell) - Must - Planned
-- [ ] **003-database-seed** (004-python-openai-agent): SQLite seed data and database service - Must - Planned
+- [x] **001-agent-scaffold** (004-python-openai-agent): Agent definition, REPL, Makefile, .env.sample - Must - COMPLETE
+- [x] **002-tool-definitions** (004-python-openai-agent): 9 tools across 5 categories (network, DB, file, email, shell) - Must - COMPLETE
+- [x] **003-database-seed** (004-python-openai-agent): SQLite seed data and database service - Must - COMPLETE
 
 #### Unit: 002-typescript-adk-agent
 
-- [ ] **001-agent-scaffold** (005-typescript-adk-agent): Agent definition, session loop, Makefile, .env.sample - Must - Planned
-- [ ] **002-tool-definitions** (005-typescript-adk-agent): 9 tools with Zod schemas across 5 categories - Must - Planned
-- [ ] **003-database-seed** (005-typescript-adk-agent): SQLite seed data and database service - Must - Planned
+- [x] **001-agent-scaffold** (005-typescript-adk-agent): Agent definition, session loop, Makefile, .env.sample - Must - COMPLETE
+- [x] **002-tool-definitions** (005-typescript-adk-agent): 9 tools with Zod schemas across 5 categories - Must - COMPLETE
+- [x] **003-database-seed** (005-typescript-adk-agent): SQLite seed data and database service - Must - COMPLETE
 
 ---
 
 ## Stories by Status
 
-- **Planned**: 6
+- **Planned**: 0
 - **Generated**: 11
 - **In Progress**: 0
-- **Completed**: 0
+- **Completed**: 6

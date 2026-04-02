@@ -2,7 +2,7 @@
 intent: 004-example-agents
 unit: 001-python-openai-agent
 story: 001-agent-scaffold
-status: planned
+status: complete
 priority: Must
 complexity: 1
 uncertainty: 1
@@ -19,12 +19,12 @@ dependencies: 0
 
 ## Acceptance Criteria
 
-- [ ] `pyproject.toml` with `openai-agents`, `httpx`, `sqlalchemy` dependencies
-- [ ] `agent/main.py` defines the agent with name, model, instructions, and tool list
-- [ ] `agent/__init__.py` exists for package structure
-- [ ] Interactive REPL starts with `uv run python -m agent.main`
-- [ ] Makefile with `install` (uv sync) and `run` targets
-- [ ] `.env.sample` with `OPENAI_API_KEY`, `IPINFO_TOKEN` documented
+- [x] `pyproject.toml` with `openai-agents`, `httpx`, `sqlalchemy` dependencies
+- [x] `agent/main.py` defines the agent with name, model, instructions, and tool list
+- [x] `agent/__init__.py` exists for package structure
+- [x] Interactive REPL starts with `uv run python -m agent.main`
+- [x] Makefile with `install` (uv sync) and `run` targets
+- [x] `.env.sample` with `OPENAI_API_KEY`, `IPINFO_TOKEN` documented
 
 ## Notes
 

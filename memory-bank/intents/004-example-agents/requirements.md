@@ -3,7 +3,7 @@ intent: 004-example-agents
 phase: inception
 status: complete
 created: 2026-04-01T10:00:00Z
-updated: 2026-04-01T10:00:00Z
+updated: 2026-04-02T10:00:00Z
 ---
 
 # Requirements: Example Agents

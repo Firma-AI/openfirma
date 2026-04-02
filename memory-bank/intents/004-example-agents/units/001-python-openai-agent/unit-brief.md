@@ -1,10 +1,10 @@
 ---
 unit: 001-python-openai-agent
 intent: 004-example-agents
-phase: inception
-status: ready
+phase: construction
+status: complete
 created: 2026-04-01T10:00:00Z
-updated: 2026-04-01T10:00:00Z
+updated: 2026-04-02T10:00:00Z
 ---
 
 # Unit Brief: Python OpenAI Agent
@@ -76,9 +76,9 @@ Provide a complete, runnable Python example agent using the OpenAI Agents SDK th
 
 | Story ID | Title | Priority | Status |
 |----------|-------|----------|--------|
-| 001-agent-scaffold | Agent scaffold and REPL | Must | Planned |
-| 002-tool-definitions | Tool definitions | Must | Planned |
-| 003-database-seed | Database seed and service | Must | Planned |
+| 001-agent-scaffold | Agent scaffold and REPL | Must | Complete |
+| 002-tool-definitions | Tool definitions | Must | Complete |
+| 003-database-seed | Database seed and service | Must | Complete |
 
 ---
 
@@ -126,13 +126,13 @@ None
 ## Success Criteria
 
 ### Functional
-- [ ] `make install && make run` starts the agent
-- [ ] All 9 tools are callable and return sensible results
-- [ ] Database is auto-seeded on first run
+- [x] `make install && make run` starts the agent
+- [x] All 9 tools are callable and return sensible results
+- [x] Database is auto-seeded on first run
 
 ### Quality
-- [ ] Code is readable without comments (self-documenting)
-- [ ] `.env.sample` documents all required variables
+- [x] Code is readable without comments (self-documenting)
+- [x] `.env.sample` documents all required variables
 
 ---
 

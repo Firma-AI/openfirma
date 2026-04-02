@@ -3,16 +3,22 @@ id: 004-python-openai-agent
 unit: 001-python-openai-agent
 intent: 004-example-agents
 type: simple-construction-bolt
-status: planned
+status: complete
 stories:
   - 001-agent-scaffold
   - 002-tool-definitions
   - 003-database-seed
 created: 2026-04-01T10:00:00Z
-started: null
-completed: null
+started: 2026-04-01T11:00:00Z
+completed: 2026-04-01T12:00:00Z
 current_stage: null
-stages_completed: []
+stages_completed:
+  - name: plan
+    completed: 2026-04-01T11:00:00Z
+  - name: implement
+    completed: 2026-04-01T11:30:00Z
+  - name: validate
+    completed: 2026-04-01T12:00:00Z
 requires_bolts: []
 enables_bolts: []
 requires_units: []
@@ -47,9 +53,9 @@ Deliver a self-contained, runnable Python agent at `example_agents/agents_sdk_py
 
 ## Stages
 
-- [ ] **1. plan**: Implementation plan
-- [ ] **2. implement**: Write all source files
-- [ ] **3. validate**: Verify `make install && make run` works
+- [x] **1. plan**: Implementation plan
+- [x] **2. implement**: Write all source files
+- [x] **3. validate**: Verify `make install && make run` works
 
 ## Dependencies
 
@@ -61,8 +67,8 @@ Deliver a self-contained, runnable Python agent at `example_agents/agents_sdk_py
 
 ## Success Criteria
 
-- [ ] `make install` completes without errors
-- [ ] `make run` starts interactive REPL
-- [ ] All 9 tools registered with agent
-- [ ] Database auto-seeds on first run
-- [ ] `.env.sample` documents all required variables
+- [x] `make install` completes without errors
+- [x] `make run` starts interactive REPL
+- [x] All 9 tools registered with agent
+- [x] Database auto-seeds on first run
+- [x] `.env.sample` documents all required variables

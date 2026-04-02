@@ -2,7 +2,7 @@
 intent: 004-example-agents
 unit: 002-typescript-adk-agent
 story: 003-database-seed
-status: planned
+status: complete
 priority: Must
 complexity: 1
 uncertainty: 1
@@ -19,12 +19,12 @@ dependencies: 0
 
 ## Acceptance Criteria
 
-- [ ] `seed.sql` identical to Python agent's seed data (10-row products table)
-- [ ] `src/services/database.ts` provides `getDb()` with lazy init and `initializeDatabase()`
-- [ ] Database stored at `.data/firma.db` (gitignored)
-- [ ] `.data/` directory auto-created if missing
-- [ ] WAL journal mode enabled for better concurrency
-- [ ] Seed runs automatically on first agent startup
+- [x] `seed.sql` identical to Python agent's seed data (10-row products table)
+- [x] `src/services/database.ts` provides `getDb()` with lazy init and `initializeDatabase()`
+- [x] Database stored at `.data/firma.db` (gitignored)
+- [x] `.data/` directory auto-created if missing
+- [x] WAL journal mode enabled for better concurrency
+- [x] Seed runs automatically on first agent startup
 
 ## Notes
 
