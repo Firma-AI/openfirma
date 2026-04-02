@@ -65,6 +65,7 @@ The agents don't need to know about Firma. They just call tools. Firma decides w
 The agents will gain tools that require **delegated access** to third-party services — testing Firma's ability to broker and scope OAuth/token-based authorization on behalf of agents:
 
 - **Slack** — send messages, read channels. The agent requests access; Firma holds the OAuth token, injects it per-call, and enforces which channels/actions are allowed.
+- **Gmail** — read, send, and draft emails via Google OAuth. Firma mediates the OAuth consent flow, holds the refresh token, and enforces scopes (e.g., send-only, specific recipient domains).
 - **Google Drive** — list, read, and write files via Google OAuth. The agent never sees the user's credentials; Firma mediates the OAuth flow and restricts access to specific folders or scopes (e.g., read-only).
 
 This validates that Firma can manage **credential lifecycle and least-privilege delegation** across real-world OAuth providers, not just static API keys.
@@ -78,3 +79,20 @@ The agents will connect to **MCP (Model Context Protocol) servers** for real-wor
 - **Google Drive** — file listing, read/write through a dedicated MCP server with Firma-managed OAuth.
 
 This proves that Firma works with **off-the-shelf MCP servers** — agents discover tools via MCP, and Firma enforces capability policies on every call regardless of where the server came from.
+
+### Open-Source Models
+
+The Python agent can swap its OpenAI model for open-source alternatives (LLaMA, Mistral, etc.) with minimal changes. The OpenAI Agents SDK supports this natively via `OpenAIChatCompletionsModel` — point it at any OpenAI-compatible API:
+
+```python
+from openai import AsyncOpenAI
+from agents import set_default_openai_client, set_default_openai_api
+
+client = AsyncOpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
+set_default_openai_client(client, use_for_tracing=False)
+set_default_openai_api("chat_completions")
+```
+
+This works with **Ollama**, **vLLM**, **LM Studio**, or any OpenAI-compatible endpoint. For multi-provider routing, the SDK also ships a **LiteLLM adapter** (`pip install openai-agents[litellm]`) that can route different agents to different providers.
+
+This validates that Firma's enforcement is **model-agnostic** — the same capability policies apply whether the agent runs GPT-4, LLaMA 3, or Mistral.
