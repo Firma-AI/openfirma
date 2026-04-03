@@ -6,22 +6,39 @@ use serde::{Deserialize, Serialize};
 /// The core protocol unit wrapping each outbound agent call.
 ///
 /// Built by the Sidecar when intercepting an agent's request. Contains the
-/// typed action intent, the raw capability token, and request metadata.
+/// typed action intent, the raw capability token, metadata, and provenance.
+/// Immutable once created — any enrichment produces a derived structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionEnvelope {
     /// Typed action parameters describing what the agent wants to do.
     pub intent: ExecutionIntent,
     /// Raw signed token string. Parsing happens in Stage 1 of the enforcement pipeline.
     pub capability: String,
-    /// Session and request metadata for correlation and audit.
-    pub metadata: RequestMetadata,
+    /// Session and runtime metadata for correlation and audit.
+    pub metadata: ExecutionMetadata,
+    /// Schema-reserved provenance field. V1 does not populate this.
+    /// Intended for anchoring the envelope to the session's prior calls
+    /// in future versions (causal chain, replay, attestation).
+    pub provenance: Option<String>,
 }
 
 /// Typed description of the action an agent intends to perform.
 ///
+/// Mirrors the proto `ExecutionIntent` message: a top-level `resource`
+/// identifier plus a `oneof params` for the typed action kind.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionIntent {
+    /// Target resource identifier (e.g., URL, table name, tool name).
+    pub resource: String,
+    /// Typed action parameters — exactly one action kind per intent.
+    pub params: ActionParams,
+}
+
+/// Typed action parameters (maps to the proto `oneof params`).
+///
 /// Uses an enum with typed variants to prevent injection via untyped maps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ExecutionIntent {
+pub enum ActionParams {
     /// Outbound HTTP request.
     Http(HttpParams),
     /// Database query.
@@ -46,14 +63,19 @@ pub enum HttpMethod {
 }
 
 /// Parameters for an outbound HTTP request.
+///
+/// The target URL lives on `ExecutionIntent.resource`, not here —
+/// matching the proto where `HttpParams` carries method, headers, body, and query.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpParams {
     /// HTTP method.
     pub method: HttpMethod,
-    /// Target URL.
-    pub url: String,
-    /// HTTP headers.
+    /// HTTP headers — allowlisted keys only.
     pub headers: HashMap<String, String>,
+    /// Request body as raw bytes (empty for GET/DELETE).
+    pub body: Option<Vec<u8>>,
+    /// Query parameters.
+    pub query: HashMap<String, String>,
 }
 
 /// Parameters for a database query.
@@ -65,8 +87,8 @@ pub struct HttpParams {
 pub struct DbQueryParams {
     /// Registered query name (looked up in a query registry).
     pub query_name: String,
-    /// Positional bind parameters for the query.
-    pub bindings: Vec<String>,
+    /// Bound parameters — scalar values only, keyed by placeholder name.
+    pub bindings: HashMap<String, String>,
     /// Target database name.
     pub db_name: String,
     /// Hint for policy: is this a read-only query?
@@ -86,9 +108,9 @@ pub struct ToolUseParams {
     pub input: HashMap<String, String>,
 }
 
-/// Correlation and audit metadata attached to every execution envelope.
+/// Session and runtime context attached to every execution envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RequestMetadata {
+pub struct ExecutionMetadata {
     /// Session this request belongs to.
     pub session_id: String,
     /// Agent that initiated this request.
@@ -97,6 +119,12 @@ pub struct RequestMetadata {
     pub timestamp: DateTime<Utc>,
     /// Optional distributed tracing correlation ID.
     pub trace_id: Option<String>,
+    /// Cumulative budget consumed in this session (e.g., API cost in USD).
+    /// Schema-reserved; populated when budget tracking is implemented.
+    pub budget_consumed: f64,
+    /// Static or pre-computed risk attribute. Defaults to None.
+    /// Schema-reserved; populated when risk scoring is implemented.
+    pub risk_score: Option<f64>,
 }
 
 /// Flattened attribute set consumed by policy evaluation (Stage 2).
@@ -129,18 +157,28 @@ mod tests {
 
     fn sample_http_envelope() -> ExecutionEnvelope {
         ExecutionEnvelope {
-            intent: ExecutionIntent::Http(HttpParams {
-                method: HttpMethod::GET,
-                url: "https://api.example.com/data".to_string(),
-                headers: HashMap::from([("Authorization".to_string(), "Bearer tok".to_string())]),
-            }),
+            intent: ExecutionIntent {
+                resource: "https://api.example.com/data".to_string(),
+                params: ActionParams::Http(HttpParams {
+                    method: HttpMethod::GET,
+                    headers: HashMap::from([(
+                        "Authorization".to_string(),
+                        "Bearer tok".to_string(),
+                    )]),
+                    body: None,
+                    query: HashMap::new(),
+                }),
+            },
             capability: "v4.public.eyJ0...".to_string(),
-            metadata: RequestMetadata {
+            metadata: ExecutionMetadata {
                 session_id: "sess_001".to_string(),
                 agent_id: "agent_abc".to_string(),
                 timestamp: Utc::now(),
                 trace_id: Some("trace_123".to_string()),
+                budget_consumed: 0.0,
+                risk_score: None,
             },
+            provenance: None,
         }
     }
 
@@ -153,41 +191,53 @@ mod tests {
 
     #[test]
     fn test_execution_intent_http() {
-        let intent = ExecutionIntent::Http(HttpParams {
-            method: HttpMethod::POST,
-            url: "https://api.example.com".to_string(),
-            headers: HashMap::new(),
-        });
-        assert!(matches!(intent, ExecutionIntent::Http(_)));
+        let intent = ExecutionIntent {
+            resource: "https://api.example.com".to_string(),
+            params: ActionParams::Http(HttpParams {
+                method: HttpMethod::POST,
+                headers: HashMap::new(),
+                body: None,
+                query: HashMap::new(),
+            }),
+        };
+        assert!(matches!(intent.params, ActionParams::Http(_)));
     }
 
     #[test]
     fn test_execution_intent_db_query() {
-        let intent = ExecutionIntent::DbQuery(DbQueryParams {
-            query_name: "get_user_by_id".to_string(),
-            bindings: vec!["42".to_string()],
-            db_name: "main".to_string(),
-            read_only: true,
-        });
-        assert!(matches!(intent, ExecutionIntent::DbQuery(_)));
+        let intent = ExecutionIntent {
+            resource: "main".to_string(),
+            params: ActionParams::DbQuery(DbQueryParams {
+                query_name: "get_user_by_id".to_string(),
+                bindings: HashMap::from([("id".to_string(), "42".to_string())]),
+                db_name: "main".to_string(),
+                read_only: true,
+            }),
+        };
+        assert!(matches!(intent.params, ActionParams::DbQuery(_)));
     }
 
     #[test]
     fn test_execution_intent_tool_use() {
-        let intent = ExecutionIntent::ToolUse(ToolUseParams {
-            tool_name: "calculator".to_string(),
-            input: HashMap::from([("expression".to_string(), "2+2".to_string())]),
-        });
-        assert!(matches!(intent, ExecutionIntent::ToolUse(_)));
+        let intent = ExecutionIntent {
+            resource: "calculator".to_string(),
+            params: ActionParams::ToolUse(ToolUseParams {
+                tool_name: "calculator".to_string(),
+                input: HashMap::from([("expression".to_string(), "2+2".to_string())]),
+            }),
+        };
+        assert!(matches!(intent.params, ActionParams::ToolUse(_)));
     }
 
     #[test]
-    fn test_request_metadata_optional_trace_id() {
-        let meta = RequestMetadata {
+    fn test_execution_metadata_optional_trace_id() {
+        let meta = ExecutionMetadata {
             session_id: "sess_001".to_string(),
             agent_id: "agent_abc".to_string(),
             timestamp: Utc::now(),
             trace_id: None,
+            budget_consumed: 0.0,
+            risk_score: None,
         };
         assert!(meta.trace_id.is_none());
     }
