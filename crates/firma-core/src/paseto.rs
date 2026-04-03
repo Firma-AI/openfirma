@@ -336,12 +336,7 @@ mod tests {
                 .abs()
                 <= 1
         );
-        assert!(
-            (recovered.expiry - original.expiry)
-                .num_seconds()
-                .abs()
-                <= 1
-        );
+        assert!((recovered.expiry - original.expiry).num_seconds().abs() <= 1);
     }
 
     #[test]

@@ -161,7 +161,10 @@ mod tests {
                 resource: "https://api.example.com/data".to_string(),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
-                    headers: HashMap::from([("Authorization".to_string(), "Bearer tok".to_string())]),
+                    headers: HashMap::from([(
+                        "Authorization".to_string(),
+                        "Bearer tok".to_string(),
+                    )]),
                     body: None,
                     query: HashMap::new(),
                 }),
