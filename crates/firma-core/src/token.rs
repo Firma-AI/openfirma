@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// Represents the authority's grant to an agent for a scoped set of actions
 /// and resources within a session. Carried inside a PASETO v4 or JWT token.
+///
+/// Field names mirror the proto `CapabilityToken` message in `firma/v1/types.proto`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CapabilityClaims {
     /// Globally unique identifier for this token. Used for revocation lookups.
@@ -14,13 +16,13 @@ pub struct CapabilityClaims {
     /// Session within which this token is valid.
     pub session_id: String,
     /// Allowed action set (e.g., `["http:GET", "tool:execute"]`). May be empty.
-    pub actions: Vec<String>,
-    /// Resource scope (e.g., `["https://api.example.com/*"]`). May be empty.
-    pub resources: Vec<String>,
+    pub action_set: Vec<String>,
+    /// Resource scope pattern this token covers (e.g., `"api.example.com/*"`).
+    pub resource_scope: String,
     /// When the Authority issued this token.
     pub issued_at: DateTime<Utc>,
     /// When this token expires. Validation enforced by `TokenVerifier`, not at construction.
-    pub expires_at: DateTime<Utc>,
+    pub expiry: DateTime<Utc>,
     /// Hex-encoded SHA-256 of the Cedar context snapshot at issuance time.
     pub context_hash: String,
 }
@@ -54,10 +56,10 @@ mod tests {
             token_id: "tok_001".to_string(),
             agent_id: "agent_abc".to_string(),
             session_id: "sess_xyz".to_string(),
-            actions: vec!["http:GET".to_string()],
-            resources: vec!["https://api.example.com/*".to_string()],
+            action_set: vec!["http:GET".to_string()],
+            resource_scope: "https://api.example.com/*".to_string(),
             issued_at: Utc::now(),
-            expires_at: Utc::now(),
+            expiry: Utc::now(),
             context_hash: "abcdef1234567890".to_string(),
         }
     }
@@ -68,8 +70,8 @@ mod tests {
         assert_eq!(claims.token_id, "tok_001");
         assert_eq!(claims.agent_id, "agent_abc");
         assert_eq!(claims.session_id, "sess_xyz");
-        assert_eq!(claims.actions.len(), 1);
-        assert_eq!(claims.resources.len(), 1);
+        assert_eq!(claims.action_set.len(), 1);
+        assert_eq!(claims.resource_scope, "https://api.example.com/*");
     }
 
     #[test]
@@ -82,14 +84,12 @@ mod tests {
     }
 
     #[test]
-    fn test_capability_claims_empty_actions_resources() {
+    fn test_capability_claims_empty_action_set() {
         let claims = CapabilityClaims {
-            actions: vec![],
-            resources: vec![],
+            action_set: vec![],
             ..sample_claims()
         };
-        assert!(claims.actions.is_empty());
-        assert!(claims.resources.is_empty());
+        assert!(claims.action_set.is_empty());
     }
 
     #[test]

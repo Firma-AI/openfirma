@@ -99,7 +99,7 @@ impl TokenVerifier for PasetoV4Verifier {
         let capability_claims = extract_capability_claims(&claims)?;
 
         // 5. Check expiration
-        if capability_claims.expires_at <= Utc::now() {
+        if capability_claims.expiry <= Utc::now() {
             return Err(TokenError::Expired {
                 token_id: capability_claims.token_id,
             });
@@ -116,7 +116,7 @@ fn build_paseto_claims(claims: &CapabilityClaims) -> Result<Claims, TokenError> 
     })?;
 
     // Override registered claims with our values
-    pc.expiration(&claims.expires_at.to_rfc3339())
+    pc.expiration(&claims.expiry.to_rfc3339())
         .map_err(|e| TokenError::Malformed {
             reason: format!("set exp: {e:?}"),
         })?;
@@ -142,23 +142,19 @@ fn build_paseto_claims(claims: &CapabilityClaims) -> Result<Claims, TokenError> 
         .map_err(|e| TokenError::Malformed {
             reason: format!("add context_hash: {e:?}"),
         })?;
+    pc.add_additional("resource_scope", claims.resource_scope.as_str())
+        .map_err(|e| TokenError::Malformed {
+            reason: format!("add resource_scope: {e:?}"),
+        })?;
 
     // Array claims (serialize via serde_json)
-    let actions_val = serde_json::to_value(&claims.actions).map_err(|e| TokenError::Malformed {
-        reason: format!("serialize actions: {e}"),
-    })?;
-    pc.add_additional("actions", actions_val)
-        .map_err(|e| TokenError::Malformed {
-            reason: format!("add actions: {e:?}"),
+    let action_set_val =
+        serde_json::to_value(&claims.action_set).map_err(|e| TokenError::Malformed {
+            reason: format!("serialize action_set: {e}"),
         })?;
-
-    let resources_val =
-        serde_json::to_value(&claims.resources).map_err(|e| TokenError::Malformed {
-            reason: format!("serialize resources: {e}"),
-        })?;
-    pc.add_additional("resources", resources_val)
+    pc.add_additional("action_set", action_set_val)
         .map_err(|e| TokenError::Malformed {
-            reason: format!("add resources: {e:?}"),
+            reason: format!("add action_set: {e:?}"),
         })?;
 
     Ok(pc)
@@ -215,10 +211,10 @@ fn extract_capability_claims(claims: &Claims) -> Result<CapabilityClaims, TokenE
         token_id: extract_string_claim(claims, "token_id")?,
         agent_id: extract_string_claim(claims, "agent_id")?,
         session_id: extract_string_claim(claims, "session_id")?,
-        actions: extract_vec_claim(claims, "actions")?,
-        resources: extract_vec_claim(claims, "resources")?,
+        action_set: extract_vec_claim(claims, "action_set")?,
+        resource_scope: extract_string_claim(claims, "resource_scope")?,
         issued_at: extract_datetime_claim(claims, "iat")?,
-        expires_at: extract_datetime_claim(claims, "exp")?,
+        expiry: extract_datetime_claim(claims, "exp")?,
         context_hash: extract_string_claim(claims, "context_hash")?,
     })
 }
@@ -240,10 +236,10 @@ mod tests {
             token_id: "tok_test_001".to_string(),
             agent_id: "agent_abc".to_string(),
             session_id: "sess_xyz".to_string(),
-            actions: vec!["http:GET".to_string(), "tool:execute".to_string()],
-            resources: vec!["https://api.example.com/*".to_string()],
+            action_set: vec!["http:GET".to_string(), "tool:execute".to_string()],
+            resource_scope: "https://api.example.com/*".to_string(),
             issued_at: now,
-            expires_at: now + chrono::Duration::seconds(expires_in_secs),
+            expiry: now + chrono::Duration::seconds(expires_in_secs),
             context_hash: "abcdef1234567890".to_string(),
         }
     }
@@ -330,8 +326,8 @@ mod tests {
         assert_eq!(recovered.token_id, original.token_id);
         assert_eq!(recovered.agent_id, original.agent_id);
         assert_eq!(recovered.session_id, original.session_id);
-        assert_eq!(recovered.actions, original.actions);
-        assert_eq!(recovered.resources, original.resources);
+        assert_eq!(recovered.action_set, original.action_set);
+        assert_eq!(recovered.resource_scope, original.resource_scope);
         assert_eq!(recovered.context_hash, original.context_hash);
         // DateTime comparison: within 1 second tolerance (RFC 3339 round-trip may lose sub-second)
         assert!(
@@ -340,12 +336,7 @@ mod tests {
                 .abs()
                 <= 1
         );
-        assert!(
-            (recovered.expires_at - original.expires_at)
-                .num_seconds()
-                .abs()
-                <= 1
-        );
+        assert!((recovered.expiry - original.expiry).num_seconds().abs() <= 1);
     }
 
     #[test]
@@ -426,19 +417,17 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_empty_actions_resources() {
+    fn test_round_trip_empty_action_set() {
         let (sk, pk) = generate_keypair();
         let signer = PasetoV4Signer::new(&sk).unwrap();
         let verifier = PasetoV4Verifier::new(&pk).unwrap();
 
         let mut claims = sample_claims(600);
-        claims.actions = vec![];
-        claims.resources = vec![];
+        claims.action_set = vec![];
 
         let token = signer.sign(&claims).unwrap();
         let recovered = verifier.verify(&token).unwrap();
-        assert!(recovered.actions.is_empty());
-        assert!(recovered.resources.is_empty());
+        assert!(recovered.action_set.is_empty());
     }
 
     #[test]
