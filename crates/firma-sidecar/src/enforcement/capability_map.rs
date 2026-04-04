@@ -1,58 +1,17 @@
-//! Capability token selection map.
-//!
-//! Holds pre-provisioned capability tokens issued by the Authority at
-//! pre-flight and selects the best match for each intercepted request
-//! based on action class and resource scope (ADR-002).
-//!
-//! Tokens are indexed by action class at construction time so that
-//! per-request lookups avoid a full linear scan. The agent knows nothing
-//! about Firma — the sidecar selects the correct token internally after
-//! intent normalization.
-
-use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use firma_core::token::{CapabilityClaims, TokenError, TokenVerifier};
+use firma_core::CapabilityClaims;
 
-use crate::enforcement::decision::{
-    CapabilityValidationStage, EnforcementDecision, EnforcementStage,
-};
-use crate::enforcement::error::EnforcementError;
+use super::decision::{EnforcementDecision, EnforcementStage};
+use super::error::EnforcementError;
 
 /// A pre-provisioned capability token with pre-parsed claims.
 #[derive(Debug, Clone)]
 pub struct CapabilityEntry {
     /// Raw signed token string for Stage 1 validation.
-    raw_token: String,
+    pub raw_token: String,
     /// Pre-parsed claims for fast selection (parsed at load time).
-    claims: CapabilityClaims,
-}
-
-impl CapabilityEntry {
-    /// Build a capability entry from a raw token by deriving its cached claims
-    /// through the verifier once at provisioning/load time.
-    ///
-    /// # Errors
-    ///
-    /// Returns `TokenError` if the token cannot be verified or parsed.
-    pub fn from_raw_token(
-        raw_token: impl Into<String>,
-        verifier: &dyn TokenVerifier,
-    ) -> Result<Self, TokenError> {
-        let raw_token = raw_token.into();
-        let claims = verifier.verify(&raw_token)?;
-        Ok(Self { raw_token, claims })
-    }
-
-    #[must_use]
-    pub fn raw_token(&self) -> &str {
-        &self.raw_token
-    }
-
-    #[must_use]
-    pub fn claims(&self) -> &CapabilityClaims {
-        &self.claims
-    }
+    pub claims: CapabilityClaims,
 }
 
 /// Holds pre-provisioned capability tokens and selects the best match
@@ -84,7 +43,7 @@ impl CapabilityMap {
         let mut wildcard_indices = Vec::new();
 
         for (idx, entry) in entries.iter().enumerate() {
-            for action in &entry.claims().action_set {
+            for action in &entry.claims.action_set {
                 if action == "*" {
                     wildcard_indices.push(idx);
                 } else {
@@ -108,15 +67,6 @@ impl CapabilityMap {
     /// 3. Token with wildcard `action_set` ("*")
     /// 4. No match -> DENY
     ///
-    /// # Note on `session_id`
-    ///
-    /// `session_id` is part of the selection key per ADR-002 to support future
-    /// multi-agent-per-sidecar deployments, where a single map may hold tokens
-    /// from multiple sessions. Currently the map is always provisioned for a
-    /// single pre-flight session, so this parameter is not yet used for
-    /// filtering. When multi-agent support is added, this will filter entries by
-    /// `claims.session_id`.
-    ///
     /// # Errors
     ///
     /// Returns `EnforcementDecision::Deny` if no capability token matches the
@@ -132,20 +82,23 @@ impl CapabilityMap {
 
         let exact_indices = self.by_action.get(action_class);
 
+        // Score exact-action candidates
         if let Some(indices) = exact_indices {
             for &idx in indices {
                 let entry = &self.entries[idx];
-                let score = Self::match_score(entry.claims(), action_class, resource);
-                if Self::should_replace(score, entry, best_match.as_ref()) {
+                let score = Self::match_score(&entry.claims, action_class, resource);
+                if score > 0 && best_match.is_none_or(|(best, _)| score > best) {
                     best_match = Some((score, entry));
                 }
             }
         }
 
+        // Score wildcard candidates (only if no exact-action match with
+        // resource scope, or wildcard could still win on resource specificity)
         for &idx in &self.wildcard_indices {
             let entry = &self.entries[idx];
-            let score = Self::match_score(entry.claims(), action_class, resource);
-            if Self::should_replace(score, entry, best_match.as_ref()) {
+            let score = Self::match_score(&entry.claims, action_class, resource);
+            if score > 0 && best_match.is_none_or(|(best, _)| score > best) {
                 best_match = Some((score, entry));
             }
         }
@@ -156,9 +109,7 @@ impl CapabilityMap {
                     "no capability token covers action '{action_class}' on resource '{resource}'"
                 ),
             }
-            .into_deny(EnforcementStage::CapabilityValidation(
-                CapabilityValidationStage::TokenSelection,
-            ))
+            .into_deny(EnforcementStage::TokenSelection)
         })
     }
 
@@ -189,48 +140,6 @@ impl CapabilityMap {
         score
     }
 
-    fn should_replace(
-        score: u32,
-        entry: &CapabilityEntry,
-        best_match: Option<&(u32, &CapabilityEntry)>,
-    ) -> bool {
-        if score == 0 {
-            return false;
-        }
-        match best_match {
-            None => true,
-            Some((best_score, best_entry)) => {
-                score > *best_score
-                    || (score == *best_score
-                        && Self::is_better_than(entry.claims(), best_entry.claims()))
-            }
-        }
-    }
-
-    /// ADR-002 tie-breaking: when two entries share the same primary score,
-    /// prefer the narrowest scope, then the freshest token.
-    ///
-    /// 1. Fewer entries in `action_set` (least-privilege)
-    /// 2. Non-wildcard `resource_scope` beats `"*"`
-    /// 3. Latest `issued_at`
-    fn is_better_than(candidate: &CapabilityClaims, current: &CapabilityClaims) -> bool {
-        match candidate.action_set.len().cmp(&current.action_set.len()) {
-            Ordering::Less => return true,
-            Ordering::Greater => return false,
-            Ordering::Equal => {}
-        }
-
-        let cand_specific = candidate.resource_scope != "*";
-        let curr_specific = current.resource_scope != "*";
-        match (cand_specific, curr_specific) {
-            (true, false) => return true,
-            (false, true) => return false,
-            _ => {}
-        }
-
-        candidate.issued_at > current.issued_at
-    }
-
     /// Return the number of entries in the map.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -249,16 +158,6 @@ mod tests {
     use super::*;
     use chrono::Utc;
 
-    struct StaticVerifier {
-        claims: CapabilityClaims,
-    }
-
-    impl TokenVerifier for StaticVerifier {
-        fn verify(&self, _raw_token: &str) -> Result<CapabilityClaims, TokenError> {
-            Ok(self.claims.clone())
-        }
-    }
-
     fn test_claims(actions: Vec<&str>, resource_scope: &str) -> CapabilityClaims {
         CapabilityClaims {
             token_id: "tok_001".to_string(),
@@ -273,14 +172,10 @@ mod tests {
     }
 
     fn test_entry(actions: Vec<&str>, resource_scope: &str) -> CapabilityEntry {
-        let claims = test_claims(actions, resource_scope);
-        CapabilityEntry::from_raw_token(
-            "v4.public.test_token",
-            &StaticVerifier {
-                claims: claims.clone(),
-            },
-        )
-        .unwrap_or_else(|e| panic!("{e}"))
+        CapabilityEntry {
+            raw_token: "v4.public.test_token".to_string(),
+            claims: test_claims(actions, resource_scope),
+        }
     }
 
     #[test]
@@ -293,12 +188,10 @@ mod tests {
         let result = map.select("sess_001", "llm.inference", "api.openai.com/v1/chat");
         assert!(result.is_ok());
         let entry = result.unwrap_or_else(|_| panic!("expected Ok"));
-        assert!(
-            entry
-                .claims()
-                .action_set
-                .contains(&"llm.inference".to_string())
-        );
+        assert!(entry
+            .claims
+            .action_set
+            .contains(&"llm.inference".to_string()));
     }
 
     #[test]
@@ -330,118 +223,6 @@ mod tests {
         assert!(result.is_ok());
         let entry = result.unwrap_or_else(|_| panic!("expected Ok"));
         // Should prefer the specific token over wildcard
-        assert_eq!(entry.claims().resource_scope, "api.openai.com");
-    }
-
-    fn entry_with_issued(
-        token_id: &str,
-        actions: Vec<&str>,
-        resource_scope: &str,
-        issued_at: chrono::DateTime<Utc>,
-    ) -> CapabilityEntry {
-        let claims = CapabilityClaims {
-            token_id: token_id.to_string(),
-            agent_id: "agent_test".to_string(),
-            session_id: "sess_001".to_string(),
-            action_set: actions.into_iter().map(String::from).collect(),
-            resource_scope: resource_scope.to_string(),
-            issued_at,
-            expiry: issued_at + chrono::Duration::hours(1),
-            context_hash: String::new(),
-        };
-        CapabilityEntry::from_raw_token(
-            format!("v4.public.{token_id}"),
-            &StaticVerifier {
-                claims: claims.clone(),
-            },
-        )
-        .unwrap_or_else(|e| panic!("{e}"))
-    }
-
-    #[test]
-    fn test_tiebreak_prefers_narrower_action_set() {
-        let now = Utc::now();
-        let wide = entry_with_issued("wide", vec!["llm.inference", "http.get"], "*", now);
-        let narrow = entry_with_issued("narrow", vec!["llm.inference"], "*", now);
-
-        // Insert wide first — without tie-breaking it would win by insertion order
-        let map = CapabilityMap::new(vec![wide, narrow]);
-        let result = map
-            .select("sess_001", "llm.inference", "any.resource")
-            .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result.claims().token_id, "narrow");
-    }
-
-    #[test]
-    fn test_tiebreak_prefers_specific_resource() {
-        let now = Utc::now();
-        let wildcard_res = entry_with_issued("wild_r", vec!["llm.inference"], "*", now);
-        let specific_res =
-            entry_with_issued("spec_r", vec!["llm.inference"], "api.openai.com", now);
-
-        // Both have exact action match; wildcard resource scores 101, specific scores 150.
-        // These actually have *different* primary scores, so test the reverse:
-        // two wildcard-resource tokens where scope size differs.
-        let broad = entry_with_issued("broad", vec!["llm.inference", "http.get"], "*", now);
-        let slim = entry_with_issued("slim", vec!["llm.inference"], "*", now);
-
-        // Both score 101 (exact action + wildcard resource). Tie-break: slim has
-        // fewer actions.
-        let map = CapabilityMap::new(vec![broad, slim]);
-        let result = map
-            .select("sess_001", "llm.inference", "some.resource")
-            .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result.claims().token_id, "slim");
-
-        // Now two tokens with same action_set size: one wildcard, one specific
-        // resource. Primary scores differ here (101 vs 150) so the specific one
-        // wins by score, not by tie-breaking. Verify the primary scoring still works.
-        let map2 = CapabilityMap::new(vec![wildcard_res, specific_res]);
-        let result2 = map2
-            .select("sess_001", "llm.inference", "api.openai.com/v1/chat")
-            .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result2.claims().token_id, "spec_r");
-    }
-
-    #[test]
-    fn test_tiebreak_prefers_latest_issued_at() {
-        let old = Utc::now() - chrono::Duration::hours(2);
-        let new = Utc::now();
-
-        let stale = entry_with_issued("stale", vec!["llm.inference"], "*", old);
-        let fresh = entry_with_issued("fresh", vec!["llm.inference"], "*", new);
-
-        // Insert stale first — same score, same action_set size, same resource
-        // specificity. Tie-break on issued_at: fresh wins.
-        let map = CapabilityMap::new(vec![stale, fresh]);
-        let result = map
-            .select("sess_001", "llm.inference", "any.resource")
-            .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result.claims().token_id, "fresh");
-    }
-
-    #[test]
-    fn test_tiebreak_three_way_deterministic() {
-        let t1 = Utc::now() - chrono::Duration::hours(3);
-        let t2 = Utc::now() - chrono::Duration::hours(1);
-        let t3 = Utc::now();
-
-        let a = entry_with_issued("a", vec!["llm.inference"], "*", t1);
-        let b = entry_with_issued("b", vec!["llm.inference"], "*", t3);
-        let c = entry_with_issued("c", vec!["llm.inference"], "*", t2);
-
-        // All identical except issued_at. b is freshest.
-        // Try both orderings to verify order-independence.
-        let map1 = CapabilityMap::new(vec![a.clone(), b.clone(), c.clone()]);
-        let r1 = map1
-            .select("sess_001", "llm.inference", "any.resource")
-            .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(r1.claims().token_id, "b");
-
-        let map2 = CapabilityMap::new(vec![c, a, b]);
-        let r2 = map2
-            .select("sess_001", "llm.inference", "any.resource")
-            .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(r2.claims().token_id, "b");
+        assert_eq!(entry.claims.resource_scope, "api.openai.com");
     }
 }

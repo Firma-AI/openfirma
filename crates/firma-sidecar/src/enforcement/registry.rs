@@ -1,16 +1,3 @@
-//! Canonical Action Class Registry v0.1.
-//!
-//! Contains the 15 canonical action classes that the enforcement pipeline
-//! understands. Every `intent.action_class` field in an `ExecutionEnvelope`
-//! MUST be one of these identifiers. Unknown protected actions that cannot
-//! be deterministically mapped to a registry entry fail closed with
-//! `DENY: UNCLASSIFIED_INTENT` (FEP \[I-N1\]).
-//!
-//! The same canonical class is produced regardless of whether the underlying
-//! action arrives as a native tool call, a CLI invocation, an HTTP request,
-//! or an MCP call. Policies and HITL conditions bind to the canonical action
-//! class, not to transport-specific names.
-
 use std::collections::HashMap;
 
 /// Risk level associated with an action class.
