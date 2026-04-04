@@ -1,12 +1,3 @@
-//! Enforcement configuration types.
-//!
-//! Deserialized from TOML at startup. Contains configuration for all
-//! enforcement sub-systems: mapping rules (intent normalization),
-//! Stage 1 (clock skew tolerance), and Stage 2 (policy bundle TTL).
-//!
-//! Validated eagerly at startup via [`EnforcementConfig::validate`] to
-//! surface misconfigurations before the first request arrives.
-
 use serde::Deserialize;
 
 const VALID_HTTP_METHODS: &[&str] = &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
@@ -50,7 +41,11 @@ pub struct MappingConfig {
 
 /// Stage 1 (token validation) configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct Stage1Config {}
+pub struct Stage1Config {
+    /// Clock skew tolerance for expiry checks (seconds). Default: 0 (strict).
+    #[serde(default)]
+    pub clock_skew_tolerance_seconds: u64,
+}
 
 /// Stage 2 (Cedar evaluation) configuration.
 #[derive(Debug, Clone, Deserialize)]
@@ -87,14 +82,14 @@ impl MappingRuleConfig {
         if self.action_class.trim().is_empty() {
             return Err("action_class must not be empty".to_string());
         }
-        if let Some(ref method) = self.method
-            && !VALID_HTTP_METHODS.contains(&method.to_uppercase().as_str())
-        {
-            return Err(format!(
-                "invalid HTTP method '{}'; expected one of: {}",
-                method,
-                VALID_HTTP_METHODS.join(", ")
-            ));
+        if let Some(ref method) = self.method {
+            if !VALID_HTTP_METHODS.contains(&method.to_uppercase().as_str()) {
+                return Err(format!(
+                    "invalid HTTP method '{}'; expected one of: {}",
+                    method,
+                    VALID_HTTP_METHODS.join(", ")
+                ));
+            }
         }
         Ok(())
     }
@@ -126,7 +121,6 @@ impl MappingRulesFile {
 
 /// Capability manifest entry for token provisioning.
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub struct CapabilityManifestEntry {
     pub agent_id: String,
     pub action_set: Vec<String>,
@@ -139,7 +133,6 @@ impl CapabilityManifestEntry {
     /// # Errors
     ///
     /// Returns a message describing the first invalid field.
-    #[allow(dead_code)]
     pub fn validate(&self) -> Result<(), String> {
         if self.agent_id.trim().is_empty() {
             return Err("agent_id must not be empty".to_string());
@@ -202,7 +195,7 @@ mod tests {
     fn test_empty_host_rejected() {
         let rule = MappingRuleConfig {
             method: None,
-            host: String::new(),
+            host: "".to_string(),
             path: None,
             action_class: "llm.inference".to_string(),
         };
@@ -255,7 +248,7 @@ mod tests {
         let file = MappingRulesFile {
             rules: vec![MappingRuleConfig {
                 method: None,
-                host: String::new(),
+                host: "".to_string(),
                 path: None,
                 action_class: "llm.inference".to_string(),
             }],
@@ -280,7 +273,7 @@ mod tests {
     #[test]
     fn test_empty_agent_id_rejected() {
         let entry = CapabilityManifestEntry {
-            agent_id: String::new(),
+            agent_id: "".to_string(),
             action_set: vec!["llm.inference".to_string()],
             resource_scope: "*".to_string(),
         };

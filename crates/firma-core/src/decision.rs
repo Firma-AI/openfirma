@@ -72,11 +72,61 @@ mod tests {
     }
 
     #[test]
-    fn decision_backward_compat_deny() {
-        let json = r#"{"Deny":{"reason":"ScopeViolation"}}"#;
-        let parsed: Decision = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            parsed,
+    fn test_decision_deny() {
+        let d = Decision::Deny {
+            reason: DenyReason::PolicyDenied,
+        };
+        assert!(matches!(
+            d,
+            Decision::Deny {
+                reason: DenyReason::PolicyDenied
+            }
+        ));
+    }
+
+    #[test]
+    fn test_decision_abort() {
+        let d = Decision::Abort {
+            reason: "fatal error".to_string(),
+        };
+        assert!(matches!(d, Decision::Abort { .. }));
+    }
+
+    #[test]
+    fn test_deny_reason_display_all_variants() {
+        let cases = [
+            (DenyReason::TokenInvalid, "token invalid"),
+            (DenyReason::TokenExpired, "token expired"),
+            (DenyReason::TokenRevoked, "token revoked"),
+            (DenyReason::PolicyDenied, "policy denied"),
+            (DenyReason::ScopeViolation, "scope violation"),
+            (DenyReason::ToolNotInScope, "tool not in scope"),
+            (DenyReason::MalformedRequest, "malformed request"),
+            (DenyReason::AuthorityUnavailable, "authority unavailable"),
+            (DenyReason::PolicyBundleStale, "policy bundle stale"),
+            (
+                DenyReason::CredentialInjectionFailed,
+                "credential injection failed",
+            ),
+            (DenyReason::ConnectorTimeout, "connector timeout"),
+            (DenyReason::UnclassifiedIntent, "unclassified intent"),
+        ];
+        for (reason, expected) in cases {
+            assert_eq!(reason.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn test_deny_reason_copy() {
+        let reason = DenyReason::TokenExpired;
+        let copied = reason;
+        assert_eq!(reason, copied);
+    }
+
+    #[test]
+    fn test_decision_serde_round_trip() {
+        let decisions = [
+            Decision::Allow,
             Decision::Deny {
                 reason: DenyReason::ScopeViolation,
             }

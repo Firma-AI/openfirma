@@ -1,10 +1,4 @@
-//! Internal enforcement errors.
-//!
-//! Every variant maps to a [`DenyReason`] via [`EnforcementError::into_deny`].
-//! This is the fail-closed boundary: errors become DENY decisions.
-//! These types are never exposed to external callers.
-
-use firma_core::{decision::DenyReason, token::TokenError};
+use firma_core::{DenyReason, TokenError};
 
 use super::decision::{EnforcementDecision, EnforcementStage};
 
@@ -24,19 +18,15 @@ pub enum EnforcementError {
     TokenValidation(#[from] TokenError),
 
     #[error("scope violation: {detail}")]
-    #[allow(dead_code)]
     ScopeViolation { detail: String },
 
     #[error("policy denied: {detail}")]
-    #[allow(dead_code)]
     PolicyDenied { detail: String },
 
     #[error("policy bundle stale")]
-    #[allow(dead_code)]
     PolicyBundleStale,
 
     #[error("configuration error: {0}")]
-    #[allow(dead_code)]
     Config(String),
 }
 
@@ -81,8 +71,6 @@ fn token_error_to_deny_reason(err: &TokenError) -> DenyReason {
 mod tests {
     use super::*;
 
-    use super::super::decision::{CapabilityValidationStage, ConstraintEnforcementStage};
-
     #[test]
     fn test_normalization_error_maps_to_unclassified() {
         let err = EnforcementError::NormalizationFailed {
@@ -97,9 +85,7 @@ mod tests {
         let err = EnforcementError::TokenValidation(TokenError::Expired {
             token_id: "tok_001".to_string(),
         });
-        let decision = err.into_deny(EnforcementStage::CapabilityValidation(
-            CapabilityValidationStage::TokenValidation,
-        ));
+        let decision = err.into_deny(EnforcementStage::Stage1);
         assert_eq!(decision.deny_reason(), Some(DenyReason::TokenExpired));
     }
 
@@ -108,9 +94,7 @@ mod tests {
         let err = EnforcementError::ScopeViolation {
             detail: "action not in token scope".to_string(),
         };
-        let decision = err.into_deny(EnforcementStage::ConstraintEnforcement(
-            ConstraintEnforcementStage::ScopeCheck,
-        ));
+        let decision = err.into_deny(EnforcementStage::Stage2);
         assert_eq!(decision.deny_reason(), Some(DenyReason::ScopeViolation));
     }
 }
