@@ -17,6 +17,30 @@ Both agents expose the same 9 tools:
 | Email | `send_email` (writes to `.data/emails/`) |
 | Shell | `run_shell` (30s timeout) |
 
+## Security
+
+### Warning
+
+> **These example agents are intentionally insecure.** They exist to demonstrate what happens when an AI agent has unrestricted tool access, and how Firma prevents exploitation. **Do not run these agents outside a Firma-managed environment in any real scenario.**
+
+### Potential exploits
+
+The tools mirror risky patterns that show up in real agent code. They are **not** safe reference implementations:
+
+- **Database (`db_query`)** — The Python agent passes SQL built from strings into `execute()` without parameterization, so untrusted input can lead to SQL injection. The TypeScript agent only checks that the statement starts with certain prefixes (`SELECT`, `PRAGMA`, `WITH`), which is trivial to bypass. Both are deliberate: they illustrate why enforcement cannot rely on ad hoc checks inside the agent.
+- **Shell (`run_shell`)** — The model supplies full shell commands. That enables command injection, resource exhaustion (for example fork bombs), and arbitrary process execution unless an external layer constrains what may run.
+- **Network, file, and email tools** — Without a policy boundary, a compromised or mis-prompted model can exfiltrate data, overwrite files, or abuse outbound HTTP and fake “email” writes.
+
+### How Firma prevents exploitation
+
+With the Firma sidecar, the same agent code is routed through policies and **capability tokens** instead of trusting these in-process guardrails:
+
+- **Database** — Firma can enforce parameterized access, table/column allowlists, read-only mode, or block dynamic SQL regardless of how the agent constructs the query string.
+- **Shell** — Execution can be denied entirely or limited to an approved command set per agent identity.
+- **Network and I/O** — Egress, paths, secrets (for example injecting `IPINFO_TOKEN` only at the proxy), and sensitive operations are decided at enforcement time, not by regexes or prefixes in demo code.
+
+The agents do not implement secure multi-tenancy; Firma is where least privilege and integrity guarantees are meant to live.
+
 ## Prerequisites
 
 - **Python agent**: Python 3.13+, [uv](https://docs.astral.sh/uv/)
@@ -48,7 +72,7 @@ On first run each agent auto-seeds a local SQLite database at `.data/firma.db` w
 
 ## How These Agents Fit Into Firma
 
-Today these agents run **standalone** — they call external APIs directly and have unrestricted access to all tools.
+Today these agents run **standalone** — they call external APIs directly and have unrestricted access to all tools. See **Security** above for the intentional weaknesses in those tools and how Firma is meant to compensate.
 
 Once the Firma sidecar is running, the same agents — **with zero code changes** — will have their tool calls intercepted and evaluated against capability tokens. For example:
 
