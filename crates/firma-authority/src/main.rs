@@ -22,7 +22,10 @@ use crate::revocation::RevocationStore;
 use crate::service::AuthorityServiceImpl;
 
 #[derive(Parser)]
-#[command(name = "firma-authority", about = "Mini Authority — Firma OSS policy & capability service")]
+#[command(
+    name = "firma-authority",
+    about = "Mini Authority — Firma OSS policy & capability service"
+)]
 struct Cli {
     /// Path to TOML configuration file.
     #[arg(short, long)]
@@ -137,13 +140,10 @@ async fn run_server(config: config::AuthorityConfig) {
         config.max_ttl_seconds,
     );
 
-    let addr = config
-        .listen_addr
-        .parse()
-        .unwrap_or_else(|e| {
-            tracing::error!(error = %e, addr = %config.listen_addr, "invalid listen address");
-            std::process::exit(1);
-        });
+    let addr = config.listen_addr.parse().unwrap_or_else(|e| {
+        tracing::error!(error = %e, addr = %config.listen_addr, "invalid listen address");
+        std::process::exit(1);
+    });
 
     tracing::info!(%addr, "gRPC server listening");
 
@@ -180,8 +180,8 @@ fn spawn_file_watcher(
     std::thread::spawn(move || {
         let rt = tokio::runtime::Handle::current();
 
-        let mut watcher = match notify::recommended_watcher(
-            move |res: Result<Event, notify::Error>| {
+        let mut watcher =
+            match notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
                 if let Ok(event) = res {
                     if matches!(
                         event.kind,
@@ -195,14 +195,13 @@ fn spawn_file_watcher(
                         }
                     }
                 }
-            },
-        ) {
-            Ok(w) => w,
-            Err(e) => {
-                tracing::error!(error = %e, "failed to create file watcher");
-                return;
-            }
-        };
+            }) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to create file watcher");
+                    return;
+                }
+            };
 
         if let Err(e) = watcher.watch(&policy_dir_clone, RecursiveMode::NonRecursive) {
             tracing::error!(error = %e, path = %policy_dir_clone.display(), "failed to watch policy dir");
