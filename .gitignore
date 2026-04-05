@@ -22,3 +22,14 @@ target
 
 # JS
 node_modules
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+*.egg
+.data/
+.env
