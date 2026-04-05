@@ -172,10 +172,10 @@ mod tests {
             token_id: "tok_001".to_string(),
             agent_id: "agent".to_string(),
             session_id: "sess".to_string(),
-            actions: vec![],
-            resources: vec![],
+            action_set: vec![],
+            resource_scope: String::new(),
             issued_at: chrono::Utc::now(),
-            expires_at: chrono::Utc::now(),
+            expiry: chrono::Utc::now(),
             context_hash: "hash".to_string(),
         };
         let result = signer.sign(&claims);

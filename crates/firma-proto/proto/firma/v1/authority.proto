@@ -19,7 +19,7 @@ import "google/protobuf/timestamp.proto";
 // all enforcement is fully local in the Sidecar.
 //
 // The permission perimeter defined by the Authority is a ceiling:
-// the Gate (Sidecar) can enforce within it but cannot extend or override it.
+// the Sidecar can enforce within it but cannot extend or override it.
 // =============================================================================
 
 service AuthorityService {
