@@ -161,11 +161,10 @@ fn read_policy_files(policy_dir: &Path) -> Result<(String, String), AuthorityErr
     for entry in &entries {
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "cedar") {
-            let content = std::fs::read_to_string(&path).map_err(|e| {
-                AuthorityError::PolicyLoadFailed {
+            let content =
+                std::fs::read_to_string(&path).map_err(|e| AuthorityError::PolicyLoadFailed {
                     reason: format!("cannot read {}: {e}", path.display()),
-                }
-            })?;
+                })?;
             if !policies.is_empty() {
                 policies.push('\n');
             }
@@ -255,10 +254,7 @@ mod tests {
 
     #[test]
     fn test_load_valid_policy() {
-        let dir = setup_policy_dir(&[(
-            "allow-all.cedar",
-            "permit(principal, action, resource);",
-        )]);
+        let dir = setup_policy_dir(&[("allow-all.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), 30);
         assert!(store.is_ok());
     }
@@ -292,10 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_reload_no_changes() {
-        let dir = setup_policy_dir(&[(
-            "basic.cedar",
-            "permit(principal, action, resource);",
-        )]);
+        let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
         let result = store.reload().await;
         assert!(result.is_ok());
@@ -303,10 +296,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_reload_detects_changes() {
-        let dir = setup_policy_dir(&[(
-            "basic.cedar",
-            "permit(principal, action, resource);",
-        )]);
+        let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
         let v1 = store.get_bundle().await.version.clone();
 
@@ -325,10 +315,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_subscribe_receives_initial_value() {
-        let dir = setup_policy_dir(&[(
-            "basic.cedar",
-            "permit(principal, action, resource);",
-        )]);
+        let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
         let rx = store.subscribe();
         let bundle = rx.borrow().clone();

@@ -47,15 +47,14 @@ impl RevocationStore {
 
         // Load existing revocations from file (if it exists)
         if revocation_file.is_file() {
-            let content =
-                std::fs::read_to_string(revocation_file).map_err(|e| {
-                    AuthorityError::RevocationError {
-                        reason: format!(
-                            "cannot read revocation file {}: {e}",
-                            revocation_file.display()
-                        ),
-                    }
-                })?;
+            let content = std::fs::read_to_string(revocation_file).map_err(|e| {
+                AuthorityError::RevocationError {
+                    reason: format!(
+                        "cannot read revocation file {}: {e}",
+                        revocation_file.display()
+                    ),
+                }
+            })?;
             let count = store.load_from_content(&content);
             tracing::info!(count, "loaded existing revocations from file");
         }

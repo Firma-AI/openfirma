@@ -84,10 +84,10 @@ impl AuthorityService for AuthorityServiceImpl {
                     token_id: token_id.clone(),
                     agent_id: req.agent_id.clone(),
                     session_id: req.session_id.clone(),
-                    actions: req.requested_actions.clone(),
-                    resources: vec![req.resource_scope.clone()],
+                    action_set: req.requested_actions.clone(),
+                    resource_scope: req.resource_scope.clone(),
                     issued_at: now,
-                    expires_at,
+                    expiry: expires_at,
                     context_hash: context_hash.clone(),
                 };
 
@@ -272,8 +272,14 @@ fn evaluate_cedar_policy(
         cedar_policy::Decision::Allow => CedarDecision::Allow,
         cedar_policy::Decision::Deny => {
             let diagnostics = response.diagnostics();
-            let reasons: Vec<String> = diagnostics.reason().map(std::string::ToString::to_string).collect();
-            let errors: Vec<String> = diagnostics.errors().map(std::string::ToString::to_string).collect();
+            let reasons: Vec<String> = diagnostics
+                .reason()
+                .map(std::string::ToString::to_string)
+                .collect();
+            let errors: Vec<String> = diagnostics
+                .errors()
+                .map(std::string::ToString::to_string)
+                .collect();
 
             let message = if !errors.is_empty() {
                 format!("policy errors: {}", errors.join("; "))
@@ -402,7 +408,12 @@ mod tests {
     #[test]
     fn test_evaluate_no_policies_denies() {
         let empty = PolicySet::new();
-        let result = evaluate_cedar_policy(&empty, "agent_1", &["http:GET".to_string()], "api.example.com");
+        let result = evaluate_cedar_policy(
+            &empty,
+            "agent_1",
+            &["http:GET".to_string()],
+            "api.example.com",
+        );
         assert!(matches!(result, CedarDecision::Deny { .. }));
     }
 
@@ -411,7 +422,8 @@ mod tests {
         let ps: PolicySet = "permit(principal, action, resource);"
             .parse()
             .unwrap_or_else(|e| panic!("{e:?}"));
-        let result = evaluate_cedar_policy(&ps, "agent_1", &["http:GET".to_string()], "api.example.com");
+        let result =
+            evaluate_cedar_policy(&ps, "agent_1", &["http:GET".to_string()], "api.example.com");
         assert!(matches!(result, CedarDecision::Allow));
     }
 
@@ -420,7 +432,8 @@ mod tests {
         let ps: PolicySet = "forbid(principal, action, resource);"
             .parse()
             .unwrap_or_else(|e| panic!("{e:?}"));
-        let result = evaluate_cedar_policy(&ps, "agent_1", &["http:GET".to_string()], "api.example.com");
+        let result =
+            evaluate_cedar_policy(&ps, "agent_1", &["http:GET".to_string()], "api.example.com");
         assert!(matches!(result, CedarDecision::Deny { .. }));
     }
 

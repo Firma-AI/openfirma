@@ -131,8 +131,7 @@ listen_addr = "0.0.0.0:9090"
 policy_dir = "/etc/firma/policies"
 max_ttl_seconds = 1800
 "#;
-        let config: AuthorityConfig =
-            toml::from_str(toml_str).unwrap_or_else(|e| panic!("{e}"));
+        let config: AuthorityConfig = toml::from_str(toml_str).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(config.listen_addr, "0.0.0.0:9090");
         assert_eq!(config.max_ttl_seconds, 1800);
         // Defaults for unspecified fields
