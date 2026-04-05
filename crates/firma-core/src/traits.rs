@@ -24,7 +24,12 @@ pub struct PolicyBundle {
 impl PolicyBundle {
     /// Create a new `PolicyBundle`.
     #[must_use]
-    pub fn new(version: String, policies: Vec<u8>, entity_schema: Vec<u8>, ttl_seconds: i32) -> Self {
+    pub fn new(
+        version: String,
+        policies: Vec<u8>,
+        entity_schema: Vec<u8>,
+        ttl_seconds: i32,
+    ) -> Self {
         Self {
             version,
             policies,
@@ -138,12 +143,7 @@ mod tests {
     struct MockBundleStore;
     impl PolicyBundleStore for MockBundleStore {
         fn load_bundle(&self) -> Result<PolicyBundle, EvaluationError> {
-            Ok(PolicyBundle::new(
-                "v1".to_string(),
-                vec![],
-                vec![],
-                30,
-            ))
+            Ok(PolicyBundle::new("v1".to_string(), vec![], vec![], 30))
         }
         fn get_version(&self) -> Option<String> {
             Some("v1".to_string())
