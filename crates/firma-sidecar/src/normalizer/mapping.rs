@@ -1,5 +1,17 @@
-use super::config::MappingRulesFile;
-use super::registry::ActionClassRegistry;
+//! Mapping table for intent normalization.
+//!
+//! Loaded from TOML configuration at startup. Each rule maps an HTTP
+//! method + host + path pattern to a canonical action class from the
+//! Canonical Action Class Registry v0.1. Rules are sorted by descending
+//! specificity so that the first match wins.
+//!
+//! The `intent.action_class` field produced by the normalizer MUST be one of
+//! the configured registry identifiers. Unknown protected actions that cannot
+//! be deterministically mapped to a registry entry fail closed with
+//! `DENY: UNCLASSIFIED_INTENT` (FEP \[I-N1\]).
+
+use crate::enforcement::config::MappingRulesFile;
+use crate::enforcement::registry::ActionClassRegistry;
 
 /// A validated mapping rule ready for matching.
 #[derive(Debug, Clone)]

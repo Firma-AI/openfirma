@@ -1,12 +1,35 @@
+//! Intent Normalizer / Envelope Builder.
+//!
+//! Runs in the Sidecar hot path immediately after interception and before
+//! token validation. Deterministically maps the raw intercepted event into a
+//! canonical `ExecutionEnvelope` with a normalized `intent.action_class`.
+//!
+//! This step performs deterministic rule-based canonicalization only — no
+//! language model, SLM, probabilistic classifier, or similarity-based
+//! inference is permitted on the hot path. It makes no policy decisions.
+//!
+//! Intent sub-fields produced: `action_class` (canonical semantic type),
+//! `resource` (normalized target resource identifier), `params`
+//! (action-specific parameters), `raw_transport` (original transport form —
+//! observational, not used by policy), `raw_action_ref` (original tool name /
+//! route / method — observational only).
+//!
+//! Failure behaviour: if classification fails or yields an ambiguous action
+//! class for a protected operation, the normalizer returns
+//! `DENY: UNCLASSIFIED_INTENT` and no Connector dispatch occurs (fail-closed).
+//! Conforms to the FEP \[I-N1\] enforcement invariant.
+
+mod mapping;
+
 use std::collections::HashMap;
 
 use firma_core::{
     ActionParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams,
 };
 
-use super::decision::{EnforcementDecision, EnforcementStage};
-use super::error::EnforcementError;
-use super::mapping::{MappingTable, MatchResult};
+pub use self::mapping::{MappingTable, MatchResult};
+use crate::enforcement::decision::{EnforcementDecision, EnforcementStage};
+use crate::enforcement::error::EnforcementError;
 
 /// Headers that must never leak into the `ExecutionEnvelope` (and therefore
 /// into logs / audit trail). Compared case-insensitively.

@@ -1,6 +1,40 @@
+//! Stage 2 — Constraint Enforcement Engine (CEE).
+//!
+//! Second enforcement phase. The semantic layer where Cedar policies and
+//! quantitative constraints are evaluated. Operates on a previously normalized
+//! `ExecutionEnvelope` produced by Stage 1 — it must not infer the canonical
+//! action class from raw transport-specific input.
+//!
+//! Steps:
+//! 1. **Scope check** — verifies that the requested `action_class` is within
+//!    the token's allowed `action_set`. Wildcard `"*"` permits all actions.
+//! 2. **Policy bundle freshness** — if the bundle TTL has expired without a
+//!    successful refresh, the Sidecar enters fail-closed mode and denies all
+//!    new requests.
+//! 3. **Context build** — assembles the Cedar request context from envelope
+//!    fields, claims, and runtime signals (budget consumed, risk score).
+//! 4. **Cedar eval** — evaluates against the current policy bundle.
+//!    Deterministic: same context + same bundle = same decision. Fully local,
+//!    no external calls.
+//!
+//! Target latency: < 200 µs p95.
+//!
+//! # Security properties
+//!
+//! Stage 2 prevents valid capabilities from being misused for out-of-policy,
+//! over-budget, or contextually disallowed actions:
+//! - **Privilege escalation within token** — a valid token does not imply all
+//!   calls are allowed; Cedar eval checks the specific call against policy.
+//! - **Scope misuse at runtime** — a valid capability for action class X
+//!   cannot be used for action class Y.
+//! - **Budget overrun / quota abuse** — pre-computed `budget_remaining`
+//!   attribute checked against threshold.
+//! - **Non-deterministic authorization** — same context + same bundle always
+//!   produces the same decision.
+
 use firma_core::{CapabilityClaims, DenyReason, ExecutionEnvelope};
 
-use super::decision::{EnforcementDecision, EnforcementStage};
+use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
 
 /// Trait for policy evaluation — abstracts Cedar or any other policy engine.
 ///
@@ -30,17 +64,17 @@ pub trait PolicyEvaluation: Send + Sync {
     fn version(&self) -> Option<String>;
 }
 
-/// Stage 2: Cedar Policy Evaluation.
+/// Stage 2: Constraint Enforcement Engine (CEE).
 ///
 /// Performs scope check (action within token's allowed set), builds the
 /// Cedar evaluation context, and evaluates policies. Fully local.
 ///
 /// Target: < 200us p95.
-pub struct Stage2Evaluator {
+pub struct ConstraintEnforcer {
     policy: Box<dyn PolicyEvaluation>,
 }
 
-impl Stage2Evaluator {
+impl ConstraintEnforcer {
     #[must_use]
     pub fn new(policy: Box<dyn PolicyEvaluation>) -> Self {
         Self { policy }
@@ -68,7 +102,9 @@ impl Stage2Evaluator {
         if !self.policy.is_fresh() {
             return EnforcementDecision::Deny {
                 reason: DenyReason::PolicyBundleStale,
-                stage: EnforcementStage::Stage2,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::BundleFreshness,
+                ),
                 detail: "policy bundle TTL expired".to_string(),
                 envelope: Some(envelope.clone()),
             };
@@ -90,7 +126,9 @@ impl Stage2Evaluator {
             },
             Ok(false) => EnforcementDecision::Deny {
                 reason: DenyReason::PolicyDenied,
-                stage: EnforcementStage::Stage2,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::PolicyEvaluation,
+                ),
                 detail: format!(
                     "policy denied action '{}' on resource '{}'",
                     envelope.intent.action_class, envelope.intent.resource
@@ -99,7 +137,9 @@ impl Stage2Evaluator {
             },
             Err(err) => EnforcementDecision::Deny {
                 reason: DenyReason::PolicyDenied,
-                stage: EnforcementStage::Stage2,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::PolicyEvaluation,
+                ),
                 detail: format!("policy evaluation error: {err}"),
                 envelope: Some(envelope.clone()),
             },
@@ -128,7 +168,7 @@ impl Stage2Evaluator {
 
         Err(EnforcementDecision::Deny {
             reason: DenyReason::ScopeViolation,
-            stage: EnforcementStage::Stage2,
+            stage: EnforcementStage::ConstraintEnforcement(ConstraintEnforcementStage::ScopeCheck),
             detail: format!(
                 "action '{}' not in token's allowed set: {:?}",
                 action, claims.action_set
@@ -260,7 +300,7 @@ mod tests {
 
     #[test]
     fn test_allow_when_in_scope_and_policy_allows() {
-        let evaluator = Stage2Evaluator::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -270,7 +310,7 @@ mod tests {
 
     #[test]
     fn test_deny_scope_violation() {
-        let evaluator = Stage2Evaluator::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let envelope = test_envelope("file.delete");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -281,7 +321,7 @@ mod tests {
 
     #[test]
     fn test_wildcard_scope_allows_all() {
-        let evaluator = Stage2Evaluator::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let envelope = test_envelope("system.execute");
         let claims = test_claims(vec!["*"]);
 
@@ -291,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_deny_when_policy_denies() {
-        let evaluator = Stage2Evaluator::new(Box::new(DenyAllPolicy));
+        let evaluator = ConstraintEnforcer::new(Box::new(DenyAllPolicy));
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -302,7 +342,7 @@ mod tests {
 
     #[test]
     fn test_deny_when_bundle_stale() {
-        let evaluator = Stage2Evaluator::new(Box::new(StalePolicy));
+        let evaluator = ConstraintEnforcer::new(Box::new(StalePolicy));
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 

@@ -1,16 +1,45 @@
+//! Enforcement decision types.
+//!
+//! Every `enforce()` call produces exactly one [`EnforcementDecision`]:
+//! ALLOW or DENY. ALLOW carries the verified claims and normalized envelope
+//! for downstream use (credential injection, connector dispatch, audit).
+//! DENY carries a structured reason, the originating stage, and a detail
+//! message for audit and agent error reporting.
+//!
+//! ABORT is an asynchronous in-flight kill signal emitted by the Authority
+//! via `WatchAborts`, not produced by the enforcement pipeline itself.
+
 use firma_core::{CapabilityClaims, DenyReason, ExecutionEnvelope};
+
+/// Sub-stages within Stage 1 (Capability Validation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityValidationStage {
+    /// Token selection from the capability map.
+    TokenSelection,
+    /// Token validation — parse, signature verify, expiry, revocation.
+    TokenValidation,
+}
+
+/// Sub-stages within Stage 2 (Constraint Enforcement Engine).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConstraintEnforcementStage {
+    /// Scope check — action class within token's allowed set.
+    ScopeCheck,
+    /// Policy bundle freshness check.
+    BundleFreshness,
+    /// Cedar policy evaluation.
+    PolicyEvaluation,
+}
 
 /// Identifies which pipeline stage produced a decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnforcementStage {
-    /// Intent normalization (pre-Stage-1).
+    /// Intent normalization — raw request → canonical `ExecutionEnvelope`.
     Normalization,
-    /// Token selection from capability map.
-    TokenSelection,
-    /// Stage 1: token validation.
-    Stage1,
-    /// Stage 2: Cedar policy evaluation.
-    Stage2,
+    /// Stage 1: Capability Validation.
+    CapabilityValidation(CapabilityValidationStage),
+    /// Stage 2: Constraint Enforcement Engine (CEE).
+    ConstraintEnforcement(ConstraintEnforcementStage),
 }
 
 /// Unified result of the enforcement pipeline.
@@ -70,13 +99,20 @@ mod tests {
     fn test_deny_has_reason() {
         let decision = EnforcementDecision::Deny {
             reason: DenyReason::TokenExpired,
-            stage: EnforcementStage::Stage1,
+            stage: EnforcementStage::CapabilityValidation(
+                CapabilityValidationStage::TokenValidation,
+            ),
             detail: "token has expired".to_string(),
             envelope: None,
         };
         assert!(decision.is_deny());
         assert!(!decision.is_allow());
         assert_eq!(decision.deny_reason(), Some(DenyReason::TokenExpired));
-        assert_eq!(decision.stage(), Some(EnforcementStage::Stage1));
+        assert_eq!(
+            decision.stage(),
+            Some(EnforcementStage::CapabilityValidation(
+                CapabilityValidationStage::TokenValidation
+            ))
+        );
     }
 }

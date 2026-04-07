@@ -1,35 +1,100 @@
+//! Stage 1 — Capability Validation.
+//!
+//! First enforcement phase. Selects the best-matching capability token and
+//! validates it:
+//!
+//! 1. **Capability token selection** — selects the best-matching pre-provisioned
+//!    token from the [`CapabilityMap`](super::capability_map::CapabilityMap) by
+//!    action class and resource scope (ADR-002). The agent knows nothing about
+//!    Firma; the sidecar selects the correct token internally.
+//! 2. **Token validation** — parse PASETO v4, verify Ed25519 signature, check
+//!    expiry (with configurable clock skew tolerance), and check revocation via
+//!    bloom filter + LRU cache.
+//!
+//! All operations are fully local — the Authority is never contacted on the
+//! hot path. Target latency: < 1 ms p95.
+//!
+//! # Security properties
+//!
+//! Stage 1 prevents forged, tampered, expired, or revoked capabilities from
+//! entering the execution path:
+//! - **Token forgery** — cryptographic signature verification rejects tokens
+//!   not signed by a trusted Authority.
+//! - **Token tampering** — any modification to scope, budget, expiry, agent ID,
+//!   or resource scope invalidates the signature.
+//! - **Expired credential reuse** — expiry check rejects tokens whose TTL has
+//!   elapsed.
+//! - **Revoked token reuse** — bloom filter + LRU cache check rejects tokens
+//!   that have been explicitly invalidated.
+
 use std::time::Duration;
 
-use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
+use firma_core::{CapabilityClaims, ExecutionEnvelope, RevocationStore, TokenError, TokenVerifier};
 
-use super::decision::{EnforcementDecision, EnforcementStage};
+use super::capability_map::CapabilityMap;
+use super::decision::{CapabilityValidationStage, EnforcementDecision, EnforcementStage};
 use super::error::EnforcementError;
 
-/// Stage 1: Token Validation.
+/// Stage 1: Capability Validation.
 ///
-/// Validates the capability token: parse PASETO v4, verify Ed25519 signature,
-/// check expiry, and check revocation via bloom filter + LRU cache.
+/// Selects the best-matching capability token and validates it:
+/// parse PASETO v4, verify Ed25519 signature, check expiry, and check
+/// revocation via bloom filter + LRU cache.
 /// Fully local — the Authority is never contacted.
 ///
 /// Target: < 1ms p95.
-pub struct Stage1Validator {
-    verifier: Box<dyn TokenVerifier + Send + Sync>,
-    revocation: Box<dyn RevocationStore + Send + Sync>,
+pub struct CapabilityValidator {
     clock_skew_tolerance: Duration,
+    capability_map: CapabilityMap,
+    revocation: Box<dyn RevocationStore + Send + Sync>,
+    verifier: Box<dyn TokenVerifier + Send + Sync>,
 }
 
-impl Stage1Validator {
+impl CapabilityValidator {
+    /// Creates a new [`CapabilityValidator`] with the given [`CapabilityMap`],
+    /// and implementations of [`TokenVerifier`] and [`RevocationStore`].
     #[must_use]
     pub fn new(
+        capability_map: CapabilityMap,
         verifier: Box<dyn TokenVerifier + Send + Sync>,
         revocation: Box<dyn RevocationStore + Send + Sync>,
         clock_skew_tolerance: Duration,
     ) -> Self {
         Self {
-            verifier,
-            revocation,
             clock_skew_tolerance,
+            capability_map,
+            revocation,
+            verifier,
         }
+    }
+
+    /// Run Stage 1: select token → validate.
+    ///
+    /// Receives an already-normalized `ExecutionEnvelope` (produced by
+    /// [`crate::normalizer::IntentNormalizer`]) and the session ID.
+    /// Selects the best-matching capability token from the map and validates it.
+    ///
+    /// Returns the validated `CapabilityClaims` on success, or a DENY decision.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EnforcementDecision::Deny` if no token matches or token
+    /// validation fails.
+    #[allow(clippy::result_large_err)]
+    pub fn enforce(
+        &self,
+        envelope: &ExecutionEnvelope,
+        session_id: &str,
+    ) -> Result<CapabilityClaims, EnforcementDecision> {
+        // Step 1: Select capability token from map (ADR-002)
+        let entry = self.capability_map.select(
+            session_id,
+            &envelope.intent.action_class,
+            &envelope.intent.resource,
+        )?;
+
+        // Step 2: Validate selected token
+        self.validate(&entry.raw_token)
     }
 
     /// Validate a raw token string.
@@ -53,12 +118,15 @@ impl Stage1Validator {
     /// Panics if the clock skew tolerance exceeds the range representable by
     /// `chrono::Duration` (practically unreachable).
     #[allow(clippy::result_large_err)]
-    pub fn validate(&self, raw_token: &str) -> Result<CapabilityClaims, EnforcementDecision> {
+    fn validate(&self, raw_token: &str) -> Result<CapabilityClaims, EnforcementDecision> {
+        let stage =
+            EnforcementStage::CapabilityValidation(CapabilityValidationStage::TokenValidation);
+
         // Steps 1-3: Parse + verify + extract claims
         let claims = self
             .verifier
             .verify(raw_token)
-            .map_err(|e| EnforcementError::from(e).into_deny(EnforcementStage::Stage1))?;
+            .map_err(|e| EnforcementError::from(e).into_deny(stage))?;
 
         // Step 4: Check expiry with clock skew tolerance
         let now = chrono::Utc::now();
@@ -68,20 +136,20 @@ impl Stage1Validator {
             return Err(EnforcementError::TokenValidation(TokenError::Expired {
                 token_id: claims.token_id.clone(),
             })
-            .into_deny(EnforcementStage::Stage1));
+            .into_deny(stage));
         }
 
         // Step 5: Check revocation
         let is_revoked = self
             .revocation
             .is_revoked(&claims.token_id)
-            .map_err(|e| EnforcementError::from(e).into_deny(EnforcementStage::Stage1))?;
+            .map_err(|e| EnforcementError::from(e).into_deny(stage))?;
 
         if is_revoked {
             return Err(EnforcementError::TokenValidation(TokenError::Revoked {
                 token_id: claims.token_id.clone(),
             })
-            .into_deny(EnforcementStage::Stage1));
+            .into_deny(stage));
         }
 
         Ok(claims)
@@ -91,6 +159,7 @@ impl Stage1Validator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::enforcement::capability_map::CapabilityEntry;
     use chrono::Utc;
     use firma_core::CapabilityClaims;
 
@@ -139,9 +208,17 @@ mod tests {
         }
     }
 
+    fn test_capability_map() -> CapabilityMap {
+        CapabilityMap::new(vec![CapabilityEntry {
+            raw_token: "v4.public.test_token".to_string(),
+            claims: valid_claims(),
+        }])
+    }
+
     #[test]
     fn test_valid_token_passes() {
-        let validator = Stage1Validator::new(
+        let validator = CapabilityValidator::new(
+            test_capability_map(),
             Box::new(MockVerifier {
                 claims: valid_claims(),
             }),
@@ -155,7 +232,8 @@ mod tests {
 
     #[test]
     fn test_invalid_signature_denied() {
-        let validator = Stage1Validator::new(
+        let validator = CapabilityValidator::new(
+            test_capability_map(),
             Box::new(FailingVerifier),
             Box::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
@@ -172,7 +250,8 @@ mod tests {
 
     #[test]
     fn test_revoked_token_denied() {
-        let validator = Stage1Validator::new(
+        let validator = CapabilityValidator::new(
+            test_capability_map(),
             Box::new(MockVerifier {
                 claims: valid_claims(),
             }),
@@ -196,7 +275,8 @@ mod tests {
         let mut claims = valid_claims();
         claims.expiry = Utc::now() - chrono::Duration::hours(1);
 
-        let validator = Stage1Validator::new(
+        let validator = CapabilityValidator::new(
+            test_capability_map(),
             Box::new(MockVerifier { claims }),
             Box::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
@@ -222,7 +302,8 @@ mod tests {
             }
         }
 
-        let validator = Stage1Validator::new(
+        let validator = CapabilityValidator::new(
+            test_capability_map(),
             Box::new(MalformedVerifier),
             Box::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
@@ -239,11 +320,10 @@ mod tests {
     #[test]
     fn test_clock_skew_tolerance_allows_slightly_expired() {
         let mut claims = valid_claims();
-        // Token expired 2 seconds ago
         claims.expiry = Utc::now() - chrono::Duration::seconds(2);
 
-        // But we allow 5 seconds of skew
-        let validator = Stage1Validator::new(
+        let validator = CapabilityValidator::new(
+            test_capability_map(),
             Box::new(MockVerifier { claims }),
             Box::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(5),
@@ -258,14 +338,12 @@ mod tests {
 
     #[test]
     fn test_every_stage1_error_is_deny() {
-        // Exhaustive: parse failure, signature invalid, expired, revoked, malformed
-        // All must map to DENY (fail-closed)
-        let error_verifiers: Vec<Box<dyn TokenVerifier + Send + Sync>> = vec![
-            Box::new(FailingVerifier), // SignatureInvalid
-        ];
+        let error_verifiers: Vec<Box<dyn TokenVerifier + Send + Sync>> =
+            vec![Box::new(FailingVerifier)];
 
         for verifier in error_verifiers {
-            let validator = Stage1Validator::new(
+            let validator = CapabilityValidator::new(
+                test_capability_map(),
                 verifier,
                 Box::new(MockRevocationStore { revoked: vec![] }),
                 Duration::from_secs(0),
