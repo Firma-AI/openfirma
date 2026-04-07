@@ -1,9 +1,22 @@
+//! Capability token selection map.
+//!
+//! Holds pre-provisioned capability tokens issued by the Authority at
+//! pre-flight and selects the best match for each intercepted request
+//! based on action class and resource scope (ADR-002).
+//!
+//! Tokens are indexed by action class at construction time so that
+//! per-request lookups avoid a full linear scan. The agent knows nothing
+//! about Firma — the sidecar selects the correct token internally after
+//! intent normalization.
+
 use std::collections::HashMap;
 
 use firma_core::CapabilityClaims;
 
-use super::decision::{EnforcementDecision, EnforcementStage};
-use super::error::EnforcementError;
+use crate::enforcement::decision::{
+    CapabilityValidationStage, EnforcementDecision, EnforcementStage,
+};
+use crate::enforcement::error::EnforcementError;
 
 /// A pre-provisioned capability token with pre-parsed claims.
 #[derive(Debug, Clone)]
@@ -109,7 +122,9 @@ impl CapabilityMap {
                     "no capability token covers action '{action_class}' on resource '{resource}'"
                 ),
             }
-            .into_deny(EnforcementStage::TokenSelection)
+            .into_deny(EnforcementStage::CapabilityValidation(
+                CapabilityValidationStage::TokenSelection,
+            ))
         })
     }
 

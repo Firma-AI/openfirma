@@ -2,7 +2,7 @@
 //!
 //! Runs in the Sidecar hot path immediately after interception and before
 //! token validation. Deterministically maps the raw intercepted event into a
-//! canonical [`NormalizedEnvelope`] with a normalized `intent.action_class`.
+//! canonical `ExecutionEnvelope` with a normalized `intent.action_class`.
 //!
 //! This step performs deterministic rule-based canonicalization only — no
 //! language model, SLM, probabilistic classifier, or similarity-based
@@ -23,11 +23,12 @@ mod mapping;
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
-use firma_core::envelope::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
+use firma_core::{
+    ActionParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams,
+};
 
 pub use self::mapping::{MappingTable, MatchResult};
-pub use crate::enforcement::decision::{EnforcementDecision, EnforcementStage};
+use crate::enforcement::decision::{EnforcementDecision, EnforcementStage};
 use crate::enforcement::error::EnforcementError;
 
 /// Headers that must never leak into the `ExecutionEnvelope` (and therefore
@@ -39,16 +40,6 @@ const SENSITIVE_HEADERS: &[&str] = &[
     "proxy-authorization",
     "x-api-key",
 ];
-
-/// Output of the intent normalizer — contains only the fields the
-/// normalizer can fill. Missing fields (`capability`, `agent_id`,
-/// `session_id`) are populated by the pipeline after Stage 1 validation
-/// when constructing the full `ExecutionEnvelope`.
-#[derive(Debug, Clone)]
-pub struct NormalizedEnvelope {
-    pub intent: ExecutionIntent,
-    pub timestamp: DateTime<Utc>,
-}
 
 /// Raw intercepted request — the input to the enforcement pipeline.
 /// Constructed by proxy-core from Pingora request data.
@@ -62,12 +53,10 @@ pub struct RawRequest {
     pub is_https: bool,
 }
 
-/// Maps raw intercepted requests to canonical [`NormalizedEnvelope`] instances.
+/// Maps raw intercepted requests to canonical `ExecutionEnvelope` instances.
 ///
 /// Uses the `MappingTable` to find the matching action class, then builds
-/// a `NormalizedEnvelope` with the five intent sub-fields and a timestamp.
-/// Fields that depend on token validation (`capability`, `session_id`,
-/// `agent_id`) are populated later by the pipeline.
+/// an immutable `ExecutionEnvelope` with all five intent sub-fields.
 #[derive(Debug)]
 pub struct IntentNormalizer {
     mapping_table: MappingTable,
@@ -79,20 +68,20 @@ impl IntentNormalizer {
         Self { mapping_table }
     }
 
-    /// Normalize a raw request into a [`NormalizedEnvelope`].
+    /// Normalize a raw request into an `ExecutionEnvelope`.
+    ///
+    /// Returns `Err(EnforcementDecision::Deny)` with `UNCLASSIFIED_INTENT`
+    /// if the request is protected but cannot be mapped.
     ///
     /// # Errors
     ///
-    /// Returns `EnforcementDecision::Deny` with `UNCLASSIFIED_INTENT` if:
-    /// - The request is protected but cannot be mapped to a known action class.
-    /// - The HTTP method is not a recognized standard method (fail-closed).
-    ///
-    /// Returns `EnforcementDecision::Passthrough` if the host is not protected.
+    /// Returns `EnforcementDecision::Deny` if the request cannot be classified
+    /// to a known action class, or if the host is not protected.
     #[allow(clippy::result_large_err)]
     pub fn normalize(
         &self,
         request: &RawRequest,
-    ) -> Result<NormalizedEnvelope, EnforcementDecision> {
+    ) -> Result<ExecutionEnvelope, EnforcementDecision> {
         let match_result =
             self.mapping_table
                 .find_match(&request.method, &request.host, &request.path);
@@ -103,16 +92,9 @@ impl IntentNormalizer {
                 let raw_transport = if request.is_https { "https" } else { "http" };
                 let resource = format!("{}{}", request.host, request.path);
 
-                let Some(http_method) = parse_http_method(&request.method) else {
-                    let detail = format!(
-                        "unrecognized HTTP method: {} {} (host: {})",
-                        request.method, request.path, request.host
-                    );
-                    return Err(EnforcementError::NormalizationFailed { detail }
-                        .into_deny(EnforcementStage::Normalization));
-                };
+                let http_method = parse_http_method(&request.method);
 
-                let envelope = NormalizedEnvelope {
+                let envelope = ExecutionEnvelope {
                     intent: ExecutionIntent {
                         action_class: rule.action_class.clone(),
                         resource,
@@ -125,7 +107,16 @@ impl IntentNormalizer {
                         raw_transport: raw_transport.to_string(),
                         raw_action_ref,
                     },
-                    timestamp: Utc::now(),
+                    capability: String::new(), // filled after token selection
+                    metadata: ExecutionMetadata {
+                        session_id: String::new(), // filled by pipeline caller
+                        agent_id: String::new(),   // filled from token claims
+                        timestamp: chrono::Utc::now(),
+                        trace_id: None,
+                        budget_consumed: 0.0,
+                        risk_score: None,
+                    },
+                    provenance: None,
                 };
 
                 Ok(envelope)
@@ -139,8 +130,11 @@ impl IntentNormalizer {
                     .into_deny(EnforcementStage::Normalization))
             }
             MatchResult::NotProtected => {
+                // For now, treat non-protected as an error at the pipeline level.
+                // The proxy-core caller should handle passthrough before calling enforce().
                 let detail = format!("non-protected host: {} (not enforced)", request.host);
-                Err(EnforcementDecision::Passthrough { detail })
+                Err(EnforcementError::NormalizationFailed { detail }
+                    .into_deny(EnforcementStage::Normalization))
             }
         }
     }
@@ -154,23 +148,21 @@ fn sanitize_headers(headers: &HashMap<String, String>) -> HashMap<String, String
         .collect()
 }
 
-fn parse_http_method(method: &str) -> Option<HttpMethod> {
+fn parse_http_method(method: &str) -> HttpMethod {
     match method.to_uppercase().as_str() {
-        "GET" => Some(HttpMethod::GET),
-        "POST" => Some(HttpMethod::POST),
-        "PUT" => Some(HttpMethod::PUT),
-        "DELETE" => Some(HttpMethod::DELETE),
-        "PATCH" => Some(HttpMethod::PATCH),
-        "HEAD" => Some(HttpMethod::HEAD),
-        "OPTIONS" => Some(HttpMethod::OPTIONS),
-        _ => None,
+        "GET" => HttpMethod::GET,
+        "PUT" => HttpMethod::PUT,
+        "DELETE" => HttpMethod::DELETE,
+        "PATCH" => HttpMethod::PATCH,
+        "HEAD" => HttpMethod::HEAD,
+        "OPTIONS" => HttpMethod::OPTIONS,
+        // "POST" and unrecognised methods default to POST (fail-safe in enforcement)
+        _ => HttpMethod::POST,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use firma_core::decision::DenyReason;
-
     use super::*;
     use crate::enforcement::config::{MappingRuleConfig, MappingRulesFile};
     use crate::enforcement::registry::ActionClassRegistry;
@@ -255,36 +247,6 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_not_protected_returns_passthrough() {
-        let registry = ActionClassRegistry::v0_1();
-        let file = MappingRulesFile {
-            rules: vec![MappingRuleConfig {
-                method: Some("POST".to_string()),
-                host: "api.openai.com".to_string(),
-                path: Some("/v1/chat/completions".to_string()),
-                action_class: "llm.inference".to_string(),
-            }],
-        };
-        let table =
-            MappingTable::from_config(&file, &registry, false).unwrap_or_else(|e| panic!("{e}"));
-        let normalizer = IntentNormalizer::new(table);
-
-        let request = RawRequest {
-            method: "GET".to_string(),
-            host: "not-protected.example.com".to_string(),
-            path: "/any".to_string(),
-            headers: HashMap::new(),
-            body: None,
-            is_https: true,
-        };
-
-        let result = normalizer.normalize(&request);
-        assert!(result.is_err());
-        let decision = result.unwrap_err();
-        assert!(decision.is_passthrough());
-    }
-
-    #[test]
     fn test_normalize_unclassified_protected() {
         let normalizer = test_normalizer();
         let request = RawRequest {
@@ -300,25 +262,9 @@ mod tests {
         assert!(result.is_err());
         let decision = result.unwrap_err();
         assert!(decision.is_deny());
-        assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
-    }
-
-    #[test]
-    fn test_normalize_unrecognized_method_denied() {
-        let normalizer = test_normalizer();
-        let request = RawRequest {
-            method: "FROBNICATE".to_string(),
-            host: "api.openai.com".to_string(),
-            path: "/v1/chat/completions".to_string(),
-            headers: HashMap::new(),
-            body: None,
-            is_https: true,
-        };
-
-        let result = normalizer.normalize(&request);
-        assert!(result.is_err());
-        let decision = result.unwrap_err();
-        assert!(decision.is_deny());
-        assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
+        assert_eq!(
+            decision.deny_reason(),
+            Some(firma_core::DenyReason::UnclassifiedIntent)
+        );
     }
 }

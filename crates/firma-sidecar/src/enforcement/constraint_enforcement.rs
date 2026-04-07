@@ -32,9 +32,9 @@
 //! - **Non-deterministic authorization** — same context + same bundle always
 //!   produces the same decision.
 
+use firma_core::{CapabilityClaims, DenyReason, ExecutionEnvelope};
+
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
-use crate::normalizer::NormalizedEnvelope;
-use firma_core::{decision::DenyReason, token::CapabilityClaims};
 
 /// Trait for policy evaluation — abstracts Cedar or any other policy engine.
 ///
@@ -82,40 +82,32 @@ impl ConstraintEnforcer {
 
     /// Evaluate the request against Cedar policies.
     ///
-    /// Returns `Ok(())` if the request passes all checks, or
-    /// `Err(EnforcementDecision::Deny)` if any check fails.
-    /// The pipeline is responsible for constructing the `Allow` decision
-    /// with a fully populated `ExecutionEnvelope`.
-    ///
     /// Sequence:
     /// 1. Scope check -- is `action_class` in the token's `action_set`?
     /// 2. Check policy bundle freshness
     /// 3. Build Cedar context
     /// 4. Evaluate Cedar policies
-    ///
-    /// # Errors
-    ///
-    /// Returns `EnforcementDecision::Deny` if scope check, bundle freshness,
-    /// or Cedar policy evaluation fails.
-    #[allow(clippy::result_large_err)]
+    #[must_use]
     pub fn evaluate(
         &self,
-        envelope: &NormalizedEnvelope,
+        envelope: &ExecutionEnvelope,
         claims: &CapabilityClaims,
-    ) -> Result<(), EnforcementDecision> {
+    ) -> EnforcementDecision {
         // Step 1: Scope check (pre-Cedar gate)
-        self.check_scope(envelope, claims)?;
+        if let Err(deny) = self.check_scope(envelope, claims) {
+            return deny;
+        }
 
         // Step 2: Check policy bundle freshness
         if !self.policy.is_fresh() {
-            return Err(EnforcementDecision::Deny {
+            return EnforcementDecision::Deny {
                 reason: DenyReason::PolicyBundleStale,
                 stage: EnforcementStage::ConstraintEnforcement(
                     ConstraintEnforcementStage::BundleFreshness,
                 ),
                 detail: "policy bundle TTL expired".to_string(),
                 envelope: Some(envelope.clone()),
-            });
+            };
         }
 
         // Step 3: Build context
@@ -128,8 +120,11 @@ impl ConstraintEnforcer {
             &envelope.intent.resource,
             &context,
         ) {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(EnforcementDecision::Deny {
+            Ok(true) => EnforcementDecision::Allow {
+                claims: claims.clone(),
+                envelope: envelope.clone(),
+            },
+            Ok(false) => EnforcementDecision::Deny {
                 reason: DenyReason::PolicyDenied,
                 stage: EnforcementStage::ConstraintEnforcement(
                     ConstraintEnforcementStage::PolicyEvaluation,
@@ -139,15 +134,15 @@ impl ConstraintEnforcer {
                     envelope.intent.action_class, envelope.intent.resource
                 ),
                 envelope: Some(envelope.clone()),
-            }),
-            Err(err) => Err(EnforcementDecision::Deny {
+            },
+            Err(err) => EnforcementDecision::Deny {
                 reason: DenyReason::PolicyDenied,
                 stage: EnforcementStage::ConstraintEnforcement(
                     ConstraintEnforcementStage::PolicyEvaluation,
                 ),
                 detail: format!("policy evaluation error: {err}"),
                 envelope: Some(envelope.clone()),
-            }),
+            },
         }
     }
 
@@ -157,7 +152,7 @@ impl ConstraintEnforcer {
     #[allow(clippy::result_large_err)]
     fn check_scope(
         &self,
-        envelope: &NormalizedEnvelope,
+        envelope: &ExecutionEnvelope,
         claims: &CapabilityClaims,
     ) -> Result<(), EnforcementDecision> {
         let action = &envelope.intent.action_class;
@@ -186,7 +181,7 @@ impl ConstraintEnforcer {
     #[allow(clippy::unused_self)] // will use self when Cedar is integrated
     fn build_context(
         &self,
-        envelope: &NormalizedEnvelope,
+        envelope: &ExecutionEnvelope,
         claims: &CapabilityClaims,
     ) -> serde_json::Value {
         serde_json::json!({
@@ -203,7 +198,7 @@ impl ConstraintEnforcer {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use firma_core::envelope::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
+    use firma_core::*;
     use std::collections::HashMap;
 
     struct AllowAllPolicy;
@@ -263,8 +258,8 @@ mod tests {
         }
     }
 
-    fn test_envelope(action_class: &str) -> NormalizedEnvelope {
-        NormalizedEnvelope {
+    fn test_envelope(action_class: &str) -> ExecutionEnvelope {
+        ExecutionEnvelope {
             intent: ExecutionIntent {
                 action_class: action_class.to_string(),
                 resource: "api.openai.com/v1/chat/completions".to_string(),
@@ -277,7 +272,16 @@ mod tests {
                 raw_transport: "https".to_string(),
                 raw_action_ref: "POST /v1/chat/completions".to_string(),
             },
-            timestamp: Utc::now(),
+            capability: "v4.public.test".to_string(),
+            metadata: ExecutionMetadata {
+                session_id: "sess_001".to_string(),
+                agent_id: "agent_test".to_string(),
+                timestamp: Utc::now(),
+                trace_id: None,
+                budget_consumed: 0.0,
+                risk_score: None,
+            },
+            provenance: None,
         }
     }
 
@@ -300,8 +304,8 @@ mod tests {
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
-        let result = evaluator.evaluate(&envelope, &claims);
-        assert!(result.is_ok());
+        let decision = evaluator.evaluate(&envelope, &claims);
+        assert!(decision.is_allow());
     }
 
     #[test]
@@ -310,7 +314,7 @@ mod tests {
         let envelope = test_envelope("file.delete");
         let claims = test_claims(vec!["llm.inference"]);
 
-        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        let decision = evaluator.evaluate(&envelope, &claims);
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::ScopeViolation));
     }
@@ -321,8 +325,8 @@ mod tests {
         let envelope = test_envelope("system.execute");
         let claims = test_claims(vec!["*"]);
 
-        let result = evaluator.evaluate(&envelope, &claims);
-        assert!(result.is_ok());
+        let decision = evaluator.evaluate(&envelope, &claims);
+        assert!(decision.is_allow());
     }
 
     #[test]
@@ -331,7 +335,7 @@ mod tests {
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
-        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        let decision = evaluator.evaluate(&envelope, &claims);
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyDenied));
     }
@@ -342,7 +346,7 @@ mod tests {
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
-        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        let decision = evaluator.evaluate(&envelope, &claims);
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
     }
