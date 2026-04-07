@@ -1,3 +1,12 @@
+//! Enforcement configuration types.
+//!
+//! Deserialized from TOML at startup. Contains configuration for all
+//! enforcement sub-systems: mapping rules (intent normalization),
+//! Stage 1 (clock skew tolerance), and Stage 2 (policy bundle TTL).
+//!
+//! Validated eagerly at startup via [`EnforcementConfig::validate`] to
+//! surface misconfigurations before the first request arrives.
+
 use serde::Deserialize;
 
 const VALID_HTTP_METHODS: &[&str] = &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];

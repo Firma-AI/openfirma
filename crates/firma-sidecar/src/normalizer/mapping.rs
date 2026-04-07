@@ -138,10 +138,10 @@ impl MappingTable {
 
     fn rule_matches(rule: &MappingRule, method: &str, host: &str, path: &str) -> bool {
         // Check method (None = any method)
-        if let Some(ref rule_method) = rule.method
-            && !rule_method.eq_ignore_ascii_case(method)
-        {
-            return false;
+        if let Some(ref rule_method) = rule.method {
+            if !rule_method.eq_ignore_ascii_case(method) {
+                return false;
+            }
         }
 
         // Check host pattern
@@ -150,10 +150,10 @@ impl MappingTable {
         }
 
         // Check path pattern (None = any path)
-        if let Some(ref pattern) = rule.path_pattern
-            && !glob_match(pattern, path)
-        {
-            return false;
+        if let Some(ref pattern) = rule.path_pattern {
+            if !glob_match(pattern, path) {
+                return false;
+            }
         }
 
         true
@@ -196,10 +196,10 @@ fn glob_match(pattern: &str, value: &str) -> bool {
     }
 
     // Last part must match at the end
-    if let Some(last) = parts.last()
-        && !last.is_empty()
-    {
-        return value.ends_with(last);
+    if let Some(last) = parts.last() {
+        if !last.is_empty() {
+            return value.ends_with(last);
+        }
     }
 
     true

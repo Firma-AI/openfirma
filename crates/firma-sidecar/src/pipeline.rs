@@ -7,20 +7,16 @@
 //! The pipeline is the ONLY public entry point for enforcement; callers
 //! never interact with individual stages directly.
 //!
-//! Every code path returns ALLOW, DENY, or PASSTHROUGH.
-//! PASSTHROUGH means the request targets a non-protected host and should
-//! be forwarded without enforcement. The pipeline short-circuits on any
-//! DENY or PASSTHROUGH.
+//! Every code path returns ALLOW or DENY — there is no third outcome.
+//! The pipeline short-circuits on any DENY.
 //!
 //! Target: < 3 ms p95 end-to-end overhead (interceptor + Stage 1 +
 //! Stage 2 + credential injection + audit emit, excluding connector and
 //! external system latency).
 
-use firma_core::envelope::{ExecutionEnvelope, ExecutionMetadata};
-
 // Re-export public API for pipeline callers
 pub use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
-pub use crate::enforcement::capability_validation::{CapabilityValidator, ValidatedCapability};
+pub use crate::enforcement::capability_validation::CapabilityValidator;
 pub use crate::enforcement::config::{
     EnforcementConfig, MappingConfig, MappingRuleConfig, MappingRulesFile, Stage1Config,
     Stage2Config,
@@ -30,16 +26,15 @@ pub use crate::enforcement::decision::{
     CapabilityValidationStage, ConstraintEnforcementStage, EnforcementDecision, EnforcementStage,
 };
 pub use crate::enforcement::registry::ActionClassRegistry;
-pub use crate::normalizer::{IntentNormalizer, MappingTable, NormalizedEnvelope, RawRequest};
+pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
 
 /// The enforcement pipeline. Orchestrates the full `enforce()` flow:
 ///
 /// ```text
-/// normalize → Stage 1 (select + validate token) → Stage 2 (Cedar eval) → assemble envelope
+/// normalize → select token → validate token (Stage 1) → Cedar eval (Stage 2)
 /// ```
 ///
-/// Short-circuits on any DENY or PASSTHROUGH. Every code path returns
-/// ALLOW, DENY, or PASSTHROUGH.
+/// Short-circuits on any DENY. Every code path returns ALLOW or DENY.
 /// The pipeline is stateless per-request — all shared state is accessed
 /// via references injected at construction time.
 ///
@@ -72,49 +67,25 @@ impl EnforcementPipeline {
     /// Token is selected internally from the `CapabilityMap` (ADR-002).
     ///
     /// Pipeline stages:
-    /// 1. Normalize intent: raw request → `NormalizedEnvelope`
-    /// 2. Stage 1: select capability token, validate token → `ValidatedCapability`
+    /// 1. Normalize intent: raw request → `ExecutionEnvelope`
+    /// 2. Stage 1: select capability token, validate token
     /// 3. Stage 2: scope check + Cedar policy evaluation
-    /// 4. On Allow: assemble a fully populated `ExecutionEnvelope` from
-    ///    the normalized envelope + validated capability + session context.
     #[must_use]
     pub fn enforce(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
-        // Normalize intent (may short-circuit with Deny or Passthrough)
-        let normalized = match self.normalizer.normalize(request) {
+        // Normalize intent
+        let envelope = match self.normalizer.normalize(request) {
             Ok(env) => env,
-            Err(decision) => return decision,
+            Err(deny) => return deny,
         };
 
         // Stage 1: Select token → validate
-        let capability = match self.stage1.enforce(&normalized, session_id) {
-            Ok(cap) => cap,
+        let claims = match self.stage1.enforce(&envelope, session_id) {
+            Ok(claims) => claims,
             Err(deny) => return deny,
         };
 
         // Stage 2: Scope check + Cedar policy evaluation
-        if let Err(deny) = self.stage2.evaluate(&normalized, &capability.claims) {
-            return deny;
-        }
-
-        // All stages passed — assemble the fully populated envelope.
-        let envelope = ExecutionEnvelope {
-            intent: normalized.intent,
-            capability: capability.raw_token,
-            metadata: ExecutionMetadata {
-                session_id: session_id.to_string(),
-                agent_id: capability.claims.agent_id.clone(),
-                timestamp: normalized.timestamp,
-                trace_id: None,
-                budget_consumed: 0.0,
-                risk_score: None,
-            },
-            provenance: None,
-        };
-
-        EnforcementDecision::Allow {
-            claims: capability.claims,
-            envelope: Box::new(envelope),
-        }
+        self.stage2.evaluate(&envelope, &claims)
     }
 }
 
@@ -127,9 +98,9 @@ mod tests {
     use crate::enforcement::registry::ActionClassRegistry;
     use crate::normalizer::MappingTable;
     use chrono::Utc;
-    use firma_core::decision::DenyReason;
-    use firma_core::token::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
+    use firma_core::*;
     use std::collections::HashMap;
+    use std::time::Duration;
 
     struct AllowAllPolicy;
     impl PolicyEvaluation for AllowAllPolicy {
@@ -159,11 +130,6 @@ mod tests {
         }
     }
 
-    fn test_entry(raw_token: &str, claims: CapabilityClaims) -> CapabilityEntry {
-        CapabilityEntry::from_raw_token(raw_token, &MockVerifier { claims })
-            .unwrap_or_else(|e| panic!("{e}"))
-    }
-
     struct NoRevocations;
     impl RevocationStore for NoRevocations {
         fn is_revoked(&self, _token_id: &str) -> Result<bool, TokenError> {
@@ -188,19 +154,11 @@ mod tests {
     }
 
     fn test_mapping_table(rules: &[MappingRuleConfig]) -> MappingTable {
-        test_mapping_table_with_protection(rules, true)
-    }
-
-    fn test_mapping_table_with_protection(
-        rules: &[MappingRuleConfig],
-        default_protected: bool,
-    ) -> MappingTable {
         let registry = ActionClassRegistry::v0_1();
         let file = MappingRulesFile {
             rules: rules.to_vec(),
         };
-        MappingTable::from_config(&file, &registry, default_protected)
-            .unwrap_or_else(|e| panic!("{e}"))
+        MappingTable::from_config(&file, &registry, true).unwrap_or_else(|e| panic!("{e}"))
     }
 
     fn default_rules() -> Vec<MappingRuleConfig> {
@@ -226,9 +184,13 @@ mod tests {
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
 
         let stage1 = CapabilityValidator::new(
-            CapabilityMap::new(vec![test_entry("v4.public.test_token", claims.clone())]),
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test_token".to_string(),
+                claims: claims.clone(),
+            }]),
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
+            Duration::from_secs(0),
         );
 
         let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
@@ -250,17 +212,6 @@ mod tests {
 
         let decision = pipeline.enforce(&request, "sess_001");
         assert!(decision.is_allow());
-
-        if let EnforcementDecision::Allow { claims, envelope } = decision {
-            assert_eq!(claims.agent_id, "agent_test");
-            assert_eq!(envelope.metadata.agent_id, "agent_test");
-            assert_eq!(envelope.metadata.session_id, "sess_001");
-            assert!(
-                !envelope.capability.is_empty(),
-                "capability must be populated on Allow"
-            );
-            assert_eq!(envelope.intent.action_class, "llm.inference");
-        }
     }
 
     #[test]
@@ -281,44 +232,6 @@ mod tests {
     }
 
     #[test]
-    fn test_enforce_not_protected_returns_passthrough() {
-        let claims = test_claims();
-        let rules = vec![MappingRuleConfig {
-            method: Some("POST".to_string()),
-            host: "api.openai.com".to_string(),
-            path: Some("/v1/chat/completions".to_string()),
-            action_class: "llm.inference".to_string(),
-        }];
-
-        let normalizer = IntentNormalizer::new(test_mapping_table_with_protection(&rules, false));
-
-        let stage1 = CapabilityValidator::new(
-            CapabilityMap::new(vec![test_entry("v4.public.test_token", claims.clone())]),
-            Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
-        );
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
-
-        let request = RawRequest {
-            method: "GET".to_string(),
-            host: "not-protected.example.com".to_string(),
-            path: "/any".to_string(),
-            headers: HashMap::new(),
-            body: None,
-            is_https: true,
-        };
-
-        let decision = pipeline.enforce(&request, "sess_001");
-        assert!(
-            decision.is_passthrough(),
-            "non-protected traffic should passthrough, not deny"
-        );
-        assert!(!decision.is_deny());
-        assert!(!decision.is_allow());
-    }
-
-    #[test]
     fn test_enforce_scope_violation() {
         let rules = vec![MappingRuleConfig {
             method: Some("DELETE".to_string()),
@@ -333,11 +246,15 @@ mod tests {
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
 
         let stage1 = CapabilityValidator::new(
-            CapabilityMap::new(vec![test_entry("v4.public.narrow", wide_claims.clone())]),
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.narrow".to_string(),
+                claims: wide_claims.clone(),
+            }]),
             Box::new(MockVerifier {
                 claims: wide_claims,
             }),
             Box::new(NoRevocations),
+            Duration::from_secs(0),
         );
 
         struct DenyDeletePolicy;
@@ -400,9 +317,13 @@ mod tests {
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
 
         let stage1 = CapabilityValidator::new(
-            CapabilityMap::new(vec![test_entry("v4.public.bad", claims.clone())]),
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.bad".to_string(),
+                claims: claims.clone(),
+            }]),
             Box::new(RejectingVerifier),
             Box::new(NoRevocations),
+            Duration::from_secs(0),
         );
         let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
@@ -445,6 +366,7 @@ mod tests {
             CapabilityMap::new(vec![]), // empty!
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
+            Duration::from_secs(0),
         );
         let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
@@ -520,9 +442,13 @@ mod tests {
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
 
         let stage1 = CapabilityValidator::new(
-            CapabilityMap::new(vec![test_entry("v4.public.test", claims.clone())]),
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test".to_string(),
+                claims: claims.clone(),
+            }]),
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
+            Duration::from_secs(0),
         );
 
         struct StalePolicy;
