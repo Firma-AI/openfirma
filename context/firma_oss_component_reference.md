@@ -1,6 +1,6 @@
 # **Firma AI — Open Source Release**
 
-`Component Reference  ·  v1`
+`OSS Runtime Realization of FEP v0.1.2`
 
 | This document describes every component included in the Firma AI open-source release (Apache 2.0). It is the primary reference for the team building on top of the OSS package. It explicitly calls out V1 scope boundaries, failure modes, and what is intentionally excluded. |
 | :---- |
@@ -18,11 +18,11 @@ Core terms used throughout this document. Definitions are grouped by layer. Refe
 | **Capability** | A scoped, time-bounded permission granted to an agent for a specific action class (e.g. “write to Postgres table orders, max 50 rows, expires in 10 min”). Issued by Firma Authority before execution begins. Defines the permission perimeter. The Sidecar enforces constraints within it but cannot extend or override it. |
 | **Capability Token** | The signed, serialized form of a capability. Encoded as PASETO v4 (preferred) or JWT RS256. Carries capability claims, agent identity, expiry, and a unique Token ID used for revocation. |
 | **Permission Perimeter** | The boundary of allowed actions, resources, budget, and expiry defined by a capability. Enforced by the Sidecar but cannot be extended or overridden at runtime. |
-| **Execution Envelope** | The core protocol unit of the Firma system. The protocol object wrapping each outbound call: intent, capability token reference, call metadata, and provenance. Each outbound call is represented as a distinct Execution Envelope evaluated independently by the Sidecar. Every request is evaluated, enforced, and audited as an Execution Envelope. Treated as immutable once created — any enrichment should produce a derived structure. |
+| **FEP Protocol Primitive—ExecutionEnvelope** | The core protocol unit of the Firma system. The protocol object wrapping each outbound call: intent, capability token reference, call metadata, and provenance. Each outbound call is represented as a distinct Execution Envelope evaluated independently by the Sidecar. Every request is evaluated, enforced, and audited as an Execution Envelope. Treated as immutable once created — any enrichment should produce a derived structure. Defined semantically by the FEP Specification v0.1. |
 | **Execution Context** | The set of attributes used during Cedar evaluation (e.g. agent identity, resource, budget remaining, risk score). Built from the Execution Envelope, Sidecar local state, and pre-computed attributes. Some attributes may originate from the agent and should be treated as untrusted unless verified or recomputed by the Sidecar. |
 | **Enforcement** |  |
 | **Stage 1 — Capability Validation** | First enforcement phase: token parse, signature verify, expiry check, revocation check via bloom filter. Fully local, \< 1ms p95. |
-| **Stage 2 — Constraint / Policy Enforcement (CEE)** | Second enforcement phase: context build, Cedar eval, scope / budget / threshold checks. Fully local, \< 200µs p95. |
+| **Stage 2 — Constraint Enforcement Engine (CEE)** | Second enforcement phase: context build, Cedar eval, scope / budget / threshold checks. Fully local, \< 200µs p95. |
 | **Constraint Enforcement Engine (CEE)** | The Stage 2 component of the Sidecar responsible for evaluating Cedar policies and applying runtime constraints (budget, scope, thresholds). |
 | **Cedar Evaluation** | Deterministic policy evaluation executed locally in the Sidecar (Stage 2\) or Authority (issuance). Takes a request context and policy bundle as input and returns ALLOW / DENY. Evaluation is fully local — no external calls are made or allowed. |
 | **Runtime Mechanics** |  |
@@ -101,7 +101,7 @@ Each component in the Firma stack prevents a specific class of threats. This sec
 | Stage 1 prevents forged, tampered, expired, or revoked capabilities from entering the execution path. |
 | :---- |
 
-### **Stage 2 — Constraint / Policy Enforcement (CEE)**
+### **Stage 2 — Constraint Enforcement Engine (CEE)**
 
 | Threat / Risk | What it prevents |
 | :---- | :---- |
@@ -163,14 +163,16 @@ Each component in the Firma stack prevents a specific class of threats. This sec
 
 ## **2\. Execution Pattern**
 
-Every agent call flows through five stages inside the Sidecar, in sequence. The Authority is not on the hot path. It is contacted only during capability issuance (pre-flight), either at session start or when new capabilities are required. It is never contacted during call execution.
+This section is the OSS runtime realization of the FEP Execution Protocol (§​5). Every agent call flows through six stages inside the Sidecar, in sequence. The Authority is not on the hot path. It is contacted only during capability issuance (pre-flight), either at session start or when new capabilities are required. It is never contacted during call execution.
+
+**Intent Normalizer / Envelope Builder** — runs immediately after interception. Maps the raw event to a canonical `intent.action_class`. Returns `DENY: UNCLASSIFIED_INTENT` fail-closed on classification failure. Produces the normalized `ExecutionEnvelope` consumed by Stage 1 and Stage 2\.
 
 A session does not imply a single capability. Multiple capabilities can coexist and be used independently across calls within the same session.
 
 | `Stage 1 — Capability Validation` | First enforcement phase. Validates the capability token: parse, signature verify, revocation check. Fully in-process, no network call. Runs in under 1 ms. |
 | :---- | :---- |
 | **`Authority (pre-flight only)`** | Called during capability issuance (pre-flight) to issue signed capability tokens. This may occur at session start or during an active session when new capabilities are required. Streams policy bundle and revocation updates in background. Not contacted again on the hot path. |
-| **`Stage 2 — Constraint / Policy Enforcement`** | Second enforcement phase (CEE). Builds Cedar context, evaluates Cedar policies, applies budget / scope / threshold checks. Fully local. |
+| **`Stage 2 — Constraint Enforcement Engine (CEE)`** | Second enforcement phase (CEE). Builds Cedar context, evaluates Cedar policies, applies budget / scope / threshold checks. Fully local. |
 | **`Connector`** | Translates the Execution Envelope to the target protocol. Applies target-specific technical constraints. Normalises the audit event. |
 | **`External`** | The downstream system: LLM API, database, third-party service, etc. |
 
@@ -220,13 +222,25 @@ Captures outbound agent traffic before it reaches the external system. Three mod
 
 * eBPF (roadmap) — kernel-level capture, no agent-side config required.
 
-Regardless of interception mode, the output is always a structured Execution Envelope passed to Stage 1\. If the intercepted request cannot be parsed into a valid Execution Envelope, the Sidecar returns a structured DENY with reason MALFORMED\_REQUEST. The agent must handle this as a recoverable error, not a fatal failure.
+Regardless of interception mode, the raw intercepted request is passed to the Intent Normalizer for canonicalization before enforcement. The Intent Normalizer produces the normalized ExecutionEnvelope that enters Stage 1 and Stage 2\. If the intercepted request cannot be parsed into a valid Execution Envelope, the Sidecar returns a structured DENY with reason MALFORMED\_REQUEST. The agent must handle this as a recoverable error, not a fatal failure.
 
-### **4.2  Execution Envelope**
+### **4.2  Intent Normalizer / Envelope Builder**
 
-The core protocol unit of the Firma system. Each outbound call is represented as a distinct Execution Envelope, evaluated independently by the Sidecar. Every request is evaluated, enforced, and audited as an Execution Envelope. Treated as immutable once created — any enrichment (e.g. credential injection) produces a derived structure, not a mutation.
+Runs in the Sidecar hot path immediately after interception and before Stage 1\. Deterministically maps the raw intercepted event into a canonical `ExecutionEnvelope` with a normalized `intent.action_class`. This step performs deterministic rule-based canonicalization only — no language model, SLM, probabilistic classifier, or similarity-based inference is permitted on the hot path. It makes no policy decisions.
 
-| `intent` | Action type, target resource identifier, action-specific parameters. |
+**Canonical action class examples:** `communication.external.send`, `payment.transfer`, `filesystem.delete`, `credential.write`, `browser.purchase`. The same canonical class is produced regardless of whether the underlying action arrives as a native tool call, a CLI invocation, an HTTP request, or an MCP call. Policies and HITL conditions bind to the canonical action class and normalized resource fields, not to transport-specific names.
+
+**Intent sub-fields produced:** `action_class` (canonical semantic type), `resource` (normalized target resource identifier), `parameters` (action-specific parameters or parameter hashes), `raw_transport` (original transport form — observational, not used by policy), `raw_action_ref` (original tool name / route / method — observational only).
+
+**Failure behaviour.** If classification fails or yields an ambiguous action class for a protected operation, the Intent Normalizer returns `DENY: UNCLASSIFIED_INTENT` and no Connector dispatch occurs. This is a fail-closed outcome. Prevents transport-level bypass where the same high-risk action would otherwise evade policy controls by appearing under a different raw tool name.
+
+Conforms to FEP §2.2 (Intent Normalization and Canonical Action Class) and the \[I-N1\] enforcement invariant. The intent.action\_class field MUST be one of the configured Canonical Action Class Registry v0.1 identifiers. Unknown protected actions that cannot be deterministically mapped to a registry entry fail closed with DENY: UNCLASSIFIED\_INTENT.
+
+### **4.3  Execution Envelope**
+
+The core protocol unit of the Firma system and the FEP protocol primitive (FEP §​2). Each outbound call is represented as a distinct Execution Envelope, evaluated independently by the Sidecar. The envelope carries four semantic fields—intent (attempted action), capability (permission ceiling), metadata (execution context), and provenance (causal chain, schema-reserved in v0.1)—as defined in the FEP Specification. Every request is evaluated, enforced, and audited as an Execution Envelope. Treated as immutable once created — any enrichment (e.g. credential injection) produces a derived structure, not a mutation.
+
+| `intent` | Normalized semantic action description produced by the Intent Normalizer. Five sub-fields: action\_class — canonical action class from the Canonical Action Class Registry (policy rules and HITL conditions bind here); resource — normalized target resource identifier; parameters — action-specific parameters or parameter hashes; raw\_transport — original transport form (observational only, not used for policy evaluation); raw\_action\_ref — original tool name / route / method (observational only). |
 | :---- | :---- |
 | **`capability`** | Signed capability token issued by the Authority at pre-flight. Used by Stage 1 to verify identity and scope. |
 | **`metadata`** | Session ID, agent ID, timestamp, trace ID, runtime signals (budget consumed, etc.). |
@@ -235,7 +249,7 @@ The core protocol unit of the Firma system. Each outbound call is represented as
 | V1 note on provenance: the field is present in the schema to keep the protocol forward-compatible, but the runtime does not populate or verify the hash chain in V1. It is a placeholder. If your connector or audit logic reads this field, treat it as optional and nullable. |
 | :---- |
 
-### **4.3  Stage 1 — Capability Validation**
+### **4.4  Stage 1 — Capability Validation**
 
 First enforcement phase. Runs synchronously in the request path. Target latency: under 1 ms. Steps:
 
@@ -247,11 +261,13 @@ First enforcement phase. Runs synchronously in the request path. Target latency:
 
 If Stage 1 passes, the envelope proceeds to Stage 2\. If it fails, the call is denied with a structured DENY response. The Authority is never contacted.
 
-### **4.4  Stage 2 — Constraint / Policy Enforcement (CEE)**
+### **4.5  Stage 2 — Constraint Enforcement Engine (CEE)**
 
 Second enforcement phase. The semantic layer where Cedar policies and quantitative constraints are evaluated. Steps:
 
 * Context build — assembles the Cedar request context from envelope fields, local state, and runtime signals.
+
+**Context Builder contract.** The Context Builder must operate on a previously normalized `ExecutionEnvelope`. Semantic action classification is completed by the Intent Normalizer before Stage 2 begins. Stage 2 may enrich context fields (budgets, thresholds, signals) but must not infer the canonical action class from raw transport-specific input.
 
 * Cedar eval — evaluates against the current policy bundle. Deterministic: same context \+ same bundle \= same decision. Evaluation is fully local — no external calls are made or allowed. Runs in microseconds.
 
@@ -260,9 +276,9 @@ Second enforcement phase. The semantic layer where Cedar policies and quantitati
 | V1 note on risk: Stage 2 applies threshold-based checks on a static or pre-computed risk attribute. It does not compute risk dynamically. "Risk score" in the OSS context means: a numeric value injected by the agent runtime (or defaulting to 0\) checked against a configured threshold in Cedar. A full dynamic risk engine is a proprietary Firma Authority capability, not part of V1 OSS. |
 | :---- |
 
-Possible outcomes: ALLOW (envelope forwarded to Connector), DENY (call blocked, structured response returned), ABORT (mid-flight kill sent to agent and Connector).
+Synchronous outcomes: ALLOW (envelope forwarded to Connector), DENY (call blocked, structured response returned). ABORT is an asynchronous in-flight kill signal — emitted by the Authority via WatchAborts, not produced by Stage 2 evaluation.
 
-### **4.5  Local State**
+### **4.6  Local State**
 
 | `Policy bundle cache` | Current serialised Cedar bundle from WatchPolicyBundle. CEE reads this on every call. Includes version number and TTL. If TTL expires without refresh, Sidecar enters fail-closed mode. |
 | :---- | :---- |
@@ -270,13 +286,13 @@ Possible outcomes: ALLOW (envelope forwarded to Connector), DENY (call blocked, 
 
 Neither cache is persisted to disk. On restart, the Sidecar re-fetches both from Authority streams before accepting traffic.
 
-### **4.6  Audit Emitter**
+### **4.7  Audit Emitter**
 
 Serialises every enforcement decision into a signed ExecutionEvent and forwards to one or more sinks. Each event contains: event ID (UUID v7), session ID, token ID, agent ID, action, resource, decision (ALLOW / DENY / ABORT), deny reason, enforcement latency (µs), context hash, bundle version, timestamp (ns), ECDSA signature over all preceding fields.
 
 Four output modes: file (append-only), stdout (default for containers, structured JSON lines), gRPC (streaming to downstream audit service), and WAL on disconnect (events buffered on disk if gRPC stream drops, replayed on reconnect — no audit events are lost).
 
-### **4.7  Credential Injector**
+### **4.8  Credential Injector**
 
 Runs after Stage 2 ALLOW, before the envelope reaches the Connector. Fetches credentials for the target system and injects them transparently. The agent never handles credentials directly. Two modes: Vault client (short-lived secrets from HashiCorp Vault or compatible), and basic credential injection (pre-configured API key / bearer token from Sidecar config).
 
@@ -310,21 +326,21 @@ Same three scenarios using axios and native fetch. Compatible with LangChain.js 
 
 ## **7\. Connector · Adapter Layer**
 
-Sits between Stage 2 (CEE) and the external system. Responsible for protocol translation, target-specific technical constraints, and audit normalisation.
+Sits between Stage 2 (CEE) and the external system. Responsible for protocol translation, target-specific technical constraints, and audit normalisation. Connector behavior must remain conformant with FEP Connector Boundary Rules (FEP §​9).
 
 | `Translate Execution Envelope → target protocol` | Converts the Firma-internal Execution Envelope to the target system’s native protocol (HTTP, gRPC, DB query, tool call payload, etc.). |
 | :---- | :---- |
 | **`Connector-specific constraints`** | Applies technical constraints specific to the target that are not easily expressible generically in Cedar: rate limits (calls/min to a specific API), response schema validation, format normalisation. Example: an OpenAI connector enforces a 60 req/min rate limit and validates that responses conform to the ChatCompletion schema before passing them back to the agent. |
 | **`Normalise audit event`** | Enriches the envelope with call outcome (status, latency, response size) and passes it to the audit emitter. Applies memory namespace tagging. |
 
-| Boundary rule: Stage 2 (CEE) decides policy. The Connector applies target-specific technical constraints that are not conveniently expressible in Cedar. Do not move policy logic into connectors. If a team starts writing business rules inside a connector “because it is easier”, that logic belongs in a Cedar policy and the connector should be refactored. A connector that becomes a second policy engine will break auditability and system guarantees. |
+| Boundary rule: Stage 2 (CEE) decides policy. The Connector applies target-specific technical constraints that are not conveniently expressible in Cedar. Do not move policy logic into connectors. If a team starts writing business rules inside a connector “because it is easier”, that logic belongs in a Cedar policy and the connector should be refactored. A connector that becomes a second policy engine will break auditability and system guarantees. By the time a request reaches the Connector, canonical semantic classification is already complete. The Connector receives a normalized ExecutionEnvelope with intent.action\_class already set. First-time semantic classification inside the Connector is forbidden. |
 | :---- |
 
 The OSS release includes a generic HTTP connector. Additional connectors (LLM providers, databases, tool APIs) can be contributed as plugins or built privately.
 
 ## **8\. Capability Lifecycle**
 
-A capability token has a defined lifecycle. Understanding it is required to build agents that handle revocation and abort correctly.
+A capability token has a defined lifecycle. Understanding it is required to build agents that handle revocation and abort correctly. Token lifecycle semantics must remain compatible with the FEP Issuance Protocol and Decision Semantics (FEP §​4, §​7).
 
 | `ISSUED` | Authority has created and signed the token. Returned to the Sidecar, not yet validated by Stage 1\. Transient. |
 | :---- | :---- |
@@ -406,7 +422,7 @@ These targets define the expected operating envelope of the Sidecar in a standar
 
 ## **12\. Failure Modes**
 
-These are the failure scenarios every team deploying the Sidecar must handle. The decision column states the Sidecar’s default behaviour. Operators can override where noted.
+These are the failure scenarios every team deploying the Sidecar must handle. Decision outcomes map to the FEP Decision Semantics (FEP §7): ALLOW, DENY (tool), DENY (API), and ABORT each carry distinct semantics, surfaces, and agent loop behaviors as defined there. The decision column states the Sidecar’s default behaviour. Operators can override where noted.
 
 | Failure scenario | Decision | Sidecar behaviour | Notes |
 | :---- | :---- | :---- | :---- |
@@ -417,6 +433,9 @@ These are the failure scenarios every team deploying the Sidecar must handle. Th
 | Audit sink unavailable (gRPC) | **WAL buffer** | Events written to local WAL. Sidecar continues accepting calls. WAL replayed when sink reconnects. WAL size capped; if cap exceeded, oldest events are dropped and a counter is emitted. | File / stdout sinks never fail silently. |
 | Connector timeout | **Abort in-flight** | Connector returns timeout error. Sidecar emits ABORT audit event, returns CONNECTOR\_TIMEOUT to agent. Token state: IN USE → ACTIVE (call is treated as not completed). | Connector timeout configurable per-connector. |
 | Vault / credential injector unavailable | **Fail closed** | Credential injection fails. Call blocked with CREDENTIAL\_INJECTION\_FAILED. Agent receives DENY. No call dispatched to external system. | Basic cred injection from config never fails this way. |
+| Protected action cannot be deterministically normalized | Fail closed | Sidecar returns DENY with reason UNCLASSIFIED\_INTENT or AMBIGUOUS\_INTENT. No Connector dispatch occurs. Token state unchanged. | Prevents transport-level bypass. Applies to actions requiring semantic policy evaluation or HITL approval. |
+
+**HITL binding semantics (OSS v1).** HITL and approval flows in OSS v1 must bind to the normalized intent.action\_class, normalized resource, payload hash (SHA-256 of action\_class ‖ resource ‖ parameters), and an explicit expiry timestamp. Approval tokens are single-use and bound to the exact normalized payload hash at approval time. An approval whose hash does not match the envelope under execution must be rejected. See FEP Specification §13.4 for the full HITL-conformant requirements.
 
 ## **13\. V1 Scope Boundary — What is NOT in OSS**
 
@@ -434,3 +453,4 @@ The following capabilities are intentionally excluded from V1. This section exis
 
 | For production deployments: replace Mini Authority with Firma Authority (config-only swap), route audit events to FirmaChain, and attach the F-Control Plane for policy authoring and bundle distribution. The Sidecar binary is identical in both environments. |
 | :---- |
+
