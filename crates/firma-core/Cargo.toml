@@ -1,17 +1,18 @@
 [package]
 name = "firma-core"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+description = "Shared types, capability tokens, Cedar wrapper, and error types for Firma OSS"
 license.workspace = true
 repository.workspace = true
-description = "Shared types, capability tokens, Cedar wrapper, and error types for Firma OSS"
 
 [dependencies]
+chrono = { workspace = true }
+pasetors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-chrono = { workspace = true }
-pasetors = { workspace = true }
 
 [lints]
 workspace = true

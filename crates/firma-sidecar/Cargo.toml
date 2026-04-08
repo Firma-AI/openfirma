@@ -1,10 +1,11 @@
 [package]
 name = "firma-sidecar"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+description = "HTTP proxy sidecar with enforcement pipeline for Firma OSS"
 license.workspace = true
 repository.workspace = true
-description = "HTTP proxy sidecar with enforcement pipeline for Firma OSS"
 
 [dependencies]
 firma-core = { path = "../firma-core" }
