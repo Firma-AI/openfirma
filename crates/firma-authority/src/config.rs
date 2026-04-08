@@ -67,10 +67,10 @@ pub fn load_config(config_path: Option<&PathBuf>) -> Result<AuthorityConfig, Con
     if let Ok(v) = std::env::var("FIRMA_AUTHORITY_REVOCATION_FILE") {
         config.revocation_file = PathBuf::from(v);
     }
-    if let Ok(v) = std::env::var("FIRMA_AUTHORITY_MAX_TTL_SECONDS") {
-        if let Ok(n) = v.parse::<i32>() {
-            config.max_ttl_seconds = n;
-        }
+    if let Ok(v) = std::env::var("FIRMA_AUTHORITY_MAX_TTL_SECONDS")
+        && let Ok(n) = v.parse::<i32>()
+    {
+        config.max_ttl_seconds = n;
     }
     if let Ok(v) = std::env::var("FIRMA_AUTHORITY_KEY_FILE") {
         config.key_file = PathBuf::from(v);
@@ -78,10 +78,10 @@ pub fn load_config(config_path: Option<&PathBuf>) -> Result<AuthorityConfig, Con
     if let Ok(v) = std::env::var("FIRMA_AUTHORITY_LOG_LEVEL") {
         config.log_level = v;
     }
-    if let Ok(v) = std::env::var("FIRMA_AUTHORITY_BUNDLE_TTL_SECONDS") {
-        if let Ok(n) = v.parse::<i32>() {
-            config.bundle_ttl_seconds = n;
-        }
+    if let Ok(v) = std::env::var("FIRMA_AUTHORITY_BUNDLE_TTL_SECONDS")
+        && let Ok(n) = v.parse::<i32>()
+    {
+        config.bundle_ttl_seconds = n;
     }
 
     Ok(config)

@@ -29,11 +29,14 @@ async-stream = "0.3"
 cedar-policy = "3"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
+firma-core = { path = "crates/firma-core" }
+firma-proto = { path = "crates/firma-proto" }
 hex = "0.4"
 notify = { version = "7", default-features = false, features = [
     "macos_kqueue",
 ] }
 pasetors = "0.7"
+prost = "0.13"
 prost-types = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -47,6 +50,7 @@ tokio = { version = "1", default-features = false, features = [
 tokio-stream = { version = "0.1", features = ["sync"] }
 toml = "1"
 tonic = "0.12"
+tonic-build = "0.12"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4"] }
