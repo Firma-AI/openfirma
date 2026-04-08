@@ -130,6 +130,7 @@ impl MappingRulesFile {
 
 /// Capability manifest entry for token provisioning.
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct CapabilityManifestEntry {
     pub agent_id: String,
     pub action_set: Vec<String>,
@@ -142,6 +143,7 @@ impl CapabilityManifestEntry {
     /// # Errors
     ///
     /// Returns a message describing the first invalid field.
+    #[allow(dead_code)]
     pub fn validate(&self) -> Result<(), String> {
         if self.agent_id.trim().is_empty() {
             return Err("agent_id must not be empty".to_string());
