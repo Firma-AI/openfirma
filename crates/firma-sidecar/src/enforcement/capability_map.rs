@@ -80,6 +80,15 @@ impl CapabilityMap {
     /// 3. Token with wildcard `action_set` ("*")
     /// 4. No match -> DENY
     ///
+    /// # Note on `session_id`
+    ///
+    /// `session_id` is part of the selection key per ADR-002 to support future
+    /// multi-agent-per-sidecar deployments, where a single map may hold tokens
+    /// from multiple sessions. Currently the map is always provisioned for a
+    /// single pre-flight session, so this parameter is not yet used for
+    /// filtering. When multi-agent support is added, this will filter entries by
+    /// `claims.session_id`.
+    ///
     /// # Errors
     ///
     /// Returns `EnforcementDecision::Deny` if no capability token matches the
