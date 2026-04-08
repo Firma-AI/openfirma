@@ -91,14 +91,14 @@ impl MappingRuleConfig {
         if self.action_class.trim().is_empty() {
             return Err("action_class must not be empty".to_string());
         }
-        if let Some(ref method) = self.method {
-            if !VALID_HTTP_METHODS.contains(&method.to_uppercase().as_str()) {
-                return Err(format!(
-                    "invalid HTTP method '{}'; expected one of: {}",
-                    method,
-                    VALID_HTTP_METHODS.join(", ")
-                ));
-            }
+        if let Some(ref method) = self.method
+            && !VALID_HTTP_METHODS.contains(&method.to_uppercase().as_str())
+        {
+            return Err(format!(
+                "invalid HTTP method '{}'; expected one of: {}",
+                method,
+                VALID_HTTP_METHODS.join(", ")
+            ));
         }
         Ok(())
     }
