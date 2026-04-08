@@ -70,13 +70,13 @@ impl IntentNormalizer {
 
     /// Normalize a raw request into an `ExecutionEnvelope`.
     ///
-    /// Returns `Err(EnforcementDecision::Deny)` with `UNCLASSIFIED_INTENT`
-    /// if the request is protected but cannot be mapped.
-    ///
     /// # Errors
     ///
-    /// Returns `EnforcementDecision::Deny` if the request cannot be classified
-    /// to a known action class, or if the host is not protected.
+    /// Returns `EnforcementDecision::Deny` with `UNCLASSIFIED_INTENT` if:
+    /// - The request is protected but cannot be mapped to a known action class.
+    /// - The HTTP method is not a recognized standard method (fail-closed).
+    ///
+    /// Returns `EnforcementDecision::Passthrough` if the host is not protected.
     #[allow(clippy::result_large_err)]
     pub fn normalize(
         &self,
@@ -92,7 +92,14 @@ impl IntentNormalizer {
                 let raw_transport = if request.is_https { "https" } else { "http" };
                 let resource = format!("{}{}", request.host, request.path);
 
-                let http_method = parse_http_method(&request.method);
+                let Some(http_method) = parse_http_method(&request.method) else {
+                    let detail = format!(
+                        "unrecognized HTTP method: {} {} (host: {})",
+                        request.method, request.path, request.host
+                    );
+                    return Err(EnforcementError::NormalizationFailed { detail }
+                        .into_deny(EnforcementStage::Normalization));
+                };
 
                 let envelope = ExecutionEnvelope {
                     intent: ExecutionIntent {
@@ -145,16 +152,16 @@ fn sanitize_headers(headers: &HashMap<String, String>) -> HashMap<String, String
         .collect()
 }
 
-fn parse_http_method(method: &str) -> HttpMethod {
+fn parse_http_method(method: &str) -> Option<HttpMethod> {
     match method.to_uppercase().as_str() {
-        "GET" => HttpMethod::GET,
-        "PUT" => HttpMethod::PUT,
-        "DELETE" => HttpMethod::DELETE,
-        "PATCH" => HttpMethod::PATCH,
-        "HEAD" => HttpMethod::HEAD,
-        "OPTIONS" => HttpMethod::OPTIONS,
-        // "POST" and unrecognised methods default to POST (fail-safe in enforcement)
-        _ => HttpMethod::POST,
+        "GET" => Some(HttpMethod::GET),
+        "POST" => Some(HttpMethod::POST),
+        "PUT" => Some(HttpMethod::PUT),
+        "DELETE" => Some(HttpMethod::DELETE),
+        "PATCH" => Some(HttpMethod::PATCH),
+        "HEAD" => Some(HttpMethod::HEAD),
+        "OPTIONS" => Some(HttpMethod::OPTIONS),
+        _ => None,
     }
 }
 
@@ -280,6 +287,28 @@ mod tests {
             method: "DELETE".to_string(),
             host: "api.openai.com".to_string(),
             path: "/v1/files/abc".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let result = normalizer.normalize(&request);
+        assert!(result.is_err());
+        let decision = result.unwrap_err();
+        assert!(decision.is_deny());
+        assert_eq!(
+            decision.deny_reason(),
+            Some(firma_core::DenyReason::UnclassifiedIntent)
+        );
+    }
+
+    #[test]
+    fn test_normalize_unrecognized_method_denied() {
+        let normalizer = test_normalizer();
+        let request = RawRequest {
+            method: "FROBNICATE".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
             body: None,
             is_https: true,
