@@ -2,7 +2,7 @@
 //!
 //! Runs in the Sidecar hot path immediately after interception and before
 //! token validation. Deterministically maps the raw intercepted event into a
-//! canonical `ExecutionEnvelope` with a normalized `intent.action_class`.
+//! canonical [`NormalizedEnvelope`] with a normalized `intent.action_class`.
 //!
 //! This step performs deterministic rule-based canonicalization only — no
 //! language model, SLM, probabilistic classifier, or similarity-based
@@ -23,12 +23,11 @@ mod mapping;
 
 use std::collections::HashMap;
 
-use firma_core::{
-    ActionParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams,
-};
+use chrono::{DateTime, Utc};
+use firma_core::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
 
 pub use self::mapping::{MappingTable, MatchResult};
-use crate::enforcement::decision::{EnforcementDecision, EnforcementStage};
+pub use crate::enforcement::decision::{EnforcementDecision, EnforcementStage};
 use crate::enforcement::error::EnforcementError;
 
 /// Headers that must never leak into the `ExecutionEnvelope` (and therefore
@@ -40,6 +39,16 @@ const SENSITIVE_HEADERS: &[&str] = &[
     "proxy-authorization",
     "x-api-key",
 ];
+
+/// Output of the intent normalizer — contains only the fields the
+/// normalizer can fill. Missing fields (`capability`, `agent_id`,
+/// `session_id`) are populated by the pipeline after Stage 1 validation
+/// when constructing the full `ExecutionEnvelope`.
+#[derive(Debug, Clone)]
+pub struct NormalizedEnvelope {
+    pub intent: ExecutionIntent,
+    pub timestamp: DateTime<Utc>,
+}
 
 /// Raw intercepted request — the input to the enforcement pipeline.
 /// Constructed by proxy-core from Pingora request data.
@@ -53,10 +62,12 @@ pub struct RawRequest {
     pub is_https: bool,
 }
 
-/// Maps raw intercepted requests to canonical `ExecutionEnvelope` instances.
+/// Maps raw intercepted requests to canonical [`NormalizedEnvelope`] instances.
 ///
 /// Uses the `MappingTable` to find the matching action class, then builds
-/// an immutable `ExecutionEnvelope` with all five intent sub-fields.
+/// a `NormalizedEnvelope` with the five intent sub-fields and a timestamp.
+/// Fields that depend on token validation (`capability`, `session_id`,
+/// `agent_id`) are populated later by the pipeline.
 #[derive(Debug)]
 pub struct IntentNormalizer {
     mapping_table: MappingTable,
@@ -68,7 +79,7 @@ impl IntentNormalizer {
         Self { mapping_table }
     }
 
-    /// Normalize a raw request into an `ExecutionEnvelope`.
+    /// Normalize a raw request into a [`NormalizedEnvelope`].
     ///
     /// # Errors
     ///
@@ -81,7 +92,7 @@ impl IntentNormalizer {
     pub fn normalize(
         &self,
         request: &RawRequest,
-    ) -> Result<ExecutionEnvelope, EnforcementDecision> {
+    ) -> Result<NormalizedEnvelope, EnforcementDecision> {
         let match_result =
             self.mapping_table
                 .find_match(&request.method, &request.host, &request.path);
@@ -101,7 +112,7 @@ impl IntentNormalizer {
                         .into_deny(EnforcementStage::Normalization));
                 };
 
-                let envelope = ExecutionEnvelope {
+                let envelope = NormalizedEnvelope {
                     intent: ExecutionIntent {
                         action_class: rule.action_class.clone(),
                         resource,
@@ -114,16 +125,7 @@ impl IntentNormalizer {
                         raw_transport: raw_transport.to_string(),
                         raw_action_ref,
                     },
-                    capability: String::new(), // filled after token selection
-                    metadata: ExecutionMetadata {
-                        session_id: String::new(), // filled by pipeline caller
-                        agent_id: String::new(),   // filled from token claims
-                        timestamp: chrono::Utc::now(),
-                        trace_id: None,
-                        budget_consumed: 0.0,
-                        risk_score: None,
-                    },
-                    provenance: None,
+                    timestamp: Utc::now(),
                 };
 
                 Ok(envelope)
