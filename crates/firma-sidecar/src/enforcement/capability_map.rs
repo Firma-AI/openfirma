@@ -203,10 +203,12 @@ mod tests {
         let result = map.select("sess_001", "llm.inference", "api.openai.com/v1/chat");
         assert!(result.is_ok());
         let entry = result.unwrap_or_else(|_| panic!("expected Ok"));
-        assert!(entry
-            .claims
-            .action_set
-            .contains(&"llm.inference".to_string()));
+        assert!(
+            entry
+                .claims
+                .action_set
+                .contains(&"llm.inference".to_string())
+        );
     }
 
     #[test]
