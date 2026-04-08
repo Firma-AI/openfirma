@@ -130,11 +130,8 @@ impl IntentNormalizer {
                     .into_deny(EnforcementStage::Normalization))
             }
             MatchResult::NotProtected => {
-                // For now, treat non-protected as an error at the pipeline level.
-                // The proxy-core caller should handle passthrough before calling enforce().
                 let detail = format!("non-protected host: {} (not enforced)", request.host);
-                Err(EnforcementError::NormalizationFailed { detail }
-                    .into_deny(EnforcementStage::Normalization))
+                Err(EnforcementDecision::Passthrough { detail })
             }
         }
     }
@@ -244,6 +241,36 @@ mod tests {
         } else {
             panic!("expected Http params");
         }
+    }
+
+    #[test]
+    fn test_normalize_not_protected_returns_passthrough() {
+        let registry = ActionClassRegistry::v0_1();
+        let file = MappingRulesFile {
+            rules: vec![MappingRuleConfig {
+                method: Some("POST".to_string()),
+                host: "api.openai.com".to_string(),
+                path: Some("/v1/chat/completions".to_string()),
+                action_class: "llm.inference".to_string(),
+            }],
+        };
+        let table =
+            MappingTable::from_config(&file, &registry, false).unwrap_or_else(|e| panic!("{e}"));
+        let normalizer = IntentNormalizer::new(table);
+
+        let request = RawRequest {
+            method: "GET".to_string(),
+            host: "not-protected.example.com".to_string(),
+            path: "/any".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let result = normalizer.normalize(&request);
+        assert!(result.is_err());
+        let decision = result.unwrap_err();
+        assert!(decision.is_passthrough());
     }
 
     #[test]
