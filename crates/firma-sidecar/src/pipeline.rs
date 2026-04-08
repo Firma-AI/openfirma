@@ -16,9 +16,11 @@
 //! Stage 2 + credential injection + audit emit, excluding connector and
 //! external system latency).
 
+use firma_core::{ExecutionEnvelope, ExecutionMetadata};
+
 // Re-export public API for pipeline callers
 pub use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
-pub use crate::enforcement::capability_validation::CapabilityValidator;
+pub use crate::enforcement::capability_validation::{CapabilityValidator, ValidatedCapability};
 pub use crate::enforcement::config::{
     EnforcementConfig, MappingConfig, MappingRuleConfig, MappingRulesFile, Stage1Config,
     Stage2Config,
@@ -28,12 +30,12 @@ pub use crate::enforcement::decision::{
     CapabilityValidationStage, ConstraintEnforcementStage, EnforcementDecision, EnforcementStage,
 };
 pub use crate::enforcement::registry::ActionClassRegistry;
-pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
+pub use crate::normalizer::{IntentNormalizer, MappingTable, NormalizedEnvelope, RawRequest};
 
 /// The enforcement pipeline. Orchestrates the full `enforce()` flow:
 ///
 /// ```text
-/// normalize → select token → validate token (Stage 1) → Cedar eval (Stage 2)
+/// normalize → Stage 1 (select + validate token) → Stage 2 (Cedar eval) → assemble envelope
 /// ```
 ///
 /// Short-circuits on any DENY or PASSTHROUGH. Every code path returns
@@ -70,25 +72,49 @@ impl EnforcementPipeline {
     /// Token is selected internally from the `CapabilityMap` (ADR-002).
     ///
     /// Pipeline stages:
-    /// 1. Normalize intent: raw request → `ExecutionEnvelope`
-    /// 2. Stage 1: select capability token, validate token
+    /// 1. Normalize intent: raw request → `NormalizedEnvelope`
+    /// 2. Stage 1: select capability token, validate token → `ValidatedCapability`
     /// 3. Stage 2: scope check + Cedar policy evaluation
+    /// 4. On Allow: assemble a fully populated `ExecutionEnvelope` from
+    ///    the normalized envelope + validated capability + session context.
     #[must_use]
     pub fn enforce(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
         // Normalize intent (may short-circuit with Deny or Passthrough)
-        let envelope = match self.normalizer.normalize(request) {
+        let normalized = match self.normalizer.normalize(request) {
             Ok(env) => env,
             Err(decision) => return decision,
         };
 
         // Stage 1: Select token → validate
-        let claims = match self.stage1.enforce(&envelope, session_id) {
-            Ok(claims) => claims,
+        let capability = match self.stage1.enforce(&normalized, session_id) {
+            Ok(cap) => cap,
             Err(deny) => return deny,
         };
 
         // Stage 2: Scope check + Cedar policy evaluation
-        self.stage2.evaluate(&envelope, &claims)
+        if let Err(deny) = self.stage2.evaluate(&normalized, &capability.claims) {
+            return deny;
+        }
+
+        // All stages passed — assemble the fully populated envelope.
+        let envelope = ExecutionEnvelope {
+            intent: normalized.intent,
+            capability: capability.raw_token,
+            metadata: ExecutionMetadata {
+                session_id: session_id.to_string(),
+                agent_id: capability.claims.agent_id.clone(),
+                timestamp: normalized.timestamp,
+                trace_id: None,
+                budget_consumed: 0.0,
+                risk_score: None,
+            },
+            provenance: None,
+        };
+
+        EnforcementDecision::Allow {
+            claims: capability.claims,
+            envelope: Box::new(envelope),
+        }
     }
 }
 
@@ -223,6 +249,17 @@ mod tests {
 
         let decision = pipeline.enforce(&request, "sess_001");
         assert!(decision.is_allow());
+
+        if let EnforcementDecision::Allow { claims, envelope } = decision {
+            assert_eq!(claims.agent_id, "agent_test");
+            assert_eq!(envelope.metadata.agent_id, "agent_test");
+            assert_eq!(envelope.metadata.session_id, "sess_001");
+            assert!(
+                !envelope.capability.is_empty(),
+                "capability must be populated on Allow"
+            );
+            assert_eq!(envelope.intent.action_class, "llm.inference");
+        }
     }
 
     #[test]

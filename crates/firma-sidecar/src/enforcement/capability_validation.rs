@@ -29,11 +29,23 @@
 
 use std::time::Duration;
 
-use firma_core::{CapabilityClaims, ExecutionEnvelope, RevocationStore, TokenError, TokenVerifier};
+use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
+
+use crate::normalizer::NormalizedEnvelope;
 
 use super::capability_map::CapabilityMap;
 use super::decision::{CapabilityValidationStage, EnforcementDecision, EnforcementStage};
 use super::error::EnforcementError;
+
+/// A capability token that has been selected from the map and
+/// cryptographically validated (signature, expiry, revocation).
+#[derive(Debug, Clone)]
+pub struct ValidatedCapability {
+    /// The raw PASETO v4 token string.
+    pub raw_token: String,
+    /// Verified claims extracted from the token.
+    pub claims: CapabilityClaims,
+}
 
 /// Stage 1: Capability Validation.
 ///
@@ -70,11 +82,12 @@ impl CapabilityValidator {
 
     /// Run Stage 1: select token → validate.
     ///
-    /// Receives an already-normalized `ExecutionEnvelope` (produced by
+    /// Receives an already-normalized [`NormalizedEnvelope`] (produced by
     /// [`crate::normalizer::IntentNormalizer`]) and the session ID.
     /// Selects the best-matching capability token from the map and validates it.
     ///
-    /// Returns the validated `CapabilityClaims` on success, or a DENY decision.
+    /// Returns a [`ValidatedCapability`] (raw token + verified claims) on
+    /// success, or a DENY decision.
     ///
     /// # Errors
     ///
@@ -83,9 +96,9 @@ impl CapabilityValidator {
     #[allow(clippy::result_large_err)]
     pub fn enforce(
         &self,
-        envelope: &ExecutionEnvelope,
+        envelope: &NormalizedEnvelope,
         session_id: &str,
-    ) -> Result<CapabilityClaims, EnforcementDecision> {
+    ) -> Result<ValidatedCapability, EnforcementDecision> {
         // Step 1: Select capability token from map (ADR-002)
         let entry = self.capability_map.select(
             session_id,
@@ -94,7 +107,11 @@ impl CapabilityValidator {
         )?;
 
         // Step 2: Validate selected token
-        self.validate(&entry.raw_token)
+        let claims = self.validate(&entry.raw_token)?;
+        Ok(ValidatedCapability {
+            raw_token: entry.raw_token.clone(),
+            claims,
+        })
     }
 
     /// Validate a raw token string.

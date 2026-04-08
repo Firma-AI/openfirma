@@ -11,6 +11,8 @@
 
 use firma_core::{CapabilityClaims, DenyReason, ExecutionEnvelope};
 
+use crate::normalizer::NormalizedEnvelope;
+
 /// Sub-stages within Stage 1 (Capability Validation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapabilityValidationStage {
@@ -53,14 +55,14 @@ pub enum EnforcementDecision {
     /// Request authorized. Proceed to credential injection + connector.
     Allow {
         claims: CapabilityClaims,
-        envelope: ExecutionEnvelope,
+        envelope: Box<ExecutionEnvelope>,
     },
     /// Request denied. Return structured denial to agent.
     Deny {
         reason: DenyReason,
         stage: EnforcementStage,
         detail: String,
-        envelope: Option<ExecutionEnvelope>,
+        envelope: Option<NormalizedEnvelope>,
     },
     /// Non-protected traffic. Forward the request without enforcement.
     Passthrough { detail: String },
