@@ -2,10 +2,11 @@
 
 ## Overview
 
-- **Total stories**: 17
+- **Total stories**: 45
 - **Complete**: 17
+- **Generated**: 28
 - **Planned**: 0
-- **Last updated**: 2026-04-02
+- **Last updated**: 2026-04-05
 
 ---
 
@@ -53,11 +54,59 @@
 - [x] **002-tool-definitions** (005-typescript-adk-agent): 9 tools with Zod schemas across 5 categories - Must - COMPLETE
 - [x] **003-database-seed** (005-typescript-adk-agent): SQLite seed data and database service - Must - COMPLETE
 
+### 006-sidecar-proxy-enforcement
+
+#### Unit: 001-proxy-core
+
+- [ ] **001-http-proxy-listener** (001-proxy-core): Plain HTTP proxy interception via Pingora - Must - ✅ GENERATED
+- [ ] **002-https-mitm-interception** (001-proxy-core): HTTPS CONNECT + TLS MITM with dynamic cert gen - Must - ✅ GENERATED
+- [ ] **003-ca-keypair-management** (001-proxy-core): CA keypair generation, persistence, reuse - Must - ✅ GENERATED
+- [ ] **004-proxy-denial-response-format** (001-proxy-core): Firma JSON denial responses (403/400/503) - Must - ✅ GENERATED
+- [ ] **005-config-and-startup** (001-proxy-core): TOML config + CLI overrides + fail-fast - Must - ✅ GENERATED
+- [ ] **006-health-readiness-shutdown** (001-proxy-core): Health, readiness, graceful SIGTERM shutdown - Must - ✅ GENERATED
+
+#### Unit: 002-enforcement-pipeline
+
+- [ ] **001-intent-normalizer** (002-enforcement-pipeline): Mapping table + action class registry → ExecutionEnvelope - Must - ✅ GENERATED
+- [ ] **002-unclassified-intent-denial** (002-enforcement-pipeline): DENY: UNCLASSIFIED_INTENT for unmappable actions - Must - ✅ GENERATED
+- [ ] **003-stage1-token-validation** (002-enforcement-pipeline): PASETO v4 parse, verify, expiry, revocation - Must - ✅ GENERATED
+- [ ] **004-stage2-cedar-evaluation** (002-enforcement-pipeline): Cedar context build + policy eval + scope check - Must - ✅ GENERATED
+- [ ] **005-two-phase-pipeline-integration** (002-enforcement-pipeline): Wire Stage 1 → Stage 2, unified Decision - Must - ✅ GENERATED
+
+#### Unit: 003-policy-revocation
+
+- [ ] **001-file-policy-source** (003-policy-revocation): Load .cedar files, watch, hot-reload - Must - ✅ GENERATED
+- [ ] **002-grpc-policy-source** (003-policy-revocation): WatchPolicyBundle stream, TTL/fail-closed - Must - ✅ GENERATED
+- [ ] **003-file-revocation-source** (003-policy-revocation): JSON file-based revocation with watch - Must - ✅ GENERATED
+- [ ] **004-grpc-revocation-source** (003-policy-revocation): WatchRevocations stream, cache updates - Must - ✅ GENERATED
+- [ ] **005-revocation-cache** (003-policy-revocation): Bloom filter + LRU two-layer cache - Must - ✅ GENERATED
+
+#### Unit: 004-llm-response-parser
+
+- [ ] **001-openai-parser** (004-llm-response-parser): OpenAI function_call/tool_calls, streaming + non-streaming - Must - ✅ GENERATED
+- [ ] **002-anthropic-parser** (004-llm-response-parser): Anthropic tool_use blocks, streaming + non-streaming - Must - ✅ GENERATED
+- [ ] **003-gemini-parser** (004-llm-response-parser): Gemini functionCall, streaming + non-streaming - Must - ✅ GENERATED
+- [ ] **004-sse-stream-reassembly** (004-llm-response-parser): Chunked SSE reassembly for cross-chunk tool calls - Must - ✅ GENERATED
+- [ ] **005-denial-rewrite-synthesis** (004-llm-response-parser): Provider-native denial result rewriting/synthesis - Must - ✅ GENERATED
+
+#### Unit: 005-connector-credentials
+
+- [ ] **001-http-connector** (005-connector-credentials): Outbound dispatch, connection pooling, timeouts - Must - ✅ GENERATED
+- [ ] **002-credential-provider-trait** (005-connector-credentials): CredentialProvider trait + config-based impl - Must - ✅ GENERATED
+- [ ] **003-credential-injection** (005-connector-credentials): Derive transport view, inject creds, fail-closed - Must - ✅ GENERATED
+
+#### Unit: 006-audit-observability
+
+- [ ] **001-execution-event-schema** (006-audit-observability): ExecutionEvent with all FEP §15 fields - Must - ✅ GENERATED
+- [ ] **002-ecdsa-audit-signing** (006-audit-observability): ECDSA signature over event fields - Must - ✅ GENERATED
+- [ ] **003-audit-sinks** (006-audit-observability): stdout + file sinks, multi-sink, async non-blocking - Must - ✅ GENERATED
+- [ ] **004-prometheus-metrics** (006-audit-observability): /metrics endpoint, counters, histograms, gauges - Should - ✅ GENERATED
+
 ---
 
 ## Stories by Status
 
 - **Planned**: 0
-- **Generated**: 11
+- **Generated**: 39
 - **In Progress**: 0
 - **Completed**: 6
