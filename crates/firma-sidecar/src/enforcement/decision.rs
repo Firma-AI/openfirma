@@ -46,7 +46,8 @@ pub enum EnforcementStage {
 ///
 /// Every `enforce()` call produces exactly one of these. Carries enough
 /// information for the caller to construct the response, emit audit events,
-/// and proceed with credential injection on ALLOW.
+/// and proceed with credential injection on ALLOW, or forward the request
+/// unmodified on PASSTHROUGH.
 #[derive(Debug)]
 pub enum EnforcementDecision {
     /// Request authorized. Proceed to credential injection + connector.
@@ -61,6 +62,8 @@ pub enum EnforcementDecision {
         detail: String,
         envelope: Option<ExecutionEnvelope>,
     },
+    /// Non-protected traffic. Forward the request without enforcement.
+    Passthrough { detail: String },
 }
 
 impl EnforcementDecision {
@@ -75,10 +78,15 @@ impl EnforcementDecision {
     }
 
     #[must_use]
+    pub fn is_passthrough(&self) -> bool {
+        matches!(self, Self::Passthrough { .. })
+    }
+
+    #[must_use]
     pub fn deny_reason(&self) -> Option<DenyReason> {
         match self {
             Self::Deny { reason, .. } => Some(*reason),
-            Self::Allow { .. } => None,
+            Self::Allow { .. } | Self::Passthrough { .. } => None,
         }
     }
 
@@ -86,7 +94,7 @@ impl EnforcementDecision {
     pub fn stage(&self) -> Option<EnforcementStage> {
         match self {
             Self::Deny { stage, .. } => Some(*stage),
-            Self::Allow { .. } => None,
+            Self::Allow { .. } | Self::Passthrough { .. } => None,
         }
     }
 }

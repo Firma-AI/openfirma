@@ -7,8 +7,10 @@
 //! The pipeline is the ONLY public entry point for enforcement; callers
 //! never interact with individual stages directly.
 //!
-//! Every code path returns ALLOW or DENY — there is no third outcome.
-//! The pipeline short-circuits on any DENY.
+//! Every code path returns ALLOW, DENY, or PASSTHROUGH.
+//! PASSTHROUGH means the request targets a non-protected host and should
+//! be forwarded without enforcement. The pipeline short-circuits on any
+//! DENY or PASSTHROUGH.
 //!
 //! Target: < 3 ms p95 end-to-end overhead (interceptor + Stage 1 +
 //! Stage 2 + credential injection + audit emit, excluding connector and
@@ -34,7 +36,8 @@ pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
 /// normalize → select token → validate token (Stage 1) → Cedar eval (Stage 2)
 /// ```
 ///
-/// Short-circuits on any DENY. Every code path returns ALLOW or DENY.
+/// Short-circuits on any DENY or PASSTHROUGH. Every code path returns
+/// ALLOW, DENY, or PASSTHROUGH.
 /// The pipeline is stateless per-request — all shared state is accessed
 /// via references injected at construction time.
 ///
@@ -72,10 +75,10 @@ impl EnforcementPipeline {
     /// 3. Stage 2: scope check + Cedar policy evaluation
     #[must_use]
     pub fn enforce(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
-        // Normalize intent
+        // Normalize intent (may short-circuit with Deny or Passthrough)
         let envelope = match self.normalizer.normalize(request) {
             Ok(env) => env,
-            Err(deny) => return deny,
+            Err(decision) => return decision,
         };
 
         // Stage 1: Select token → validate
@@ -154,11 +157,19 @@ mod tests {
     }
 
     fn test_mapping_table(rules: &[MappingRuleConfig]) -> MappingTable {
+        test_mapping_table_with_protection(rules, true)
+    }
+
+    fn test_mapping_table_with_protection(
+        rules: &[MappingRuleConfig],
+        default_protected: bool,
+    ) -> MappingTable {
         let registry = ActionClassRegistry::v0_1();
         let file = MappingRulesFile {
             rules: rules.to_vec(),
         };
-        MappingTable::from_config(&file, &registry, true).unwrap_or_else(|e| panic!("{e}"))
+        MappingTable::from_config(&file, &registry, default_protected)
+            .unwrap_or_else(|e| panic!("{e}"))
     }
 
     fn default_rules() -> Vec<MappingRuleConfig> {
@@ -229,6 +240,48 @@ mod tests {
         let decision = pipeline.enforce(&request, "sess_001");
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
+    }
+
+    #[test]
+    fn test_enforce_not_protected_returns_passthrough() {
+        let claims = test_claims();
+        let rules = vec![MappingRuleConfig {
+            method: Some("POST".to_string()),
+            host: "api.openai.com".to_string(),
+            path: Some("/v1/chat/completions".to_string()),
+            action_class: "llm.inference".to_string(),
+        }];
+
+        let normalizer = IntentNormalizer::new(test_mapping_table_with_protection(&rules, false));
+
+        let stage1 = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test_token".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier { claims }),
+            Box::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
+
+        let request = RawRequest {
+            method: "GET".to_string(),
+            host: "not-protected.example.com".to_string(),
+            path: "/any".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let decision = pipeline.enforce(&request, "sess_001");
+        assert!(
+            decision.is_passthrough(),
+            "non-protected traffic should passthrough, not deny"
+        );
+        assert!(!decision.is_deny());
+        assert!(!decision.is_allow());
     }
 
     #[test]
