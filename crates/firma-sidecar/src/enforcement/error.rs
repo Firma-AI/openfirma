@@ -24,15 +24,19 @@ pub enum EnforcementError {
     TokenValidation(#[from] TokenError),
 
     #[error("scope violation: {detail}")]
+    #[allow(dead_code)]
     ScopeViolation { detail: String },
 
     #[error("policy denied: {detail}")]
+    #[allow(dead_code)]
     PolicyDenied { detail: String },
 
     #[error("policy bundle stale")]
+    #[allow(dead_code)]
     PolicyBundleStale,
 
     #[error("configuration error: {0}")]
+    #[allow(dead_code)]
     Config(String),
 }
 
