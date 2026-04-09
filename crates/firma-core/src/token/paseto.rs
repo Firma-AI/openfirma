@@ -1,6 +1,4 @@
-use crate::error::TokenError;
-use crate::token::CapabilityClaims;
-use crate::traits::{TokenSigner, TokenVerifier};
+use super::{CapabilityClaims, TokenError, TokenSigner, TokenVerifier};
 
 use chrono::{DateTime, Utc};
 use pasetors::claims::Claims;

@@ -1,5 +1,27 @@
+pub mod paseto;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+/// Errors from token signing, verification, and revocation operations.
+#[derive(Debug, thiserror::Error)]
+pub enum TokenError {
+    /// Token could not be parsed from the raw string.
+    #[error("token parse failure: {reason}")]
+    ParseFailure { reason: String },
+    /// Token signature verification failed.
+    #[error("token signature invalid: {reason}")]
+    SignatureInvalid { reason: String },
+    /// Token has expired.
+    #[error("token expired: {token_id}")]
+    Expired { token_id: String },
+    /// Token has been revoked.
+    #[error("token revoked: {token_id}")]
+    Revoked { token_id: String },
+    /// Token payload is malformed or missing required fields.
+    #[error("token malformed: {reason}")]
+    Malformed { reason: String },
+}
 
 /// Payload of a signed capability token.
 ///
@@ -44,6 +66,48 @@ pub enum TokenState {
     Revoked,
     /// Token invalidated due to policy abort. Terminal.
     Aborted,
+}
+
+/// Serialize and cryptographically sign capability claims into a token string.
+///
+/// Format-agnostic — implementations choose the token format (PASETO v4, JWT, etc.).
+/// All implementations must be object-safe for dynamic dispatch.
+pub trait TokenSigner {
+    /// Sign the given claims and return a serialized token string.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TokenError` if signing fails (e.g., key unavailable, serialization error).
+    fn sign(&self, claims: &CapabilityClaims) -> Result<String, TokenError>;
+}
+
+/// Parse, verify signature, validate expiry, and return capability claims.
+///
+/// Format-agnostic — implementations choose the token format (PASETO v4, JWT, etc.).
+/// All implementations must be object-safe for dynamic dispatch.
+pub trait TokenVerifier {
+    /// Verify a raw token string and return the validated claims.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TokenError` if the token is invalid, expired, revoked, or malformed.
+    fn verify(&self, raw_token: &str) -> Result<CapabilityClaims, TokenError>;
+}
+
+/// Check and record token revocations.
+pub trait RevocationStore {
+    /// Check if a token has been revoked by its ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TokenError` if the revocation store cannot be queried.
+    fn is_revoked(&self, token_id: &str) -> Result<bool, TokenError>;
+    /// Record a token revocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TokenError` if the revocation cannot be recorded.
+    fn add_revocation(&self, token_id: &str) -> Result<(), TokenError>;
 }
 
 #[cfg(test)]
@@ -127,5 +191,64 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap_or_else(|e| panic!("{e}"));
         let parsed: TokenState = serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(state, parsed);
+    }
+
+    // -- TokenSigner, TokenVerifier, RevocationStore object-safety tests --
+
+    struct MockSigner;
+    impl TokenSigner for MockSigner {
+        fn sign(&self, _claims: &CapabilityClaims) -> Result<String, TokenError> {
+            Ok("mock_token".to_string())
+        }
+    }
+
+    struct MockVerifier;
+    impl TokenVerifier for MockVerifier {
+        fn verify(&self, _raw_token: &str) -> Result<CapabilityClaims, TokenError> {
+            Err(TokenError::ParseFailure {
+                reason: "mock".to_string(),
+            })
+        }
+    }
+
+    struct MockRevocationStore;
+    impl RevocationStore for MockRevocationStore {
+        fn is_revoked(&self, _token_id: &str) -> Result<bool, TokenError> {
+            Ok(false)
+        }
+        fn add_revocation(&self, _token_id: &str) -> Result<(), TokenError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_token_signer_object_safe() {
+        let signer: Box<dyn TokenSigner> = Box::new(MockSigner);
+        let claims = CapabilityClaims {
+            token_id: "tok_001".to_string(),
+            agent_id: "agent".to_string(),
+            session_id: "sess".to_string(),
+            action_set: vec![],
+            resource_scope: String::new(),
+            issued_at: Utc::now(),
+            expiry: Utc::now(),
+            context_hash: "hash".to_string(),
+        };
+        let result = signer.sign(&claims);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_token_verifier_object_safe() {
+        let verifier: Box<dyn TokenVerifier> = Box::new(MockVerifier);
+        let result = verifier.verify("some_token");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_revocation_store_object_safe() {
+        let store: Box<dyn RevocationStore> = Box::new(MockRevocationStore);
+        assert_eq!(store.is_revoked("tok_001").ok(), Some(false));
+        assert!(store.add_revocation("tok_001").is_ok());
     }
 }
