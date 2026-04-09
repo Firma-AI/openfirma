@@ -159,6 +159,11 @@ mod tests {
         }
     }
 
+    fn test_entry(raw_token: &str, claims: CapabilityClaims) -> CapabilityEntry {
+        CapabilityEntry::from_raw_token(raw_token, &MockVerifier { claims })
+            .unwrap_or_else(|e| panic!("{e}"))
+    }
+
     struct NoRevocations;
     impl RevocationStore for NoRevocations {
         fn is_revoked(&self, _token_id: &str) -> Result<bool, TokenError> {
@@ -221,10 +226,7 @@ mod tests {
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
 
         let stage1 = CapabilityValidator::new(
-            CapabilityMap::new(vec![CapabilityEntry {
-                raw_token: "v4.public.test_token".to_string(),
-                claims: claims.clone(),
-            }]),
+            CapabilityMap::new(vec![test_entry("v4.public.test_token", claims.clone())]),
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
             Duration::from_secs(0),
@@ -292,10 +294,7 @@ mod tests {
         let normalizer = IntentNormalizer::new(test_mapping_table_with_protection(&rules, false));
 
         let stage1 = CapabilityValidator::new(
-            CapabilityMap::new(vec![CapabilityEntry {
-                raw_token: "v4.public.test_token".to_string(),
-                claims: claims.clone(),
-            }]),
+            CapabilityMap::new(vec![test_entry("v4.public.test_token", claims.clone())]),
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
             Duration::from_secs(0),
@@ -336,10 +335,7 @@ mod tests {
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
 
         let stage1 = CapabilityValidator::new(
-            CapabilityMap::new(vec![CapabilityEntry {
-                raw_token: "v4.public.narrow".to_string(),
-                claims: wide_claims.clone(),
-            }]),
+            CapabilityMap::new(vec![test_entry("v4.public.narrow", wide_claims.clone())]),
             Box::new(MockVerifier {
                 claims: wide_claims,
             }),
@@ -407,10 +403,7 @@ mod tests {
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
 
         let stage1 = CapabilityValidator::new(
-            CapabilityMap::new(vec![CapabilityEntry {
-                raw_token: "v4.public.bad".to_string(),
-                claims: claims.clone(),
-            }]),
+            CapabilityMap::new(vec![test_entry("v4.public.bad", claims.clone())]),
             Box::new(RejectingVerifier),
             Box::new(NoRevocations),
             Duration::from_secs(0),
@@ -532,10 +525,7 @@ mod tests {
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
 
         let stage1 = CapabilityValidator::new(
-            CapabilityMap::new(vec![CapabilityEntry {
-                raw_token: "v4.public.test".to_string(),
-                claims: claims.clone(),
-            }]),
+            CapabilityMap::new(vec![test_entry("v4.public.test", claims.clone())]),
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
             Duration::from_secs(0),
