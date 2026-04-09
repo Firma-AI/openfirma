@@ -107,9 +107,9 @@ impl CapabilityValidator {
         )?;
 
         // Step 2: Validate selected token
-        let claims = self.validate(&entry.raw_token)?;
+        let claims = self.validate(entry.raw_token())?;
         Ok(ValidatedCapability {
-            raw_token: entry.raw_token.clone(),
+            raw_token: entry.raw_token().to_string(),
             claims,
         })
     }
@@ -226,10 +226,15 @@ mod tests {
     }
 
     fn test_capability_map() -> CapabilityMap {
-        CapabilityMap::new(vec![CapabilityEntry {
-            raw_token: "v4.public.test_token".to_string(),
-            claims: valid_claims(),
-        }])
+        CapabilityMap::new(vec![
+            CapabilityEntry::from_raw_token(
+                "v4.public.test_token",
+                &MockVerifier {
+                    claims: valid_claims(),
+                },
+            )
+            .unwrap_or_else(|e| panic!("{e}")),
+        ])
     }
 
     #[test]
