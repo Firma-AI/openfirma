@@ -1,7 +1,18 @@
 use crate::decision::Decision;
 use crate::envelope::ExecutionContext;
-use crate::error::{EvaluationError, TokenError};
-use crate::token::CapabilityClaims;
+/// Errors from policy evaluation operations.
+#[derive(Debug, thiserror::Error)]
+pub enum EvaluationError {
+    /// Policy bundle could not be loaded.
+    #[error("policy load failure: {reason}")]
+    PolicyLoadFailure { reason: String },
+    /// Execution context could not be built from the envelope.
+    #[error("context build failure: {reason}")]
+    ContextBuildFailure { reason: String },
+    /// Internal evaluation error.
+    #[error("evaluation internal error: {reason}")]
+    InternalError { reason: String },
+}
 
 /// Opaque policy bundle type.
 ///
@@ -19,32 +30,6 @@ impl PolicyBundle {
     fn new() -> Self {
         Self { _private: () }
     }
-}
-
-/// Serialize and cryptographically sign capability claims into a token string.
-///
-/// Format-agnostic — implementations choose the token format (PASETO v4, JWT, etc.).
-/// All implementations must be object-safe for dynamic dispatch.
-pub trait TokenSigner {
-    /// Sign the given claims and return a serialized token string.
-    ///
-    /// # Errors
-    ///
-    /// Returns `TokenError` if signing fails (e.g., key unavailable, serialization error).
-    fn sign(&self, claims: &CapabilityClaims) -> Result<String, TokenError>;
-}
-
-/// Parse, verify signature, validate expiry, and return capability claims.
-///
-/// Format-agnostic — implementations choose the token format (PASETO v4, JWT, etc.).
-/// All implementations must be object-safe for dynamic dispatch.
-pub trait TokenVerifier {
-    /// Verify a raw token string and return the validated claims.
-    ///
-    /// # Errors
-    ///
-    /// Returns `TokenError` if the token is invalid, expired, revoked, or malformed.
-    fn verify(&self, raw_token: &str) -> Result<CapabilityClaims, TokenError>;
 }
 
 /// Evaluate policy rules against an execution context.
@@ -76,44 +61,10 @@ pub trait PolicyBundleStore {
     fn is_fresh(&self) -> bool;
 }
 
-/// Check and record token revocations.
-pub trait RevocationStore {
-    /// Check if a token has been revoked by its ID.
-    ///
-    /// # Errors
-    ///
-    /// Returns `TokenError` if the revocation store cannot be queried.
-    fn is_revoked(&self, token_id: &str) -> Result<bool, TokenError>;
-    /// Record a token revocation.
-    ///
-    /// # Errors
-    ///
-    /// Returns `TokenError` if the revocation cannot be recorded.
-    fn add_revocation(&self, token_id: &str) -> Result<(), TokenError>;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::decision::DenyReason;
-
-    // -- Mock implementations for object-safety verification --
-
-    struct MockSigner;
-    impl TokenSigner for MockSigner {
-        fn sign(&self, _claims: &CapabilityClaims) -> Result<String, TokenError> {
-            Ok("mock_token".to_string())
-        }
-    }
-
-    struct MockVerifier;
-    impl TokenVerifier for MockVerifier {
-        fn verify(&self, _raw_token: &str) -> Result<CapabilityClaims, TokenError> {
-            Err(TokenError::ParseFailure {
-                reason: "mock".to_string(),
-            })
-        }
-    }
 
     struct MockEvaluator;
     impl PolicyEvaluator for MockEvaluator {
@@ -133,42 +84,6 @@ mod tests {
         fn is_fresh(&self) -> bool {
             true
         }
-    }
-
-    struct MockRevocationStore;
-    impl RevocationStore for MockRevocationStore {
-        fn is_revoked(&self, _token_id: &str) -> Result<bool, TokenError> {
-            Ok(false)
-        }
-        fn add_revocation(&self, _token_id: &str) -> Result<(), TokenError> {
-            Ok(())
-        }
-    }
-
-    // -- Object-safety tests: Box<dyn Trait> must compile --
-
-    #[test]
-    fn test_token_signer_object_safe() {
-        let signer: Box<dyn TokenSigner> = Box::new(MockSigner);
-        let claims = crate::token::CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent".to_string(),
-            session_id: "sess".to_string(),
-            action_set: vec![],
-            resource_scope: String::new(),
-            issued_at: chrono::Utc::now(),
-            expiry: chrono::Utc::now(),
-            context_hash: "hash".to_string(),
-        };
-        let result = signer.sign(&claims);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_token_verifier_object_safe() {
-        let verifier: Box<dyn TokenVerifier> = Box::new(MockVerifier);
-        let result = verifier.verify("some_token");
-        assert!(result.is_err());
     }
 
     #[test]
@@ -193,13 +108,6 @@ mod tests {
         assert!(store.load_bundle().is_ok());
         assert_eq!(store.get_version(), Some("v1".to_string()));
         assert!(store.is_fresh());
-    }
-
-    #[test]
-    fn test_revocation_store_object_safe() {
-        let store: Box<dyn RevocationStore> = Box::new(MockRevocationStore);
-        assert_eq!(store.is_revoked("tok_001").ok(), Some(false));
-        assert!(store.add_revocation("tok_001").is_ok());
     }
 
     #[test]
