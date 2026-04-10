@@ -53,6 +53,9 @@ pub enum DenyReason {
     /// Outbound connector timed out.
     #[error("connector timeout")]
     ConnectorTimeout,
+    /// Protected action could not be mapped to any canonical action class.
+    #[error("unclassified intent")]
+    UnclassifiedIntent,
 }
 
 #[cfg(test)]
@@ -104,6 +107,7 @@ mod tests {
                 "credential injection failed",
             ),
             (DenyReason::ConnectorTimeout, "connector timeout"),
+            (DenyReason::UnclassifiedIntent, "unclassified intent"),
         ];
         for (reason, expected) in cases {
             assert_eq!(reason.to_string(), expected);

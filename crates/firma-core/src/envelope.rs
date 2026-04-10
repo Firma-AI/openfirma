@@ -24,14 +24,23 @@ pub struct ExecutionEnvelope {
 
 /// Typed description of the action an agent intends to perform.
 ///
-/// Mirrors the proto `ExecutionIntent` message: a top-level `resource`
-/// identifier plus a `oneof params` for the typed action kind.
+/// Contains five canonical intent sub-fields: `action_class`, `resource`,
+/// `params`, `raw_transport`, and `raw_action_ref`. The `action_class` is
+/// the canonical class from the v0.1 Action Class Registry, set by the
+/// Sidecar's intent normalizer after mapping the raw intercepted request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionIntent {
+    /// Canonical action class from the v0.1 registry (e.g., `"llm.inference"`,
+    /// `"http.get"`). Set by the intent normalizer.
+    pub action_class: String,
     /// Target resource identifier (e.g., URL, table name, tool name).
     pub resource: String,
     /// Typed action parameters — exactly one action kind per intent.
     pub params: ActionParams,
+    /// Original transport protocol (e.g., `"http"`, `"https"`).
+    pub raw_transport: String,
+    /// Original request signature for traceability (e.g., `"POST /v1/chat/completions"`).
+    pub raw_action_ref: String,
 }
 
 /// Typed action parameters (maps to the proto `oneof params`).
@@ -158,6 +167,7 @@ mod tests {
     fn sample_http_envelope() -> ExecutionEnvelope {
         ExecutionEnvelope {
             intent: ExecutionIntent {
+                action_class: "http.get".to_string(),
                 resource: "https://api.example.com/data".to_string(),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
@@ -168,6 +178,8 @@ mod tests {
                     body: None,
                     query: HashMap::new(),
                 }),
+                raw_transport: "https".to_string(),
+                raw_action_ref: "GET /data".to_string(),
             },
             capability: "v4.public.eyJ0...".to_string(),
             metadata: ExecutionMetadata {
@@ -192,6 +204,7 @@ mod tests {
     #[test]
     fn test_execution_intent_http() {
         let intent = ExecutionIntent {
+            action_class: "http.post".to_string(),
             resource: "https://api.example.com".to_string(),
             params: ActionParams::Http(HttpParams {
                 method: HttpMethod::POST,
@@ -199,13 +212,17 @@ mod tests {
                 body: None,
                 query: HashMap::new(),
             }),
+            raw_transport: "https".to_string(),
+            raw_action_ref: "POST /".to_string(),
         };
         assert!(matches!(intent.params, ActionParams::Http(_)));
+        assert_eq!(intent.action_class, "http.post");
     }
 
     #[test]
     fn test_execution_intent_db_query() {
         let intent = ExecutionIntent {
+            action_class: "db.query".to_string(),
             resource: "main".to_string(),
             params: ActionParams::DbQuery(DbQueryParams {
                 query_name: "get_user_by_id".to_string(),
@@ -213,6 +230,8 @@ mod tests {
                 db_name: "main".to_string(),
                 read_only: true,
             }),
+            raw_transport: "https".to_string(),
+            raw_action_ref: "POST /query".to_string(),
         };
         assert!(matches!(intent.params, ActionParams::DbQuery(_)));
     }
@@ -220,11 +239,14 @@ mod tests {
     #[test]
     fn test_execution_intent_tool_use() {
         let intent = ExecutionIntent {
+            action_class: "code.execute".to_string(),
             resource: "calculator".to_string(),
             params: ActionParams::ToolUse(ToolUseParams {
                 tool_name: "calculator".to_string(),
                 input: HashMap::from([("expression".to_string(), "2+2".to_string())]),
             }),
+            raw_transport: "https".to_string(),
+            raw_action_ref: "POST /tools/calculator".to_string(),
         };
         assert!(matches!(intent.params, ActionParams::ToolUse(_)));
     }

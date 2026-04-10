@@ -35,6 +35,12 @@ Decisions made during inception that are explicitly out of scope for V1:
 - **provenance field**: Removed from ExecutionEnvelope. V1 placeholder with no implementation — add back when hash chain is designed.
 - **BudgetExceeded / RiskThreshold deny reasons**: Deferred — corresponding data fields not yet present.
 
+## Design Notes
+
+### Operator File Count for Policy Setup
+
+Current design requires operators to touch 4 files minimum (sidecar config, mapping rules, Cedar schema, Cedar policies). For the "try it in 5 minutes" tier this is too many. Ship sensible defaults: default mapping rules for OpenAI/Anthropic/Gemini, default `.cedarschema` matching the v0.1 action class registry, and a starter policy. Target: 2 files minimum (config + one policy). Address during intent 006 config story (bolt 007-proxy-core) or intent 007 local dev mode.
+
 ## Key Principles
 
 - **No sandbox required**: Firma's security model is proxy-based (HTTP_PROXY), not sandbox-based. Agents don't need containerization for Firma to work. The sandbox/container layer is orthogonal — provides runtime containment, not policy enforcement.
