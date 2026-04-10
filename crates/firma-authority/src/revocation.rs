@@ -88,7 +88,7 @@ impl RevocationStore {
     }
 
     /// Revoke a token by ID. Idempotent — duplicate revocations are no-ops.
-    #[allow(dead_code)] // Called via gRPC and file watcher paths
+    #[expect(dead_code, reason = "called via gRPC and file watcher paths")]
     pub async fn revoke(&self, token_id: &str, reason: &str) {
         let mut entries = self.entries.write().await;
         if entries.contains_key(token_id) {
@@ -112,7 +112,7 @@ impl RevocationStore {
     }
 
     /// Check if a token has been revoked.
-    #[allow(dead_code)] // Public API used by sidecar integration
+    #[expect(dead_code, reason = "public API used by sidecar integration")]
     pub async fn is_revoked(&self, token_id: &str) -> bool {
         self.entries.read().await.contains_key(token_id)
     }

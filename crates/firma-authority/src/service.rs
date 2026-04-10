@@ -61,7 +61,7 @@ impl AuthorityService for AuthorityServiceImpl {
         );
 
         // Build Cedar evaluation context
-        let policy_set = self.policy_store.get_policy_set().await;
+        let policy_set = self.policy_store.policy_set().await;
         let decision = evaluate_cedar_policy(
             &policy_set,
             &req.agent_id,
@@ -78,7 +78,7 @@ impl AuthorityService for AuthorityServiceImpl {
                 let token_id = format!("tok_{}", Uuid::new_v4());
 
                 // Build context hash from the current policy bundle version
-                let context_hash = self.policy_store.get_bundle().await.version.clone();
+                let context_hash = self.policy_store.bundle().await.version.clone();
 
                 let claims = CapabilityClaims {
                     token_id: token_id.clone(),

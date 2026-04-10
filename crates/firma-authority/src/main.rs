@@ -89,10 +89,10 @@ async fn run_server(config: config::AuthorityConfig) {
     // FR-9: Load Ed25519 signing key
     let key_bytes = match std::fs::read(&config.key_file) {
         Ok(bytes) => bytes,
-        Err(e) => {
+        Err(error) => {
             tracing::error!(
                 path = %config.key_file.display(),
-                error = %e,
+                %error,
                 "failed to read signing key file — run `firma-authority generate-key` first"
             );
             std::process::exit(1);
@@ -162,7 +162,7 @@ async fn run_server(config: config::AuthorityConfig) {
     tracing::info!("firma-authority shut down gracefully");
 }
 
-/// Start a file watcher thread to monitor policy directory and revocation file.
+/// Start a file watcher to monitor policy directory and revocation file.
 fn spawn_file_watcher(
     config: &config::AuthorityConfig,
     policy_store: Arc<CedarPolicyStore>,
@@ -172,69 +172,51 @@ fn spawn_file_watcher(
     let policy_dir = config.policy_dir.clone();
     let revocation_file = config.revocation_file.clone();
 
-    // File watcher runs in a blocking thread
-    let tx = notify_tx;
-    let policy_dir_clone = policy_dir.clone();
-    let revocation_file_clone = revocation_file.clone();
-
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Handle::current();
-
-        let mut watcher =
-            match notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-                if let Ok(event) = res
-                    && matches!(
-                        event.kind,
-                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-                    )
-                {
+    let Ok(mut watcher) =
+        notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+            if let Ok(event) = res {
+                if matches!(
+                    event.kind,
+                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                ) {
                     for path in event.paths {
-                        let tx = tx.clone();
-                        rt.spawn(async move {
-                            let _ = tx.send(path).await;
-                        });
+                        let _ = notify_tx.try_send(path);
                     }
                 }
-            }) {
-                Ok(w) => w,
-                Err(e) => {
-                    tracing::error!(error = %e, "failed to create file watcher");
-                    return;
-                }
-            };
+            }
+        })
+        .inspect_err(|error| tracing::error!(%error, "failed to create file watcher"))
+    else {
+        return;
+    };
 
-        if let Err(e) = watcher.watch(&policy_dir_clone, RecursiveMode::NonRecursive) {
-            tracing::error!(error = %e, path = %policy_dir_clone.display(), "failed to watch policy dir");
-        }
+    if let Err(error) = watcher.watch(&policy_dir, RecursiveMode::NonRecursive) {
+        tracing::error!(%error, path = %policy_dir.display(), "failed to watch policy dir");
+    }
 
-        if let Some(parent) = revocation_file_clone.parent()
-            && parent.is_dir()
-            && let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive)
-        {
-            tracing::error!(error = %e, "failed to watch revocation file directory");
-        }
-
-        tracing::info!("file watcher started");
-        std::thread::park();
-    });
+    if let Err(error) = watcher.watch(&revocation_file, RecursiveMode::NonRecursive) {
+        tracing::error!(%error, "failed to watch revocation file directory");
+    }
 
     // Process file change events
     tokio::spawn(async move {
+        // keep watcher alive
+        let _watcher = watcher;
         while let Some(changed_path) = notify_rx.recv().await {
             if changed_path
                 .extension()
                 .is_some_and(|ext| ext == "cedar" || ext == "cedarschema" || ext == "json")
             {
                 tracing::info!(path = %changed_path.display(), "policy file changed, reloading");
-                if let Err(e) = policy_store.reload().await {
-                    tracing::error!(error = %e, "policy hot-reload failed, keeping previous policy set");
+                if let Err(error) = policy_store.reload().await {
+                    tracing::error!(%error, "policy hot-reload failed, keeping previous policy set");
                 }
             }
 
             if changed_path == revocation_file {
                 tracing::info!("revocation file changed, reloading");
-                if let Err(e) = revocation_store.reload_from_file().await {
-                    tracing::error!(error = %e, "revocation file reload failed");
+                if let Err(error) = revocation_store.reload_from_file().await {
+                    tracing::error!(%error, "revocation file reload failed");
                 }
             }
         }
