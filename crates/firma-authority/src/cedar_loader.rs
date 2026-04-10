@@ -116,18 +116,18 @@ impl CedarPolicyStore {
     }
 
     /// Get a snapshot of the current policy set for evaluation.
-    pub async fn get_policy_set(&self) -> Arc<PolicySet> {
+    pub async fn policy_set(&self) -> Arc<PolicySet> {
         Arc::clone(&*self.policy_set.read().await)
     }
 
     /// Get the current schema, if one was loaded.
     #[expect(dead_code, reason = "will be used when schema validation is wired in")]
-    pub async fn get_schema(&self) -> Option<Arc<Schema>> {
+    pub async fn schema(&self) -> Option<Arc<Schema>> {
         self.schema.read().await.clone()
     }
 
     /// Get the current policy bundle for distribution to sidecars.
-    pub async fn get_bundle(&self) -> PolicyBundle {
+    pub async fn bundle(&self) -> PolicyBundle {
         self.bundle.read().await.clone()
     }
 
@@ -243,9 +243,9 @@ mod tests {
     use std::fs;
 
     fn setup_policy_dir(policies: &[(&str, &str)]) -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let dir = tempfile::tempdir().expect("create the temp dir failed");
         for (name, content) in policies {
-            fs::write(dir.path().join(name), content).unwrap_or_else(|e| panic!("{e}"));
+            fs::write(dir.path().join(name), content).expect("write policies failed");
         }
         dir
     }
@@ -303,7 +303,7 @@ mod tests {
     async fn test_reload_detects_changes() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
-        let v1 = store.get_bundle().await.version.clone();
+        let v1 = store.bundle().await.version.clone();
 
         // Add a new policy file
         fs::write(
@@ -314,7 +314,7 @@ mod tests {
 
         let result = store.reload().await;
         assert!(result.is_ok());
-        let v2 = store.get_bundle().await.version;
+        let v2 = store.bundle().await.version;
         assert_ne!(v1, v2);
     }
 
