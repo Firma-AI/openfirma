@@ -8,8 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-firma-core = { path = "../firma-core" }
-firma-proto = { path = "../firma-proto" }
+firma-core = { workspace = true }
+firma-proto = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
