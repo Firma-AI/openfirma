@@ -9,12 +9,12 @@ use tonic::{Request as TonicRequest, Response, Status};
 use uuid::Uuid;
 
 use firma_core::{CapabilityClaims, PasetoV4Signer, PolicyBundle, TokenSigner};
+use firma_proto::RevocationEvent;
 use firma_proto::firma::v1::authority_service_server::AuthorityService;
 use firma_proto::firma::v1::{
     CapabilityToken, IssueCapabilityRequest, IssueCapabilityResponse, PolicyBundleUpdate,
     TokenFormat, WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
-use firma_proto::RevocationEvent;
 
 use crate::cedar_loader::CedarPolicyStore;
 use crate::revocation::RevocationStore;
