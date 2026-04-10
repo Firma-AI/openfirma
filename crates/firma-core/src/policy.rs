@@ -1,5 +1,6 @@
 use crate::decision::Decision;
 use crate::envelope::ExecutionContext;
+
 /// Errors from policy evaluation operations.
 #[derive(Debug, thiserror::Error)]
 pub enum EvaluationError {
