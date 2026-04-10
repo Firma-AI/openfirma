@@ -182,17 +182,17 @@ fn spawn_file_watcher(
 
         let mut watcher =
             match notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-                if let Ok(event) = res {
-                    if matches!(
+                if let Ok(event) = res
+                    && matches!(
                         event.kind,
                         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-                    ) {
-                        for path in event.paths {
-                            let tx = tx.clone();
-                            rt.spawn(async move {
-                                let _ = tx.send(path).await;
-                            });
-                        }
+                    )
+                {
+                    for path in event.paths {
+                        let tx = tx.clone();
+                        rt.spawn(async move {
+                            let _ = tx.send(path).await;
+                        });
                     }
                 }
             }) {
@@ -207,12 +207,11 @@ fn spawn_file_watcher(
             tracing::error!(error = %e, path = %policy_dir_clone.display(), "failed to watch policy dir");
         }
 
-        if let Some(parent) = revocation_file_clone.parent() {
-            if parent.is_dir() {
-                if let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive) {
-                    tracing::error!(error = %e, "failed to watch revocation file directory");
-                }
-            }
+        if let Some(parent) = revocation_file_clone.parent()
+            && parent.is_dir()
+            && let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive)
+        {
+            tracing::error!(error = %e, "failed to watch revocation file directory");
         }
 
         tracing::info!("file watcher started");

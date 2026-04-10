@@ -1,14 +1,16 @@
 [workspace]
 members = [
+    "crates/firma-authority",
     "crates/firma-core",
     "crates/firma-proto",
     "crates/firma-sidecar",
-    "crates/firma-authority",
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
-edition = "2021"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.86.0"
 license = "Apache-2.0"
 repository = "https://github.com/firma-ai/firma-oss"
 
@@ -23,23 +25,32 @@ module_name_repetitions = "allow"
 unsafe_code = "deny"
 
 [workspace.dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+async-stream = "0.3"
+cedar-policy = "3"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+firma-core = { path = "crates/firma-core" }
+firma-proto = { path = "crates/firma-proto" }
+hex = "0.4"
+notify = { version = "7", default-features = false, features = [
+    "macos_kqueue",
+] }
+pasetors = "0.7"
+prost = "0.13"
+prost-types = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "2"
-chrono = { version = "0.4", features = ["serde"] }
-pasetors = "0.7"
-cedar-policy = "3"
-notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
-toml = "0.8"
-clap = { version = "4", features = ["derive"] }
-uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
-hex = "0.4"
-tonic = "0.12"
-prost-types = "0.13"
-async-stream = "0.3"
-tokio-stream = { version = "0.1", features = ["sync"] }
 tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+toml = "1"
+tonic = "0.12"
+tonic-build = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v4"] }
