@@ -172,21 +172,19 @@ fn spawn_file_watcher(
     let policy_dir = config.policy_dir.clone();
     let revocation_file = config.revocation_file.clone();
 
-    let Ok(mut watcher) =
-        notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-            if let Ok(event) = res {
-                if matches!(
-                    event.kind,
-                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-                ) {
-                    for path in event.paths {
-                        let _ = notify_tx.try_send(path);
-                    }
+    let Ok(mut watcher) = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+        if let Ok(event) = res {
+            if matches!(
+                event.kind,
+                EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+            ) {
+                for path in event.paths {
+                    let _ = notify_tx.try_send(path);
                 }
             }
-        })
-        .inspect_err(|error| tracing::error!(%error, "failed to create file watcher"))
-    else {
+        }
+    })
+    .inspect_err(|error| tracing::error!(%error, "failed to create file watcher")) else {
         return;
     };
 

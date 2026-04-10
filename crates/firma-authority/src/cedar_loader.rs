@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use cedar_policy::{PolicySet, Schema};
 use sha2::{Digest, Sha256};
-use tokio::sync::{watch, RwLock};
+use tokio::sync::{RwLock, watch};
 
 use firma_core::PolicyBundle;
 
