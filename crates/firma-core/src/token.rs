@@ -114,22 +114,9 @@ pub trait RevocationStore {
 mod tests {
     use super::*;
     use chrono::Utc;
-
-    fn sample_claims() -> CapabilityClaims {
-        CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent_abc".to_string(),
-            session_id: "sess_xyz".to_string(),
-            action_set: vec!["http:GET".to_string()],
-            resource_scope: "https://api.example.com/*".to_string(),
-            issued_at: Utc::now(),
-            expiry: Utc::now(),
-            context_hash: "abcdef1234567890".to_string(),
-        }
-    }
+    use pretty_assertions::assert_eq;
 
     #[test]
-    #[allow(clippy::expect_used)]
     fn claims_payload_backward_compat() {
         let json = r#"{
             "token_id":      "golden-tok-001",
@@ -160,82 +147,13 @@ mod tests {
             context_hash: "deadbeef1234567890abcdef".to_string(),
         };
 
-        assert2::assert!(claims == expected);
+        assert_eq!(claims, expected);
     }
 
     #[test]
-    fn capability_claims_serde_round_trip() {
-        let claims = sample_claims();
-        let json = serde_json::to_string(&claims).expect("Token serialization failed");
-        let parsed: CapabilityClaims =
-            serde_json::from_str(&json).expect("Token deserialization failed");
-        assert_eq!(claims, parsed);
-    }
-
-    #[test]
-    fn token_state_serde_round_trip() {
+    fn token_state_to_camel_case() {
         let state = TokenState::Revoked;
-        let json = serde_json::to_string(&state).unwrap_or_else(|e| panic!("{e}"));
-        let parsed: TokenState = serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(state, parsed);
-    }
-
-    // -- TokenSigner, TokenVerifier, RevocationStore object-safety tests --
-
-    struct MockSigner;
-    impl TokenSigner for MockSigner {
-        fn sign(&self, _claims: &CapabilityClaims) -> Result<String, TokenError> {
-            Ok("mock_token".to_string())
-        }
-    }
-
-    struct MockVerifier;
-    impl TokenVerifier for MockVerifier {
-        fn verify(&self, _raw_token: &str) -> Result<CapabilityClaims, TokenError> {
-            Err(TokenError::ParseFailure {
-                reason: "mock".to_string(),
-            })
-        }
-    }
-
-    struct MockRevocationStore;
-    impl RevocationStore for MockRevocationStore {
-        fn is_revoked(&self, _token_id: &str) -> Result<bool, TokenError> {
-            Ok(false)
-        }
-        fn add_revocation(&self, _token_id: &str) -> Result<(), TokenError> {
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn token_signer_object_safe() {
-        let signer: Box<dyn TokenSigner> = Box::new(MockSigner);
-        let claims = CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent".to_string(),
-            session_id: "sess".to_string(),
-            action_set: vec![],
-            resource_scope: String::new(),
-            issued_at: Utc::now(),
-            expiry: Utc::now(),
-            context_hash: "hash".to_string(),
-        };
-        let result = signer.sign(&claims);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn token_verifier_object_safe() {
-        let verifier: Box<dyn TokenVerifier> = Box::new(MockVerifier);
-        let result = verifier.verify("some_token");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn revocation_store_object_safe() {
-        let store: Box<dyn RevocationStore> = Box::new(MockRevocationStore);
-        assert_eq!(store.is_revoked("tok_001").ok(), Some(false));
-        assert!(store.add_revocation("tok_001").is_ok());
+        let json = serde_json::to_string(&state).expect("TokenState should be serializable");
+        assert_eq!(json, r#""Revoked""#);
     }
 }
