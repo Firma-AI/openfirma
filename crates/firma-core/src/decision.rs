@@ -19,6 +19,7 @@ pub enum Decision {
 /// - `BudgetExceeded` — when budget tracking mechanism is designed
 /// - `RiskThreshold` — when anomaly detection is designed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 pub enum DenyReason {
     /// Signature check failed or unrecognized token format.
     #[error("token invalid")]
@@ -62,38 +63,54 @@ pub enum DenyReason {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use rstest::rstest;
 
-    #[rstest]
-    #[case(r#""Allow""#, Decision::Allow)]
-    #[case(r#"{"Deny":{"reason":"ScopeViolation"}}"#, Decision::Deny { reason: DenyReason::ScopeViolation })]
-    #[case(r#"{"Abort":{"reason":"fatal"}}"#, Decision::Abort { reason: "fatal".to_string() })]
-    fn decision_backward_compat(#[case] json: &str, #[case] expected: Decision) {
-        let parsed: Decision =
-            serde_json::from_str(json).expect("backward compat broken: Decision format changed");
-        assert_eq!(parsed, expected);
+    #[test]
+    fn decision_backward_compat() {
+        let cases: &[(&str, Decision)] = &[
+            (r#""Allow""#, Decision::Allow),
+            (
+                r#"{"Deny":{"reason":"ScopeViolation"}}"#,
+                Decision::Deny {
+                    reason: DenyReason::ScopeViolation,
+                },
+            ),
+            (
+                r#"{"Abort":{"reason":"fatal"}}"#,
+                Decision::Abort {
+                    reason: "fatal".to_string(),
+                },
+            ),
+        ];
+
+        for (json, expected) in cases {
+            let parsed: Decision = serde_json::from_str(json)
+                .expect("backward compat broken: Decision format changed");
+
+            assert_eq!(&parsed, expected);
+        }
     }
 
-    #[rstest]
-    #[case(r#""TokenInvalid""#, DenyReason::TokenInvalid)]
-    #[case(r#""TokenExpired""#, DenyReason::TokenExpired)]
-    #[case(r#""TokenRevoked""#, DenyReason::TokenRevoked)]
-    #[case(r#""PolicyDenied""#, DenyReason::PolicyDenied)]
-    #[case(r#""ScopeViolation""#, DenyReason::ScopeViolation)]
-    #[case(r#""ToolNotInScope""#, DenyReason::ToolNotInScope)]
-    #[case(r#""MalformedRequest""#, DenyReason::MalformedRequest)]
-    #[case(r#""AuthorityUnavailable""#, DenyReason::AuthorityUnavailable)]
-    #[case(r#""PolicyBundleStale""#, DenyReason::PolicyBundleStale)]
-    #[case(
-        r#""CredentialInjectionFailed""#,
-        DenyReason::CredentialInjectionFailed
-    )]
-    #[case(r#""ConnectorTimeout""#, DenyReason::ConnectorTimeout)]
-    #[case(r#""UnclassifiedIntent""#, DenyReason::UnclassifiedIntent)]
-    #[allow(clippy::expect_used)]
-    fn deny_reason_backward_compat(#[case] json: &str, #[case] expected: DenyReason) {
-        let parsed: DenyReason = serde_json::from_str(json)
-            .expect("backward compat broken: DenyReason variant name changed");
-        assert_eq!(parsed, expected);
+    #[test]
+    fn deny_reason_backward_compat() {
+        use strum::IntoEnumIterator;
+        for reason in DenyReason::iter() {
+            let parsed: DenyReason = serde_json::from_str(match reason {
+                DenyReason::TokenInvalid => r#""TokenInvalid""#,
+                DenyReason::TokenExpired => r#""TokenExpired""#,
+                DenyReason::TokenRevoked => r#""TokenRevoked""#,
+                DenyReason::PolicyDenied => r#""PolicyDenied""#,
+                DenyReason::ScopeViolation => r#""ScopeViolation""#,
+                DenyReason::ToolNotInScope => r#""ToolNotInScope""#,
+                DenyReason::MalformedRequest => r#""MalformedRequest""#,
+                DenyReason::AuthorityUnavailable => r#""AuthorityUnavailable""#,
+                DenyReason::PolicyBundleStale => r#""PolicyBundleStale""#,
+                DenyReason::CredentialInjectionFailed => r#""CredentialInjectionFailed""#,
+                DenyReason::ConnectorTimeout => r#""ConnectorTimeout""#,
+                DenyReason::UnclassifiedIntent => r#""UnclassifiedIntent""#,
+            })
+            .expect("backward compat broken: serde representation changed");
+
+            assert_eq!(parsed, reason);
+        }
     }
 }
