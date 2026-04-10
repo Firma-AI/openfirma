@@ -12,4 +12,6 @@ pub use envelope::{
 };
 pub use policy::{EvaluationError, PolicyBundle, PolicyBundleStore, PolicyEvaluator};
 pub use token::paseto::{PasetoV4Signer, PasetoV4Verifier};
-pub use token::{CapabilityClaims, RevocationStore, TokenError, TokenSigner, TokenState, TokenVerifier};
+pub use token::{
+    CapabilityClaims, RevocationStore, TokenError, TokenSigner, TokenState, TokenVerifier,
+};
