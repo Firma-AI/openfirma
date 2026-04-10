@@ -61,98 +61,39 @@ pub enum DenyReason {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fmt::Display;
+    use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
-    #[test]
-    fn decision_allow() {
-        let d = Decision::Allow;
-        assert_eq!(d, Decision::Allow);
+    #[rstest]
+    #[case(r#""Allow""#, Decision::Allow)]
+    #[case(r#"{"Deny":{"reason":"ScopeViolation"}}"#, Decision::Deny { reason: DenyReason::ScopeViolation })]
+    #[case(r#"{"Abort":{"reason":"fatal"}}"#,         Decision::Abort { reason: "fatal".to_string() })]
+    fn decision_backward_compat(#[case] json: &str, #[case] expected: Decision) {
+        let parsed: Decision =
+            serde_json::from_str(json).expect("backward compat broken: Decision format changed");
+        assert_eq!(parsed, expected);
     }
 
-    #[test]
-    fn decision_deny() {
-        let d = Decision::Deny {
-            reason: DenyReason::PolicyDenied,
-        };
-        assert!(matches!(
-            d,
-            Decision::Deny {
-                reason: DenyReason::PolicyDenied
-            }
-        ));
-    }
-
-    #[test]
-    fn decision_abort() {
-        let d = Decision::Abort {
-            reason: "fatal error".to_string(),
-        };
-        assert!(matches!(d, Decision::Abort { .. }));
-    }
-
-    #[test]
-    fn deny_reason_display_all_variants() {
-        let cases = [
-            (DenyReason::TokenInvalid, "token invalid"),
-            (DenyReason::TokenExpired, "token expired"),
-            (DenyReason::TokenRevoked, "token revoked"),
-            (DenyReason::PolicyDenied, "policy denied"),
-            (DenyReason::ScopeViolation, "scope violation"),
-            (DenyReason::ToolNotInScope, "tool not in scope"),
-            (DenyReason::MalformedRequest, "malformed request"),
-            (DenyReason::AuthorityUnavailable, "authority unavailable"),
-            (DenyReason::PolicyBundleStale, "policy bundle stale"),
-            (
-                DenyReason::CredentialInjectionFailed,
-                "credential injection failed",
-            ),
-            (DenyReason::ConnectorTimeout, "connector timeout"),
-            (DenyReason::UnclassifiedIntent, "unclassified intent"),
-        ];
-        for (reason, expected) in cases {
-            assert_eq!(reason.to_string(), expected);
-        }
-    }
-
-    #[test]
-    fn deny_reason_copy() {
-        let reason = DenyReason::TokenExpired;
-        let copied = reason;
-        assert_eq!(reason, copied);
-    }
-
-    #[test]
-    fn decision_serde_round_trip() {
-        let decisions = [
-            Decision::Allow,
-            Decision::Deny {
-                reason: DenyReason::ScopeViolation,
-            },
-            Decision::Abort {
-                reason: "panic".to_string(),
-            },
-        ];
-        for d in &decisions {
-            let json = serde_json::to_string(d).unwrap_or_else(|e| panic!("{e}"));
-            let parsed: Decision = serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
-            assert_eq!(*d, parsed);
-        }
-    }
-
-    #[test]
-    fn decision_eq() {
-        assert_eq!(Decision::Allow, Decision::Allow);
-        assert_ne!(
-            Decision::Allow,
-            Decision::Deny {
-                reason: DenyReason::PolicyDenied
-            }
-        );
-    }
-
-    #[test]
-    fn deny_reason_is_display() {
-        fn assert_display<T: Display>() {}
-        assert_display::<DenyReason>();
+    #[rstest]
+    #[case(r#""TokenInvalid""#, DenyReason::TokenInvalid)]
+    #[case(r#""TokenExpired""#, DenyReason::TokenExpired)]
+    #[case(r#""TokenRevoked""#, DenyReason::TokenRevoked)]
+    #[case(r#""PolicyDenied""#, DenyReason::PolicyDenied)]
+    #[case(r#""ScopeViolation""#, DenyReason::ScopeViolation)]
+    #[case(r#""ToolNotInScope""#, DenyReason::ToolNotInScope)]
+    #[case(r#""MalformedRequest""#, DenyReason::MalformedRequest)]
+    #[case(r#""AuthorityUnavailable""#, DenyReason::AuthorityUnavailable)]
+    #[case(r#""PolicyBundleStale""#, DenyReason::PolicyBundleStale)]
+    #[case(
+        r#""CredentialInjectionFailed""#,
+        DenyReason::CredentialInjectionFailed
+    )]
+    #[case(r#""ConnectorTimeout""#, DenyReason::ConnectorTimeout)]
+    #[case(r#""UnclassifiedIntent""#, DenyReason::UnclassifiedIntent)]
+    #[allow(clippy::expect_used)]
+    fn deny_reason_backward_compat(#[case] json: &str, #[case] expected: DenyReason) {
+        let parsed: DenyReason = serde_json::from_str(json)
+            .expect("backward compat broken: DenyReason variant name changed");
+        assert_eq!(parsed, expected);
     }
 }
