@@ -67,7 +67,7 @@ mod tests {
     #[rstest]
     #[case(r#""Allow""#, Decision::Allow)]
     #[case(r#"{"Deny":{"reason":"ScopeViolation"}}"#, Decision::Deny { reason: DenyReason::ScopeViolation })]
-    #[case(r#"{"Abort":{"reason":"fatal"}}"#,         Decision::Abort { reason: "fatal".to_string() })]
+    #[case(r#"{"Abort":{"reason":"fatal"}}"#, Decision::Abort { reason: "fatal".to_string() })]
     fn decision_backward_compat(#[case] json: &str, #[case] expected: Decision) {
         let parsed: Decision =
             serde_json::from_str(json).expect("backward compat broken: Decision format changed");
