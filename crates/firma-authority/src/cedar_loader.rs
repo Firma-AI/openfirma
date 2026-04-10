@@ -36,7 +36,7 @@ impl CedarPolicyStore {
     ///
     /// # Errors
     ///
-    /// Returns `AuthorityError` if the policy directory cannot be read or
+    /// Returns [`AuthorityError`] if the policy directory cannot be read or
     /// any `.cedar` file contains invalid syntax.
     pub fn load(policy_dir: &Path, bundle_ttl_seconds: i32) -> Result<Self, AuthorityError> {
         let (policies_src, schema_src) = read_policy_files(policy_dir)?;
@@ -121,7 +121,7 @@ impl CedarPolicyStore {
     }
 
     /// Get the current schema, if one was loaded.
-    #[allow(dead_code)] // Will be used when schema validation is wired in
+    #[expect(dead_code, reason = "will be used when schema validation is wired in")]
     pub async fn get_schema(&self) -> Option<Arc<Schema>> {
         self.schema.read().await.clone()
     }
@@ -173,26 +173,31 @@ fn read_policy_files(policy_dir: &Path) -> Result<(String, String), AuthorityErr
     }
 
     // Try to load schema
-    let schema_src = try_read_schema(policy_dir);
+    let schema_src = try_read_schema(policy_dir).unwrap_or_default();
 
     Ok((policies, schema_src))
 }
 
 /// Try to read Cedar schema from the policy directory.
-/// Returns empty string if no schema file exists.
-fn try_read_schema(policy_dir: &Path) -> String {
+///
+/// Returns the schema contents if a `schema.cedarschema` or `schema.json`
+/// file is found. Returns an `io::Error` otherwise.
+fn try_read_schema(policy_dir: &Path) -> std::io::Result<String> {
     // Try `.cedarschema` first (human-readable format), then `.json`
     let schema_path = policy_dir.join("schema.cedarschema");
     if schema_path.is_file() {
-        return std::fs::read_to_string(&schema_path).unwrap_or_default();
+        return std::fs::read_to_string(&schema_path);
     }
 
     let schema_json_path = policy_dir.join("schema.json");
     if schema_json_path.is_file() {
-        return std::fs::read_to_string(&schema_json_path).unwrap_or_default();
+        return std::fs::read_to_string(&schema_json_path);
     }
 
-    String::new()
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "no schema file found",
+    ))
 }
 
 /// Parse Cedar policy source into a `PolicySet`.
