@@ -3,21 +3,39 @@ use crate::envelope::ExecutionContext;
 use crate::error::{EvaluationError, TokenError};
 use crate::token::CapabilityClaims;
 
-/// Opaque policy bundle type.
+/// Policy bundle containing Cedar policies and entity schema.
 ///
-/// Internals will be defined when Cedar integration lands (intent 005).
-/// Private field prevents external construction — bundles must come from
-/// `PolicyBundleStore::load_bundle`.
+/// Created by the Authority when loading policies from disk, and distributed
+/// to Sidecars via `WatchPolicyBundle` streaming. The `version` field is a
+/// hex-encoded SHA-256 hash of the concatenated policy + schema bytes,
+/// enabling cheap equality checks for deduplication.
 #[derive(Debug, Clone)]
 pub struct PolicyBundle {
-    _private: (),
+    /// Bundle version identifier (hex SHA-256 of policies + schema).
+    pub version: String,
+    /// Raw Cedar policy source (concatenated `.cedar` files).
+    pub policies: Vec<u8>,
+    /// Raw Cedar entity schema bytes.
+    pub entity_schema: Vec<u8>,
+    /// Time-to-live in seconds. Sidecars enter fail-closed when stale.
+    pub ttl_seconds: i32,
 }
 
 impl PolicyBundle {
-    /// Create a new `PolicyBundle`. Only available within firma-core.
-    #[cfg(test)]
-    fn new() -> Self {
-        Self { _private: () }
+    /// Create a new `PolicyBundle`.
+    #[must_use]
+    pub fn new(
+        version: String,
+        policies: Vec<u8>,
+        entity_schema: Vec<u8>,
+        ttl_seconds: i32,
+    ) -> Self {
+        Self {
+            version,
+            policies,
+            entity_schema,
+            ttl_seconds,
+        }
     }
 }
 
@@ -125,7 +143,7 @@ mod tests {
     struct MockBundleStore;
     impl PolicyBundleStore for MockBundleStore {
         fn load_bundle(&self) -> Result<PolicyBundle, EvaluationError> {
-            Ok(PolicyBundle::new())
+            Ok(PolicyBundle::new("v1".to_string(), vec![], vec![], 30))
         }
         fn get_version(&self) -> Option<String> {
             Some("v1".to_string())
@@ -233,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_policy_bundle_debug() {
-        let bundle = PolicyBundle::new();
+        let bundle = PolicyBundle::new("v1".to_string(), vec![], vec![], 30);
         let debug = format!("{bundle:?}");
         assert!(debug.contains("PolicyBundle"));
     }
