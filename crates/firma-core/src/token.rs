@@ -130,8 +130,7 @@ mod tests {
             "context_hash":  "deadbeef1234567890abcdef"
         }"#;
 
-        let claims: CapabilityClaims = serde_json::from_str(json)
-            .expect("backward compat broken: claims payload format changed");
+        let claims: CapabilityClaims = serde_json::from_str(json).unwrap();
 
         let expected = CapabilityClaims {
             token_id: "golden-tok-001".to_string(),
@@ -163,8 +162,7 @@ mod tests {
                 TokenState::Revoked => r#""Revoked""#,
                 TokenState::Aborted => r#""Aborted""#,
             })
-            .expect("backward compat broken: serde representation changed");
-
+            .unwrap();
             assert_eq!(parsed, reason);
         }
     }
