@@ -88,7 +88,7 @@ mod tests {
     }
 
     #[test]
-    fn test_policy_evaluator_object_safe() {
+    fn policy_evaluator_object_safe() {
         let evaluator: Box<dyn PolicyEvaluator> = Box::new(MockEvaluator);
         let ctx = ExecutionContext {
             agent_id: "agent".to_string(),
@@ -104,7 +104,7 @@ mod tests {
     }
 
     #[test]
-    fn test_policy_bundle_store_object_safe() {
+    fn policy_bundle_store_object_safe() {
         let store: Box<dyn PolicyBundleStore> = Box::new(MockBundleStore);
         assert!(store.load_bundle().is_ok());
         assert_eq!(store.get_version(), Some("v1".to_string()));
@@ -112,7 +112,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mock_evaluator_deny() {
+    fn mock_evaluator_deny() {
         struct DenyEvaluator;
         impl PolicyEvaluator for DenyEvaluator {
             fn evaluate(&self, _ctx: &ExecutionContext) -> Result<Decision, EvaluationError> {
@@ -141,9 +141,10 @@ mod tests {
     }
 
     #[test]
-    fn test_policy_bundle_debug() {
+    fn policy_bundle_debug() {
         let bundle = PolicyBundle::new();
         let debug = format!("{bundle:?}");
         assert!(debug.contains("PolicyBundle"));
     }
+
 }

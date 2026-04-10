@@ -129,64 +129,51 @@ mod tests {
     }
 
     #[test]
-    fn test_capability_claims_construction() {
-        let claims = sample_claims();
-        assert_eq!(claims.token_id, "tok_001");
-        assert_eq!(claims.agent_id, "agent_abc");
-        assert_eq!(claims.session_id, "sess_xyz");
-        assert_eq!(claims.action_set.len(), 1);
-        assert_eq!(claims.resource_scope, "https://api.example.com/*");
+    #[allow(clippy::expect_used)]
+    fn claims_payload_backward_compat() {
+        let json = r#"{
+            "token_id":      "golden-tok-001",
+            "agent_id":      "golden-agent",
+            "session_id":    "golden-sess",
+            "action_set":    ["http:GET", "tool:execute"],
+            "resource_scope":"https://api.example.com/*",
+            "issued_at":     "2024-01-01T00:00:00Z",
+            "expiry":        "2099-01-01T00:00:00Z",
+            "context_hash":  "deadbeef1234567890abcdef"
+        }"#;
+
+        let claims: CapabilityClaims = serde_json::from_str(json)
+            .expect("backward compat broken: claims payload format changed");
+
+        let expected = CapabilityClaims {
+            token_id: "golden-tok-001".to_string(),
+            agent_id: "golden-agent".to_string(),
+            session_id: "golden-sess".to_string(),
+            action_set: vec!["http:GET".to_string(), "tool:execute".to_string()],
+            resource_scope: "https://api.example.com/*".to_string(),
+            issued_at: chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                .expect("fixed date")
+                .with_timezone(&Utc),
+            expiry: chrono::DateTime::parse_from_rfc3339("2099-01-01T00:00:00Z")
+                .expect("fixed date")
+                .with_timezone(&Utc),
+            context_hash: "deadbeef1234567890abcdef".to_string(),
+        };
+
+        assert2::assert!(claims == expected);
     }
 
     #[test]
-    fn test_capability_claims_serde_round_trip() {
+    fn capability_claims_serde_round_trip() {
         let claims = sample_claims();
-        let json = serde_json::to_string(&claims).unwrap_or_else(|e| panic!("{e}"));
+        let json = serde_json::to_string(&claims).expect("Token serialization failed");
         let parsed: CapabilityClaims =
-            serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
+            serde_json::from_str(&json).expect("Token deserialization failed");
         assert_eq!(claims, parsed);
     }
 
     #[test]
-    fn test_capability_claims_empty_action_set() {
-        let claims = CapabilityClaims {
-            action_set: vec![],
-            ..sample_claims()
-        };
-        assert!(claims.action_set.is_empty());
-    }
-
-    #[test]
-    fn test_capability_claims_debug_clone() {
-        let claims = sample_claims();
-        let cloned = claims.clone();
-        assert_eq!(claims, cloned);
-        let debug = format!("{claims:?}");
-        assert!(debug.contains("tok_001"));
-    }
-
-    #[test]
-    fn test_token_state_all_variants() {
-        let states = [
-            TokenState::Issued,
-            TokenState::Active,
-            TokenState::InUse,
-            TokenState::Expired,
-            TokenState::Revoked,
-            TokenState::Aborted,
-        ];
-        assert_eq!(states.len(), 6);
-    }
-
-    #[test]
-    fn test_token_state_copy_eq() {
-        let state = TokenState::Active;
-        let copied = state;
-        assert_eq!(state, copied);
-    }
-
-    #[test]
-    fn test_token_state_serde_round_trip() {
+    fn token_state_serde_round_trip() {
         let state = TokenState::Revoked;
         let json = serde_json::to_string(&state).unwrap_or_else(|e| panic!("{e}"));
         let parsed: TokenState = serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
@@ -222,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn test_token_signer_object_safe() {
+    fn token_signer_object_safe() {
         let signer: Box<dyn TokenSigner> = Box::new(MockSigner);
         let claims = CapabilityClaims {
             token_id: "tok_001".to_string(),
@@ -239,14 +226,14 @@ mod tests {
     }
 
     #[test]
-    fn test_token_verifier_object_safe() {
+    fn token_verifier_object_safe() {
         let verifier: Box<dyn TokenVerifier> = Box::new(MockVerifier);
         let result = verifier.verify("some_token");
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_revocation_store_object_safe() {
+    fn revocation_store_object_safe() {
         let store: Box<dyn RevocationStore> = Box::new(MockRevocationStore);
         assert_eq!(store.is_revoked("tok_001").ok(), Some(false));
         assert!(store.add_revocation("tok_001").is_ok());

@@ -195,14 +195,14 @@ mod tests {
     }
 
     #[test]
-    fn test_execution_envelope_construction() {
+    fn execution_envelope_construction() {
         let envelope = sample_http_envelope();
         assert_eq!(envelope.capability, "v4.public.eyJ0...");
         assert_eq!(envelope.metadata.agent_id, "agent_abc");
     }
 
     #[test]
-    fn test_execution_intent_http() {
+    fn execution_intent_http() {
         let intent = ExecutionIntent {
             action_class: "http.post".to_string(),
             resource: "https://api.example.com".to_string(),
@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn test_execution_intent_db_query() {
+    fn execution_intent_db_query() {
         let intent = ExecutionIntent {
             action_class: "db.query".to_string(),
             resource: "main".to_string(),
@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn test_execution_intent_tool_use() {
+    fn execution_intent_tool_use() {
         let intent = ExecutionIntent {
             action_class: "code.execute".to_string(),
             resource: "calculator".to_string(),
@@ -252,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn test_execution_metadata_optional_trace_id() {
+    fn execution_metadata_optional_trace_id() {
         let meta = ExecutionMetadata {
             session_id: "sess_001".to_string(),
             agent_id: "agent_abc".to_string(),
@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn test_execution_context_construction() {
+    fn execution_context_construction() {
         let ctx = ExecutionContext {
             agent_id: "agent_abc".to_string(),
             action: "http:GET".to_string(),
@@ -280,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn test_envelope_serde_round_trip() {
+    fn envelope_serde_round_trip() {
         let envelope = sample_http_envelope();
         let json = serde_json::to_string(&envelope).unwrap_or_else(|e| panic!("{e}"));
         let parsed: ExecutionEnvelope =
