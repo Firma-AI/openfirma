@@ -53,6 +53,7 @@ pub struct CapabilityClaims {
 ///
 /// Terminal states (`Expired`, `Revoked`, `Aborted`) cannot transition to any other state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 pub enum TokenState {
     /// Token created by Authority, not yet delivered to agent.
     Issued,
@@ -115,7 +116,6 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use pretty_assertions::assert_eq;
-    use rstest::rstest;
 
     #[test]
     fn claims_payload_backward_compat() {
@@ -151,19 +151,21 @@ mod tests {
         assert_eq!(claims, expected);
     }
 
-    #[rstest]
-    #[case(TokenState::Issued, r#""Issued""#)]
-    #[case(TokenState::Active, r#""Active""#)]
-    #[case(TokenState::InUse, r#""InUse""#)]
-    #[case(TokenState::Expired, r#""Expired""#)]
-    #[case(TokenState::Revoked, r#""Revoked""#)]
-    #[case(TokenState::Aborted, r#""Aborted""#)]
-    #[allow(clippy::expect_used)]
-    fn token_state_backward_compat(#[case] state: TokenState, #[case] expected_json: &str) {
-        let json = serde_json::to_string(&state).expect("serialization failed");
-        assert_eq!(json, expected_json);
-        let parsed: TokenState = serde_json::from_str(expected_json)
-            .expect("backward compat broken: TokenState variant name changed");
-        assert_eq!(parsed, state);
+    #[test]
+    fn token_state_backward_compat() {
+        use strum::IntoEnumIterator;
+        for reason in TokenState::iter() {
+            let parsed: TokenState = serde_json::from_str(match reason {
+                TokenState::Issued => r#""Issued""#,
+                TokenState::Active => r#""Active""#,
+                TokenState::InUse => r#""InUse""#,
+                TokenState::Expired => r#""Expired""#,
+                TokenState::Revoked => r#""Revoked""#,
+                TokenState::Aborted => r#""Aborted""#,
+            })
+            .expect("backward compat broken: serde representation changed");
+
+            assert_eq!(parsed, reason);
+        }
     }
 }
