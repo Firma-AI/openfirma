@@ -115,6 +115,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     #[test]
     fn claims_payload_backward_compat() {
@@ -150,10 +151,19 @@ mod tests {
         assert_eq!(claims, expected);
     }
 
-    #[test]
-    fn token_state_to_camel_case() {
-        let state = TokenState::Revoked;
-        let json = serde_json::to_string(&state).expect("TokenState should be serializable");
-        assert_eq!(json, r#""Revoked""#);
+    #[rstest]
+    #[case(TokenState::Issued, r#""Issued""#)]
+    #[case(TokenState::Active, r#""Active""#)]
+    #[case(TokenState::InUse, r#""InUse""#)]
+    #[case(TokenState::Expired, r#""Expired""#)]
+    #[case(TokenState::Revoked, r#""Revoked""#)]
+    #[case(TokenState::Aborted, r#""Aborted""#)]
+    #[allow(clippy::expect_used)]
+    fn token_state_backward_compat(#[case] state: TokenState, #[case] expected_json: &str) {
+        let json = serde_json::to_string(&state).expect("serialization failed");
+        assert_eq!(json, expected_json);
+        let parsed: TokenState = serde_json::from_str(expected_json)
+            .expect("backward compat broken: TokenState variant name changed");
+        assert_eq!(parsed, state);
     }
 }
