@@ -25,6 +25,7 @@ module_name_repetitions = "allow"
 unsafe_code = "deny"
 
 [workspace.dependencies]
+assert2 = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 pasetors = "0.7"
 serde = { version = "1", features = ["derive"] }

@@ -64,13 +64,13 @@ mod tests {
     use std::fmt::Display;
 
     #[test]
-    fn test_decision_allow() {
+    fn decision_allow() {
         let d = Decision::Allow;
         assert_eq!(d, Decision::Allow);
     }
 
     #[test]
-    fn test_decision_deny() {
+    fn decision_deny() {
         let d = Decision::Deny {
             reason: DenyReason::PolicyDenied,
         };
@@ -83,7 +83,7 @@ mod tests {
     }
 
     #[test]
-    fn test_decision_abort() {
+    fn decision_abort() {
         let d = Decision::Abort {
             reason: "fatal error".to_string(),
         };
@@ -91,7 +91,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deny_reason_display_all_variants() {
+    fn deny_reason_display_all_variants() {
         let cases = [
             (DenyReason::TokenInvalid, "token invalid"),
             (DenyReason::TokenExpired, "token expired"),
@@ -115,14 +115,14 @@ mod tests {
     }
 
     #[test]
-    fn test_deny_reason_copy() {
+    fn deny_reason_copy() {
         let reason = DenyReason::TokenExpired;
         let copied = reason;
         assert_eq!(reason, copied);
     }
 
     #[test]
-    fn test_decision_serde_round_trip() {
+    fn decision_serde_round_trip() {
         let decisions = [
             Decision::Allow,
             Decision::Deny {
@@ -140,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn test_decision_eq() {
+    fn decision_eq() {
         assert_eq!(Decision::Allow, Decision::Allow);
         assert_ne!(
             Decision::Allow,
@@ -151,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deny_reason_is_display() {
+    fn deny_reason_is_display() {
         fn assert_display<T: Display>() {}
         assert_display::<DenyReason>();
     }
