@@ -193,9 +193,7 @@ mod tests {
             },
             "provenance": null
         }"#;
-
-        let envelope: ExecutionEnvelope = serde_json::from_str(json)
-            .expect("backward compat broken: envelope payload format changed");
+        let envelope: ExecutionEnvelope = serde_json::from_str(json).unwrap();
 
         let expected = ExecutionEnvelope {
             intent: ExecutionIntent {
@@ -241,9 +239,7 @@ mod tests {
             }
         }"#;
 
-        let params: ActionParams = serde_json::from_str(json)
-            .expect("backward compat broken: DbQuery params format changed");
-
+        let params: ActionParams = serde_json::from_str(json).unwrap();
         let expected = ActionParams::DbQuery(DbQueryParams {
             query_name: "get_user_by_id".to_string(),
             bindings: HashMap::from([("id".to_string(), "42".to_string())]),
@@ -263,9 +259,7 @@ mod tests {
             }
         }"#;
 
-        let params: ActionParams = serde_json::from_str(json)
-            .expect("backward compat broken: ToolUse params format changed");
-
+        let params: ActionParams = serde_json::from_str(json).unwrap();
         let expected = ActionParams::ToolUse(ToolUseParams {
             tool_name: "calculator".to_string(),
             input: HashMap::from([("expression".to_string(), "2+2".to_string())]),

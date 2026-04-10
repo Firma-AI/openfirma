@@ -65,29 +65,34 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn decision_backward_compat() {
-        let cases: &[(&str, Decision)] = &[
-            (r#""Allow""#, Decision::Allow),
-            (
-                r#"{"Deny":{"reason":"ScopeViolation"}}"#,
-                Decision::Deny {
-                    reason: DenyReason::ScopeViolation,
-                },
-            ),
-            (
-                r#"{"Abort":{"reason":"fatal"}}"#,
-                Decision::Abort {
-                    reason: "fatal".to_string(),
-                },
-            ),
-        ];
+    fn decision_backward_compat_allow() {
+        let json = r#""Allow""#;
+        let parsed: Decision = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed, Decision::Allow);
+    }
 
-        for (json, expected) in cases {
-            let parsed: Decision = serde_json::from_str(json)
-                .expect("backward compat broken: Decision format changed");
+    #[test]
+    fn decision_backward_compat_deny() {
+        let json = r#"{"Deny":{"reason":"ScopeViolation"}}"#;
+        let parsed: Decision = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            parsed,
+            Decision::Deny {
+                reason: DenyReason::ScopeViolation,
+            }
+        );
+    }
 
-            assert_eq!(&parsed, expected);
-        }
+    #[test]
+    fn decision_backward_compat_abort() {
+        let json = r#"{"Abort":{"reason":"fatal"}}"#;
+        let parsed: Decision = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            parsed,
+            Decision::Abort {
+                reason: "fatal".to_string(),
+            }
+        );
     }
 
     #[test]
@@ -108,8 +113,7 @@ mod tests {
                 DenyReason::ConnectorTimeout => r#""ConnectorTimeout""#,
                 DenyReason::UnclassifiedIntent => r#""UnclassifiedIntent""#,
             })
-            .expect("backward compat broken: serde representation changed");
-
+            .unwrap();
             assert_eq!(parsed, reason);
         }
     }
