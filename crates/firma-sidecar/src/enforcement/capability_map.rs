@@ -15,7 +15,6 @@ use std::collections::HashMap;
 use firma_core::CapabilityClaims;
 #[cfg(test)]
 use firma_core::TokenId;
-use firma_core::token::matches_resource_scope;
 
 use crate::enforcement::decision::{
     CapabilityValidationStage, EnforcementDecision, EnforcementStage,
@@ -164,7 +163,7 @@ impl CapabilityMap {
 
         if claims.resource_scope == "*" {
             score += 1;
-        } else if matches_resource_scope(&claims.resource_scope, resource) {
+        } else if resource_scope_matches(&claims.resource_scope, resource) {
             score += 50;
         } else if !claims.resource_scope.is_empty() {
             return 0;
@@ -225,6 +224,70 @@ impl CapabilityMap {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+}
+
+/// Check whether a `resource_scope` pattern authorizes access to `resource`.
+///
+/// Unlike raw `str::starts_with`, this enforces **host boundary** semantics
+/// to prevent subdomain / path-extension bypasses (T-002).
+///
+/// Scope patterns take the form `<host>[/<path>]`:
+///
+/// | Scope pattern            | Resource                               | Match |
+/// |--------------------------|-----------------------------------------|-------|
+/// | `"*"`                    | (any)                                   | yes   |
+/// | `"api.example.com"`      | `"api.example.com/v1/chat"`            | yes   |
+/// | `"api.example.com"`      | `"api.example.com.evil.com/v1/chat"`   | **no**|
+/// | `"api.example.com/v1"`   | `"api.example.com/v1/chat"`            | yes   |
+/// | `"api.example.com/v1"`   | `"api.example.com/v2/chat"`            | **no**|
+/// | `"*.example.com"`        | `"api.example.com/v1/chat"`           | yes   |
+/// | `"*.example.com"`        | `"example.com/v1/chat"`                | **no**|
+fn resource_scope_matches(scope: &str, resource: &str) -> bool {
+    if scope == "*" {
+        return true;
+    }
+
+    let (scope_host, scope_path) = split_host_path(scope);
+    let (res_host, res_path) = split_host_path(resource);
+
+    if !host_matches(scope_host, res_host) {
+        return false;
+    }
+
+    if scope_path.is_empty() {
+        return true;
+    }
+
+    res_path.starts_with(scope_path)
+        && (res_path.len() == scope_path.len()
+            || res_path.as_bytes().get(scope_path.len()) == Some(&b'/'))
+}
+
+/// Split a resource identifier into `(host, path)` at the first `/`.
+///
+/// `"api.example.com/v1/chat"` → `("api.example.com", "/v1/chat")`
+/// `"api.example.com"`         → `("api.example.com", "")`
+fn split_host_path(s: &str) -> (&str, &str) {
+    match s.find('/') {
+        Some(idx) => (&s[..idx], &s[idx..]),
+        None => (s, ""),
+    }
+}
+
+/// Match a scope host pattern against a resource host.
+///
+/// - Exact match: `scope_host == res_host`
+/// - Wildcard prefix: `*.example.com` matches `api.example.com` but **not**
+///   `example.com` (requires at least one subdomain label)
+fn host_matches(scope_host: &str, res_host: &str) -> bool {
+    if let Some(suffix) = scope_host.strip_prefix("*.") {
+        if res_host == suffix {
+            return false;
+        }
+        res_host.ends_with(suffix) && res_host.ends_with(&format!(".{suffix}"))
+    } else {
+        scope_host == res_host
     }
 }
 
@@ -522,5 +585,147 @@ mod tests {
         let map = CapabilityMap::new(vec![test_entry(vec!["filesystem.read"], "*")]);
         assert!(!map.is_empty());
         assert_eq!(map.len(), 1);
+    }
+
+    // ===== T-002: Resource scope boundary enforcement tests =====
+
+    #[test]
+    fn test_resource_scope_matches_wildcard_allows_any() {
+        assert!(resource_scope_matches("*", "anything.example.com/path"));
+    }
+
+    #[test]
+    fn test_resource_scope_matches_exact_host_with_path() {
+        assert!(resource_scope_matches(
+            "api.example.com",
+            "api.example.com/v1/chat"
+        ));
+    }
+
+    #[test]
+    fn test_resource_scope_matches_exact_host_without_path() {
+        assert!(resource_scope_matches("api.example.com", "api.example.com"));
+    }
+
+    #[test]
+    fn test_resource_scope_rejects_subdomain_extension() {
+        assert!(!resource_scope_matches(
+            "api.example.com",
+            "api.example.com.evil.com/v1/chat"
+        ));
+    }
+
+    #[test]
+    fn test_resource_scope_rejects_host_prefix_extension() {
+        assert!(!resource_scope_matches(
+            "api.example.com",
+            "xapi.example.com/v1/chat"
+        ));
+    }
+
+    #[test]
+    fn test_resource_scope_matches_scoped_path() {
+        assert!(resource_scope_matches(
+            "api.example.com/v1",
+            "api.example.com/v1/chat"
+        ));
+    }
+
+    #[test]
+    fn test_resource_scope_rejects_different_path_branch() {
+        assert!(!resource_scope_matches(
+            "api.example.com/v1",
+            "api.example.com/v2/chat"
+        ));
+    }
+
+    #[test]
+    fn test_resource_scope_rejects_path_prefix_without_separator() {
+        assert!(!resource_scope_matches(
+            "api.example.com/v1",
+            "api.example.com/v1alpha/chat"
+        ));
+    }
+
+    #[test]
+    fn test_resource_scope_wildcard_host_matches_subdomain() {
+        assert!(resource_scope_matches(
+            "*.example.com",
+            "api.example.com/v1/chat"
+        ));
+    }
+
+    #[test]
+    fn test_resource_scope_wildcard_host_rejects_bare_domain() {
+        assert!(!resource_scope_matches(
+            "*.example.com",
+            "example.com/v1/chat"
+        ));
+    }
+
+    #[test]
+    fn test_resource_scope_wildcard_host_rejects_unrelated_domain() {
+        assert!(!resource_scope_matches(
+            "*.example.com",
+            "api.notexample.com/v1/chat"
+        ));
+    }
+
+    #[test]
+    fn test_resource_scope_wildcard_host_deep_subdomain() {
+        assert!(resource_scope_matches(
+            "*.example.com",
+            "deep.api.example.com/v1/chat"
+        ));
+    }
+
+    #[test]
+    fn test_resource_scope_rejects_different_host() {
+        assert!(!resource_scope_matches(
+            "api.openai.com",
+            "api.anthropic.com/v1/chat"
+        ));
+    }
+
+    #[test]
+    fn test_host_matches_exact() {
+        assert!(host_matches("api.example.com", "api.example.com"));
+        assert!(!host_matches("api.example.com", "other.example.com"));
+    }
+
+    #[test]
+    fn test_host_matches_wildcard() {
+        assert!(host_matches("*.example.com", "api.example.com"));
+        assert!(host_matches("*.example.com", "deep.api.example.com"));
+        assert!(!host_matches("*.example.com", "example.com"));
+        assert!(!host_matches("*.example.com", "notexample.com"));
+    }
+
+    #[test]
+    fn test_split_host_path() {
+        assert_eq!(
+            split_host_path("api.example.com/v1/chat"),
+            ("api.example.com", "/v1/chat")
+        );
+        assert_eq!(split_host_path("api.example.com"), ("api.example.com", ""));
+        assert_eq!(split_host_path(""), ("", ""));
+    }
+
+    #[test]
+    fn test_select_rejects_subdomain_bypass() {
+        let map = CapabilityMap::new(vec![
+            test_entry(vec!["llm.inference"], "api.openai.com"),
+            test_entry(vec!["http.get"], "*"),
+        ]);
+
+        let result = map.select(
+            "sess_001",
+            "llm.inference",
+            "api.openai.com.evil.com/v1/chat",
+        );
+        assert!(
+            result.is_err(),
+            "subdomain extension must not match scope for api.openai.com"
+        );
     }
 }
