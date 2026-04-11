@@ -51,14 +51,42 @@ pub struct NormalizedEnvelope {
 }
 
 /// Raw intercepted request — the input to the enforcement pipeline.
-/// Constructed by proxy-core from Pingora request data.
+///
+/// Produced by an [`Interceptor`](crate::interceptor::Interceptor) from
+/// transport-specific input and consumed by [`IntentNormalizer`] to build a
+/// canonical [`NormalizedEnvelope`]. All three interception modes (HTTP proxy,
+/// gRPC hook, Unix socket) produce an identical `RawRequest`, keeping
+/// downstream stages transport-agnostic.
+///
+/// Sensitive headers (`authorization`, `cookie`, `x-api-key`) are stripped
+/// during normalization and never reach policy evaluation.
 #[derive(Debug)]
 pub struct RawRequest {
+    /// HTTP method verb (e.g. `GET`, `POST`, `DELETE`).
+    ///
+    /// Together with `host` and `path`, determines the canonical
+    /// `action_class` via the mapping table.
     pub method: String,
+    /// Target host or domain (e.g. `api.stripe.com`).
+    ///
+    /// Maps to the `resource` sub-field of the normalized intent.
     pub host: String,
+    /// Request path including any query string (e.g. `/v1/charges`).
     pub path: String,
+    /// HTTP headers as key-value pairs.
+    ///
+    /// May contain sensitive headers at this stage; the normalizer filters
+    /// them before building the [`NormalizedEnvelope`].
     pub headers: HashMap<String, String>,
+    /// Optional request body as raw bytes.
+    ///
+    /// Used by the normalizer to extract `parameters` for the intent
+    /// sub-field. `None` for bodiless methods like `GET` or `DELETE`.
     pub body: Option<Vec<u8>>,
+    /// Whether the original request used HTTPS.
+    ///
+    /// Preserved as the `raw_transport` observational field in the
+    /// [`NormalizedEnvelope`]; not used for policy evaluation.
     pub is_https: bool,
 }
 

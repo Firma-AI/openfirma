@@ -2,6 +2,7 @@
 members = [
     "crates/firma-authority",
     "crates/firma-core",
+    "crates/firma-grpc-interceptor-proto",
     "crates/firma-proto",
     "crates/firma-sidecar",
 ]
@@ -25,21 +26,17 @@ module_name_repetitions = "allow"
 unsafe_code = "deny"
 
 [workspace.dependencies]
-async-stream = "0.3"
-cedar-policy = "3"
+async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
-criterion = { version = "0.5", features = ["html_reports"] }
-clap = { version = "4", features = ["derive"] }
-firma-core = { path = "crates/firma-core" }
-firma-proto = { path = "crates/firma-proto" }
-hex = "0.4"
-notify = { version = "7", default-features = false, features = [
-    "macos_kqueue",
-] }
+firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto" }
+http-body-util = "0.1"
+hyper = { version = "1", default-features = false }
+hyper-util = { version = "0.1", default-features = false }
 pasetors = "0.7"
-pretty_assertions = "1"
-prost = "0.13"
-prost-types = "0.13"
+pingora-core = "0.8"
+pingora-proxy = "0.8"
+prost = "0.14"
+prost-types = "0.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -52,6 +49,9 @@ tokio = { version = "1", default-features = false, features = [
 ] }
 tokio-util = "0.7"
 toml = "1"
+tonic = { version = "0.14", features = ["transport"] }
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4"] }
