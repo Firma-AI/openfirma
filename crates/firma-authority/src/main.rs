@@ -99,7 +99,7 @@ async fn run_server(config: config::AuthorityConfig) {
         }
     };
 
-    let signer = match PasetoV4Signer::new(&key_bytes) {
+    let signer = match PasetoV4Signer::try_new(&key_bytes) {
         Ok(s) => Arc::new(s),
         Err(e) => {
             tracing::error!(error = %e, "invalid signing key");
