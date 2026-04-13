@@ -94,10 +94,10 @@ impl EnforcementPipeline {
         }
 
         // All stages passed — assemble the fully populated envelope.
-        let envelope = ExecutionEnvelope {
-            intent: normalized.intent,
-            capability: capability.raw_token,
-            metadata: ExecutionMetadata {
+        let envelope = ExecutionEnvelope::new(
+            normalized.intent,
+            capability.raw_token,
+            ExecutionMetadata {
                 session_id: session_id.to_string(),
                 agent_id: capability.claims.agent_id.clone(),
                 timestamp: normalized.timestamp,
@@ -105,8 +105,8 @@ impl EnforcementPipeline {
                 budget_consumed: 0.0,
                 risk_score: None,
             },
-            provenance: None,
-        };
+            None,
+        );
 
         EnforcementDecision::Allow {
             claims: capability.claims,
@@ -249,13 +249,13 @@ mod tests {
 
         if let EnforcementDecision::Allow { claims, envelope } = decision {
             assert_eq!(claims.agent_id, "agent_test");
-            assert_eq!(envelope.metadata.agent_id, "agent_test");
-            assert_eq!(envelope.metadata.session_id, "sess_001");
+            assert_eq!(envelope.metadata().agent_id, "agent_test");
+            assert_eq!(envelope.metadata().session_id, "sess_001");
             assert!(
-                !envelope.capability.is_empty(),
+                !envelope.capability().is_empty(),
                 "capability must be populated on Allow"
             );
-            assert_eq!(envelope.intent.action_class, "llm.inference");
+            assert_eq!(envelope.intent().action_class, "llm.inference");
         }
     }
 
