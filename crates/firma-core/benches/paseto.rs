@@ -1,4 +1,4 @@
-#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
 
 use chrono::Utc;
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -8,7 +8,7 @@ use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 
 fn generate_keypair() -> (Vec<u8>, Vec<u8>) {
-    let kp = AsymmetricKeyPair::<V4>::generate().expect("keygen");
+    let kp = AsymmetricKeyPair::<V4>::generate().unwrap();
     (kp.secret.as_bytes().to_vec(), kp.public.as_bytes().to_vec())
 }
 
@@ -28,22 +28,22 @@ fn sample_claims() -> CapabilityClaims {
 
 fn bench_sign(c: &mut Criterion) {
     let (sk, _pk) = generate_keypair();
-    let signer = PasetoV4Signer::try_new(&sk).expect("signer");
+    let signer = PasetoV4Signer::try_new(&sk).unwrap();
     let claims = sample_claims();
 
     c.bench_function("paseto_v4_sign", |b| {
-        b.iter(|| signer.sign(&claims).expect("sign"));
+        b.iter(|| signer.sign(&claims).unwrap());
     });
 }
 
 fn bench_verify(c: &mut Criterion) {
     let (sk, pk) = generate_keypair();
-    let signer = PasetoV4Signer::try_new(&sk).expect("signer");
-    let verifier = PasetoV4Verifier::try_new(&pk).expect("verifier");
-    let token = signer.sign(&sample_claims()).expect("sign");
+    let signer = PasetoV4Signer::try_new(&sk).unwrap();
+    let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
+    let token = signer.sign(&sample_claims()).unwrap();
 
     c.bench_function("paseto_v4_verify", |b| {
-        b.iter(|| verifier.verify(&token).expect("verify"));
+        b.iter(|| verifier.verify(&token).unwrap());
     });
 }
 
