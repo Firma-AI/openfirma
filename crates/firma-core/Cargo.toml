@@ -18,5 +18,11 @@ thiserror = { workspace = true }
 workspace = true
 
 [dev-dependencies]
+criterion = { workspace = true }
+pasetors = { workspace = true }
 pretty_assertions = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
+
+[[bench]]
+name = "paseto"
+harness = false

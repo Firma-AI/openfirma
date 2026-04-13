@@ -1,0 +1,51 @@
+#![allow(clippy::expect_used)]
+
+use chrono::Utc;
+use criterion::{criterion_group, criterion_main, Criterion};
+use firma_core::token::{CapabilityClaims, TokenSigner, TokenVerifier};
+use firma_core::token::paseto::{PasetoV4Signer, PasetoV4Verifier};
+use pasetors::keys::{AsymmetricKeyPair, Generate};
+use pasetors::version4::V4;
+
+fn generate_keypair() -> (Vec<u8>, Vec<u8>) {
+    let kp = AsymmetricKeyPair::<V4>::generate().expect("keygen");
+    (kp.secret.as_bytes().to_vec(), kp.public.as_bytes().to_vec())
+}
+
+fn sample_claims() -> CapabilityClaims {
+    let now = Utc::now();
+    CapabilityClaims {
+        token_id: "tok_bench_001".to_string(),
+        agent_id: "agent_bench".to_string(),
+        session_id: "sess_bench".to_string(),
+        action_set: vec!["http:GET".to_string(), "tool:execute".to_string()],
+        resource_scope: "https://api.example.com/*".to_string(),
+        issued_at: now,
+        expiry: now + chrono::Duration::seconds(600),
+        context_hash: "abcdef1234567890".to_string(),
+    }
+}
+
+fn bench_sign(c: &mut Criterion) {
+    let (sk, _pk) = generate_keypair();
+    let signer = PasetoV4Signer::try_new(&sk).expect("signer");
+    let claims = sample_claims();
+
+    c.bench_function("paseto_v4_sign", |b| {
+        b.iter(|| signer.sign(&claims).expect("sign"));
+    });
+}
+
+fn bench_verify(c: &mut Criterion) {
+    let (sk, pk) = generate_keypair();
+    let signer = PasetoV4Signer::try_new(&sk).expect("signer");
+    let verifier = PasetoV4Verifier::try_new(&pk).expect("verifier");
+    let token = signer.sign(&sample_claims()).expect("sign");
+
+    c.bench_function("paseto_v4_verify", |b| {
+        b.iter(|| verifier.verify(&token).expect("verify"));
+    });
+}
+
+criterion_group!(benches, bench_sign, bench_verify);
+criterion_main!(benches);
