@@ -32,10 +32,9 @@
 //! - **Non-deterministic authorization** — same context + same bundle always
 //!   produces the same decision.
 
-use firma_core::{CapabilityClaims, DenyReason};
-
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
 use crate::normalizer::NormalizedEnvelope;
+use firma_core::{decision::DenyReason, token::CapabilityClaims};
 
 /// Trait for policy evaluation — abstracts Cedar or any other policy engine.
 ///
@@ -204,7 +203,7 @@ impl ConstraintEnforcer {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use firma_core::*;
+    use firma_core::envelope::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
     use std::collections::HashMap;
 
     struct AllowAllPolicy;

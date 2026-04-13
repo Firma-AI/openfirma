@@ -28,6 +28,7 @@ unsafe_code = "deny"
 async-stream = "0.3"
 cedar-policy = "3"
 chrono = { version = "0.4", features = ["serde"] }
+criterion = { version = "0.5", features = ["html_reports"] }
 clap = { version = "4", features = ["derive"] }
 firma-core = { path = "crates/firma-core" }
 firma-proto = { path = "crates/firma-proto" }
@@ -36,11 +37,13 @@ notify = { version = "7", default-features = false, features = [
     "macos_kqueue",
 ] }
 pasetors = "0.7"
+pretty_assertions = "1"
 prost = "0.13"
 prost-types = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+strum = "0.28"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", default-features = false, features = [

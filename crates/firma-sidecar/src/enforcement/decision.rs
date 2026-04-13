@@ -9,7 +9,7 @@
 //! ABORT is an asynchronous in-flight kill signal emitted by the Authority
 //! via `WatchAborts`, not produced by the enforcement pipeline itself.
 
-use firma_core::{CapabilityClaims, DenyReason, ExecutionEnvelope};
+use firma_core::{decision::DenyReason, envelope::ExecutionEnvelope, token::CapabilityClaims};
 
 use crate::normalizer::NormalizedEnvelope;
 

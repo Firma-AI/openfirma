@@ -206,7 +206,7 @@ mod tests {
     fn test_empty_host_rejected() {
         let rule = MappingRuleConfig {
             method: None,
-            host: "".to_string(),
+            host: String::new(),
             path: None,
             action_class: "llm.inference".to_string(),
         };
@@ -259,7 +259,7 @@ mod tests {
         let file = MappingRulesFile {
             rules: vec![MappingRuleConfig {
                 method: None,
-                host: "".to_string(),
+                host: String::new(),
                 path: None,
                 action_class: "llm.inference".to_string(),
             }],
@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn test_empty_agent_id_rejected() {
         let entry = CapabilityManifestEntry {
-            agent_id: "".to_string(),
+            agent_id: String::new(),
             action_set: vec!["llm.inference".to_string()],
             resource_scope: "*".to_string(),
         };
