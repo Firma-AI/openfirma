@@ -236,10 +236,12 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
 
     use super::*;
+    use crate::config::{MappingRuleConfig, MappingRulesFile};
+    use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
+    use crate::enforcement::constraint_enforcement::PolicyEvaluation;
     use crate::pipeline::{
-        ActionClassRegistry, CapabilityEntry, CapabilityMap, CapabilityValidator,
-        ConstraintEnforcer, IntentNormalizer, MappingRuleConfig, MappingRulesFile, MappingTable,
-        PolicyEvaluation,
+        ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, IntentNormalizer,
+        MappingTable,
     };
 
     // ── helpers ────────────────────────────────────────────────────────
@@ -335,7 +337,7 @@ mod tests {
             MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
-        let stage1 = CapabilityValidator::new(
+        let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![CapabilityEntry {
                 raw_token: "v4.public.test_token".to_string(),
                 claims: claims.clone(),
@@ -344,9 +346,13 @@ mod tests {
             Box::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
 
-        Arc::new(EnforcementPipeline::new(normalizer, stage1, stage2))
+        Arc::new(EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+        ))
     }
 
     /// Builds a pipeline that DENYs classified requests to `host` (empty
@@ -367,15 +373,19 @@ mod tests {
             MappingTable::from_config(&rules, &registry, false).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
-        let stage1 = CapabilityValidator::new(
+        let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![]),
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
 
-        Arc::new(EnforcementPipeline::new(normalizer, stage1, stage2))
+        Arc::new(EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+        ))
     }
 
     /// Starts a minimal HTTP server that always returns `200 OK`.

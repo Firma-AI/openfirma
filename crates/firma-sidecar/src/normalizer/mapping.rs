@@ -10,7 +10,7 @@
 //! be deterministically mapped to a registry entry fail closed with
 //! `DENY: UNCLASSIFIED_INTENT` (FEP \[I-N1\]).
 
-use crate::enforcement::config::MappingRulesFile;
+use crate::config::MappingRulesFile;
 use crate::enforcement::registry::ActionClassRegistry;
 
 /// A validated mapping rule ready for matching.
@@ -208,7 +208,7 @@ fn glob_match(pattern: &str, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::enforcement::config::MappingRuleConfig;
+    use crate::config::MappingRuleConfig;
 
     fn test_registry() -> ActionClassRegistry {
         ActionClassRegistry::v0_1()

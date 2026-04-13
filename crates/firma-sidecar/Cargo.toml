@@ -8,8 +8,19 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+clap = { workspace = true, features = [
+  "color",
+  "derive",
+  "env",
+  "error-context",
+  "help",
+  "std",
+  "suggestions",
+  "usage",
+] }
 firma-core = { path = "../firma-core" }
 firma-grpc-interceptor-proto = { path = "../firma-grpc-interceptor-proto" }
 firma-proto = { path = "../firma-proto" }
@@ -25,6 +36,7 @@ toml = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true, default-features = false, features = [
+  "fs",
   "macros",
   "net",
   "rt-multi-thread",

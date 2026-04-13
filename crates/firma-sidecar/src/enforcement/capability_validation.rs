@@ -354,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn test_every_stage1_error_is_deny() {
+    fn test_every_validation_error_is_deny() {
         let error_verifiers: Vec<Box<dyn TokenVerifier + Send + Sync>> =
             vec![Box::new(FailingVerifier)];
 

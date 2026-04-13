@@ -19,18 +19,12 @@
 use firma_core::{ExecutionEnvelope, ExecutionMetadata};
 
 // Re-export public API for pipeline callers
-pub use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
-pub use crate::enforcement::capability_validation::{CapabilityValidator, ValidatedCapability};
-pub use crate::enforcement::config::{
-    EnforcementConfig, MappingConfig, MappingRuleConfig, MappingRulesFile, Stage1Config,
-    Stage2Config,
-};
+pub use crate::enforcement::capability_map::CapabilityMap;
+pub use crate::enforcement::capability_validation::CapabilityValidator;
 pub use crate::enforcement::constraint_enforcement::{ConstraintEnforcer, PolicyEvaluation};
-pub use crate::enforcement::decision::{
-    CapabilityValidationStage, ConstraintEnforcementStage, EnforcementDecision, EnforcementStage,
-};
+pub use crate::enforcement::decision::EnforcementDecision;
 pub use crate::enforcement::registry::ActionClassRegistry;
-pub use crate::normalizer::{IntentNormalizer, MappingTable, NormalizedEnvelope, RawRequest};
+pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
 
 /// The enforcement pipeline. Orchestrates the full `enforce()` flow:
 ///
@@ -46,8 +40,8 @@ pub use crate::normalizer::{IntentNormalizer, MappingTable, NormalizedEnvelope, 
 /// Target: < 3ms p95 end-to-end overhead.
 pub struct EnforcementPipeline {
     normalizer: IntentNormalizer,
-    stage1: CapabilityValidator,
-    stage2: ConstraintEnforcer,
+    capability_validator: CapabilityValidator,
+    constraint_enforcer: ConstraintEnforcer,
 }
 
 impl EnforcementPipeline {
@@ -56,13 +50,13 @@ impl EnforcementPipeline {
     #[must_use]
     pub fn new(
         normalizer: IntentNormalizer,
-        stage1: CapabilityValidator,
-        stage2: ConstraintEnforcer,
+        capability_validator: CapabilityValidator,
+        constraint_enforcer: ConstraintEnforcer,
     ) -> Self {
         Self {
             normalizer,
-            stage1,
-            stage2,
+            capability_validator,
+            constraint_enforcer,
         }
     }
 
@@ -73,8 +67,8 @@ impl EnforcementPipeline {
     ///
     /// Pipeline stages:
     /// 1. Normalize intent: raw request → `NormalizedEnvelope`
-    /// 2. Stage 1: select capability token, validate token → `ValidatedCapability`
-    /// 3. Stage 2: scope check + Cedar policy evaluation
+    /// 2. Capability validation: select token, validate → `ValidatedCapability`
+    /// 3. Constraint enforcement: scope check + Cedar policy evaluation
     /// 4. On Allow: assemble a fully populated `ExecutionEnvelope` from
     ///    the normalized envelope + validated capability + session context.
     #[must_use]
@@ -85,14 +79,17 @@ impl EnforcementPipeline {
             Err(decision) => return decision,
         };
 
-        // Stage 1: Select token → validate
-        let capability = match self.stage1.enforce(&normalized, session_id) {
+        // Capability validation: select token → validate
+        let capability = match self.capability_validator.enforce(&normalized, session_id) {
             Ok(cap) => cap,
             Err(deny) => return deny,
         };
 
-        // Stage 2: Scope check + Cedar policy evaluation
-        if let Err(deny) = self.stage2.evaluate(&normalized, &capability.claims) {
+        // Constraint enforcement: scope check + Cedar policy evaluation
+        if let Err(deny) = self
+            .constraint_enforcer
+            .evaluate(&normalized, &capability.claims)
+        {
             return deny;
         }
 
@@ -121,8 +118,8 @@ impl EnforcementPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
-    use crate::enforcement::config::{MappingRuleConfig, MappingRulesFile};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
     use crate::enforcement::registry::ActionClassRegistry;
     use crate::normalizer::MappingTable;
@@ -220,7 +217,7 @@ mod tests {
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
 
-        let stage1 = CapabilityValidator::new(
+        let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![CapabilityEntry {
                 raw_token: "v4.public.test_token".to_string(),
                 claims: claims.clone(),
@@ -230,9 +227,9 @@ mod tests {
             Duration::from_secs(0),
         );
 
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
 
-        EnforcementPipeline::new(normalizer, stage1, stage2)
+        EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer)
     }
 
     #[test]
@@ -291,7 +288,7 @@ mod tests {
 
         let normalizer = IntentNormalizer::new(test_mapping_table_with_protection(&rules, false));
 
-        let stage1 = CapabilityValidator::new(
+        let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![CapabilityEntry {
                 raw_token: "v4.public.test_token".to_string(),
                 claims: claims.clone(),
@@ -300,8 +297,9 @@ mod tests {
             Box::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let pipeline =
+            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
 
         let request = RawRequest {
             method: "GET".to_string(),
@@ -335,7 +333,7 @@ mod tests {
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
 
-        let stage1 = CapabilityValidator::new(
+        let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![CapabilityEntry {
                 raw_token: "v4.public.narrow".to_string(),
                 claims: wide_claims.clone(),
@@ -366,8 +364,9 @@ mod tests {
             }
         }
 
-        let stage2 = ConstraintEnforcer::new(Box::new(DenyDeletePolicy));
-        let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(DenyDeletePolicy));
+        let pipeline =
+            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
 
         let request = RawRequest {
             method: "DELETE".to_string(),
@@ -386,7 +385,7 @@ mod tests {
     // ===== Fail-closed discipline tests =====
 
     #[test]
-    fn test_enforce_stage1_failure_short_circuits_stage2() {
+    fn test_enforce_validation_failure_short_circuits_enforcement() {
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
             method: Some("POST".to_string()),
@@ -406,7 +405,7 @@ mod tests {
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
 
-        let stage1 = CapabilityValidator::new(
+        let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![CapabilityEntry {
                 raw_token: "v4.public.bad".to_string(),
                 claims: claims.clone(),
@@ -415,8 +414,9 @@ mod tests {
             Box::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let pipeline =
+            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -452,14 +452,15 @@ mod tests {
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
 
-        let stage1 = CapabilityValidator::new(
+        let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![]), // empty!
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let pipeline =
+            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -531,7 +532,7 @@ mod tests {
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
 
-        let stage1 = CapabilityValidator::new(
+        let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![CapabilityEntry {
                 raw_token: "v4.public.test".to_string(),
                 claims: claims.clone(),
@@ -560,8 +561,9 @@ mod tests {
             }
         }
 
-        let stage2 = ConstraintEnforcer::new(Box::new(StalePolicy));
-        let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(StalePolicy));
+        let pipeline =
+            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
 
         let request = RawRequest {
             method: "POST".to_string(),

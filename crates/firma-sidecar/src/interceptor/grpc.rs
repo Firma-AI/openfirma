@@ -154,10 +154,12 @@ mod tests {
     use firma_grpc_interceptor_proto::interceptor_hook_client::InterceptorHookClient;
 
     use super::*;
+    use crate::config::{MappingRuleConfig, MappingRulesFile};
+    use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
+    use crate::enforcement::constraint_enforcement::PolicyEvaluation;
     use crate::pipeline::{
-        ActionClassRegistry, CapabilityEntry, CapabilityMap, CapabilityValidator,
-        ConstraintEnforcer, IntentNormalizer, MappingRuleConfig, MappingRulesFile, MappingTable,
-        PolicyEvaluation,
+        ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, IntentNormalizer,
+        MappingTable,
     };
 
     /// Returns an available localhost address by binding to port 0.
@@ -236,7 +238,7 @@ mod tests {
             MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
-        let stage1 = CapabilityValidator::new(
+        let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![CapabilityEntry {
                 raw_token: "v4.public.test_token".to_string(),
                 claims: claims.clone(),
@@ -245,9 +247,13 @@ mod tests {
             Box::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
 
-        Arc::new(EnforcementPipeline::new(normalizer, stage1, stage2))
+        Arc::new(EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+        ))
     }
 
     fn test_pipeline_deny_all() -> Arc<EnforcementPipeline> {
@@ -266,15 +272,19 @@ mod tests {
             MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
 
         let normalizer = IntentNormalizer::new(table);
-        let stage1 = CapabilityValidator::new(
+        let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![]),
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
 
-        Arc::new(EnforcementPipeline::new(normalizer, stage1, stage2))
+        Arc::new(EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+        ))
     }
 
     #[tokio::test]

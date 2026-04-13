@@ -205,12 +205,14 @@ impl CapabilityMap {
     }
 
     /// Return the number of entries in the map.
+    #[expect(dead_code, reason = "public API for diagnostics/health callers")]
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Check if the map is empty.
+    #[expect(dead_code, reason = "public API for diagnostics/health callers")]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()

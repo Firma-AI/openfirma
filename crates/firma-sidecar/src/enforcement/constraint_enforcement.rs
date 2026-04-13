@@ -62,6 +62,7 @@ pub trait PolicyEvaluation: Send + Sync {
     fn is_fresh(&self) -> bool;
 
     /// Get the current policy bundle version.
+    #[expect(dead_code, reason = "used by audit logging once wired")]
     fn version(&self) -> Option<String>;
 }
 
