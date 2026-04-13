@@ -21,7 +21,7 @@ impl PasetoV4Signer {
     /// # Errors
     ///
     /// Returns `TokenError::Malformed` if the key bytes are invalid or wrong length.
-    pub fn new(secret_key_bytes: &[u8]) -> Result<Self, TokenError> {
+    pub fn try_new(secret_key_bytes: &[u8]) -> Result<Self, TokenError> {
         let secret_key = AsymmetricSecretKey::<V4>::from(secret_key_bytes).map_err(|e| {
             TokenError::Malformed {
                 reason: format!("invalid private key: {e:?}"),
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn sign_produces_v4_public_token() {
         let (sk, _pk) = generate_keypair();
-        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
         let claims = sample_claims(600);
         let token = signer.sign(&claims).unwrap();
         assert!(token.starts_with("v4.public."));
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn signer_as_dyn_token_signer() {
         let (sk, _pk) = generate_keypair();
-        let signer: Box<dyn TokenSigner> = Box::new(PasetoV4Signer::new(&sk).unwrap());
+        let signer: Box<dyn TokenSigner> = Box::new(PasetoV4Signer::try_new(&sk).unwrap());
         let claims = sample_claims(600);
         let token = signer.sign(&claims).unwrap();
         assert!(token.starts_with("v4.public."));
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn invalid_secret_key_bytes() {
-        let result = PasetoV4Signer::new(&[0u8; 32]); // wrong size
+        let result = PasetoV4Signer::try_new(&[0u8; 32]); // wrong size
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, TokenError::Malformed { .. }));
@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn round_trip_claims_match() {
         let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
         let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
 
         let original = sample_claims(600);
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn expired_token_rejected() {
         let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
         let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
 
         let claims = sample_claims(-1); // expired 1 second ago
@@ -358,7 +358,7 @@ mod tests {
     #[test]
     fn tampered_token_rejected() {
         let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
         let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
 
         let claims = sample_claims(600);
@@ -388,7 +388,7 @@ mod tests {
         let (sk, _pk) = generate_keypair();
         let (_sk2, pk2) = generate_keypair(); // different key pair
 
-        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
         let verifier = PasetoV4Verifier::try_new(&pk2).unwrap();
 
         let claims = sample_claims(600);
@@ -405,7 +405,7 @@ mod tests {
     #[test]
     fn future_token_accepted() {
         let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
         let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
 
         let claims = sample_claims(600); // 10 minutes in the future
@@ -417,7 +417,7 @@ mod tests {
     #[test]
     fn round_trip_empty_action_set() {
         let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
         let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
 
         let mut claims = sample_claims(600);
@@ -431,7 +431,7 @@ mod tests {
     #[test]
     fn round_trip_unicode_agent_id() {
         let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
         let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
 
         let mut claims = sample_claims(600);
@@ -446,7 +446,7 @@ mod tests {
     #[ignore] // NFR-1 targets apply to release builds; skip on debug CI runners
     fn verify_performance() {
         let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
         let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
 
         let claims = sample_claims(600);
@@ -473,7 +473,7 @@ mod tests {
     #[ignore] // NFR-1 targets apply to release builds; skip on debug CI runners
     fn sign_performance() {
         let (sk, _pk) = generate_keypair();
-        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
         let claims = sample_claims(600);
 
         // Warm up
