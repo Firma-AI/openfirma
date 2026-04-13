@@ -50,6 +50,10 @@ pub enum EnforcementStage {
 /// information for the caller to construct the response, emit audit events,
 /// and proceed with credential injection on ALLOW, or forward the request
 /// unmodified on PASSTHROUGH.
+#[expect(
+    dead_code,
+    reason = "variant fields consumed by audit/connector once wired"
+)]
 #[derive(Debug)]
 pub enum EnforcementDecision {
     /// Request authorized. Proceed to credential injection + connector.
@@ -68,6 +72,7 @@ pub enum EnforcementDecision {
     Passthrough { detail: String },
 }
 
+#[expect(dead_code, reason = "public API consumed by interceptor/audit callers")]
 impl EnforcementDecision {
     #[must_use]
     pub fn is_allow(&self) -> bool {

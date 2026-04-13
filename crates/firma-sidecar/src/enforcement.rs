@@ -20,12 +20,10 @@
 //! - [`decision`] — Unified ALLOW/DENY result type for every enforcement call.
 //! - [`error`] — Internal error types; every variant maps to a DENY decision
 //!   (fail-closed boundary).
-//! - [`config`] — Deserialized enforcement configuration (TOML).
 //! - [`registry`] — Canonical Action Class Registry v0.1 (15 action classes).
 
 pub(crate) mod capability_map;
 pub(crate) mod capability_validation;
-pub(crate) mod config;
 pub(crate) mod constraint_enforcement;
 pub(crate) mod decision;
 pub(crate) mod error;

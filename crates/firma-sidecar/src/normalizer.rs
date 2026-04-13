@@ -198,7 +198,7 @@ fn parse_http_method(method: &str) -> Option<HttpMethod> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::enforcement::config::{MappingRuleConfig, MappingRulesFile};
+    use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::enforcement::registry::ActionClassRegistry;
 
     fn test_normalizer() -> IntentNormalizer {

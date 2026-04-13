@@ -23,6 +23,10 @@ pub enum RiskLevel {
 }
 
 /// Definition of a single action class in the registry.
+#[expect(
+    dead_code,
+    reason = "fields read by policy evaluation and audit once wired"
+)]
 #[derive(Debug, Clone)]
 pub struct ActionClassDefinition {
     pub name: &'static str,
@@ -138,18 +142,21 @@ impl ActionClassRegistry {
     }
 
     /// Get the definition for an action class.
+    #[expect(dead_code, reason = "public API for policy evaluation callers")]
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&ActionClassDefinition> {
         self.classes.get(name)
     }
 
     /// Return the number of registered action classes.
+    #[expect(dead_code, reason = "public API for diagnostics/health callers")]
     #[must_use]
     pub fn len(&self) -> usize {
         self.classes.len()
     }
 
     /// Check if the registry is empty.
+    #[expect(dead_code, reason = "public API for diagnostics/health callers")]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.classes.is_empty()

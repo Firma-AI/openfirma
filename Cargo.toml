@@ -26,7 +26,9 @@ module_name_repetitions = "allow"
 unsafe_code = "deny"
 
 [workspace.dependencies]
+anyhow = "1"
 async-trait = "0.1"
+clap = { version = "4", default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
 firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto" }
 http-body-util = "0.1"

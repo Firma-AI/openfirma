@@ -751,8 +751,10 @@ dependencies = [
 name = "firma-sidecar"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "chrono",
+ "clap",
  "firma-core",
  "firma-grpc-interceptor-proto",
  "firma-proto",
