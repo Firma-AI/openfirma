@@ -441,5 +441,4 @@ mod tests {
         let recovered = verifier.verify(&token).unwrap();
         assert_eq!(recovered.agent_id, "agent-\u{1F916}-bot");
     }
-
 }
