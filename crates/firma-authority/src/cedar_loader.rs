@@ -5,7 +5,7 @@ use cedar_policy::{PolicySet, Schema};
 use sha2::{Digest, Sha256};
 use tokio::sync::{RwLock, watch};
 
-use firma_core::PolicyBundle;
+use firma_core::policy::PolicyBundle;
 
 use crate::error::AuthorityError;
 

@@ -3,12 +3,14 @@ use std::sync::Arc;
 
 use cedar_policy::{Authorizer, Context, Entities, EntityUid, PolicySet, Request};
 use chrono::{Duration, Utc};
+use firma_core::policy::PolicyBundle;
+use firma_core::token::paseto::PasetoV4Signer;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
 use tonic::{Request as TonicRequest, Response, Status};
 use uuid::Uuid;
 
-use firma_core::{CapabilityClaims, PasetoV4Signer, PolicyBundle, TokenSigner};
+use firma_core::token::{CapabilityClaims, TokenSigner};
 use firma_proto::RevocationEvent;
 use firma_proto::firma::v1::authority_service_server::AuthorityService;
 use firma_proto::firma::v1::{

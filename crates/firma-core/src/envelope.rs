@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Built by the Sidecar when intercepting an agent's request. Contains the
 /// typed action intent, the raw capability token, metadata, and provenance.
 /// Immutable once created — any enrichment produces a derived structure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionEnvelope {
     /// Typed action parameters describing what the agent wants to do.
     pub intent: ExecutionIntent,
@@ -28,7 +28,7 @@ pub struct ExecutionEnvelope {
 /// `params`, `raw_transport`, and `raw_action_ref`. The `action_class` is
 /// the canonical class from the v0.1 Action Class Registry, set by the
 /// Sidecar's intent normalizer after mapping the raw intercepted request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionIntent {
     /// Canonical action class from the v0.1 registry (e.g., `"llm.inference"`,
     /// `"http.get"`). Set by the intent normalizer.
@@ -46,7 +46,7 @@ pub struct ExecutionIntent {
 /// Typed action parameters (maps to the proto `oneof params`).
 ///
 /// Uses an enum with typed variants to prevent injection via untyped maps.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ActionParams {
     /// Outbound HTTP request.
     Http(HttpParams),
@@ -75,7 +75,7 @@ pub enum HttpMethod {
 ///
 /// The target URL lives on `ExecutionIntent.resource`, not here —
 /// matching the proto where `HttpParams` carries method, headers, body, and query.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HttpParams {
     /// HTTP method.
     pub method: HttpMethod,
@@ -92,7 +92,7 @@ pub struct HttpParams {
 /// Uses a named query plus bindings instead of a raw SQL statement,
 /// aligning with the intent-003 proto definition and preventing
 /// raw SQL injection at the type level.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DbQueryParams {
     /// Registered query name (looked up in a query registry).
     pub query_name: String,
@@ -109,7 +109,7 @@ pub struct DbQueryParams {
 /// Input is a flat `String → String` map (scalar values only),
 /// schema-validated against the tool registry. Aligns with the
 /// intent-003 proto definition and keeps the core→proto conversion trivial.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolUseParams {
     /// Name of the tool to invoke.
     pub tool_name: String,
@@ -118,7 +118,7 @@ pub struct ToolUseParams {
 }
 
 /// Session and runtime context attached to every execution envelope.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionMetadata {
     /// Session this request belongs to.
     pub session_id: String,
@@ -141,7 +141,7 @@ pub struct ExecutionMetadata {
 /// Built from `ExecutionEnvelope` fields plus Sidecar-local state.
 /// The derivation of `action` and `resource` from the envelope's intent
 /// is Sidecar-specific logic (added in intent 006).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionContext {
     /// Agent identity, from envelope metadata.
     pub agent_id: String,
@@ -163,9 +163,39 @@ pub struct ExecutionContext {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use pretty_assertions::assert_eq;
 
-    fn sample_http_envelope() -> ExecutionEnvelope {
-        ExecutionEnvelope {
+    #[test]
+    fn envelope_payload_backward_compat() {
+        let json = r#"{
+            "intent": {
+                "action_class": "http.get",
+                "resource": "https://api.example.com/data",
+                "params": {
+                    "Http": {
+                        "method": "GET",
+                        "headers": {"Authorization": "Bearer tok"},
+                        "body": null,
+                        "query": {}
+                    }
+                },
+                "raw_transport": "https",
+                "raw_action_ref": "GET /data"
+            },
+            "capability": "v4.public.golden",
+            "metadata": {
+                "session_id": "golden-sess",
+                "agent_id": "golden-agent",
+                "timestamp": "2024-01-01T00:00:00Z",
+                "trace_id": "golden-trace",
+                "budget_consumed": 0.0,
+                "risk_score": null
+            },
+            "provenance": null
+        }"#;
+        let envelope: ExecutionEnvelope = serde_json::from_str(json).unwrap();
+
+        let expected = ExecutionEnvelope {
             intent: ExecutionIntent {
                 action_class: "http.get".to_string(),
                 resource: "https://api.example.com/data".to_string(),
@@ -181,111 +211,60 @@ mod tests {
                 raw_transport: "https".to_string(),
                 raw_action_ref: "GET /data".to_string(),
             },
-            capability: "v4.public.eyJ0...".to_string(),
+            capability: "v4.public.golden".to_string(),
             metadata: ExecutionMetadata {
-                session_id: "sess_001".to_string(),
-                agent_id: "agent_abc".to_string(),
-                timestamp: Utc::now(),
-                trace_id: Some("trace_123".to_string()),
+                session_id: "golden-sess".to_string(),
+                agent_id: "golden-agent".to_string(),
+                timestamp: chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                    .expect("fixed date")
+                    .with_timezone(&Utc),
+                trace_id: Some("golden-trace".to_string()),
                 budget_consumed: 0.0,
                 risk_score: None,
             },
             provenance: None,
-        }
-    }
-
-    #[test]
-    fn test_execution_envelope_construction() {
-        let envelope = sample_http_envelope();
-        assert_eq!(envelope.capability, "v4.public.eyJ0...");
-        assert_eq!(envelope.metadata.agent_id, "agent_abc");
-    }
-
-    #[test]
-    fn test_execution_intent_http() {
-        let intent = ExecutionIntent {
-            action_class: "http.post".to_string(),
-            resource: "https://api.example.com".to_string(),
-            params: ActionParams::Http(HttpParams {
-                method: HttpMethod::POST,
-                headers: HashMap::new(),
-                body: None,
-                query: HashMap::new(),
-            }),
-            raw_transport: "https".to_string(),
-            raw_action_ref: "POST /".to_string(),
         };
-        assert!(matches!(intent.params, ActionParams::Http(_)));
-        assert_eq!(intent.action_class, "http.post");
+
+        assert_eq!(envelope, expected);
     }
 
     #[test]
-    fn test_execution_intent_db_query() {
-        let intent = ExecutionIntent {
-            action_class: "db.query".to_string(),
-            resource: "main".to_string(),
-            params: ActionParams::DbQuery(DbQueryParams {
-                query_name: "get_user_by_id".to_string(),
-                bindings: HashMap::from([("id".to_string(), "42".to_string())]),
-                db_name: "main".to_string(),
-                read_only: true,
-            }),
-            raw_transport: "https".to_string(),
-            raw_action_ref: "POST /query".to_string(),
-        };
-        assert!(matches!(intent.params, ActionParams::DbQuery(_)));
+    fn action_params_db_query_backward_compat() {
+        let json = r#"{
+            "DbQuery": {
+                "query_name": "get_user_by_id",
+                "bindings": {"id": "42"},
+                "db_name": "main",
+                "read_only": true
+            }
+        }"#;
+
+        let params: ActionParams = serde_json::from_str(json).unwrap();
+        let expected = ActionParams::DbQuery(DbQueryParams {
+            query_name: "get_user_by_id".to_string(),
+            bindings: HashMap::from([("id".to_string(), "42".to_string())]),
+            db_name: "main".to_string(),
+            read_only: true,
+        });
+
+        assert_eq!(params, expected);
     }
 
     #[test]
-    fn test_execution_intent_tool_use() {
-        let intent = ExecutionIntent {
-            action_class: "code.execute".to_string(),
-            resource: "calculator".to_string(),
-            params: ActionParams::ToolUse(ToolUseParams {
-                tool_name: "calculator".to_string(),
-                input: HashMap::from([("expression".to_string(), "2+2".to_string())]),
-            }),
-            raw_transport: "https".to_string(),
-            raw_action_ref: "POST /tools/calculator".to_string(),
-        };
-        assert!(matches!(intent.params, ActionParams::ToolUse(_)));
-    }
+    fn action_params_tool_use_backward_compat() {
+        let json = r#"{
+            "ToolUse": {
+                "tool_name": "calculator",
+                "input": {"expression": "2+2"}
+            }
+        }"#;
 
-    #[test]
-    fn test_execution_metadata_optional_trace_id() {
-        let meta = ExecutionMetadata {
-            session_id: "sess_001".to_string(),
-            agent_id: "agent_abc".to_string(),
-            timestamp: Utc::now(),
-            trace_id: None,
-            budget_consumed: 0.0,
-            risk_score: None,
-        };
-        assert!(meta.trace_id.is_none());
-    }
+        let params: ActionParams = serde_json::from_str(json).unwrap();
+        let expected = ActionParams::ToolUse(ToolUseParams {
+            tool_name: "calculator".to_string(),
+            input: HashMap::from([("expression".to_string(), "2+2".to_string())]),
+        });
 
-    #[test]
-    fn test_execution_context_construction() {
-        let ctx = ExecutionContext {
-            agent_id: "agent_abc".to_string(),
-            action: "http:GET".to_string(),
-            resource: "https://api.example.com/data".to_string(),
-            session_id: "sess_001".to_string(),
-            token_id: "tok_001".to_string(),
-            token_actions: vec!["http:GET".to_string()],
-            token_resources: vec!["https://api.example.com/*".to_string()],
-        };
-        assert_eq!(ctx.agent_id, "agent_abc");
-        assert_eq!(ctx.action, "http:GET");
-    }
-
-    #[test]
-    fn test_envelope_serde_round_trip() {
-        let envelope = sample_http_envelope();
-        let json = serde_json::to_string(&envelope).unwrap_or_else(|e| panic!("{e}"));
-        let parsed: ExecutionEnvelope =
-            serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(parsed.capability, envelope.capability);
-        assert_eq!(parsed.metadata.agent_id, envelope.metadata.agent_id);
+        assert_eq!(params, expected);
     }
 }

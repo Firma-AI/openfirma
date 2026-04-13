@@ -24,7 +24,7 @@ mod mapping;
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use firma_core::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
+use firma_core::envelope::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
 
 pub use self::mapping::{MappingTable, MatchResult};
 pub use crate::enforcement::decision::{EnforcementDecision, EnforcementStage};
@@ -169,6 +169,8 @@ fn parse_http_method(method: &str) -> Option<HttpMethod> {
 
 #[cfg(test)]
 mod tests {
+    use firma_core::decision::DenyReason;
+
     use super::*;
     use crate::enforcement::config::{MappingRuleConfig, MappingRulesFile};
     use crate::enforcement::registry::ActionClassRegistry;
@@ -298,10 +300,7 @@ mod tests {
         assert!(result.is_err());
         let decision = result.unwrap_err();
         assert!(decision.is_deny());
-        assert_eq!(
-            decision.deny_reason(),
-            Some(firma_core::DenyReason::UnclassifiedIntent)
-        );
+        assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
     }
 
     #[test]
@@ -320,9 +319,6 @@ mod tests {
         assert!(result.is_err());
         let decision = result.unwrap_err();
         assert!(decision.is_deny());
-        assert_eq!(
-            decision.deny_reason(),
-            Some(firma_core::DenyReason::UnclassifiedIntent)
-        );
+        assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
     }
 }

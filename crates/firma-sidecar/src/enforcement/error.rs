@@ -4,7 +4,7 @@
 //! This is the fail-closed boundary: errors become DENY decisions.
 //! These types are never exposed to external callers.
 
-use firma_core::{DenyReason, TokenError};
+use firma_core::{decision::DenyReason, token::TokenError};
 
 use super::decision::{EnforcementDecision, EnforcementStage};
 
