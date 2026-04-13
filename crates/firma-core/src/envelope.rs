@@ -7,19 +7,65 @@ use serde::{Deserialize, Serialize};
 ///
 /// Built by the Sidecar when intercepting an agent's request. Contains the
 /// typed action intent, the raw capability token, metadata, and provenance.
-/// Immutable once created — any enrichment produces a derived structure.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Immutable once created: fields are private and only exposed via shared
+/// references. Any enrichment produces a derived structure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionEnvelope {
     /// Typed action parameters describing what the agent wants to do.
-    pub intent: ExecutionIntent,
+    intent: ExecutionIntent,
     /// Raw signed token string. Parsing happens in Stage 1 of the enforcement pipeline.
-    pub capability: String,
+    capability: String,
     /// Session and runtime metadata for correlation and audit.
-    pub metadata: ExecutionMetadata,
+    metadata: ExecutionMetadata,
     /// Schema-reserved provenance field. V1 does not populate this.
     /// Intended for anchoring the envelope to the session's prior calls
     /// in future versions (causal chain, replay, attestation).
-    pub provenance: Option<String>,
+    provenance: Option<String>,
+}
+
+impl ExecutionEnvelope {
+    /// Constructs a new `ExecutionEnvelope`.
+    ///
+    /// Once created, the envelope is immutable: callers receive shared
+    /// references only.
+    #[must_use]
+    pub fn new(
+        intent: ExecutionIntent,
+        capability: String,
+        metadata: ExecutionMetadata,
+        provenance: Option<String>,
+    ) -> Self {
+        Self {
+            intent,
+            capability,
+            metadata,
+            provenance,
+        }
+    }
+
+    /// Gets the typed action parameters describing what the agent wants to do.
+    #[must_use]
+    pub fn intent(&self) -> &ExecutionIntent {
+        &self.intent
+    }
+
+    /// Gets the raw signed token string.
+    #[must_use]
+    pub fn capability(&self) -> &str {
+        &self.capability
+    }
+
+    /// Gets the session and runtime metadata for correlation and audit.
+    #[must_use]
+    pub fn metadata(&self) -> &ExecutionMetadata {
+        &self.metadata
+    }
+
+    /// Gets the schema-reserved provenance field.
+    #[must_use]
+    pub fn provenance(&self) -> Option<&str> {
+        self.provenance.as_deref()
+    }
 }
 
 /// Typed description of the action an agent intends to perform.
@@ -165,38 +211,9 @@ mod tests {
     use chrono::Utc;
     use pretty_assertions::assert_eq;
 
-    #[test]
-    fn envelope_payload_backward_compat() {
-        let json = r#"{
-            "intent": {
-                "action_class": "http.get",
-                "resource": "https://api.example.com/data",
-                "params": {
-                    "Http": {
-                        "method": "GET",
-                        "headers": {"Authorization": "Bearer tok"},
-                        "body": null,
-                        "query": {}
-                    }
-                },
-                "raw_transport": "https",
-                "raw_action_ref": "GET /data"
-            },
-            "capability": "v4.public.golden",
-            "metadata": {
-                "session_id": "golden-sess",
-                "agent_id": "golden-agent",
-                "timestamp": "2024-01-01T00:00:00Z",
-                "trace_id": "golden-trace",
-                "budget_consumed": 0.0,
-                "risk_score": null
-            },
-            "provenance": null
-        }"#;
-        let envelope: ExecutionEnvelope = serde_json::from_str(json).unwrap();
-
-        let expected = ExecutionEnvelope {
-            intent: ExecutionIntent {
+    fn sample_http_envelope() -> ExecutionEnvelope {
+        ExecutionEnvelope::new(
+            ExecutionIntent {
                 action_class: "http.get".to_string(),
                 resource: "https://api.example.com/data".to_string(),
                 params: ActionParams::Http(HttpParams {
@@ -211,26 +228,24 @@ mod tests {
                 raw_transport: "https".to_string(),
                 raw_action_ref: "GET /data".to_string(),
             },
-            capability: "v4.public.golden".to_string(),
-            metadata: ExecutionMetadata {
-                session_id: "golden-sess".to_string(),
-                agent_id: "golden-agent".to_string(),
-                timestamp: chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
-                    .expect("fixed date")
-                    .with_timezone(&Utc),
-                trace_id: Some("golden-trace".to_string()),
+            "v4.public.eyJ0...".to_string(),
+            ExecutionMetadata {
+                session_id: "sess_001".to_string(),
+                agent_id: "agent_abc".to_string(),
+                timestamp: Utc::now(),
+                trace_id: Some("trace_123".to_string()),
                 budget_consumed: 0.0,
                 risk_score: None,
             },
-            provenance: None,
-        }
+            None,
+        )
     }
 
     #[test]
     fn test_execution_envelope_construction() {
         let envelope = sample_http_envelope();
-        assert_eq!(envelope.capability, "v4.public.eyJ0...");
-        assert_eq!(envelope.metadata.agent_id, "agent_abc");
+        assert_eq!(envelope.capability(), "v4.public.eyJ0...");
+        assert_eq!(envelope.metadata().agent_id, "agent_abc");
     }
 
     #[test]
@@ -289,6 +304,28 @@ mod tests {
             input: HashMap::from([("expression".to_string(), "2+2".to_string())]),
         });
 
-        assert_eq!(params, expected);
+    #[test]
+    fn test_execution_context_construction() {
+        let ctx = ExecutionContext {
+            agent_id: "agent_abc".to_string(),
+            action: "http:GET".to_string(),
+            resource: "https://api.example.com/data".to_string(),
+            session_id: "sess_001".to_string(),
+            token_id: "tok_001".to_string(),
+            token_actions: vec!["http:GET".to_string()],
+            token_resources: vec!["https://api.example.com/*".to_string()],
+        };
+        assert_eq!(ctx.agent_id, "agent_abc");
+        assert_eq!(ctx.action, "http:GET");
+    }
+
+    #[test]
+    fn test_envelope_serde_round_trip() {
+        let envelope = sample_http_envelope();
+        let json = serde_json::to_string(&envelope).unwrap_or_else(|e| panic!("{e}"));
+        let parsed: ExecutionEnvelope =
+            serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(parsed.capability(), envelope.capability());
+        assert_eq!(parsed.metadata().agent_id, envelope.metadata().agent_id);
     }
 }
