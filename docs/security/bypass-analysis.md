@@ -1,7 +1,7 @@
 # Firma OSS Interception Boundary Bypass Analysis
 
 Status: draft security analysis  
-Date: 2026-04-11  
+Date: 2026-04-13  
 Owner: Security / Dario W1
 
 ## Purpose
@@ -19,6 +19,7 @@ This analysis is grounded in:
 - `context/domain-design-decisions.md`
 - `memory-bank/intents/006-sidecar-proxy-enforcement/requirements.md`
 - the current `firma-sidecar` and `firma-core` code implementing normalization and enforcement primitives
+- the proposed host-boundary remediation in `origin/fix/T-002-resource-scope-prefix-matching` (referenced from PR #16)
 
 In particular, the analysis focuses on:
 
@@ -45,12 +46,17 @@ The main conclusions are:
    - in-process SDK or local tool execution
    - MCP `stdio` / local transport
    - generic gRPC client traffic
-4. `ExecutionEnvelope` integrity is strong with respect to capability authenticity and normalized action/resource selection inside the current enforcement pipeline, but not fully sealed end-to-end:
+4. Inside the covered request path, capability scope enforcement still has a host-boundary gap today:
+   - `CapabilityMap` currently uses raw `starts_with` matching for `resource_scope`
+   - that can over-match `api.openai.com` against `api.openai.com.evil.com/...` or `/v1` against `/v1alpha`
+   - the referenced `fix/T-002-resource-scope-prefix-matching` branch proposes the right direction: host/path-aware boundary matching plus tests
+   - this is not a transport bypass, but it is a real authorization-scope broadening risk inside the covered path
+5. `ExecutionEnvelope` integrity is strong with respect to capability authenticity and normalized action/resource selection inside the current enforcement pipeline, but not fully sealed end-to-end:
    - capability claims are sidecar-selected and cryptographically verified
    - Stage 2 evaluates normalized `action_class` and `resource`, not transport-specific fields
    - however, the current Rust `ExecutionEnvelope` type exposes public fields, so post-construction immutability is a documented invariant rather than a fully type-enforced property
    - additionally, the current pipeline writes caller-supplied `session_id` into `ExecutionMetadata` while Stage 2 evaluates `claims.session_id`, creating a metadata consistency gap
-5. eBPF can help close some bypass classes, especially direct TCP and loopback, but eBPF alone will not fully solve local tool execution, `stdio`, or semantic intent reconstruction for encrypted protocols. A future eBPF layer would need complementary userspace hooks and strict process attribution.
+6. eBPF can help close some bypass classes, especially direct TCP and loopback, but eBPF alone will not fully solve local tool execution, `stdio`, or semantic intent reconstruction for encrypted protocols. A future eBPF layer would need complementary userspace hooks and strict process attribution.
 
 ## Security boundary: What Firma is and is not
 
@@ -85,6 +91,7 @@ The intended architecture and the currently implemented code are not the same th
 - `firma-sidecar` does not yet implement the Pingora transport layer in the binary
 - `firma-sidecar` does not currently depend on Pingora or Tonic
 - the LLM response parser is specified in memory-bank artifacts but not yet implemented in code
+- the current branch still uses prefix-based `resource_scope` matching in `CapabilityMap`; the tighter host-boundary matcher exists only on `origin/fix/T-002-resource-scope-prefix-matching`
 
 ### Security implication
 
@@ -146,23 +153,24 @@ Status values:
 - Partial in V1
 - Deferred post-V1
 
-| Vector | Example | Impact | Status | Severity | Evidence / Notes | Recommended Mitigation |
-| --- | --- | --- | --- | --- | --- | --- |
-| Direct outbound TCP / UDP | Agent opens raw socket to external host | Sidecar never sees the call; no envelope created | Deferred post-V1 | Critical | V1 sidecar is explicitly HTTP proxy oriented; eBPF is roadmap only | Host egress controls, sidecar-forcing network policy, future eBPF socket capture |
-| Non-proxied HTTP/HTTPS client | SDK ignores `HTTP_PROXY`, custom TLS stack, raw socket HTTPS | HTTP request bypasses proxy and request-path enforcement | Deferred post-V1 | Critical | V1 depends on proxy routing; no host-level forcing in OSS | Host-level proxy enforcement, iptables/eBPF, runtime sandboxing |
-| Localhost / loopback escape | Agent calls `127.0.0.1:*`, `::1`, or another local service directly | Bypasses external proxy path; may reach sensitive local services | Deferred post-V1 | High | No loopback interception mechanism exists in V1 | Local service isolation, firewall/namespace policy, future eBPF with loopback coverage |
-| Unix socket escape | Tool talks to `/var/run/...sock` or local daemon socket | Bypasses network proxy entirely | Deferred post-V1 | High | Unix socket mode is architectural/future; no generic socket interception exists | Runtime policy, filesystem/socket ACLs, future hook or syscall-level coverage |
-| Generic gRPC hot-path traffic | Tool uses internal `tonic` client to call service directly | HTTP proxy does not see generic gRPC client calls | Deferred post-V1 | High | Requirements explicitly state V1 does not intercept gRPC agent-to-service traffic | Future gRPC hook, L7 proxying for HTTP/2/gRPC, or eBPF + userspace parsing |
-| MCP over `stdio` / local process transport | Agent invokes local MCP server as child process | No proxy boundary crossed; no pre-execution envelope created | Deferred post-V1 | High | Future MCP usage is called out in repo docs; HTTP proxy does not cover `stdio` | Future stdio/local hook, tighter runtime isolation |
-| Native DB wire protocol | PostgreSQL/MySQL direct connection | DB action bypasses HTTP proxy entirely | Deferred post-V1 | High | Explicitly out of scope in V1 requirements | DB proxy mode or eBPF/socket controls in future |
-| Local SDK / local tool execution | Shell, file I/O, subprocess, SQLite, local business logic | Effects may happen with no network call for Sidecar to intercept | Partial in V1 | High | Response-path parser can deny supported LLM tool suggestions before execution, but once local code runs there is no generic effect interception | Response-path enforcement for supported providers, future SDK hooks, containment/runtime controls |
-| Unsupported provider / format on response path | New LLM provider, Realtime/WebSocket API, unknown tool-call payload format | Tool suggestion reaches agent without Sidecar evaluation | Partial in V1 | High | Unit brief explicitly forwards unknown/unsupported providers without response-path evaluation | Clear provider support disclosure, parser expansion, fail-closed policy for high-risk deployments |
-| Malformed or oversized streaming body | SSE or JSON array stream never forms valid events | Planned response parser forwards remaining stream without response-path evaluation | Partial in V1 | High | SSE reassembly story explicitly chooses fail-open on parse failure / buffer overflow | Prefer configurable fail-closed mode for protected LLM endpoints, strict fixture coverage |
-| Misconfigured non-protected host passthrough | `mapping.default_protected = false` or permissive allowlisting | Unknown hosts can be forwarded without normalization or policy | Partial in V1 | Medium | Code supports `Passthrough`; config default is hardened (`default_protected = true`) but the escape hatch exists | Keep `default_protected = true`, treat passthrough as exceptional and auditable |
-| Transport-name semantic leakage | High-risk action disguised under transport-specific name or unmapped host/path | Policy may not fire if normalization is wrong or too permissive | Partial in V1 | Medium | FEP treats this as a primary threat; normalizer is designed to fail closed for protected actions | Strong rule coverage, registry conformance tests, protected-by-default config |
-| Downstream envelope mutation | Connector or later stage mutates `intent`, `capability`, or `metadata` after ALLOW | Stage 2 decision and dispatched call can diverge | Partial in V1 | Medium | FEP forbids this, but current Rust envelope fields are public | Make envelope fields private, use read-only accessors and derived transport views |
-| Session metadata confusion | Caller passes wrong `session_id`; token selection ignores `session_id` today | Final envelope metadata can diverge from verified claims/session used in Stage 2 | Partial in V1 | Medium | `CapabilityMap::select()` ignores `session_id`; pipeline writes caller-supplied `session_id` into metadata | Validate session equality and derive metadata session from verified claims |
-| Timestamp drift between evaluation and audit envelope | Stage 2 context uses fresh `Utc::now()`, not the normalized timestamp | Small discrepancy between evaluated context and emitted envelope/audit metadata | Partial in V1 | Low | Mainly audit/reproducibility correctness issue | Use normalized timestamp consistently through Stage 2 and final envelope |
+| Vector                                                | Example                                                                                                        | Impact                                                                             | Status           | Severity | Evidence / Notes                                                                                                                                     | Recommended Mitigation                                                                            |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Direct outbound TCP / UDP                             | Agent opens raw socket to external host                                                                        | Sidecar never sees the call; no envelope created                                   | Deferred post-V1 | Critical | V1 sidecar is explicitly HTTP proxy oriented; eBPF is roadmap only                                                                                   | Host egress controls, sidecar-forcing network policy, future eBPF socket capture                  |
+| Non-proxied HTTP/HTTPS client                         | SDK ignores `HTTP_PROXY`, custom TLS stack, raw socket HTTPS                                                   | HTTP request bypasses proxy and request-path enforcement                           | Deferred post-V1 | Critical | V1 depends on proxy routing; no host-level forcing in OSS                                                                                            | Host-level proxy enforcement, iptables/eBPF, runtime sandboxing                                   |
+| Localhost / loopback escape                           | Agent calls `127.0.0.1:*`, `::1`, or another local service directly                                            | Bypasses external proxy path; may reach sensitive local services                   | Deferred post-V1 | High     | No loopback interception mechanism exists in V1                                                                                                      | Local service isolation, firewall/namespace policy, future eBPF with loopback coverage            |
+| Unix socket escape                                    | Tool talks to `/var/run/...sock` or local daemon socket                                                        | Bypasses network proxy entirely                                                    | Deferred post-V1 | High     | Unix socket mode is architectural/future; no generic socket interception exists                                                                      | Runtime policy, filesystem/socket ACLs, future hook or syscall-level coverage                     |
+| Generic gRPC hot-path traffic                         | Tool uses internal `tonic` client to call service directly                                                     | HTTP proxy does not see generic gRPC client calls                                  | Deferred post-V1 | High     | Requirements explicitly state V1 does not intercept gRPC agent-to-service traffic                                                                    | Future gRPC hook, L7 proxying for HTTP/2/gRPC, or eBPF + userspace parsing                        |
+| MCP over `stdio` / local process transport            | Agent invokes local MCP server as child process                                                                | No proxy boundary crossed; no pre-execution envelope created                       | Deferred post-V1 | High     | Future MCP usage is called out in repo docs; HTTP proxy does not cover `stdio`                                                                       | Future stdio/local hook, tighter runtime isolation                                                |
+| Native DB wire protocol                               | PostgreSQL/MySQL direct connection                                                                             | DB action bypasses HTTP proxy entirely                                             | Deferred post-V1 | High     | Explicitly out of scope in V1 requirements                                                                                                           | DB proxy mode or eBPF/socket controls in future                                                   |
+| Local SDK / local tool execution                      | Shell, file I/O, subprocess, SQLite, local business logic                                                      | Effects may happen with no network call for Sidecar to intercept                   | Partial in V1    | High     | Response-path parser can deny supported LLM tool suggestions before execution, but once local code runs there is no generic effect interception      | Response-path enforcement for supported providers, future SDK hooks, containment/runtime controls |
+| Unsupported provider / format on response path        | New LLM provider, Realtime/WebSocket API, unknown tool-call payload format                                     | Tool suggestion reaches agent without Sidecar evaluation                           | Partial in V1    | High     | Unit brief explicitly forwards unknown/unsupported providers without response-path evaluation                                                        | Clear provider support disclosure, parser expansion, fail-closed policy for high-risk deployments |
+| Malformed or oversized streaming body                 | SSE or JSON array stream never forms valid events                                                              | Planned response parser forwards remaining stream without response-path evaluation | Partial in V1    | High     | SSE reassembly story explicitly chooses fail-open on parse failure / buffer overflow                                                                 | Prefer configurable fail-closed mode for protected LLM endpoints, strict fixture coverage         |
+| Misconfigured non-protected host passthrough          | `mapping.default_protected = false` or permissive allowlisting                                                 | Unknown hosts can be forwarded without normalization or policy                     | Partial in V1    | Medium   | Code supports `Passthrough`; config default is hardened (`default_protected = true`) but the escape hatch exists                                     | Keep `default_protected = true`, treat passthrough as exceptional and auditable                   |
+| Resource-scope prefix bypass                          | Token scoped to `api.openai.com` or `.../v1` is matched against `api.openai.com.evil.com/...` or `.../v1alpha` | Stage 1 may select a capability outside the intended host/path boundary            | Partial in V1    | High     | Current `CapabilityMap` uses `resource.starts_with(resource_scope)`; `origin/fix/T-002-resource-scope-prefix-matching` adds host/path-aware matching | Adopt T-002 host-boundary semantics and keep the regression tests                                 |
+| Transport-name semantic leakage                       | High-risk action disguised under transport-specific name or unmapped host/path                                 | Policy may not fire if normalization is wrong or too permissive                    | Partial in V1    | Medium   | FEP treats this as a primary threat; normalizer is designed to fail closed for protected actions                                                     | Strong rule coverage, registry conformance tests, protected-by-default config                     |
+| Downstream envelope mutation                          | Connector or later stage mutates `intent`, `capability`, or `metadata` after ALLOW                             | Stage 2 decision and dispatched call can diverge                                   | Partial in V1    | Medium   | FEP forbids this, but current Rust envelope fields are public                                                                                        | Make envelope fields private, use read-only accessors and derived transport views                 |
+| Session metadata confusion                            | Caller passes wrong `session_id`; token selection ignores `session_id` today                                   | Final envelope metadata can diverge from verified claims/session used in Stage 2   | Partial in V1    | Medium   | `CapabilityMap::select()` ignores `session_id`; pipeline writes caller-supplied `session_id` into metadata                                           | Validate session equality and derive metadata session from verified claims                        |
+| Timestamp drift between evaluation and audit envelope | Stage 2 context uses fresh `Utc::now()`, not the normalized timestamp                                          | Small discrepancy between evaluated context and emitted envelope/audit metadata    | Partial in V1    | Low      | Mainly audit/reproducibility correctness issue                                                                                                       | Use normalized timestamp consistently through Stage 2 and final envelope                          |
 
 ## Detailed findings
 
@@ -421,6 +429,7 @@ Closing these classes requires:
 - tool execution before local side effects begin
 - unsupported or malformed LLM response formats
 - passthrough behavior driven by config
+- host/path resource-scope precision during Stage 1 token selection
 - envelope immutability and transport-to-envelope consistency
 
 ### Deferred to post-V1
@@ -455,12 +464,14 @@ Closing these classes requires:
 ### Immediate engineering recommendations
 
 1. Preserve `mapping.default_protected = true` as the secure default and treat any passthrough configuration as an explicit risk acceptance.
-2. Make `ExecutionEnvelope` fields private and expose read-only accessors plus a dedicated transport-view builder.
-3. Validate that caller `session_id` matches verified token claims, and prefer deriving final metadata from verified claims.
-4. Reuse the normalized timestamp through Stage 2 and final envelope assembly for tighter audit/evaluation consistency.
-5. When the transport layer lands, add integration tests specifically for:
+2. Adopt the T-002 host-boundary matcher for `resource_scope` selection and preserve its regression tests for subdomain and path-prefix edge cases.
+3. Make `ExecutionEnvelope` fields private and expose read-only accessors plus a dedicated transport-view builder.
+4. Validate that caller `session_id` matches verified token claims, and prefer deriving final metadata from verified claims.
+5. Reuse the normalized timestamp through Stage 2 and final envelope assembly for tighter audit/evaluation consistency.
+6. When the transport layer lands, add integration tests specifically for:
    - proxy bypass attempts
    - loopback access
+   - resource-scope host-boundary edge cases
    - IP-literal and alternate-host coverage
    - malformed response-path streams
 
