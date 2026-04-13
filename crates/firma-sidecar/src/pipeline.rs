@@ -16,7 +16,7 @@
 //! Stage 2 + credential injection + audit emit, excluding connector and
 //! external system latency).
 
-use firma_core::{ExecutionEnvelope, ExecutionMetadata};
+use firma_core::envelope::{ExecutionEnvelope, ExecutionMetadata};
 
 // Re-export public API for pipeline callers
 pub use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
@@ -127,7 +127,8 @@ mod tests {
     use crate::enforcement::registry::ActionClassRegistry;
     use crate::normalizer::MappingTable;
     use chrono::Utc;
-    use firma_core::*;
+    use firma_core::decision::DenyReason;
+    use firma_core::token::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
     use std::collections::HashMap;
     use std::time::Duration;
 

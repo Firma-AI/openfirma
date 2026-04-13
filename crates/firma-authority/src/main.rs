@@ -13,7 +13,7 @@ use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 use tonic::transport::Server;
 
-use firma_core::PasetoV4Signer;
+use firma_core::token::paseto::PasetoV4Signer;
 use firma_proto::firma::v1::authority_service_server::AuthorityServiceServer;
 
 use crate::cedar_loader::CedarPolicyStore;
