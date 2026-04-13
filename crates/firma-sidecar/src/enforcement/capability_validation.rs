@@ -29,7 +29,7 @@
 
 use std::time::Duration;
 
-use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
+use firma_core::token::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
 
 use crate::normalizer::NormalizedEnvelope;
 
@@ -178,7 +178,7 @@ mod tests {
     use super::*;
     use crate::enforcement::capability_map::CapabilityEntry;
     use chrono::Utc;
-    use firma_core::CapabilityClaims;
+    use firma_core::token::CapabilityClaims;
 
     struct MockVerifier {
         claims: CapabilityClaims,
@@ -266,7 +266,7 @@ mod tests {
         let decision = result.unwrap_err();
         assert_eq!(
             decision.deny_reason(),
-            Some(firma_core::DenyReason::TokenInvalid)
+            Some(firma_core::decision::DenyReason::TokenInvalid)
         );
     }
 
@@ -288,7 +288,7 @@ mod tests {
         let decision = result.unwrap_err();
         assert_eq!(
             decision.deny_reason(),
-            Some(firma_core::DenyReason::TokenRevoked)
+            Some(firma_core::decision::DenyReason::TokenRevoked)
         );
     }
 
@@ -309,7 +309,7 @@ mod tests {
         let decision = result.unwrap_err();
         assert_eq!(
             decision.deny_reason(),
-            Some(firma_core::DenyReason::TokenExpired)
+            Some(firma_core::decision::DenyReason::TokenExpired)
         );
     }
 
@@ -335,7 +335,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().deny_reason(),
-            Some(firma_core::DenyReason::TokenInvalid)
+            Some(firma_core::decision::DenyReason::TokenInvalid)
         );
     }
 

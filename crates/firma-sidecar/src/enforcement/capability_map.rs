@@ -12,7 +12,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use firma_core::{CapabilityClaims, TokenError, TokenVerifier};
+use firma_core::token::{CapabilityClaims, TokenError, TokenVerifier};
 
 use crate::enforcement::decision::{
     CapabilityValidationStage, EnforcementDecision, EnforcementStage,
