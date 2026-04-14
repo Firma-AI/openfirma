@@ -58,7 +58,7 @@ A ceiling can be scoped to different units of activity.
 Open questions:
 - Is per-token the only scope needed for V1?
 - If per-session scope is needed: how is the session identified? (`session_id` in the token? In the Execution Envelope metadata?)
-- If per-tool scope is needed: does the ceiling live in the token, in Cedar policy, or in a separate config?
+- If a token for the same `session_id` has a different `budget_ceiling`, should the Sidecar replace the previous `ceiling_budget` for that session?
 - Should the budget be updated pre-call (estimated), post-call (actual), or both?
 
 ### 4. Estimation — How is spend measured before the actual cost is known?
@@ -75,12 +75,9 @@ Open questions:
 ### 5. Storage and Configuration — How do operators define budgets?
 
 Open questions:
-- Is the ceiling value embedded in the capability token (per-issuance), or is it a system-level policy enforced via Cedar?
-- If in the token: who decides the ceiling value at issuance time? The agent (requested)? The operator (policy-constrained)? The Authority (always applied)?
-- If in Cedar: what does the budget attribute look like in a Cedar policy? Can Cedar natively express numeric comparisons against a running counter?
-- How is the counter persisted across requests within a token lifetime? In-memory (simple, lost on restart)? Redis? A local SQLite file?
+- How is the counter persisted across requests within a token lifetime? In-memory (simple, lost on restart)?
 - Is there a configuration schema for budget limits in `firma-sidecar` config (e.g., `config.toml`)? Or is everything token-driven?
-- Should operators be able to set a global default ceiling that applies if the token carries none?
+- How is the budget ceiling stored in the Authority?
 
 ### 6. Wire Format and Type Safety
 
@@ -94,7 +91,6 @@ Open questions:
 
 Open questions:
 - When the ceiling is reached mid-stream (e.g., during a streaming LLM response), should the stream be cut? Or only the next call be denied?
-- Should there be a "soft ceiling" (warn at 80%, deny at 100%) vs. a "hard ceiling" (deny immediately at 100%)?
 - What is the behavior when the estimated cost of a single call exceeds the remaining budget entirely?
 
 ---
