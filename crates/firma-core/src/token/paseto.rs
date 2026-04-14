@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn signer_as_dyn_token_signer() {
         let (sk, _pk) = generate_keypair();
-        let signer: Box<dyn TokenSigner> = Box::new(PasetoV4Signer::try_new(&sk).unwrap());
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
         let claims = sample_claims(600);
         let token = signer.sign(&claims).unwrap();
         assert!(token.starts_with("v4.public."));
@@ -321,20 +321,7 @@ mod tests {
         let token = signer.sign(&original).unwrap();
         let recovered = verifier.verify(&token).unwrap();
 
-        assert_eq!(recovered.token_id, original.token_id);
-        assert_eq!(recovered.agent_id, original.agent_id);
-        assert_eq!(recovered.session_id, original.session_id);
-        assert_eq!(recovered.action_set, original.action_set);
-        assert_eq!(recovered.resource_scope, original.resource_scope);
-        assert_eq!(recovered.context_hash, original.context_hash);
-        // DateTime comparison: within 1 second tolerance (RFC 3339 round-trip may lose sub-second)
-        assert!(
-            (recovered.issued_at - original.issued_at)
-                .num_seconds()
-                .abs()
-                <= 1
-        );
-        assert!((recovered.expiry - original.expiry).num_seconds().abs() <= 1);
+        assert_eq!(recovered, original);
     }
 
     #[test]
