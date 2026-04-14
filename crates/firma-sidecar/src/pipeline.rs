@@ -130,7 +130,6 @@ mod tests {
     use firma_core::decision::DenyReason;
     use firma_core::token::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
     use std::collections::HashMap;
-    use std::time::Duration;
 
     struct AllowAllPolicy;
     impl PolicyEvaluation for AllowAllPolicy {
@@ -230,7 +229,6 @@ mod tests {
             CapabilityMap::new(vec![test_entry("v4.public.test_token", claims.clone())]),
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
-            Duration::from_secs(0),
         );
 
         let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
@@ -298,7 +296,6 @@ mod tests {
             CapabilityMap::new(vec![test_entry("v4.public.test_token", claims.clone())]),
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
-            Duration::from_secs(0),
         );
         let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
@@ -341,7 +338,6 @@ mod tests {
                 claims: wide_claims,
             }),
             Box::new(NoRevocations),
-            Duration::from_secs(0),
         );
 
         struct DenyDeletePolicy;
@@ -407,7 +403,6 @@ mod tests {
             CapabilityMap::new(vec![test_entry("v4.public.bad", claims.clone())]),
             Box::new(RejectingVerifier),
             Box::new(NoRevocations),
-            Duration::from_secs(0),
         );
         let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
@@ -450,7 +445,6 @@ mod tests {
             CapabilityMap::new(vec![]), // empty!
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
-            Duration::from_secs(0),
         );
         let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
@@ -529,7 +523,6 @@ mod tests {
             CapabilityMap::new(vec![test_entry("v4.public.test", claims.clone())]),
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
-            Duration::from_secs(0),
         );
 
         struct StalePolicy;

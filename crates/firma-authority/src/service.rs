@@ -387,10 +387,6 @@ fn clamp_ttl(requested: i32, max: i32) -> i32 {
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
-    use firma_core::token::paseto::PasetoV4Verifier;
-    use firma_core::token::TokenVerifier;
-    use pasetors::keys::{AsymmetricKeyPair, Generate};
-    use pasetors::version4::V4;
 
     #[test]
     fn test_clamp_ttl_within_max() {
