@@ -105,6 +105,7 @@ impl AuthorityService for AuthorityServiceImpl {
                 let token = CapabilityToken {
                     token_id,
                     agent_id: req.agent_id.clone(),
+                    session_id: req.session_id.clone(),
                     action_set: req.requested_actions,
                     resource_scope: req.resource_scope,
                     issued_at: Some(issued_at_ts),
