@@ -130,4 +130,87 @@ mod tests {
             ))
         );
     }
+
+    #[test]
+    fn test_allow_helpers() {
+        let decision = EnforcementDecision::Allow {
+            claims: CapabilityClaims {
+                token_id: "tok_001".to_string(),
+                agent_id: "agent".to_string(),
+                session_id: "sess".to_string(),
+                action_set: vec![],
+                resource_scope: String::new(),
+                issued_at: chrono::Utc::now(),
+                expiry: chrono::Utc::now(),
+                context_hash: String::new(),
+            },
+            envelope: Box::new(ExecutionEnvelope::new(
+                firma_core::ExecutionIntent {
+                    action_class: "http.get".to_string(),
+                    resource: "example.com".to_string(),
+                    params: firma_core::ActionParams::Http(firma_core::HttpParams {
+                        method: firma_core::HttpMethod::GET,
+                        headers: std::collections::HashMap::new(),
+                        body: None,
+                        query: std::collections::HashMap::new(),
+                    }),
+                    raw_transport: "https".to_string(),
+                    raw_action_ref: "GET /".to_string(),
+                },
+                "token".to_string(),
+                firma_core::ExecutionMetadata {
+                    session_id: "sess".to_string(),
+                    agent_id: "agent".to_string(),
+                    timestamp: chrono::Utc::now(),
+                    trace_id: None,
+                    budget_consumed: 0.0,
+                    risk_score: None,
+                },
+                None,
+            )),
+        };
+
+        assert!(decision.is_allow());
+        assert!(!decision.is_deny());
+        assert!(!decision.is_passthrough());
+        assert_eq!(decision.deny_reason(), None);
+        assert_eq!(decision.stage(), None);
+    }
+
+    #[test]
+    fn test_passthrough_helpers() {
+        let decision = EnforcementDecision::Passthrough {
+            detail: "non-protected host".to_string(),
+        };
+
+        assert!(decision.is_passthrough());
+        assert!(!decision.is_allow());
+        assert!(!decision.is_deny());
+        assert_eq!(decision.deny_reason(), None);
+        assert_eq!(decision.stage(), None);
+    }
+
+    #[test]
+    fn test_deny_all_stages() {
+        let stages = [
+            EnforcementStage::Normalization,
+            EnforcementStage::CapabilityValidation(CapabilityValidationStage::TokenSelection),
+            EnforcementStage::CapabilityValidation(CapabilityValidationStage::TokenValidation),
+            EnforcementStage::ConstraintEnforcement(ConstraintEnforcementStage::ScopeCheck),
+            EnforcementStage::ConstraintEnforcement(ConstraintEnforcementStage::BundleFreshness),
+            EnforcementStage::ConstraintEnforcement(
+                ConstraintEnforcementStage::PolicyEvaluation,
+            ),
+        ];
+
+        for stage in stages {
+            let decision = EnforcementDecision::Deny {
+                reason: DenyReason::PolicyDenied,
+                stage,
+                detail: "test".to_string(),
+                envelope: None,
+            };
+            assert_eq!(decision.stage(), Some(stage));
+        }
+    }
 }

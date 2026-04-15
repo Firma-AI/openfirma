@@ -353,4 +353,157 @@ mod tests {
             Some(firma_core::DenyReason::UnclassifiedIntent)
         );
     }
+
+    #[test]
+    fn test_normalize_strips_set_cookie_header() {
+        let normalizer = test_normalizer();
+        let mut headers = HashMap::new();
+        headers.insert("Set-Cookie".to_string(), "session=abc".to_string());
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers,
+            body: None,
+            is_https: true,
+        };
+
+        let envelope = normalizer
+            .normalize(&request)
+            .unwrap_or_else(|_| panic!("expected Ok"));
+        if let ActionParams::Http(ref params) = envelope.intent.params {
+            assert!(
+                !params.headers.contains_key("Set-Cookie"),
+                "set-cookie header must be stripped"
+            );
+            assert!(params.headers.contains_key("Content-Type"));
+        } else {
+            panic!("expected Http params");
+        }
+    }
+
+    #[test]
+    fn test_normalize_strips_proxy_authorization_header() {
+        let normalizer = test_normalizer();
+        let mut headers = HashMap::new();
+        headers.insert(
+            "Proxy-Authorization".to_string(),
+            "Basic abc123".to_string(),
+        );
+        headers.insert("Accept".to_string(), "application/json".to_string());
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers,
+            body: None,
+            is_https: true,
+        };
+
+        let envelope = normalizer
+            .normalize(&request)
+            .unwrap_or_else(|_| panic!("expected Ok"));
+        if let ActionParams::Http(ref params) = envelope.intent.params {
+            assert!(
+                !params.headers.contains_key("Proxy-Authorization"),
+                "proxy-authorization header must be stripped"
+            );
+            assert!(params.headers.contains_key("Accept"));
+        } else {
+            panic!("expected Http params");
+        }
+    }
+
+    #[test]
+    fn test_normalize_body_passthrough() {
+        let normalizer = test_normalizer();
+        let body_bytes = b"{\"model\":\"gpt-4\"}".to_vec();
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: Some(body_bytes.clone()),
+            is_https: true,
+        };
+
+        let envelope = normalizer
+            .normalize(&request)
+            .unwrap_or_else(|_| panic!("expected Ok"));
+        if let ActionParams::Http(ref params) = envelope.intent.params {
+            assert_eq!(
+                params.body.as_ref(),
+                Some(&body_bytes),
+                "body bytes must be preserved"
+            );
+        } else {
+            panic!("expected Http params");
+        }
+    }
+
+    #[test]
+    fn test_normalize_http_transport() {
+        let normalizer = test_normalizer();
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: false,
+        };
+
+        let envelope = normalizer
+            .normalize(&request)
+            .unwrap_or_else(|_| panic!("expected Ok"));
+        assert_eq!(envelope.intent.raw_transport, "http");
+    }
+
+    #[test]
+    fn test_normalize_resource_format() {
+        let normalizer = test_normalizer();
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let envelope = normalizer
+            .normalize(&request)
+            .unwrap_or_else(|_| panic!("expected Ok"));
+        assert_eq!(
+            envelope.intent.resource,
+            "api.openai.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn test_normalize_none_body_for_get() {
+        let normalizer = test_normalizer();
+        let request = RawRequest {
+            method: "GET".to_string(),
+            host: "api.example.com".to_string(),
+            path: "/data".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let envelope = normalizer
+            .normalize(&request)
+            .unwrap_or_else(|_| panic!("expected Ok"));
+        if let ActionParams::Http(ref params) = envelope.intent.params {
+            assert!(params.body.is_none());
+            assert_eq!(params.method, HttpMethod::GET);
+        } else {
+            panic!("expected Http params");
+        }
+    }
 }

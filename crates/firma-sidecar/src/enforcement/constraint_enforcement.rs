@@ -348,4 +348,138 @@ mod tests {
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
     }
+
+    #[test]
+    fn test_policy_evaluation_error_is_deny() {
+        struct ErrorPolicy;
+        impl PolicyEvaluation for ErrorPolicy {
+            fn evaluate(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+                _: &serde_json::Value,
+            ) -> Result<bool, String> {
+                Err("cedar engine crashed".to_string())
+            }
+            fn is_fresh(&self) -> bool {
+                true
+            }
+            fn version(&self) -> Option<String> {
+                Some("test-v1".to_string())
+            }
+        }
+
+        let evaluator = ConstraintEnforcer::new(Box::new(ErrorPolicy));
+        let envelope = test_envelope("llm.inference");
+        let claims = test_claims(vec!["llm.inference"]);
+
+        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        assert!(decision.is_deny());
+        assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyDenied));
+    }
+
+    #[test]
+    fn test_scope_check_multiple_actions_in_set() {
+        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let envelope = test_envelope("http.get");
+        let claims = test_claims(vec!["llm.inference", "http.get", "db.query"]);
+
+        let result = evaluator.evaluate(&envelope, &claims);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_scope_check_empty_action_set_denies() {
+        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let envelope = test_envelope("llm.inference");
+        let claims = test_claims(vec![]);
+
+        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        assert!(decision.is_deny());
+        assert_eq!(decision.deny_reason(), Some(DenyReason::ScopeViolation));
+    }
+
+    #[test]
+    fn test_build_context_includes_required_fields() {
+        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let envelope = test_envelope("llm.inference");
+        let claims = test_claims(vec!["llm.inference"]);
+
+        let context = evaluator.build_context(&envelope, &claims);
+        assert_eq!(context["action_class"], "llm.inference");
+        assert_eq!(
+            context["resource"],
+            "api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(context["agent_id"], "agent_test");
+        assert_eq!(context["session_id"], "sess_001");
+        assert!(context["timestamp"].is_string());
+    }
+
+    #[test]
+    fn test_stale_bundle_short_circuits_before_policy_eval() {
+        // Even if policy would allow, staleness must deny first
+        struct StaleButAllowPolicy;
+        impl PolicyEvaluation for StaleButAllowPolicy {
+            fn evaluate(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+                _: &serde_json::Value,
+            ) -> Result<bool, String> {
+                Ok(true)
+            }
+            fn is_fresh(&self) -> bool {
+                false
+            }
+            fn version(&self) -> Option<String> {
+                None
+            }
+        }
+
+        let evaluator = ConstraintEnforcer::new(Box::new(StaleButAllowPolicy));
+        let envelope = test_envelope("llm.inference");
+        let claims = test_claims(vec!["llm.inference"]);
+
+        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
+        assert_eq!(
+            decision.stage(),
+            Some(EnforcementStage::ConstraintEnforcement(
+                ConstraintEnforcementStage::BundleFreshness
+            ))
+        );
+    }
+
+    #[test]
+    fn test_scope_violation_reports_correct_stage() {
+        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let envelope = test_envelope("file.delete");
+        let claims = test_claims(vec!["llm.inference"]);
+
+        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        assert_eq!(
+            decision.stage(),
+            Some(EnforcementStage::ConstraintEnforcement(
+                ConstraintEnforcementStage::ScopeCheck
+            ))
+        );
+    }
+
+    #[test]
+    fn test_policy_deny_reports_correct_stage() {
+        let evaluator = ConstraintEnforcer::new(Box::new(DenyAllPolicy));
+        let envelope = test_envelope("llm.inference");
+        let claims = test_claims(vec!["llm.inference"]);
+
+        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        assert_eq!(
+            decision.stage(),
+            Some(EnforcementStage::ConstraintEnforcement(
+                ConstraintEnforcementStage::PolicyEvaluation
+            ))
+        );
+    }
 }
