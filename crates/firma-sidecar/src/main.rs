@@ -25,8 +25,12 @@
 //!   a single `enforce()` entry point. This is the primary public API;
 //!   all types needed to construct and inspect the pipeline are re-exported
 //!   from here.
+//! - [`audit`] — Audit event emitter. Produces a signed event for every
+//!   enforcement decision. Supports stdout, file, gRPC, and WAL output
+//!   sinks.
 
 mod args;
+mod audit;
 mod config;
 mod enforcement;
 mod health;
@@ -43,7 +47,9 @@ use tokio::io::AsyncReadExt as _;
 use tokio_util::sync::CancellationToken;
 
 use crate::args::Args;
-use crate::config::InterceptorMode;
+use crate::audit::AuditSink as _;
+use crate::audit::sink as audit_sink;
+use crate::config::{AuditConfig, InterceptorMode};
 use crate::interceptor::Interceptor as _;
 
 #[tokio::main]
@@ -81,8 +87,12 @@ async fn main() -> anyhow::Result<()> {
     };
     tracing::debug!("signal handlers registered");
 
+    // setup audit sink
+    let (audit_sink_tx, audit_sink_rx) = tokio::sync::mpsc::channel(100);
+    let audit_sink = spawn_audit_sink(&config.audit, audit_sink_rx, exit.clone())?;
+
     // build enforcement pipeline
-    let pipeline = build_pipeline(&config)?;
+    let pipeline = build_pipeline(&config, audit_sink_tx)?;
 
     // run interceptor
     tracing::info!(
@@ -91,8 +101,14 @@ async fn main() -> anyhow::Result<()> {
     );
     let interceptor_handle = spawn_interceptor(&config, pipeline, exit.clone())?;
 
+    tracing::info!("all components initialized; entering main loop");
     // wait for all background tasks to complete
-    let _ = tokio::join!(sigterm_handler, health_server, interceptor_handle);
+    let _ = tokio::join!(
+        audit_sink,
+        health_server,
+        interceptor_handle,
+        sigterm_handler
+    );
     tracing::info!("firma-sidecar exiting");
 
     Ok(())
@@ -141,7 +157,7 @@ async fn read_config(path: &Path) -> anyhow::Result<config::SidecarConfig> {
 }
 
 /// Build the [`pipeline::EnforcementPipeline`] from a validated
-/// [`config::SidecarConfig`].
+/// [`config::SidecarConfig`] and the [`tokio::sync::mpsc::Sender`] for audit [`audit::ExecutionEvent`]s.
 ///
 /// Reads the mapping rules file referenced in the config, constructs
 /// the action-class registry, normalizer, and both enforcement stages.
@@ -152,6 +168,7 @@ async fn read_config(path: &Path) -> anyhow::Result<config::SidecarConfig> {
 /// parsed, or when pipeline components fail to initialize.
 fn build_pipeline(
     config: &config::SidecarConfig,
+    audit_sink_tx: tokio::sync::mpsc::Sender<audit::ExecutionEvent>,
 ) -> anyhow::Result<Arc<pipeline::EnforcementPipeline>> {
     // Load mapping rules
     let rules_content =
@@ -267,6 +284,54 @@ fn spawn_interceptor(
                 if let Err(e) = interceptor.run(pipeline, cancel).await {
                     tracing::error!(error = %e, "Unix socket interceptor failed");
                 }
+            }))
+        }
+    }
+}
+
+/// Spawn the [`AuditSink`](crate::audit::AuditSink) as a background tokio task, consuming from the provided `Receiver`.
+/// Returns a [`tokio::task::JoinHandle`] that resolves when the sink shuts down.
+///
+/// # Errors
+///
+/// Returns an error when the sink fails to initialize (e.g. invalid config, failure to connect to external sink).
+fn spawn_audit_sink(
+    config: &AuditConfig,
+    rx: tokio::sync::mpsc::Receiver<audit::ExecutionEvent>,
+    exit: CancellationToken,
+) -> anyhow::Result<tokio::task::JoinHandle<Result<(), audit::AuditSinkError>>> {
+    match config.sink {
+        config::AuditSink::File => {
+            let path = config.file_path.clone().ok_or_else(|| {
+                anyhow::anyhow!("file sink requires file_path in audit configuration")
+            })?;
+            Ok(tokio::spawn(async move {
+                audit_sink::FileAuditSink::new(path).run(rx, exit).await
+            }))
+        }
+        config::AuditSink::Grpc => {
+            let endpoint = config.grpc_url.clone().ok_or_else(|| {
+                anyhow::anyhow!("gRPC sink requires grpc_url in audit configuration")
+            })?;
+            Ok(tokio::spawn(async move {
+                audit_sink::GrpcAuditSink::new(endpoint).run(rx, exit).await
+            }))
+        }
+        config::AuditSink::Stdout => Ok(tokio::spawn(async move {
+            audit_sink::StdoutAuditSink::new().run(rx, exit).await
+        })),
+        config::AuditSink::Wal => {
+            let path = config.wal_path.clone().ok_or_else(|| {
+                anyhow::anyhow!("WAL sink requires wal_path in audit configuration")
+            })?;
+            let grpc_url = config.grpc_url.clone().ok_or_else(|| {
+                anyhow::anyhow!("WAL sink requires grpc_url in audit configuration")
+            })?;
+            let wal_max_bytes = config.wal_max_bytes;
+            Ok(tokio::spawn(async move {
+                audit_sink::WalAuditSink::new(grpc_url, path, wal_max_bytes)
+                    .run(rx, exit)
+                    .await
             }))
         }
     }

@@ -405,10 +405,7 @@ mod tests {
     #[test]
     fn test_select_resource_scope_mismatch_rejected() {
         // Token scoped to "api.stripe.com" should not match "api.openai.com"
-        let map = CapabilityMap::new(vec![test_entry(
-            vec!["llm.inference"],
-            "api.stripe.com",
-        )]);
+        let map = CapabilityMap::new(vec![test_entry(vec!["llm.inference"], "api.stripe.com")]);
 
         let result = map.select("sess_001", "llm.inference", "api.openai.com/v1/chat");
         assert!(result.is_err());
@@ -418,10 +415,7 @@ mod tests {
 
     #[test]
     fn test_select_resource_scope_prefix_match() {
-        let map = CapabilityMap::new(vec![test_entry(
-            vec!["llm.inference"],
-            "api.openai.com",
-        )]);
+        let map = CapabilityMap::new(vec![test_entry(vec!["llm.inference"], "api.openai.com")]);
 
         let result = map.select("sess_001", "llm.inference", "api.openai.com/v1/chat");
         assert!(result.is_ok());
@@ -446,8 +440,7 @@ mod tests {
     fn test_select_multiple_resource_scopes_picks_best() {
         let now = Utc::now();
         let wildcard = entry_with_issued("wild", vec!["llm.inference"], "*", now);
-        let specific =
-            entry_with_issued("specific", vec!["llm.inference"], "api.openai.com", now);
+        let specific = entry_with_issued("specific", vec!["llm.inference"], "api.openai.com", now);
 
         let map = CapabilityMap::new(vec![wildcard, specific]);
         let result = map

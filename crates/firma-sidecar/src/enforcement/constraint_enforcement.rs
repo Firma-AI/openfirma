@@ -408,10 +408,7 @@ mod tests {
 
         let context = evaluator.build_context(&envelope, &claims);
         assert_eq!(context["action_class"], "llm.inference");
-        assert_eq!(
-            context["resource"],
-            "api.openai.com/v1/chat/completions"
-        );
+        assert_eq!(context["resource"], "api.openai.com/v1/chat/completions");
         assert_eq!(context["agent_id"], "agent_test");
         assert_eq!(context["session_id"], "sess_001");
         assert!(context["timestamp"].is_string());
