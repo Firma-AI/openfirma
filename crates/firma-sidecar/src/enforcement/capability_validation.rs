@@ -354,6 +354,79 @@ mod tests {
     }
 
     #[test]
+    fn test_enforce_selects_and_validates_token() {
+        let claims = valid_claims();
+        let envelope = NormalizedEnvelope {
+            intent: firma_core::ExecutionIntent {
+                action_class: "llm.inference".to_string(),
+                resource: "api.openai.com/v1/chat".to_string(),
+                params: firma_core::ActionParams::Http(firma_core::HttpParams {
+                    method: firma_core::HttpMethod::POST,
+                    headers: std::collections::HashMap::new(),
+                    body: None,
+                    query: std::collections::HashMap::new(),
+                }),
+                raw_transport: "https".to_string(),
+                raw_action_ref: "POST /v1/chat".to_string(),
+            },
+            timestamp: Utc::now(),
+        };
+
+        let validator = CapabilityValidator::new(
+            test_capability_map(),
+            Box::new(MockVerifier {
+                claims: claims.clone(),
+            }),
+            Box::new(MockRevocationStore { revoked: vec![] }),
+            Duration::from_secs(0),
+        );
+
+        let result = validator.enforce(&envelope, "sess_001");
+        assert!(result.is_ok());
+        let validated = result.unwrap_or_else(|_| panic!("expected Ok"));
+        assert_eq!(validated.claims.token_id, "tok_001");
+        assert_eq!(validated.raw_token, "v4.public.test_token");
+    }
+
+    #[test]
+    fn test_enforce_no_matching_token_denies() {
+        let claims = valid_claims();
+        let envelope = NormalizedEnvelope {
+            intent: firma_core::ExecutionIntent {
+                action_class: "file.delete".to_string(), // not in token's action_set
+                resource: "any.resource".to_string(),
+                params: firma_core::ActionParams::Http(firma_core::HttpParams {
+                    method: firma_core::HttpMethod::DELETE,
+                    headers: std::collections::HashMap::new(),
+                    body: None,
+                    query: std::collections::HashMap::new(),
+                }),
+                raw_transport: "https".to_string(),
+                raw_action_ref: "DELETE /files".to_string(),
+            },
+            timestamp: Utc::now(),
+        };
+
+        let validator = CapabilityValidator::new(
+            test_capability_map(),
+            Box::new(MockVerifier { claims }),
+            Box::new(MockRevocationStore { revoked: vec![] }),
+            Duration::from_secs(0),
+        );
+
+        let result = validator.enforce(&envelope, "sess_001");
+        assert!(result.is_err());
+        let decision = result.unwrap_err();
+        assert!(decision.is_deny());
+        assert_eq!(
+            decision.stage(),
+            Some(super::super::decision::EnforcementStage::CapabilityValidation(
+                super::super::decision::CapabilityValidationStage::TokenSelection
+            ))
+        );
+    }
+
+    #[test]
     fn test_every_validation_error_is_deny() {
         let error_verifiers: Vec<Box<dyn TokenVerifier + Send + Sync>> =
             vec![Box::new(FailingVerifier)];

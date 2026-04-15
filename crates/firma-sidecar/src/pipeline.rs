@@ -521,6 +521,214 @@ mod tests {
     // ===== Policy bundle staleness =====
 
     #[test]
+    fn test_enforce_allow_envelope_fields_complete() {
+        let pipeline = test_pipeline();
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: Some(b"{\"model\":\"gpt-4\"}".to_vec()),
+            is_https: true,
+        };
+
+        let decision = pipeline.enforce(&request, "sess_001");
+        assert!(decision.is_allow());
+
+        if let EnforcementDecision::Allow { claims, envelope } = decision {
+            // Verify intent fields
+            assert_eq!(envelope.intent().action_class, "llm.inference");
+            assert_eq!(
+                envelope.intent().resource,
+                "api.openai.com/v1/chat/completions"
+            );
+            assert_eq!(envelope.intent().raw_transport, "https");
+            assert_eq!(
+                envelope.intent().raw_action_ref,
+                "POST /v1/chat/completions"
+            );
+
+            // Verify metadata fields
+            assert_eq!(envelope.metadata().session_id, "sess_001");
+            assert_eq!(envelope.metadata().agent_id, "agent_test");
+            assert!(envelope.metadata().trace_id.is_none());
+            assert!((envelope.metadata().budget_consumed - 0.0).abs() < f64::EPSILON);
+            assert!(envelope.metadata().risk_score.is_none());
+
+            // Verify provenance is None (V1 placeholder)
+            assert!(envelope.provenance().is_none());
+
+            // Verify capability token is populated
+            assert!(!envelope.capability().is_empty());
+
+            // Verify claims match
+            assert_eq!(claims.token_id, "tok_001");
+            assert_eq!(claims.agent_id, "agent_test");
+        }
+    }
+
+    #[test]
+    fn test_enforce_revoked_token_denied_through_pipeline() {
+        let claims = test_claims();
+        let rules = vec![MappingRuleConfig {
+            method: Some("POST".to_string()),
+            host: "api.openai.com".to_string(),
+            path: Some("/v1/chat/completions".to_string()),
+            action_class: "llm.inference".to_string(),
+        }];
+
+        struct RevokedStore;
+        impl firma_core::RevocationStore for RevokedStore {
+            fn is_revoked(&self, _token_id: &str) -> Result<bool, firma_core::TokenError> {
+                Ok(true)
+            }
+            fn add_revocation(&self, _: &str) -> Result<(), firma_core::TokenError> {
+                Ok(())
+            }
+        }
+
+        let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier { claims }),
+            Box::new(RevokedStore),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let pipeline =
+            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let decision = pipeline.enforce(&request, "sess_001");
+        assert!(decision.is_deny());
+        assert_eq!(decision.deny_reason(), Some(DenyReason::TokenRevoked));
+    }
+
+    #[test]
+    fn test_enforce_expired_token_denied_through_pipeline() {
+        let mut claims = test_claims();
+        claims.expiry = Utc::now() - chrono::Duration::hours(1);
+
+        let rules = vec![MappingRuleConfig {
+            method: Some("POST".to_string()),
+            host: "api.openai.com".to_string(),
+            path: Some("/v1/chat/completions".to_string()),
+            action_class: "llm.inference".to_string(),
+        }];
+
+        let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier { claims }),
+            Box::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let pipeline =
+            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let decision = pipeline.enforce(&request, "sess_001");
+        assert!(decision.is_deny());
+        assert_eq!(decision.deny_reason(), Some(DenyReason::TokenExpired));
+    }
+
+    #[test]
+    fn test_enforce_scope_violation_through_pipeline() {
+        // Token only allows llm.inference, but request maps to http.get
+        let mut claims = test_claims();
+        claims.action_set = vec!["llm.inference".to_string()]; // no http.get
+
+        let rules = vec![
+            MappingRuleConfig {
+                method: Some("GET".to_string()),
+                host: "api.example.com".to_string(),
+                path: None,
+                action_class: "http.get".to_string(),
+            },
+        ];
+
+        let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier { claims }),
+            Box::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let pipeline =
+            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
+
+        let request = RawRequest {
+            method: "GET".to_string(),
+            host: "api.example.com".to_string(),
+            path: "/data".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let decision = pipeline.enforce(&request, "sess_001");
+        // Token selection fails because no token covers http.get
+        assert!(decision.is_deny());
+    }
+
+    #[test]
+    fn test_enforce_sensitive_headers_stripped_in_allow() {
+        let pipeline = test_pipeline();
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer secret".to_string());
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers,
+            body: None,
+            is_https: true,
+        };
+
+        let decision = pipeline.enforce(&request, "sess_001");
+        assert!(decision.is_allow());
+
+        if let EnforcementDecision::Allow { envelope, .. } = decision {
+            if let firma_core::ActionParams::Http(ref params) = envelope.intent().params {
+                assert!(
+                    !params.headers.contains_key("Authorization"),
+                    "authorization header must not leak into envelope"
+                );
+                assert!(params.headers.contains_key("Content-Type"));
+            }
+        }
+    }
+
+    #[test]
     fn test_enforce_stale_bundle_denies() {
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {

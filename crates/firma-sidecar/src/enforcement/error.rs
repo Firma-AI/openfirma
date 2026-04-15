@@ -113,4 +113,117 @@ mod tests {
         ));
         assert_eq!(decision.deny_reason(), Some(DenyReason::ScopeViolation));
     }
+
+    #[test]
+    fn test_no_matching_token_maps_to_token_invalid() {
+        let err = EnforcementError::NoMatchingToken {
+            detail: "no token found".to_string(),
+        };
+        let decision = err.into_deny(EnforcementStage::CapabilityValidation(
+            CapabilityValidationStage::TokenSelection,
+        ));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
+    }
+
+    #[test]
+    fn test_token_revoked_maps_correctly() {
+        let err = EnforcementError::TokenValidation(TokenError::Revoked {
+            token_id: "tok_002".to_string(),
+        });
+        let decision = err.into_deny(EnforcementStage::CapabilityValidation(
+            CapabilityValidationStage::TokenValidation,
+        ));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::TokenRevoked));
+    }
+
+    #[test]
+    fn test_token_signature_invalid_maps_to_token_invalid() {
+        let err = EnforcementError::TokenValidation(TokenError::SignatureInvalid {
+            reason: "bad key".to_string(),
+        });
+        let decision = err.into_deny(EnforcementStage::CapabilityValidation(
+            CapabilityValidationStage::TokenValidation,
+        ));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
+    }
+
+    #[test]
+    fn test_token_parse_failure_maps_to_token_invalid() {
+        let err = EnforcementError::TokenValidation(TokenError::ParseFailure {
+            reason: "not base64".to_string(),
+        });
+        let decision = err.into_deny(EnforcementStage::CapabilityValidation(
+            CapabilityValidationStage::TokenValidation,
+        ));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
+    }
+
+    #[test]
+    fn test_token_malformed_maps_to_token_invalid() {
+        let err = EnforcementError::TokenValidation(TokenError::Malformed {
+            reason: "missing fields".to_string(),
+        });
+        let decision = err.into_deny(EnforcementStage::CapabilityValidation(
+            CapabilityValidationStage::TokenValidation,
+        ));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
+    }
+
+    #[test]
+    fn test_policy_denied_maps_correctly() {
+        let err = EnforcementError::PolicyDenied {
+            detail: "cedar denied".to_string(),
+        };
+        let decision = err.into_deny(EnforcementStage::ConstraintEnforcement(
+            ConstraintEnforcementStage::PolicyEvaluation,
+        ));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyDenied));
+    }
+
+    #[test]
+    fn test_policy_bundle_stale_maps_correctly() {
+        let err = EnforcementError::PolicyBundleStale;
+        let decision = err.into_deny(EnforcementStage::ConstraintEnforcement(
+            ConstraintEnforcementStage::BundleFreshness,
+        ));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
+    }
+
+    #[test]
+    fn test_config_error_maps_to_malformed_request() {
+        let err = EnforcementError::Config("bad config".to_string());
+        let decision = err.into_deny(EnforcementStage::Normalization);
+        assert_eq!(decision.deny_reason(), Some(DenyReason::MalformedRequest));
+    }
+
+    #[test]
+    fn test_all_errors_produce_deny_decisions() {
+        let errors: Vec<EnforcementError> = vec![
+            EnforcementError::NormalizationFailed {
+                detail: "test".to_string(),
+            },
+            EnforcementError::NoMatchingToken {
+                detail: "test".to_string(),
+            },
+            EnforcementError::TokenValidation(TokenError::Expired {
+                token_id: "tok".to_string(),
+            }),
+            EnforcementError::ScopeViolation {
+                detail: "test".to_string(),
+            },
+            EnforcementError::PolicyDenied {
+                detail: "test".to_string(),
+            },
+            EnforcementError::PolicyBundleStale,
+            EnforcementError::Config("test".to_string()),
+        ];
+
+        for err in errors {
+            let decision = err.into_deny(EnforcementStage::Normalization);
+            assert!(
+                decision.is_deny(),
+                "every EnforcementError must produce a DENY"
+            );
+        }
+    }
 }

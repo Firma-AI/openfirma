@@ -401,4 +401,69 @@ mod tests {
             .unwrap_or_else(|_| panic!("expected Ok"));
         assert_eq!(r2.claims.token_id, "b");
     }
+
+    #[test]
+    fn test_select_resource_scope_mismatch_rejected() {
+        // Token scoped to "api.stripe.com" should not match "api.openai.com"
+        let map = CapabilityMap::new(vec![test_entry(
+            vec!["llm.inference"],
+            "api.stripe.com",
+        )]);
+
+        let result = map.select("sess_001", "llm.inference", "api.openai.com/v1/chat");
+        assert!(result.is_err());
+        let decision = result.unwrap_err();
+        assert!(decision.is_deny());
+    }
+
+    #[test]
+    fn test_select_resource_scope_prefix_match() {
+        let map = CapabilityMap::new(vec![test_entry(
+            vec!["llm.inference"],
+            "api.openai.com",
+        )]);
+
+        let result = map.select("sess_001", "llm.inference", "api.openai.com/v1/chat");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_select_empty_map_returns_deny() {
+        let map = CapabilityMap::new(vec![]);
+        let result = map.select("sess_001", "llm.inference", "any.resource");
+        assert!(result.is_err());
+        let decision = result.unwrap_err();
+        assert!(decision.is_deny());
+        assert_eq!(
+            decision.stage(),
+            Some(EnforcementStage::CapabilityValidation(
+                CapabilityValidationStage::TokenSelection,
+            ))
+        );
+    }
+
+    #[test]
+    fn test_select_multiple_resource_scopes_picks_best() {
+        let now = Utc::now();
+        let wildcard = entry_with_issued("wild", vec!["llm.inference"], "*", now);
+        let specific =
+            entry_with_issued("specific", vec!["llm.inference"], "api.openai.com", now);
+
+        let map = CapabilityMap::new(vec![wildcard, specific]);
+        let result = map
+            .select("sess_001", "llm.inference", "api.openai.com/v1/chat")
+            .unwrap_or_else(|_| panic!("expected Ok"));
+        assert_eq!(result.claims.token_id, "specific");
+    }
+
+    #[test]
+    fn test_len_and_is_empty() {
+        let empty_map = CapabilityMap::new(vec![]);
+        assert!(empty_map.is_empty());
+        assert_eq!(empty_map.len(), 0);
+
+        let map = CapabilityMap::new(vec![test_entry(vec!["http.get"], "*")]);
+        assert!(!map.is_empty());
+        assert_eq!(map.len(), 1);
+    }
 }
