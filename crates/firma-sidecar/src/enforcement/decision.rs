@@ -198,9 +198,7 @@ mod tests {
             EnforcementStage::CapabilityValidation(CapabilityValidationStage::TokenValidation),
             EnforcementStage::ConstraintEnforcement(ConstraintEnforcementStage::ScopeCheck),
             EnforcementStage::ConstraintEnforcement(ConstraintEnforcementStage::BundleFreshness),
-            EnforcementStage::ConstraintEnforcement(
-                ConstraintEnforcementStage::PolicyEvaluation,
-            ),
+            EnforcementStage::ConstraintEnforcement(ConstraintEnforcementStage::PolicyEvaluation),
         ];
 
         for stage in stages {

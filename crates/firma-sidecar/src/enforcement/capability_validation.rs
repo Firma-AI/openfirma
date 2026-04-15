@@ -420,9 +420,11 @@ mod tests {
         assert!(decision.is_deny());
         assert_eq!(
             decision.stage(),
-            Some(super::super::decision::EnforcementStage::CapabilityValidation(
-                super::super::decision::CapabilityValidationStage::TokenSelection
-            ))
+            Some(
+                super::super::decision::EnforcementStage::CapabilityValidation(
+                    super::super::decision::CapabilityValidationStage::TokenSelection
+                )
+            )
         );
     }
 

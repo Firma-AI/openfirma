@@ -53,6 +53,15 @@ clock_skew_tolerance_seconds = 5
 
 [constraint_enforcement]
 bundle_ttl_seconds = 60
+
+[audit]
+sink = "wal"
+file_path = "/var/log/firma/audit.jsonl"
+grpc_url = "https://audit.example.com"
+wal_path = "/var/lib/firma/wal"
+wal_max_bytes = 104857600
+signing_key_path = "/etc/firma/audit.pem"
+# signing_key_env = "FIRMA_AUDIT_SIGNING_KEY"
 ```
 
 ## Sections
@@ -153,9 +162,32 @@ Stage 1 settings.
 
 Stage 2 settings.
 
-| Field                | Type | Default | Description                            |
-| -------------------- | ---- | ------- | -------------------------------------- |
-| `bundle_ttl_seconds` | u64  | `30`    | Policy bundle maximum age before deny  |
+| Field                | Type | Default | Description                           |
+| -------------------- | ---- | ------- | ------------------------------------- |
+| `bundle_ttl_seconds` | u64  | `30`    | Policy bundle maximum age before deny |
+
+### `[audit]`
+
+Audit event emitter settings. Controls where enforcement events are written and
+how they are signed.
+
+| Field              | Type   | Default     | Description                                     |
+| ------------------ | ------ | ----------- | ----------------------------------------------- |
+| `sink`             | string | `stdout`    | `stdout`, `file`, `grpc`, `wal`                 |
+| `file_path`        | path   | none        | Append-only file path (required for `file` sink) |
+| `grpc_url`         | string | none        | Audit service URL (required for `grpc`/`wal`)   |
+| `wal_path`         | path   | none        | Local WAL directory (required for `wal` sink)   |
+| `wal_max_bytes`    | u64    | `104857600` | Maximum WAL size in bytes (100 MiB)             |
+| `signing_key_path` | path   | none        | ECDSA private key file path                     |
+| `signing_key_env`  | string | none        | Env var containing ECDSA private key (PEM)      |
+
+Validation:
+
+- `file_path` must be set and non-empty when sink is `file`.
+- `grpc_url` must be set and non-empty when sink is `grpc` or `wal`.
+- `wal_path` must be set and non-empty when sink is `wal`.
+- `wal_max_bytes` must be greater than `0`.
+- `signing_key_path` and `signing_key_env` are mutually exclusive.
 
 ## Mapping Rules File
 

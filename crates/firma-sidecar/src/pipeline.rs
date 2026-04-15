@@ -661,14 +661,12 @@ mod tests {
         let mut claims = test_claims();
         claims.action_set = vec!["llm.inference".to_string()]; // no http.get
 
-        let rules = vec![
-            MappingRuleConfig {
-                method: Some("GET".to_string()),
-                host: "api.example.com".to_string(),
-                path: None,
-                action_class: "http.get".to_string(),
-            },
-        ];
+        let rules = vec![MappingRuleConfig {
+            method: Some("GET".to_string()),
+            host: "api.example.com".to_string(),
+            path: None,
+            action_class: "http.get".to_string(),
+        }];
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
         let capability_validator = CapabilityValidator::new(
