@@ -1,40 +1,34 @@
 //! Audit event builder.
 //!
-//! Constructs and signs [`ExecutionEvent`]s from enforcement decisions.
+//! Constructs and signs [`ExecutionEvent`]s from [`AuditPayload`]s.
 //! The builder holds the ECDSA signing key, loaded once at startup, and
 //! provides a single [`EventBuilder::build`] method that maps an
-//! [`EnforcementDecision`] into a fully populated, signed audit event.
+//! [`AuditPayload`] into a fully populated, signed audit event.
+//!
+//! The builder lives on the **sink side** of the audit channel, keeping
+//! ECDSA signing off the enforcement hot path.
 
 use std::fmt;
-use std::time::Duration;
 
-use ecdsa::signature::Signer;
 use ecdsa::SignatureEncoding;
+use ecdsa::signature::Signer;
 use p256::ecdsa::{DerSignature, SigningKey};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use super::ExecutionEvent;
-use crate::enforcement::decision::EnforcementDecision;
+use super::{AuditPayload, ExecutionEvent};
 
-/// Proto wire values for the `EnforcementDecision` enum.
-#[allow(dead_code, reason = "used once pipeline wires send_audit_event")]
-const DECISION_ALLOW: i32 = 1;
-#[allow(dead_code, reason = "used once pipeline wires send_audit_event")]
-const DECISION_DENY: i32 = 2;
-
-/// Builds signed [`ExecutionEvent`]s from enforcement decisions.
+/// Builds signed [`ExecutionEvent`]s from [`AuditPayload`]s.
 ///
 /// Loaded once at startup with an ECDSA P-256 signing key. Each call
 /// to [`build`](Self::build) produces a new event with a UUID v7
 /// identifier, a nanosecond-precision timestamp, and an ECDSA signature
 /// covering all preceding fields.
-#[allow(dead_code, reason = "used once pipeline wires send_audit_event")]
 pub struct EventBuilder {
     signing_key: SigningKey,
 }
 
-// M-PUBLIC-DEBUG: custom Debug to avoid leaking key material.
+// custom Debug to avoid leaking key material.
 impl fmt::Debug for EventBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EventBuilder")
@@ -44,7 +38,6 @@ impl fmt::Debug for EventBuilder {
 }
 
 /// Errors that can occur when constructing an [`EventBuilder`].
-#[allow(dead_code, reason = "used once pipeline wires send_audit_event")]
 #[derive(Debug, thiserror::Error)]
 pub enum EventBuilderError {
     /// The PEM-encoded signing key could not be parsed.
@@ -52,7 +45,6 @@ pub enum EventBuilderError {
     InvalidKey(String),
 }
 
-#[allow(dead_code, reason = "used once pipeline wires send_audit_event")]
 impl EventBuilder {
     /// Creates a new builder from a PEM-encoded ECDSA P-256 private key.
     ///
@@ -68,93 +60,27 @@ impl EventBuilder {
         Ok(Self { signing_key })
     }
 
-    /// Builds a signed [`ExecutionEvent`] from an enforcement decision.
+    /// Builds a signed [`ExecutionEvent`] from an [`AuditPayload`].
     ///
-    /// Fields are extracted from the decision variant:
-    /// - **Allow**: token ID, agent ID, action, and resource come from
-    ///   the claims and envelope.
-    /// - **Deny**: token ID, agent ID, action, and resource come from
-    ///   the envelope when available; deny reason is serialized.
-    /// - **Passthrough**: produces an event with empty token/agent
-    ///   fields and decision set to ALLOW (non-protected traffic).
+    /// Generates a UUID v7 event ID, captures the current wall-clock
+    /// timestamp in nanoseconds, and signs all fields with ECDSA P-256.
     #[must_use]
-    pub fn build(
-        &self,
-        decision: &EnforcementDecision,
-        session_id: &str,
-        enforcement_latency: Duration,
-    ) -> ExecutionEvent {
+    pub fn build(&self, payload: AuditPayload) -> ExecutionEvent {
         let event_id = Uuid::now_v7().to_string();
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "duration micros fits i64 for any realistic enforcement latency"
-        )]
-        let enforcement_latency_us = enforcement_latency.as_micros() as i64;
         let timestamp = timestamp_nanos();
-
-        let (token_id, agent_id, action, resource, decision_code, deny_reason, context_hash, bundle_version) =
-            match decision {
-                EnforcementDecision::Allow { claims, envelope } => (
-                    claims.token_id.clone(),
-                    claims.agent_id.clone(),
-                    envelope.intent().action_class.clone(),
-                    envelope.intent().resource.clone(),
-                    DECISION_ALLOW,
-                    String::new(),
-                    claims.context_hash.clone(),
-                    String::new(),
-                ),
-                EnforcementDecision::Deny {
-                    reason,
-                    detail,
-                    envelope,
-                    ..
-                } => {
-                    let (action, resource) = envelope
-                        .as_ref()
-                        .map(|e| {
-                            (
-                                e.intent.action_class.clone(),
-                                e.intent.resource.clone(),
-                            )
-                        })
-                        .unwrap_or_default();
-
-                    (
-                        String::new(),
-                        String::new(),
-                        action,
-                        resource,
-                        DECISION_DENY,
-                        format!("{reason}: {detail}"),
-                        String::new(),
-                        String::new(),
-                    )
-                }
-                EnforcementDecision::Passthrough { .. } => (
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    DECISION_ALLOW,
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                ),
-            };
 
         let mut event = ExecutionEvent {
             event_id,
-            session_id: session_id.to_string(),
-            token_id,
-            agent_id,
-            action,
-            resource,
-            decision: decision_code,
-            deny_reason,
-            enforcement_latency_us,
-            context_hash,
-            bundle_version,
+            session_id: payload.session_id,
+            token_id: payload.token_id,
+            agent_id: payload.agent_id,
+            action: payload.action,
+            resource: payload.resource,
+            decision: payload.decision,
+            deny_reason: payload.deny_reason,
+            enforcement_latency_us: payload.enforcement_latency_us,
+            context_hash: payload.context_hash,
+            bundle_version: payload.bundle_version,
             timestamp: Some(timestamp),
             signature: Vec::new(),
         };
@@ -167,7 +93,7 @@ impl EventBuilder {
     /// (excluding the signature field itself).
     ///
     /// The signing payload is the SHA-256 digest of the canonical
-    /// JSON serialization of the signable fields.
+    /// field concatenation.
     fn sign(&self, event: &ExecutionEvent) -> Vec<u8> {
         let payload = signing_payload(event);
         let signature: DerSignature = self.signing_key.sign(&payload);
@@ -175,7 +101,6 @@ impl EventBuilder {
     }
 }
 
-#[allow(dead_code, reason = "used once pipeline wires send_audit_event")]
 /// Builds the canonical byte payload that is signed.
 ///
 /// Concatenates all event fields (except `signature`) in declaration
@@ -205,12 +130,13 @@ fn signing_payload(event: &ExecutionEvent) -> Vec<u8> {
     hasher.update(b"\n");
     hasher.update(event.bundle_version.as_bytes());
     hasher.update(b"\n");
-    let ts = event.timestamp.map_or_else(|| "0".to_string(), |n| n.to_string());
+    let ts = event
+        .timestamp
+        .map_or_else(|| "0".to_string(), |n| n.to_string());
     hasher.update(ts.as_bytes());
     hasher.finalize().to_vec()
 }
 
-#[allow(dead_code, reason = "used once pipeline wires send_audit_event")]
 /// Returns the current wall-clock time as nanoseconds since the Unix
 /// epoch.
 fn timestamp_nanos() -> u128 {
@@ -220,8 +146,7 @@ fn timestamp_nanos() -> u128 {
         reason = "timestamp_nanos_opt returns None for dates before epoch; \
                   current wall-clock is always positive"
     )]
-    now.timestamp_nanos_opt()
-        .map_or(0, |ns| ns as u128)
+    now.timestamp_nanos_opt().map_or(0, |ns| ns as u128)
 }
 
 #[cfg(test)]
@@ -234,8 +159,8 @@ mod tests {
     use chrono::Utc;
     use ecdsa::signature::Verifier;
     use firma_core::{
-        ActionParams, CapabilityClaims, DenyReason, ExecutionEnvelope,
-        ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams,
+        ActionParams, CapabilityClaims, DenyReason, ExecutionEnvelope, ExecutionIntent,
+        ExecutionMetadata, HttpMethod, HttpParams,
     };
     use p256::ecdsa::VerifyingKey;
 
@@ -251,6 +176,10 @@ MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgS+9b9zHd22EAeg9M
 bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 3wlh7RZmOnI0E3wNCaMKd3B7Sd/fXknJ0WmI6BsrvfidxQEAYvsndbvx
 -----END PRIVATE KEY-----";
+
+    /// Proto wire values for the `EnforcementDecision` enum.
+    const DECISION_ALLOW: i32 = 1;
+    const DECISION_DENY: i32 = 2;
 
     fn test_claims() -> CapabilityClaims {
         CapabilityClaims {
@@ -310,27 +239,33 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         }
     }
 
+    /// Helper to build an `AuditPayload` from an `EnforcementDecision`,
+    /// mirroring what the pipeline does on the hot path.
+    fn payload_from_decision(
+        decision: &EnforcementDecision,
+        session_id: &str,
+        latency: Duration,
+    ) -> AuditPayload {
+        crate::pipeline::audit_payload_from_decision(decision, session_id, latency)
+    }
+
     #[test]
     fn test_build_allow_event() {
-        let builder =
-            EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
+        let builder = EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
 
         let decision = EnforcementDecision::Allow {
             claims: test_claims(),
             envelope: Box::new(test_envelope()),
         };
 
-        let event =
-            builder.build(&decision, "sess_001", Duration::from_micros(150));
+        let payload = payload_from_decision(&decision, "sess_001", Duration::from_micros(150));
+        let event = builder.build(payload);
 
         assert_eq!(event.session_id, "sess_001");
         assert_eq!(event.token_id, "tok_001");
         assert_eq!(event.agent_id, "agent_test");
         assert_eq!(event.action, "llm.inference");
-        assert_eq!(
-            event.resource,
-            "api.openai.com/v1/chat/completions"
-        );
+        assert_eq!(event.resource, "api.openai.com/v1/chat/completions");
         assert_eq!(event.decision, DECISION_ALLOW);
         assert!(event.deny_reason.is_empty());
         assert_eq!(event.enforcement_latency_us, 150);
@@ -341,8 +276,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 
     #[test]
     fn test_build_deny_event() {
-        let builder =
-            EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
+        let builder = EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
 
         let decision = EnforcementDecision::Deny {
             reason: DenyReason::TokenExpired,
@@ -353,8 +287,8 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             envelope: Some(test_normalized_envelope()),
         };
 
-        let event =
-            builder.build(&decision, "sess_deny", Duration::from_micros(42));
+        let payload = payload_from_decision(&decision, "sess_deny", Duration::from_micros(42));
+        let event = builder.build(payload);
 
         assert_eq!(event.session_id, "sess_deny");
         assert_eq!(event.decision, DECISION_DENY);
@@ -365,18 +299,14 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 
     #[test]
     fn test_build_passthrough_event() {
-        let builder =
-            EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
+        let builder = EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
 
         let decision = EnforcementDecision::Passthrough {
             detail: "non-protected host".to_string(),
         };
 
-        let event = builder.build(
-            &decision,
-            "sess_pt",
-            Duration::from_micros(5),
-        );
+        let payload = payload_from_decision(&decision, "sess_pt", Duration::from_micros(5));
+        let event = builder.build(payload);
 
         assert_eq!(event.decision, DECISION_ALLOW);
         assert!(event.token_id.is_empty());
@@ -385,16 +315,15 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 
     #[test]
     fn test_signature_is_verifiable() {
-        let builder =
-            EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
+        let builder = EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
 
         let decision = EnforcementDecision::Allow {
             claims: test_claims(),
             envelope: Box::new(test_envelope()),
         };
 
-        let event =
-            builder.build(&decision, "sess_001", Duration::from_micros(100));
+        let payload = payload_from_decision(&decision, "sess_001", Duration::from_micros(100));
+        let event = builder.build(payload);
 
         // Derive the verifying (public) key from the signing key.
         let signing_key: SigningKey = TEST_KEY_PEM
@@ -403,8 +332,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let verifying_key = VerifyingKey::from(&signing_key);
 
         let payload = signing_payload(&event);
-        let sig = DerSignature::from_bytes(&event.signature)
-            .unwrap_or_else(|e| panic!("{e}"));
+        let sig = DerSignature::from_bytes(&event.signature).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             verifying_key.verify(&payload, &sig).is_ok(),
@@ -414,16 +342,15 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 
     #[test]
     fn test_tampered_event_fails_verification() {
-        let builder =
-            EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
+        let builder = EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
 
         let decision = EnforcementDecision::Allow {
             claims: test_claims(),
             envelope: Box::new(test_envelope()),
         };
 
-        let mut event =
-            builder.build(&decision, "sess_001", Duration::from_micros(100));
+        let payload = payload_from_decision(&decision, "sess_001", Duration::from_micros(100));
+        let mut event = builder.build(payload);
 
         // Tamper with the event after signing.
         event.agent_id = "evil_agent".to_string();
@@ -434,8 +361,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let verifying_key = VerifyingKey::from(&signing_key);
 
         let payload = signing_payload(&event);
-        let sig = DerSignature::from_bytes(&event.signature)
-            .unwrap_or_else(|e| panic!("{e}"));
+        let sig = DerSignature::from_bytes(&event.signature).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             verifying_key.verify(&payload, &sig).is_err(),
@@ -445,8 +371,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 
     #[test]
     fn test_debug_redacts_key() {
-        let builder =
-            EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
+        let builder = EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
         let rendered = format!("{builder:?}");
 
         assert!(rendered.contains("EventBuilder"));
@@ -465,15 +390,24 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 
     #[test]
     fn test_event_ids_are_unique() {
-        let builder =
-            EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
+        let builder = EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
 
-        let decision = EnforcementDecision::Passthrough {
-            detail: "test".to_string(),
+        let payload1 = AuditPayload {
+            session_id: "s".to_string(),
+            token_id: String::new(),
+            agent_id: String::new(),
+            action: String::new(),
+            resource: String::new(),
+            decision: 1,
+            deny_reason: String::new(),
+            enforcement_latency_us: 0,
+            context_hash: String::new(),
+            bundle_version: String::new(),
         };
+        let payload2 = payload1.clone();
 
-        let e1 = builder.build(&decision, "s", Duration::ZERO);
-        let e2 = builder.build(&decision, "s", Duration::ZERO);
+        let e1 = builder.build(payload1);
+        let e2 = builder.build(payload2);
 
         assert_ne!(
             e1.event_id, e2.event_id,
@@ -483,8 +417,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 
     #[test]
     fn test_build_deny_without_envelope() {
-        let builder =
-            EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
+        let builder = EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
 
         let decision = EnforcementDecision::Deny {
             reason: DenyReason::UnclassifiedIntent,
@@ -493,8 +426,8 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             envelope: None,
         };
 
-        let event =
-            builder.build(&decision, "sess_no_env", Duration::from_micros(10));
+        let payload = payload_from_decision(&decision, "sess_no_env", Duration::from_micros(10));
+        let event = builder.build(payload);
 
         assert_eq!(event.decision, DECISION_DENY);
         assert!(event.deny_reason.contains("unclassified intent"));

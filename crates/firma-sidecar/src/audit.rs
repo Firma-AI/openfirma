@@ -90,6 +90,37 @@ pub enum AuditSinkError {
     ServerError(String),
 }
 
+/// Lightweight audit payload sent from the pipeline hot path through
+/// the channel. Contains only the fields extracted from the enforcement
+/// decision — no signing, no UUID generation. The [`EventBuilder`](builder::EventBuilder)
+/// on the sink side converts this into a fully populated, signed
+/// [`ExecutionEvent`].
+#[derive(Debug, Clone)]
+pub struct AuditPayload {
+    /// Session that produced this event.
+    pub session_id: String,
+    /// Capability token ID evaluated during enforcement.
+    pub token_id: String,
+    /// Agent that initiated the action.
+    pub agent_id: String,
+    /// Canonical action class from the normalizer (e.g., `llm.inference`).
+    pub action: String,
+    /// Target resource identifier (e.g., URL, table name).
+    pub resource: String,
+    /// Enforcement outcome (proto wire value: 1 = ALLOW, 2 = DENY).
+    pub decision: i32,
+    /// Human-readable reason when decision is DENY or ABORT. Empty on
+    /// ALLOW.
+    pub deny_reason: String,
+    /// Wall-clock time spent in the enforcement pipeline, in
+    /// microseconds.
+    pub enforcement_latency_us: i64,
+    /// Integrity hash of the Cedar context used during evaluation.
+    pub context_hash: String,
+    /// Policy bundle version active at decision time.
+    pub bundle_version: String,
+}
+
 /// Domain-level audit event produced by the enforcement pipeline.
 ///
 /// Converted into the proto wire type via `From<ExecutionEvent>`.

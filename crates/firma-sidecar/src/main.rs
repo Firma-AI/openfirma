@@ -87,12 +87,18 @@ async fn main() -> anyhow::Result<()> {
     };
     tracing::debug!("signal handlers registered");
 
-    // setup audit sink
-    let (audit_sink_tx, audit_sink_rx) = tokio::sync::mpsc::channel(100);
-    let audit_sink = spawn_audit_sink(&config.audit, audit_sink_rx, exit.clone())?;
+    // setup audit sink with signing adapter
+    let (audit_payload_tx, audit_payload_rx) = tokio::sync::mpsc::channel(100);
+    let audit_event_builder = load_audit_event_builder(&config.audit)?;
+    let audit_sink = spawn_audit_sink(
+        &config.audit,
+        audit_payload_rx,
+        audit_event_builder,
+        exit.clone(),
+    )?;
 
     // build enforcement pipeline
-    let pipeline = build_pipeline(&config, audit_sink_tx)?;
+    let pipeline = build_pipeline(&config, audit_payload_tx)?;
 
     // run interceptor
     tracing::info!(
@@ -168,7 +174,7 @@ async fn read_config(path: &Path) -> anyhow::Result<config::SidecarConfig> {
 /// parsed, or when pipeline components fail to initialize.
 fn build_pipeline(
     config: &config::SidecarConfig,
-    audit_sink_tx: tokio::sync::mpsc::Sender<audit::ExecutionEvent>,
+    audit_sink_tx: tokio::sync::mpsc::Sender<audit::AuditPayload>,
 ) -> anyhow::Result<Arc<pipeline::EnforcementPipeline>> {
     // Load mapping rules
     let rules_content =
@@ -228,14 +234,11 @@ fn build_pipeline(
         Box::new(StubPolicyEvaluation),
     );
 
-    let audit_event_builder = load_audit_event_builder(&config.audit)?;
-
     let pipeline = pipeline::EnforcementPipeline::new(
         normalizer,
         capability_validator,
         constraint_enforcer,
         audit_sink_tx,
-        audit_event_builder,
     );
     tracing::info!("enforcement pipeline initialized");
 
@@ -297,6 +300,11 @@ fn spawn_interceptor(
 }
 
 /// Spawn the [`AuditSink`](crate::audit::AuditSink) as a background tokio task, consuming from the provided `Receiver`.
+/// Spawns the audit sink pipeline: a signing adapter that receives
+/// [`AuditPayload`](audit::AuditPayload)s, signs them into
+/// [`ExecutionEvent`](audit::ExecutionEvent)s, and forwards to the
+/// concrete [`AuditSink`](audit::AuditSink).
+///
 /// Returns a [`tokio::task::JoinHandle`] that resolves when the sink shuts down.
 ///
 /// # Errors
@@ -304,16 +312,29 @@ fn spawn_interceptor(
 /// Returns an error when the sink fails to initialize (e.g. invalid config, failure to connect to external sink).
 fn spawn_audit_sink(
     config: &AuditConfig,
-    rx: tokio::sync::mpsc::Receiver<audit::ExecutionEvent>,
+    payload_rx: tokio::sync::mpsc::Receiver<audit::AuditPayload>,
+    event_builder: audit::builder::EventBuilder,
     exit: CancellationToken,
 ) -> anyhow::Result<tokio::task::JoinHandle<Result<(), audit::AuditSinkError>>> {
+    // Internal channel between the signing adapter and the concrete sink.
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel::<audit::ExecutionEvent>(100);
+
+    // Spawn the signing adapter: AuditPayload → sign → ExecutionEvent.
+    let adapter_exit = exit.clone();
+    tokio::spawn(async move {
+        run_signing_adapter(payload_rx, event_tx, event_builder, adapter_exit).await;
+    });
+
+    // Spawn the concrete sink, which consumes signed ExecutionEvents.
     match config.sink {
         config::AuditSink::File => {
             let path = config.file_path.clone().ok_or_else(|| {
                 anyhow::anyhow!("file sink requires file_path in audit configuration")
             })?;
             Ok(tokio::spawn(async move {
-                audit_sink::FileAuditSink::new(path).run(rx, exit).await
+                audit_sink::FileAuditSink::new(path)
+                    .run(event_rx, exit)
+                    .await
             }))
         }
         config::AuditSink::Grpc => {
@@ -321,11 +342,13 @@ fn spawn_audit_sink(
                 anyhow::anyhow!("gRPC sink requires grpc_url in audit configuration")
             })?;
             Ok(tokio::spawn(async move {
-                audit_sink::GrpcAuditSink::new(endpoint).run(rx, exit).await
+                audit_sink::GrpcAuditSink::new(endpoint)
+                    .run(event_rx, exit)
+                    .await
             }))
         }
         config::AuditSink::Stdout => Ok(tokio::spawn(async move {
-            audit_sink::StdoutAuditSink::new().run(rx, exit).await
+            audit_sink::StdoutAuditSink::new().run(event_rx, exit).await
         })),
         config::AuditSink::Wal => {
             let path = config.wal_path.clone().ok_or_else(|| {
@@ -337,9 +360,47 @@ fn spawn_audit_sink(
             let wal_max_bytes = config.wal_max_bytes;
             Ok(tokio::spawn(async move {
                 audit_sink::WalAuditSink::new(grpc_url, path, wal_max_bytes)
-                    .run(rx, exit)
+                    .run(event_rx, exit)
                     .await
             }))
+        }
+    }
+}
+
+/// Signing adapter that sits between the pipeline and the concrete sink.
+///
+/// Receives [`AuditPayload`](audit::AuditPayload)s from the pipeline,
+/// signs each into a full [`ExecutionEvent`](audit::ExecutionEvent),
+/// and forwards to the concrete sink via `event_tx`.
+async fn run_signing_adapter(
+    mut payload_rx: tokio::sync::mpsc::Receiver<audit::AuditPayload>,
+    event_tx: tokio::sync::mpsc::Sender<audit::ExecutionEvent>,
+    builder: audit::builder::EventBuilder,
+    exit: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            payload = payload_rx.recv() => {
+                let Some(payload) = payload else {
+                    // Channel closed — pipeline shut down.
+                    break;
+                };
+                let event = builder.build(payload);
+                if event_tx.send(event).await.is_err() {
+                    // Sink channel closed — nothing to forward to.
+                    break;
+                }
+            }
+            () = exit.cancelled() => {
+                // Drain remaining payloads before exiting.
+                while let Ok(payload) = payload_rx.try_recv() {
+                    let event = builder.build(payload);
+                    if event_tx.send(event).await.is_err() {
+                        break;
+                    }
+                }
+                break;
+            }
         }
     }
 }
