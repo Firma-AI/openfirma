@@ -147,7 +147,7 @@ async fn handle_request(
         .cloned()
         .unwrap_or_default();
 
-    let decision = pipeline.enforce(&raw, &session_id);
+    let decision = pipeline.enforce(&raw, &session_id).await;
 
     let response = match decision {
         EnforcementDecision::Allow { .. } | EnforcementDecision::Passthrough { .. } => {
@@ -238,6 +238,7 @@ mod tests {
     use tokio::net::UnixStream;
 
     use super::*;
+    use crate::audit::builder::EventBuilder;
     use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
@@ -286,6 +287,17 @@ mod tests {
         }
     }
 
+    const TEST_KEY_PEM: &str = "\
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgS+9b9zHd22EAeg9M
+bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
+3wlh7RZmOnI0E3wNCaMKd3B7Sd/fXknJ0WmI6BsrvfidxQEAYvsndbvx
+-----END PRIVATE KEY-----";
+
+    fn test_event_builder() -> EventBuilder {
+        EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"))
+    }
+
     fn test_claims() -> CapabilityClaims {
         CapabilityClaims {
             token_id: "tok_001".to_string(),
@@ -302,6 +314,7 @@ mod tests {
     /// Builds a pipeline that ALLOWs POST requests to any host at the given
     /// path. Uses a wildcard host pattern (`*`).
     fn test_pipeline_allow(path: &str) -> Arc<EnforcementPipeline> {
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
@@ -331,12 +344,15 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
+            tx,
+            test_event_builder(),
         ))
     }
 
     /// Builds a pipeline that DENYs classified requests (empty capability map).
     /// Uses `default_protected: true` so every host is protected.
     fn test_pipeline_deny_all() -> Arc<EnforcementPipeline> {
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
@@ -363,12 +379,15 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
+            tx,
+            test_event_builder(),
         ))
     }
 
     /// Builds a pipeline where only `api.openai.com` is mapped and
     /// `default_protected` is false, so unmapped hosts pass through.
     fn test_pipeline_passthrough() -> Arc<EnforcementPipeline> {
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
@@ -398,6 +417,8 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
+            tx,
+            test_event_builder(),
         ))
     }
 

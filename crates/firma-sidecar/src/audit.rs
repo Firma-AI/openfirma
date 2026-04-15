@@ -30,6 +30,7 @@
 //! signature covers all event fields preceding it, enabling downstream
 //! consumers to verify event integrity without trusting the transport.
 
+pub mod builder;
 pub mod sink;
 
 use std::future::Future;
@@ -51,7 +52,6 @@ use tokio_util::sync::CancellationToken;
 /// object-safe. That is intentional: the concrete sink type is selected
 /// once at startup based on the `[audit]` config section, so dynamic
 /// dispatch is unnecessary.
-#[expect(dead_code, reason = "trait implemented by concrete sinks in follow-up")]
 pub trait AuditSink {
     /// Drives the sink, consuming events from `rx` until `exit` is
     /// cancelled or an unrecoverable error occurs.

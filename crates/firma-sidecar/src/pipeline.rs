@@ -16,8 +16,11 @@
 //! Stage 2 + credential injection + audit emit, excluding connector and
 //! external system latency).
 
+use std::time::Duration;
+
 use firma_core::{ExecutionEnvelope, ExecutionMetadata};
 
+use crate::audit::builder::EventBuilder;
 // Re-export public API for pipeline callers
 pub use crate::enforcement::capability_map::CapabilityMap;
 pub use crate::enforcement::capability_validation::CapabilityValidator;
@@ -25,6 +28,8 @@ pub use crate::enforcement::constraint_enforcement::{ConstraintEnforcer, PolicyE
 pub use crate::enforcement::decision::EnforcementDecision;
 pub use crate::enforcement::registry::ActionClassRegistry;
 pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
+
+type AuditSinkSender = tokio::sync::mpsc::Sender<crate::audit::ExecutionEvent>;
 
 /// The enforcement pipeline. Orchestrates the full `enforce()` flow:
 ///
@@ -39,9 +44,11 @@ pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
 ///
 /// Target: < 3ms p95 end-to-end overhead.
 pub struct EnforcementPipeline {
-    normalizer: IntentNormalizer,
+    audit_event_builder: EventBuilder,
+    audit_sink_sender: AuditSinkSender,
     capability_validator: CapabilityValidator,
     constraint_enforcer: ConstraintEnforcer,
+    normalizer: IntentNormalizer,
 }
 
 impl EnforcementPipeline {
@@ -52,11 +59,15 @@ impl EnforcementPipeline {
         normalizer: IntentNormalizer,
         capability_validator: CapabilityValidator,
         constraint_enforcer: ConstraintEnforcer,
+        audit_sink_sender: AuditSinkSender,
+        audit_event_builder: EventBuilder,
     ) -> Self {
         Self {
-            normalizer,
+            audit_event_builder,
+            audit_sink_sender,
             capability_validator,
             constraint_enforcer,
+            normalizer,
         }
     }
 
@@ -72,7 +83,21 @@ impl EnforcementPipeline {
     /// 4. On Allow: assemble a fully populated `ExecutionEnvelope` from
     ///    the normalized envelope + validated capability + session context.
     #[must_use]
-    pub fn enforce(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
+    pub async fn enforce(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
+        let start = std::time::Instant::now();
+
+        let decision = self.enforce_inner(request, session_id);
+
+        // Audit every decision — ALLOW, DENY, and PASSTHROUGH.
+        self.send_audit_event(&decision, session_id, start.elapsed())
+            .await;
+
+        decision
+    }
+
+    /// Pure enforcement logic, separated so the outer [`enforce`](Self::enforce)
+    /// can unconditionally audit the result.
+    fn enforce_inner(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
         // Normalize intent (may short-circuit with Deny or Passthrough)
         let normalized = match self.normalizer.normalize(request) {
             Ok(env) => env,
@@ -113,11 +138,27 @@ impl EnforcementPipeline {
             envelope: Box::new(envelope),
         }
     }
+
+    /// Given the [`EnforcementDecision`] and request context, build and send an
+    /// audit event to the sink. Called internally on DENY decisions to ensure that all denied requests are audited.
+    async fn send_audit_event(
+        &self,
+        deny: &EnforcementDecision,
+        session_id: &str,
+        latency: Duration,
+    ) {
+        let payload = self.audit_event_builder.build(deny, session_id, latency);
+
+        if let Err(err) = self.audit_sink_sender.send(payload).await {
+            tracing::error!("failed to send audit event: {err}");
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audit::builder::EventBuilder;
     use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
@@ -127,6 +168,17 @@ mod tests {
     use firma_core::*;
     use std::collections::HashMap;
     use std::time::Duration;
+
+    const TEST_KEY_PEM: &str = "\
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgS+9b9zHd22EAeg9M
+bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
+3wlh7RZmOnI0E3wNCaMKd3B7Sd/fXknJ0WmI6BsrvfidxQEAYvsndbvx
+-----END PRIVATE KEY-----";
+
+    fn test_event_builder() -> EventBuilder {
+        EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"))
+    }
 
     struct AllowAllPolicy;
     impl PolicyEvaluation for AllowAllPolicy {
@@ -213,6 +265,7 @@ mod tests {
     }
 
     fn test_pipeline() -> EnforcementPipeline {
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
@@ -229,11 +282,17 @@ mod tests {
 
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
 
-        EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer)
+        EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            tx,
+            test_event_builder(),
+        )
     }
 
-    #[test]
-    fn test_enforce_happy_path() {
+    #[tokio::test]
+    async fn test_enforce_happy_path() {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: "POST".to_string(),
@@ -244,7 +303,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_allow());
 
         if let EnforcementDecision::Allow { claims, envelope } = decision {
@@ -259,8 +318,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_enforce_unclassified_intent() {
+    #[tokio::test]
+    async fn test_enforce_unclassified_intent() {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: "DELETE".to_string(),
@@ -271,13 +330,14 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
     }
 
-    #[test]
-    fn test_enforce_not_protected_returns_passthrough() {
+    #[tokio::test]
+    async fn test_enforce_not_protected_returns_passthrough() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
             method: Some("POST".to_string()),
@@ -298,8 +358,13 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let pipeline =
-            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
+        let pipeline = EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            tx,
+            test_event_builder(),
+        );
 
         let request = RawRequest {
             method: "GET".to_string(),
@@ -310,7 +375,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001").await;
         assert!(
             decision.is_passthrough(),
             "non-protected traffic should passthrough, not deny"
@@ -319,8 +384,8 @@ mod tests {
         assert!(!decision.is_allow());
     }
 
-    #[test]
-    fn test_enforce_scope_violation() {
+    #[tokio::test]
+    async fn test_enforce_scope_violation() {
         let rules = vec![MappingRuleConfig {
             method: Some("DELETE".to_string()),
             host: "api.example.com".to_string(),
@@ -364,9 +429,16 @@ mod tests {
             }
         }
 
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(DenyDeletePolicy));
-        let pipeline =
-            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
+        let pipeline = EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            tx,
+            test_event_builder(),
+        );
 
         let request = RawRequest {
             method: "DELETE".to_string(),
@@ -377,15 +449,15 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyDenied));
     }
 
     // ===== Fail-closed discipline tests =====
 
-    #[test]
-    fn test_enforce_validation_failure_short_circuits_enforcement() {
+    #[tokio::test]
+    async fn test_enforce_validation_failure_short_circuits_enforcement() {
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
             method: Some("POST".to_string()),
@@ -415,8 +487,15 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let pipeline =
-            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+
+        let pipeline = EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            tx,
+            test_event_builder(),
+        );
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -427,7 +506,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
         assert_eq!(
@@ -440,8 +519,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_enforce_no_capability_token_denies() {
+    #[tokio::test]
+    async fn test_enforce_no_capability_token_denies() {
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
             method: Some("POST".to_string()),
@@ -459,8 +538,15 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let pipeline =
-            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+
+        let pipeline = EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            tx,
+            test_event_builder(),
+        );
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -471,15 +557,15 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
     }
 
     // ===== Determinism test =====
 
-    #[test]
-    fn test_enforce_deterministic_same_input_same_output() {
+    #[tokio::test]
+    async fn test_enforce_deterministic_same_input_same_output() {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: "POST".to_string(),
@@ -491,7 +577,7 @@ mod tests {
         };
 
         for _ in 0..100 {
-            let decision = pipeline.enforce(&request, "sess_001");
+            let decision = pipeline.enforce(&request, "sess_001").await;
             assert!(
                 decision.is_allow(),
                 "non-deterministic: got DENY on repeated call"
@@ -499,8 +585,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_enforce_deterministic_deny_same_input() {
+    #[tokio::test]
+    async fn test_enforce_deterministic_deny_same_input() {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: "DELETE".to_string(),
@@ -512,7 +598,7 @@ mod tests {
         };
 
         for _ in 0..100 {
-            let decision = pipeline.enforce(&request, "sess_001");
+            let decision = pipeline.enforce(&request, "sess_001").await;
             assert!(decision.is_deny());
             assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
         }
@@ -520,8 +606,8 @@ mod tests {
 
     // ===== Policy bundle staleness =====
 
-    #[test]
-    fn test_enforce_allow_envelope_fields_complete() {
+    #[tokio::test]
+    async fn test_enforce_allow_envelope_fields_complete() {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: "POST".to_string(),
@@ -532,7 +618,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_allow());
 
         if let EnforcementDecision::Allow { claims, envelope } = decision {
@@ -567,8 +653,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_enforce_revoked_token_denied_through_pipeline() {
+    #[tokio::test]
+    async fn test_enforce_revoked_token_denied_through_pipeline() {
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
             method: Some("POST".to_string()),
@@ -598,8 +684,14 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let pipeline =
-            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let pipeline = EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            tx,
+            test_event_builder(),
+        );
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -610,13 +702,13 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::TokenRevoked));
     }
 
-    #[test]
-    fn test_enforce_expired_token_denied_through_pipeline() {
+    #[tokio::test]
+    async fn test_enforce_expired_token_denied_through_pipeline() {
         let mut claims = test_claims();
         claims.expiry = Utc::now() - chrono::Duration::hours(1);
 
@@ -638,8 +730,14 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let pipeline =
-            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let pipeline = EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            tx,
+            test_event_builder(),
+        );
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -650,13 +748,13 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::TokenExpired));
     }
 
-    #[test]
-    fn test_enforce_scope_violation_through_pipeline() {
+    #[tokio::test]
+    async fn test_enforce_scope_violation_through_pipeline() {
         // Token only allows llm.inference, but request maps to http.get
         let mut claims = test_claims();
         claims.action_set = vec!["llm.inference".to_string()]; // no http.get
@@ -679,8 +777,14 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let pipeline =
-            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let pipeline = EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            tx,
+            test_event_builder(),
+        );
 
         let request = RawRequest {
             method: "GET".to_string(),
@@ -691,13 +795,13 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001").await;
         // Token selection fails because no token covers http.get
         assert!(decision.is_deny());
     }
 
-    #[test]
-    fn test_enforce_sensitive_headers_stripped_in_allow() {
+    #[tokio::test]
+    async fn test_enforce_sensitive_headers_stripped_in_allow() {
         let pipeline = test_pipeline();
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), "Bearer secret".to_string());
@@ -712,7 +816,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_allow());
 
         if let EnforcementDecision::Allow { envelope, .. } = decision {
@@ -726,8 +830,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_enforce_stale_bundle_denies() {
+    #[tokio::test]
+    async fn test_enforce_stale_bundle_denies() {
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
             method: Some("POST".to_string()),
@@ -768,8 +872,15 @@ mod tests {
         }
 
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(StalePolicy));
-        let pipeline =
-            EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+
+        let pipeline = EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            tx,
+            test_event_builder(),
+        );
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -780,8 +891,187 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
+    }
+
+    // ===== Audit event emission tests =====
+
+    #[tokio::test]
+    async fn test_enforce_allow_emits_audit_event() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let claims = test_claims();
+
+        let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test_token".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier { claims }),
+            Box::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let pipeline = EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            tx,
+            test_event_builder(),
+        );
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let decision = pipeline.enforce(&request, "sess_audit").await;
+        assert!(decision.is_allow());
+
+        let event = rx.try_recv().unwrap_or_else(|e| panic!("expected audit event: {e}"));
+        assert_eq!(event.session_id, "sess_audit");
+        assert_eq!(event.decision, 1); // ALLOW
+        assert_eq!(event.token_id, "tok_001");
+        assert_eq!(event.agent_id, "agent_test");
+        assert_eq!(event.action, "llm.inference");
+        assert!(event.enforcement_latency_us >= 0);
+        assert!(!event.signature.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_enforce_deny_emits_audit_event() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let claims = test_claims();
+
+        let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![]),
+            Box::new(MockVerifier { claims }),
+            Box::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let pipeline = EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            tx,
+            test_event_builder(),
+        );
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let decision = pipeline.enforce(&request, "sess_deny").await;
+        assert!(decision.is_deny());
+
+        let event = rx.try_recv().unwrap_or_else(|e| panic!("expected audit event: {e}"));
+        assert_eq!(event.session_id, "sess_deny");
+        assert_eq!(event.decision, 2); // DENY
+        assert!(!event.signature.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_enforce_passthrough_emits_audit_event() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let claims = test_claims();
+
+        let rules = vec![MappingRuleConfig {
+            method: Some("POST".to_string()),
+            host: "api.openai.com".to_string(),
+            path: Some("/v1/chat/completions".to_string()),
+            action_class: "llm.inference".to_string(),
+        }];
+        let normalizer = IntentNormalizer::new(test_mapping_table_with_protection(&rules, false));
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test_token".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier { claims }),
+            Box::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let pipeline = EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            tx,
+            test_event_builder(),
+        );
+
+        let request = RawRequest {
+            method: "GET".to_string(),
+            host: "not-protected.example.com".to_string(),
+            path: "/any".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let decision = pipeline.enforce(&request, "sess_pt").await;
+        assert!(decision.is_passthrough());
+
+        let event = rx.try_recv().unwrap_or_else(|e| panic!("expected audit event: {e}"));
+        assert_eq!(event.session_id, "sess_pt");
+        assert_eq!(event.decision, 1); // Passthrough maps to ALLOW
+        assert!(!event.signature.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_enforce_normalization_deny_emits_audit_event() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let claims = test_claims();
+
+        let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test_token".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier { claims }),
+            Box::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let pipeline = EnforcementPipeline::new(
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            tx,
+            test_event_builder(),
+        );
+
+        // Unclassified intent — denied at normalization stage
+        let request = RawRequest {
+            method: "DELETE".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/files/abc".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let decision = pipeline.enforce(&request, "sess_norm").await;
+        assert!(decision.is_deny());
+        assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
+
+        let event = rx.try_recv().unwrap_or_else(|e| panic!("expected audit event: {e}"));
+        assert_eq!(event.session_id, "sess_norm");
+        assert_eq!(event.decision, 2); // DENY
+        assert!(!event.signature.is_empty());
     }
 }

@@ -21,29 +21,34 @@ clap = { workspace = true, features = [
   "suggestions",
   "usage",
 ] }
+ecdsa = { workspace = true }
+elliptic-curve = { workspace = true }
 firma-core = { path = "../firma-core" }
 firma-grpc-interceptor-proto = { path = "../firma-grpc-interceptor-proto" }
 firma-proto = { path = "../firma-proto" }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
+p256 = { workspace = true }
 pingora-core = { workspace = true }
 pingora-proxy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
-toml = { workspace = true }
-tonic = { workspace = true }
-tracing = { workspace = true }
-tokio-stream = { workspace = true }
 tokio = { workspace = true, default-features = false, features = [
   "fs",
   "macros",
   "net",
   "rt-multi-thread",
 ] }
+tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
+toml = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

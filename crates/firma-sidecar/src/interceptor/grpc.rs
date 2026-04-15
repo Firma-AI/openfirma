@@ -107,7 +107,7 @@ impl InterceptorHook for GrpcInterceptor {
             is_https: req.is_https,
         };
 
-        let decision = pipeline.enforce(&raw, &session_id);
+        let decision = pipeline.enforce(&raw, &session_id).await;
 
         let response = match decision {
             EnforcementDecision::Allow { .. } | EnforcementDecision::Passthrough { .. } => {
@@ -154,6 +154,7 @@ mod tests {
     use firma_grpc_interceptor_proto::interceptor_hook_client::InterceptorHookClient;
 
     use super::*;
+    use crate::audit::builder::EventBuilder;
     use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
@@ -210,6 +211,17 @@ mod tests {
         }
     }
 
+    const TEST_KEY_PEM: &str = "\
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgS+9b9zHd22EAeg9M
+bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
+3wlh7RZmOnI0E3wNCaMKd3B7Sd/fXknJ0WmI6BsrvfidxQEAYvsndbvx
+-----END PRIVATE KEY-----";
+
+    fn test_event_builder() -> EventBuilder {
+        EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"))
+    }
+
     fn test_claims() -> CapabilityClaims {
         CapabilityClaims {
             token_id: "tok_001".to_string(),
@@ -224,6 +236,8 @@ mod tests {
     }
 
     fn test_pipeline_allow() -> Arc<EnforcementPipeline> {
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
@@ -253,10 +267,13 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
+            tx,
+            test_event_builder(),
         ))
     }
 
     fn test_pipeline_deny_all() -> Arc<EnforcementPipeline> {
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         // Empty capability map — every classified request fails at token selection
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
@@ -284,6 +301,8 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
+            tx,
+            test_event_builder(),
         ))
     }
 
