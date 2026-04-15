@@ -236,7 +236,6 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
 
     use super::*;
-    use crate::audit::builder::EventBuilder;
     use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
@@ -306,17 +305,6 @@ mod tests {
         }
     }
 
-    const TEST_KEY_PEM: &str = "\
------BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgS+9b9zHd22EAeg9M
-bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
-3wlh7RZmOnI0E3wNCaMKd3B7Sd/fXknJ0WmI6BsrvfidxQEAYvsndbvx
------END PRIVATE KEY-----";
-
-    fn test_event_builder() -> EventBuilder {
-        EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"))
-    }
-
     fn test_claims() -> CapabilityClaims {
         CapabilityClaims {
             token_id: "tok_001".to_string(),
@@ -367,7 +355,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             capability_validator,
             constraint_enforcer,
             tx,
-            test_event_builder(),
         ))
     }
 
@@ -404,7 +391,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             capability_validator,
             constraint_enforcer,
             tx,
-            test_event_builder(),
         ))
     }
 

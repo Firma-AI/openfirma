@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use firma_core::{ExecutionEnvelope, ExecutionMetadata};
 
-use crate::audit::builder::EventBuilder;
+use crate::audit::AuditPayload;
 // Re-export public API for pipeline callers
 pub use crate::enforcement::capability_map::CapabilityMap;
 pub use crate::enforcement::capability_validation::CapabilityValidator;
@@ -29,7 +29,11 @@ pub use crate::enforcement::decision::EnforcementDecision;
 pub use crate::enforcement::registry::ActionClassRegistry;
 pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
 
-type AuditSinkSender = tokio::sync::mpsc::Sender<crate::audit::ExecutionEvent>;
+type AuditSinkSender = tokio::sync::mpsc::Sender<AuditPayload>;
+
+/// Proto wire values for the enforcement decision enum.
+const DECISION_ALLOW: i32 = 1;
+const DECISION_DENY: i32 = 2;
 
 /// The enforcement pipeline. Orchestrates the full `enforce()` flow:
 ///
@@ -44,7 +48,6 @@ type AuditSinkSender = tokio::sync::mpsc::Sender<crate::audit::ExecutionEvent>;
 ///
 /// Target: < 3ms p95 end-to-end overhead.
 pub struct EnforcementPipeline {
-    audit_event_builder: EventBuilder,
     audit_sink_sender: AuditSinkSender,
     capability_validator: CapabilityValidator,
     constraint_enforcer: ConstraintEnforcer,
@@ -60,10 +63,8 @@ impl EnforcementPipeline {
         capability_validator: CapabilityValidator,
         constraint_enforcer: ConstraintEnforcer,
         audit_sink_sender: AuditSinkSender,
-        audit_event_builder: EventBuilder,
     ) -> Self {
         Self {
-            audit_event_builder,
             audit_sink_sender,
             capability_validator,
             constraint_enforcer,
@@ -139,15 +140,16 @@ impl EnforcementPipeline {
         }
     }
 
-    /// Given the [`EnforcementDecision`] and request context, build and send an
-    /// audit event to the sink. Called internally on DENY decisions to ensure that all denied requests are audited.
+    /// Builds an [`AuditPayload`] from the decision and sends it through
+    /// the audit channel. The signing adapter on the sink side handles
+    /// UUID generation, timestamping, and ECDSA signing.
     async fn send_audit_event(
         &self,
-        deny: &EnforcementDecision,
+        decision: &EnforcementDecision,
         session_id: &str,
         latency: Duration,
     ) {
-        let payload = self.audit_event_builder.build(deny, session_id, latency);
+        let payload = audit_payload_from_decision(decision, session_id, latency);
 
         if let Err(err) = self.audit_sink_sender.send(payload).await {
             tracing::error!("failed to send audit event: {err}");
@@ -155,10 +157,85 @@ impl EnforcementPipeline {
     }
 }
 
+/// Extracts an [`AuditPayload`] from an [`EnforcementDecision`].
+///
+/// This is a pure data extraction — no cryptography, no I/O. Designed
+/// to run on the enforcement hot path with < 1µs overhead.
+#[must_use]
+pub fn audit_payload_from_decision(
+    decision: &EnforcementDecision,
+    session_id: &str,
+    enforcement_latency: Duration,
+) -> AuditPayload {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "duration micros fits i64 for any realistic enforcement latency"
+    )]
+    let enforcement_latency_us = enforcement_latency.as_micros() as i64;
+
+    let (token_id, agent_id, action, resource, decision_code, deny_reason, context_hash, bundle_version) =
+        match decision {
+            EnforcementDecision::Allow { claims, envelope } => (
+                claims.token_id.clone(),
+                claims.agent_id.clone(),
+                envelope.intent().action_class.clone(),
+                envelope.intent().resource.clone(),
+                DECISION_ALLOW,
+                String::new(),
+                claims.context_hash.clone(),
+                String::new(),
+            ),
+            EnforcementDecision::Deny {
+                reason,
+                detail,
+                envelope,
+                ..
+            } => {
+                let (action, resource) = envelope
+                    .as_ref()
+                    .map(|e| (e.intent.action_class.clone(), e.intent.resource.clone()))
+                    .unwrap_or_default();
+
+                (
+                    String::new(),
+                    String::new(),
+                    action,
+                    resource,
+                    DECISION_DENY,
+                    format!("{reason}: {detail}"),
+                    String::new(),
+                    String::new(),
+                )
+            }
+            EnforcementDecision::Passthrough { .. } => (
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                DECISION_ALLOW,
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+        };
+
+    AuditPayload {
+        session_id: session_id.to_string(),
+        token_id,
+        agent_id,
+        action,
+        resource,
+        decision: decision_code,
+        deny_reason,
+        enforcement_latency_us,
+        context_hash,
+        bundle_version,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audit::builder::EventBuilder;
     use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
@@ -168,17 +245,6 @@ mod tests {
     use firma_core::*;
     use std::collections::HashMap;
     use std::time::Duration;
-
-    const TEST_KEY_PEM: &str = "\
------BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgS+9b9zHd22EAeg9M
-bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
-3wlh7RZmOnI0E3wNCaMKd3B7Sd/fXknJ0WmI6BsrvfidxQEAYvsndbvx
------END PRIVATE KEY-----";
-
-    fn test_event_builder() -> EventBuilder {
-        EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"))
-    }
 
     struct AllowAllPolicy;
     impl PolicyEvaluation for AllowAllPolicy {
@@ -287,7 +353,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             capability_validator,
             constraint_enforcer,
             tx,
-            test_event_builder(),
         )
     }
 
@@ -363,7 +428,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             capability_validator,
             constraint_enforcer,
             tx,
-            test_event_builder(),
         );
 
         let request = RawRequest {
@@ -437,7 +501,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             capability_validator,
             constraint_enforcer,
             tx,
-            test_event_builder(),
         );
 
         let request = RawRequest {
@@ -494,7 +557,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             capability_validator,
             constraint_enforcer,
             tx,
-            test_event_builder(),
         );
 
         let request = RawRequest {
@@ -545,7 +607,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             capability_validator,
             constraint_enforcer,
             tx,
-            test_event_builder(),
         );
 
         let request = RawRequest {
@@ -690,7 +751,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             capability_validator,
             constraint_enforcer,
             tx,
-            test_event_builder(),
         );
 
         let request = RawRequest {
@@ -736,7 +796,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             capability_validator,
             constraint_enforcer,
             tx,
-            test_event_builder(),
         );
 
         let request = RawRequest {
@@ -783,7 +842,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             capability_validator,
             constraint_enforcer,
             tx,
-            test_event_builder(),
         );
 
         let request = RawRequest {
@@ -879,7 +937,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             capability_validator,
             constraint_enforcer,
             tx,
-            test_event_builder(),
         );
 
         let request = RawRequest {
@@ -919,7 +976,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             capability_validator,
             constraint_enforcer,
             tx,
-            test_event_builder(),
         );
 
         let request = RawRequest {
@@ -934,14 +990,13 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let decision = pipeline.enforce(&request, "sess_audit").await;
         assert!(decision.is_allow());
 
-        let event = rx.try_recv().unwrap_or_else(|e| panic!("expected audit event: {e}"));
-        assert_eq!(event.session_id, "sess_audit");
-        assert_eq!(event.decision, 1); // ALLOW
-        assert_eq!(event.token_id, "tok_001");
-        assert_eq!(event.agent_id, "agent_test");
-        assert_eq!(event.action, "llm.inference");
-        assert!(event.enforcement_latency_us >= 0);
-        assert!(!event.signature.is_empty());
+        let payload = rx.try_recv().unwrap_or_else(|e| panic!("expected audit payload: {e}"));
+        assert_eq!(payload.session_id, "sess_audit");
+        assert_eq!(payload.decision, 1); // ALLOW
+        assert_eq!(payload.token_id, "tok_001");
+        assert_eq!(payload.agent_id, "agent_test");
+        assert_eq!(payload.action, "llm.inference");
+        assert!(payload.enforcement_latency_us >= 0);
     }
 
     #[tokio::test]
@@ -962,7 +1017,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             capability_validator,
             constraint_enforcer,
             tx,
-            test_event_builder(),
         );
 
         let request = RawRequest {
@@ -977,10 +1031,9 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let decision = pipeline.enforce(&request, "sess_deny").await;
         assert!(decision.is_deny());
 
-        let event = rx.try_recv().unwrap_or_else(|e| panic!("expected audit event: {e}"));
-        assert_eq!(event.session_id, "sess_deny");
-        assert_eq!(event.decision, 2); // DENY
-        assert!(!event.signature.is_empty());
+        let payload = rx.try_recv().unwrap_or_else(|e| panic!("expected audit payload: {e}"));
+        assert_eq!(payload.session_id, "sess_deny");
+        assert_eq!(payload.decision, 2); // DENY
     }
 
     #[tokio::test]
@@ -1010,7 +1063,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             capability_validator,
             constraint_enforcer,
             tx,
-            test_event_builder(),
         );
 
         let request = RawRequest {
@@ -1025,10 +1077,9 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let decision = pipeline.enforce(&request, "sess_pt").await;
         assert!(decision.is_passthrough());
 
-        let event = rx.try_recv().unwrap_or_else(|e| panic!("expected audit event: {e}"));
-        assert_eq!(event.session_id, "sess_pt");
-        assert_eq!(event.decision, 1); // Passthrough maps to ALLOW
-        assert!(!event.signature.is_empty());
+        let payload = rx.try_recv().unwrap_or_else(|e| panic!("expected audit payload: {e}"));
+        assert_eq!(payload.session_id, "sess_pt");
+        assert_eq!(payload.decision, 1); // Passthrough maps to ALLOW
     }
 
     #[tokio::test]
@@ -1052,7 +1103,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             capability_validator,
             constraint_enforcer,
             tx,
-            test_event_builder(),
         );
 
         // Unclassified intent — denied at normalization stage
@@ -1069,9 +1119,8 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
 
-        let event = rx.try_recv().unwrap_or_else(|e| panic!("expected audit event: {e}"));
-        assert_eq!(event.session_id, "sess_norm");
-        assert_eq!(event.decision, 2); // DENY
-        assert!(!event.signature.is_empty());
+        let payload = rx.try_recv().unwrap_or_else(|e| panic!("expected audit payload: {e}"));
+        assert_eq!(payload.session_id, "sess_norm");
+        assert_eq!(payload.decision, 2); // DENY
     }
 }
