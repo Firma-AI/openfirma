@@ -131,7 +131,7 @@ impl ProxyHttp for HttpInterceptor {
             .get("x-firma-session-id")
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
-        let decision = pipeline.enforce(&raw_request, session_id);
+        let decision = pipeline.enforce(&raw_request, session_id).await;
 
         // 3. Act on the enforcement decision
         match decision {
@@ -236,6 +236,7 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
 
     use super::*;
+    use crate::audit::builder::EventBuilder;
     use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
@@ -305,6 +306,17 @@ mod tests {
         }
     }
 
+    const TEST_KEY_PEM: &str = "\
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgS+9b9zHd22EAeg9M
+bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
+3wlh7RZmOnI0E3wNCaMKd3B7Sd/fXknJ0WmI6BsrvfidxQEAYvsndbvx
+-----END PRIVATE KEY-----";
+
+    fn test_event_builder() -> EventBuilder {
+        EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"))
+    }
+
     fn test_claims() -> CapabilityClaims {
         CapabilityClaims {
             token_id: "tok_001".to_string(),
@@ -323,6 +335,8 @@ mod tests {
     /// Uses a wildcard host pattern (`*`) combined with the concrete path
     /// so the rule matches regardless of port number in the host header.
     fn test_pipeline_allow(path: &str) -> Arc<EnforcementPipeline> {
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
@@ -352,6 +366,8 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
+            tx,
+            test_event_builder(),
         ))
     }
 
@@ -359,6 +375,8 @@ mod tests {
     /// capability map). Uses `default_protected: false` so unmapped hosts
     /// pass through.
     fn test_pipeline_deny_for_host(host: &str) -> Arc<EnforcementPipeline> {
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
@@ -385,6 +403,8 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
+            tx,
+            test_event_builder(),
         ))
     }
 
@@ -549,8 +569,8 @@ mod tests {
 
     // ── pipeline sanity checks ─────────────────────────────────────────
 
-    #[test]
-    fn test_pipeline_allow_matches_with_port_in_host() {
+    #[tokio::test]
+    async fn test_pipeline_allow_matches_with_port_in_host() {
         let pipeline = test_pipeline_allow("/v1/chat/completions");
         let raw = RawRequest {
             method: "POST".to_string(),
@@ -560,7 +580,7 @@ mod tests {
             body: Some(b"{}".to_vec()),
             is_https: false,
         };
-        let decision = pipeline.enforce(&raw, "");
+        let decision = pipeline.enforce(&raw, "").await;
         assert!(decision.is_allow(), "expected allow, got: {decision:?}");
     }
 

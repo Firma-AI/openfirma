@@ -228,8 +228,15 @@ fn build_pipeline(
         Box::new(StubPolicyEvaluation),
     );
 
-    let pipeline =
-        pipeline::EnforcementPipeline::new(normalizer, capability_validator, constraint_enforcer);
+    let audit_event_builder = load_audit_event_builder(&config.audit)?;
+
+    let pipeline = pipeline::EnforcementPipeline::new(
+        normalizer,
+        capability_validator,
+        constraint_enforcer,
+        audit_sink_tx,
+        audit_event_builder,
+    );
     tracing::info!("enforcement pipeline initialized");
 
     Ok(Arc::new(pipeline))
@@ -335,6 +342,37 @@ fn spawn_audit_sink(
             }))
         }
     }
+}
+
+/// Loads the ECDSA signing key PEM from the audit configuration and
+/// constructs an [`audit::builder::EventBuilder`].
+///
+/// The key is loaded from either `signing_key_path` (file) or
+/// `signing_key_env` (environment variable). When neither is set, a
+/// placeholder empty key is used (startup will fail at signing time).
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or the PEM is invalid.
+fn load_audit_event_builder(
+    config: &config::AuditConfig,
+) -> anyhow::Result<audit::builder::EventBuilder> {
+    let pem = if let Some(ref path) = config.signing_key_path {
+        std::fs::read_to_string(path).map_err(|e| {
+            anyhow::anyhow!("failed to read signing key from {}: {e}", path.display())
+        })?
+    } else if let Some(ref env_var) = config.signing_key_env {
+        std::env::var(env_var).map_err(|e| {
+            anyhow::anyhow!("failed to read signing key from env var {env_var}: {e}")
+        })?
+    } else {
+        return Err(anyhow::anyhow!(
+            "audit signing key not configured: set signing_key_path or signing_key_env"
+        ));
+    };
+
+    audit::builder::EventBuilder::new(&pem)
+        .map_err(|e| anyhow::anyhow!("failed to initialize audit event builder: {e}"))
 }
 
 // ---------------------------------------------------------------------------

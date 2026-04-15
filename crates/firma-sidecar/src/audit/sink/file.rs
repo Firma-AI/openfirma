@@ -56,7 +56,7 @@ impl FileAuditSink {
 
         let line = format!("{serialized}\n");
         match file.write_all(line.as_bytes()).await {
-            Ok(_) => {
+            Ok(()) => {
                 tracing::debug!(
                     event_id = %event.event_id,
                     "successfully wrote audit event to file"
