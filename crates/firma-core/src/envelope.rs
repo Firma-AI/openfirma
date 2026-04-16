@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::token::{AgentId, SessionId, TokenId};
+use crate::agent::AgentId;
+use crate::session::SessionId;
+use crate::token::TokenId;
 
 /// The core protocol unit wrapping each outbound agent call.
 ///

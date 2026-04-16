@@ -34,7 +34,9 @@
 
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
 use crate::normalizer::NormalizedEnvelope;
-use firma_core::{decision::DenyReason, token::{AgentId, CapabilityClaims}};
+use firma_core::agent::AgentId;
+use firma_core::decision::DenyReason;
+use firma_core::token::CapabilityClaims;
 
 /// Trait for policy evaluation — abstracts Cedar or any other policy engine.
 ///

@@ -29,7 +29,7 @@
 
 use std::time::Duration;
 
-use firma_core::token::SessionId;
+use firma_core::session::SessionId;
 use firma_core::token::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
 
 use crate::normalizer::NormalizedEnvelope;
