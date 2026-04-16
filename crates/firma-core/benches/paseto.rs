@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use chrono::Utc;
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
 use firma_core::token::paseto::{PasetoV4Signer, PasetoV4Verifier};
 use firma_core::token::{CapabilityClaims, TokenSigner, TokenVerifier};
 use pasetors::keys::{AsymmetricKeyPair, Generate};
@@ -15,9 +15,9 @@ fn generate_keypair() -> (Vec<u8>, Vec<u8>) {
 fn sample_claims() -> CapabilityClaims {
     let now = Utc::now();
     CapabilityClaims {
-        token_id: "tok_bench_001".to_string(),
-        agent_id: "agent_bench".to_string(),
-        session_id: "sess_bench".to_string(),
+        token_id: "tok_bench_001".parse().unwrap(),
+        agent_id: "agent_bench".parse().unwrap(),
+        session_id: "sess_bench".parse().unwrap(),
         action_set: vec!["http:GET".to_string(), "tool:execute".to_string()],
         resource_scope: "https://api.example.com/*".to_string(),
         issued_at: now,

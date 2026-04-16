@@ -17,6 +17,7 @@
 //! external system latency).
 
 use firma_core::envelope::{ExecutionEnvelope, ExecutionMetadata};
+use firma_core::token::SessionId;
 
 // Re-export public API for pipeline callers
 pub use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
@@ -78,7 +79,7 @@ impl EnforcementPipeline {
     /// 4. On Allow: assemble a fully populated `ExecutionEnvelope` from
     ///    the normalized envelope + validated capability + session context.
     #[must_use]
-    pub fn enforce(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
+    pub fn enforce(&self, request: &RawRequest, session_id: SessionId) -> EnforcementDecision {
         // Normalize intent (may short-circuit with Deny or Passthrough)
         let normalized = match self.normalizer.normalize(request) {
             Ok(env) => env,
@@ -86,7 +87,7 @@ impl EnforcementPipeline {
         };
 
         // Stage 1: Select token → validate
-        let capability = match self.stage1.enforce(&normalized, session_id) {
+        let capability = match self.stage1.enforce(&normalized, session_id.clone()) {
             Ok(cap) => cap,
             Err(deny) => return deny,
         };
@@ -101,7 +102,7 @@ impl EnforcementPipeline {
             intent: normalized.intent,
             capability: capability.raw_token,
             metadata: ExecutionMetadata {
-                session_id: session_id.to_string(),
+                session_id,
                 agent_id: capability.claims.agent_id.clone(),
                 timestamp: normalized.timestamp,
                 trace_id: None,
@@ -128,7 +129,8 @@ mod tests {
     use crate::normalizer::MappingTable;
     use chrono::Utc;
     use firma_core::decision::DenyReason;
-    use firma_core::token::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
+    use firma_core::token::AgentId;
+    use firma_core::token::{CapabilityClaims, RevocationStore, TokenError, TokenId, TokenVerifier};
     use std::collections::HashMap;
     use std::time::Duration;
 
@@ -136,7 +138,7 @@ mod tests {
     impl PolicyEvaluation for AllowAllPolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
@@ -167,19 +169,19 @@ mod tests {
 
     struct NoRevocations;
     impl RevocationStore for NoRevocations {
-        fn is_revoked(&self, _token_id: &str) -> Result<bool, TokenError> {
+        fn is_revoked(&self, _token_id: &TokenId) -> Result<bool, TokenError> {
             Ok(false)
         }
-        fn add_revocation(&self, _token_id: &str) -> Result<(), TokenError> {
+        fn add_revocation(&self, _token_id: &TokenId) -> Result<(), TokenError> {
             Ok(())
         }
     }
 
     fn test_claims() -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent_test".to_string(),
-            session_id: "sess_001".to_string(),
+            token_id: "tok_001".parse().unwrap(),
+            agent_id: "agent_test".parse().unwrap(),
+            session_id: "sess_001".parse().unwrap(),
             action_set: vec!["llm.inference".to_string(), "http.get".to_string()],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
@@ -250,13 +252,13 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
         assert!(decision.is_allow());
 
         if let EnforcementDecision::Allow { claims, envelope } = decision {
-            assert_eq!(claims.agent_id, "agent_test");
-            assert_eq!(envelope.metadata.agent_id, "agent_test");
-            assert_eq!(envelope.metadata.session_id, "sess_001");
+            assert_eq!(claims.agent_id.as_ref(), "agent_test");
+            assert_eq!(envelope.metadata.agent_id.as_ref(), "agent_test");
+            assert_eq!(envelope.metadata.session_id.as_ref(), "sess_001");
             assert!(
                 !envelope.capability.is_empty(),
                 "capability must be populated on Allow"
@@ -277,7 +279,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
     }
@@ -312,7 +314,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
         assert!(
             decision.is_passthrough(),
             "non-protected traffic should passthrough, not deny"
@@ -348,7 +350,7 @@ mod tests {
         impl PolicyEvaluation for DenyDeletePolicy {
             fn evaluate(
                 &self,
-                _: &str,
+                _: &AgentId,
                 action: &str,
                 _: &str,
                 _: &serde_json::Value,
@@ -375,7 +377,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyDenied));
     }
@@ -421,7 +423,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
         assert_eq!(
@@ -464,7 +466,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
     }
@@ -484,7 +486,7 @@ mod tests {
         };
 
         for _ in 0..100 {
-            let decision = pipeline.enforce(&request, "sess_001");
+            let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
             assert!(
                 decision.is_allow(),
                 "non-deterministic: got DENY on repeated call"
@@ -505,7 +507,7 @@ mod tests {
         };
 
         for _ in 0..100 {
-            let decision = pipeline.enforce(&request, "sess_001");
+            let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
             assert!(decision.is_deny());
             assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
         }
@@ -536,7 +538,7 @@ mod tests {
         impl PolicyEvaluation for StalePolicy {
             fn evaluate(
                 &self,
-                _: &str,
+                _: &AgentId,
                 _: &str,
                 _: &str,
                 _: &serde_json::Value,
@@ -563,7 +565,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
     }

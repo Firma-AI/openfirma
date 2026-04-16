@@ -29,6 +29,7 @@
 
 use std::time::Duration;
 
+use firma_core::token::SessionId;
 use firma_core::token::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
 
 use crate::normalizer::NormalizedEnvelope;
@@ -97,7 +98,7 @@ impl CapabilityValidator {
     pub fn enforce(
         &self,
         envelope: &NormalizedEnvelope,
-        session_id: &str,
+        session_id: SessionId,
     ) -> Result<ValidatedCapability, EnforcementDecision> {
         // Step 1: Select capability token from map (ADR-002)
         let entry = self.capability_map.select(
@@ -151,7 +152,7 @@ impl CapabilityValidator {
             .unwrap_or(chrono::Duration::zero());
         if claims.expiry + tolerance <= now {
             return Err(EnforcementError::TokenValidation(TokenError::Expired {
-                token_id: claims.token_id.clone(),
+                token_id: claims.token_id.to_string(),
             })
             .into_deny(stage));
         }
@@ -164,7 +165,7 @@ impl CapabilityValidator {
 
         if is_revoked {
             return Err(EnforcementError::TokenValidation(TokenError::Revoked {
-                token_id: claims.token_id.clone(),
+                token_id: claims.token_id.to_string(),
             })
             .into_deny(stage));
         }
@@ -178,7 +179,7 @@ mod tests {
     use super::*;
     use crate::enforcement::capability_map::CapabilityEntry;
     use chrono::Utc;
-    use firma_core::token::CapabilityClaims;
+    use firma_core::token::{CapabilityClaims, TokenId};
 
     struct MockVerifier {
         claims: CapabilityClaims,
@@ -204,19 +205,19 @@ mod tests {
     }
 
     impl RevocationStore for MockRevocationStore {
-        fn is_revoked(&self, token_id: &str) -> Result<bool, TokenError> {
+        fn is_revoked(&self, token_id: &TokenId) -> Result<bool, TokenError> {
             Ok(self.revoked.contains(&token_id.to_string()))
         }
-        fn add_revocation(&self, _token_id: &str) -> Result<(), TokenError> {
+        fn add_revocation(&self, _token_id: &TokenId) -> Result<(), TokenError> {
             Ok(())
         }
     }
 
     fn valid_claims() -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent_test".to_string(),
-            session_id: "sess_001".to_string(),
+            token_id: "tok_001".parse().unwrap(),
+            agent_id: "agent_test".parse().unwrap(),
+            session_id: "sess_001".parse().unwrap(),
             action_set: vec!["llm.inference".to_string()],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
