@@ -152,7 +152,7 @@ impl CapabilityValidator {
             .unwrap_or(chrono::Duration::zero());
         if claims.expiry + tolerance <= now {
             return Err(EnforcementError::TokenValidation(TokenError::Expired {
-                token_id: claims.token_id.to_string(),
+                token_id: claims.token_id.clone(),
             })
             .into_deny(stage));
         }
@@ -165,7 +165,7 @@ impl CapabilityValidator {
 
         if is_revoked {
             return Err(EnforcementError::TokenValidation(TokenError::Revoked {
-                token_id: claims.token_id.to_string(),
+                token_id: claims.token_id.clone(),
             })
             .into_deny(stage));
         }
@@ -215,7 +215,7 @@ mod tests {
 
     fn valid_claims() -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".parse().unwrap(),
+            token_id: TokenId::new(),
             agent_id: "agent_test".parse().unwrap(),
             session_id: "sess_001".parse().unwrap(),
             action_set: vec!["llm.inference".to_string()],
@@ -273,13 +273,16 @@ mod tests {
 
     #[test]
     fn test_revoked_token_denied() {
+        let claims = valid_claims();
+        let token_id = claims.token_id;
+
         let validator = CapabilityValidator::new(
             test_capability_map(),
             Box::new(MockVerifier {
-                claims: valid_claims(),
+                claims: claims.clone(),
             }),
             Box::new(MockRevocationStore {
-                revoked: vec!["tok_001".to_string()],
+                revoked: vec![token_id.to_string()],
             }),
             Duration::from_secs(0),
         );

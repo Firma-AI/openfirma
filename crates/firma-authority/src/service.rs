@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use cedar_policy::{Authorizer, Context, Entities, EntityUid, PolicySet, Request};
 use chrono::{Duration, Utc};
+use sha2::{Digest, Sha256};
 use firma_core::policy::PolicyBundle;
 use firma_core::token::paseto::PasetoV4Signer;
 use firma_core::token::{CapabilityClaims, TokenId, TokenSigner};
@@ -77,8 +78,15 @@ impl AuthorityService for AuthorityServiceImpl {
                 let expires_at = now + Duration::seconds(i64::from(ttl));
                 let token_id = TokenId::new();
 
-                // Build context hash from the current policy bundle version
-                let context_hash = self.policy_store.bundle().await.version.clone();
+                // Build context hash: SHA-256 of (agent_id | sorted_actions | resource | bundle_version).
+                // This binds the token to both the identity being granted and the policy state at issuance.
+                let bundle_version = self.policy_store.bundle().await.version.clone();
+                let context_hash = compute_context_hash(
+                    &req.agent_id,
+                    &req.requested_actions,
+                    &req.resource_scope,
+                    &bundle_version,
+                );
 
                 let agent_id = req
                     .agent_id
@@ -374,10 +382,38 @@ fn bundle_to_update(bundle: &PolicyBundle) -> PolicyBundleUpdate {
 
 fn entry_to_proto(entry: &crate::revocation::RevocationEntry) -> RevocationEvent {
     RevocationEvent {
-        token_id: entry.token_id.clone(),
+        token_id: entry.token_id.to_string(),
         reason: entry.reason.clone(),
         timestamp: Some(to_proto_timestamp(entry.timestamp)),
     }
+}
+
+/// Compute the context hash for a capability token.
+///
+/// SHA-256 of `agent_id | sorted_actions | resource | bundle_version`.
+/// Binds the issued token to both the principal's identity and the policy
+/// state that governed the evaluation.
+fn compute_context_hash(
+    agent_id: &str,
+    actions: &[String],
+    resource: &str,
+    bundle_version: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(agent_id.as_bytes());
+    hasher.update(b"|");
+    // Sort actions for a deterministic hash regardless of request order.
+    let mut sorted = actions.to_vec();
+    sorted.sort_unstable();
+    for action in &sorted {
+        hasher.update(action.as_bytes());
+        hasher.update(b",");
+    }
+    hasher.update(b"|");
+    hasher.update(resource.as_bytes());
+    hasher.update(b"|");
+    hasher.update(bundle_version.as_bytes());
+    hex::encode(hasher.finalize())
 }
 
 /// FR-4: Clamp requested TTL to the configured maximum.
@@ -451,5 +487,58 @@ mod tests {
         let now = Utc::now();
         let ts = to_proto_timestamp(now);
         assert_eq!(ts.seconds, now.timestamp());
+    }
+
+    #[test]
+    fn context_hash_deterministic() {
+        let h1 = compute_context_hash(
+            "agent_1",
+            &["http.get".to_string(), "llm.inference".to_string()],
+            "api.example.com",
+            "bundle_v1",
+        );
+        let h2 = compute_context_hash(
+            "agent_1",
+            &["http.get".to_string(), "llm.inference".to_string()],
+            "api.example.com",
+            "bundle_v1",
+        );
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn context_hash_action_order_independent() {
+        // Actions sorted before hashing — different order must produce same hash.
+        let h1 = compute_context_hash(
+            "agent_1",
+            &["http.get".to_string(), "llm.inference".to_string()],
+            "api.example.com",
+            "v1",
+        );
+        let h2 = compute_context_hash(
+            "agent_1",
+            &["llm.inference".to_string(), "http.get".to_string()],
+            "api.example.com",
+            "v1",
+        );
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn context_hash_changes_with_agent() {
+        let h1 =
+            compute_context_hash("agent_a", &["http.get".to_string()], "resource", "bundle_v1");
+        let h2 =
+            compute_context_hash("agent_b", &["http.get".to_string()], "resource", "bundle_v1");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn context_hash_changes_with_bundle_version() {
+        let h1 =
+            compute_context_hash("agent_1", &["http.get".to_string()], "resource", "bundle_v1");
+        let h2 =
+            compute_context_hash("agent_1", &["http.get".to_string()], "resource", "bundle_v2");
+        assert_ne!(h1, h2);
     }
 }

@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+cedar-policy = { workspace = true }
 firma-core = { workspace = true }
 firma-proto = { workspace = true }
 tokio = { workspace = true }
@@ -18,6 +19,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 toml = { workspace = true }
+
+[dev-dependencies]
+pasetors = { workspace = true }
 
 [lints]
 workspace = true

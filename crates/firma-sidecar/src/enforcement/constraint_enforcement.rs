@@ -205,6 +205,7 @@ impl ConstraintEnforcer {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use firma_core::token::TokenId;
     use firma_core::envelope::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
     use std::collections::HashMap;
 
@@ -285,7 +286,7 @@ mod tests {
 
     fn test_claims(actions: Vec<&str>) -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".parse().unwrap(),
+            token_id: TokenId::new(),
             agent_id: "agent_test".parse().unwrap(),
             session_id: "sess_001".parse().unwrap(),
             action_set: actions.into_iter().map(String::from).collect(),
