@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use chrono::Utc;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use firma_core::token::paseto::{PasetoV4Signer, PasetoV4Verifier};
 use firma_core::token::{CapabilityClaims, TokenSigner, TokenVerifier};
 use pasetors::keys::{AsymmetricKeyPair, Generate};

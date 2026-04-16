@@ -17,7 +17,7 @@
 //! external system latency).
 
 use firma_core::envelope::{ExecutionEnvelope, ExecutionMetadata};
-use firma_core::token::SessionId;
+use firma_core::session::SessionId;
 
 // Re-export public API for pipeline callers
 pub use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
@@ -128,9 +128,11 @@ mod tests {
     use crate::enforcement::registry::ActionClassRegistry;
     use crate::normalizer::MappingTable;
     use chrono::Utc;
+    use firma_core::agent::AgentId;
     use firma_core::decision::DenyReason;
-    use firma_core::token::AgentId;
-    use firma_core::token::{CapabilityClaims, RevocationStore, TokenError, TokenId, TokenVerifier};
+    use firma_core::token::{
+        CapabilityClaims, RevocationStore, TokenError, TokenId, TokenVerifier,
+    };
     use std::collections::HashMap;
     use std::time::Duration;
 

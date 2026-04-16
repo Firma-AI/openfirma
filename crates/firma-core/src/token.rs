@@ -1,16 +1,19 @@
-//! Capability token types, identity primitives, and signing/verification traits.
+//! Capability token types and signing/verification traits.
 
 pub mod paseto;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// Error returned when an identifier string fails validation.
-#[derive(Debug, thiserror::Error)]
-#[error("invalid id: {0}")]
-pub struct InvalidIdError(&'static str);
+use crate::agent::AgentId;
+use crate::session::SessionId;
 
-impl InvalidIdError {
+/// Error returned when a [`TokenId`] string fails validation.
+#[derive(Debug, thiserror::Error)]
+#[error("invalid token id: {0}")]
+pub struct InvalidTokenIdError(&'static str);
+
+impl InvalidTokenIdError {
     #[inline]
     #[must_use]
     pub fn empty_string() -> Self {
@@ -53,94 +56,18 @@ impl std::fmt::Display for TokenId {
 }
 
 impl TryFrom<String> for TokenId {
-    type Error = InvalidIdError;
+    type Error = InvalidTokenIdError;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         if s.is_empty() {
-            return Err(InvalidIdError::empty_string());
+            return Err(InvalidTokenIdError::empty_string());
         }
         Ok(Self(s))
     }
 }
 
 impl std::str::FromStr for TokenId {
-    type Err = InvalidIdError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::try_from(s.to_string())
-    }
-}
-
-/// Unique identifier for an agent.
-///
-/// Non-empty string, serialises and deserialises as a plain string.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
-#[serde(try_from = "String")]
-pub struct AgentId(String);
-
-impl AsRef<str> for AgentId {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for AgentId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl TryFrom<String> for AgentId {
-    type Error = InvalidIdError;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        if s.is_empty() {
-            return Err(InvalidIdError::empty_string());
-        }
-        Ok(Self(s))
-    }
-}
-
-impl std::str::FromStr for AgentId {
-    type Err = InvalidIdError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::try_from(s.to_string())
-    }
-}
-
-/// Unique identifier for a session.
-///
-/// Non-empty string, serialises and deserialises as a plain string.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
-#[serde(try_from = "String")]
-pub struct SessionId(String);
-
-impl AsRef<str> for SessionId {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for SessionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl TryFrom<String> for SessionId {
-    type Error = InvalidIdError;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        if s.is_empty() {
-            return Err(InvalidIdError::empty_string());
-        }
-        Ok(Self(s))
-    }
-}
-
-impl std::str::FromStr for SessionId {
-    type Err = InvalidIdError;
+    type Err = InvalidTokenIdError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::try_from(s.to_string())
@@ -295,17 +222,13 @@ mod tests {
     }
 
     #[test]
-    fn id_types_reject_empty_parse() {
+    fn token_id_rejects_empty_parse() {
         assert!("".parse::<TokenId>().is_err());
-        assert!("".parse::<AgentId>().is_err());
-        assert!("".parse::<SessionId>().is_err());
     }
 
     #[test]
-    fn id_types_reject_empty_deserialize() {
+    fn token_id_rejects_empty_deserialize() {
         assert!(serde_json::from_str::<TokenId>(r#""""#).is_err());
-        assert!(serde_json::from_str::<AgentId>(r#""""#).is_err());
-        assert!(serde_json::from_str::<SessionId>(r#""""#).is_err());
     }
 
     #[test]
