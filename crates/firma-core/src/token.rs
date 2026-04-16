@@ -5,10 +5,18 @@ pub mod paseto;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// Error returned when an identifier is constructed from an empty string.
+/// Error returned when an identifier string fails validation.
 #[derive(Debug, thiserror::Error)]
-#[error("id must not be empty")]
-pub struct EmptyIdError;
+#[error("invalid id: {0}")]
+pub struct InvalidIdError(&'static str);
+
+impl InvalidIdError {
+    #[inline]
+    #[must_use]
+    pub fn empty_string() -> Self {
+        Self("must not be empty")
+    }
+}
 
 /// Unique identifier for a capability token.
 ///
@@ -45,24 +53,21 @@ impl std::fmt::Display for TokenId {
 }
 
 impl TryFrom<String> for TokenId {
-    type Error = EmptyIdError;
+    type Error = InvalidIdError;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         if s.is_empty() {
-            return Err(EmptyIdError);
+            return Err(InvalidIdError::empty_string());
         }
         Ok(Self(s))
     }
 }
 
 impl std::str::FromStr for TokenId {
-    type Err = EmptyIdError;
+    type Err = InvalidIdError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.is_empty() {
-            return Err(EmptyIdError);
-        }
-        Ok(Self(s.to_string()))
+        Self::try_from(s.to_string())
     }
 }
 
@@ -86,24 +91,21 @@ impl std::fmt::Display for AgentId {
 }
 
 impl TryFrom<String> for AgentId {
-    type Error = EmptyIdError;
+    type Error = InvalidIdError;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         if s.is_empty() {
-            return Err(EmptyIdError);
+            return Err(InvalidIdError::empty_string());
         }
         Ok(Self(s))
     }
 }
 
 impl std::str::FromStr for AgentId {
-    type Err = EmptyIdError;
+    type Err = InvalidIdError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.is_empty() {
-            return Err(EmptyIdError);
-        }
-        Ok(Self(s.to_string()))
+        Self::try_from(s.to_string())
     }
 }
 
@@ -127,24 +129,21 @@ impl std::fmt::Display for SessionId {
 }
 
 impl TryFrom<String> for SessionId {
-    type Error = EmptyIdError;
+    type Error = InvalidIdError;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         if s.is_empty() {
-            return Err(EmptyIdError);
+            return Err(InvalidIdError::empty_string());
         }
         Ok(Self(s))
     }
 }
 
 impl std::str::FromStr for SessionId {
-    type Err = EmptyIdError;
+    type Err = InvalidIdError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.is_empty() {
-            return Err(EmptyIdError);
-        }
-        Ok(Self(s.to_string()))
+        Self::try_from(s.to_string())
     }
 }
 
