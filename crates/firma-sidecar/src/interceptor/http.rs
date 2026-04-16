@@ -241,7 +241,7 @@ mod tests {
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
     use crate::pipeline::{
         ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, IntentNormalizer,
-        MappingTable,
+        MappingTable, NullCredentialInjector, PipelineArgs,
     };
 
     // ── helpers ────────────────────────────────────────────────────────
@@ -350,12 +350,13 @@ mod tests {
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
 
-        Arc::new(EnforcementPipeline::new(
+        Arc::new(EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        ))
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        }))
     }
 
     /// Builds a pipeline that DENYs classified requests to `host` (empty
@@ -386,12 +387,13 @@ mod tests {
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
 
-        Arc::new(EnforcementPipeline::new(
+        Arc::new(EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        ))
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        }))
     }
 
     /// Starts a minimal HTTP server that always returns `200 OK`.

@@ -243,7 +243,7 @@ mod tests {
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
     use crate::pipeline::{
         ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, IntentNormalizer,
-        MappingTable,
+        MappingTable, NullCredentialInjector, PipelineArgs,
     };
 
     // ── helpers ────────────────────────────────────────────────────────
@@ -328,12 +328,13 @@ mod tests {
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
 
-        Arc::new(EnforcementPipeline::new(
+        Arc::new(EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        ))
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        }))
     }
 
     /// Builds a pipeline that DENYs classified requests (empty capability map).
@@ -362,12 +363,13 @@ mod tests {
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
 
-        Arc::new(EnforcementPipeline::new(
+        Arc::new(EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        ))
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        }))
     }
 
     /// Builds a pipeline where only `api.openai.com` is mapped and
@@ -399,12 +401,13 @@ mod tests {
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
 
-        Arc::new(EnforcementPipeline::new(
+        Arc::new(EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        ))
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        }))
     }
 
     /// Returns a unique temporary socket path for a test.
