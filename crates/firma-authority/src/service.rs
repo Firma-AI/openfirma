@@ -5,18 +5,16 @@ use cedar_policy::{Authorizer, Context, Entities, EntityUid, PolicySet, Request}
 use chrono::{Duration, Utc};
 use firma_core::policy::PolicyBundle;
 use firma_core::token::paseto::PasetoV4Signer;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::{Stream, StreamExt};
-use tonic::{Request as TonicRequest, Response, Status};
-use uuid::Uuid;
-
-use firma_core::token::{CapabilityClaims, TokenSigner};
+use firma_core::token::{CapabilityClaims, TokenId, TokenSigner};
 use firma_proto::RevocationEvent;
 use firma_proto::firma::v1::authority_service_server::AuthorityService;
 use firma_proto::firma::v1::{
     CapabilityToken, IssueCapabilityRequest, IssueCapabilityResponse, PolicyBundleUpdate,
     TokenFormat, WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::{Stream, StreamExt};
+use tonic::{Request as TonicRequest, Response, Status};
 
 use crate::cedar_loader::CedarPolicyStore;
 use crate::revocation::RevocationStore;
@@ -77,15 +75,24 @@ impl AuthorityService for AuthorityServiceImpl {
                 let ttl = clamp_ttl(req.requested_ttl_seconds, self.max_ttl_seconds);
                 let now = Utc::now();
                 let expires_at = now + Duration::seconds(i64::from(ttl));
-                let token_id = format!("tok_{}", Uuid::new_v4());
+                let token_id = TokenId::new();
 
                 // Build context hash from the current policy bundle version
                 let context_hash = self.policy_store.bundle().await.version.clone();
 
+                let agent_id = req
+                    .agent_id
+                    .parse()
+                    .map_err(|e| Status::invalid_argument(format!("invalid agent_id: {e}")))?;
+                let session_id = req
+                    .session_id
+                    .parse()
+                    .map_err(|e| Status::invalid_argument(format!("invalid session_id: {e}")))?;
+
                 let claims = CapabilityClaims {
                     token_id: token_id.clone(),
-                    agent_id: req.agent_id.clone(),
-                    session_id: req.session_id.clone(),
+                    agent_id,
+                    session_id,
                     action_set: req.requested_actions.clone(),
                     resource_scope: req.resource_scope.clone(),
                     issued_at: now,
@@ -103,8 +110,8 @@ impl AuthorityService for AuthorityServiceImpl {
                 let expiry_ts = to_proto_timestamp(expires_at);
 
                 let token = CapabilityToken {
-                    token_id,
-                    agent_id: req.agent_id.clone(),
+                    token_id: token_id.to_string(),
+                    agent_id: req.agent_id,
                     action_set: req.requested_actions,
                     resource_scope: req.resource_scope,
                     issued_at: Some(issued_at_ts),
@@ -115,7 +122,7 @@ impl AuthorityService for AuthorityServiceImpl {
                 };
 
                 tracing::info!(
-                    agent_id = %req.agent_id,
+                    agent_id = %token.agent_id,
                     token_id = %token.token_id,
                     ttl = ttl,
                     "capability granted"

@@ -700,7 +700,6 @@ dependencies = [
  "tonic",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
@@ -715,6 +714,7 @@ dependencies = [
  "serde_json",
  "strum",
  "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]

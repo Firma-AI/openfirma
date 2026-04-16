@@ -34,7 +34,7 @@
 
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
 use crate::normalizer::NormalizedEnvelope;
-use firma_core::{decision::DenyReason, token::CapabilityClaims};
+use firma_core::{decision::DenyReason, token::{AgentId, CapabilityClaims}};
 
 /// Trait for policy evaluation — abstracts Cedar or any other policy engine.
 ///
@@ -51,7 +51,7 @@ pub trait PolicyEvaluation: Send + Sync {
     /// context or engine error).
     fn evaluate(
         &self,
-        principal: &str,
+        principal: &AgentId,
         action: &str,
         resource: &str,
         context: &serde_json::Value,
@@ -210,7 +210,7 @@ mod tests {
     impl PolicyEvaluation for AllowAllPolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
@@ -229,7 +229,7 @@ mod tests {
     impl PolicyEvaluation for DenyAllPolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
@@ -248,7 +248,7 @@ mod tests {
     impl PolicyEvaluation for StalePolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
@@ -283,9 +283,9 @@ mod tests {
 
     fn test_claims(actions: Vec<&str>) -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent_test".to_string(),
-            session_id: "sess_001".to_string(),
+            token_id: "tok_001".parse().unwrap(),
+            agent_id: "agent_test".parse().unwrap(),
+            session_id: "sess_001".parse().unwrap(),
             action_set: actions.into_iter().map(String::from).collect(),
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),

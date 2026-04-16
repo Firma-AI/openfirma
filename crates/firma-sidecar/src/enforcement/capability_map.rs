@@ -12,6 +12,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+use firma_core::token::SessionId;
 use firma_core::token::{CapabilityClaims, TokenError, TokenVerifier};
 
 use crate::enforcement::decision::{
@@ -124,7 +125,7 @@ impl CapabilityMap {
     #[allow(clippy::result_large_err)]
     pub fn select(
         &self,
-        _session_id: &str,
+        _session_id: SessionId,
         action_class: &str,
         resource: &str,
     ) -> Result<&CapabilityEntry, EnforcementDecision> {
@@ -261,9 +262,9 @@ mod tests {
 
     fn test_claims(actions: Vec<&str>, resource_scope: &str) -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent_test".to_string(),
-            session_id: "sess_001".to_string(),
+            token_id: "tok_001".parse().unwrap(),
+            agent_id: "agent_test".parse().unwrap(),
+            session_id: "sess_001".parse().unwrap(),
             action_set: actions.into_iter().map(String::from).collect(),
             resource_scope: resource_scope.to_string(),
             issued_at: Utc::now(),
@@ -290,7 +291,7 @@ mod tests {
             test_entry(vec!["http.get"], "*"),
         ]);
 
-        let result = map.select("sess_001", "llm.inference", "api.openai.com/v1/chat");
+        let result = map.select("sess_001".parse().unwrap(),"llm.inference", "api.openai.com/v1/chat");
         assert!(result.is_ok());
         let entry = result.unwrap_or_else(|_| panic!("expected Ok"));
         assert!(
@@ -305,7 +306,7 @@ mod tests {
     fn test_select_wildcard_action() {
         let map = CapabilityMap::new(vec![test_entry(vec!["*"], "*")]);
 
-        let result = map.select("sess_001", "db.query", "any.resource");
+        let result = map.select("sess_001".parse().unwrap(),"db.query", "any.resource");
         assert!(result.is_ok());
     }
 
@@ -313,7 +314,7 @@ mod tests {
     fn test_select_no_match_returns_deny() {
         let map = CapabilityMap::new(vec![test_entry(vec!["llm.inference"], "*")]);
 
-        let result = map.select("sess_001", "file.delete", "any.resource");
+        let result = map.select("sess_001".parse().unwrap(),"file.delete", "any.resource");
         assert!(result.is_err());
         let decision = result.unwrap_err();
         assert!(decision.is_deny());
@@ -326,7 +327,7 @@ mod tests {
             test_entry(vec!["llm.inference"], "api.openai.com"),
         ]);
 
-        let result = map.select("sess_001", "llm.inference", "api.openai.com/v1/chat");
+        let result = map.select("sess_001".parse().unwrap(),"llm.inference", "api.openai.com/v1/chat");
         assert!(result.is_ok());
         let entry = result.unwrap_or_else(|_| panic!("expected Ok"));
         // Should prefer the specific token over wildcard
@@ -340,9 +341,9 @@ mod tests {
         issued_at: chrono::DateTime<Utc>,
     ) -> CapabilityEntry {
         let claims = CapabilityClaims {
-            token_id: token_id.to_string(),
-            agent_id: "agent_test".to_string(),
-            session_id: "sess_001".to_string(),
+            token_id: token_id.parse().unwrap(),
+            agent_id: "agent_test".parse().unwrap(),
+            session_id: "sess_001".parse().unwrap(),
             action_set: actions.into_iter().map(String::from).collect(),
             resource_scope: resource_scope.to_string(),
             issued_at,
@@ -367,9 +368,9 @@ mod tests {
         // Insert wide first — without tie-breaking it would win by insertion order
         let map = CapabilityMap::new(vec![wide, narrow]);
         let result = map
-            .select("sess_001", "llm.inference", "any.resource")
+            .select("sess_001".parse().unwrap(),"llm.inference", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result.claims().token_id, "narrow");
+        assert_eq!(result.claims().token_id.as_ref(), "narrow");
     }
 
     #[test]
@@ -389,18 +390,18 @@ mod tests {
         // fewer actions.
         let map = CapabilityMap::new(vec![broad, slim]);
         let result = map
-            .select("sess_001", "llm.inference", "some.resource")
+            .select("sess_001".parse().unwrap(),"llm.inference", "some.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result.claims().token_id, "slim");
+        assert_eq!(result.claims().token_id.as_ref(), "slim");
 
         // Now two tokens with same action_set size: one wildcard, one specific
         // resource. Primary scores differ here (101 vs 150) so the specific one
         // wins by score, not by tie-breaking. Verify the primary scoring still works.
         let map2 = CapabilityMap::new(vec![wildcard_res, specific_res]);
         let result2 = map2
-            .select("sess_001", "llm.inference", "api.openai.com/v1/chat")
+            .select("sess_001".parse().unwrap(),"llm.inference", "api.openai.com/v1/chat")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result2.claims().token_id, "spec_r");
+        assert_eq!(result2.claims().token_id.as_ref(), "spec_r");
     }
 
     #[test]
@@ -415,9 +416,9 @@ mod tests {
         // specificity. Tie-break on issued_at: fresh wins.
         let map = CapabilityMap::new(vec![stale, fresh]);
         let result = map
-            .select("sess_001", "llm.inference", "any.resource")
+            .select("sess_001".parse().unwrap(),"llm.inference", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result.claims().token_id, "fresh");
+        assert_eq!(result.claims().token_id.as_ref(), "fresh");
     }
 
     #[test]
@@ -434,14 +435,14 @@ mod tests {
         // Try both orderings to verify order-independence.
         let map1 = CapabilityMap::new(vec![a.clone(), b.clone(), c.clone()]);
         let r1 = map1
-            .select("sess_001", "llm.inference", "any.resource")
+            .select("sess_001".parse().unwrap(),"llm.inference", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(r1.claims().token_id, "b");
+        assert_eq!(r1.claims().token_id.as_ref(), "b");
 
         let map2 = CapabilityMap::new(vec![c, a, b]);
         let r2 = map2
-            .select("sess_001", "llm.inference", "any.resource")
+            .select("sess_001".parse().unwrap(),"llm.inference", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(r2.claims().token_id, "b");
+        assert_eq!(r2.claims().token_id.as_ref(), "b");
     }
 }
