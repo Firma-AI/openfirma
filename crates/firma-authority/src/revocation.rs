@@ -6,11 +6,12 @@ use chrono::{DateTime, Utc};
 use tokio::sync::{RwLock, broadcast};
 
 use crate::error::AuthorityError;
+use firma_core::token::TokenId;
 
 /// An event representing the revocation of a capability token.
 #[derive(Debug, Clone)]
 pub struct RevocationEntry {
-    pub token_id: String,
+    pub token_id: TokenId,
     pub reason: String,
     pub timestamp: DateTime<Utc>,
 }
@@ -21,7 +22,7 @@ pub struct RevocationEntry {
 /// connected `WatchRevocations` streams (FR-6, FR-7).
 pub struct RevocationStore {
     /// Revoked token IDs mapped to their revocation entries.
-    entries: Arc<RwLock<HashMap<String, RevocationEntry>>>,
+    entries: Arc<RwLock<HashMap<TokenId, RevocationEntry>>>,
     /// Ordered log for replay (FR-6: replay events after `since`).
     log: Arc<RwLock<Vec<RevocationEntry>>>,
     /// Broadcast channel for new revocation events.
@@ -70,16 +71,24 @@ impl RevocationStore {
         let mut count = 0;
 
         for line in content.lines() {
-            let token_id = line.trim();
-            if token_id.is_empty() || entries.contains_key(token_id) {
+            let s = line.trim();
+            if s.is_empty() {
+                continue;
+            }
+            let Ok(token_id) = s.parse() else {
+                tracing::warn!(token_id = %s, "invalid token_id in revocation file, ignoring");
+                continue;
+            };
+
+            if entries.contains_key(&token_id) {
                 continue;
             }
             let entry = RevocationEntry {
-                token_id: token_id.to_string(),
+                token_id,
                 reason: "file-based revocation".to_string(),
                 timestamp: Utc::now(),
             };
-            entries.insert(token_id.to_string(), entry.clone());
+            entries.insert(token_id, entry.clone());
             log.push(entry);
             count += 1;
         }
@@ -89,32 +98,32 @@ impl RevocationStore {
 
     /// Revoke a token by ID. Idempotent — duplicate revocations are no-ops.
     #[allow(dead_code, reason = "called via gRPC and file watcher paths")]
-    pub async fn revoke(&self, token_id: &str, reason: &str) {
+    pub async fn revoke(&self, token_id: TokenId, reason: &str) {
         let mut entries = self.entries.write().await;
-        if entries.contains_key(token_id) {
-            tracing::debug!(token_id, "duplicate revocation ignored");
+        if entries.contains_key(&token_id) {
+            tracing::debug!(token_id = %token_id, "duplicate revocation ignored");
             return;
         }
 
         let entry = RevocationEntry {
-            token_id: token_id.to_string(),
+            token_id,
             reason: reason.to_string(),
             timestamp: Utc::now(),
         };
 
-        entries.insert(token_id.to_string(), entry.clone());
+        entries.insert(token_id, entry.clone());
         self.log.write().await.push(entry.clone());
 
         // Broadcast to watchers — ignore send errors (no receivers is fine)
         let _ = self.tx.send(entry);
 
-        tracing::info!(token_id, reason, "token revoked");
+        tracing::info!(token_id = %token_id, reason, "token revoked");
     }
 
     /// Check if a token has been revoked.
     #[allow(dead_code, reason = "public API used by sidecar integration")]
-    pub async fn is_revoked(&self, token_id: &str) -> bool {
-        self.entries.read().await.contains_key(token_id)
+    pub async fn is_revoked(&self, token_id: TokenId) -> bool {
+        self.entries.read().await.contains_key(&token_id)
     }
 
     /// Get all revocation events after the given timestamp (for stream replay).
@@ -154,16 +163,24 @@ impl RevocationStore {
             let mut log = self.log.write().await;
 
             for line in content.lines() {
-                let token_id = line.trim();
-                if token_id.is_empty() || entries.contains_key(token_id) {
+                let s = line.trim();
+                if s.is_empty() {
+                    continue;
+                }
+                let Ok(token_id) = s.parse() else {
+                    tracing::warn!(token_id = %s, "invalid token_id in revocation file, ignoring");
+                    continue;
+                };
+
+                if entries.contains_key(&token_id) {
                     continue;
                 }
                 let entry = RevocationEntry {
-                    token_id: token_id.to_string(),
+                    token_id,
                     reason: "file-based revocation".to_string(),
                     timestamp: Utc::now(),
                 };
-                entries.insert(token_id.to_string(), entry.clone());
+                entries.insert(token_id, entry.clone());
                 log.push(entry.clone());
                 new_entries.push(entry);
             }
@@ -194,18 +211,22 @@ mod tests {
     fn test_load_existing_revocations() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let file = dir.path().join("revocations.txt");
-        std::fs::write(&file, "tok_001\ntok_002\n").unwrap_or_else(|e| panic!("{e}"));
+        let id1 = TokenId::new();
+        let id2 = TokenId::new();
+        std::fs::write(&file, format!("{id1}\n{id2}\n")).unwrap_or_else(|e| panic!("{e}"));
 
         let store = RevocationStore::new(&file).unwrap_or_else(|e| panic!("{e}"));
-        assert!(store.entries.blocking_read().contains_key("tok_001"));
-        assert!(store.entries.blocking_read().contains_key("tok_002"));
+        assert!(store.entries.blocking_read().contains_key(&id1));
+        assert!(store.entries.blocking_read().contains_key(&id2));
     }
 
     #[test]
     fn test_load_ignores_empty_lines() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let file = dir.path().join("revocations.txt");
-        std::fs::write(&file, "tok_001\n\n  \ntok_002\n").unwrap_or_else(|e| panic!("{e}"));
+        let id1 = TokenId::new();
+        let id2 = TokenId::new();
+        std::fs::write(&file, format!("{id1}\n\n  \n{id2}\n")).unwrap_or_else(|e| panic!("{e}"));
 
         let store = RevocationStore::new(&file).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(store.entries.blocking_read().len(), 2);
@@ -217,8 +238,9 @@ mod tests {
         let file = dir.path().join("revocations.txt");
         let store = RevocationStore::new(&file).unwrap_or_else(|e| panic!("{e}"));
 
-        store.revoke("tok_001", "test").await;
-        store.revoke("tok_001", "test again").await;
+        let id = TokenId::new();
+        store.revoke(id, "test").await;
+        store.revoke(id, "test again").await;
         assert_eq!(store.entries.read().await.len(), 1);
     }
 
@@ -228,9 +250,10 @@ mod tests {
         let file = dir.path().join("revocations.txt");
         let store = RevocationStore::new(&file).unwrap_or_else(|e| panic!("{e}"));
 
-        assert!(!store.is_revoked("tok_001").await);
-        store.revoke("tok_001", "test").await;
-        assert!(store.is_revoked("tok_001").await);
+        let id = TokenId::new();
+        assert!(!store.is_revoked(id).await);
+        store.revoke(id, "test").await;
+        assert!(store.is_revoked(id).await);
     }
 
     #[tokio::test]
@@ -240,8 +263,8 @@ mod tests {
         let store = RevocationStore::new(&file).unwrap_or_else(|e| panic!("{e}"));
 
         let before = Utc::now() - chrono::Duration::seconds(1);
-        store.revoke("tok_001", "test").await;
-        store.revoke("tok_002", "test").await;
+        store.revoke(TokenId::new(), "test").await;
+        store.revoke(TokenId::new(), "test").await;
 
         let events = store.events_since(before).await;
         assert_eq!(events.len(), 2);

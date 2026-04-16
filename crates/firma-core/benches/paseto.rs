@@ -15,7 +15,7 @@ fn generate_keypair() -> (Vec<u8>, Vec<u8>) {
 fn sample_claims() -> CapabilityClaims {
     let now = Utc::now();
     CapabilityClaims {
-        token_id: "tok_bench_001".parse().unwrap(),
+        token_id: firma_core::token::TokenId::new(),
         agent_id: "agent_bench".parse().unwrap(),
         session_id: "sess_bench".parse().unwrap(),
         action_set: vec!["http:GET".to_string(), "tool:execute".to_string()],

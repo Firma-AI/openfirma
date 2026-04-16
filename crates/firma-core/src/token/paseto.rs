@@ -99,7 +99,7 @@ impl TokenVerifier for PasetoV4Verifier {
         // 5. Check expiration
         if capability_claims.expiry <= Utc::now() {
             return Err(TokenError::Expired {
-                token_id: capability_claims.token_id.to_string(),
+                token_id: capability_claims.token_id,
             });
         }
 
@@ -124,7 +124,7 @@ fn build_paseto_claims(claims: &CapabilityClaims) -> Result<Claims, TokenError> 
         })?;
 
     // Custom string claims
-    pc.add_additional("token_id", claims.token_id.as_ref())
+    pc.add_additional("token_id", claims.token_id.to_string().as_str())
         .map_err(|e| TokenError::Malformed {
             reason: format!("add token_id: {e:?}"),
         })?;
@@ -227,6 +227,7 @@ fn extract_capability_claims(claims: &Claims) -> Result<CapabilityClaims, TokenE
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::token::TokenId;
     use pasetors::keys::{AsymmetricKeyPair, Generate};
 
     fn generate_keypair() -> (Vec<u8>, Vec<u8>) {
@@ -237,7 +238,7 @@ mod tests {
     fn sample_claims(expires_in_secs: i64) -> CapabilityClaims {
         let now = Utc::now();
         CapabilityClaims {
-            token_id: "tok_test_001".parse().unwrap(),
+            token_id: TokenId::new(),
             agent_id: "agent_abc".parse().unwrap(),
             session_id: "sess_xyz".parse().unwrap(),
             action_set: vec!["http:GET".to_string(), "tool:execute".to_string()],
@@ -350,13 +351,14 @@ mod tests {
         let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
 
         let claims = sample_claims(-1); // expired 1 second ago
+        let expected_token_id = claims.token_id;
         let token = signer.sign(&claims).unwrap();
         let result = verifier.verify(&token);
 
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            matches!(err, TokenError::Expired { ref token_id } if token_id == "tok_test_001"),
+            matches!(err, TokenError::Expired { ref token_id } if token_id == &expected_token_id),
             "expected Expired with token_id, got: {err:?}"
         );
     }

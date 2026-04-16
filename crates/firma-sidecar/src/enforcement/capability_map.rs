@@ -249,6 +249,7 @@ impl CapabilityMap {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use firma_core::token::TokenId;
 
     struct StaticVerifier {
         claims: CapabilityClaims,
@@ -262,7 +263,7 @@ mod tests {
 
     fn test_claims(actions: Vec<&str>, resource_scope: &str) -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".parse().unwrap(),
+            token_id: TokenId::new(),
             agent_id: "agent_test".parse().unwrap(),
             session_id: "sess_001".parse().unwrap(),
             action_set: actions.into_iter().map(String::from).collect(),
@@ -343,13 +344,12 @@ mod tests {
     }
 
     fn entry_with_issued(
-        token_id: &str,
         actions: Vec<&str>,
         resource_scope: &str,
         issued_at: chrono::DateTime<Utc>,
     ) -> CapabilityEntry {
         let claims = CapabilityClaims {
-            token_id: token_id.parse().unwrap(),
+            token_id: TokenId::new(),
             agent_id: "agent_test".parse().unwrap(),
             session_id: "sess_001".parse().unwrap(),
             action_set: actions.into_iter().map(String::from).collect(),
@@ -359,7 +359,7 @@ mod tests {
             context_hash: String::new(),
         };
         CapabilityEntry::from_raw_token(
-            format!("v4.public.{token_id}"),
+            format!("v4.public.{}", claims.token_id),
             &StaticVerifier {
                 claims: claims.clone(),
             },
@@ -370,29 +370,34 @@ mod tests {
     #[test]
     fn test_tiebreak_prefers_narrower_action_set() {
         let now = Utc::now();
-        let wide = entry_with_issued("wide", vec!["llm.inference", "http.get"], "*", now);
-        let narrow = entry_with_issued("narrow", vec!["llm.inference"], "*", now);
+        let wide = entry_with_issued(vec!["llm.inference", "http.get"], "*", now);
+        let narrow = entry_with_issued(vec!["llm.inference"], "*", now);
+
+        let expected_token_id = narrow.claims().token_id;
 
         // Insert wide first — without tie-breaking it would win by insertion order
         let map = CapabilityMap::new(vec![wide, narrow]);
         let result = map
             .select("sess_001".parse().unwrap(), "llm.inference", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result.claims().token_id.as_ref(), "narrow");
+        assert_eq!(result.claims().token_id, expected_token_id);
     }
 
     #[test]
     fn test_tiebreak_prefers_specific_resource() {
         let now = Utc::now();
-        let wildcard_res = entry_with_issued("wild_r", vec!["llm.inference"], "*", now);
-        let specific_res =
-            entry_with_issued("spec_r", vec!["llm.inference"], "api.openai.com", now);
+        let wildcard_res = entry_with_issued(vec!["llm.inference"], "*", now);
+        let specific_res = entry_with_issued(vec!["llm.inference"], "api.openai.com", now);
+
+        let expected_spec_r_id = specific_res.claims().token_id;
 
         // Both have exact action match; wildcard resource scores 101, specific scores 150.
         // These actually have *different* primary scores, so test the reverse:
         // two wildcard-resource tokens where scope size differs.
-        let broad = entry_with_issued("broad", vec!["llm.inference", "http.get"], "*", now);
-        let slim = entry_with_issued("slim", vec!["llm.inference"], "*", now);
+        let broad = entry_with_issued(vec!["llm.inference", "http.get"], "*", now);
+        let slim = entry_with_issued(vec!["llm.inference"], "*", now);
+
+        let expected_slim_id = slim.claims().token_id;
 
         // Both score 101 (exact action + wildcard resource). Tie-break: slim has
         // fewer actions.
@@ -404,7 +409,7 @@ mod tests {
                 "some.resource",
             )
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result.claims().token_id.as_ref(), "slim");
+        assert_eq!(result.claims().token_id, expected_slim_id);
 
         // Now two tokens with same action_set size: one wildcard, one specific
         // resource. Primary scores differ here (101 vs 150) so the specific one
@@ -417,7 +422,7 @@ mod tests {
                 "api.openai.com/v1/chat",
             )
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result2.claims().token_id.as_ref(), "spec_r");
+        assert_eq!(result2.claims().token_id, expected_spec_r_id);
     }
 
     #[test]
@@ -425,8 +430,10 @@ mod tests {
         let old = Utc::now() - chrono::Duration::hours(2);
         let new = Utc::now();
 
-        let stale = entry_with_issued("stale", vec!["llm.inference"], "*", old);
-        let fresh = entry_with_issued("fresh", vec!["llm.inference"], "*", new);
+        let stale = entry_with_issued(vec!["llm.inference"], "*", old);
+        let fresh = entry_with_issued(vec!["llm.inference"], "*", new);
+
+        let expected_token_id = fresh.claims().token_id;
 
         // Insert stale first — same score, same action_set size, same resource
         // specificity. Tie-break on issued_at: fresh wins.
@@ -434,7 +441,7 @@ mod tests {
         let result = map
             .select("sess_001".parse().unwrap(), "llm.inference", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result.claims().token_id.as_ref(), "fresh");
+        assert_eq!(result.claims().token_id, expected_token_id);
     }
 
     #[test]
@@ -443,9 +450,11 @@ mod tests {
         let t2 = Utc::now() - chrono::Duration::hours(1);
         let t3 = Utc::now();
 
-        let a = entry_with_issued("a", vec!["llm.inference"], "*", t1);
-        let b = entry_with_issued("b", vec!["llm.inference"], "*", t3);
-        let c = entry_with_issued("c", vec!["llm.inference"], "*", t2);
+        let a = entry_with_issued(vec!["llm.inference"], "*", t1);
+        let b = entry_with_issued(vec!["llm.inference"], "*", t3);
+        let c = entry_with_issued(vec!["llm.inference"], "*", t2);
+
+        let expected_token_id = b.claims().token_id;
 
         // All identical except issued_at. b is freshest.
         // Try both orderings to verify order-independence.
@@ -453,12 +462,12 @@ mod tests {
         let r1 = map1
             .select("sess_001".parse().unwrap(), "llm.inference", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(r1.claims().token_id.as_ref(), "b");
+        assert_eq!(r1.claims().token_id, expected_token_id);
 
         let map2 = CapabilityMap::new(vec![c, a, b]);
         let r2 = map2
             .select("sess_001".parse().unwrap(), "llm.inference", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(r2.claims().token_id.as_ref(), "b");
+        assert_eq!(r2.claims().token_id, expected_token_id);
     }
 }

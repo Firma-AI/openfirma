@@ -1,0 +1,21 @@
+// Firma enforcement schema.
+//
+// Canonical entity types for capability issuance (Authority) and constraint
+// enforcement (Sidecar Stage 2). This file is the single source of truth for
+// entity type definitions shared across both components.
+//
+// Entity UID conventions (matched by both Authority and Sidecar Cedar evaluators):
+//   principal: Firma::Agent::"<agent_id>"
+//   action:    Firma::Action::"<action_class>"   (e.g., "llm.inference")
+//   resource:  Firma::Resource::"<resource_uri>"
+//
+// Context attributes populated by ConstraintEnforcer::build_context():
+//   action_class : String  - canonical action class (mirrors the action UID ID)
+//   resource     : String  - target resource URI
+//   agent_id     : String  - requesting agent identity
+//   session_id   : String  - enclosing session identity
+//   timestamp    : String  - ISO 8601 request timestamp
+namespace Firma {
+    entity Agent;
+    entity Resource;
+}

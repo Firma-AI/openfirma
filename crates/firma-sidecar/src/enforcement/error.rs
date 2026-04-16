@@ -81,6 +81,7 @@ fn token_error_to_deny_reason(err: &TokenError) -> DenyReason {
 mod tests {
     use super::*;
 
+    use firma_core::token::TokenId;
     use super::super::decision::{CapabilityValidationStage, ConstraintEnforcementStage};
 
     #[test]
@@ -95,7 +96,7 @@ mod tests {
     #[test]
     fn test_token_expired_maps_correctly() {
         let err = EnforcementError::TokenValidation(TokenError::Expired {
-            token_id: "tok_001".to_string(),
+            token_id: TokenId::new(),
         });
         let decision = err.into_deny(EnforcementStage::CapabilityValidation(
             CapabilityValidationStage::TokenValidation,
