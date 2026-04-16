@@ -18,10 +18,14 @@
 
 use std::time::Duration;
 
-use firma_core::{ExecutionEnvelope, ExecutionMetadata};
+use firma_core::{DenyReason, ExecutionEnvelope, ExecutionMetadata};
 
 use crate::audit::AuditPayload;
-// Re-export public API for pipeline callers
+use crate::credential::{CredentialInjectionError, CredentialInjector, InjectedCredentials};
+use crate::enforcement::decision::EnforcementStage;
+// Re-export public API for pipeline callers (test-only)
+#[cfg(test)]
+pub use crate::credential::NullCredentialInjector;
 pub use crate::enforcement::capability_map::CapabilityMap;
 pub use crate::enforcement::capability_validation::CapabilityValidator;
 pub use crate::enforcement::constraint_enforcement::{ConstraintEnforcer, PolicyEvaluation};
@@ -35,10 +39,27 @@ type AuditSinkSender = tokio::sync::mpsc::Sender<AuditPayload>;
 const DECISION_ALLOW: i32 = 1;
 const DECISION_DENY: i32 = 2;
 
+/// Construction arguments for [`EnforcementPipeline`].
+///
+/// Bundles every component the pipeline needs so the constructor
+/// stays readable as new stages (e.g. credential injection) are added.
+pub struct PipelineArgs {
+    /// Intent normalizer (raw request → canonical envelope).
+    pub normalizer: IntentNormalizer,
+    /// Stage 1: token selection, parse, verify, expiry, revocation.
+    pub capability_validator: CapabilityValidator,
+    /// Stage 2: scope check, bundle freshness, Cedar policy eval.
+    pub constraint_enforcer: ConstraintEnforcer,
+    /// Channel for emitting audit payloads to the signing adapter.
+    pub audit_sink_sender: AuditSinkSender,
+    /// Credential injector called after Stage 2 ALLOW.
+    pub credential_injector: Box<dyn CredentialInjector>,
+}
+
 /// The enforcement pipeline. Orchestrates the full `enforce()` flow:
 ///
 /// ```text
-/// normalize → Stage 1 (select + validate token) → Stage 2 (Cedar eval) → assemble envelope
+/// normalize → Stage 1 → Stage 2 → credential injection → assemble envelope
 /// ```
 ///
 /// Short-circuits on any DENY or PASSTHROUGH. Every code path returns
@@ -51,24 +72,21 @@ pub struct EnforcementPipeline {
     audit_sink_sender: AuditSinkSender,
     capability_validator: CapabilityValidator,
     constraint_enforcer: ConstraintEnforcer,
+    credential_injector: Box<dyn CredentialInjector>,
     normalizer: IntentNormalizer,
 }
 
 impl EnforcementPipeline {
-    /// Construct the pipeline with normalizer and both enforcement stages.
-    /// Called once at startup.
+    /// Construct the pipeline from [`PipelineArgs`]. Called once at
+    /// startup.
     #[must_use]
-    pub fn new(
-        normalizer: IntentNormalizer,
-        capability_validator: CapabilityValidator,
-        constraint_enforcer: ConstraintEnforcer,
-        audit_sink_sender: AuditSinkSender,
-    ) -> Self {
+    pub fn new(args: PipelineArgs) -> Self {
         Self {
-            audit_sink_sender,
-            capability_validator,
-            constraint_enforcer,
-            normalizer,
+            audit_sink_sender: args.audit_sink_sender,
+            capability_validator: args.capability_validator,
+            constraint_enforcer: args.constraint_enforcer,
+            credential_injector: args.credential_injector,
+            normalizer: args.normalizer,
         }
     }
 
@@ -81,13 +99,14 @@ impl EnforcementPipeline {
     /// 1. Normalize intent: raw request → `NormalizedEnvelope`
     /// 2. Capability validation: select token, validate → `ValidatedCapability`
     /// 3. Constraint enforcement: scope check + Cedar policy evaluation
-    /// 4. On Allow: assemble a fully populated `ExecutionEnvelope` from
+    /// 4. Credential injection: fetch credentials for outbound target
+    /// 5. On Allow: assemble a fully populated `ExecutionEnvelope` from
     ///    the normalized envelope + validated capability + session context.
     #[must_use]
     pub async fn enforce(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
         let start = std::time::Instant::now();
 
-        let decision = self.enforce_inner(request, session_id);
+        let decision = self.enforce_inner(request, session_id).await;
 
         // Audit every decision — ALLOW, DENY, and PASSTHROUGH.
         self.send_audit_event(&decision, session_id, start.elapsed())
@@ -96,9 +115,9 @@ impl EnforcementPipeline {
         decision
     }
 
-    /// Pure enforcement logic, separated so the outer [`enforce`](Self::enforce)
+    /// Enforcement logic, separated so the outer [`enforce`](Self::enforce)
     /// can unconditionally audit the result.
-    fn enforce_inner(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
+    async fn enforce_inner(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
         // Normalize intent (may short-circuit with Deny or Passthrough)
         let normalized = match self.normalizer.normalize(request) {
             Ok(env) => env,
@@ -133,6 +152,39 @@ impl EnforcementPipeline {
             },
             None,
         );
+
+        // Credential injection: fetch credentials for the outbound
+        // target. connector_id is the host portion of the resource.
+        let connector_id = extract_host(envelope.intent().resource.as_str());
+        let target = envelope.intent().resource.as_str();
+        let credentials = match self
+            .credential_injector
+            .inject(&envelope, connector_id, target)
+            .await
+        {
+            Ok(creds) => creds,
+            // No credentials configured for this connector — proceed
+            // with empty headers (passthrough behavior).
+            Err(CredentialInjectionError::UnknownConnector { .. }) => InjectedCredentials::empty(),
+            // Credential fetch failed — fail-closed.
+            Err(CredentialInjectionError::FetchFailed {
+                connector_id,
+                reason,
+            }) => {
+                return EnforcementDecision::Deny {
+                    reason: DenyReason::CredentialInjectionFailed,
+                    stage: EnforcementStage::CredentialInjection,
+                    detail: format!("connector {connector_id}: {reason}"),
+                    envelope: None,
+                };
+            }
+        };
+
+        // Build the transport view — unused until interceptors consume
+        // it (task 005), but constructed now so the pipeline contract
+        // is complete.
+        let _transport_view =
+            crate::credential::transport::TransportView::new(envelope.clone(), credentials);
 
         EnforcementDecision::Allow {
             claims: capability.claims,
@@ -173,51 +225,59 @@ pub fn audit_payload_from_decision(
     )]
     let enforcement_latency_us = enforcement_latency.as_micros() as i64;
 
-    let (token_id, agent_id, action, resource, decision_code, deny_reason, context_hash, bundle_version) =
-        match decision {
-            EnforcementDecision::Allow { claims, envelope } => (
-                claims.token_id.clone(),
-                claims.agent_id.clone(),
-                envelope.intent().action_class.clone(),
-                envelope.intent().resource.clone(),
-                DECISION_ALLOW,
-                String::new(),
-                claims.context_hash.clone(),
-                String::new(),
-            ),
-            EnforcementDecision::Deny {
-                reason,
-                detail,
-                envelope,
-                ..
-            } => {
-                let (action, resource) = envelope
-                    .as_ref()
-                    .map(|e| (e.intent.action_class.clone(), e.intent.resource.clone()))
-                    .unwrap_or_default();
+    let (
+        token_id,
+        agent_id,
+        action,
+        resource,
+        decision_code,
+        deny_reason,
+        context_hash,
+        bundle_version,
+    ) = match decision {
+        EnforcementDecision::Allow { claims, envelope } => (
+            claims.token_id.clone(),
+            claims.agent_id.clone(),
+            envelope.intent().action_class.clone(),
+            envelope.intent().resource.clone(),
+            DECISION_ALLOW,
+            String::new(),
+            claims.context_hash.clone(),
+            String::new(),
+        ),
+        EnforcementDecision::Deny {
+            reason,
+            detail,
+            envelope,
+            ..
+        } => {
+            let (action, resource) = envelope
+                .as_ref()
+                .map(|e| (e.intent.action_class.clone(), e.intent.resource.clone()))
+                .unwrap_or_default();
 
-                (
-                    String::new(),
-                    String::new(),
-                    action,
-                    resource,
-                    DECISION_DENY,
-                    format!("{reason}: {detail}"),
-                    String::new(),
-                    String::new(),
-                )
-            }
-            EnforcementDecision::Passthrough { .. } => (
+            (
                 String::new(),
                 String::new(),
+                action,
+                resource,
+                DECISION_DENY,
+                format!("{reason}: {detail}"),
                 String::new(),
                 String::new(),
-                DECISION_ALLOW,
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
-        };
+            )
+        }
+        EnforcementDecision::Passthrough { .. } => (
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            DECISION_ALLOW,
+            String::new(),
+            String::new(),
+            String::new(),
+        ),
+    };
 
     AuditPayload {
         session_id: session_id.to_string(),
@@ -231,6 +291,14 @@ pub fn audit_payload_from_decision(
         context_hash,
         bundle_version,
     }
+}
+
+/// Extracts the host portion from a resource string.
+///
+/// Resource format is `host/path` (no scheme). Returns the host part
+/// before the first `/`, or the entire string if no `/` is present.
+fn extract_host(resource: &str) -> &str {
+    resource.split('/').next().unwrap_or(resource)
 }
 
 #[cfg(test)]
@@ -348,12 +416,13 @@ mod tests {
 
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
 
-        EnforcementPipeline::new(
+        EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        )
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        })
     }
 
     #[tokio::test]
@@ -423,12 +492,13 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let pipeline = EnforcementPipeline::new(
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        );
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        });
 
         let request = RawRequest {
             method: "GET".to_string(),
@@ -496,12 +566,13 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
 
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(DenyDeletePolicy));
-        let pipeline = EnforcementPipeline::new(
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        );
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        });
 
         let request = RawRequest {
             method: "DELETE".to_string(),
@@ -552,12 +623,13 @@ mod tests {
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
 
-        let pipeline = EnforcementPipeline::new(
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        );
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        });
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -602,12 +674,13 @@ mod tests {
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
 
-        let pipeline = EnforcementPipeline::new(
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        );
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        });
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -746,12 +819,13 @@ mod tests {
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        let pipeline = EnforcementPipeline::new(
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        );
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        });
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -791,12 +865,13 @@ mod tests {
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        let pipeline = EnforcementPipeline::new(
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        );
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        });
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -837,12 +912,13 @@ mod tests {
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        let pipeline = EnforcementPipeline::new(
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        );
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        });
 
         let request = RawRequest {
             method: "GET".to_string(),
@@ -932,12 +1008,13 @@ mod tests {
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(StalePolicy));
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
 
-        let pipeline = EnforcementPipeline::new(
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        );
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        });
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -971,12 +1048,13 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let pipeline = EnforcementPipeline::new(
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        );
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        });
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -990,7 +1068,9 @@ mod tests {
         let decision = pipeline.enforce(&request, "sess_audit").await;
         assert!(decision.is_allow());
 
-        let payload = rx.try_recv().unwrap_or_else(|e| panic!("expected audit payload: {e}"));
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_audit");
         assert_eq!(payload.decision, 1); // ALLOW
         assert_eq!(payload.token_id, "tok_001");
@@ -1012,12 +1092,13 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let pipeline = EnforcementPipeline::new(
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        );
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        });
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -1031,7 +1112,9 @@ mod tests {
         let decision = pipeline.enforce(&request, "sess_deny").await;
         assert!(decision.is_deny());
 
-        let payload = rx.try_recv().unwrap_or_else(|e| panic!("expected audit payload: {e}"));
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_deny");
         assert_eq!(payload.decision, 2); // DENY
     }
@@ -1058,12 +1141,13 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let pipeline = EnforcementPipeline::new(
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        );
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        });
 
         let request = RawRequest {
             method: "GET".to_string(),
@@ -1077,7 +1161,9 @@ mod tests {
         let decision = pipeline.enforce(&request, "sess_pt").await;
         assert!(decision.is_passthrough());
 
-        let payload = rx.try_recv().unwrap_or_else(|e| panic!("expected audit payload: {e}"));
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_pt");
         assert_eq!(payload.decision, 1); // Passthrough maps to ALLOW
     }
@@ -1098,12 +1184,13 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let pipeline = EnforcementPipeline::new(
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        );
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        });
 
         // Unclassified intent — denied at normalization stage
         let request = RawRequest {
@@ -1119,8 +1206,165 @@ mod tests {
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
 
-        let payload = rx.try_recv().unwrap_or_else(|e| panic!("expected audit payload: {e}"));
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_norm");
+        assert_eq!(payload.decision, 2); // DENY
+    }
+
+    // ===== Credential injection tests =====
+
+    #[tokio::test]
+    async fn test_enforce_credential_injection_success() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let claims = test_claims();
+
+        let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test_token".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier { claims }),
+            Box::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+
+        // BasicCredentialInjector with credentials for api.openai.com
+        let injector =
+            crate::credential::provider::BasicCredentialInjector::new(HashMap::from([(
+                "api.openai.com".to_string(),
+                HashMap::from([("Authorization".to_string(), "Bearer sk_test".to_string())]),
+            )]));
+
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            audit_sink_sender: tx,
+            credential_injector: Box::new(injector),
+        });
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let decision = pipeline.enforce(&request, "sess_cred").await;
+        assert!(
+            decision.is_allow(),
+            "credential injection should not block Allow"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enforce_credential_injection_unknown_connector_allows() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let claims = test_claims();
+
+        let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test_token".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier { claims }),
+            Box::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+
+        // Empty injector — no connectors configured
+        let injector = crate::credential::provider::BasicCredentialInjector::empty();
+
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            audit_sink_sender: tx,
+            credential_injector: Box::new(injector),
+        });
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        // UnknownConnector should be treated as passthrough (empty creds)
+        let decision = pipeline.enforce(&request, "sess_cred").await;
+        assert!(
+            decision.is_allow(),
+            "unknown connector should still Allow with empty credentials"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enforce_credential_injection_fetch_failed_denies() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let claims = test_claims();
+
+        let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test_token".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier { claims }),
+            Box::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+
+        // Vault injector with nonexistent secret file — triggers FetchFailed
+        let injector =
+            crate::credential::provider::VaultCredentialInjector::new(HashMap::from([(
+                "api.openai.com".to_string(),
+                vec![crate::credential::provider::VaultSecretEntry {
+                    header_name: "Authorization".to_string(),
+                    value_prefix: Some("Bearer ".to_string()),
+                    secret_path: std::path::PathBuf::from("/nonexistent/secret"),
+                }],
+            )]));
+
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            audit_sink_sender: tx,
+            credential_injector: Box::new(injector),
+        });
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let decision = pipeline.enforce(&request, "sess_fail").await;
+        assert!(decision.is_deny(), "FetchFailed should produce DENY");
+        assert_eq!(
+            decision.deny_reason(),
+            Some(DenyReason::CredentialInjectionFailed)
+        );
+
+        // Verify audit event emitted for the deny
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected audit payload: {e}"));
+        assert_eq!(payload.session_id, "sess_fail");
         assert_eq!(payload.decision, 2); // DENY
     }
 }

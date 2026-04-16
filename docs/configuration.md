@@ -39,9 +39,17 @@ dir = "/etc/firma/ca"
 level = "debug"
 
 [credentials.openai]
+mode = "basic"
 target_host = "api.openai.com"
 header = "Authorization"
 value_from_env = "OPENAI_API_KEY"
+prefix = "Bearer "
+
+[credentials.stripe]
+mode = "vault"
+target_host = "api.stripe.com"
+header = "Authorization"
+secret_path = "/run/secrets/stripe_token"
 prefix = "Bearer "
 
 [mapping]
@@ -123,19 +131,61 @@ Validation:
 
 ### `[credentials.<label>]`
 
-Per-target credential injection. Matching outbound requests have the specified
-header injected with a value read from an environment variable.
+Per-target credential injection. Each entry selects a mode (`basic` or `vault`)
+and provides the fields that mode requires. Matching outbound requests have the
+specified header injected with the resolved credential value.
 
-| Field            | Type   | Required | Description                           |
-| ---------------- | ------ | -------- | ------------------------------------- |
-| `target_host`    | string | yes      | Host this credential applies to       |
-| `header`         | string | yes      | HTTP header name to inject            |
-| `value_from_env` | string | yes      | Environment variable to read          |
-| `prefix`         | string | no       | Prefix prepended to the env var value |
+Multiple entries may target the same `target_host`. Headers from all matching
+entries are merged. If no credentials are configured for a target host, the
+request proceeds with no injected headers.
+
+When credentials _are_ configured for a host but cannot be resolved (e.g. a
+Vault-rendered secret file is missing), the request is denied with
+`CREDENTIAL_INJECTION_FAILED` (fail-closed).
+
+| Field            | Type   | Default | Description                                       |
+| ---------------- | ------ | ------- | ------------------------------------------------- |
+| `mode`           | string | `basic` | `basic` (env var at startup) or `vault` (file)    |
+| `target_host`    | string |         | Host this credential applies to                   |
+| `header`         | string |         | HTTP header name to inject                        |
+| `prefix`         | string | none    | Prefix prepended to the resolved value            |
+| `value_from_env` | string | none    | Environment variable to read (basic mode)         |
+| `secret_path`    | path   | none    | Vault Agent secret file path (vault mode)         |
+
+#### Basic mode
+
+Reads a static credential from an environment variable once at startup. The
+sidecar exits if the variable is missing or empty.
+
+```toml
+[credentials.openai]
+mode = "basic"
+target_host = "api.openai.com"
+header = "Authorization"
+value_from_env = "OPENAI_API_KEY"
+prefix = "Bearer "
+```
+
+#### Vault mode
+
+Reads a secret from a file on disk rendered by Vault Agent. The file is read
+on each request, so rotated secrets take effect immediately.
+
+```toml
+[credentials.stripe]
+mode = "vault"
+target_host = "api.stripe.com"
+header = "Authorization"
+secret_path = "/run/secrets/stripe_token"
+prefix = "Bearer "
+```
 
 Validation:
 
-- `target_host`, `header`, and `value_from_env` must not be empty.
+- `target_host` and `header` must not be empty.
+- Basic mode: `value_from_env` must be set and non-empty; the referenced
+  environment variable must be set and non-empty at startup.
+- Vault mode: `secret_path` must be set and non-empty.
 
 ### `[mapping]`
 

@@ -284,22 +284,44 @@ impl Default for LogConfig {
     }
 }
 
+/// Credential injection mode selector.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialMode {
+    /// Static credential read from an environment variable at startup.
+    #[default]
+    Basic,
+    /// Secret file rendered by Vault Agent, read from disk per-call.
+    Vault,
+}
+
 /// Credential injection entry for a single external target.
 ///
-/// At proxy time, matching outbound requests have the specified header
-/// injected with a value read from the named environment variable.
-#[expect(dead_code, reason = "consumed once credential injection is wired")]
+/// Each entry selects a mode (`basic` or `vault`) and provides the
+/// fields that mode requires. At proxy time, matching outbound requests
+/// have the specified header injected.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CredentialConfig {
+    /// Injection mode. Default: `basic`.
+    #[serde(default)]
+    pub mode: CredentialMode,
     /// Host that this credential applies to.
     pub target_host: String,
     /// HTTP header name to inject (e.g. `Authorization`).
     pub header: String,
-    /// Environment variable whose value is injected.
-    pub value_from_env: String,
-    /// Optional prefix prepended to the env value (e.g. `"Bearer "`).
+    /// Optional prefix prepended to the resolved value
+    /// (e.g. `"Bearer "`).
     #[serde(default)]
     pub prefix: Option<String>,
+    // -- basic mode fields --
+    /// Environment variable whose value is injected (basic mode).
+    #[serde(default)]
+    pub value_from_env: Option<String>,
+    // -- vault mode fields --
+    /// Filesystem path to the secret file rendered by Vault Agent
+    /// (vault mode).
+    #[serde(default)]
+    pub secret_path: Option<PathBuf>,
 }
 
 impl CredentialConfig {
@@ -310,8 +332,23 @@ impl CredentialConfig {
         if self.header.trim().is_empty() {
             return Err("header must not be empty".into());
         }
-        if self.value_from_env.trim().is_empty() {
-            return Err("value_from_env must not be empty".into());
+        match self.mode {
+            CredentialMode::Basic => {
+                let env = self.value_from_env.as_deref().unwrap_or("");
+                if env.trim().is_empty() {
+                    return Err("value_from_env is required for basic mode".into());
+                }
+            }
+            CredentialMode::Vault => {
+                let path = self
+                    .secret_path
+                    .as_ref()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or("");
+                if path.trim().is_empty() {
+                    return Err("secret_path is required for vault mode".into());
+                }
+            }
         }
         Ok(())
     }
@@ -373,15 +410,17 @@ mod tests {
     }
 
     #[test]
-    fn test_sidecar_config_invalid_credential() {
+    fn test_sidecar_config_invalid_credential_basic() {
         let mut creds = HashMap::new();
         creds.insert(
             "bad".to_string(),
             CredentialConfig {
+                mode: CredentialMode::Basic,
                 target_host: String::new(),
                 header: "Authorization".to_string(),
-                value_from_env: "KEY".to_string(),
+                value_from_env: Some("KEY".to_string()),
                 prefix: None,
+                secret_path: None,
             },
         );
         let config = SidecarConfig {
@@ -392,6 +431,56 @@ mod tests {
         assert!(
             err.contains("credentials.bad"),
             "error should mention credential label: {err}"
+        );
+    }
+
+    #[test]
+    fn test_sidecar_config_invalid_credential_basic_missing_env() {
+        let mut creds = HashMap::new();
+        creds.insert(
+            "noenv".to_string(),
+            CredentialConfig {
+                mode: CredentialMode::Basic,
+                target_host: "api.example.com".to_string(),
+                header: "Authorization".to_string(),
+                value_from_env: None,
+                prefix: None,
+                secret_path: None,
+            },
+        );
+        let config = SidecarConfig {
+            credentials: creds,
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("value_from_env"),
+            "error should mention value_from_env: {err}"
+        );
+    }
+
+    #[test]
+    fn test_sidecar_config_invalid_credential_vault_missing_path() {
+        let mut creds = HashMap::new();
+        creds.insert(
+            "novault".to_string(),
+            CredentialConfig {
+                mode: CredentialMode::Vault,
+                target_host: "api.example.com".to_string(),
+                header: "Authorization".to_string(),
+                value_from_env: None,
+                prefix: None,
+                secret_path: None,
+            },
+        );
+        let config = SidecarConfig {
+            credentials: creds,
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("secret_path"),
+            "error should mention secret_path: {err}"
         );
     }
 

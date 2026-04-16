@@ -159,7 +159,7 @@ mod tests {
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
     use crate::pipeline::{
         ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, IntentNormalizer,
-        MappingTable,
+        MappingTable, NullCredentialInjector, PipelineArgs,
     };
 
     /// Returns an available localhost address by binding to port 0.
@@ -251,12 +251,13 @@ mod tests {
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
 
-        Arc::new(EnforcementPipeline::new(
+        Arc::new(EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        ))
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        }))
     }
 
     fn test_pipeline_deny_all() -> Arc<EnforcementPipeline> {
@@ -284,12 +285,13 @@ mod tests {
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
 
-        Arc::new(EnforcementPipeline::new(
+        Arc::new(EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            tx,
-        ))
+            audit_sink_sender: tx,
+            credential_injector: Box::new(NullCredentialInjector),
+        }))
     }
 
     #[tokio::test]

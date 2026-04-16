@@ -42,6 +42,8 @@ pub enum EnforcementStage {
     CapabilityValidation(CapabilityValidationStage),
     /// Stage 2: Constraint Enforcement Engine (CEE).
     ConstraintEnforcement(ConstraintEnforcementStage),
+    /// Credential injection — post-enforcement credential fetch failed.
+    CredentialInjection,
 }
 
 /// Unified result of the enforcement pipeline.
