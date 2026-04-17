@@ -251,48 +251,48 @@ mod tests {
     }
 
     #[test]
-    fn test_load_empty_policy_dir() {
+    fn load_empty_policy_dir() {
         let dir = setup_policy_dir(&[]);
         let store = CedarPolicyStore::load(dir.path(), 30);
         assert!(store.is_ok());
     }
 
     #[test]
-    fn test_load_valid_policy() {
+    fn load_valid_policy() {
         let dir = setup_policy_dir(&[("allow-all.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), 30);
         assert!(store.is_ok());
     }
 
     #[test]
-    fn test_load_invalid_policy_fails_fast() {
+    fn load_invalid_policy_fails_fast() {
         let dir = setup_policy_dir(&[("bad.cedar", "this is not valid cedar syntax {{{")]);
         let store = CedarPolicyStore::load(dir.path(), 30);
         assert!(store.is_err());
     }
 
     #[test]
-    fn test_nonexistent_dir_fails() {
+    fn nonexistent_dir_fails() {
         let store = CedarPolicyStore::load(Path::new("/nonexistent/path"), 30);
         assert!(store.is_err());
     }
 
     #[test]
-    fn test_version_hash_deterministic() {
+    fn version_hash_deterministic() {
         let v1 = compute_version_hash("policy A", "schema B");
         let v2 = compute_version_hash("policy A", "schema B");
         assert_eq!(v1, v2);
     }
 
     #[test]
-    fn test_version_hash_changes_with_content() {
+    fn version_hash_changes_with_content() {
         let v1 = compute_version_hash("policy A", "schema B");
         let v2 = compute_version_hash("policy C", "schema B");
         assert_ne!(v1, v2);
     }
 
     #[tokio::test]
-    async fn test_reload_no_changes() {
+    async fn reload_no_changes() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
         let result = store.reload().await;
@@ -300,7 +300,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_reload_detects_changes() {
+    async fn reload_detects_changes() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
         let v1 = store.bundle().await.version.clone();
@@ -319,7 +319,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_subscribe_receives_initial_value() {
+    async fn subscribe_receives_initial_value() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
         let rx = store.subscribe();
