@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use tokio::sync::{RwLock, broadcast};
+use tokio::task::JoinHandle;
 
 use crate::error::AuthorityError;
 use firma_core::token::TokenId;
@@ -16,17 +17,16 @@ pub struct RevocationEntry {
     pub timestamp: DateTime<Utc>,
 }
 
-/// In-memory revocation store with file-based ingestion and broadcast support.
+/// In-memory revocation store with file-based ingestion.
 ///
-/// Maintains a log of revocation events and broadcasts new events to all
-/// connected `WatchRevocations` streams (FR-6, FR-7).
+/// Maintains a log of revocation events for replay (FR-6, FR-7).
+/// Live broadcast to `WatchRevocations` streams is handled by [`RevocationStoreWatcher`].
+#[derive(Clone)]
 pub struct RevocationStore {
     /// Revoked token IDs mapped to their revocation entries.
     entries: Arc<RwLock<HashMap<TokenId, RevocationEntry>>>,
     /// Ordered log for replay (FR-6: replay events after `since`).
     log: Arc<RwLock<Vec<RevocationEntry>>>,
-    /// Broadcast channel for new revocation events.
-    tx: broadcast::Sender<RevocationEntry>,
     /// Path to the revocation file.
     revocation_file: PathBuf,
 }
@@ -38,11 +38,9 @@ impl RevocationStore {
     ///
     /// Returns `AuthorityError` if the file exists but cannot be read.
     pub fn new(revocation_file: &Path) -> Result<Self, AuthorityError> {
-        let (tx, _rx) = broadcast::channel(1024);
         let store = Self {
             entries: Arc::new(RwLock::new(HashMap::new())),
             log: Arc::new(RwLock::new(Vec::new())),
-            tx,
             revocation_file: revocation_file.to_path_buf(),
         };
 
@@ -70,13 +68,13 @@ impl RevocationStore {
         let mut log = self.log.blocking_write();
         let mut count = 0;
 
-        for line in content.lines() {
-            let s = line.trim();
-            if s.is_empty() {
+        for (line_number, line) in content.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
                 continue;
             }
-            let Ok(token_id) = s.parse() else {
-                tracing::warn!(token_id = %s, "invalid token_id in revocation file, ignoring");
+            let Ok(token_id) = line.parse() else {
+                tracing::warn!(line_number, %line, "invalid token_id in revocation file, ignoring");
                 continue;
             };
 
@@ -114,9 +112,6 @@ impl RevocationStore {
         entries.insert(token_id, entry.clone());
         self.log.write().await.push(entry.clone());
 
-        // Broadcast to watchers — ignore send errors (no receivers is fine)
-        let _ = self.tx.send(entry);
-
         tracing::info!(token_id = %token_id, reason, "token revoked");
     }
 
@@ -137,15 +132,13 @@ impl RevocationStore {
             .collect()
     }
 
-    /// Subscribe to new revocation events.
-    pub fn subscribe(&self) -> broadcast::Receiver<RevocationEntry> {
-        self.tx.subscribe()
-    }
-
-    /// Reload revocations from the file on disk. Called by file watcher.
-    pub async fn reload_from_file(&self) -> Result<(), AuthorityError> {
+    /// Reload revocations from the file on disk.
+    ///
+    /// Returns the newly-added entries so that callers (e.g. [`RevocationStoreWatcher`])
+    /// can broadcast them to live subscribers.
+    pub async fn reload_from_file(&self) -> Result<Vec<RevocationEntry>, AuthorityError> {
         if !self.revocation_file.is_file() {
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         let content = tokio::fs::read_to_string(&self.revocation_file)
@@ -158,39 +151,105 @@ impl RevocationStore {
             })?;
 
         let mut new_entries = Vec::new();
-        {
-            let mut entries = self.entries.write().await;
-            let mut log = self.log.write().await;
+        let mut entries = self.entries.write().await;
+        let mut log = self.log.write().await;
 
-            for line in content.lines() {
-                let s = line.trim();
-                if s.is_empty() {
-                    continue;
-                }
-                let Ok(token_id) = s.parse() else {
-                    tracing::warn!(token_id = %s, "invalid token_id in revocation file, ignoring");
-                    continue;
-                };
-
-                if entries.contains_key(&token_id) {
-                    continue;
-                }
-                let entry = RevocationEntry {
-                    token_id,
-                    reason: "file-based revocation".to_string(),
-                    timestamp: Utc::now(),
-                };
-                entries.insert(token_id, entry.clone());
-                log.push(entry.clone());
-                new_entries.push(entry);
+        for line in content.lines() {
+            let s = line.trim();
+            if s.is_empty() {
+                continue;
             }
+            let Ok(token_id) = s.parse() else {
+                tracing::warn!(token_id = %s, "invalid token_id in revocation file, ignoring");
+                continue;
+            };
+
+            if entries.contains_key(&token_id) {
+                continue;
+            }
+            let entry = RevocationEntry {
+                token_id,
+                reason: "file-based revocation".to_string(),
+                timestamp: Utc::now(),
+            };
+            entries.insert(token_id, entry.clone());
+            log.push(entry.clone());
+            new_entries.push(entry);
         }
 
-        for entry in new_entries {
-            let _ = self.tx.send(entry);
-        }
+        Ok(new_entries)
+    }
 
-        Ok(())
+    /// Watch the revocation file for changes and reload automatically.
+    ///
+    /// Only [`notify::event::EventKind::Modify`] and [`notify::event::EventKind::Create`] events
+    /// trigger a reload. Returns a [`RevocationStoreWatcher`]: keep it alive for the watch to stay
+    /// active. Dropping it stops the file watch and the reload task.
+    pub fn watch(&self) -> Result<RevocationStoreWatcher, notify::Error> {
+        use notify::Watcher as _;
+
+        let path = self.revocation_file.clone();
+        let this = self.clone();
+        let (tx_signal, mut rx_signal) = tokio::sync::mpsc::channel::<()>(16);
+        let (tx_broadcast, _) = broadcast::channel(1024);
+        let tx_for_task = tx_broadcast.clone();
+
+        let watch_path = path.clone();
+        let mut watcher = notify::recommended_watcher(
+            move |res: notify::Result<notify::Event>| match res {
+                Ok(event)
+                    if matches!(
+                        event.kind,
+                        notify::event::EventKind::Modify(_)
+                            | notify::event::EventKind::Create(_)
+                    ) =>
+                {
+                    tracing::info!(path = %watch_path.display(), "revocation file changed; reloading");
+                    let _ = tx_signal.try_send(());
+                }
+                Err(error) => tracing::error!(?error, "revocation file watch error"),
+                _ => {}
+            },
+        )
+        .inspect_err(|error| tracing::error!(?error, "failed to create revocation file watcher"))?;
+
+        watcher.watch(&path, notify::RecursiveMode::NonRecursive)?;
+
+        let task = tokio::spawn(async move {
+            while rx_signal.recv().await.is_some() {
+                match this.reload_from_file().await {
+                    Ok(new_entries) => {
+                        for entry in new_entries {
+                            let _ = tx_for_task.send(entry);
+                        }
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "revocation file reload failed; keeping previous state");
+                    }
+                }
+            }
+        });
+
+        Ok(RevocationStoreWatcher {
+            _watcher: watcher,
+            _task: task,
+            tx: tx_broadcast,
+        })
+    }
+}
+
+/// Owns the file watcher and reload task for a [`RevocationStore`].
+/// Dropping this handle stops the file watch and the reload task.
+pub struct RevocationStoreWatcher {
+    _watcher: notify::RecommendedWatcher,
+    _task: JoinHandle<()>,
+    tx: broadcast::Sender<RevocationEntry>,
+}
+
+impl RevocationStoreWatcher {
+    /// Subscribe to new revocation events as they are ingested.
+    pub fn subscribe(&self) -> broadcast::Receiver<RevocationEntry> {
+        self.tx.subscribe()
     }
 }
 
@@ -272,5 +331,52 @@ mod tests {
         let future = Utc::now() + chrono::Duration::seconds(1);
         let events = store.events_since(future).await;
         assert!(events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn watch_reloads_on_file_change() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let file = dir.path().join("revocations.txt");
+
+        // Create store before the file exists so new() skips load_from_content
+        // (which uses blocking_write, incompatible with async context).
+        let store = RevocationStore::new(&file).unwrap_or_else(|e| panic!("{e}"));
+
+        // Create the file so notify can watch it, then start watching.
+        std::fs::write(&file, "").unwrap_or_else(|e| panic!("{e}"));
+        let _watcher = store.watch().unwrap_or_else(|e| panic!("{e}"));
+
+        let id = TokenId::new();
+        std::fs::write(&file, format!("{id}\n")).unwrap_or_else(|e| panic!("{e}"));
+
+        for _ in 0..50 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+            if store.is_revoked(id).await {
+                return;
+            }
+        }
+        panic!("revocation store did not reload within timeout");
+    }
+
+    #[tokio::test]
+    async fn watch_subscribe_receives_new_entries() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let file = dir.path().join("revocations.txt");
+
+        let store = RevocationStore::new(&file).unwrap_or_else(|e| panic!("{e}"));
+
+        std::fs::write(&file, "").unwrap_or_else(|e| panic!("{e}"));
+        let watcher = store.watch().unwrap_or_else(|e| panic!("{e}"));
+        let mut rx = watcher.subscribe();
+
+        let id = TokenId::new();
+        std::fs::write(&file, format!("{id}\n")).unwrap_or_else(|e| panic!("{e}"));
+
+        let entry = tokio::time::timeout(tokio::time::Duration::from_millis(500), rx.recv())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for revocation event"))
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        assert_eq!(entry.token_id, id);
     }
 }

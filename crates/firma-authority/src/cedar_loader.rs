@@ -4,6 +4,7 @@ use std::sync::Arc;
 use cedar_policy::{PolicySet, Schema};
 use sha2::{Digest, Sha256};
 use tokio::sync::{RwLock, watch};
+use tokio::task::JoinHandle;
 
 use firma_core::policy::PolicyBundle;
 
@@ -14,6 +15,7 @@ use crate::error::AuthorityError;
 /// Holds the currently active `PolicySet` and `Schema` behind an `RwLock`,
 /// and exposes a `watch::Sender` that downstream consumers (gRPC streams)
 /// subscribe to for push notifications on policy changes.
+#[derive(Clone)]
 pub struct CedarPolicyStore {
     /// Current compiled policy set.
     policy_set: Arc<RwLock<Arc<PolicySet>>>,
@@ -131,10 +133,70 @@ impl CedarPolicyStore {
         self.bundle.read().await.clone()
     }
 
+    /// Watch the policy directory for changes and reload automatically.
+    ///
+    /// Only [`notify::event::EventKind::Modify`], [`notify::event::EventKind::Create`], and
+    /// [`notify::event::EventKind::Remove`] events trigger a reload. Returns a
+    /// [`CedarPolicyStoreWatcher`]: keep it alive for the watch to stay active.
+    /// Dropping it stops the file watch and the reload task.
+    pub fn watch(&self) -> Result<CedarPolicyStoreWatcher, notify::Error> {
+        use notify::Watcher as _;
+
+        let path = self.policy_dir.clone();
+        let this = self.clone();
+        let (tx_signal, mut rx_signal) = tokio::sync::mpsc::channel::<()>(16);
+
+        let watch_path = path.clone();
+        let mut watcher = notify::recommended_watcher(
+            move |res: notify::Result<notify::Event>| match res {
+                Ok(event)
+                    if matches!(
+                        event.kind,
+                        notify::event::EventKind::Modify(_)
+                            | notify::event::EventKind::Create(_)
+                            | notify::event::EventKind::Remove(_)
+                    ) =>
+                {
+                    tracing::info!(path = %watch_path.display(), "policy directory changed; reloading");
+                    let _ = tx_signal.try_send(());
+                }
+                Err(error) => tracing::error!(?error, "policy directory watch error"),
+                _ => {}
+            },
+        )
+        .inspect_err(|error| tracing::error!(?error, "failed to create policy directory watcher"))?;
+
+        watcher.watch(&path, notify::RecursiveMode::NonRecursive)?;
+
+        let task = tokio::spawn(async move {
+            while rx_signal.recv().await.is_some() {
+                if let Err(error) = this.reload().await {
+                    tracing::error!(%error, "policy reload failed; keeping previous policy set");
+                }
+            }
+        });
+
+        Ok(CedarPolicyStoreWatcher {
+            _watcher: watcher,
+            _task: task,
+            tx: self.bundle_tx.clone(),
+        })
+    }
+}
+
+/// Owns the file watcher and reload task for a [`CedarPolicyStore`].
+/// Dropping this handle stops the file watch and the reload task.
+pub struct CedarPolicyStoreWatcher {
+    _watcher: notify::RecommendedWatcher,
+    _task: JoinHandle<()>,
+    tx: watch::Sender<PolicyBundle>,
+}
+
+impl CedarPolicyStoreWatcher {
     /// Subscribe to policy bundle updates. Returns the current bundle
     /// immediately, then yields on changes.
     pub fn subscribe(&self) -> watch::Receiver<PolicyBundle> {
-        self.bundle_tx.subscribe()
+        self.tx.subscribe()
     }
 }
 
@@ -319,11 +381,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn subscribe_receives_initial_value() {
+    async fn watch_reloads_on_policy_change() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
-        let rx = store.subscribe();
-        let bundle = rx.borrow().clone();
+        let v1 = store.bundle().await.version.clone();
+        let _watcher = store.watch().unwrap_or_else(|e| panic!("{e}"));
+
+        std::fs::write(
+            dir.path().join("basic.cedar"),
+            "forbid(principal, action, resource);",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        for _ in 0..50 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+            if store.bundle().await.version != v1 {
+                return;
+            }
+        }
+        panic!("policy store did not reload within timeout");
+    }
+
+    #[tokio::test]
+    async fn watch_subscribe_receives_bundle_update() {
+        let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
+        let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
+        let watcher = store.watch().unwrap_or_else(|e| panic!("{e}"));
+        let mut rx = watcher.subscribe();
+        let _ = rx.borrow_and_update().clone(); // mark initial value as seen
+
+        std::fs::write(
+            dir.path().join("basic.cedar"),
+            "forbid(principal, action, resource);",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        tokio::time::timeout(tokio::time::Duration::from_millis(500), rx.changed())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for bundle update"))
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        let bundle = rx.borrow_and_update().clone();
         assert!(!bundle.version.is_empty());
     }
 }

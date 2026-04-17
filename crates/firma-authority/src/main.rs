@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use notify::{Event, EventKind, RecursiveMode, Watcher};
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 use tonic::transport::Server;
@@ -125,17 +124,30 @@ async fn run_server(config: config::AuthorityConfig) {
         }
     };
 
-    // FR-2: Start file watcher for policy hot-reload
-    spawn_file_watcher(
-        &config,
-        Arc::clone(&policy_store),
-        Arc::clone(&revocation_store),
-    );
+    // FR-2: Start policy directory watcher for hot-reload
+    let policy_watcher = match policy_store.watch() {
+        Ok(w) => Arc::new(w),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to start policy directory watcher");
+            std::process::exit(1);
+        }
+    };
+
+    // Start revocation file watcher
+    let revocation_watcher = match revocation_store.watch() {
+        Ok(w) => Arc::new(w),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to start revocation file watcher");
+            std::process::exit(1);
+        }
+    };
 
     // Build gRPC service
     let authority_service = AuthorityServiceImpl::new(
         Arc::clone(&policy_store),
+        policy_watcher,
         Arc::clone(&revocation_store),
+        revocation_watcher,
         signer,
         config.max_ttl_seconds,
     );
@@ -162,64 +174,6 @@ async fn run_server(config: config::AuthorityConfig) {
     tracing::info!("firma-authority shut down gracefully");
 }
 
-/// Start a file watcher to monitor policy directory and revocation file.
-fn spawn_file_watcher(
-    config: &config::AuthorityConfig,
-    policy_store: Arc<CedarPolicyStore>,
-    revocation_store: Arc<RevocationStore>,
-) {
-    let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<PathBuf>(32);
-    let policy_dir = config.policy_dir.clone();
-    let revocation_file = config.revocation_file.clone();
-
-    let Ok(mut watcher) = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-        if let Ok(event) = res {
-            if matches!(
-                event.kind,
-                EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-            ) {
-                for path in event.paths {
-                    let _ = notify_tx.try_send(path);
-                }
-            }
-        }
-    })
-    .inspect_err(|error| tracing::error!(%error, "failed to create file watcher")) else {
-        return;
-    };
-
-    if let Err(error) = watcher.watch(&policy_dir, RecursiveMode::NonRecursive) {
-        tracing::error!(%error, path = %policy_dir.display(), "failed to watch policy dir");
-    }
-
-    if let Err(error) = watcher.watch(&revocation_file, RecursiveMode::NonRecursive) {
-        tracing::error!(%error, "failed to watch revocation file directory");
-    }
-
-    // Process file change events
-    tokio::spawn(async move {
-        // keep watcher alive
-        let _watcher = watcher;
-        while let Some(changed_path) = notify_rx.recv().await {
-            if changed_path
-                .extension()
-                .is_some_and(|ext| ext == "cedar" || ext == "cedarschema" || ext == "json")
-            {
-                tracing::info!(path = %changed_path.display(), "policy file changed, reloading");
-                if let Err(error) = policy_store.reload().await {
-                    tracing::error!(%error, "policy hot-reload failed, keeping previous policy set");
-                }
-            }
-
-            if changed_path == revocation_file {
-                tracing::info!("revocation file changed, reloading");
-                if let Err(error) = revocation_store.reload_from_file().await {
-                    tracing::error!(%error, "revocation file reload failed");
-                }
-            }
-        }
-    });
-}
 
 /// FR-7: Revoke a token by appending its ID to the revocation file.
 fn run_revoke(config: &config::AuthorityConfig, token_id: &str) {

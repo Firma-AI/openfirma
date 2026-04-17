@@ -17,13 +17,15 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
 use tonic::{Request as TonicRequest, Response, Status};
 
-use crate::cedar_loader::CedarPolicyStore;
-use crate::revocation::RevocationStore;
+use crate::cedar_loader::{CedarPolicyStore, CedarPolicyStoreWatcher};
+use crate::revocation::{RevocationStore, RevocationStoreWatcher};
 
 /// gRPC implementation of the `AuthorityService` defined in `authority.proto`.
 pub struct AuthorityServiceImpl {
     policy_store: Arc<CedarPolicyStore>,
+    policy_watcher: Arc<CedarPolicyStoreWatcher>,
     revocation_store: Arc<RevocationStore>,
+    revocation_watcher: Arc<RevocationStoreWatcher>,
     signer: Arc<PasetoV4Signer>,
     max_ttl_seconds: i32,
 }
@@ -31,13 +33,17 @@ pub struct AuthorityServiceImpl {
 impl AuthorityServiceImpl {
     pub fn new(
         policy_store: Arc<CedarPolicyStore>,
+        policy_watcher: Arc<CedarPolicyStoreWatcher>,
         revocation_store: Arc<RevocationStore>,
+        revocation_watcher: Arc<RevocationStoreWatcher>,
         signer: Arc<PasetoV4Signer>,
         max_ttl_seconds: i32,
     ) -> Self {
         Self {
             policy_store,
+            policy_watcher,
             revocation_store,
+            revocation_watcher,
             signer,
             max_ttl_seconds,
         }
@@ -177,7 +183,7 @@ impl AuthorityService for AuthorityServiceImpl {
             "sidecar connected to policy bundle stream"
         );
 
-        let mut rx = self.policy_store.subscribe();
+        let mut rx = self.policy_watcher.subscribe();
 
         let stream = async_stream::try_stream! {
             // Send current bundle immediately (unless client already has it)
@@ -218,7 +224,7 @@ impl AuthorityService for AuthorityServiceImpl {
 
         // Replay events after `since` timestamp
         let replay_events = self.revocation_store.events_since(since).await;
-        let broadcast_rx = self.revocation_store.subscribe();
+        let broadcast_rx = self.revocation_watcher.subscribe();
 
         let stream = async_stream::try_stream! {
             // First, replay historical events
