@@ -17,7 +17,7 @@ use firma_core::token::paseto::PasetoV4Signer;
 use firma_proto::firma::v1::authority_service_server::AuthorityServiceServer;
 
 use crate::cedar_loader::CedarPolicyStore;
-use crate::config::load_config;
+use crate::config::AuthorityConfig;
 use crate::revocation::RevocationStore;
 use crate::service::AuthorityServiceImpl;
 
@@ -57,7 +57,7 @@ async fn main() {
     let cli = Cli::parse();
 
     // Load configuration
-    let config = match load_config(cli.config.as_ref()) {
+    let config = match AuthorityConfig::load(cli.config.as_ref()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("configuration error: {e}");
