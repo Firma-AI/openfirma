@@ -61,7 +61,10 @@ impl MappingRule {
         if let Some(p) = path {
             score += 5;
             // Longer path = more specific
-            #[allow(clippy::cast_possible_truncation)] // path segments will never exceed u32
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "path segments will never exceed u32"
+            )]
             let segments = p.split('/').filter(|s| !s.is_empty()).count() as u32;
             score += segments;
             // No wildcards in path = more specific

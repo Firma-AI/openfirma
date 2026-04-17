@@ -24,16 +24,17 @@ use hyper_util::rt::TokioIo;
 use tokio::net::{UnixListener, UnixStream};
 use tokio_util::sync::CancellationToken;
 
+use crate::handler::{DispatchedResponse, HandledResponse, RequestHandler};
 use crate::interceptor::{Interceptor, InterceptorError};
-use crate::pipeline::{EnforcementDecision, EnforcementPipeline, RawRequest};
+use crate::pipeline::RawRequest;
 
 /// Unix domain socket interceptor.
 ///
 /// Accepts a [`PathBuf`](std::path::PathBuf) pointing to the socket file and
 /// manages the full bind / listen / accept / cleanup cycle. Incoming HTTP
 /// requests are parsed into
-/// [`RawRequest`](crate::normalizer::RawRequest) values and enforced through
-/// the [`EnforcementPipeline`](crate::pipeline::EnforcementPipeline) provided
+/// [`RawRequest`](crate::normalizer::RawRequest) values and handled through
+/// the [`RequestHandler`](crate::handler::RequestHandler) provided
 /// in [`Interceptor::run`](super::Interceptor::run).
 ///
 /// Malformed requests that cannot be parsed into a valid `RawRequest` are
@@ -42,9 +43,9 @@ use crate::pipeline::{EnforcementDecision, EnforcementPipeline, RawRequest};
 pub struct UnixSocketInterceptor {
     /// Path to the Unix domain socket file.
     path: PathBuf,
-    /// Reference to the enforcement pipeline, set when the interceptor is
+    /// Reference to the request handler, set when the interceptor is
     /// running.
-    pipeline: Option<Arc<EnforcementPipeline>>,
+    handler: Option<Arc<RequestHandler>>,
 }
 
 impl UnixSocketInterceptor {
@@ -53,7 +54,7 @@ impl UnixSocketInterceptor {
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
-            pipeline: None,
+            handler: None,
         }
     }
 }
@@ -73,27 +74,27 @@ impl From<&Path> for UnixSocketInterceptor {
 impl Interceptor for UnixSocketInterceptor {
     async fn run(
         mut self,
-        pipeline: Arc<EnforcementPipeline>,
+        handler: Arc<RequestHandler>,
         cancel: CancellationToken,
     ) -> Result<(), InterceptorError> {
-        self.pipeline = Some(pipeline);
+        self.handler = Some(handler);
         // Remove stale socket if present
         let _ = std::fs::remove_file(&self.path);
         let listener = UnixListener::bind(&self.path)
             .map_err(|_| InterceptorError::BindFailed("Channel closed".to_string()))?;
 
-        let pipeline = self
-            .pipeline
+        let handler = self
+            .handler
             .as_ref()
-            .ok_or_else(|| InterceptorError::ServerError("pipeline not set".to_string()))?;
+            .ok_or_else(|| InterceptorError::ServerError("request handler not set".to_string()))?;
 
         loop {
             tokio::select! {
                 accepted = listener.accept() => {
                     if let Ok((stream, _socket_addr)) = accepted {
-                        let pipeline = Arc::clone(pipeline);
+                        let handler = Arc::clone(handler);
                         tokio::spawn(async move {
-                            if let Err(e) = serve_connection(stream, pipeline).await {
+                            if let Err(e) = serve_connection(stream, handler).await {
                                 tracing::warn!("connection error: {e}");
                             }
                         });
@@ -112,15 +113,15 @@ impl Interceptor for UnixSocketInterceptor {
 /// pipeline, and respond with the decision.
 async fn serve_connection(
     socket: UnixStream,
-    pipeline: Arc<EnforcementPipeline>,
+    handler: Arc<RequestHandler>,
 ) -> Result<(), InterceptorError> {
     let io = TokioIo::new(socket);
     http1::Builder::new()
         .serve_connection(
             io,
             service_fn(move |req: Request<Incoming>| {
-                let pipeline = Arc::clone(&pipeline);
-                async move { handle_request(req, &pipeline).await }
+                let handler = Arc::clone(&handler);
+                async move { handle_request(req, &handler).await }
             }),
         )
         .await
@@ -128,13 +129,13 @@ async fn serve_connection(
 }
 
 /// Convert an incoming hyper request into a [`RawRequest`], run it through
-/// the enforcement pipeline, and return the appropriate HTTP response.
+/// the request handler, and return the appropriate HTTP response.
 ///
 /// Malformed requests (missing host, unreadable body) are rejected with
 /// `403 MALFORMED_REQUEST` (fail-closed).
 async fn handle_request(
     req: Request<Incoming>,
-    pipeline: &EnforcementPipeline,
+    handler: &RequestHandler,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let raw = match build_raw_request(req).await {
         Ok(r) => r,
@@ -147,23 +148,31 @@ async fn handle_request(
         .cloned()
         .unwrap_or_default();
 
-    let decision = pipeline.enforce(&raw, &session_id).await;
+    let outcome = handler.handle(raw, &session_id).await;
 
-    let response = match decision {
-        EnforcementDecision::Allow { .. } | EnforcementDecision::Passthrough { .. } => {
-            Response::builder()
-                .status(StatusCode::OK)
-                .body(Full::new(Bytes::from_static(b"ALLOW")))
-                .unwrap_or_else(|_| {
-                    deny_response(StatusCode::INTERNAL_SERVER_ERROR, "response build failed")
-                })
+    let response = match outcome {
+        HandledResponse::Ok(response) | HandledResponse::Passthrough(response) => {
+            dispatched_response(response)
         }
-        EnforcementDecision::Deny { reason, detail, .. } => {
-            deny_response(StatusCode::FORBIDDEN, &format!("{reason}: {detail}"))
-        }
+        HandledResponse::Deny { reason, detail } => deny_json_response(
+            StatusCode::FORBIDDEN,
+            crate::handler::deny_body_json(reason, &detail),
+        ),
     };
 
     Ok(response)
+}
+
+fn dispatched_response(response: DispatchedResponse) -> Response<Full<Bytes>> {
+    let mut builder = Response::builder().status(response.status);
+    for (name, value) in response.headers {
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(Full::new(Bytes::from(response.body)))
+        .unwrap_or_else(|_| {
+            deny_response(StatusCode::INTERNAL_SERVER_ERROR, "response build failed")
+        })
 }
 
 /// Build a [`RawRequest`] from a hyper [`Request`].
@@ -220,7 +229,10 @@ async fn build_raw_request(req: Request<Incoming>) -> Result<RawRequest, String>
     })
 }
 
-/// Build a structured denial HTTP response.
+/// Build a structured denial HTTP response with a plain-text body.
+///
+/// Used for transport-level malformed-request errors that do not carry a
+/// [`DenyReason`](firma_core::DenyReason).
 fn deny_response(status: StatusCode, detail: &str) -> Response<Full<Bytes>> {
     Response::builder()
         .status(status)
@@ -228,13 +240,27 @@ fn deny_response(status: StatusCode, detail: &str) -> Response<Full<Bytes>> {
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b"internal error"))))
 }
 
+/// Build a structured denial HTTP response with a JSON body.
+///
+/// Used for enforcement denials routed through
+/// [`HandledResponse::Deny`](crate::handler::HandledResponse::Deny).
+fn deny_json_response(status: StatusCode, body: Vec<u8>) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .body(Full::new(Bytes::from(body)))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b"internal error"))))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
     use std::time::Duration;
 
     use chrono::Utc;
     use firma_core::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
     use tokio::net::UnixStream;
 
     use super::*;
@@ -242,8 +268,8 @@ mod tests {
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
     use crate::pipeline::{
-        ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, IntentNormalizer,
-        MappingTable, NullCredentialInjector, PipelineArgs,
+        ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, EnforcementPipeline,
+        IntentNormalizer, MappingTable, NullCredentialInjector, PipelineArgs,
     };
 
     // ── helpers ────────────────────────────────────────────────────────
@@ -302,7 +328,6 @@ mod tests {
     /// Builds a pipeline that ALLOWs POST requests to any host at the given
     /// path. Uses a wildcard host pattern (`*`).
     fn test_pipeline_allow(path: &str) -> Arc<EnforcementPipeline> {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
@@ -332,7 +357,6 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         }))
     }
@@ -340,7 +364,6 @@ mod tests {
     /// Builds a pipeline that DENYs classified requests (empty capability map).
     /// Uses `default_protected: true` so every host is protected.
     fn test_pipeline_deny_all() -> Arc<EnforcementPipeline> {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
@@ -367,7 +390,6 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         }))
     }
@@ -375,7 +397,6 @@ mod tests {
     /// Builds a pipeline where only `api.openai.com` is mapped and
     /// `default_protected` is false, so unmapped hosts pass through.
     fn test_pipeline_passthrough() -> Arc<EnforcementPipeline> {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
@@ -405,9 +426,42 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         }))
+    }
+
+    fn test_handler(pipeline: Arc<EnforcementPipeline>) -> Arc<RequestHandler> {
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        Arc::new(RequestHandler::new(pipeline, tx))
+    }
+
+    async fn mock_upstream() -> (SocketAddr, CancellationToken) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.ok();
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
+        let listener = listener.unwrap();
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
+        let addr = listener.local_addr().unwrap();
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        if let Ok((mut stream, _)) = accepted {
+                            let mut buf = vec![0u8; 4096];
+                            let _ = stream.read(&mut buf).await;
+                            let response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+                            let _ = stream.write_all(response.as_bytes()).await;
+                            let _ = stream.shutdown().await;
+                        }
+                    }
+                    () = cancel_clone.cancelled() => break,
+                }
+            }
+        });
+
+        (addr, cancel)
     }
 
     /// Returns a unique temporary socket path for a test.
@@ -418,12 +472,12 @@ mod tests {
     /// Starts the Unix socket interceptor and waits for it to be ready.
     async fn start_interceptor(
         path: &Path,
-        pipeline: Arc<EnforcementPipeline>,
+        handler: Arc<RequestHandler>,
         cancel: CancellationToken,
     ) -> tokio::task::JoinHandle<Result<(), InterceptorError>> {
         let interceptor = UnixSocketInterceptor::new(path.to_path_buf());
         let cancel_clone = cancel.clone();
-        let handle = tokio::spawn(async move { interceptor.run(pipeline, cancel_clone).await });
+        let handle = tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
 
         // Wait for the socket file to appear.
         for _ in 0..50 {
@@ -441,10 +495,10 @@ mod tests {
         let mut stream = UnixStream::connect(path)
             .await
             .map_err(|e| format!("connect failed: {e}"));
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let stream = stream.as_mut().unwrap();
 
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         stream.write_all(request.as_bytes()).await.unwrap();
 
         // Read the full response. The server writes the response after
@@ -526,30 +580,35 @@ mod tests {
     #[tokio::test]
     async fn test_uds_allows_valid_request() {
         let sock = temp_socket_path("allow");
-        let pipeline = test_pipeline_allow("/v1/chat/completions");
+        let (upstream_addr, upstream_cancel) = mock_upstream().await;
+        let handler = test_handler(test_pipeline_allow("/v1/chat/completions"));
         let cancel = CancellationToken::new();
-        let handle = start_interceptor(&sock, pipeline, cancel.clone()).await;
+        let handle = start_interceptor(&sock, handler, cancel.clone()).await;
 
-        let request = "POST /v1/chat/completions HTTP/1.1\r\n\
-                        Host: api.openai.com\r\n\
+        let request = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\n\
+                        Host: 127.0.0.1:{}\r\n\
                         Content-Length: 2\r\n\
                         \r\n\
-                        {}";
+                        {{}}",
+            upstream_addr.port()
+        );
 
-        let (status, body) = uds_request(&sock, request).await;
+        let (status, body) = uds_request(&sock, &request).await;
         assert_eq!(status, 200, "expected 200 OK for allowed request");
-        assert_eq!(body, "ALLOW");
+        assert_eq!(body, "OK");
 
         cancel.cancel();
+        upstream_cancel.cancel();
         let _ = handle.await;
     }
 
     #[tokio::test]
     async fn test_uds_denies_when_no_capability() {
         let sock = temp_socket_path("deny_cap");
-        let pipeline = test_pipeline_deny_all();
+        let handler = test_handler(test_pipeline_deny_all());
         let cancel = CancellationToken::new();
-        let handle = start_interceptor(&sock, pipeline, cancel.clone()).await;
+        let handle = start_interceptor(&sock, handler, cancel.clone()).await;
 
         let request = "POST /v1/chat/completions HTTP/1.1\r\n\
                         Host: api.openai.com\r\n\
@@ -568,9 +627,9 @@ mod tests {
     #[tokio::test]
     async fn test_uds_denies_unclassified_intent() {
         let sock = temp_socket_path("deny_unclass");
-        let pipeline = test_pipeline_allow("/v1/chat/completions");
+        let handler = test_handler(test_pipeline_allow("/v1/chat/completions"));
         let cancel = CancellationToken::new();
-        let handle = start_interceptor(&sock, pipeline, cancel.clone()).await;
+        let handle = start_interceptor(&sock, handler, cancel.clone()).await;
 
         // DELETE to a mapped host but unmapped method+path → unclassified → DENY
         let request = "DELETE /v1/files/abc HTTP/1.1\r\n\
@@ -587,31 +646,36 @@ mod tests {
     #[tokio::test]
     async fn test_uds_passthrough_for_unmapped_host() {
         let sock = temp_socket_path("passthrough");
-        let pipeline = test_pipeline_passthrough();
+        let (upstream_addr, upstream_cancel) = mock_upstream().await;
+        let handler = test_handler(test_pipeline_passthrough());
         let cancel = CancellationToken::new();
-        let handle = start_interceptor(&sock, pipeline, cancel.clone()).await;
+        let handle = start_interceptor(&sock, handler, cancel.clone()).await;
 
-        let request = "GET /anything HTTP/1.1\r\n\
-                        Host: not-protected.example.com\r\n\
-                        \r\n";
+        let request = format!(
+            "GET /anything HTTP/1.1\r\n\
+                        Host: 127.0.0.1:{}\r\n\
+                        \r\n",
+            upstream_addr.port()
+        );
 
-        let (status, body) = uds_request(&sock, request).await;
+        let (status, body) = uds_request(&sock, &request).await;
         assert_eq!(
             status, 200,
             "non-protected host should passthrough (200), got {status}"
         );
-        assert_eq!(body, "ALLOW");
+        assert_eq!(body, "OK");
 
         cancel.cancel();
+        upstream_cancel.cancel();
         let _ = handle.await;
     }
 
     #[tokio::test]
     async fn test_uds_denies_missing_host() {
         let sock = temp_socket_path("no_host");
-        let pipeline = test_pipeline_allow("/v1/chat/completions");
+        let handler = test_handler(test_pipeline_allow("/v1/chat/completions"));
         let cancel = CancellationToken::new();
-        let handle = start_interceptor(&sock, pipeline, cancel.clone()).await;
+        let handle = start_interceptor(&sock, handler, cancel.clone()).await;
 
         // HTTP/1.1 request with no Host header → MALFORMED_REQUEST
         let request = "POST /v1/chat/completions HTTP/1.1\r\n\
@@ -633,64 +697,72 @@ mod tests {
     #[tokio::test]
     async fn test_uds_allows_request_with_body() {
         let sock = temp_socket_path("body");
-        let pipeline = test_pipeline_allow("/v1/chat/completions");
+        let (upstream_addr, upstream_cancel) = mock_upstream().await;
+        let handler = test_handler(test_pipeline_allow("/v1/chat/completions"));
         let cancel = CancellationToken::new();
-        let handle = start_interceptor(&sock, pipeline, cancel.clone()).await;
+        let handle = start_interceptor(&sock, handler, cancel.clone()).await;
 
         let json_body = r#"{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}"#;
         let request = format!(
             "POST /v1/chat/completions HTTP/1.1\r\n\
-             Host: api.openai.com\r\n\
+             Host: 127.0.0.1:{}\r\n\
              Content-Type: application/json\r\n\
              Content-Length: {}\r\n\
              \r\n\
              {json_body}",
+            upstream_addr.port(),
             json_body.len()
         );
 
         let (status, body) = uds_request(&sock, &request).await;
         assert_eq!(status, 200, "request with body should be allowed");
-        assert_eq!(body, "ALLOW");
+        assert_eq!(body, "OK");
 
         cancel.cancel();
+        upstream_cancel.cancel();
         let _ = handle.await;
     }
 
     #[tokio::test]
     async fn test_uds_handles_multiple_sequential_connections() {
         let sock = temp_socket_path("multi");
-        let pipeline = test_pipeline_allow("/v1/chat/completions");
+        let (upstream_addr, upstream_cancel) = mock_upstream().await;
+        let handler = test_handler(test_pipeline_allow("/v1/chat/completions"));
         let cancel = CancellationToken::new();
-        let handle = start_interceptor(&sock, pipeline, cancel.clone()).await;
+        let handle = start_interceptor(&sock, handler, cancel.clone()).await;
 
-        let request = "POST /v1/chat/completions HTTP/1.1\r\n\
-                        Host: api.openai.com\r\n\
+        let request = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\n\
+                        Host: 127.0.0.1:{}\r\n\
                         Content-Length: 2\r\n\
                         \r\n\
-                        {}";
+                        {{}}",
+            upstream_addr.port()
+        );
 
         // Send three sequential requests on separate connections.
         for i in 0..3 {
-            let (status, body) = uds_request(&sock, request).await;
+            let (status, body) = uds_request(&sock, &request).await;
             assert_eq!(status, 200, "connection {i}: expected 200 OK, got {status}");
-            assert_eq!(body, "ALLOW", "connection {i}: unexpected body");
+            assert_eq!(body, "OK", "connection {i}: unexpected body");
         }
 
         cancel.cancel();
+        upstream_cancel.cancel();
         let _ = handle.await;
     }
 
     #[tokio::test]
     async fn test_uds_cleans_up_socket_on_shutdown() {
         let sock = temp_socket_path("cleanup");
-        let pipeline = test_pipeline_allow("/v1/chat/completions");
+        let handler = test_handler(test_pipeline_allow("/v1/chat/completions"));
         let cancel = CancellationToken::new();
-        let handle = start_interceptor(&sock, pipeline, cancel.clone()).await;
+        let handle = start_interceptor(&sock, handler, cancel.clone()).await;
 
         assert!(sock.exists(), "socket file should exist while running");
 
         cancel.cancel();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         handle.await.unwrap().unwrap();
 
         assert!(
@@ -706,7 +778,8 @@ mod tests {
         std::fs::write(&sock, b"stale").unwrap_or_default();
         assert!(sock.exists(), "stale file should exist before start");
 
-        let pipeline = test_pipeline_allow("/v1/chat/completions");
+        let (upstream_addr, upstream_cancel) = mock_upstream().await;
+        let handler = test_handler(test_pipeline_allow("/v1/chat/completions"));
         let cancel = CancellationToken::new();
 
         // Cannot use start_interceptor here because the stale regular file
@@ -714,7 +787,7 @@ mod tests {
         // and wait for a successful connection.
         let interceptor = UnixSocketInterceptor::new(sock.clone());
         let cancel_clone = cancel.clone();
-        let handle = tokio::spawn(async move { interceptor.run(pipeline, cancel_clone).await });
+        let handle = tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
 
         // Wait until we can actually connect to the socket.
         for _ in 0..50 {
@@ -726,19 +799,23 @@ mod tests {
 
         // The interceptor should have removed the stale file and bound
         // successfully.
-        let request = "POST /v1/chat/completions HTTP/1.1\r\n\
-                        Host: api.openai.com\r\n\
+        let request = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\n\
+                        Host: 127.0.0.1:{}\r\n\
                         Content-Length: 2\r\n\
                         \r\n\
-                        {}";
+                        {{}}",
+            upstream_addr.port()
+        );
 
-        let (status, _) = uds_request(&sock, request).await;
+        let (status, _) = uds_request(&sock, &request).await;
         assert_eq!(
             status, 200,
             "interceptor should work after removing stale socket"
         );
 
         cancel.cancel();
+        upstream_cancel.cancel();
         let _ = handle.await;
     }
 }

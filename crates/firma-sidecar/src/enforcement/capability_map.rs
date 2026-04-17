@@ -94,7 +94,10 @@ impl CapabilityMap {
     ///
     /// Returns `EnforcementDecision::Deny` if no capability token matches the
     /// requested action class and resource.
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "domain decision carries denial context"
+    )]
     pub fn select(
         &self,
         _session_id: &str,

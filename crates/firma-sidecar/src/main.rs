@@ -34,6 +34,7 @@ mod audit;
 mod config;
 mod credential;
 mod enforcement;
+mod handler;
 mod health;
 mod interceptor;
 mod log;
@@ -98,15 +99,16 @@ async fn main() -> anyhow::Result<()> {
         exit.clone(),
     )?;
 
-    // build enforcement pipeline
-    let pipeline = build_pipeline(&config, audit_payload_tx)?;
+    // build enforcement pipeline and request handler
+    let pipeline = build_pipeline(&config)?;
+    let handler = Arc::new(handler::RequestHandler::new(pipeline, audit_payload_tx));
 
     // run interceptor
     tracing::info!(
         mode = %config.interceptor.mode,
         "starting interceptor"
     );
-    let interceptor_handle = spawn_interceptor(&config, pipeline, exit.clone())?;
+    let interceptor_handle = spawn_interceptor(&config, handler, exit.clone())?;
 
     tracing::info!("all components initialized; entering main loop");
     // wait for all background tasks to complete
@@ -175,7 +177,6 @@ async fn read_config(path: &Path) -> anyhow::Result<config::SidecarConfig> {
 /// parsed, or when pipeline components fail to initialize.
 fn build_pipeline(
     config: &config::SidecarConfig,
-    audit_sink_tx: tokio::sync::mpsc::Sender<audit::AuditPayload>,
 ) -> anyhow::Result<Arc<pipeline::EnforcementPipeline>> {
     // Load mapping rules
     let rules_content =
@@ -242,7 +243,6 @@ fn build_pipeline(
         normalizer,
         capability_validator,
         constraint_enforcer,
-        audit_sink_sender: audit_sink_tx,
         credential_injector,
     });
     tracing::info!("enforcement pipeline initialized");
@@ -262,7 +262,7 @@ fn build_pipeline(
 /// validation, but enforced here defensively).
 fn spawn_interceptor(
     config: &config::SidecarConfig,
-    pipeline: Arc<pipeline::EnforcementPipeline>,
+    handler: Arc<handler::RequestHandler>,
     cancel: CancellationToken,
 ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     let ic = &config.interceptor;
@@ -272,7 +272,7 @@ fn spawn_interceptor(
             let interceptor = interceptor::http::HttpInterceptor::new(ic.listen_addr);
             tracing::info!(listen_addr = %ic.listen_addr, "HTTP proxy interceptor configured");
             Ok(tokio::spawn(async move {
-                if let Err(e) = interceptor.run(pipeline, cancel).await {
+                if let Err(e) = interceptor.run(handler, cancel).await {
                     tracing::error!(error = %e, "HTTP proxy interceptor failed");
                 }
             }))
@@ -281,7 +281,7 @@ fn spawn_interceptor(
             let interceptor = interceptor::grpc::GrpcInterceptor::new(ic.listen_addr);
             tracing::info!(listen_addr = %ic.listen_addr, "gRPC interceptor configured");
             Ok(tokio::spawn(async move {
-                if let Err(e) = interceptor.run(pipeline, cancel).await {
+                if let Err(e) = interceptor.run(handler, cancel).await {
                     tracing::error!(error = %e, "gRPC interceptor failed");
                 }
             }))
@@ -296,7 +296,7 @@ fn spawn_interceptor(
                 interceptor::unix_socket::UnixSocketInterceptor::new(socket_path.clone());
             tracing::info!(socket_path = %socket_path.display(), "Unix socket interceptor configured");
             Ok(tokio::spawn(async move {
-                if let Err(e) = interceptor.run(pipeline, cancel).await {
+                if let Err(e) = interceptor.run(handler, cancel).await {
                     tracing::error!(error = %e, "Unix socket interceptor failed");
                 }
             }))

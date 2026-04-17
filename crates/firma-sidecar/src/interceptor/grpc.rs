@@ -6,9 +6,9 @@
 //! proxy environment variable is required.
 //!
 //! The service converts each `InterceptRequest` proto message into a
-//! [`RawRequest`](crate::normalizer::RawRequest), runs it through the
-//! [`EnforcementPipeline`](crate::pipeline::EnforcementPipeline), and returns
-//! an `InterceptResponse` with the ALLOW / DENY decision.
+//! [`RawRequest`](crate::normalizer::RawRequest), passes it to the shared
+//! [`RequestHandler`](crate::handler::RequestHandler), and returns an
+//! `InterceptResponse` with the ALLOW / DENY result.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -16,8 +16,9 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 
+use crate::handler::{HandledResponse, RequestHandler};
 use crate::interceptor::{Interceptor, InterceptorError};
-use crate::pipeline::{EnforcementDecision, EnforcementPipeline, RawRequest};
+use crate::pipeline::RawRequest;
 use firma_grpc_interceptor_proto::interceptor_hook_server::{
     InterceptorHook, InterceptorHookServer,
 };
@@ -28,9 +29,10 @@ use firma_grpc_interceptor_proto::{InterceptRequest, InterceptResponse};
 /// Exposes an `InterceptorHook` gRPC service that agent code calls directly
 /// from within the same process or over a local connection. Each inbound
 /// `InterceptRequest` is converted into a
-/// [`RawRequest`](crate::normalizer::RawRequest) and enforced through the
-/// [`EnforcementPipeline`]. The resulting
-/// [`EnforcementDecision`] is mapped to an `InterceptResponse` returned to the
+/// [`RawRequest`](crate::normalizer::RawRequest) and handled through the
+/// [`RequestHandler`](crate::handler::RequestHandler). The resulting
+/// [`HandledResponse`](crate::handler::HandledResponse) is mapped to an
+/// `InterceptResponse` returned to the
 /// agent.
 ///
 /// Malformed requests that cannot be parsed into a valid `RawRequest` are
@@ -39,8 +41,8 @@ use firma_grpc_interceptor_proto::{InterceptRequest, InterceptResponse};
 pub struct GrpcInterceptor {
     /// Listen address for the gRPC server.
     address: SocketAddr,
-    /// Enforcement pipeline shared across all requests.
-    pipeline: Option<Arc<EnforcementPipeline>>,
+    /// Request handler shared across all requests.
+    handler: Option<Arc<RequestHandler>>,
 }
 
 impl GrpcInterceptor {
@@ -49,7 +51,7 @@ impl GrpcInterceptor {
     pub fn new(address: SocketAddr) -> Self {
         Self {
             address,
-            pipeline: None,
+            handler: None,
         }
     }
 }
@@ -66,10 +68,10 @@ impl InterceptorHook for GrpcInterceptor {
         &self,
         request: tonic::Request<InterceptRequest>,
     ) -> Result<tonic::Response<InterceptResponse>, tonic::Status> {
-        let pipeline = self
-            .pipeline
+        let handler = self
+            .handler
             .as_ref()
-            .ok_or_else(|| tonic::Status::internal("pipeline not initialized"))?;
+            .ok_or_else(|| tonic::Status::internal("request handler not initialized"))?;
 
         let metadata = request.metadata();
         let metadata_session_id = metadata
@@ -107,16 +109,14 @@ impl InterceptorHook for GrpcInterceptor {
             is_https: req.is_https,
         };
 
-        let decision = pipeline.enforce(&raw, &session_id).await;
+        let outcome = handler.handle(raw, &session_id).await;
 
-        let response = match decision {
-            EnforcementDecision::Allow { .. } | EnforcementDecision::Passthrough { .. } => {
-                InterceptResponse {
-                    allowed: true,
-                    reason: String::new(),
-                }
-            }
-            EnforcementDecision::Deny { reason, detail, .. } => InterceptResponse {
+        let response = match outcome {
+            HandledResponse::Ok(_) | HandledResponse::Passthrough(_) => InterceptResponse {
+                allowed: true,
+                reason: String::new(),
+            },
+            HandledResponse::Deny { reason, detail } => InterceptResponse {
                 allowed: false,
                 reason: format!("{reason}: {detail}"),
             },
@@ -129,11 +129,11 @@ impl InterceptorHook for GrpcInterceptor {
 impl Interceptor for GrpcInterceptor {
     async fn run(
         mut self,
-        pipeline: Arc<EnforcementPipeline>,
+        handler: Arc<RequestHandler>,
         cancel: CancellationToken,
     ) -> Result<(), InterceptorError> {
         let address = self.address;
-        self.pipeline = Some(pipeline);
+        self.handler = Some(handler);
 
         let svc = InterceptorHookServer::new(self);
         Server::builder()
@@ -152,14 +152,16 @@ mod tests {
     use chrono::Utc;
     use firma_core::*;
     use firma_grpc_interceptor_proto::interceptor_hook_client::InterceptorHookClient;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     use super::*;
     use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
     use crate::pipeline::{
-        ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, IntentNormalizer,
-        MappingTable, NullCredentialInjector, PipelineArgs,
+        ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, EnforcementPipeline,
+        IntentNormalizer, MappingTable, NullCredentialInjector, PipelineArgs,
     };
 
     /// Returns an available localhost address by binding to port 0.
@@ -168,7 +170,7 @@ mod tests {
             .ok()
             .and_then(|l| l.local_addr().ok());
         // SAFETY: this is test-only code; binding port 0 always succeeds
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         listener.unwrap()
     }
 
@@ -224,14 +226,12 @@ mod tests {
     }
 
     fn test_pipeline_allow() -> Arc<EnforcementPipeline> {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
-
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
                 method: Some("POST".to_string()),
-                host: "api.openai.com".to_string(),
+                host: "*".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
                 action_class: "llm.inference".to_string(),
             }],
@@ -255,13 +255,45 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         }))
     }
 
-    fn test_pipeline_deny_all() -> Arc<EnforcementPipeline> {
+    fn test_handler(pipeline: Arc<EnforcementPipeline>) -> Arc<RequestHandler> {
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        Arc::new(RequestHandler::new(pipeline, tx))
+    }
+
+    async fn mock_upstream() -> (SocketAddr, CancellationToken) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.ok();
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
+        let listener = listener.unwrap();
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
+        let addr = listener.local_addr().unwrap();
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        if let Ok((mut stream, _)) = accepted {
+                            let mut buf = vec![0u8; 4096];
+                            let _ = stream.read(&mut buf).await;
+                            let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+                            let _ = stream.write_all(response.as_bytes()).await;
+                            let _ = stream.shutdown().await;
+                        }
+                    }
+                    () = cancel_clone.cancelled() => break,
+                }
+            }
+        });
+
+        (addr, cancel)
+    }
+
+    fn test_pipeline_deny_all() -> Arc<EnforcementPipeline> {
         // Empty capability map — every classified request fails at token selection
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
@@ -289,7 +321,6 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         }))
     }
@@ -297,20 +328,21 @@ mod tests {
     #[tokio::test]
     async fn test_intercept_allows_valid_request() {
         let addr = free_addr();
-        let pipeline = test_pipeline_allow();
+        let (upstream_addr, upstream_cancel) = mock_upstream().await;
+        let handler = test_handler(test_pipeline_allow());
         let cancel = CancellationToken::new();
 
         let interceptor = GrpcInterceptor::new(addr);
         let cancel_clone = cancel.clone();
         let server_handle =
-            tokio::spawn(async move { interceptor.run(pipeline, cancel_clone).await });
+            tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let mut client = InterceptorHookClient::connect(format!("http://{addr}"))
             .await
             .map_err(|e| format!("connect failed: {e}"));
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let client = client.as_mut().unwrap();
 
         let mut headers = HashMap::new();
@@ -319,7 +351,7 @@ mod tests {
         let response = client
             .intercept(InterceptRequest {
                 method: "POST".to_owned(),
-                host: "api.openai.com".to_owned(),
+                host: format!("127.0.0.1:{}", upstream_addr.port()),
                 path: "/v1/chat/completions".to_owned(),
                 headers,
                 body: b"{}".to_vec(),
@@ -327,34 +359,35 @@ mod tests {
                 session_id: String::new(),
             })
             .await;
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let response = response.unwrap().into_inner();
 
         assert!(response.allowed);
         assert!(response.reason.is_empty());
 
         cancel.cancel();
-        #[allow(clippy::unwrap_used)]
+        upstream_cancel.cancel();
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         server_handle.await.unwrap().unwrap();
     }
 
     #[tokio::test]
     async fn test_intercept_denies_when_no_capability() {
         let addr = free_addr();
-        let pipeline = test_pipeline_deny_all();
+        let handler = test_handler(test_pipeline_deny_all());
         let cancel = CancellationToken::new();
 
         let interceptor = GrpcInterceptor::new(addr);
         let cancel_clone = cancel.clone();
         let server_handle =
-            tokio::spawn(async move { interceptor.run(pipeline, cancel_clone).await });
+            tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let mut client = InterceptorHookClient::connect(format!("http://{addr}"))
             .await
             .map_err(|e| format!("connect failed: {e}"));
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let client = client.as_mut().unwrap();
 
         let response = client
@@ -368,41 +401,42 @@ mod tests {
                 session_id: String::new(),
             })
             .await;
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let response = response.unwrap().into_inner();
 
         assert!(!response.allowed);
         assert!(!response.reason.is_empty());
 
         cancel.cancel();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         server_handle.await.unwrap().unwrap();
     }
 
     #[tokio::test]
     async fn test_intercept_empty_body_becomes_none() {
         let addr = free_addr();
-        let pipeline = test_pipeline_allow();
+        let (upstream_addr, upstream_cancel) = mock_upstream().await;
+        let handler = test_handler(test_pipeline_allow());
         let cancel = CancellationToken::new();
 
         let interceptor = GrpcInterceptor::new(addr);
         let cancel_clone = cancel.clone();
         let server_handle =
-            tokio::spawn(async move { interceptor.run(pipeline, cancel_clone).await });
+            tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let mut client = InterceptorHookClient::connect(format!("http://{addr}"))
             .await
             .map_err(|e| format!("connect failed: {e}"));
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let client = client.as_mut().unwrap();
 
         // POST to a mapped endpoint with empty body — should still allow
         let response = client
             .intercept(InterceptRequest {
                 method: "POST".to_owned(),
-                host: "api.openai.com".to_owned(),
+                host: format!("127.0.0.1:{}", upstream_addr.port()),
                 path: "/v1/chat/completions".to_owned(),
                 headers: HashMap::new(),
                 body: Vec::new(),
@@ -410,33 +444,34 @@ mod tests {
                 session_id: String::new(),
             })
             .await;
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let response = response.unwrap().into_inner();
 
         assert!(response.allowed);
 
         cancel.cancel();
-        #[allow(clippy::unwrap_used)]
+        upstream_cancel.cancel();
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         server_handle.await.unwrap().unwrap();
     }
 
     #[tokio::test]
     async fn test_intercept_denies_malformed_request_missing_host() {
         let addr = free_addr();
-        let pipeline = test_pipeline_allow();
+        let handler = test_handler(test_pipeline_allow());
         let cancel = CancellationToken::new();
 
         let interceptor = GrpcInterceptor::new(addr);
         let cancel_clone = cancel.clone();
         let server_handle =
-            tokio::spawn(async move { interceptor.run(pipeline, cancel_clone).await });
+            tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let mut client = InterceptorHookClient::connect(format!("http://{addr}"))
             .await
             .map_err(|e| format!("connect failed: {e}"));
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let client = client.as_mut().unwrap();
 
         let response = client
@@ -450,14 +485,14 @@ mod tests {
                 session_id: String::new(),
             })
             .await;
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let response = response.unwrap().into_inner();
 
         assert!(!response.allowed);
         assert!(response.reason.contains("MALFORMED_REQUEST"));
 
         cancel.cancel();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         server_handle.await.unwrap().unwrap();
     }
 }

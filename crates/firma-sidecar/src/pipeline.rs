@@ -33,8 +33,6 @@ pub use crate::enforcement::decision::EnforcementDecision;
 pub use crate::enforcement::registry::ActionClassRegistry;
 pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
 
-type AuditSinkSender = tokio::sync::mpsc::Sender<AuditPayload>;
-
 /// Proto wire values for the enforcement decision enum.
 const DECISION_ALLOW: i32 = 1;
 const DECISION_DENY: i32 = 2;
@@ -50,8 +48,6 @@ pub struct PipelineArgs {
     pub capability_validator: CapabilityValidator,
     /// Stage 2: scope check, bundle freshness, Cedar policy eval.
     pub constraint_enforcer: ConstraintEnforcer,
-    /// Channel for emitting audit payloads to the signing adapter.
-    pub audit_sink_sender: AuditSinkSender,
     /// Credential injector called after Stage 2 ALLOW.
     pub credential_injector: Box<dyn CredentialInjector>,
 }
@@ -69,7 +65,6 @@ pub struct PipelineArgs {
 ///
 /// Target: < 3ms p95 end-to-end overhead.
 pub struct EnforcementPipeline {
-    audit_sink_sender: AuditSinkSender,
     capability_validator: CapabilityValidator,
     constraint_enforcer: ConstraintEnforcer,
     credential_injector: Box<dyn CredentialInjector>,
@@ -82,7 +77,6 @@ impl EnforcementPipeline {
     #[must_use]
     pub fn new(args: PipelineArgs) -> Self {
         Self {
-            audit_sink_sender: args.audit_sink_sender,
             capability_validator: args.capability_validator,
             constraint_enforcer: args.constraint_enforcer,
             credential_injector: args.credential_injector,
@@ -103,16 +97,17 @@ impl EnforcementPipeline {
     /// 5. On Allow: assemble a fully populated `ExecutionEnvelope` from
     ///    the normalized envelope + validated capability + session context.
     #[must_use]
-    pub async fn enforce(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
+    pub async fn enforce(
+        &self,
+        request: &RawRequest,
+        session_id: &str,
+    ) -> (EnforcementDecision, AuditPayload) {
         let start = std::time::Instant::now();
 
         let decision = self.enforce_inner(request, session_id).await;
+        let payload = audit_payload_from_decision(&decision, session_id, start.elapsed());
 
-        // Audit every decision — ALLOW, DENY, and PASSTHROUGH.
-        self.send_audit_event(&decision, session_id, start.elapsed())
-            .await;
-
-        decision
+        (decision, payload)
     }
 
     /// Enforcement logic, separated so the outer [`enforce`](Self::enforce)
@@ -189,22 +184,6 @@ impl EnforcementPipeline {
         EnforcementDecision::Allow {
             claims: capability.claims,
             envelope: Box::new(envelope),
-        }
-    }
-
-    /// Builds an [`AuditPayload`] from the decision and sends it through
-    /// the audit channel. The signing adapter on the sink side handles
-    /// UUID generation, timestamping, and ECDSA signing.
-    async fn send_audit_event(
-        &self,
-        decision: &EnforcementDecision,
-        session_id: &str,
-        latency: Duration,
-    ) {
-        let payload = audit_payload_from_decision(decision, session_id, latency);
-
-        if let Err(err) = self.audit_sink_sender.send(payload).await {
-            tracing::error!("failed to send audit event: {err}");
         }
     }
 }
@@ -399,7 +378,6 @@ mod tests {
     }
 
     fn test_pipeline() -> EnforcementPipeline {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
@@ -420,7 +398,6 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         })
     }
@@ -437,7 +414,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001").await;
+        let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_allow());
 
         if let EnforcementDecision::Allow { claims, envelope } = decision {
@@ -464,14 +441,13 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001").await;
+        let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
     }
 
     #[tokio::test]
     async fn test_enforce_not_protected_returns_passthrough() {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
             method: Some("POST".to_string()),
@@ -496,7 +472,6 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         });
 
@@ -509,7 +484,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001").await;
+        let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(
             decision.is_passthrough(),
             "non-protected traffic should passthrough, not deny"
@@ -563,14 +538,11 @@ mod tests {
             }
         }
 
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
-
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(DenyDeletePolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         });
 
@@ -583,7 +555,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001").await;
+        let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyDenied));
     }
@@ -621,13 +593,11 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
 
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         });
 
@@ -640,7 +610,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001").await;
+        let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
         assert_eq!(
@@ -672,13 +642,11 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
 
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         });
 
@@ -691,7 +659,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001").await;
+        let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
     }
@@ -711,7 +679,7 @@ mod tests {
         };
 
         for _ in 0..100 {
-            let decision = pipeline.enforce(&request, "sess_001").await;
+            let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
             assert!(
                 decision.is_allow(),
                 "non-deterministic: got DENY on repeated call"
@@ -732,7 +700,7 @@ mod tests {
         };
 
         for _ in 0..100 {
-            let decision = pipeline.enforce(&request, "sess_001").await;
+            let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
             assert!(decision.is_deny());
             assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
         }
@@ -752,7 +720,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001").await;
+        let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_allow());
 
         if let EnforcementDecision::Allow { claims, envelope } = decision {
@@ -818,12 +786,10 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         });
 
@@ -836,7 +802,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001").await;
+        let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::TokenRevoked));
     }
@@ -864,12 +830,10 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         });
 
@@ -882,7 +846,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001").await;
+        let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::TokenExpired));
     }
@@ -911,12 +875,10 @@ mod tests {
             Duration::from_secs(0),
         );
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         });
 
@@ -929,7 +891,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001").await;
+        let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         // Token selection fails because no token covers http.get
         assert!(decision.is_deny());
     }
@@ -950,7 +912,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001").await;
+        let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_allow());
 
         if let EnforcementDecision::Allow { envelope, .. } = decision {
@@ -1006,13 +968,11 @@ mod tests {
         }
 
         let constraint_enforcer = ConstraintEnforcer::new(Box::new(StalePolicy));
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
 
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         });
 
@@ -1025,7 +985,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001").await;
+        let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
     }
@@ -1034,7 +994,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_enforce_allow_emits_audit_event() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
@@ -1052,7 +1011,6 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         });
 
@@ -1065,12 +1023,9 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_audit").await;
+        let (decision, payload) = pipeline.enforce(&request, "sess_audit").await;
         assert!(decision.is_allow());
 
-        let payload = rx
-            .try_recv()
-            .unwrap_or_else(|e| panic!("expected audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_audit");
         assert_eq!(payload.decision, 1); // ALLOW
         assert_eq!(payload.token_id, "tok_001");
@@ -1081,7 +1036,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_enforce_deny_emits_audit_event() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
@@ -1096,7 +1050,6 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         });
 
@@ -1109,19 +1062,15 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_deny").await;
+        let (decision, payload) = pipeline.enforce(&request, "sess_deny").await;
         assert!(decision.is_deny());
 
-        let payload = rx
-            .try_recv()
-            .unwrap_or_else(|e| panic!("expected audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_deny");
         assert_eq!(payload.decision, 2); // DENY
     }
 
     #[tokio::test]
     async fn test_enforce_passthrough_emits_audit_event() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
 
         let rules = vec![MappingRuleConfig {
@@ -1145,7 +1094,6 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         });
 
@@ -1158,19 +1106,15 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_pt").await;
+        let (decision, payload) = pipeline.enforce(&request, "sess_pt").await;
         assert!(decision.is_passthrough());
 
-        let payload = rx
-            .try_recv()
-            .unwrap_or_else(|e| panic!("expected audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_pt");
         assert_eq!(payload.decision, 1); // Passthrough maps to ALLOW
     }
 
     #[tokio::test]
     async fn test_enforce_normalization_deny_emits_audit_event() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
@@ -1188,7 +1132,6 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         });
 
@@ -1202,13 +1145,10 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_norm").await;
+        let (decision, payload) = pipeline.enforce(&request, "sess_norm").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
 
-        let payload = rx
-            .try_recv()
-            .unwrap_or_else(|e| panic!("expected audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_norm");
         assert_eq!(payload.decision, 2); // DENY
     }
@@ -1217,7 +1157,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_enforce_credential_injection_success() {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
@@ -1243,7 +1182,6 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(injector),
         });
 
@@ -1256,7 +1194,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_cred").await;
+        let (decision, _payload) = pipeline.enforce(&request, "sess_cred").await;
         assert!(
             decision.is_allow(),
             "credential injection should not block Allow"
@@ -1265,7 +1203,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_enforce_credential_injection_unknown_connector_allows() {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
@@ -1287,7 +1224,6 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(injector),
         });
 
@@ -1301,7 +1237,7 @@ mod tests {
         };
 
         // UnknownConnector should be treated as passthrough (empty creds)
-        let decision = pipeline.enforce(&request, "sess_cred").await;
+        let (decision, _payload) = pipeline.enforce(&request, "sess_cred").await;
         assert!(
             decision.is_allow(),
             "unknown connector should still Allow with empty credentials"
@@ -1310,7 +1246,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_enforce_credential_injection_fetch_failed_denies() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let claims = test_claims();
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
@@ -1340,7 +1275,6 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(injector),
         });
 
@@ -1353,17 +1287,13 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_fail").await;
+        let (decision, payload) = pipeline.enforce(&request, "sess_fail").await;
         assert!(decision.is_deny(), "FetchFailed should produce DENY");
         assert_eq!(
             decision.deny_reason(),
             Some(DenyReason::CredentialInjectionFailed)
         );
 
-        // Verify audit event emitted for the deny
-        let payload = rx
-            .try_recv()
-            .unwrap_or_else(|e| panic!("expected audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_fail");
         assert_eq!(payload.decision, 2); // DENY
     }

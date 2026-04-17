@@ -116,7 +116,10 @@ impl IntentNormalizer {
     /// - The HTTP method is not a recognized standard method (fail-closed).
     ///
     /// Returns `EnforcementDecision::Passthrough` if the host is not protected.
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "domain decision carries denial context"
+    )]
     pub fn normalize(
         &self,
         request: &RawRequest,

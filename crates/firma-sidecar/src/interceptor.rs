@@ -7,8 +7,8 @@
 //!
 //! Regardless of interception mode, the raw intercepted request is converted
 //! into a [`RawRequest`](crate::normalizer::RawRequest) and passed to the
-//! [`EnforcementPipeline`](crate::pipeline::EnforcementPipeline) for
-//! enforcement. If the intercepted request cannot be parsed into a valid
+//! [`RequestHandler`](crate::handler::RequestHandler) for enforcement and
+//! dispatch. If the intercepted request cannot be parsed into a valid
 //! `RawRequest`, the interceptor returns a structured DENY with reason
 //! `MALFORMED_REQUEST` (fail-closed).
 
@@ -20,7 +20,7 @@ pub mod unix_socket;
 
 use std::sync::Arc;
 
-use crate::pipeline::EnforcementPipeline;
+use crate::handler::RequestHandler;
 
 use tokio_util::sync::CancellationToken;
 
@@ -41,9 +41,9 @@ pub enum InterceptorError {
 /// Every outbound agent call must pass through an [`Interceptor`] before reaching
 /// the target. The interceptor converts transport-specific input into a
 /// [`RawRequest`](crate::normalizer::RawRequest), runs it through the
-/// [`EnforcementPipeline`], and acts on the resulting
-/// [`EnforcementDecision`](crate::pipeline::EnforcementDecision) at the
-/// transport level (forward on Allow/Passthrough, reject on Deny).
+/// [`RequestHandler`], and serializes the resulting
+/// [`HandledResponse`](crate::handler::HandledResponse) at the transport
+/// level.
 ///
 /// Three interception modes are supported today:
 ///
@@ -60,16 +60,14 @@ pub enum InterceptorError {
 /// * The implementor **must** build a
 ///   [`RawRequest`](crate::normalizer::RawRequest) from the incoming
 ///   transport data and call
-///   [`EnforcementPipeline::enforce`] to obtain a decision.
+///   [`RequestHandler::handle`](crate::handler::RequestHandler::handle).
 /// * If a request cannot be parsed into a valid
 ///   [`RawRequest`](crate::normalizer::RawRequest), the implementor
 ///   **must** reply to the caller with a structured DENY carrying reason
 ///   `MALFORMED_REQUEST` (fail-closed).
-/// * On [`EnforcementDecision::Allow`](crate::pipeline::EnforcementDecision)
-///   or [`EnforcementDecision::Passthrough`](crate::pipeline::EnforcementDecision),
-///   the implementor forwards the request to the upstream.
-/// * On [`EnforcementDecision::Deny`](crate::pipeline::EnforcementDecision),
-///   the implementor returns a structured denial to the caller.
+/// * On allow or passthrough, the implementor serializes the dispatched
+///   response returned by the handler.
+/// * On deny, the implementor returns a structured denial to the caller.
 /// * The implementor **must** stop accepting new connections and drain
 ///   in-flight work when `cancel` is triggered, then return `Ok(())`.
 ///
@@ -78,7 +76,7 @@ pub enum InterceptorError {
 /// Returns [`InterceptorError`] if the interceptor encounters an
 /// unrecoverable error.
 pub trait Interceptor: Send + Sync + 'static {
-    /// Starts the interceptor loop, enforcing each request via `pipeline`.
+    /// Starts the interceptor loop, handling each request via `handler`.
     ///
     /// This method runs until `cancel` is triggered or an unrecoverable
     /// error occurs. Implementors should treat this as the main run loop
@@ -89,7 +87,7 @@ pub trait Interceptor: Send + Sync + 'static {
     /// Returns [`InterceptorError`] on unrecoverable failure.
     fn run(
         self,
-        pipeline: Arc<EnforcementPipeline>,
+        handler: Arc<RequestHandler>,
         cancel: CancellationToken,
     ) -> impl Future<Output = Result<(), InterceptorError>>;
 }

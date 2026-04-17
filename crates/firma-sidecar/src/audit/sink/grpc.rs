@@ -163,7 +163,7 @@ mod tests {
         );
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "endpoint retained for sink diagnostics")]
     /// Verifies that events sent through the channel are converted to
     /// proto types. This is a compile-time check that the `From` impl
     /// is wired correctly; the actual gRPC call requires a live server.

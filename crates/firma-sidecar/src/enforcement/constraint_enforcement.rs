@@ -99,7 +99,10 @@ impl ConstraintEnforcer {
     ///
     /// Returns `EnforcementDecision::Deny` if scope check, bundle freshness,
     /// or Cedar policy evaluation fails.
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "domain decision carries denial context"
+    )]
     pub fn evaluate(
         &self,
         envelope: &NormalizedEnvelope,
@@ -155,8 +158,11 @@ impl ConstraintEnforcer {
 
     /// Scope check: verify `action_class` is in the token's allowed action set.
     /// Wildcard "*" in `action_set` means all actions are allowed.
-    #[allow(clippy::unused_self)] // will use self when Cedar is integrated
-    #[allow(clippy::result_large_err)]
+    #[expect(clippy::unused_self, reason = "will use self when Cedar is integrated")]
+    #[expect(
+        clippy::result_large_err,
+        reason = "domain decision carries denial context"
+    )]
     fn check_scope(
         &self,
         envelope: &NormalizedEnvelope,
@@ -185,7 +191,7 @@ impl ConstraintEnforcer {
     }
 
     /// Build the Cedar evaluation context from envelope + claims.
-    #[allow(clippy::unused_self)] // will use self when Cedar is integrated
+    #[expect(clippy::unused_self, reason = "will use self when Cedar is integrated")]
     fn build_context(
         &self,
         envelope: &NormalizedEnvelope,
