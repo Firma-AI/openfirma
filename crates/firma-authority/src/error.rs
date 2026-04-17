@@ -17,6 +17,9 @@ pub enum AuthorityError {
 
     #[error("revocation error: {reason}")]
     RevocationError { reason: String },
+
+    #[error("file watch failed: {reason}")]
+    WatchFailed { reason: String },
 }
 
 impl From<crate::config::ConfigError> for AuthorityError {

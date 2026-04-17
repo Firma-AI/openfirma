@@ -10,20 +10,23 @@ use firma_core::policy::PolicyBundle;
 
 use crate::error::AuthorityError;
 
+/// All mutable policy state kept under a single lock for atomic swaps.
+struct PolicyState {
+    policy_set: Arc<PolicySet>,
+    schema: Option<Arc<Schema>>,
+    bundle: PolicyBundle,
+}
+
 /// Thread-safe Cedar policy store with hot-reload support.
 ///
-/// Holds the currently active `PolicySet` and `Schema` behind an `RwLock`,
-/// and exposes a `watch::Sender` that downstream consumers (gRPC streams)
-/// subscribe to for push notifications on policy changes.
+/// All policy state (`PolicySet`, `Schema`, `PolicyBundle`) is held under a
+/// single `RwLock` so that `reload()` updates are atomic — no reader ever
+/// sees a new policy set paired with a stale schema or bundle.
 #[derive(Clone)]
 pub struct CedarPolicyStore {
-    /// Current compiled policy set.
-    policy_set: Arc<RwLock<Arc<PolicySet>>>,
-    /// Current Cedar schema (if loaded).
-    schema: Arc<RwLock<Option<Arc<Schema>>>>,
-    /// Current bundle snapshot for distribution to sidecars.
-    bundle: Arc<RwLock<PolicyBundle>>,
-    /// Broadcast channel for policy bundle updates.
+    /// Atomic policy state.
+    state: Arc<RwLock<PolicyState>>,
+    /// Watch channel for policy bundle updates (push to sidecars).
     bundle_tx: watch::Sender<PolicyBundle>,
     /// Policy directory path.
     policy_dir: PathBuf,
@@ -62,31 +65,30 @@ impl CedarPolicyStore {
         );
 
         Ok(Self {
-            policy_set: Arc::new(RwLock::new(Arc::new(policy_set))),
-            schema: Arc::new(RwLock::new(schema.map(Arc::new))),
-            bundle: Arc::new(RwLock::new(bundle)),
+            state: Arc::new(RwLock::new(PolicyState {
+                policy_set: Arc::new(policy_set),
+                schema: schema.map(Arc::new),
+                bundle,
+            })),
             bundle_tx,
             policy_dir: policy_dir.to_path_buf(),
             bundle_ttl_seconds,
         })
     }
 
-    /// Reload policies from disk. If the new policy set is valid, atomically
-    /// swap and notify all watchers. If invalid, keep the previous set (FR-2).
+    /// Reload policies from disk, atomically swapping all state in one lock
+    /// acquisition. If the new policy set is invalid, keeps the previous set
+    /// (FR-2). No-ops if the version hash has not changed.
     pub async fn reload(&self) -> Result<(), AuthorityError> {
         let (policies_src, schema_src) = read_policy_files(&self.policy_dir)?;
         let new_policy_set = parse_policies(&policies_src)?;
         let new_schema = parse_schema(&schema_src)?;
-
         let new_version = compute_version_hash(&policies_src, &schema_src);
 
-        // Check if version changed
-        {
-            let current_bundle = self.bundle.read().await;
-            if current_bundle.version == new_version {
-                tracing::debug!("policy reload: no changes detected");
-                return Ok(());
-            }
+        let mut state = self.state.write().await;
+        if state.bundle.version == new_version {
+            tracing::debug!("policy reload: no changes detected");
+            return Ok(());
         }
 
         let new_bundle = PolicyBundle::new(
@@ -96,19 +98,10 @@ impl CedarPolicyStore {
             self.bundle_ttl_seconds,
         );
 
-        // Atomic swap
-        {
-            let mut ps = self.policy_set.write().await;
-            *ps = Arc::new(new_policy_set);
-        }
-        {
-            let mut s = self.schema.write().await;
-            *s = new_schema.map(Arc::new);
-        }
-        {
-            let mut b = self.bundle.write().await;
-            *b = new_bundle.clone();
-        }
+        state.policy_set = Arc::new(new_policy_set);
+        state.schema = new_schema.map(Arc::new);
+        state.bundle = new_bundle.clone();
+        drop(state);
 
         // Notify all watchers — ignore error (no receivers is fine)
         let _ = self.bundle_tx.send(new_bundle);
@@ -119,18 +112,18 @@ impl CedarPolicyStore {
 
     /// Get a snapshot of the current policy set for evaluation.
     pub async fn policy_set(&self) -> Arc<PolicySet> {
-        Arc::clone(&*self.policy_set.read().await)
+        self.state.read().await.policy_set.clone()
     }
 
     /// Get the current schema, if one was loaded.
     #[expect(dead_code, reason = "will be used when schema validation is wired in")]
     pub async fn schema(&self) -> Option<Arc<Schema>> {
-        self.schema.read().await.clone()
+        self.state.read().await.schema.clone()
     }
 
     /// Get the current policy bundle for distribution to sidecars.
     pub async fn bundle(&self) -> PolicyBundle {
-        self.bundle.read().await.clone()
+        self.state.read().await.bundle.clone()
     }
 
     /// Watch the policy directory for changes and reload automatically.
@@ -139,7 +132,11 @@ impl CedarPolicyStore {
     /// [`notify::event::EventKind::Remove`] events trigger a reload. Returns a
     /// [`CedarPolicyStoreWatcher`]: keep it alive for the watch to stay active.
     /// Dropping it stops the file watch and the reload task.
-    pub fn watch(&self) -> Result<CedarPolicyStoreWatcher, notify::Error> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `AuthorityError` if the OS file watcher cannot be created or registered.
+    pub fn watch(&self) -> Result<CedarPolicyStoreWatcher, AuthorityError> {
         use notify::Watcher as _;
 
         let path = self.policy_dir.clone();
@@ -164,9 +161,13 @@ impl CedarPolicyStore {
                 _ => {}
             },
         )
-        .inspect_err(|error| tracing::error!(?error, "failed to create policy directory watcher"))?;
+        .map_err(|e| AuthorityError::WatchFailed { reason: e.to_string() })?;
 
-        watcher.watch(&path, notify::RecursiveMode::NonRecursive)?;
+        watcher
+            .watch(&path, notify::RecursiveMode::NonRecursive)
+            .map_err(|e| AuthorityError::WatchFailed {
+                reason: e.to_string(),
+            })?;
 
         let task = tokio::spawn(async move {
             while rx_signal.recv().await.is_some() {
@@ -178,7 +179,7 @@ impl CedarPolicyStore {
 
         Ok(CedarPolicyStoreWatcher {
             _watcher: watcher,
-            _task: task,
+            task,
             tx: self.bundle_tx.clone(),
         })
     }
@@ -188,7 +189,7 @@ impl CedarPolicyStore {
 /// Dropping this handle stops the file watch and the reload task.
 pub struct CedarPolicyStoreWatcher {
     _watcher: notify::RecommendedWatcher,
-    _task: JoinHandle<()>,
+    task: JoinHandle<()>,
     tx: watch::Sender<PolicyBundle>,
 }
 
@@ -197,6 +198,12 @@ impl CedarPolicyStoreWatcher {
     /// immediately, then yields on changes.
     pub fn subscribe(&self) -> watch::Receiver<PolicyBundle> {
         self.tx.subscribe()
+    }
+
+    /// Abort the background reload task immediately.
+    #[expect(dead_code, reason = "explicit shutdown hook for callers that need it")]
+    pub fn abort(&self) {
+        self.task.abort();
     }
 }
 
@@ -385,7 +392,10 @@ mod tests {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
         let v1 = store.bundle().await.version.clone();
-        let _watcher = store.watch().unwrap_or_else(|e| panic!("{e}"));
+
+        let watcher = store.watch().unwrap_or_else(|e| panic!("{e}"));
+        let mut rx = watcher.subscribe();
+        let _ = rx.borrow_and_update().clone(); // mark initial value as seen
 
         std::fs::write(
             dir.path().join("basic.cedar"),
@@ -393,13 +403,13 @@ mod tests {
         )
         .unwrap_or_else(|e| panic!("{e}"));
 
-        for _ in 0..50 {
-            tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
-            if store.bundle().await.version != v1 {
-                return;
-            }
-        }
-        panic!("policy store did not reload within timeout");
+        // The watch::changed() future is the completion signal — no polling needed.
+        tokio::time::timeout(tokio::time::Duration::from_millis(500), rx.changed())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for policy reload"))
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        assert_ne!(store.bundle().await.version, v1);
     }
 
     #[tokio::test]

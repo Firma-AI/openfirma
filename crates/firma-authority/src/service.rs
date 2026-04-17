@@ -14,6 +14,7 @@ use firma_proto::firma::v1::{
 };
 use sha2::{Digest, Sha256};
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::{Stream, StreamExt};
 use tonic::{Request as TonicRequest, Response, Status};
 
@@ -234,8 +235,13 @@ impl AuthorityService for AuthorityServiceImpl {
 
             // Then stream new events as they arrive
             let mut broadcast_stream = BroadcastStream::new(broadcast_rx);
-            while let Some(Ok(entry)) = broadcast_stream.next().await {
-                yield entry_to_proto(&entry);
+            while let Some(result) = broadcast_stream.next().await {
+                match result {
+                    Ok(entry) => yield entry_to_proto(&entry),
+                    Err(BroadcastStreamRecvError::Lagged(n)) => {
+                        tracing::warn!(missed = n, "sidecar missed revocation events due to slow consumption");
+                    }
+                }
             }
         };
 
