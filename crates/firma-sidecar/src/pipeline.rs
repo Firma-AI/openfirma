@@ -242,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enforce_happy_path() {
+    fn enforce_happy_path() {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: "POST".to_string(),
@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enforce_unclassified_intent() {
+    fn enforce_unclassified_intent() {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: "DELETE".to_string(),
@@ -286,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enforce_not_protected_returns_passthrough() {
+    fn enforce_not_protected_returns_passthrough() {
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
             method: Some("POST".to_string()),
@@ -324,7 +324,25 @@ mod tests {
     }
 
     #[test]
-    fn test_enforce_scope_violation() {
+    fn enforce_scope_violation() {
+        struct DenyDeletePolicy;
+        impl PolicyEvaluation for DenyDeletePolicy {
+            fn evaluate(
+                &self,
+                _: &AgentId,
+                action: &str,
+                _: &str,
+                _: &serde_json::Value,
+            ) -> Result<bool, String> {
+                Ok(action != "http.delete")
+            }
+            fn is_fresh(&self) -> bool {
+                true
+            }
+            fn version(&self) -> Option<String> {
+                Some("test".to_string())
+            }
+        }
         let rules = vec![MappingRuleConfig {
             method: Some("DELETE".to_string()),
             host: "api.example.com".to_string(),
@@ -344,26 +362,6 @@ mod tests {
             }),
             Box::new(NoRevocations),
         );
-
-        struct DenyDeletePolicy;
-        impl PolicyEvaluation for DenyDeletePolicy {
-            fn evaluate(
-                &self,
-                _: &AgentId,
-                action: &str,
-                _: &str,
-                _: &serde_json::Value,
-            ) -> Result<bool, String> {
-                Ok(action != "http.delete")
-            }
-            fn is_fresh(&self) -> bool {
-                true
-            }
-            fn version(&self) -> Option<String> {
-                Some("test".to_string())
-            }
-        }
-
         let stage2 = ConstraintEnforcer::new(Box::new(DenyDeletePolicy));
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
 
@@ -384,15 +382,7 @@ mod tests {
     // ===== Fail-closed discipline tests =====
 
     #[test]
-    fn test_enforce_stage1_failure_short_circuits_stage2() {
-        let claims = test_claims();
-        let rules = vec![MappingRuleConfig {
-            method: Some("POST".to_string()),
-            host: "api.openai.com".to_string(),
-            path: Some("/v1/chat/completions".to_string()),
-            action_class: "llm.inference".to_string(),
-        }];
-
+    fn enforce_stage1_failure_short_circuits_stage2() {
         struct RejectingVerifier;
         impl TokenVerifier for RejectingVerifier {
             fn verify(&self, _: &str) -> Result<CapabilityClaims, TokenError> {
@@ -401,6 +391,14 @@ mod tests {
                 })
             }
         }
+
+        let claims = test_claims();
+        let rules = vec![MappingRuleConfig {
+            method: Some("POST".to_string()),
+            host: "api.openai.com".to_string(),
+            path: Some("/v1/chat/completions".to_string()),
+            action_class: "llm.inference".to_string(),
+        }];
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
 
@@ -435,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enforce_no_capability_token_denies() {
+    fn enforce_no_capability_token_denies() {
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
             method: Some("POST".to_string()),
@@ -471,7 +469,7 @@ mod tests {
     // ===== Determinism test =====
 
     #[test]
-    fn test_enforce_deterministic_same_input_same_output() {
+    fn enforce_deterministic_same_input_same_output() {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: "POST".to_string(),
@@ -492,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enforce_deterministic_deny_same_input() {
+    fn enforce_deterministic_deny_same_input() {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: "DELETE".to_string(),
@@ -513,23 +511,7 @@ mod tests {
     // ===== Policy bundle staleness =====
 
     #[test]
-    fn test_enforce_stale_bundle_denies() {
-        let claims = test_claims();
-        let rules = vec![MappingRuleConfig {
-            method: Some("POST".to_string()),
-            host: "api.openai.com".to_string(),
-            path: Some("/v1/chat/completions".to_string()),
-            action_class: "llm.inference".to_string(),
-        }];
-
-        let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
-
-        let stage1 = CapabilityValidator::new(
-            CapabilityMap::new(vec![test_entry("v4.public.test", claims.clone())]),
-            Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
-        );
-
+    fn enforce_stale_bundle_denies() {
         struct StalePolicy;
         impl PolicyEvaluation for StalePolicy {
             fn evaluate(
@@ -548,6 +530,22 @@ mod tests {
                 None
             }
         }
+
+        let claims = test_claims();
+        let rules = vec![MappingRuleConfig {
+            method: Some("POST".to_string()),
+            host: "api.openai.com".to_string(),
+            path: Some("/v1/chat/completions".to_string()),
+            action_class: "llm.inference".to_string(),
+        }];
+
+        let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
+
+        let stage1 = CapabilityValidator::new(
+            CapabilityMap::new(vec![test_entry("v4.public.test", claims.clone())]),
+            Box::new(MockVerifier { claims }),
+            Box::new(NoRevocations),
+        );
 
         let stage2 = ConstraintEnforcer::new(Box::new(StalePolicy));
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);

@@ -24,6 +24,57 @@ pub struct AuthorityConfig {
     pub bundle_ttl_seconds: i32,
 }
 
+impl AuthorityConfig {
+    /// Load configuration by merging an optional TOML file with environment variable overrides.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config file exists but cannot be parsed.
+    pub fn load(config_path: Option<&PathBuf>) -> Result<AuthorityConfig, ConfigError> {
+        let mut config = if let Some(path) = config_path {
+            let contents = std::fs::read_to_string(path).map_err(|e| ConfigError::IoError {
+                path: path.clone(),
+                reason: e.to_string(),
+            })?;
+            toml::from_str::<AuthorityConfig>(&contents).map_err(|e| ConfigError::ParseError {
+                path: path.clone(),
+                reason: e.to_string(),
+            })?
+        } else {
+            AuthorityConfig::default()
+        };
+
+        // Environment variable overrides (FIRMA_AUTHORITY_ prefix)
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_LISTEN_ADDR") {
+            config.listen_addr = v;
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_POLICY_DIR") {
+            config.policy_dir = PathBuf::from(v);
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_REVOCATION_FILE") {
+            config.revocation_file = PathBuf::from(v);
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_MAX_TTL_SECONDS")
+            && let Ok(n) = v.parse::<i32>()
+        {
+            config.max_ttl_seconds = n;
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_KEY_FILE") {
+            config.key_file = PathBuf::from(v);
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_LOG_LEVEL") {
+            config.log_level = v;
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_BUNDLE_TTL_SECONDS")
+            && let Ok(n) = v.parse::<i32>()
+        {
+            config.bundle_ttl_seconds = n;
+        }
+
+        Ok(config)
+    }
+}
+
 impl Default for AuthorityConfig {
     fn default() -> Self {
         Self {
@@ -36,55 +87,6 @@ impl Default for AuthorityConfig {
             bundle_ttl_seconds: 30,
         }
     }
-}
-
-/// Load configuration from an optional TOML file, then overlay environment variables.
-///
-/// # Errors
-///
-/// Returns an error if the config file exists but cannot be parsed.
-pub fn load_config(config_path: Option<&PathBuf>) -> Result<AuthorityConfig, ConfigError> {
-    let mut config = if let Some(path) = config_path {
-        let contents = std::fs::read_to_string(path).map_err(|e| ConfigError::IoError {
-            path: path.clone(),
-            reason: e.to_string(),
-        })?;
-        toml::from_str::<AuthorityConfig>(&contents).map_err(|e| ConfigError::ParseError {
-            path: path.clone(),
-            reason: e.to_string(),
-        })?
-    } else {
-        AuthorityConfig::default()
-    };
-
-    // Environment variable overrides (FIRMA_AUTHORITY_ prefix)
-    if let Ok(v) = std::env::var("FIRMA_AUTHORITY_LISTEN_ADDR") {
-        config.listen_addr = v;
-    }
-    if let Ok(v) = std::env::var("FIRMA_AUTHORITY_POLICY_DIR") {
-        config.policy_dir = PathBuf::from(v);
-    }
-    if let Ok(v) = std::env::var("FIRMA_AUTHORITY_REVOCATION_FILE") {
-        config.revocation_file = PathBuf::from(v);
-    }
-    if let Ok(v) = std::env::var("FIRMA_AUTHORITY_MAX_TTL_SECONDS")
-        && let Ok(n) = v.parse::<i32>()
-    {
-        config.max_ttl_seconds = n;
-    }
-    if let Ok(v) = std::env::var("FIRMA_AUTHORITY_KEY_FILE") {
-        config.key_file = PathBuf::from(v);
-    }
-    if let Ok(v) = std::env::var("FIRMA_AUTHORITY_LOG_LEVEL") {
-        config.log_level = v;
-    }
-    if let Ok(v) = std::env::var("FIRMA_AUTHORITY_BUNDLE_TTL_SECONDS")
-        && let Ok(n) = v.parse::<i32>()
-    {
-        config.bundle_ttl_seconds = n;
-    }
-
-    Ok(config)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -110,17 +112,17 @@ mod tests {
     }
 
     #[test]
-    fn test_load_config_defaults_when_no_file() {
-        let config = load_config(None);
+    fn load_config_defaults_when_no_file() {
+        let config = AuthorityConfig::load(None);
         assert!(config.is_ok());
         let config = config.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(config.listen_addr, "[::1]:50051");
     }
 
     #[test]
-    fn test_load_config_nonexistent_file_errors() {
+    fn load_config_nonexistent_file_errors() {
         let path = PathBuf::from("/nonexistent/config.toml");
-        let result = load_config(Some(&path));
+        let result = AuthorityConfig::load(Some(&path));
         assert!(result.is_err());
     }
 
