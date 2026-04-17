@@ -81,8 +81,8 @@ fn token_error_to_deny_reason(err: &TokenError) -> DenyReason {
 mod tests {
     use super::*;
 
-    use firma_core::token::TokenId;
     use super::super::decision::{CapabilityValidationStage, ConstraintEnforcementStage};
+    use firma_core::token::TokenId;
 
     #[test]
     fn test_normalization_error_maps_to_unclassified() {

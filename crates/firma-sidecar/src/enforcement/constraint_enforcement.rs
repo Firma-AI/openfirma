@@ -205,8 +205,8 @@ impl ConstraintEnforcer {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use firma_core::token::TokenId;
     use firma_core::envelope::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
+    use firma_core::token::TokenId;
     use std::collections::HashMap;
 
     struct AllowAllPolicy;
