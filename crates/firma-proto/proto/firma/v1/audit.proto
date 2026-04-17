@@ -59,6 +59,15 @@ message ExecutionEvent {
   google.protobuf.Timestamp timestamp = 12;
   // ECDSA signature (DER-encoded) over all preceding fields.
   bytes signature = 13;
+  // HTTP status code returned by the connector. Zero when the call
+  // never dispatched (pre-dispatch DENY or ABORT).
+  int32 dispatch_status = 14;
+  // Wall-clock time spent in the connector dispatch, in microseconds.
+  // Zero when the call never dispatched.
+  int64 dispatch_latency_us = 15;
+  // Target response body size in bytes. Zero when the call never
+  // dispatched or the target returned no body.
+  int64 response_size = 16;
 }
 
 // StreamEventsResponse is returned when the client half-closes the stream.

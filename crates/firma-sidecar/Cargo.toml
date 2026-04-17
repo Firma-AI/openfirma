@@ -26,6 +26,7 @@ elliptic-curve = { workspace = true }
 firma-core = { path = "../firma-core" }
 firma-grpc-interceptor-proto = { path = "../firma-grpc-interceptor-proto" }
 firma-proto = { path = "../firma-proto" }
+governor = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
@@ -54,6 +55,7 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+wiremock = "0.6"
 
 [lints]
 workspace = true

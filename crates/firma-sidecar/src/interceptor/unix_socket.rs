@@ -158,6 +158,10 @@ async fn handle_request(
             StatusCode::FORBIDDEN,
             crate::handler::deny_body_json(reason, &detail),
         ),
+        HandledResponse::Aborted { reason, detail } => deny_json_response(
+            StatusCode::GATEWAY_TIMEOUT,
+            crate::handler::abort_body_json(reason, &detail),
+        ),
     };
 
     Ok(response)
@@ -432,7 +436,11 @@ mod tests {
 
     fn test_handler(pipeline: Arc<EnforcementPipeline>) -> Arc<RequestHandler> {
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        Arc::new(RequestHandler::new(pipeline, tx))
+        Arc::new(RequestHandler::new(
+            pipeline,
+            crate::handler::test_connector_registry(),
+            tx,
+        ))
     }
 
     async fn mock_upstream() -> (SocketAddr, CancellationToken) {

@@ -1,29 +1,75 @@
-// Read-only transport view combining an enforcement-approved envelope
-// with its injected credentials, ready for the connector layer to forward.
+//! Read-only transport view consumed by connector implementations.
+//!
+//! The sidecar assembles a [`TransportView`] after enforcement passes
+//! and credential injection completes. The view pairs an approved
+//! [`ExecutionEnvelope`] with its [`InjectedCredentials`] and is the
+//! single value handed to the [`Connector`] layer at dispatch time.
+//!
+//! Neither the envelope nor the credentials can be mutated through
+//! this view. This is intentional: by the time a connector runs, Stage
+//! 1, Stage 2, and credential injection have all executed, and the
+//! connector's role is limited to protocol translation and dispatch
+//! (FEP §6.2).
+//!
+//! [`Connector`]: crate::connector::Connector
 
-use firma_core::ExecutionEnvelope;
+use crate::ExecutionEnvelope;
+use crate::credential::InjectedCredentials;
 
-use super::InjectedCredentials;
-
-/// Immutable bundle of an [`ExecutionEnvelope`] and its
-/// [`InjectedCredentials`], produced after enforcement passes and
-/// credential injection completes.
+/// Immutable pairing of an [`ExecutionEnvelope`] and its
+/// [`InjectedCredentials`], handed to the connector layer as the
+/// single input it needs to build the outbound request.
 ///
-/// Handed to the connector layer as the single unit it needs to build
-/// the outbound request. Neither the envelope nor the credentials can
-/// be mutated through this view.
+/// Neither field can be mutated through this view. Connectors read the
+/// envelope to derive the request (URL, method, headers, body) and
+/// read the credentials to merge injected headers before dispatch.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// use firma_core::{InjectedCredentials, TransportView};
+/// # use firma_core::{ActionParams, ExecutionEnvelope, ExecutionIntent,
+/// #     ExecutionMetadata, HttpMethod, HttpParams};
+/// # fn envelope() -> ExecutionEnvelope {
+/// #     ExecutionEnvelope::new(
+/// #         ExecutionIntent {
+/// #             action_class: "http.get".to_string(),
+/// #             resource: "https://api.example.com".to_string(),
+/// #             params: ActionParams::Http(HttpParams {
+/// #                 method: HttpMethod::GET,
+/// #                 headers: HashMap::new(),
+/// #                 body: None,
+/// #                 query: HashMap::new(),
+/// #             }),
+/// #             raw_transport: "https".to_string(),
+/// #             raw_action_ref: "GET /".to_string(),
+/// #         },
+/// #         "v4.public.eyJ0...".to_string(),
+/// #         ExecutionMetadata {
+/// #             session_id: "sess_001".to_string(),
+/// #             agent_id: "agent_abc".to_string(),
+/// #             timestamp: chrono::Utc::now(),
+/// #             trace_id: None,
+/// #             budget_consumed: 0.0,
+/// #             risk_score: None,
+/// #         },
+/// #         None,
+/// #     )
+/// # }
+///
+/// let view = TransportView::new(envelope(), InjectedCredentials::empty());
+/// assert!(view.credentials().is_empty());
+/// ```
 #[derive(Debug, Clone)]
 pub struct TransportView {
     envelope: ExecutionEnvelope,
     credentials: InjectedCredentials,
 }
 
-#[expect(
-    dead_code,
-    reason = "consumed by connector/interceptor callers once wired"
-)]
 impl TransportView {
-    /// Creates a new [`TransportView`] from an execution envelope and injected credentials.
+    /// Creates a new [`TransportView`] from an envelope and its
+    /// injected credentials.
     #[must_use]
     pub fn new(envelope: ExecutionEnvelope, credentials: InjectedCredentials) -> Self {
         Self {
@@ -32,7 +78,7 @@ impl TransportView {
         }
     }
 
-    /// Returns a reference to the [`ExecutionEnvelope`].
+    /// Returns a reference to the enforced [`ExecutionEnvelope`].
     #[must_use]
     pub fn envelope(&self) -> &ExecutionEnvelope {
         &self.envelope
@@ -48,7 +94,7 @@ impl TransportView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use firma_core::{ActionParams, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams};
+    use crate::{ActionParams, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams};
     use std::collections::HashMap;
 
     fn sample_envelope() -> ExecutionEnvelope {
@@ -89,7 +135,7 @@ mod tests {
         assert_eq!(view.envelope().intent().action_class, "http.get");
         assert_eq!(
             view.credentials().get("Authorization").map(String::as_str),
-            Some("Bearer secret")
+            Some("Bearer secret"),
         );
     }
 
@@ -110,7 +156,7 @@ mod tests {
 
         assert_eq!(
             cloned.envelope().metadata().agent_id,
-            view.envelope().metadata().agent_id
+            view.envelope().metadata().agent_id,
         );
         assert_eq!(cloned.credentials().headers(), view.credentials().headers());
     }

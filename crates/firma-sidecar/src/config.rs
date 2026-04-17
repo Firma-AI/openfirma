@@ -13,9 +13,14 @@
 //! surface misconfigurations before the first request arrives.
 
 mod audit;
+mod connector;
 mod enforcement;
 
 pub use self::audit::{AuditConfig, AuditSink};
+pub use self::connector::ConnectorConfig;
+
+#[cfg(test)]
+pub use self::connector::HostConnectorConfig;
 pub use self::enforcement::{EnforcementConfig, MappingRulesFile};
 
 #[cfg(test)]
@@ -57,6 +62,10 @@ pub struct SidecarConfig {
     /// label (e.g. `[credentials.openai]`).
     #[serde(default)]
     pub credentials: HashMap<String, CredentialConfig>,
+    /// Outbound connector settings (default timeout + per-host
+    /// overrides with rate limits).
+    #[serde(default)]
+    pub connector: ConnectorConfig,
     /// Enforcement engine settings (mapping rules, capability
     /// validation, constraint enforcement).
     #[serde(flatten)]
@@ -85,6 +94,9 @@ impl SidecarConfig {
             cred.validate()
                 .map_err(|e| format!("credentials.{label}: {e}"))?;
         }
+        self.connector
+            .validate()
+            .map_err(|e| format!("connector: {e}"))?;
         self.enforcement.validate()?;
         self.audit.validate().map_err(|e| format!("audit: {e}"))?;
         Ok(())

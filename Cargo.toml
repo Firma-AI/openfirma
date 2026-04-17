@@ -33,6 +33,7 @@ clap = { version = "4", default-features = false }
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
 elliptic-curve = { version = "0.13", features = ["pem"] }
 firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto" }
+governor = "0.10"
 http-body-util = "0.1"
 hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }

@@ -202,6 +202,14 @@ async fn write_handled_response(
                 )
                 .await
         }
+        HandledResponse::Aborted { reason, detail } => {
+            session
+                .respond_error_with_body(
+                    504,
+                    hyper::body::Bytes::from(crate::handler::abort_body_json(reason, &detail)),
+                )
+                .await
+        }
     }
 }
 
@@ -437,7 +445,11 @@ mod tests {
 
     fn test_handler(pipeline: Arc<EnforcementPipeline>) -> Arc<RequestHandler> {
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        Arc::new(RequestHandler::new(pipeline, tx))
+        Arc::new(RequestHandler::new(
+            pipeline,
+            crate::handler::test_connector_registry(),
+            tx,
+        ))
     }
 
     /// Starts a minimal HTTP server that always returns `200 OK`.

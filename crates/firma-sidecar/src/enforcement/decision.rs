@@ -9,7 +9,7 @@
 //! ABORT is an asynchronous in-flight kill signal emitted by the Authority
 //! via `WatchAborts`, not produced by the enforcement pipeline itself.
 
-use firma_core::{CapabilityClaims, DenyReason, ExecutionEnvelope};
+use firma_core::{CapabilityClaims, DenyReason, ExecutionEnvelope, InjectedCredentials};
 
 use crate::normalizer::NormalizedEnvelope;
 
@@ -58,10 +58,13 @@ pub enum EnforcementStage {
 )]
 #[derive(Debug)]
 pub enum EnforcementDecision {
-    /// Request authorized. Proceed to credential injection + connector.
+    /// Request authorized. Proceed to connector dispatch.
     Allow {
         claims: CapabilityClaims,
         envelope: Box<ExecutionEnvelope>,
+        /// Credentials injected after enforcement passed, ready for
+        /// the connector layer to merge into the outbound request.
+        credentials: InjectedCredentials,
     },
     /// Request denied. Return structured denial to agent.
     Deny {
@@ -136,6 +139,7 @@ mod tests {
     #[test]
     fn test_allow_helpers() {
         let decision = EnforcementDecision::Allow {
+            credentials: InjectedCredentials::empty(),
             claims: CapabilityClaims {
                 token_id: "tok_001".to_string(),
                 agent_id: "agent".to_string(),

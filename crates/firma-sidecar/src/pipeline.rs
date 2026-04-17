@@ -18,10 +18,10 @@
 
 use std::time::Duration;
 
-use firma_core::{DenyReason, ExecutionEnvelope, ExecutionMetadata};
+use firma_core::{DenyReason, ExecutionEnvelope, ExecutionMetadata, InjectedCredentials};
 
 use crate::audit::AuditPayload;
-use crate::credential::{CredentialInjectionError, CredentialInjector, InjectedCredentials};
+use crate::credential::{CredentialInjectionError, CredentialInjector};
 use crate::enforcement::decision::EnforcementStage;
 // Re-export public API for pipeline callers (test-only)
 #[cfg(test)]
@@ -35,7 +35,11 @@ pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
 
 /// Proto wire values for the enforcement decision enum.
 const DECISION_ALLOW: i32 = 1;
-const DECISION_DENY: i32 = 2;
+pub(crate) const DECISION_DENY: i32 = 2;
+/// Proto wire value for the `ABORT` decision introduced by task 005
+/// step 6. Emitted when the connector aborts an already-approved call
+/// (currently only `CONNECTOR_TIMEOUT`).
+pub(crate) const DECISION_ABORT: i32 = 3;
 
 /// Construction arguments for [`EnforcementPipeline`].
 ///
@@ -175,15 +179,10 @@ impl EnforcementPipeline {
             }
         };
 
-        // Build the transport view — unused until interceptors consume
-        // it (task 005), but constructed now so the pipeline contract
-        // is complete.
-        let _transport_view =
-            crate::credential::transport::TransportView::new(envelope.clone(), credentials);
-
         EnforcementDecision::Allow {
             claims: capability.claims,
             envelope: Box::new(envelope),
+            credentials,
         }
     }
 }
@@ -214,7 +213,9 @@ pub fn audit_payload_from_decision(
         context_hash,
         bundle_version,
     ) = match decision {
-        EnforcementDecision::Allow { claims, envelope } => (
+        EnforcementDecision::Allow {
+            claims, envelope, ..
+        } => (
             claims.token_id.clone(),
             claims.agent_id.clone(),
             envelope.intent().action_class.clone(),
@@ -269,6 +270,9 @@ pub fn audit_payload_from_decision(
         enforcement_latency_us,
         context_hash,
         bundle_version,
+        dispatch_status: 0,
+        dispatch_latency_us: 0,
+        response_size: 0,
     }
 }
 
@@ -417,7 +421,10 @@ mod tests {
         let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_allow());
 
-        if let EnforcementDecision::Allow { claims, envelope } = decision {
+        if let EnforcementDecision::Allow {
+            claims, envelope, ..
+        } = decision
+        {
             assert_eq!(claims.agent_id, "agent_test");
             assert_eq!(envelope.metadata().agent_id, "agent_test");
             assert_eq!(envelope.metadata().session_id, "sess_001");
@@ -723,7 +730,10 @@ mod tests {
         let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_allow());
 
-        if let EnforcementDecision::Allow { claims, envelope } = decision {
+        if let EnforcementDecision::Allow {
+            claims, envelope, ..
+        } = decision
+        {
             // Verify intent fields
             assert_eq!(envelope.intent().action_class, "llm.inference");
             assert_eq!(

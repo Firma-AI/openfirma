@@ -28,10 +28,13 @@
 //! - [`audit`] — Audit event emitter. Produces a signed event for every
 //!   enforcement decision. Supports stdout, file, gRPC, and WAL output
 //!   sinks.
+//! - [`startup`] — Per-subsystem builders that translate
+//!   [`config::SidecarConfig`] into runtime components.
 
 mod args;
 mod audit;
 mod config;
+mod connector;
 mod credential;
 mod enforcement;
 mod handler;
@@ -40,6 +43,7 @@ mod interceptor;
 mod log;
 mod normalizer;
 mod pipeline;
+mod startup;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -49,27 +53,19 @@ use tokio::io::AsyncReadExt as _;
 use tokio_util::sync::CancellationToken;
 
 use crate::args::Args;
-use crate::audit::AuditSink as _;
-use crate::audit::sink as audit_sink;
-use crate::config::{AuditConfig, InterceptorMode};
-use crate::interceptor::Interceptor as _;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // parse arguments and initialize logging before doing anything else
     let args = Args::parse();
     crate::log::init_log(args.log_level, args.log_file.as_deref(), args.log_filter)?;
     tracing::info!("firma-sidecar starting");
 
-    // parse configuration
     tracing::info!("loading configuration from {}", args.config_file.display());
     let config = read_config(&args.config_file).await?;
     tracing::info!("configuration loaded successfully");
 
-    // setup cancellation
     let exit = CancellationToken::new();
 
-    // setup health check server
     tracing::debug!(
         "initializing health check server at {}",
         args.health_bind_addr
@@ -79,7 +75,6 @@ async fn main() -> anyhow::Result<()> {
     let health_server = tokio::spawn(health_server.serve());
     tracing::info!("health check server listening at {}", args.health_bind_addr);
 
-    // setup signal handlers for graceful shutdown
     tracing::debug!("registering signal handlers for graceful shutdown");
     let sigterm_handler = {
         let exit = exit.clone();
@@ -89,29 +84,30 @@ async fn main() -> anyhow::Result<()> {
     };
     tracing::debug!("signal handlers registered");
 
-    // setup audit sink with signing adapter
     let (audit_payload_tx, audit_payload_rx) = tokio::sync::mpsc::channel(100);
-    let audit_event_builder = load_audit_event_builder(&config.audit)?;
-    let audit_sink = spawn_audit_sink(
+    let audit_event_builder = startup::load_audit_event_builder(&config.audit)?;
+    let audit_sink = startup::spawn_audit_sink(
         &config.audit,
         audit_payload_rx,
         audit_event_builder,
         exit.clone(),
     )?;
 
-    // build enforcement pipeline and request handler
-    let pipeline = build_pipeline(&config)?;
-    let handler = Arc::new(handler::RequestHandler::new(pipeline, audit_payload_tx));
+    let pipeline = startup::build_pipeline(&config)?;
+    let connector_registry = startup::build_connector_registry(&config.connector)?;
+    let handler = Arc::new(handler::RequestHandler::new(
+        pipeline,
+        connector_registry,
+        audit_payload_tx,
+    ));
 
-    // run interceptor
     tracing::info!(
         mode = %config.interceptor.mode,
         "starting interceptor"
     );
-    let interceptor_handle = spawn_interceptor(&config, handler, exit.clone())?;
+    let interceptor_handle = startup::spawn_interceptor(&config, handler, exit.clone())?;
 
     tracing::info!("all components initialized; entering main loop");
-    // wait for all background tasks to complete
     let _ = tokio::join!(
         audit_sink,
         health_server,
@@ -125,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
 
 /// Handler worker for catching sigterm signals.
 ///
-/// When a SIGTERM signal is caught, the `exit` flag is trigerred.
+/// When a SIGTERM signal is caught, the `exit` flag is triggered.
 async fn handle_sigterm(exit: CancellationToken) {
     match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
         Ok(mut sigterm) => {
@@ -151,7 +147,7 @@ async fn handle_sigterm(exit: CancellationToken) {
     exit.cancel();
 }
 
-/// Read [`config::SidecarConfig`] from the given [`Path`]
+/// Read [`config::SidecarConfig`] from the given [`Path`].
 async fn read_config(path: &Path) -> anyhow::Result<config::SidecarConfig> {
     let mut f = tokio::fs::File::open(path).await?;
     let mut content = String::new();
@@ -163,453 +159,4 @@ async fn read_config(path: &Path) -> anyhow::Result<config::SidecarConfig> {
         .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;
 
     Ok(config)
-}
-
-/// Build the [`pipeline::EnforcementPipeline`] from a validated
-/// [`config::SidecarConfig`] and the [`tokio::sync::mpsc::Sender`] for audit [`audit::ExecutionEvent`]s.
-///
-/// Reads the mapping rules file referenced in the config, constructs
-/// the action-class registry, normalizer, and both enforcement stages.
-///
-/// # Errors
-///
-/// Returns an error when the mapping rules file cannot be read or
-/// parsed, or when pipeline components fail to initialize.
-fn build_pipeline(
-    config: &config::SidecarConfig,
-) -> anyhow::Result<Arc<pipeline::EnforcementPipeline>> {
-    // Load mapping rules
-    let rules_content =
-        std::fs::read_to_string(&config.enforcement.mapping.rules_path).map_err(|e| {
-            anyhow::anyhow!(
-                "failed to read mapping rules from '{}': {e}",
-                config.enforcement.mapping.rules_path
-            )
-        })?;
-    let rules_file: config::MappingRulesFile = toml::from_str(&rules_content).map_err(|e| {
-        anyhow::anyhow!(
-            "failed to parse mapping rules '{}': {e}",
-            config.enforcement.mapping.rules_path
-        )
-    })?;
-    rules_file.validate().map_err(|e| {
-        anyhow::anyhow!(
-            "invalid mapping rules '{}': {e}",
-            config.enforcement.mapping.rules_path
-        )
-    })?;
-
-    // Build components
-    let registry = pipeline::ActionClassRegistry::v0_1();
-    let table = pipeline::MappingTable::from_config(
-        &rules_file,
-        &registry,
-        config.enforcement.mapping.default_protected,
-    )
-    .map_err(|e| anyhow::anyhow!("failed to build mapping table: {e}"))?;
-
-    let normalizer = pipeline::IntentNormalizer::new(table);
-
-    // Capability validation.
-    // Capability map and token verifier/revocation store are populated
-    // from the Authority at pre-flight; for now use empty defaults so
-    // the binary starts.  Authority integration (task 007+) will
-    // populate these.
-    let capability_validator = pipeline::CapabilityValidator::new(
-        pipeline::CapabilityMap::new(vec![]),
-        // TODO(authority): replace stubs with Authority-backed impls
-        Box::new(StubTokenVerifier),
-        Box::new(StubRevocationStore),
-        std::time::Duration::from_secs(
-            config
-                .enforcement
-                .capability_validation
-                .clock_skew_tolerance_seconds,
-        ),
-    );
-
-    // Constraint enforcement.
-    // Policy evaluation will be populated from cedar bundle loading
-    // (task 005+); stub accepts everything for now.
-    let constraint_enforcer = pipeline::ConstraintEnforcer::new(
-        // TODO(policy): replace stub with Cedar policy evaluator
-        Box::new(StubPolicyEvaluation),
-    );
-
-    let credential_injector: Box<dyn credential::CredentialInjector> =
-        build_credential_injector(&config.credentials)?;
-
-    let pipeline = pipeline::EnforcementPipeline::new(pipeline::PipelineArgs {
-        normalizer,
-        capability_validator,
-        constraint_enforcer,
-        credential_injector,
-    });
-    tracing::info!("enforcement pipeline initialized");
-
-    Ok(Arc::new(pipeline))
-}
-
-/// Spawn the configured interceptor as a background tokio task.
-///
-/// Returns a [`tokio::task::JoinHandle`] that resolves when the
-/// interceptor shuts down.
-///
-/// # Errors
-///
-/// Returns an error when the interceptor mode is `unix_socket` but
-/// the required `socket_path` is missing (should be caught by
-/// validation, but enforced here defensively).
-fn spawn_interceptor(
-    config: &config::SidecarConfig,
-    handler: Arc<handler::RequestHandler>,
-    cancel: CancellationToken,
-) -> anyhow::Result<tokio::task::JoinHandle<()>> {
-    let ic = &config.interceptor;
-
-    match ic.mode {
-        InterceptorMode::HttpProxy => {
-            let interceptor = interceptor::http::HttpInterceptor::new(ic.listen_addr);
-            tracing::info!(listen_addr = %ic.listen_addr, "HTTP proxy interceptor configured");
-            Ok(tokio::spawn(async move {
-                if let Err(e) = interceptor.run(handler, cancel).await {
-                    tracing::error!(error = %e, "HTTP proxy interceptor failed");
-                }
-            }))
-        }
-        InterceptorMode::Grpc => {
-            let interceptor = interceptor::grpc::GrpcInterceptor::new(ic.listen_addr);
-            tracing::info!(listen_addr = %ic.listen_addr, "gRPC interceptor configured");
-            Ok(tokio::spawn(async move {
-                if let Err(e) = interceptor.run(handler, cancel).await {
-                    tracing::error!(error = %e, "gRPC interceptor failed");
-                }
-            }))
-        }
-        #[cfg(unix)]
-        InterceptorMode::UnixSocket => {
-            let socket_path = ic
-                .socket_path
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("unix_socket mode requires socket_path"))?;
-            let interceptor =
-                interceptor::unix_socket::UnixSocketInterceptor::new(socket_path.clone());
-            tracing::info!(socket_path = %socket_path.display(), "Unix socket interceptor configured");
-            Ok(tokio::spawn(async move {
-                if let Err(e) = interceptor.run(handler, cancel).await {
-                    tracing::error!(error = %e, "Unix socket interceptor failed");
-                }
-            }))
-        }
-    }
-}
-
-/// Spawn the [`AuditSink`](crate::audit::AuditSink) as a background tokio task, consuming from the provided `Receiver`.
-/// Spawns the audit sink pipeline: a signing adapter that receives
-/// [`AuditPayload`](audit::AuditPayload)s, signs them into
-/// [`ExecutionEvent`](audit::ExecutionEvent)s, and forwards to the
-/// concrete [`AuditSink`](audit::AuditSink).
-///
-/// Returns a [`tokio::task::JoinHandle`] that resolves when the sink shuts down.
-///
-/// # Errors
-///
-/// Returns an error when the sink fails to initialize (e.g. invalid config, failure to connect to external sink).
-fn spawn_audit_sink(
-    config: &AuditConfig,
-    payload_rx: tokio::sync::mpsc::Receiver<audit::AuditPayload>,
-    event_builder: audit::builder::EventBuilder,
-    exit: CancellationToken,
-) -> anyhow::Result<tokio::task::JoinHandle<Result<(), audit::AuditSinkError>>> {
-    // Internal channel between the signing adapter and the concrete sink.
-    let (event_tx, event_rx) = tokio::sync::mpsc::channel::<audit::ExecutionEvent>(100);
-
-    // Spawn the signing adapter: AuditPayload → sign → ExecutionEvent.
-    let adapter_exit = exit.clone();
-    tokio::spawn(async move {
-        run_signing_adapter(payload_rx, event_tx, event_builder, adapter_exit).await;
-    });
-
-    // Spawn the concrete sink, which consumes signed ExecutionEvents.
-    match config.sink {
-        config::AuditSink::File => {
-            let path = config.file_path.clone().ok_or_else(|| {
-                anyhow::anyhow!("file sink requires file_path in audit configuration")
-            })?;
-            Ok(tokio::spawn(async move {
-                audit_sink::FileAuditSink::new(path)
-                    .run(event_rx, exit)
-                    .await
-            }))
-        }
-        config::AuditSink::Grpc => {
-            let endpoint = config.grpc_url.clone().ok_or_else(|| {
-                anyhow::anyhow!("gRPC sink requires grpc_url in audit configuration")
-            })?;
-            Ok(tokio::spawn(async move {
-                audit_sink::GrpcAuditSink::new(endpoint)
-                    .run(event_rx, exit)
-                    .await
-            }))
-        }
-        config::AuditSink::Stdout => Ok(tokio::spawn(async move {
-            audit_sink::StdoutAuditSink::new().run(event_rx, exit).await
-        })),
-        config::AuditSink::Wal => {
-            let path = config.wal_path.clone().ok_or_else(|| {
-                anyhow::anyhow!("WAL sink requires wal_path in audit configuration")
-            })?;
-            let grpc_url = config.grpc_url.clone().ok_or_else(|| {
-                anyhow::anyhow!("WAL sink requires grpc_url in audit configuration")
-            })?;
-            let wal_max_bytes = config.wal_max_bytes;
-            Ok(tokio::spawn(async move {
-                audit_sink::WalAuditSink::new(grpc_url, path, wal_max_bytes)
-                    .run(event_rx, exit)
-                    .await
-            }))
-        }
-    }
-}
-
-/// Signing adapter that sits between the pipeline and the concrete sink.
-///
-/// Receives [`AuditPayload`](audit::AuditPayload)s from the pipeline,
-/// signs each into a full [`ExecutionEvent`](audit::ExecutionEvent),
-/// and forwards to the concrete sink via `event_tx`.
-async fn run_signing_adapter(
-    mut payload_rx: tokio::sync::mpsc::Receiver<audit::AuditPayload>,
-    event_tx: tokio::sync::mpsc::Sender<audit::ExecutionEvent>,
-    builder: audit::builder::EventBuilder,
-    exit: CancellationToken,
-) {
-    loop {
-        tokio::select! {
-            payload = payload_rx.recv() => {
-                let Some(payload) = payload else {
-                    // Channel closed — pipeline shut down.
-                    break;
-                };
-                let event = builder.build(payload);
-                if event_tx.send(event).await.is_err() {
-                    // Sink channel closed — nothing to forward to.
-                    break;
-                }
-            }
-            () = exit.cancelled() => {
-                // Drain remaining payloads before exiting.
-                while let Ok(payload) = payload_rx.try_recv() {
-                    let event = builder.build(payload);
-                    if event_tx.send(event).await.is_err() {
-                        break;
-                    }
-                }
-                break;
-            }
-        }
-    }
-}
-
-/// Loads the ECDSA signing key PEM from the audit configuration and
-/// constructs an [`audit::builder::EventBuilder`].
-///
-/// The key is loaded from either `signing_key_path` (file) or
-/// `signing_key_env` (environment variable). When neither is set, a
-/// placeholder empty key is used (startup will fail at signing time).
-///
-/// # Errors
-///
-/// Returns an error if the file cannot be read or the PEM is invalid.
-fn load_audit_event_builder(
-    config: &config::AuditConfig,
-) -> anyhow::Result<audit::builder::EventBuilder> {
-    let pem = if let Some(ref path) = config.signing_key_path {
-        std::fs::read_to_string(path).map_err(|e| {
-            anyhow::anyhow!("failed to read signing key from {}: {e}", path.display())
-        })?
-    } else if let Some(ref env_var) = config.signing_key_env {
-        std::env::var(env_var).map_err(|e| {
-            anyhow::anyhow!("failed to read signing key from env var {env_var}: {e}")
-        })?
-    } else {
-        return Err(anyhow::anyhow!(
-            "audit signing key not configured: set signing_key_path or signing_key_env"
-        ));
-    };
-
-    audit::builder::EventBuilder::new(&pem)
-        .map_err(|e| anyhow::anyhow!("failed to initialize audit event builder: {e}"))
-}
-
-/// Builds a [`CredentialInjector`](credential::CredentialInjector) from
-/// the `[credentials]` configuration section.
-///
-/// Basic-mode entries resolve their `value_from_env` environment
-/// variable at startup. Vault-mode entries record the `secret_path`
-/// for per-call reads. When both modes are present, the resulting
-/// injector tries the basic provider first, then falls back to vault.
-///
-/// If no credentials are configured, returns a
-/// [`NullCredentialInjector`](credential::NullCredentialInjector).
-///
-/// # Errors
-///
-/// Returns an error if a basic-mode entry references a missing or
-/// empty environment variable.
-fn build_credential_injector(
-    creds: &std::collections::HashMap<String, config::CredentialConfig>,
-) -> anyhow::Result<Box<dyn credential::CredentialInjector>> {
-    use config::CredentialMode;
-
-    if creds.is_empty() {
-        tracing::info!("no credential entries configured; using null injector");
-        return Ok(Box::new(credential::NullCredentialInjector));
-    }
-
-    let mut basic_map: std::collections::HashMap<
-        String,
-        std::collections::HashMap<String, String>,
-    > = std::collections::HashMap::new();
-    let mut vault_map: std::collections::HashMap<
-        String,
-        Vec<credential::provider::VaultSecretEntry>,
-    > = std::collections::HashMap::new();
-
-    for (label, entry) in creds {
-        match entry.mode {
-            CredentialMode::Basic => {
-                let env_name = entry.value_from_env.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!("credentials.{label}: value_from_env required for basic mode")
-                })?;
-                let raw_value = std::env::var(env_name).map_err(|e| {
-                    anyhow::anyhow!("credentials.{label}: env var '{env_name}' not set: {e}")
-                })?;
-                if raw_value.trim().is_empty() {
-                    return Err(anyhow::anyhow!(
-                        "credentials.{label}: env var '{env_name}' is empty"
-                    ));
-                }
-
-                let value = match &entry.prefix {
-                    Some(prefix) => format!("{prefix}{raw_value}"),
-                    None => raw_value,
-                };
-
-                basic_map
-                    .entry(entry.target_host.clone())
-                    .or_default()
-                    .insert(entry.header.clone(), value);
-
-                tracing::info!(
-                    label = label.as_str(),
-                    mode = "basic",
-                    target_host = entry.target_host.as_str(),
-                    header = entry.header.as_str(),
-                    "credential entry loaded"
-                );
-            }
-            CredentialMode::Vault => {
-                let secret_path = entry.secret_path.clone().ok_or_else(|| {
-                    anyhow::anyhow!("credentials.{label}: secret_path required for vault mode")
-                })?;
-
-                vault_map
-                    .entry(entry.target_host.clone())
-                    .or_default()
-                    .push(credential::provider::VaultSecretEntry {
-                        header_name: entry.header.clone(),
-                        value_prefix: entry.prefix.clone(),
-                        secret_path,
-                    });
-
-                tracing::info!(
-                    label = label.as_str(),
-                    mode = "vault",
-                    target_host = entry.target_host.as_str(),
-                    header = entry.header.as_str(),
-                    "credential entry loaded"
-                );
-            }
-        }
-    }
-
-    let has_basic = !basic_map.is_empty();
-    let has_vault = !vault_map.is_empty();
-
-    match (has_basic, has_vault) {
-        (true, false) => Ok(Box::new(
-            credential::provider::BasicCredentialInjector::new(basic_map),
-        )),
-        (false, true) => Ok(Box::new(
-            credential::provider::VaultCredentialInjector::new(vault_map),
-        )),
-        (true, true) => Ok(Box::new(
-            credential::provider::CompositeCredentialInjector::new(
-                credential::provider::BasicCredentialInjector::new(basic_map),
-                credential::provider::VaultCredentialInjector::new(vault_map),
-            ),
-        )),
-        (false, false) => {
-            // All entries parsed but none populated — shouldn't happen
-            // given the is_empty check above, but handle defensively.
-            Ok(Box::new(credential::NullCredentialInjector))
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Stub implementations (replaced by Authority / Cedar integration later)
-// ---------------------------------------------------------------------------
-
-/// Stub token verifier that always rejects. Replaced once Authority
-/// integration is wired in.
-struct StubTokenVerifier;
-
-impl firma_core::TokenVerifier for StubTokenVerifier {
-    fn verify(
-        &self,
-        _raw_token: &str,
-    ) -> Result<firma_core::CapabilityClaims, firma_core::TokenError> {
-        Err(firma_core::TokenError::SignatureInvalid {
-            reason: "stub verifier: no Authority configured".to_string(),
-        })
-    }
-}
-
-/// Stub revocation store that reports nothing revoked. Replaced once
-/// Authority integration is wired in.
-struct StubRevocationStore;
-
-impl firma_core::RevocationStore for StubRevocationStore {
-    fn is_revoked(&self, _token_id: &str) -> Result<bool, firma_core::TokenError> {
-        Ok(false)
-    }
-
-    fn add_revocation(&self, _token_id: &str) -> Result<(), firma_core::TokenError> {
-        Ok(())
-    }
-}
-
-/// Stub policy evaluator that accepts everything. Replaced once Cedar
-/// bundle loading is wired in.
-struct StubPolicyEvaluation;
-
-impl pipeline::PolicyEvaluation for StubPolicyEvaluation {
-    fn evaluate(
-        &self,
-        _principal: &str,
-        _action: &str,
-        _resource: &str,
-        _context: &serde_json::Value,
-    ) -> Result<bool, String> {
-        Ok(true)
-    }
-
-    fn is_fresh(&self) -> bool {
-        true
-    }
-
-    fn version(&self) -> Option<String> {
-        None
-    }
 }
