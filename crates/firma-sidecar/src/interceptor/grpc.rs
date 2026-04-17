@@ -120,6 +120,10 @@ impl InterceptorHook for GrpcInterceptor {
                 allowed: false,
                 reason: format!("{reason}: {detail}"),
             },
+            HandledResponse::Aborted { reason, detail } => InterceptResponse {
+                allowed: false,
+                reason: format!("ABORT:{}: {detail}", reason.code()),
+            },
         };
 
         Ok(tonic::Response::new(response))
@@ -261,7 +265,11 @@ mod tests {
 
     fn test_handler(pipeline: Arc<EnforcementPipeline>) -> Arc<RequestHandler> {
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        Arc::new(RequestHandler::new(pipeline, tx))
+        Arc::new(RequestHandler::new(
+            pipeline,
+            crate::handler::test_connector_registry(),
+            tx,
+        ))
     }
 
     async fn mock_upstream() -> (SocketAddr, CancellationToken) {
@@ -355,7 +363,7 @@ mod tests {
                 path: "/v1/chat/completions".to_owned(),
                 headers,
                 body: b"{}".to_vec(),
-                is_https: true,
+                is_https: false,
                 session_id: String::new(),
             })
             .await;
@@ -440,7 +448,7 @@ mod tests {
                 path: "/v1/chat/completions".to_owned(),
                 headers: HashMap::new(),
                 body: Vec::new(),
-                is_https: true,
+                is_https: false,
                 session_id: String::new(),
             })
             .await;

@@ -54,6 +54,15 @@ pub enum DenyReason {
     /// Outbound connector timed out.
     #[error("connector timeout")]
     ConnectorTimeout,
+    /// Outbound connector failed at the transport layer (DNS, TCP,
+    /// TLS, connection reset).
+    #[error("connector network error")]
+    ConnectorNetworkError,
+    /// Outbound connector could not translate the envelope into a
+    /// well-formed target request. Should be unreachable
+    /// post-enforcement; treated as fail-closed.
+    #[error("connector invalid request")]
+    ConnectorInvalidRequest,
     /// Protected action could not be mapped to any canonical action class.
     #[error("unclassified intent")]
     UnclassifiedIntent,
@@ -109,6 +118,11 @@ mod tests {
                 "credential injection failed",
             ),
             (DenyReason::ConnectorTimeout, "connector timeout"),
+            (DenyReason::ConnectorNetworkError, "connector network error"),
+            (
+                DenyReason::ConnectorInvalidRequest,
+                "connector invalid request",
+            ),
             (DenyReason::UnclassifiedIntent, "unclassified intent"),
         ];
         for (reason, expected) in cases {

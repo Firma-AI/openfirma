@@ -119,6 +119,15 @@ pub struct AuditPayload {
     pub context_hash: String,
     /// Policy bundle version active at decision time.
     pub bundle_version: String,
+    /// HTTP status code returned by the connector. Zero when the call
+    /// never dispatched (pre-dispatch DENY or ABORT).
+    pub dispatch_status: i32,
+    /// Connector dispatch latency in microseconds. Zero when the call
+    /// never dispatched.
+    pub dispatch_latency_us: i64,
+    /// Target response body size in bytes. Zero when the call never
+    /// dispatched or the target returned no body.
+    pub response_size: i64,
 }
 
 /// Domain-level audit event produced by the enforcement pipeline.
@@ -152,6 +161,15 @@ pub struct ExecutionEvent {
     pub bundle_version: String,
     /// Event timestamp as nanoseconds since the Unix epoch.
     pub timestamp: Option<u128>,
+    /// HTTP status code returned by the connector. Zero when the call
+    /// never dispatched (pre-dispatch DENY or ABORT).
+    pub dispatch_status: i32,
+    /// Connector dispatch latency in microseconds. Zero when the call
+    /// never dispatched.
+    pub dispatch_latency_us: i64,
+    /// Target response body size in bytes. Zero when the call never
+    /// dispatched or the target returned no body.
+    pub response_size: i64,
     /// ECDSA signature (DER-encoded) over all preceding fields.
     pub signature: Vec<u8>,
 }
@@ -183,6 +201,9 @@ impl From<ExecutionEvent> for firma_proto::firma::v1::ExecutionEvent {
                 }
             }),
             signature: value.signature,
+            dispatch_status: value.dispatch_status,
+            dispatch_latency_us: value.dispatch_latency_us,
+            response_size: value.response_size,
         }
     }
 }

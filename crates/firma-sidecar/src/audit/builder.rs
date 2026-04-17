@@ -82,6 +82,9 @@ impl EventBuilder {
             context_hash: payload.context_hash,
             bundle_version: payload.bundle_version,
             timestamp: Some(timestamp),
+            dispatch_status: payload.dispatch_status,
+            dispatch_latency_us: payload.dispatch_latency_us,
+            response_size: payload.response_size,
             signature: Vec::new(),
         };
 
@@ -134,6 +137,12 @@ fn signing_payload(event: &ExecutionEvent) -> Vec<u8> {
         .timestamp
         .map_or_else(|| "0".to_string(), |n| n.to_string());
     hasher.update(ts.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(event.dispatch_status.to_string().as_bytes());
+    hasher.update(b"\n");
+    hasher.update(event.dispatch_latency_us.to_string().as_bytes());
+    hasher.update(b"\n");
+    hasher.update(event.response_size.to_string().as_bytes());
     hasher.finalize().to_vec()
 }
 
@@ -256,6 +265,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let decision = EnforcementDecision::Allow {
             claims: test_claims(),
             envelope: Box::new(test_envelope()),
+            credentials: firma_core::InjectedCredentials::empty(),
         };
 
         let payload = payload_from_decision(&decision, "sess_001", Duration::from_micros(150));
@@ -320,6 +330,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let decision = EnforcementDecision::Allow {
             claims: test_claims(),
             envelope: Box::new(test_envelope()),
+            credentials: firma_core::InjectedCredentials::empty(),
         };
 
         let payload = payload_from_decision(&decision, "sess_001", Duration::from_micros(100));
@@ -347,6 +358,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let decision = EnforcementDecision::Allow {
             claims: test_claims(),
             envelope: Box::new(test_envelope()),
+            credentials: firma_core::InjectedCredentials::empty(),
         };
 
         let payload = payload_from_decision(&decision, "sess_001", Duration::from_micros(100));
@@ -403,6 +415,9 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             enforcement_latency_us: 0,
             context_hash: String::new(),
             bundle_version: String::new(),
+            dispatch_status: 0,
+            dispatch_latency_us: 0,
+            response_size: 0,
         };
         let payload2 = payload1.clone();
 

@@ -4,10 +4,10 @@
 /// Used when the configuration mixes both `basic` and `vault` mode
 /// entries. Each provider handles its own set of connector IDs.
 use async_trait::async_trait;
-use firma_core::ExecutionEnvelope;
+use firma_core::{ExecutionEnvelope, InjectedCredentials};
 
 use super::{BasicCredentialInjector, VaultCredentialInjector};
-use crate::credential::{CredentialInjectionError, CredentialInjector, InjectedCredentials};
+use crate::credential::{CredentialInjectionError, CredentialInjector};
 
 /// Tries the basic provider first; if it returns
 /// [`UnknownConnector`](CredentialInjectionError::UnknownConnector),

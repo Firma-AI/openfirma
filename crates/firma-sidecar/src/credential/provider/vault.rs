@@ -9,9 +9,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use firma_core::ExecutionEnvelope;
+use firma_core::{ExecutionEnvelope, InjectedCredentials};
 
-use crate::credential::{CredentialInjectionError, CredentialInjector, InjectedCredentials};
+use crate::credential::{CredentialInjectionError, CredentialInjector};
 
 /// Descriptor for a single credential file rendered by Vault Agent.
 ///

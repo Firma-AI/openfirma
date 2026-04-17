@@ -469,6 +469,9 @@ mod tests {
             context_hash: "abc123".to_string(),
             bundle_version: "v1".to_string(),
             timestamp: Some(1_700_000_000_000_000_000),
+            dispatch_status: 0,
+            dispatch_latency_us: 0,
+            response_size: 0,
             signature: vec![0xDE, 0xAD],
         }
     }
