@@ -70,21 +70,21 @@ impl CedarPolicyEvaluator {
 
     /// Build a Cedar `EntityUid` for the principal (agent).
     fn agent_uid(agent_id: &str) -> Result<EntityUid, String> {
-        format!("Firma::Agent::\"{}\"", agent_id)
+        format!("Firma::Agent::\"{agent_id}\"")
             .parse::<EntityUid>()
             .map_err(|e| format!("invalid agent UID for '{agent_id}': {e}"))
     }
 
     /// Build a Cedar `EntityUid` for the action class.
     fn action_uid(action_class: &str) -> Result<EntityUid, String> {
-        format!("Firma::Action::\"{}\"", action_class)
+        format!("Firma::Action::\"{action_class}\"")
             .parse::<EntityUid>()
             .map_err(|e| format!("invalid action UID for '{action_class}': {e}"))
     }
 
     /// Build a Cedar `EntityUid` for the resource.
     fn resource_uid(resource: &str) -> Result<EntityUid, String> {
-        format!("Firma::Resource::\"{}\"", resource)
+        format!("Firma::Resource::\"{resource}\"")
             .parse::<EntityUid>()
             .map_err(|e| format!("invalid resource UID for '{resource}': {e}"))
     }
@@ -298,7 +298,12 @@ mod tests {
             "timestamp": "2025-01-01T00:00:00Z"
         });
         let deny = evaluator
-            .evaluate(&agent("agent_test"), "file.delete", "api.openai.com", &deny_context)
+            .evaluate(
+                &agent("agent_test"),
+                "file.delete",
+                "api.openai.com",
+                &deny_context,
+            )
             .unwrap();
         assert!(!deny);
     }

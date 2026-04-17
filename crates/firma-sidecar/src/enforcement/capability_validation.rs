@@ -153,7 +153,7 @@ impl CapabilityValidator {
 
         if is_revoked {
             return Err(EnforcementError::TokenValidation(TokenError::Revoked {
-                token_id: claims.token_id.clone(),
+                token_id: claims.token_id,
             })
             .into_deny(stage));
         }

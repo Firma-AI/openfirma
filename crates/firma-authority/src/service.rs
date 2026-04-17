@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use cedar_policy::{Authorizer, Context, Entities, EntityUid, PolicySet, Request};
 use chrono::{Duration, Utc};
-use sha2::{Digest, Sha256};
 use firma_core::policy::PolicyBundle;
 use firma_core::token::paseto::PasetoV4Signer;
 use firma_core::token::{CapabilityClaims, TokenId, TokenSigner};
@@ -13,6 +12,7 @@ use firma_proto::firma::v1::{
     CapabilityToken, IssueCapabilityRequest, IssueCapabilityResponse, PolicyBundleUpdate,
     TokenFormat, WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
+use sha2::{Digest, Sha256};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
 use tonic::{Request as TonicRequest, Response, Status};
@@ -98,7 +98,7 @@ impl AuthorityService for AuthorityServiceImpl {
                     .map_err(|e| Status::invalid_argument(format!("invalid session_id: {e}")))?;
 
                 let claims = CapabilityClaims {
-                    token_id: token_id.clone(),
+                    token_id,
                     agent_id,
                     session_id,
                     action_set: req.requested_actions.clone(),
@@ -527,19 +527,35 @@ mod tests {
 
     #[test]
     fn context_hash_changes_with_agent() {
-        let h1 =
-            compute_context_hash("agent_a", &["http.get".to_string()], "resource", "bundle_v1");
-        let h2 =
-            compute_context_hash("agent_b", &["http.get".to_string()], "resource", "bundle_v1");
+        let h1 = compute_context_hash(
+            "agent_a",
+            &["http.get".to_string()],
+            "resource",
+            "bundle_v1",
+        );
+        let h2 = compute_context_hash(
+            "agent_b",
+            &["http.get".to_string()],
+            "resource",
+            "bundle_v1",
+        );
         assert_ne!(h1, h2);
     }
 
     #[test]
     fn context_hash_changes_with_bundle_version() {
-        let h1 =
-            compute_context_hash("agent_1", &["http.get".to_string()], "resource", "bundle_v1");
-        let h2 =
-            compute_context_hash("agent_1", &["http.get".to_string()], "resource", "bundle_v2");
+        let h1 = compute_context_hash(
+            "agent_1",
+            &["http.get".to_string()],
+            "resource",
+            "bundle_v1",
+        );
+        let h2 = compute_context_hash(
+            "agent_1",
+            &["http.get".to_string()],
+            "resource",
+            "bundle_v2",
+        );
         assert_ne!(h1, h2);
     }
 }
