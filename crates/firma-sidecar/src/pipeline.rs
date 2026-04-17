@@ -135,7 +135,6 @@ mod tests {
         CapabilityClaims, RevocationStore, TokenError, TokenId, TokenVerifier,
     };
     use std::collections::HashMap;
-    use std::time::Duration;
 
     struct AllowAllPolicy;
     impl PolicyEvaluation for AllowAllPolicy {
@@ -235,7 +234,6 @@ mod tests {
             CapabilityMap::new(vec![test_entry("v4.public.test_token", claims.clone())]),
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
-            Duration::from_secs(0),
         );
 
         let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
@@ -303,7 +301,6 @@ mod tests {
             CapabilityMap::new(vec![test_entry("v4.public.test_token", claims.clone())]),
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
-            Duration::from_secs(0),
         );
         let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
@@ -346,7 +343,6 @@ mod tests {
                 claims: wide_claims,
             }),
             Box::new(NoRevocations),
-            Duration::from_secs(0),
         );
 
         struct DenyDeletePolicy;
@@ -412,7 +408,6 @@ mod tests {
             CapabilityMap::new(vec![test_entry("v4.public.bad", claims.clone())]),
             Box::new(RejectingVerifier),
             Box::new(NoRevocations),
-            Duration::from_secs(0),
         );
         let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
@@ -455,7 +450,6 @@ mod tests {
             CapabilityMap::new(vec![]), // empty!
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
-            Duration::from_secs(0),
         );
         let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
@@ -534,7 +528,6 @@ mod tests {
             CapabilityMap::new(vec![test_entry("v4.public.test", claims.clone())]),
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
-            Duration::from_secs(0),
         );
 
         struct StalePolicy;
@@ -598,7 +591,6 @@ mod roundtrip_tests {
     use pasetors::keys::{AsymmetricKeyPair, Generate};
     use pasetors::version4::V4;
     use std::collections::HashMap;
-    use std::time::Duration;
 
     struct NoRevocations;
     impl RevocationStore for NoRevocations {
@@ -653,7 +645,6 @@ mod roundtrip_tests {
             capability_map,
             Box::new(verifier_for_stage1),
             Box::new(NoRevocations),
-            Duration::from_secs(0),
         );
         let stage2 = ConstraintEnforcer::new(Box::new(cedar_eval));
 
@@ -734,7 +725,6 @@ mod roundtrip_tests {
             capability_map,
             Box::new(PasetoV4Verifier::try_new(&pk2).unwrap()),
             Box::new(NoRevocations),
-            Duration::from_secs(0),
         );
         let rules = vec![MappingRuleConfig {
             method: Some("POST".to_string()),
