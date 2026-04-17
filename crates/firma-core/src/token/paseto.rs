@@ -50,14 +50,23 @@ impl TokenSigner for PasetoV4Signer {
 /// PASETO v4.public token verifier using Ed25519.
 ///
 /// Implements [`TokenVerifier`] by verifying the Ed25519 signature,
-/// checking expiration, and deserializing claims from the token payload.
+/// checking expiration with a configurable clock skew leeway, and
+/// deserializing claims from the token payload.
+///
+/// The leeway absorbs NTP drift and scheduling jitter between the
+/// Authority (issuer) and the Sidecar (verifier).
 #[derive(Debug)]
 pub struct PasetoV4Verifier {
     public_key: AsymmetricPublicKey<V4>,
+    /// Leeway added to the token expiry before comparing with the current
+    /// time. A token is rejected only when `expiry + leeway <= now`.
+    leeway: chrono::Duration,
 }
 
 impl PasetoV4Verifier {
     /// Construct from raw Ed25519 public key bytes (32 bytes).
+    ///
+    /// Uses a default clock skew leeway of 10 seconds.
     ///
     /// # Errors
     ///
@@ -68,7 +77,20 @@ impl PasetoV4Verifier {
                 reason: format!("invalid public key: {e:?}"),
             }
         })?;
-        Ok(Self { public_key })
+        Ok(Self {
+            public_key,
+            leeway: chrono::Duration::seconds(10),
+        })
+    }
+
+    /// Override the leeway applied during expiry validation.
+    ///
+    /// By default the verifier allows 10 seconds of leeway. Use this method
+    /// to tighten or loosen that window for specific deployment contexts.
+    #[must_use]
+    pub fn with_leeway(mut self, leeway: chrono::Duration) -> Self {
+        self.leeway = leeway;
+        self
     }
 }
 
@@ -96,8 +118,10 @@ impl TokenVerifier for PasetoV4Verifier {
         // 4. Extract all claims
         let capability_claims = extract_capability_claims(&claims)?;
 
-        // 5. Check expiration
-        if capability_claims.expiry <= Utc::now() {
+        // 5. Check expiration with clock skew leeway.
+        // A token is denied only when expiry + leeway <= now, so a token
+        // that expired up to `clock_skew` ago is still accepted.
+        if capability_claims.expiry + self.leeway <= Utc::now() {
             return Err(TokenError::Expired {
                 token_id: capability_claims.token_id,
             });
@@ -263,7 +287,7 @@ mod tests {
     #[test]
     fn signer_as_dyn_token_signer() {
         let (sk, _pk) = generate_keypair();
-        let signer: Box<dyn TokenSigner> = Box::new(PasetoV4Signer::try_new(&sk).unwrap());
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
         let claims = sample_claims(600);
         let token = signer.sign(&claims).unwrap();
         assert!(token.starts_with("v4.public."));
@@ -328,20 +352,7 @@ mod tests {
         let token = signer.sign(&original).unwrap();
         let recovered = verifier.verify(&token).unwrap();
 
-        assert_eq!(recovered.token_id, original.token_id);
-        assert_eq!(recovered.agent_id, original.agent_id);
-        assert_eq!(recovered.session_id, original.session_id);
-        assert_eq!(recovered.action_set, original.action_set);
-        assert_eq!(recovered.resource_scope, original.resource_scope);
-        assert_eq!(recovered.context_hash, original.context_hash);
-        // DateTime comparison: within 1 second tolerance (RFC 3339 round-trip may lose sub-second)
-        assert!(
-            (recovered.issued_at - original.issued_at)
-                .num_seconds()
-                .abs()
-                <= 1
-        );
-        assert!((recovered.expiry - original.expiry).num_seconds().abs() <= 1);
+        assert_eq!(recovered, original);
     }
 
     #[test]
@@ -350,7 +361,8 @@ mod tests {
         let signer = PasetoV4Signer::try_new(&sk).unwrap();
         let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
 
-        let claims = sample_claims(-1); // expired 1 second ago
+        // Expired 30s ago — well outside the 10s default leeway.
+        let claims = sample_claims(-30);
         let expected_token_id = claims.token_id;
         let token = signer.sign(&claims).unwrap();
         let result = verifier.verify(&token);
@@ -360,6 +372,44 @@ mod tests {
         assert!(
             matches!(err, TokenError::Expired { ref token_id } if token_id == &expected_token_id),
             "expected Expired with token_id, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn token_within_leeway_accepted() {
+        let (sk, pk) = generate_keypair();
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
+        let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
+
+        // Expired 5s ago — within the 10s default leeway.
+        let claims = sample_claims(-5);
+        let token = signer.sign(&claims).unwrap();
+        let result = verifier.verify(&token);
+
+        assert!(result.is_ok(), "token within leeway must be accepted");
+    }
+
+    #[test]
+    fn token_within_default_leeway_rejected_when_leeway_zeroed() {
+        let (sk, pk) = generate_keypair();
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
+        // Override leeway to zero — strict expiry enforcement.
+        let verifier = PasetoV4Verifier::try_new(&pk)
+            .unwrap()
+            .with_leeway(chrono::Duration::zero());
+
+        // Expired 5s ago — accepted by the default verifier but rejected here.
+        let claims = sample_claims(-5);
+        let token = signer.sign(&claims).unwrap();
+        let result = verifier.verify(&token);
+
+        assert!(
+            result.is_err(),
+            "token expired 5s ago must be rejected with zero leeway"
+        );
+        assert!(
+            matches!(result.unwrap_err(), TokenError::Expired { .. }),
+            "error must be Expired"
         );
     }
 

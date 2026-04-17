@@ -50,11 +50,7 @@ pub struct MappingConfig {
 
 /// Stage 1 (token validation) configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct Stage1Config {
-    /// Clock skew tolerance for expiry checks (seconds). Default: 0 (strict).
-    #[serde(default)]
-    pub clock_skew_tolerance_seconds: u64,
-}
+pub struct Stage1Config {}
 
 /// Stage 2 (Cedar evaluation) configuration.
 #[derive(Debug, Clone, Deserialize)]
