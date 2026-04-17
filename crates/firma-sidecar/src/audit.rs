@@ -4,10 +4,10 @@
 //! (ALLOW, DENY, ABORT). No call enters or exits the sidecar without a
 //! corresponding audit record.
 //!
-//! The emitter is invoked by the pipeline after every `enforce()` call,
-//! regardless of outcome. Each event carries an ECDSA signature over all
-//! fields, making the audit log tamper-evident and independently
-//! verifiable.
+//! The emitter is invoked by the [`RequestHandler`](crate::handler::RequestHandler)
+//! after every handled call, regardless of outcome. Each event carries an
+//! ECDSA signature over all fields, making the audit log tamper-evident and
+//! independently verifiable.
 //!
 //! # Output sinks
 //!
@@ -171,9 +171,11 @@ impl From<ExecutionEvent> for firma_proto::firma::v1::ExecutionEvent {
             context_hash: value.context_hash,
             bundle_version: value.bundle_version,
             timestamp: value.timestamp.map(|nanos| {
-                #[allow(clippy::cast_possible_truncation)]
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "timestamp seconds fit i64 for supported event times"
+                )]
                 let seconds = (nanos / 1_000_000_000) as i64;
-                #[allow(clippy::cast_possible_truncation)]
                 let sub_nanos = (nanos % 1_000_000_000) as i32;
                 firma_proto::prost_types::Timestamp {
                     seconds,

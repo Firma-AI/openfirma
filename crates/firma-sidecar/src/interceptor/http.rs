@@ -6,10 +6,10 @@
 //! through this interceptor before reaching external systems.
 //!
 //! The Pingora `ProxyHttp` lifecycle hooks parse each inbound request into a
-//! [`RawRequest`](crate::normalizer::RawRequest), run it through the
-//! [`EnforcementPipeline`](crate::pipeline::EnforcementPipeline), and act on
-//! the decision at the transport level. HTTPS CONNECT tunneling with dynamic
-//! certificate generation is planned but not yet implemented.
+//! [`RawRequest`](crate::normalizer::RawRequest), pass it to the shared
+//! [`RequestHandler`](crate::handler::RequestHandler), and write the handled
+//! response downstream. HTTPS CONNECT tunneling with dynamic certificate
+//! generation is planned but not yet implemented.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -17,18 +17,20 @@ use std::sync::Arc;
 use pingora_core::server::configuration::ServerConf;
 use pingora_core::server::{RunArgs, Server, ShutdownSignal, ShutdownSignalWatch};
 use pingora_core::upstreams::peer::HttpPeer;
+use pingora_http::ResponseHeader;
 use pingora_proxy::{ProxyHttp, Session, http_proxy_service};
 use tokio_util::sync::CancellationToken;
 
+use crate::handler::{DispatchedResponse, HandledResponse, RequestHandler};
 use crate::interceptor::Interceptor;
-use crate::pipeline::{EnforcementPipeline, RawRequest};
+use crate::pipeline::RawRequest;
 
 /// Pingora-based HTTP forward proxy interceptor.
 ///
 /// Listens on a configurable TCP port (default 8080) and captures every
 /// outbound HTTP request made by the agent. Each request is converted into a
-/// [`RawRequest`](crate::normalizer::RawRequest) and enforced through the
-/// [`EnforcementPipeline`](crate::pipeline::EnforcementPipeline) provided in
+/// [`RawRequest`](crate::normalizer::RawRequest) and handled through the
+/// [`RequestHandler`](crate::handler::RequestHandler) provided in
 /// [`Interceptor::run`](super::Interceptor::run).
 ///
 /// Malformed requests that cannot be parsed into a valid `RawRequest` are
@@ -36,7 +38,7 @@ use crate::pipeline::{EnforcementPipeline, RawRequest};
 /// (fail-closed).
 pub struct HttpInterceptor {
     address: SocketAddr,
-    pipeline: Option<Arc<EnforcementPipeline>>,
+    handler: Option<Arc<RequestHandler>>,
 }
 
 impl HttpInterceptor {
@@ -45,7 +47,7 @@ impl HttpInterceptor {
     pub fn new(address: SocketAddr) -> Self {
         Self {
             address,
-            pipeline: None,
+            handler: None,
         }
     }
 }
@@ -62,102 +64,106 @@ impl ProxyHttp for HttpInterceptor {
 
     fn new_ctx(&self) -> Self::CTX {}
 
+    async fn request_filter(
+        &self,
+        session: &mut Session,
+        _ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<bool> {
+        let raw_request = build_raw_request(session).await?;
+
+        let handler = self
+            .handler
+            .as_ref()
+            .ok_or_else(|| pingora_core::Error::new(pingora_core::ErrorType::InternalError))?;
+
+        let session_id = raw_request
+            .headers
+            .get("x-firma-session-id")
+            .cloned()
+            .unwrap_or_default();
+        let outcome = handler.handle(raw_request, &session_id).await;
+
+        write_handled_response(session, outcome).await?;
+        Ok(true)
+    }
+
     async fn upstream_peer(
         &self,
         session: &mut Session,
         _ctx: &mut Self::CTX,
     ) -> pingora_core::Result<Box<HttpPeer>> {
-        // 1. Build RawRequest from session.req_header()
-        let body = if session.is_body_empty() {
-            None
-        } else {
-            let mut body = vec![];
-            loop {
-                match session.read_request_body().await {
-                    Ok(Some(chunk)) => body.extend(chunk.to_vec()),
-                    Ok(None) => break,
-                    Err(_error) => {
-                        return Err(pingora_core::Error::new(
-                            pingora_core::ErrorType::InternalError,
-                        ));
-                    }
+        Ok(Box::new(resolve_upstream(&raw_request_from_header(
+            session,
+        )?)))
+    }
+}
+
+async fn build_raw_request(session: &mut Session) -> pingora_core::Result<RawRequest> {
+    let body = if session.is_body_empty() {
+        None
+    } else {
+        let mut body = vec![];
+        loop {
+            match session.read_request_body().await {
+                Ok(Some(chunk)) => body.extend(chunk.to_vec()),
+                Ok(None) => break,
+                Err(_error) => {
+                    return Err(pingora_core::Error::new(
+                        pingora_core::ErrorType::InternalError,
+                    ));
                 }
             }
-
-            Some(body)
-        };
-        let header = session.req_header();
-
-        let host = header
-            .headers
-            .get("host")
-            .and_then(|v| v.to_str().ok())
-            .map(ToString::to_string)
-            .or_else(|| header.uri.authority().map(ToString::to_string))
-            .unwrap_or_default();
-
-        // Fail-closed: reject requests without a resolvable host.
-        if host.is_empty() {
-            return Err(pingora_core::Error::because(
-                pingora_core::ErrorType::HTTPStatus(400),
-                "MALFORMED_REQUEST: missing host",
-                pingora_core::Error::new(pingora_core::ErrorType::InternalError),
-            ));
         }
 
-        let raw_request = RawRequest {
-            method: header.method.to_string(),
-            host,
-            headers: header
-                .headers
-                .iter()
-                .filter_map(|(key, value)| {
-                    Some((key.to_string(), value.to_str().ok()?.to_string()))
-                })
-                .collect(),
-            path: extract_path(header.raw_path()),
-            body,
-            is_https: header.method == "CONNECT",
-        };
+        Some(body)
+    };
 
-        // 2. Enforce through the pipeline
-        let pipeline = self
-            .pipeline
-            .as_ref()
-            .ok_or_else(|| pingora_core::Error::new(pingora_core::ErrorType::InternalError))?;
+    let mut raw = raw_request_from_header(session)?;
+    raw.body = body;
+    Ok(raw)
+}
 
-        let session_id = header
-            .headers
-            .get("x-firma-session-id")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
-        let decision = pipeline.enforce(&raw_request, session_id).await;
+fn raw_request_from_header(session: &Session) -> pingora_core::Result<RawRequest> {
+    let header = session.req_header();
+    let host = header
+        .headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string)
+        .or_else(|| header.uri.authority().map(ToString::to_string))
+        .unwrap_or_default();
 
-        // 3. Act on the enforcement decision
-        match decision {
-            crate::pipeline::EnforcementDecision::Allow { .. }
-            | crate::pipeline::EnforcementDecision::Passthrough { .. } => {
-                Ok(Box::new(resolve_upstream(&raw_request)))
-            }
-            crate::pipeline::EnforcementDecision::Deny { reason, detail, .. } => {
-                Err(pingora_core::Error::because(
-                    pingora_core::ErrorType::HTTPStatus(403),
-                    format!("{reason}: {detail}"),
-                    pingora_core::Error::new(pingora_core::ErrorType::InternalError),
-                ))
-            }
-        }
+    // Fail-closed: reject requests without a resolvable host.
+    if host.is_empty() {
+        return Err(pingora_core::Error::because(
+            pingora_core::ErrorType::HTTPStatus(400),
+            "MALFORMED_REQUEST: missing host",
+            pingora_core::Error::new(pingora_core::ErrorType::InternalError),
+        ));
     }
+
+    Ok(RawRequest {
+        method: header.method.to_string(),
+        host,
+        headers: header
+            .headers
+            .iter()
+            .filter_map(|(key, value)| Some((key.to_string(), value.to_str().ok()?.to_string())))
+            .collect(),
+        path: extract_path(header.raw_path()),
+        body: None,
+        is_https: header.method == "CONNECT",
+    })
 }
 
 impl Interceptor for HttpInterceptor {
     async fn run(
         mut self,
-        pipeline: Arc<EnforcementPipeline>,
+        handler: Arc<RequestHandler>,
         cancel: CancellationToken,
     ) -> Result<(), super::InterceptorError> {
         let address = self.address;
-        self.pipeline = Some(pipeline);
+        self.handler = Some(handler);
 
         let conf = Arc::new(ServerConf::default());
         let mut svc = http_proxy_service(&conf, self);
@@ -178,6 +184,45 @@ impl Interceptor for HttpInterceptor {
         .await
         .map_err(|e| super::InterceptorError::ServerError(e.to_string()))
     }
+}
+
+async fn write_handled_response(
+    session: &mut Session,
+    outcome: HandledResponse,
+) -> pingora_core::Result<()> {
+    match outcome {
+        HandledResponse::Ok(response) | HandledResponse::Passthrough(response) => {
+            write_dispatched_response(session, response).await
+        }
+        HandledResponse::Deny { reason, detail } => {
+            session
+                .respond_error_with_body(
+                    403,
+                    hyper::body::Bytes::from(crate::handler::deny_body_json(reason, &detail)),
+                )
+                .await
+        }
+    }
+}
+
+async fn write_dispatched_response(
+    session: &mut Session,
+    response: DispatchedResponse,
+) -> pingora_core::Result<()> {
+    let mut header = ResponseHeader::build(response.status, Some(response.headers.len()))?;
+    for (name, value) in response.headers {
+        let _inserted = header.append_header(name, value)?;
+    }
+    let is_empty = response.body.is_empty();
+    session
+        .write_response_header(Box::new(header), is_empty)
+        .await?;
+    if !is_empty {
+        session
+            .write_response_body(Some(hyper::body::Bytes::from(response.body)), true)
+            .await?;
+    }
+    Ok(())
 }
 
 /// Bridges a [`CancellationToken`] into Pingora's [`ShutdownSignalWatch`].
@@ -240,8 +285,8 @@ mod tests {
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
     use crate::pipeline::{
-        ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, IntentNormalizer,
-        MappingTable, NullCredentialInjector, PipelineArgs,
+        ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, EnforcementPipeline,
+        IntentNormalizer, MappingTable, NullCredentialInjector, PipelineArgs,
     };
 
     // ── helpers ────────────────────────────────────────────────────────
@@ -263,7 +308,7 @@ mod tests {
             .ok()
             .and_then(|l| l.local_addr().ok());
         // SAFETY: this is test-only code; binding port 0 always succeeds
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         listener.unwrap()
     }
 
@@ -323,8 +368,6 @@ mod tests {
     /// Uses a wildcard host pattern (`*`) combined with the concrete path
     /// so the rule matches regardless of port number in the host header.
     fn test_pipeline_allow(path: &str) -> Arc<EnforcementPipeline> {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
-
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
@@ -354,7 +397,6 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         }))
     }
@@ -363,8 +405,6 @@ mod tests {
     /// capability map). Uses `default_protected: false` so unmapped hosts
     /// pass through.
     fn test_pipeline_deny_for_host(host: &str) -> Arc<EnforcementPipeline> {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
-
         let claims = test_claims();
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
@@ -391,18 +431,22 @@ mod tests {
             normalizer,
             capability_validator,
             constraint_enforcer,
-            audit_sink_sender: tx,
             credential_injector: Box::new(NullCredentialInjector),
         }))
+    }
+
+    fn test_handler(pipeline: Arc<EnforcementPipeline>) -> Arc<RequestHandler> {
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        Arc::new(RequestHandler::new(pipeline, tx))
     }
 
     /// Starts a minimal HTTP server that always returns `200 OK`.
     /// Returns the address it is listening on.
     async fn mock_upstream() -> (SocketAddr, CancellationToken) {
         let listener = TcpListener::bind("127.0.0.1:0").await.ok();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let listener = listener.unwrap();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let addr = listener.local_addr().unwrap();
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
@@ -434,10 +478,10 @@ mod tests {
     /// status code.
     async fn proxy_request(proxy_addr: SocketAddr, request: &str) -> u16 {
         let mut stream = TcpStream::connect(proxy_addr).await.ok();
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let stream = stream.as_mut().unwrap();
 
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         stream.write_all(request.as_bytes()).await.unwrap();
 
         // Read the response (with a timeout so the test does not hang).
@@ -463,12 +507,12 @@ mod tests {
     /// Returns a handle to the server task.
     async fn start_proxy(
         addr: SocketAddr,
-        pipeline: Arc<EnforcementPipeline>,
+        handler: Arc<RequestHandler>,
         cancel: CancellationToken,
     ) -> tokio::task::JoinHandle<Result<(), super::super::InterceptorError>> {
         let interceptor = HttpInterceptor::new(addr);
         let cancel_clone = cancel.clone();
-        let handle = tokio::spawn(async move { interceptor.run(pipeline, cancel_clone).await });
+        let handle = tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
 
         // Wait for the proxy to be ready by polling the port.
         for _ in 0..50 {
@@ -568,7 +612,7 @@ mod tests {
             body: Some(b"{}".to_vec()),
             is_https: false,
         };
-        let decision = pipeline.enforce(&raw, "").await;
+        let (decision, _payload) = pipeline.enforce(&raw, "").await;
         assert!(decision.is_allow(), "expected allow, got: {decision:?}");
     }
 
@@ -579,10 +623,10 @@ mod tests {
         let (upstream_addr, upstream_cancel) = mock_upstream().await;
         let proxy_addr = free_addr();
         let host = format!("127.0.0.1:{}", upstream_addr.port());
-        let pipeline = test_pipeline_allow("/v1/chat/completions");
+        let handler = test_handler(test_pipeline_allow("/v1/chat/completions"));
         let cancel = CancellationToken::new();
 
-        let server_handle = start_proxy(proxy_addr, pipeline, cancel.clone()).await;
+        let server_handle = start_proxy(proxy_addr, handler, cancel.clone()).await;
 
         let request = format!(
             "POST http://{host}/v1/chat/completions HTTP/1.1\r\n\
@@ -606,10 +650,10 @@ mod tests {
         let proxy_addr = free_addr();
         let host = format!("127.0.0.1:{}", upstream_addr.port());
         // Wildcard host, empty cap map → DENY at token selection
-        let pipeline = test_pipeline_deny_for_host("*");
+        let handler = test_handler(test_pipeline_deny_for_host("*"));
         let cancel = CancellationToken::new();
 
-        let server_handle = start_proxy(proxy_addr, pipeline, cancel.clone()).await;
+        let server_handle = start_proxy(proxy_addr, handler, cancel.clone()).await;
 
         let request = format!(
             "POST http://{host}/v1/chat/completions HTTP/1.1\r\n\
@@ -634,10 +678,10 @@ mod tests {
         let host = format!("127.0.0.1:{}", upstream_addr.port());
         // Pipeline maps only api.openai.com, default_protected=false →
         // unmapped hosts pass through.
-        let pipeline = test_pipeline_deny_for_host("api.openai.com");
+        let handler = test_handler(test_pipeline_deny_for_host("api.openai.com"));
         let cancel = CancellationToken::new();
 
-        let server_handle = start_proxy(proxy_addr, pipeline, cancel.clone()).await;
+        let server_handle = start_proxy(proxy_addr, handler, cancel.clone()).await;
 
         let request = format!(
             "GET http://{host}/anything HTTP/1.1\r\n\

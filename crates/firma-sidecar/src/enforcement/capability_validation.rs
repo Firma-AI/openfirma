@@ -93,7 +93,10 @@ impl CapabilityValidator {
     ///
     /// Returns `EnforcementDecision::Deny` if no token matches or token
     /// validation fails.
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "domain decision carries denial context"
+    )]
     pub fn enforce(
         &self,
         envelope: &NormalizedEnvelope,
@@ -134,7 +137,10 @@ impl CapabilityValidator {
     ///
     /// Panics if the clock skew tolerance exceeds the range representable by
     /// `chrono::Duration` (practically unreachable).
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "domain decision carries denial context"
+    )]
     fn validate(&self, raw_token: &str) -> Result<CapabilityClaims, EnforcementDecision> {
         let stage =
             EnforcementStage::CapabilityValidation(CapabilityValidationStage::TokenValidation);
