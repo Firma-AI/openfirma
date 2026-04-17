@@ -174,7 +174,6 @@ async fn run_server(config: config::AuthorityConfig) {
     tracing::info!("firma-authority shut down gracefully");
 }
 
-
 /// FR-7: Revoke a token by appending its ID to the revocation file.
 fn run_revoke(config: &config::AuthorityConfig, token_id: &str) {
     use std::io::Write;
