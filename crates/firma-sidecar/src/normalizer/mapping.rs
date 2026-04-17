@@ -112,7 +112,7 @@ impl MappingTable {
         }
 
         // Sort by descending specificity (most specific first)
-        rules.sort_by(|a, b| b.specificity.cmp(&a.specificity));
+        rules.sort_by_key(|b| std::cmp::Reverse(b.specificity));
 
         Ok(Self {
             rules,
