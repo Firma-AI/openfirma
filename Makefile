@@ -1,4 +1,4 @@
-.PHONY: fmt lint test build check
+.PHONY: fmt lint test build check stress-http
 
 fmt:
 	cargo fmt --check
@@ -13,3 +13,6 @@ build:
 	cargo build --workspace
 
 check: fmt lint test build
+
+stress-http:
+	cargo test -p firma-sidecar --test interception_stress -- --nocapture
