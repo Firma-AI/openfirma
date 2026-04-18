@@ -25,7 +25,7 @@ def get_client() -> Client:
     global _client
     if _client is None:
         url = _require_env("SUPABASE_URL")
-        key = _require_env("SUPABASE_ANON_KEY")
+        key = _require_env("SUPABASE_PUBLISHABLE_KEY")
         _client = create_client(url, key)
     return _client
 

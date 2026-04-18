@@ -65,7 +65,7 @@ Both agents share one Supabase project; you only need to do this once.
 
 1. Create a new project at [supabase.com](https://supabase.com).
 2. Open the SQL editor and run [`supabase_schema.sql`](./supabase_schema.sql). It creates the `products` table (10 seed rows), the `execute_sql(text)` RPC, and the `firma-demo` storage bucket.
-3. Copy your project's URL and `anon` key into each agent's `.env` (see `.env.sample`).
+3. Copy your project's URL and **Publishable key** (`sb_publishable_...`, from Settings → API Keys) into each agent's `.env` as `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`. Do **not** copy the Secret key — it bypasses Row Level Security and would defeat the demo's enforcement story.
 4. Sign up at [resend.com](https://resend.com), verify a sending domain, and put the API key plus a verified `from` address into both `.env` files.
 
 ## Quick Start
@@ -137,12 +137,12 @@ The agents don't need to know about Firma. They just call tools. Firma decides w
 
 ### Move demo secrets into the sidecar
 
-Today every API key — `OPENAI_API_KEY`, `GOOGLE_GENAI_API_KEY`, `SUPABASE_ANON_KEY`, `RESEND_API_KEY`, and `IPINFO_TOKEN` — sits in the agent's `.env` so the SDKs can start. That's a compromise for a standalone demo; it is not the endgame Firma is claiming.
+Today every API key — `OPENAI_API_KEY`, `GOOGLE_GENAI_API_KEY`, `SUPABASE_PUBLISHABLE_KEY`, `RESEND_API_KEY`, and `IPINFO_TOKEN` — sits in the agent's `.env` so the SDKs can start. That's a compromise for a standalone demo; it is not the endgame Firma is claiming.
 
 The follow-up work is to relocate those secrets so the **sidecar** holds them and injects them into outbound calls at interception time, leaving the agent process with either empty or placeholder values. Concretely:
 
 - `IPINFO_TOKEN` is already sidecar-only today (the agent never reads it) — it's the existing credential-injection exemplar.
-- `RESEND_API_KEY` and `SUPABASE_ANON_KEY` should move to the sidecar's env and be injected as `Authorization` / `apikey` headers per-host. The agent should start with those vars unset.
+- `RESEND_API_KEY` and `SUPABASE_PUBLISHABLE_KEY` should move to the sidecar's env and be injected as `Authorization` / `apikey` headers per-host. The agent should start with those vars unset. Note: Supabase's new publishable/secret keys require the sidecar to set **both** `apikey` and `Authorization: Bearer` to the same value — sending only one of them is rejected ([Supabase docs](https://supabase.com/docs/guides/api/api-keys)).
 - `OPENAI_API_KEY` and `GOOGLE_GENAI_API_KEY` should move the same way, injected on requests to `api.openai.com` and `generativelanguage.googleapis.com` respectively. This is the most interesting case because the agent SDKs build those headers themselves — Firma has to strip and replace them rather than fill in a blank.
 
 Wiring this end-to-end requires the sidecar's credential-injection path (`005-connector-credentials`) to be configurable per host, a sidecar-side `.env` separate from the agent's, and README changes that remove the secrets from the agent-side `.env.sample`. Tracked as future work; flagged here so the current split doesn't get mistaken for the target state.

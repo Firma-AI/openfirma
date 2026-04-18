@@ -16,7 +16,7 @@ function requireEnv(name: string): string {
 export function getSupabase(): SupabaseClient {
   if (!client) {
     const url = requireEnv('SUPABASE_URL');
-    const key = requireEnv('SUPABASE_ANON_KEY');
+    const key = requireEnv('SUPABASE_PUBLISHABLE_KEY');
     client = createClient(url, key);
   }
   return client;

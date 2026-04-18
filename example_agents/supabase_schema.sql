@@ -67,7 +67,9 @@ EXCEPTION WHEN others THEN
 END;
 $$;
 
--- Allow the Supabase anon / authenticated roles to invoke it through PostgREST.
+-- Allow the Supabase roles reachable via PostgREST to invoke this. The
+-- publishable key (sb_publishable_...) hits the API as the `anon` role, so
+-- that's the one that actually matters for the demo.
 GRANT EXECUTE ON FUNCTION public.execute_sql(text) TO anon, authenticated, service_role;
 
 -- 3. Storage bucket -----------------------------------------------------------
@@ -79,17 +81,23 @@ INSERT INTO storage.buckets (id, name, public)
 VALUES ('firma-demo', 'firma-demo', false)
 ON CONFLICT (id) DO NOTHING;
 
--- Minimal permissive policy so the anon key can read / write demo objects.
--- Tighten for any real deployment.
+-- Minimal permissive policies so the publishable key can read / write demo
+-- objects. Tighten for any real deployment.
+--
+-- Postgres does not support `CREATE POLICY IF NOT EXISTS`, so we drop-then-
+-- create to keep this script idempotent.
 
-CREATE POLICY IF NOT EXISTS "firma-demo read"
+DROP POLICY IF EXISTS "firma-demo read" ON storage.objects;
+CREATE POLICY "firma-demo read"
     ON storage.objects FOR SELECT
     USING (bucket_id = 'firma-demo');
 
-CREATE POLICY IF NOT EXISTS "firma-demo write"
+DROP POLICY IF EXISTS "firma-demo write" ON storage.objects;
+CREATE POLICY "firma-demo write"
     ON storage.objects FOR INSERT
     WITH CHECK (bucket_id = 'firma-demo');
 
-CREATE POLICY IF NOT EXISTS "firma-demo update"
+DROP POLICY IF EXISTS "firma-demo update" ON storage.objects;
+CREATE POLICY "firma-demo update"
     ON storage.objects FOR UPDATE
     USING (bucket_id = 'firma-demo');
