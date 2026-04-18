@@ -10,7 +10,8 @@ repository.workspace = true
 [dependencies]
 firma-core = { workspace = true }
 firma-proto = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde = { workspace = true }
