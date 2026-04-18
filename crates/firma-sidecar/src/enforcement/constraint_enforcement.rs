@@ -74,6 +74,14 @@ pub trait PolicyEvaluation: Send + Sync {
     /// Check if the policy bundle is still fresh (TTL not expired).
     fn is_fresh(&self) -> bool;
 
+    /// Check if a policy bundle is currently available.
+    ///
+    /// Default assumes availability, preserving backwards compatibility for
+    /// evaluators that only model freshness.
+    fn is_available(&self) -> bool {
+        true
+    }
+
     /// Get the current policy bundle version.
     fn version(&self) -> Option<String>;
 }
@@ -103,9 +111,10 @@ impl ConstraintEnforcer {
     ///
     /// Sequence:
     /// 1. Scope check -- is `action_class` in the token's `action_set`?
-    /// 2. Check policy bundle freshness
-    /// 3. Build Cedar context
-    /// 4. Evaluate Cedar policies
+    /// 2. Check policy availability
+    /// 3. Check policy bundle freshness
+    /// 4. Build Cedar context
+    /// 5. Evaluate Cedar policies
     ///
     /// # Errors
     ///
@@ -120,7 +129,19 @@ impl ConstraintEnforcer {
         // Step 1: Scope check (pre-Cedar gate)
         self.check_scope(envelope, claims)?;
 
-        // Step 2: Check policy bundle freshness
+        // Step 2: Check policy availability (fail-closed)
+        if !self.policy.is_available() {
+            return Err(EnforcementDecision::Deny {
+                reason: DenyReason::FailClosed,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::BundleFreshness,
+                ),
+                detail: "policy bundle unavailable; failing closed".to_string(),
+                envelope: Some(envelope.clone()),
+            });
+        }
+
+        // Step 3: Check policy bundle freshness
         if !self.policy.is_fresh() {
             return Err(EnforcementDecision::Deny {
                 reason: DenyReason::PolicyBundleStale,
@@ -132,10 +153,10 @@ impl ConstraintEnforcer {
             });
         }
 
-        // Step 3: Build context
+        // Step 4: Build context
         let context = self.build_context(envelope, claims);
 
-        // Step 4: Evaluate policies
+        // Step 5: Evaluate policies
         match self.policy.evaluate(
             &claims.agent_id,
             &envelope.intent.action_class,
@@ -173,9 +194,10 @@ impl ConstraintEnforcer {
     /// # Errors
     ///
     /// Returns `EnforcementDecision::Deny` if scope validation fails, the
-    /// policy bundle is unavailable/stale (`PolicyBundleStale`), policy
-    /// evaluation times out (`EnforcementTimeout`), or the policy evaluator
-    /// returns an error (`FailClosed`).
+    /// policy bundle is unavailable (`FailClosed`) or stale
+    /// (`PolicyBundleStale`), policy evaluation times out
+    /// (`EnforcementTimeout`), or the policy evaluator returns an error
+    /// (`FailClosed`).
     #[allow(clippy::result_large_err)]
     pub async fn evaluate_with_timeout(
         &self,
@@ -186,7 +208,19 @@ impl ConstraintEnforcer {
         // Step 1: Scope check (pre-Cedar gate)
         self.check_scope(envelope, claims)?;
 
-        // Step 2: Deny stale/unavailable policy bundle (fail-closed class)
+        // Step 2: Check policy availability (fail-closed)
+        if !self.policy.is_available() {
+            return Err(EnforcementDecision::Deny {
+                reason: DenyReason::FailClosed,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::BundleFreshness,
+                ),
+                detail: "policy bundle unavailable; failing closed".to_string(),
+                envelope: Some(envelope.clone()),
+            });
+        }
+
+        // Step 3: Deny stale policy bundle
         if !self.policy.is_fresh() {
             return Err(EnforcementDecision::Deny {
                 reason: DenyReason::PolicyBundleStale,
@@ -198,7 +232,7 @@ impl ConstraintEnforcer {
             });
         }
 
-        // Step 3: Build context from immutable request + validated claims.
+        // Step 4: Build context from immutable request + validated claims.
         let context = self.build_context(envelope, claims);
         let eval_result = if let Some(timeout_duration) = timeout {
             tokio::time::timeout(
@@ -388,6 +422,28 @@ mod tests {
         }
     }
 
+    struct UnavailablePolicy;
+    impl PolicyEvaluation for UnavailablePolicy {
+        fn evaluate(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+        fn is_fresh(&self) -> bool {
+            true
+        }
+        fn is_available(&self) -> bool {
+            false
+        }
+        fn version(&self) -> Option<String> {
+            None
+        }
+    }
+
     struct SlowAsyncPolicy;
     impl PolicyEvaluation for SlowAsyncPolicy {
         fn evaluate(
@@ -504,6 +560,17 @@ mod tests {
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
+    }
+
+    #[test]
+    fn test_deny_when_bundle_unavailable_fail_closed() {
+        let evaluator = ConstraintEnforcer::new(Box::new(UnavailablePolicy));
+        let envelope = test_envelope("llm.inference");
+        let claims = test_claims(vec!["llm.inference"]);
+
+        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        assert!(decision.is_deny());
+        assert_eq!(decision.deny_reason(), Some(DenyReason::FailClosed));
     }
 
     #[test]
