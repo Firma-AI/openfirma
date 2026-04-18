@@ -123,11 +123,11 @@ impl ConstraintEnforcer {
         // Step 2: Check policy bundle freshness
         if !self.policy.is_fresh() {
             return Err(EnforcementDecision::Deny {
-                reason: DenyReason::FailClosed,
+                reason: DenyReason::PolicyBundleStale,
                 stage: EnforcementStage::ConstraintEnforcement(
                     ConstraintEnforcementStage::BundleFreshness,
                 ),
-                detail: "policy bundle unavailable or stale; failing closed".to_string(),
+                detail: "policy bundle unavailable or stale".to_string(),
                 envelope: Some(envelope.clone()),
             });
         }
@@ -173,8 +173,9 @@ impl ConstraintEnforcer {
     /// # Errors
     ///
     /// Returns `EnforcementDecision::Deny` if scope validation fails, the
-    /// policy bundle is unavailable/stale, policy evaluation times out, or the
-    /// policy evaluator returns an error.
+    /// policy bundle is unavailable/stale (`PolicyBundleStale`), policy
+    /// evaluation times out (`EnforcementTimeout`), or the policy evaluator
+    /// returns an error (`FailClosed`).
     #[allow(clippy::result_large_err)]
     pub async fn evaluate_with_timeout(
         &self,
@@ -185,29 +186,29 @@ impl ConstraintEnforcer {
         // Step 1: Scope check (pre-Cedar gate)
         self.check_scope(envelope, claims)?;
 
-        // Step 2: Fail closed if policy set is unavailable/stale
+        // Step 2: Deny stale/unavailable policy bundle (fail-closed class)
         if !self.policy.is_fresh() {
             return Err(EnforcementDecision::Deny {
-                reason: DenyReason::FailClosed,
+                reason: DenyReason::PolicyBundleStale,
                 stage: EnforcementStage::ConstraintEnforcement(
                     ConstraintEnforcementStage::BundleFreshness,
                 ),
-                detail: "policy bundle unavailable or stale; failing closed".to_string(),
+                detail: "policy bundle unavailable or stale".to_string(),
                 envelope: Some(envelope.clone()),
             });
         }
 
         // Step 3: Build context from immutable request + validated claims.
         let context = self.build_context(envelope, claims);
-        let principal = claims.agent_id.clone();
-        let action = envelope.intent.action_class.clone();
-        let resource = envelope.intent.resource.clone();
-
         let eval_result = if let Some(timeout_duration) = timeout {
             tokio::time::timeout(
                 timeout_duration,
-                self.policy
-                    .evaluate_async(&principal, &action, &resource, &context),
+                self.policy.evaluate_async(
+                    &claims.agent_id,
+                    &envelope.intent.action_class,
+                    &envelope.intent.resource,
+                    &context,
+                ),
             )
             .await
             .map_err(|_| EnforcementDecision::Deny {
@@ -223,7 +224,12 @@ impl ConstraintEnforcer {
             })?
         } else {
             self.policy
-                .evaluate_async(&principal, &action, &resource, &context)
+                .evaluate_async(
+                    &claims.agent_id,
+                    &envelope.intent.action_class,
+                    &envelope.intent.resource,
+                    &context,
+                )
                 .await
         };
 
@@ -335,6 +341,25 @@ mod tests {
             _: &serde_json::Value,
         ) -> Result<bool, String> {
             Ok(false)
+        }
+        fn is_fresh(&self) -> bool {
+            true
+        }
+        fn version(&self) -> Option<String> {
+            Some("test-v1".to_string())
+        }
+    }
+
+    struct ErrorPolicy;
+    impl PolicyEvaluation for ErrorPolicy {
+        fn evaluate(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> Result<bool, String> {
+            Err("evaluation backend error".to_string())
         }
         fn is_fresh(&self) -> bool {
             true
@@ -473,6 +498,17 @@ mod tests {
     #[test]
     fn test_deny_when_bundle_stale() {
         let evaluator = ConstraintEnforcer::new(Box::new(StalePolicy));
+        let envelope = test_envelope("llm.inference");
+        let claims = test_claims(vec!["llm.inference"]);
+
+        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        assert!(decision.is_deny());
+        assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
+    }
+
+    #[test]
+    fn test_policy_evaluator_error_fails_closed() {
+        let evaluator = ConstraintEnforcer::new(Box::new(ErrorPolicy));
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
