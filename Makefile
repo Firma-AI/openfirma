@@ -1,4 +1,4 @@
-.PHONY: fmt lint test build check stress-http stress-shared-state stress-loom
+.PHONY: fmt lint test build check stress-http stress-shared-state stress-loom stress-miri
 
 fmt:
 	cargo fmt --check
@@ -22,3 +22,6 @@ stress-shared-state:
 
 stress-loom:
 	cargo test -p firma-sidecar --test loom_shared_state --features loom-tests -- --nocapture
+
+stress-miri:
+	cargo +nightly miri test -p firma-sidecar --test interception_stress

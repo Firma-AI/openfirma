@@ -67,6 +67,12 @@ rustup +nightly component add miri
 cargo +nightly miri setup
 ```
 
+Shortcut:
+
+```bash
+make stress-miri
+```
+
 ## Invariants to preserve
 
 - protected traffic must never bypass Stage 1 + Stage 2

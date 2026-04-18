@@ -334,7 +334,7 @@ impl ConstraintEnforcer {
             "resource": envelope.intent.resource,
             "agent_id": claims.agent_id,
             "session_id": claims.session_id,
-            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "timestamp": envelope.timestamp.to_rfc3339(),
         })
     }
 }
