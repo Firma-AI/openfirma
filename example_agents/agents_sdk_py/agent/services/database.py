@@ -1,36 +1,34 @@
 import os
 
-from sqlalchemy import create_engine, text
+from supabase import Client, create_client
 
-_BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DB_PATH = os.path.join(_BASE_DIR, ".data", "firma.db")
-SEED_PATH = os.path.join(_BASE_DIR, "seed.sql")
-
-_engine = None
+_client: Client | None = None
 
 
-def get_engine():
-    global _engine
-    if _engine is None:
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-        _engine = create_engine(f"sqlite:///{DB_PATH}")
-    return _engine
+def _require_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(
+            f"{name} is required. Set it in .env (see .env.sample). "
+            "The Firma demo agents rely on Supabase for db_query and file tools."
+        )
+    return value
 
 
-def initialize_database() -> None:
-    engine = get_engine()
+def get_client() -> Client:
+    """Return a singleton Supabase client.
 
-    if not os.path.exists(SEED_PATH):
-        print(f"firma-agent: Seed file not found at {SEED_PATH}, skipping initialization")
-        return
+    All traffic goes to ``<SUPABASE_URL>/rest/v1/...`` or ``/storage/v1/...``
+    over HTTPS. When ``HTTPS_PROXY`` points at the Firma sidecar, every call
+    is visible to enforcement.
+    """
+    global _client
+    if _client is None:
+        url = _require_env("SUPABASE_URL")
+        key = _require_env("SUPABASE_ANON_KEY")
+        _client = create_client(url, key)
+    return _client
 
-    seed_sql = open(SEED_PATH).read()
 
-    with engine.connect() as conn:
-        for statement in seed_sql.split(";"):
-            statement = statement.strip()
-            if statement:
-                conn.execute(text(statement))
-        conn.commit()
-
-    print("firma-agent: Database initialized with seed data")
+def storage_bucket() -> str:
+    return os.environ.get("SUPABASE_STORAGE_BUCKET", "firma-demo")

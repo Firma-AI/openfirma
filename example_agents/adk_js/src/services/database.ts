@@ -1,31 +1,27 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import Database from 'better-sqlite3';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-const BASE_DIR = process.cwd();
-const DB_PATH = path.join(BASE_DIR, '.data', 'firma.db');
-const SEED_PATH = path.join(BASE_DIR, 'seed.sql');
+let client: SupabaseClient | null = null;
 
-let db: Database.Database | null = null;
-
-export function getDb(): Database.Database {
-  if (!db) {
-    fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `${name} is required. Set it in .env (see .env.sample). ` +
+        'The Firma demo agents rely on Supabase for db_query and file tools.',
+    );
   }
-  return db;
+  return value;
 }
 
-export function initializeDatabase(): void {
-  const database = getDb();
-
-  if (!fs.existsSync(SEED_PATH)) {
-    console.log(`firma-agent: Seed file not found at ${SEED_PATH}, skipping initialization`);
-    return;
+export function getSupabase(): SupabaseClient {
+  if (!client) {
+    const url = requireEnv('SUPABASE_URL');
+    const key = requireEnv('SUPABASE_ANON_KEY');
+    client = createClient(url, key);
   }
+  return client;
+}
 
-  const seedSql = fs.readFileSync(SEED_PATH, 'utf-8');
-  database.exec(seedSql);
-  console.log('firma-agent: Database initialized with seed data');
+export function storageBucket(): string {
+  return process.env.SUPABASE_STORAGE_BUCKET ?? 'firma-demo';
 }
