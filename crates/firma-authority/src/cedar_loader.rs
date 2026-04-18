@@ -79,29 +79,31 @@ impl CedarPolicyStore {
     /// Reload policies from disk, atomically swapping all state in one lock
     /// acquisition. If the new policy set is invalid, keeps the previous set
     /// (FR-2). No-ops if the version hash has not changed.
-    pub async fn reload(&self) -> Result<(), AuthorityError> {
+    async fn reload(&self) -> Result<(), AuthorityError> {
         let (policies_src, schema_src) = read_policy_files(&self.policy_dir)?;
         let new_policy_set = parse_policies(&policies_src)?;
         let new_schema = parse_schema(&schema_src)?;
         let new_version = compute_version_hash(&policies_src, &schema_src);
 
-        let mut state = self.state.write().await;
-        if state.bundle.version == new_version {
-            tracing::debug!("policy reload: no changes detected");
-            return Ok(());
-        }
+        let new_bundle = {
+            let mut state = self.state.write().await;
+            if state.bundle.version == new_version {
+                tracing::debug!("policy reload: no changes detected");
+                return Ok(());
+            }
 
-        let new_bundle = PolicyBundle::new(
-            new_version.clone(),
-            policies_src.into_bytes(),
-            schema_src.into_bytes(),
-            self.bundle_ttl_seconds,
-        );
+            let bundle = PolicyBundle::new(
+                new_version.clone(),
+                policies_src.into_bytes(),
+                schema_src.into_bytes(),
+                self.bundle_ttl_seconds,
+            );
 
-        state.policy_set = Arc::new(new_policy_set);
-        state.schema = new_schema.map(Arc::new);
-        state.bundle = new_bundle.clone();
-        drop(state);
+            state.policy_set = Arc::new(new_policy_set);
+            state.schema = new_schema.map(Arc::new);
+            state.bundle = bundle.clone();
+            bundle
+        };
 
         // Notify all watchers — ignore error (no receivers is fine)
         let _ = self.bundle_tx.send(new_bundle);
