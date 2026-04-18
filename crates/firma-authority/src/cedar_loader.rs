@@ -14,7 +14,6 @@ use crate::error::AuthorityError;
 struct PolicyState {
     policy_set: Arc<PolicySet>,
     schema: Option<Arc<Schema>>,
-    bundle: PolicyBundle,
 }
 
 /// Thread-safe Cedar policy store with hot-reload support.
@@ -68,7 +67,6 @@ impl CedarPolicyStore {
             state: Arc::new(RwLock::new(PolicyState {
                 policy_set: Arc::new(policy_set),
                 schema: schema.map(Arc::new),
-                bundle,
             })),
             bundle_tx,
             policy_dir: policy_dir.to_path_buf(),
@@ -87,7 +85,7 @@ impl CedarPolicyStore {
 
         let new_bundle = {
             let mut state = self.state.write().await;
-            if state.bundle.version == new_version {
+            if self.bundle_tx.borrow().version == new_version {
                 tracing::debug!("policy reload: no changes detected");
                 return Ok(());
             }
@@ -101,7 +99,6 @@ impl CedarPolicyStore {
 
             state.policy_set = Arc::new(new_policy_set);
             state.schema = new_schema.map(Arc::new);
-            state.bundle = bundle.clone();
             bundle
         };
 
@@ -125,7 +122,7 @@ impl CedarPolicyStore {
 
     /// Get the current policy bundle for distribution to sidecars.
     pub async fn bundle(&self) -> PolicyBundle {
-        self.state.read().await.bundle.clone()
+        self.bundle_tx.borrow().clone()
     }
 
     /// Watch the policy directory for changes and reload automatically.
