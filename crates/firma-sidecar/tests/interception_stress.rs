@@ -9,6 +9,13 @@ use firma_sidecar::pipeline::{
     PolicyEvaluation, RawRequest,
 };
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, thread, time::Duration};
+use std::{
+    collections::HashSet,
+    sync::{
+        RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 struct AllowAllPolicy;
 impl PolicyEvaluation for AllowAllPolicy {
@@ -32,6 +39,10 @@ impl PolicyEvaluation for PolicyUnavailable {
     }
 
     fn is_fresh(&self) -> bool {
+        true
+    }
+
+    fn is_available(&self) -> bool {
         false
     }
 
@@ -68,6 +79,21 @@ impl PolicyEvaluation for SlowPolicy {
     }
 }
 
+struct StalePolicy;
+impl PolicyEvaluation for StalePolicy {
+    fn evaluate(&self, _: &str, _: &str, _: &str, _: &serde_json::Value) -> Result<bool, String> {
+        Ok(true)
+    }
+
+    fn is_fresh(&self) -> bool {
+        false
+    }
+
+    fn version(&self) -> Option<String> {
+        Some("stale-policy-v1".to_string())
+    }
+}
+
 struct MockVerifier {
     claims: CapabilityClaims,
 }
@@ -84,6 +110,94 @@ impl RevocationStore for NoRevocations {
     }
 
     fn add_revocation(&self, _token_id: &str) -> Result<(), TokenError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SharedPolicySet {
+    version: u64,
+    allow: bool,
+}
+
+#[derive(Debug)]
+struct SharedPolicyState {
+    available: AtomicBool,
+    fresh: AtomicBool,
+    policy_set: RwLock<SharedPolicySet>,
+}
+
+struct SharedPolicyEvaluator {
+    state: Arc<SharedPolicyState>,
+    session_counters: Arc<RwLock<HashMap<String, u64>>>,
+}
+
+impl PolicyEvaluation for SharedPolicyEvaluator {
+    fn evaluate(
+        &self,
+        principal: &str,
+        _: &str,
+        _: &str,
+        _: &serde_json::Value,
+    ) -> Result<bool, String> {
+        {
+            let mut counters = self
+                .session_counters
+                .write()
+                .unwrap_or_else(|_| panic!("session counter lock poisoned"));
+            let next = counters.get(principal).copied().unwrap_or(0) + 1;
+            counters.insert(principal.to_string(), next);
+        }
+
+        let allow = self
+            .state
+            .policy_set
+            .read()
+            .unwrap_or_else(|_| panic!("policy set lock poisoned"))
+            .allow;
+
+        Ok(allow)
+    }
+
+    fn is_fresh(&self) -> bool {
+        self.state.fresh.load(Ordering::SeqCst)
+    }
+
+    fn is_available(&self) -> bool {
+        self.state.available.load(Ordering::SeqCst)
+    }
+
+    fn version(&self) -> Option<String> {
+        let version = self
+            .state
+            .policy_set
+            .read()
+            .unwrap_or_else(|_| panic!("policy set lock poisoned"))
+            .version;
+        Some(format!("shared-v{version}"))
+    }
+}
+
+#[derive(Clone)]
+struct SharedRevocationStore {
+    revoked: Arc<RwLock<HashSet<String>>>,
+}
+
+impl RevocationStore for SharedRevocationStore {
+    fn is_revoked(&self, token_id: &str) -> Result<bool, TokenError> {
+        let revoked = self
+            .revoked
+            .read()
+            .unwrap_or_else(|_| panic!("revocation lock poisoned"));
+        Ok(revoked.contains(token_id))
+    }
+
+    fn add_revocation(&self, token_id: &str) -> Result<(), TokenError> {
+        let mut revoked = self
+            .revoked
+            .write()
+            .unwrap_or_else(|_| panic!("revocation lock poisoned"));
+        revoked.insert(token_id.to_string());
         Ok(())
     }
 }
@@ -119,6 +233,14 @@ fn build_pipeline(
     policy: Box<dyn PolicyEvaluation>,
     stage2_timeout: Duration,
 ) -> EnforcementPipeline {
+    build_pipeline_with_revocation(policy, stage2_timeout, Box::new(NoRevocations))
+}
+
+fn build_pipeline_with_revocation(
+    policy: Box<dyn PolicyEvaluation>,
+    stage2_timeout: Duration,
+    revocation: Box<dyn RevocationStore + Send + Sync>,
+) -> EnforcementPipeline {
     let claims = test_claims();
     let stage1 = CapabilityValidator::new(
         CapabilityMap::new(vec![
@@ -131,7 +253,7 @@ fn build_pipeline(
             .unwrap_or_else(|e| panic!("{e}")),
         ]),
         Box::new(MockVerifier { claims }),
-        Box::new(NoRevocations),
+        revocation,
     );
 
     EnforcementPipeline::with_stage2_timeout(
@@ -204,8 +326,21 @@ async fn stage2_timeout_denies_with_enforcement_timeout() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn policy_unavailable_denies_policy_bundle_stale() {
+async fn policy_unavailable_denies_fail_closed() {
     let pipeline = build_pipeline(Box::new(PolicyUnavailable), Duration::from_millis(50));
+
+    let decision = pipeline
+        .enforce_async(&protected_request(), "sess_stress")
+        .await;
+
+    assert!(decision.is_deny());
+    assert_eq!(decision.deny_reason(), Some(DenyReason::FailClosed));
+    assert!(!matches!(decision, EnforcementDecision::Passthrough { .. }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn policy_stale_denies_policy_bundle_stale() {
+    let pipeline = build_pipeline(Box::new(StalePolicy), Duration::from_millis(50));
 
     let decision = pipeline
         .enforce_async(&protected_request(), "sess_stress")
@@ -214,6 +349,111 @@ async fn policy_unavailable_denies_policy_bundle_stale() {
     assert!(decision.is_deny());
     assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
     assert!(!matches!(decision, EnforcementDecision::Passthrough { .. }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stress_shared_state_mutation_produces_only_valid_decisions() {
+    let state = Arc::new(SharedPolicyState {
+        available: AtomicBool::new(true),
+        fresh: AtomicBool::new(true),
+        policy_set: RwLock::new(SharedPolicySet {
+            version: 1,
+            allow: true,
+        }),
+    });
+    let session_counters = Arc::new(RwLock::new(HashMap::<String, u64>::new()));
+    let revocations = Arc::new(RwLock::new(HashSet::<String>::new()));
+
+    let evaluator = SharedPolicyEvaluator {
+        state: Arc::clone(&state),
+        session_counters: Arc::clone(&session_counters),
+    };
+    let pipeline = Arc::new(build_pipeline_with_revocation(
+        Box::new(evaluator),
+        Duration::from_millis(50),
+        Box::new(SharedRevocationStore {
+            revoked: Arc::clone(&revocations),
+        }),
+    ));
+
+    let state_writer = Arc::clone(&state);
+    let revocation_writer = Arc::clone(&revocations);
+    let mutator = tokio::spawn(async move {
+        for i in 0..400 {
+            state_writer.available.store(i % 7 != 0, Ordering::SeqCst);
+            state_writer.fresh.store(i % 5 != 0, Ordering::SeqCst);
+
+            {
+                let mut policy = state_writer
+                    .policy_set
+                    .write()
+                    .unwrap_or_else(|_| panic!("policy set lock poisoned"));
+                policy.version += 1;
+                policy.allow = i % 11 != 0;
+            }
+
+            {
+                let mut revoked = revocation_writer
+                    .write()
+                    .unwrap_or_else(|_| panic!("revocation lock poisoned"));
+                if i % 13 == 0 {
+                    revoked.insert("tok_stress_001".to_string());
+                } else {
+                    revoked.remove("tok_stress_001");
+                }
+            }
+
+            tokio::task::yield_now().await;
+        }
+    });
+
+    let mut tasks = Vec::with_capacity(100);
+    for _ in 0..100 {
+        let pipeline = Arc::clone(&pipeline);
+        tasks.push(tokio::spawn(async move {
+            pipeline
+                .enforce_async(&protected_request(), "sess_stress")
+                .await
+        }));
+    }
+
+    let mut saw_shared_state_deny = false;
+    for task in tasks {
+        let decision = tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .expect("task timed out")
+            .expect("task panicked");
+
+        assert!(
+            !decision.is_passthrough(),
+            "protected traffic must never bypass enforcement"
+        );
+
+        match decision {
+            EnforcementDecision::Allow { .. } => {}
+            EnforcementDecision::Deny { reason, .. } => {
+                let allowed = matches!(
+                    reason,
+                    DenyReason::FailClosed
+                        | DenyReason::PolicyBundleStale
+                        | DenyReason::PolicyDenied
+                        | DenyReason::TokenRevoked
+                );
+                assert!(allowed, "unexpected deny reason under shared-state stress");
+                saw_shared_state_deny = true;
+            }
+            EnforcementDecision::Passthrough { .. } => {
+                panic!("protected traffic must not bypass enforcement")
+            }
+        }
+    }
+
+    mutator.await.expect("mutator panicked");
+
+    assert!(
+        saw_shared_state_deny,
+        "shared state stress should exercise at least one deny path"
+    );
 }
 
 #[test]
