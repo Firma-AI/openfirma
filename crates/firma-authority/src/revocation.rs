@@ -254,11 +254,11 @@ impl RevocationStore {
                     Ok(new_entries) => {
                         for entry in new_entries {
                             if let Ok(n) = tx_for_task.send(entry) {
-                                tracing::debug!(receivers = n, "revocation event broadcast")
+                                tracing::debug!(receivers = n, "revocation event broadcast");
                             } else {
                                 tracing::debug!(
                                     "no active revocation subscribers; event not broadcast"
-                                )
+                                );
                             }
                         }
                     }
