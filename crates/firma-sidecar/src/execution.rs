@@ -103,6 +103,7 @@ pub struct ConnectorResponse {
 pub enum DispatchOutcome {
     ToolResult(ToolUseResult),
     ApiDenied(ApiAuthorizationFailure),
+    Aborted { reason: String },
     Forwarded(ConnectorResponse),
 }
 
