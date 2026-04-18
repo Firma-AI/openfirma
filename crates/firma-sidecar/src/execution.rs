@@ -321,8 +321,19 @@ impl InFlightAbortManager {
         }
     }
 
+    /// Parse and process a proto revocation event in one step.
+    pub async fn process_proto_event(
+        &self,
+        event: &RevocationEvent,
+        audit: &AuditEmitter,
+    ) -> usize {
+        self.process_signal(RevocationSignal::from_proto(event), audit)
+            .await
+    }
+
     async fn abort_matching(&self, token_id: Option<&str>, session_id: Option<&str>) -> usize {
         let mut ids = HashSet::new();
+        let mut cancels = Vec::new();
 
         let state = self.state.read().await;
         if let Some(token) = token_id
@@ -337,9 +348,17 @@ impl InFlightAbortManager {
         }
 
         for id in &ids {
-            if let Some(entry) = state.executions.get(id) {
-                entry.cancel.cancel();
+            if let Some(entry) = state.executions.get(id)
+                && !entry.cancel.is_cancelled()
+            {
+                cancels.push(entry.cancel.clone());
             }
+        }
+
+        drop(state);
+
+        for cancel in &cancels {
+            cancel.cancel();
         }
 
         ids.len()
@@ -519,6 +538,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn abort_signal_by_token_only_cancels_matching_execution() {
+        let manager = InFlightAbortManager::new();
+        let token_cancel = manager.register("exec-1", "tok-1", "sess-a").await;
+        let other_cancel = manager.register("exec-2", "tok-2", "sess-b").await;
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let audit = AuditEmitter::new(tx);
+
+        let cancelled = manager
+            .process_signal(
+                RevocationSignal::Abort {
+                    token_id: Some("tok-1".to_string()),
+                    session_id: None,
+                    reason: "ABORT token".to_string(),
+                },
+                &audit,
+            )
+            .await;
+
+        assert_eq!(cancelled, 1);
+        assert!(token_cancel.is_cancelled());
+        assert!(!other_cancel.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn abort_signal_by_session_only_cancels_all_session_executions() {
+        let manager = InFlightAbortManager::new();
+        let first = manager.register("exec-1", "tok-1", "sess-a").await;
+        let second = manager.register("exec-2", "tok-2", "sess-a").await;
+        let third = manager.register("exec-3", "tok-3", "sess-b").await;
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let audit = AuditEmitter::new(tx);
+
+        let cancelled = manager
+            .process_signal(
+                RevocationSignal::Abort {
+                    token_id: None,
+                    session_id: Some("sess-a".to_string()),
+                    reason: "ABORT session".to_string(),
+                },
+                &audit,
+            )
+            .await;
+
+        assert_eq!(cancelled, 2);
+        assert!(first.is_cancelled());
+        assert!(second.is_cancelled());
+        assert!(!third.is_cancelled());
+    }
+
+    #[tokio::test]
     async fn revoked_signal_does_not_abort_inflight() {
         let manager = InFlightAbortManager::new();
         let token_cancel = manager.register("exec-1", "tok-1", "sess-a").await;
@@ -557,5 +628,24 @@ mod tests {
                 reason: "ABORT session_id=sess-a".to_string(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn abort_proto_event_path_cancels_inflight() {
+        let manager = InFlightAbortManager::new();
+        let token_cancel = manager.register("exec-1", "tok-1", "sess-a").await;
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let audit = AuditEmitter::new(tx);
+
+        let event = RevocationEvent {
+            token_id: "tok-1".to_string(),
+            reason: "ABORT".to_string(),
+            timestamp: None,
+        };
+
+        let cancelled = manager.process_proto_event(&event, &audit).await;
+        assert_eq!(cancelled, 1);
+        assert!(token_cancel.is_cancelled());
     }
 }
