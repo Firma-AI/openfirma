@@ -27,6 +27,7 @@
 //!   from here.
 
 pub mod enforcement;
+pub mod execution;
 pub mod interceptor;
 pub mod normalizer;
 pub mod pipeline;
