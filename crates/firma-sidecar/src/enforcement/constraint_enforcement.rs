@@ -35,6 +35,7 @@
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
 use crate::normalizer::NormalizedEnvelope;
 use firma_core::{decision::DenyReason, token::CapabilityClaims};
+use std::{future::Future, pin::Pin, time::Duration};
 
 /// Trait for policy evaluation — abstracts Cedar or any other policy engine.
 ///
@@ -56,6 +57,19 @@ pub trait PolicyEvaluation: Send + Sync {
         resource: &str,
         context: &serde_json::Value,
     ) -> Result<bool, String>;
+
+    /// Async policy evaluation hook used by timeout-aware pipeline paths.
+    ///
+    /// Default implementation delegates to the synchronous `evaluate()`.
+    fn evaluate_async<'a>(
+        &'a self,
+        principal: &'a str,
+        action: &'a str,
+        resource: &'a str,
+        context: &'a serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, String>> + Send + 'a>> {
+        Box::pin(async move { self.evaluate(principal, action, resource, context) })
+    }
 
     /// Check if the policy bundle is still fresh (TTL not expired).
     fn is_fresh(&self) -> bool;
@@ -109,11 +123,11 @@ impl ConstraintEnforcer {
         // Step 2: Check policy bundle freshness
         if !self.policy.is_fresh() {
             return Err(EnforcementDecision::Deny {
-                reason: DenyReason::PolicyBundleStale,
+                reason: DenyReason::FailClosed,
                 stage: EnforcementStage::ConstraintEnforcement(
                     ConstraintEnforcementStage::BundleFreshness,
                 ),
-                detail: "policy bundle TTL expired".to_string(),
+                detail: "policy bundle unavailable or stale; failing closed".to_string(),
                 envelope: Some(envelope.clone()),
             });
         }
@@ -141,11 +155,97 @@ impl ConstraintEnforcer {
                 envelope: Some(envelope.clone()),
             }),
             Err(err) => Err(EnforcementDecision::Deny {
+                reason: DenyReason::FailClosed,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::PolicyEvaluation,
+                ),
+                detail: format!("policy evaluation failed; failing closed: {err}"),
+                envelope: Some(envelope.clone()),
+            }),
+        }
+    }
+
+    /// Timeout-aware Stage 2 evaluation.
+    ///
+    /// If `timeout` is `Some`, policy evaluation is bounded and any timeout
+    /// yields a fail-closed DENY with `EnforcementTimeout`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EnforcementDecision::Deny` if scope validation fails, the
+    /// policy bundle is unavailable/stale, policy evaluation times out, or the
+    /// policy evaluator returns an error.
+    #[allow(clippy::result_large_err)]
+    pub async fn evaluate_with_timeout(
+        &self,
+        envelope: &NormalizedEnvelope,
+        claims: &CapabilityClaims,
+        timeout: Option<Duration>,
+    ) -> Result<(), EnforcementDecision> {
+        // Step 1: Scope check (pre-Cedar gate)
+        self.check_scope(envelope, claims)?;
+
+        // Step 2: Fail closed if policy set is unavailable/stale
+        if !self.policy.is_fresh() {
+            return Err(EnforcementDecision::Deny {
+                reason: DenyReason::FailClosed,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::BundleFreshness,
+                ),
+                detail: "policy bundle unavailable or stale; failing closed".to_string(),
+                envelope: Some(envelope.clone()),
+            });
+        }
+
+        // Step 3: Build context from immutable request + validated claims.
+        let context = self.build_context(envelope, claims);
+        let principal = claims.agent_id.clone();
+        let action = envelope.intent.action_class.clone();
+        let resource = envelope.intent.resource.clone();
+
+        let eval_result = if let Some(timeout_duration) = timeout {
+            tokio::time::timeout(
+                timeout_duration,
+                self.policy
+                    .evaluate_async(&principal, &action, &resource, &context),
+            )
+            .await
+            .map_err(|_| EnforcementDecision::Deny {
+                reason: DenyReason::EnforcementTimeout,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::PolicyEvaluation,
+                ),
+                detail: format!(
+                    "stage 2 policy evaluation timed out after {} ms",
+                    timeout_duration.as_millis()
+                ),
+                envelope: Some(envelope.clone()),
+            })?
+        } else {
+            self.policy
+                .evaluate_async(&principal, &action, &resource, &context)
+                .await
+        };
+
+        match eval_result {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(EnforcementDecision::Deny {
                 reason: DenyReason::PolicyDenied,
                 stage: EnforcementStage::ConstraintEnforcement(
                     ConstraintEnforcementStage::PolicyEvaluation,
                 ),
-                detail: format!("policy evaluation error: {err}"),
+                detail: format!(
+                    "policy denied action '{}' on resource '{}'",
+                    envelope.intent.action_class, envelope.intent.resource
+                ),
+                envelope: Some(envelope.clone()),
+            }),
+            Err(err) => Err(EnforcementDecision::Deny {
+                reason: DenyReason::FailClosed,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::PolicyEvaluation,
+                ),
+                detail: format!("policy evaluation failed; failing closed: {err}"),
                 envelope: Some(envelope.clone()),
             }),
         }
@@ -204,7 +304,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use firma_core::envelope::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
-    use std::collections::HashMap;
+    use std::{collections::HashMap, future::Future, pin::Pin, time::Duration};
 
     struct AllowAllPolicy;
     impl PolicyEvaluation for AllowAllPolicy {
@@ -260,6 +360,40 @@ mod tests {
         }
         fn version(&self) -> Option<String> {
             None
+        }
+    }
+
+    struct SlowAsyncPolicy;
+    impl PolicyEvaluation for SlowAsyncPolicy {
+        fn evaluate(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+
+        fn evaluate_async<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: &'a str,
+            _: &'a serde_json::Value,
+        ) -> Pin<Box<dyn Future<Output = Result<bool, String>> + Send + 'a>> {
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                Ok(true)
+            })
+        }
+
+        fn is_fresh(&self) -> bool {
+            true
+        }
+
+        fn version(&self) -> Option<String> {
+            Some("test-v1".to_string())
         }
     }
 
@@ -344,6 +478,24 @@ mod tests {
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert!(decision.is_deny());
-        assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::FailClosed));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_stage2_timeout_fails_closed() {
+        let evaluator = ConstraintEnforcer::new(Box::new(SlowAsyncPolicy));
+        let envelope = test_envelope("llm.inference");
+        let claims = test_claims(vec!["llm.inference"]);
+
+        let pending =
+            evaluator.evaluate_with_timeout(&envelope, &claims, Some(Duration::from_secs(2)));
+        tokio::pin!(pending);
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(3)).await;
+        let decision = pending.await.unwrap_err();
+
+        assert!(decision.is_deny());
+        assert_eq!(decision.deny_reason(), Some(DenyReason::EnforcementTimeout));
     }
 }
