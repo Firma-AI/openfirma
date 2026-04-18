@@ -7,7 +7,7 @@ This guide describes a reproducible way to validate fail-closed behavior under c
 - 100 concurrent protected HTTP requests complete with a concrete `EnforcementDecision`
 - no protected request returns `Passthrough`
 - Stage 2 timeout returns `DENY: EnforcementTimeout`
-- unavailable/stale policy bundle returns `DENY: FailClosed`
+- unavailable/stale policy bundle returns `DENY: PolicyBundleStale`
 - basic threaded-read race smoke test for shared pipeline access
 
 ## Test suite
@@ -56,6 +56,6 @@ cargo +nightly miri setup
 ## Invariants to preserve
 
 - protected traffic must never bypass Stage 1 + Stage 2
-- policy freshness failures must fail closed (`FailClosed`), never fallback allow
+- policy freshness failures return `PolicyBundleStale` (fail-closed class), never fallback allow
 - policy evaluation timeout must fail closed (`EnforcementTimeout`)
 - policy evaluator errors are treated as fail-closed (`FailClosed`)

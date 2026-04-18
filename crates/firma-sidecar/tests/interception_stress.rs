@@ -204,7 +204,7 @@ async fn stage2_timeout_denies_with_enforcement_timeout() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn policy_unavailable_denies_fail_closed() {
+async fn policy_unavailable_denies_policy_bundle_stale() {
     let pipeline = build_pipeline(Box::new(PolicyUnavailable), Duration::from_millis(50));
 
     let decision = pipeline
@@ -212,7 +212,7 @@ async fn policy_unavailable_denies_fail_closed() {
         .await;
 
     assert!(decision.is_deny());
-    assert_eq!(decision.deny_reason(), Some(DenyReason::FailClosed));
+    assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
     assert!(!matches!(decision, EnforcementDecision::Passthrough { .. }));
 }
 

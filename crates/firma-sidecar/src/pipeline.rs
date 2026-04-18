@@ -630,6 +630,6 @@ mod tests {
 
         let decision = pipeline.enforce(&request, "sess_001");
         assert!(decision.is_deny());
-        assert_eq!(decision.deny_reason(), Some(DenyReason::FailClosed));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
     }
 }
