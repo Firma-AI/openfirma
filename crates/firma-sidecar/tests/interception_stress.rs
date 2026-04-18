@@ -203,14 +203,17 @@ impl RevocationStore for SharedRevocationStore {
 }
 
 fn test_claims() -> CapabilityClaims {
+    let issued_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+        .unwrap_or_else(|_| panic!("failed to build fixed issued_at timestamp"))
+        .with_timezone(&Utc);
     CapabilityClaims {
         token_id: "tok_stress_001".to_string(),
         agent_id: "agent_stress".to_string(),
         session_id: "sess_stress".to_string(),
         action_set: vec!["llm.inference".to_string()],
         resource_scope: "*".to_string(),
-        issued_at: Utc::now(),
-        expiry: Utc::now() + chrono::Duration::hours(1),
+        issued_at,
+        expiry: issued_at + chrono::Duration::hours(1),
         context_hash: String::new(),
     }
 }
