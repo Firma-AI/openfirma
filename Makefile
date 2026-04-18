@@ -12,7 +12,7 @@ test:
 build:
 	cargo build --workspace
 
-check: fmt lint test build
+check: fmt lint test stress-loom build
 
 stress-http:
 	cargo test -p firma-sidecar --test interception_stress -- --nocapture
