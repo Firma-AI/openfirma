@@ -101,6 +101,18 @@ pub struct IntentNormalizer {
     mapping_table: MappingTable,
 }
 
+#[cfg(not(miri))]
+fn runtime_timestamp() -> DateTime<Utc> {
+    Utc::now()
+}
+
+#[cfg(miri)]
+fn runtime_timestamp() -> DateTime<Utc> {
+    chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+        .unwrap_or_else(|_| panic!("failed to build fixed miri timestamp"))
+        .with_timezone(&Utc)
+}
+
 impl IntentNormalizer {
     #[must_use]
     pub fn new(mapping_table: MappingTable) -> Self {
@@ -156,7 +168,7 @@ impl IntentNormalizer {
                         raw_transport: raw_transport.to_string(),
                         raw_action_ref,
                     },
-                    timestamp: Utc::now(),
+                    timestamp: runtime_timestamp(),
                 };
 
                 Ok(envelope)

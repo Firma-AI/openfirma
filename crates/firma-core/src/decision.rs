@@ -19,6 +19,7 @@ pub enum Decision {
 /// - `BudgetExceeded` — when budget tracking mechanism is designed
 /// - `RiskThreshold` — when anomaly detection is designed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 pub enum DenyReason {
     /// Signature check failed or unrecognized token format.
     #[error("token invalid")]
@@ -53,6 +54,12 @@ pub enum DenyReason {
     /// Initial revocation state has not been applied yet.
     #[error("revocation cache not ready")]
     RevocationCacheNotReady,
+    /// Fail-closed safety boundary triggered due to missing/invalid enforcement prerequisites.
+    #[error("fail closed")]
+    FailClosed,
+    /// Enforcement evaluation exceeded configured timeout budget.
+    #[error("enforcement timeout")]
+    EnforcementTimeout,
     /// Sidecar failed to inject credentials for Stage 3.
     #[error("credential injection failed")]
     CredentialInjectionFailed,
@@ -122,6 +129,8 @@ mod tests {
                 DenyReason::RevocationCacheNotReady,
                 "revocation cache not ready",
             ),
+            (DenyReason::FailClosed, "fail closed"),
+            (DenyReason::EnforcementTimeout, "enforcement timeout"),
             (
                 DenyReason::CredentialInjectionFailed,
                 "credential injection failed",
@@ -179,5 +188,65 @@ mod tests {
     fn test_deny_reason_is_display() {
         fn assert_display<T: Display>() {}
         assert_display::<DenyReason>();
+    }
+
+    #[test]
+    fn decision_backward_compat_allow() {
+        let json = r#""Allow""#;
+        let parsed: Decision = serde_json::from_str(json).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(parsed, Decision::Allow);
+    }
+
+    #[test]
+    fn decision_backward_compat_deny() {
+        let json = r#"{"Deny":{"reason":"ScopeViolation"}}"#;
+        let parsed: Decision = serde_json::from_str(json).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            parsed,
+            Decision::Deny {
+                reason: DenyReason::ScopeViolation,
+            }
+        );
+    }
+
+    #[test]
+    fn decision_backward_compat_abort() {
+        let json = r#"{"Abort":{"reason":"fatal"}}"#;
+        let parsed: Decision = serde_json::from_str(json).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            parsed,
+            Decision::Abort {
+                reason: "fatal".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn deny_reason_backward_compat() {
+        use strum::IntoEnumIterator;
+        for reason in DenyReason::iter() {
+            let json = match reason {
+                DenyReason::TokenInvalid => r#""TokenInvalid""#,
+                DenyReason::TokenExpired => r#""TokenExpired""#,
+                DenyReason::TokenRevoked => r#""TokenRevoked""#,
+                DenyReason::PolicyDenied => r#""PolicyDenied""#,
+                DenyReason::ScopeViolation => r#""ScopeViolation""#,
+                DenyReason::ToolNotInScope => r#""ToolNotInScope""#,
+                DenyReason::MalformedRequest => r#""MalformedRequest""#,
+                DenyReason::AuthorityUnavailable => r#""AuthorityUnavailable""#,
+                DenyReason::PolicyBundleStale => r#""PolicyBundleStale""#,
+                DenyReason::PolicyBundleNotReady => r#""PolicyBundleNotReady""#,
+                DenyReason::RevocationCacheNotReady => r#""RevocationCacheNotReady""#,
+                DenyReason::FailClosed => r#""FailClosed""#,
+                DenyReason::EnforcementTimeout => r#""EnforcementTimeout""#,
+                DenyReason::CredentialInjectionFailed => r#""CredentialInjectionFailed""#,
+                DenyReason::ConnectorTimeout => r#""ConnectorTimeout""#,
+                DenyReason::ConnectorNetworkError => r#""ConnectorNetworkError""#,
+                DenyReason::ConnectorInvalidRequest => r#""ConnectorInvalidRequest""#,
+                DenyReason::UnclassifiedIntent => r#""UnclassifiedIntent""#,
+            };
+            let parsed: DenyReason = serde_json::from_str(json).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(parsed, reason);
+        }
     }
 }

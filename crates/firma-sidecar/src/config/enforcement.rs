@@ -77,12 +77,17 @@ pub struct ConstraintEnforcementConfig {
     /// Policy bundle TTL in seconds. Default: 30.
     #[serde(default = "default_bundle_ttl")]
     pub bundle_ttl_seconds: u64,
+    /// Optional Stage 2 evaluation timeout in milliseconds.
+    /// Any timeout must fail closed with `DenyReason::EnforcementTimeout`.
+    #[serde(default = "default_stage2_timeout_ms")]
+    pub enforcement_timeout_ms: u64,
 }
 
 impl Default for ConstraintEnforcementConfig {
     fn default() -> Self {
         Self {
             bundle_ttl_seconds: default_bundle_ttl(),
+            enforcement_timeout_ms: default_stage2_timeout_ms(),
         }
     }
 }
@@ -207,6 +212,10 @@ const fn default_true() -> bool {
 
 const fn default_bundle_ttl() -> u64 {
     30
+}
+
+const fn default_stage2_timeout_ms() -> u64 {
+    50
 }
 
 // ---------------------------------------------------------------------------
