@@ -1,7 +1,7 @@
 //! Roundtrip integration tests.
 //!
 //! Authority signs a real PASETO v4 token → Sidecar Stage 1 verifies the Ed25519
-//! signature → Stage 2 CedarPolicyEvaluator evaluates the policy → Assert Allow.
+//! signature → Stage 2 `CedarPolicyEvaluator` evaluates the policy → Assert Allow.
 //!
 //! These tests exercise the full cryptographic and policy evaluation path without
 //! any mocking of the token layer.
@@ -16,9 +16,9 @@ use firma_core::policy::PolicyBundle;
 use firma_core::token::paseto::{PasetoV4Signer, PasetoV4Verifier};
 use firma_core::token::{CapabilityClaims, RevocationStore, TokenError, TokenId, TokenSigner};
 use firma_sidecar::pipeline::{
-    ActionClassRegistry, CapabilityEntry, CapabilityMap, CapabilityValidator,
-    CedarPolicyEvaluator, ConstraintEnforcer, EnforcementDecision, EnforcementPipeline,
-    IntentNormalizer, MappingRuleConfig, MappingRulesFile, MappingTable, RawRequest,
+    ActionClassRegistry, CapabilityEntry, CapabilityMap, CapabilityValidator, CedarPolicyEvaluator,
+    ConstraintEnforcer, EnforcementDecision, EnforcementPipeline, IntentNormalizer,
+    MappingRuleConfig, MappingRulesFile, MappingTable, RawRequest,
 };
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;

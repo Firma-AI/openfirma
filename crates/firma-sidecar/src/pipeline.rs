@@ -564,4 +564,3 @@ mod tests {
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
     }
 }
-

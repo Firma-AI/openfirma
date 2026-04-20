@@ -195,6 +195,7 @@ pub struct CedarPolicyStoreWatcher {
 impl CedarPolicyStoreWatcher {
     /// Subscribe to policy bundle updates. Returns the current bundle
     /// immediately, then yields on changes.
+    #[must_use] 
     pub fn subscribe(&self) -> watch::Receiver<PolicyBundle> {
         self.tx.subscribe()
     }
