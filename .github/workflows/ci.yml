@@ -33,5 +33,8 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      - name: Loom Shared-State Model Check
+        run: cargo test -p firma-sidecar --test loom_shared_state --features loom-tests -- --nocapture
+
       - name: Build
         run: cargo build --workspace
