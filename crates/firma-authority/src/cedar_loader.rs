@@ -229,6 +229,7 @@ fn read_policy_files(policy_dir: &Path) -> Result<(String, String), AuthorityErr
     for entry in &entries {
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "cedar") {
+            tracing::debug!(path = %path.display(), "reading policy file");
             let content =
                 std::fs::read_to_string(&path).map_err(|e| AuthorityError::PolicyLoadFailed {
                     reason: format!("cannot read {}: {e}", path.display()),
@@ -239,6 +240,8 @@ fn read_policy_files(policy_dir: &Path) -> Result<(String, String), AuthorityErr
             policies.push_str(&content);
         }
     }
+
+    tracing::debug!(policies_len = policies.len(), "finished reading policies");
 
     // Try to load schema
     let schema_src = try_read_schema(policy_dir).unwrap_or_default();
@@ -309,8 +312,20 @@ fn compute_version_hash(policies: &str, schema: &str) -> String {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    fn setup_tracing() {
+        INIT.call_once(|| {
+            tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .init();
+        });
+    }
 
     fn setup_policy_dir(policies: &[(&str, &str)]) -> tempfile::TempDir {
+        setup_tracing();
         let dir = tempfile::tempdir().expect("create the temp dir failed");
         for (name, content) in policies {
             fs::write(dir.path().join(name), content).expect("write policies failed");
