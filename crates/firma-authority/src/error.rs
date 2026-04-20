@@ -4,11 +4,9 @@ pub enum AuthorityError {
     #[error("policy load failed: {reason}")]
     PolicyLoadFailed { reason: String },
 
-    #[expect(dead_code, reason = "will be used during runtime evaluation path")]
     #[error("policy evaluation failed: {reason}")]
     EvaluationFailed { reason: String },
 
-    #[expect(dead_code, reason = "will be used during key management flows")]
     #[error("key management error: {reason}")]
     KeyError { reason: String },
 

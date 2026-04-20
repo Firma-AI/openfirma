@@ -111,7 +111,6 @@ impl RevocationStore {
     /// # Errors
     ///
     /// Returns `AuthorityError` if the revocation file cannot be opened or written to.
-    #[allow(dead_code, reason = "called via gRPC revocation path")]
     pub async fn revoke(&self, token_id: TokenId, reason: &str) -> Result<(), AuthorityError> {
         if self.entries.read().await.contains_key(&token_id) {
             tracing::debug!(%token_id, "duplicate revocation ignored");
@@ -141,7 +140,6 @@ impl RevocationStore {
     }
 
     /// Check if a token has been revoked.
-    #[allow(dead_code, reason = "public API used by sidecar integration")]
     pub async fn is_revoked(&self, token_id: TokenId) -> bool {
         self.entries.read().await.contains_key(&token_id)
     }
@@ -287,13 +285,12 @@ pub struct RevocationStoreWatcher {
 
 impl RevocationStoreWatcher {
     /// Subscribe to new revocation events as they are ingested from the file.
-    #[must_use] 
+    #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<RevocationEntry> {
         self.tx.subscribe()
     }
 
     /// Abort the background reload task immediately.
-    #[expect(dead_code, reason = "explicit shutdown hook for callers that need it")]
     pub fn abort(&self) {
         self.task.abort();
     }
