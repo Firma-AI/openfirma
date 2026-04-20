@@ -22,6 +22,7 @@ pub struct EnforcementConfig {
     #[serde(default)]
     pub capability_validation: CapabilityValidationConfig,
     /// Constraint enforcement settings.
+    #[expect(dead_code, reason = "consumed once Cedar bundle loading is wired")]
     #[serde(default)]
     pub constraint_enforcement: ConstraintEnforcementConfig,
 }
@@ -70,6 +71,7 @@ pub struct CapabilityValidationConfig {
 }
 
 /// Constraint enforcement configuration.
+#[expect(dead_code, reason = "consumed once Cedar bundle loading is wired")]
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConstraintEnforcementConfig {
     /// Policy bundle TTL in seconds. Default: 30.
@@ -77,10 +79,6 @@ pub struct ConstraintEnforcementConfig {
     pub bundle_ttl_seconds: u64,
     /// Optional Stage 2 evaluation timeout in milliseconds.
     /// Any timeout must fail closed with `DenyReason::EnforcementTimeout`.
-    #[expect(
-        dead_code,
-        reason = "wired into pipeline.with_stage2_timeout once startup plumbs it"
-    )]
     #[serde(default = "default_stage2_timeout_ms")]
     pub enforcement_timeout_ms: u64,
 }

@@ -4,22 +4,18 @@
 //! enforcement stages, and the credential injector, and wraps them in
 //! an [`EnforcementPipeline`](crate::pipeline::EnforcementPipeline).
 //!
-//! The Cedar evaluator boots empty: Stage 2 fails closed with
-//! `POLICY_BUNDLE_STALE` until the Authority pushes a valid bundle over
-//! `WatchPolicyBundle` (task 007) and the [`BundleLoader`] atomically
-//! installs the first snapshot. When `policy.authority_url` is unset,
-//! the evaluator stays empty for the life of the process — Stage 2
-//! remains fail-closed unless tests / dev tooling invoke the loader
-//! directly.
+//! Authority-backed token verification and Cedar policy evaluation are
+//! stubbed until the corresponding integration tasks land (task 007+).
+//! The revocation cache is real (task 006) but stays empty until the
+//! `WatchRevocations` writer is wired up in task 007.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use firma_core::RevocationStore;
 
 use crate::authority_client::readiness::{ReadinessFlag, ReadinessState};
+use crate::authority_client::swappable_policy::SwappablePolicyEvaluation;
 use crate::config;
-use crate::enforcement::policy::{BundleLoader, CedarPolicyEvaluator};
 use crate::enforcement::revocation::BloomLruRevocationStore;
 use crate::pipeline;
 use crate::startup::credential::build_credential_injector;
@@ -30,8 +26,8 @@ pub struct PipelineRuntime {
     pub pipeline: Arc<pipeline::EnforcementPipeline>,
     /// Store shared by Stage 1 and the Authority revocation task.
     pub revocation_store: Arc<dyn RevocationStore + Send + Sync>,
-    /// Bundle loader shared with the Authority `WatchPolicyBundle` task.
-    pub bundle_loader: Arc<BundleLoader>,
+    /// Policy snapshot shared by Stage 2 and the Authority bundle task.
+    pub swappable_policy: Arc<SwappablePolicyEvaluation>,
     /// Writable readiness flag for Authority tasks.
     pub readiness: Arc<ReadinessFlag>,
 }
@@ -72,6 +68,9 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
 
     let normalizer = pipeline::IntentNormalizer::new(table);
 
+    // Capability map and token verifier are populated from the Authority
+    // at pre-flight; for now use empty defaults so the binary starts.
+    // Authority integration (task 007+) will populate these.
     let revocation_store = Arc::new(BloomLruRevocationStore::new(config.revocation.into()));
     tracing::debug!(
         initial_metrics = ?revocation_store.metrics(),
@@ -82,7 +81,7 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
         pipeline::CapabilityMap::new(vec![]),
         Box::new(StubTokenVerifier),
         Arc::clone(&revocation_store_dyn),
-        Duration::from_secs(
+        std::time::Duration::from_secs(
             config
                 .enforcement
                 .capability_validation
@@ -90,12 +89,11 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
         ),
     );
 
-    let policy_evaluator = Arc::new(CedarPolicyEvaluator::empty(Duration::from_secs(
-        config.enforcement.constraint_enforcement.bundle_ttl_seconds,
-    )));
-    let bundle_loader = Arc::new(BundleLoader::new(Arc::clone(&policy_evaluator)));
+    let initial_policy: Box<dyn pipeline::PolicyEvaluation + Send + Sync> =
+        Box::new(DenyAllPolicyEvaluation);
+    let swappable_policy = Arc::new(SwappablePolicyEvaluation::new(initial_policy));
     let policy_for_stage: Arc<dyn pipeline::PolicyEvaluation + Send + Sync> =
-        policy_evaluator as Arc<dyn pipeline::PolicyEvaluation + Send + Sync>;
+        Arc::clone(&swappable_policy) as Arc<dyn pipeline::PolicyEvaluation + Send + Sync>;
     let constraint_enforcer = pipeline::ConstraintEnforcer::new(policy_for_stage);
 
     let credential_injector = build_credential_injector(&config.credentials)?;
@@ -123,7 +121,7 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
     Ok(PipelineRuntime {
         pipeline: Arc::new(pipeline),
         revocation_store: revocation_store_dyn,
-        bundle_loader,
+        swappable_policy,
         readiness,
     })
 }
@@ -140,5 +138,28 @@ impl firma_core::TokenVerifier for StubTokenVerifier {
         Err(firma_core::TokenError::SignatureInvalid {
             reason: "stub verifier: no Authority configured".to_string(),
         })
+    }
+}
+
+/// Initial policy evaluator used before the first Authority bundle arrives.
+struct DenyAllPolicyEvaluation;
+
+impl pipeline::PolicyEvaluation for DenyAllPolicyEvaluation {
+    fn evaluate(
+        &self,
+        _principal: &str,
+        _action: &str,
+        _resource: &str,
+        _context: &serde_json::Value,
+    ) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    fn is_fresh(&self) -> bool {
+        false
+    }
+
+    fn version(&self) -> Option<String> {
+        None
     }
 }

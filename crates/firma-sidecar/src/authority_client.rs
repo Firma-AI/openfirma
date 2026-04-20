@@ -8,6 +8,7 @@ pub mod channel;
 pub mod policy_bundle;
 pub mod readiness;
 pub mod revocation;
+pub mod swappable_policy;
 
 #[cfg(test)]
 mod integration_tests;
@@ -21,20 +22,19 @@ use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 
 use crate::config::AuthorityConfig;
-use crate::enforcement::policy::BundleLoader;
 
 use self::backoff::ExponentialBackoff;
-use self::policy_bundle::PolicyBundleTask;
+use self::policy_bundle::{BundleParser, PolicyBundleTask};
 use self::readiness::ReadinessFlag;
 use self::revocation::RevocationTask;
+use self::swappable_policy::SwappablePolicyEvaluation;
 
 /// Dependencies required to spawn Authority stream clients.
 pub struct AuthorityDeps {
     /// Shared tonic channel to the Authority.
     pub channel: Channel,
-    /// Bundle loader that parses policy pushes and swaps the Cedar
-    /// evaluator snapshot shared with Stage 2.
-    pub bundle_loader: Arc<BundleLoader>,
+    /// Hot-swappable policy evaluator used by Stage 2.
+    pub swappable_policy: Arc<SwappablePolicyEvaluation>,
     /// Revocation store shared with Stage 1.
     pub revocation_store: Arc<dyn RevocationStore + Send + Sync>,
     /// Readiness writer shared by stream tasks.
@@ -43,6 +43,8 @@ pub struct AuthorityDeps {
     pub cancel: CancellationToken,
     /// Authority client tuning.
     pub config: AuthorityConfig,
+    /// Policy bundle parser implementation.
+    pub bundle_parser: Arc<dyn BundleParser + Send + Sync>,
 }
 
 /// Join handles for the spawned stream tasks.
@@ -61,10 +63,11 @@ pub fn spawn_authority_client(deps: AuthorityDeps) -> AuthorityClientHandle {
 
     let policy_task = PolicyBundleTask {
         channel: deps.channel.clone(),
-        loader: deps.bundle_loader,
+        swappable: deps.swappable_policy,
         readiness: Arc::clone(&deps.readiness),
         backoff: ExponentialBackoff::new(min, max),
         cancel: deps.cancel.clone(),
+        bundle_parser: deps.bundle_parser,
     };
     let revocation_task = RevocationTask {
         channel: deps.channel,

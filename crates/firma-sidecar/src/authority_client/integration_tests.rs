@@ -24,14 +24,13 @@ use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
 use super::channel::build_channel;
+use super::policy_bundle::StubBundleParser;
 use super::readiness::{ReadinessFlag, ReadinessState, ReadinessView};
+use super::swappable_policy::SwappablePolicyEvaluation;
 use super::{AuthorityClientHandle, AuthorityDeps, spawn_authority_client};
 use crate::config::AuthorityConfig;
 use crate::enforcement::constraint_enforcement::PolicyEvaluation;
-use crate::enforcement::policy::{BundleLoader, CedarPolicyEvaluator};
 use crate::enforcement::revocation::{BloomLruRevocationStore, RevocationConfig};
-
-const VALID_POLICY_CEDAR: &[u8] = b"permit(principal, action, resource);";
 
 // -----------------------------------------------------------------------------
 // Mock AuthorityService
@@ -192,7 +191,7 @@ async fn spawn_mock_authority() -> anyhow::Result<MockAuthorityServer> {
 // -----------------------------------------------------------------------------
 
 struct SidecarHarness {
-    policy_evaluator: Arc<CedarPolicyEvaluator>,
+    swappable_policy: Arc<SwappablePolicyEvaluation>,
     revocation_store: Arc<BloomLruRevocationStore>,
     readiness_view: ReadinessView,
     cancel: CancellationToken,
@@ -213,8 +212,8 @@ async fn spawn_sidecar(url: &str, config: AuthorityConfig) -> anyhow::Result<Sid
         fpr: 0.001,
         lru_capacity: 128,
     }));
-    let policy_evaluator = Arc::new(CedarPolicyEvaluator::empty(Duration::from_secs(2)));
-    let bundle_loader = Arc::new(BundleLoader::new(Arc::clone(&policy_evaluator)));
+    let initial_policy: Box<dyn PolicyEvaluation + Send + Sync> = Box::new(DenyAllEvaluation);
+    let swappable_policy = Arc::new(SwappablePolicyEvaluation::new(initial_policy));
     let (flag, readiness_view) = ReadinessFlag::new(ReadinessState::default());
     let readiness = Arc::new(flag);
     let cancel = CancellationToken::new();
@@ -223,20 +222,43 @@ async fn spawn_sidecar(url: &str, config: AuthorityConfig) -> anyhow::Result<Sid
 
     let authority = spawn_authority_client(AuthorityDeps {
         channel,
-        bundle_loader,
+        swappable_policy: Arc::clone(&swappable_policy),
         revocation_store: revocation_dyn,
         readiness,
         cancel: cancel.clone(),
         config,
+        bundle_parser: Arc::new(StubBundleParser),
     });
 
     Ok(SidecarHarness {
-        policy_evaluator,
+        swappable_policy,
         revocation_store,
         readiness_view,
         cancel,
         authority,
     })
+}
+
+struct DenyAllEvaluation;
+
+impl PolicyEvaluation for DenyAllEvaluation {
+    fn evaluate(
+        &self,
+        _principal: &str,
+        _action: &str,
+        _resource: &str,
+        _context: &serde_json::Value,
+    ) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    fn is_fresh(&self) -> bool {
+        false
+    }
+
+    fn version(&self) -> Option<String> {
+        None
+    }
 }
 
 fn bundle_update(version: &str, ttl_seconds: i32, policies: &[u8]) -> PolicyBundleUpdate {
@@ -293,7 +315,7 @@ async fn readiness_flips_after_initial_bundle_and_revocation_grace() -> anyhow::
     let server = spawn_mock_authority().await?;
     server
         .handle
-        .set_initial_bundle(bundle_update("v1", 60, VALID_POLICY_CEDAR));
+        .set_initial_bundle(bundle_update("v1", 60, b"stub-policies"));
     let harness = spawn_sidecar(&server.url, test_config()).await?;
 
     let policy_ready = wait_for(Duration::from_secs(2), || {
@@ -309,7 +331,7 @@ async fn readiness_flips_after_initial_bundle_and_revocation_grace() -> anyhow::
     assert!(revocation_ready, "revocation readiness never flipped");
 
     assert_eq!(
-        harness.policy_evaluator.version().as_deref(),
+        harness.swappable_policy.version().as_deref(),
         Some("v1"),
         "initial bundle version should be applied"
     );
@@ -324,7 +346,7 @@ async fn revocation_event_propagates_to_store_within_one_second() -> anyhow::Res
     let server = spawn_mock_authority().await?;
     server
         .handle
-        .set_initial_bundle(bundle_update("v1", 60, VALID_POLICY_CEDAR));
+        .set_initial_bundle(bundle_update("v1", 60, b"stub-policies"));
     let harness = spawn_sidecar(&server.url, test_config()).await?;
 
     assert!(
@@ -360,7 +382,7 @@ async fn ttl_expiry_marks_policy_stale_after_authority_disappears() -> anyhow::R
     let server = spawn_mock_authority().await?;
     server
         .handle
-        .set_initial_bundle(bundle_update("v-ttl", 1, VALID_POLICY_CEDAR));
+        .set_initial_bundle(bundle_update("v-ttl", 1, b"stub-policies"));
     let harness = spawn_sidecar(&server.url, test_config()).await?;
 
     assert!(
@@ -371,14 +393,14 @@ async fn ttl_expiry_marks_policy_stale_after_authority_disappears() -> anyhow::R
         .await
     );
     assert!(
-        harness.policy_evaluator.is_fresh(),
+        harness.swappable_policy.is_fresh(),
         "bundle should be fresh immediately after swap"
     );
 
     server.stop().await;
 
     let went_stale = wait_for(Duration::from_secs(3), || {
-        !harness.policy_evaluator.is_fresh()
+        !harness.swappable_policy.is_fresh()
     })
     .await;
     assert!(
@@ -395,7 +417,7 @@ async fn reconnect_applies_new_bundle_version() -> anyhow::Result<()> {
     let server = spawn_mock_authority().await?;
     server
         .handle
-        .set_initial_bundle(bundle_update("v1", 60, VALID_POLICY_CEDAR));
+        .set_initial_bundle(bundle_update("v1", 60, b"stub-policies"));
     let harness = spawn_sidecar(&server.url, test_config()).await?;
 
     assert!(
@@ -405,14 +427,14 @@ async fn reconnect_applies_new_bundle_version() -> anyhow::Result<()> {
             .policy_bundle_ready)
         .await
     );
-    assert_eq!(harness.policy_evaluator.version().as_deref(), Some("v1"));
+    assert_eq!(harness.swappable_policy.version().as_deref(), Some("v1"));
 
     server
         .handle
-        .push_bundle(bundle_update("v2", 60, VALID_POLICY_CEDAR));
+        .push_bundle(bundle_update("v2", 60, b"stub-policies-next"));
 
     let swapped = wait_for(Duration::from_secs(2), || {
-        harness.policy_evaluator.version().as_deref() == Some("v2")
+        harness.swappable_policy.version().as_deref() == Some("v2")
     })
     .await;
     assert!(swapped, "swappable policy did not pick up v2");
@@ -427,27 +449,24 @@ async fn malformed_bundle_retains_previous_version() -> anyhow::Result<()> {
     let server = spawn_mock_authority().await?;
     server
         .handle
-        .set_initial_bundle(bundle_update("v1", 60, VALID_POLICY_CEDAR));
+        .set_initial_bundle(bundle_update("v1", 60, b"stub-policies"));
     let harness = spawn_sidecar(&server.url, test_config()).await?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
-            .policy_evaluator
+            .swappable_policy
             .version()
             .as_deref()
             == Some("v1"))
         .await
     );
 
-    // Malformed Cedar text is rejected by BundleLoader::apply — the
-    // previous snapshot must remain in place.
-    server
-        .handle
-        .push_bundle(bundle_update("v-bad", 60, b"not a cedar policy"));
+    // StubBundleParser rejects empty policy bytes. Sidecar must keep v1.
+    server.handle.push_bundle(bundle_update("v-bad", 60, b""));
 
     tokio::time::sleep(Duration::from_millis(250)).await;
     assert_eq!(
-        harness.policy_evaluator.version().as_deref(),
+        harness.swappable_policy.version().as_deref(),
         Some("v1"),
         "malformed bundle must not replace the last valid version"
     );
@@ -455,9 +474,9 @@ async fn malformed_bundle_retains_previous_version() -> anyhow::Result<()> {
     // A follow-up valid bundle must still apply normally.
     server
         .handle
-        .push_bundle(bundle_update("v2", 60, VALID_POLICY_CEDAR));
+        .push_bundle(bundle_update("v2", 60, b"stub-policies"));
     let swapped = wait_for(Duration::from_secs(2), || {
-        harness.policy_evaluator.version().as_deref() == Some("v2")
+        harness.swappable_policy.version().as_deref() == Some("v2")
     })
     .await;
     assert!(swapped, "recovery bundle v2 did not apply");
