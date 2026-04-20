@@ -161,11 +161,16 @@ impl EnforcementPipeline {
             Err(deny) => return deny,
         };
 
-        if let Err(deny) = self
-            .stage2
-            .evaluate_with_timeout(&normalized, &capability.claims, self.stage2_timeout)
-            .await
-        {
+        let stage2_result = match self.stage2_timeout {
+            Some(timeout) => {
+                self.stage2
+                    .evaluate_with_timeout(&normalized, &capability.claims, timeout)
+                    .await
+            }
+            None => self.stage2.evaluate(&normalized, &capability.claims),
+        };
+
+        if let Err(deny) = stage2_result {
             return deny;
         }
 

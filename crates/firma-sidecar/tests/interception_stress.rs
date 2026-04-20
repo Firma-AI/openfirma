@@ -8,7 +8,7 @@ use firma_sidecar::pipeline::{
     EnforcementDecision, EnforcementPipeline, MappingRuleConfig, MappingRulesFile, MappingTable,
     PolicyEvaluation, RawRequest,
 };
-use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, thread, time::Duration};
+use std::{collections::HashMap, sync::Arc, thread, time::Duration};
 use std::{
     collections::HashSet,
     sync::{
@@ -54,20 +54,8 @@ impl PolicyEvaluation for PolicyUnavailable {
 struct SlowPolicy;
 impl PolicyEvaluation for SlowPolicy {
     fn evaluate(&self, _: &str, _: &str, _: &str, _: &serde_json::Value) -> Result<bool, String> {
+        thread::sleep(Duration::from_millis(200));
         Ok(true)
-    }
-
-    fn evaluate_async<'a>(
-        &'a self,
-        _: &'a str,
-        _: &'a str,
-        _: &'a str,
-        _: &'a serde_json::Value,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, String>> + Send + 'a>> {
-        Box::pin(async move {
-            tokio::time::sleep(Duration::from_secs(30)).await;
-            Ok(true)
-        })
     }
 
     fn is_fresh(&self) -> bool {
@@ -312,18 +300,12 @@ async fn stress_100_concurrent_requests_no_passthrough() {
     }
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stage2_timeout_denies_with_enforcement_timeout() {
-    let pipeline = build_pipeline(Box::new(SlowPolicy), Duration::from_secs(2));
+    let pipeline = build_pipeline(Box::new(SlowPolicy), Duration::from_millis(20));
     let request = protected_request();
 
-    let decision_future = pipeline.enforce_async(&request, "sess_stress");
-    tokio::pin!(decision_future);
-
-    tokio::task::yield_now().await;
-    tokio::time::advance(Duration::from_secs(3)).await;
-
-    let decision = decision_future.await;
+    let decision = pipeline.enforce_async(&request, "sess_stress").await;
     assert!(decision.is_deny());
     assert_eq!(decision.deny_reason(), Some(DenyReason::EnforcementTimeout));
 }
