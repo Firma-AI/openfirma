@@ -121,7 +121,7 @@ impl ConstraintEnforcer {
         }
 
         // Step 3: Build context
-        let context = self.build_context(envelope, claims);
+        let context = Self::build_context(envelope, claims);
 
         // Step 4: Evaluate policies
         match self.policy.evaluate(
@@ -191,9 +191,7 @@ impl ConstraintEnforcer {
     /// - `timestamp_ms` — Unix epoch milliseconds at evaluation time
     /// - `params`       — JSON-serialized `intent.params` (available to Cedar `when` clauses)
     /// - `risk_score`   — V1 placeholder, always 0
-    #[allow(clippy::unused_self)]
     fn build_context(
-        &self,
         envelope: &NormalizedEnvelope,
         claims: &CapabilityClaims,
     ) -> serde_json::Value {
