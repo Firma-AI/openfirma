@@ -185,18 +185,25 @@ impl ConstraintEnforcer {
     }
 
     /// Build the Cedar evaluation context from envelope + claims.
-    #[allow(clippy::unused_self)] // will use self when Cedar is integrated
+    ///
+    /// Produces the `EnforcementContext` record declared in `firma.cedarschema`:
+    /// - `session_id`   — enclosing session identity
+    /// - `timestamp_ms` — Unix epoch milliseconds at evaluation time
+    /// - `params`       — JSON-serialized `intent.params` (available to Cedar `when` clauses)
+    /// - `risk_score`   — V1 placeholder, always 0
+    #[allow(clippy::unused_self)]
     fn build_context(
         &self,
         envelope: &NormalizedEnvelope,
         claims: &CapabilityClaims,
     ) -> serde_json::Value {
+        let params =
+            serde_json::to_string(&envelope.intent.params).unwrap_or_else(|_| "{}".to_string());
         serde_json::json!({
-            "action_class": envelope.intent.action_class,
-            "resource": envelope.intent.resource,
-            "agent_id": claims.agent_id,
-            "session_id": claims.session_id,
-            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "session_id": claims.session_id.as_ref(),
+            "timestamp_ms": chrono::Utc::now().timestamp_millis(),
+            "params": params,
+            "risk_score": 0i64,
         })
     }
 }

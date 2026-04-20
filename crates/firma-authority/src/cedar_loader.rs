@@ -115,7 +115,6 @@ impl CedarPolicyStore {
     }
 
     /// Get the current schema, if one was loaded.
-    #[expect(dead_code, reason = "will be used when schema validation is wired in")]
     pub async fn schema(&self) -> Option<Arc<Schema>> {
         self.state.read().await.schema.clone()
     }
