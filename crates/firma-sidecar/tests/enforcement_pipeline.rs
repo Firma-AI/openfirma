@@ -16,9 +16,9 @@ use firma_core::policy::PolicyBundle;
 use firma_core::token::paseto::{PasetoV4Signer, PasetoV4Verifier};
 use firma_core::token::{CapabilityClaims, RevocationStore, TokenError, TokenId, TokenSigner};
 use firma_sidecar::pipeline::{
-    ActionClassRegistry, CapabilityEntry, CapabilityMap, CapabilityValidator,
-    CedarPolicyEvaluator, ConstraintEnforcer, EnforcementDecision, EnforcementPipeline,
-    IntentNormalizer, MappingRuleConfig, MappingRulesFile, MappingTable, RawRequest,
+    ActionClassRegistry, CapabilityEntry, CapabilityMap, CapabilityValidator, CedarPolicyEvaluator,
+    ConstraintEnforcer, EnforcementDecision, EnforcementPipeline, IntentNormalizer,
+    MappingRuleConfig, MappingRulesFile, MappingTable, RawRequest,
 };
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;

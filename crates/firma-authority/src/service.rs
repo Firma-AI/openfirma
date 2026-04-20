@@ -87,7 +87,7 @@ impl AuthorityService for AuthorityServiceImpl {
 
                 // Build context hash: SHA-256 of (agent_id | sorted_actions | resource | bundle_version).
                 // This binds the token to both the identity being granted and the policy state at issuance.
-                let bundle_version = self.policy_store.bundle().await.version.clone();
+                let bundle_version = self.policy_store.bundle().version.clone();
                 let context_hash = compute_context_hash(
                     &req.agent_id,
                     &req.requested_actions,
