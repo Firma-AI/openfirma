@@ -21,6 +21,7 @@ use std::time::Duration;
 use firma_core::{DenyReason, ExecutionEnvelope, ExecutionMetadata, InjectedCredentials};
 
 use crate::audit::AuditPayload;
+use crate::authority_client::readiness::ReadinessView;
 use crate::credential::{CredentialInjectionError, CredentialInjector};
 use crate::enforcement::decision::EnforcementStage;
 // Re-export public API for pipeline callers (test-only)
@@ -73,6 +74,7 @@ pub struct EnforcementPipeline {
     constraint_enforcer: ConstraintEnforcer,
     credential_injector: Box<dyn CredentialInjector>,
     normalizer: IntentNormalizer,
+    readiness: ReadinessView,
 }
 
 impl EnforcementPipeline {
@@ -85,7 +87,15 @@ impl EnforcementPipeline {
             constraint_enforcer: args.constraint_enforcer,
             credential_injector: args.credential_injector,
             normalizer: args.normalizer,
+            readiness: ReadinessView::all_ready(),
         }
+    }
+
+    /// Install a readiness view for Authority-backed runtime state.
+    #[must_use]
+    pub fn with_readiness(mut self, readiness: ReadinessView) -> Self {
+        self.readiness = readiness;
+        self
     }
 
     /// Run the full enforcement pipeline.
@@ -117,6 +127,10 @@ impl EnforcementPipeline {
     /// Enforcement logic, separated so the outer [`enforce`](Self::enforce)
     /// can unconditionally audit the result.
     async fn enforce_inner(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
+        if let Err(deny) = self.check_readiness() {
+            return deny;
+        }
+
         // Normalize intent (may short-circuit with Deny or Passthrough)
         let normalized = match self.normalizer.normalize(request) {
             Ok(env) => env,
@@ -184,6 +198,39 @@ impl EnforcementPipeline {
             envelope: Box::new(envelope),
             credentials,
         }
+    }
+
+    /// Readiness gate. Denies every call until the Authority streams
+    /// have hydrated both the policy bundle and the revocation cache,
+    /// so in-flight traffic never bypasses state that the Authority
+    /// has not yet shipped.
+    #[expect(
+        clippy::result_large_err,
+        reason = "domain decision carries denial context"
+    )]
+    fn check_readiness(&self) -> Result<(), EnforcementDecision> {
+        let readiness = self.readiness.snapshot();
+        if !readiness.policy_bundle_ready {
+            return Err(EnforcementDecision::Deny {
+                reason: DenyReason::PolicyBundleNotReady,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    crate::enforcement::decision::ConstraintEnforcementStage::BundleFreshness,
+                ),
+                detail: "policy bundle has not been loaded".to_string(),
+                envelope: None,
+            });
+        }
+        if !readiness.revocation_ready {
+            return Err(EnforcementDecision::Deny {
+                reason: DenyReason::RevocationCacheNotReady,
+                stage: EnforcementStage::CapabilityValidation(
+                    crate::enforcement::decision::CapabilityValidationStage::TokenValidation,
+                ),
+                detail: "revocation cache has not completed initial sync".to_string(),
+                envelope: None,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -392,11 +439,11 @@ mod tests {
                 claims: claims.clone(),
             }]),
             Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
 
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
         EnforcementPipeline::new(PipelineArgs {
             normalizer,
@@ -437,6 +484,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_enforce_denies_before_authority_readiness() {
+        let (flag, readiness) = crate::authority_client::readiness::ReadinessFlag::new(
+            crate::authority_client::readiness::ReadinessState::default(),
+        );
+        let pipeline = test_pipeline().with_readiness(readiness);
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
+        assert_eq!(
+            decision.deny_reason(),
+            Some(DenyReason::PolicyBundleNotReady)
+        );
+
+        flag.set_policy_bundle_ready(true);
+        let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
+        assert_eq!(
+            decision.deny_reason(),
+            Some(DenyReason::RevocationCacheNotReady)
+        );
+    }
+
+    #[tokio::test]
     async fn test_enforce_unclassified_intent() {
         let pipeline = test_pipeline();
         let request = RawRequest {
@@ -471,10 +547,10 @@ mod tests {
                 claims: claims.clone(),
             }]),
             Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
@@ -522,7 +598,7 @@ mod tests {
             Box::new(MockVerifier {
                 claims: wide_claims,
             }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
 
@@ -545,7 +621,7 @@ mod tests {
             }
         }
 
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(DenyDeletePolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(DenyDeletePolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
@@ -596,10 +672,10 @@ mod tests {
                 claims: claims.clone(),
             }]),
             Box::new(RejectingVerifier),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
@@ -645,10 +721,10 @@ mod tests {
         let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![]), // empty!
             Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
@@ -792,10 +868,10 @@ mod tests {
                 claims: claims.clone(),
             }]),
             Box::new(MockVerifier { claims }),
-            Box::new(RevokedStore),
+            std::sync::Arc::new(RevokedStore),
             Duration::from_secs(0),
         );
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
@@ -836,10 +912,10 @@ mod tests {
                 claims: claims.clone(),
             }]),
             Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
@@ -881,10 +957,10 @@ mod tests {
                 claims: claims.clone(),
             }]),
             Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
@@ -954,7 +1030,7 @@ mod tests {
                 claims: claims.clone(),
             }]),
             Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
 
@@ -977,7 +1053,7 @@ mod tests {
             }
         }
 
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(StalePolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(StalePolicy));
 
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
@@ -1013,10 +1089,10 @@ mod tests {
                 claims: claims.clone(),
             }]),
             Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
@@ -1052,10 +1128,10 @@ mod tests {
         let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![]),
             Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
@@ -1096,10 +1172,10 @@ mod tests {
                 claims: claims.clone(),
             }]),
             Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
@@ -1134,10 +1210,10 @@ mod tests {
                 claims: claims.clone(),
             }]),
             Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
             normalizer,
             capability_validator,
@@ -1176,10 +1252,10 @@ mod tests {
                 claims: claims.clone(),
             }]),
             Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
         // BasicCredentialInjector with credentials for api.openai.com
         let injector =
@@ -1222,10 +1298,10 @@ mod tests {
                 claims: claims.clone(),
             }]),
             Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
         // Empty injector — no connectors configured
         let injector = crate::credential::provider::BasicCredentialInjector::empty();
@@ -1265,10 +1341,10 @@ mod tests {
                 claims: claims.clone(),
             }]),
             Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
         // Vault injector with nonexistent secret file — triggers FetchFailed
         let injector =

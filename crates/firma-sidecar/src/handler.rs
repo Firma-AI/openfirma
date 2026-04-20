@@ -480,10 +480,10 @@ mod tests {
             capability_validator: CapabilityValidator::new(
                 CapabilityMap::new(entries),
                 Box::new(MockVerifier { claims }),
-                Box::new(NoRevocations),
+                std::sync::Arc::new(NoRevocations),
                 Duration::from_secs(0),
             ),
-            constraint_enforcer: ConstraintEnforcer::new(Box::new(AllowAllPolicy)),
+            constraint_enforcer: ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy)),
             credential_injector: Box::new(NullCredentialInjector),
         }))
     }

@@ -47,6 +47,12 @@ pub enum DenyReason {
     /// Policy bundle TTL exceeded, no fresh bundle available.
     #[error("policy bundle stale")]
     PolicyBundleStale,
+    /// Initial policy bundle has not been applied yet.
+    #[error("policy bundle not ready")]
+    PolicyBundleNotReady,
+    /// Initial revocation state has not been applied yet.
+    #[error("revocation cache not ready")]
+    RevocationCacheNotReady,
     /// Sidecar failed to inject credentials for Stage 3.
     #[error("credential injection failed")]
     CredentialInjectionFailed,
@@ -111,6 +117,11 @@ mod tests {
             (DenyReason::MalformedRequest, "malformed request"),
             (DenyReason::AuthorityUnavailable, "authority unavailable"),
             (DenyReason::PolicyBundleStale, "policy bundle stale"),
+            (DenyReason::PolicyBundleNotReady, "policy bundle not ready"),
+            (
+                DenyReason::RevocationCacheNotReady,
+                "revocation cache not ready",
+            ),
             (
                 DenyReason::CredentialInjectionFailed,
                 "credential injection failed",

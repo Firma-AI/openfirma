@@ -52,8 +52,10 @@ graph LR
 
 ## 3. Top-level runtime
 
-At startup, `main.rs` loads configuration, spawns four long-lived tasks,
-and wires them together through in-process channels.
+At startup, `main.rs` loads configuration, spawns long-lived tasks, and
+wires them together through in-process channels. When
+`policy.authority_url` is configured, two additional background tasks
+keep policy and revocation state current.
 
 ```mermaid
 graph TB
@@ -71,6 +73,11 @@ graph TB
         sink[Audit sink task<br/>stdout / file / gRPC / WAL]
         health[Health server task]
         sig[Signal handler task]
+        pbtask[PolicyBundleTask<br/>WatchPolicyBundle]
+        rvtask[RevocationTask<br/>WatchRevocations]
+        swap[SwappablePolicyEvaluation<br/>Arc-shared]
+        rev[BloomLruRevocationStore<br/>Arc-shared]
+        ready[ReadinessFlag<br/>tokio::watch]
     end
 
     builders --> interceptor
@@ -78,14 +85,25 @@ graph TB
     builders --> connreg
     builders --> sink
     builders --> health
+    builders --> pbtask
+    builders --> rvtask
 
     interceptor -->|RawRequest| handler
     handler --> pipeline
     handler --> connreg
     handler -->|AuditPayload via mpsc| sink
+    pipeline --> swap
+    pipeline --> rev
+    pipeline --> ready
+    pbtask --> swap
+    pbtask --> ready
+    rvtask --> rev
+    rvtask --> ready
     sig -.->|CancellationToken| interceptor
     sig -.->|CancellationToken| sink
     sig -.->|CancellationToken| health
+    sig -.->|CancellationToken| pbtask
+    sig -.->|CancellationToken| rvtask
 ```
 
 Key wiring facts:
@@ -95,6 +113,18 @@ Key wiring facts:
 - The audit sink runs in its own task and consumes `AuditPayload` values
   over a bounded `mpsc` channel (capacity 100). Signing happens on the
   sink side, not on the hot path.
+- `PolicyBundleTask` and `RevocationTask` share a single tonic
+  `Channel` to the Authority but run independent stream loops with
+  per-stream exponential backoff, so a failure on one stream does not
+  stall the other.
+- `SwappablePolicyEvaluation` is a lock-free `ArcSwap` wrapper over the
+  current `PolicyEvaluation`. Stage 2 reads it through the trait; the
+  policy-bundle task swaps a new evaluator into it on every accepted
+  bundle and refreshes the TTL deadline used by `is_fresh()`.
+- `BloomLruRevocationStore` is shared as `Arc<dyn RevocationStore>`
+  between Stage 1 (reader) and the revocation task (writer).
+- `ReadinessFlag` fans out to the pipeline as a `tokio::watch::Receiver`
+  so the hot-path readiness check is a single atomic borrow.
 - Shutdown is a single `CancellationToken` fan-out. SIGTERM/SIGINT
   cancels; every task drains and returns.
 
@@ -121,6 +151,7 @@ sequenceDiagram
     Interceptor->>Interceptor: build RawRequest<br/>(or DENY MALFORMED_REQUEST)
     Interceptor->>Handler: handle(RawRequest, session_id)
     Handler->>Pipeline: enforce(&req, session_id)
+    Pipeline->>Pipeline: check ReadinessFlag<br/>(DENY PolicyBundleNotReady /<br/>RevocationCacheNotReady if not yet hydrated)
     Pipeline->>Normalizer: normalize(&req)
     alt protected + classifiable
         Normalizer-->>Pipeline: NormalizedEnvelope
@@ -166,7 +197,10 @@ stages and short-circuits on the first failure.
 ```mermaid
 flowchart TB
     raw([RawRequest])
-    raw --> norm{Normalizer}
+    raw --> ready{ReadinessFlag}
+    ready -->|policy + revocation ready| norm{Normalizer}
+    ready -->|policy not ready| denyready1([DENY<br/>PolicyBundleNotReady])
+    ready -->|revocation not ready| denyready2([DENY<br/>RevocationCacheNotReady])
     norm -->|classified| s1{Stage 1<br/>CapabilityValidator}
     norm -->|unprotected host| passthrough([PASSTHROUGH])
     norm -->|unknown method<br/>or unclassifiable| deny1([DENY<br/>UNCLASSIFIED_INTENT<br/>or MALFORMED_REQUEST])
@@ -243,18 +277,18 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    src([WatchRevocations<br/>Authority stream<br/>&#40;task 007&#41;]) --> add[add_revocation&#40;token_id&#41;]
+    src([WatchRevocations<br/>Authority stream]) --> add[add_revocation&#40;token_id&#41;]
     add --> b1[bloom: fetch_or k bits<br/>lock-free, idempotent]
     add --> l1[LRU: put&#40;token_id&#41;<br/>mutex, may evict oldest]
     b1 --> m1[revocations_total++<br/>tracing::info event]
     l1 --> m1
 ```
 
-The writer side is driven by the WatchRevocations client (task 007);
-until that lands, the cache stays empty and no token is reported as
-revoked. The tracing event emitted on every insert anchors the
-revocation propagation metric: Authority push to first Stage 1 DENY
-< 1 s p99.
+The writer side is driven by the `RevocationTask` described in §5.6.
+Stage 1 holds the same `Arc<dyn RevocationStore>` as the writer, so
+every push is visible on the next `is_revoked` call. The tracing event
+emitted on every insert anchors the revocation propagation metric:
+Authority push to first Stage 1 DENY < 1 s p99.
 
 ### 5.3 Stage 2 — Constraint Enforcement
 
@@ -262,6 +296,17 @@ revocation propagation metric: Authority push to first Stage 1 DENY
    `action_set`? `"*"` wildcards pass.
 2. **Bundle freshness** — is `PolicyEvaluation::is_fresh()` true?
 3. **Cedar evaluation** — build the context and call the policy engine.
+
+Stage 2 holds the evaluator as `Arc<dyn PolicyEvaluation>`. In the
+Authority-backed runtime the concrete pointer targets a
+`SwappablePolicyEvaluation`: an `ArcSwap` over the compiled evaluator
+plus an atomic TTL deadline. `evaluate()` reads through the current
+snapshot; `is_fresh()` reads the atomic deadline. The
+`PolicyBundleTask` (§5.6) updates both atomically when a new bundle
+arrives, so in-flight calls finish against the previous snapshot. When
+the deadline elapses without a refresh, `is_fresh()` flips to `false`
+and this stage denies with `PolicyBundleStale` — the fail-closed
+behavior required by the spec.
 
 Target: < 200 µs p95. Like Stage 1, this runs entirely in-process;
 the Authority is never on the hot path.
@@ -290,6 +335,46 @@ flowchart LR
 
 `ExecutionEnvelope::new()` produces a value with private fields and
 shared-reference getters; once built it is never mutated.
+
+### 5.6 Authority stream clients
+
+When `policy.authority_url` is set, `startup` spawns two long-lived
+tasks from `authority_client`:
+
+- **`PolicyBundleTask`** calls `WatchPolicyBundle` and, on each
+  `PolicyBundleUpdate`, parses the bytes into a fresh
+  `PolicyEvaluation` via the pluggable `BundleParser` trait and calls
+  `SwappablePolicyEvaluation::swap`, which updates the evaluator
+  snapshot, TTL deadline, and version in a single store. A failed
+  parse is logged and the previous bundle is retained. The first
+  accepted bundle flips `ReadinessFlag::policy_bundle_ready`. Cedar
+  parsing lands in task 013; until then the Stub parser accepts
+  non-empty byte payloads and installs an allow-all evaluator.
+
+- **`RevocationTask`** calls `WatchRevocations` and forwards each
+  `RevocationEvent` to `RevocationStore::add_revocation` on the shared
+  bloom+LRU store. The task records the latest event timestamp and
+  resends it as `since` on reconnect so the Authority can replay any
+  missed events. `ReadinessFlag::revocation_ready` flips on the first
+  event OR after a configurable grace period
+  (`revocation_readiness_grace_ms`, default 500 ms) after the stream
+  opens — whichever comes first. When
+  `revocation_fail_closed_on_disconnect` is true, the readiness bit
+  flips back to `false` on disconnect; by default it stays set and
+  the cache continues serving from its last-known state.
+
+Both tasks share a single lazy `tonic::transport::Channel` but run
+independent reconnect loops with exponential backoff
+(`reconnect_min_backoff_ms` / `reconnect_max_backoff_secs`) and
+symmetric jitter. Shutdown is driven by the same `CancellationToken`
+that shuts the rest of the runtime down.
+
+`ReadinessFlag` is a `tokio::sync::watch` producer with a matching
+`ReadinessView` consumer. The pipeline's readiness check is a single
+atomic borrow on the watch channel — no lock, no allocation. When
+`authority_url` is unset (dev mode), the pipeline is constructed with
+a view that is pre-populated to all-ready so local runs do not wedge
+behind a stream that will never connect.
 
 ## 6. Dispatch and the abort path
 
@@ -398,6 +483,8 @@ crates/firma-sidecar/src/
 ├── credential{.rs,/}       — CredentialInjector trait + Null / Basic / Vault providers.
 ├── connector{.rs,/}        — ConnectorRegistry + generic HTTP provider.
 ├── audit{.rs,/}            — AuditPayload, ExecutionEvent, EventBuilder, sinks.
+├── authority_client{.rs,/} — WatchPolicyBundle + WatchRevocations stream tasks,
+│                             SwappablePolicyEvaluation, ReadinessFlag, backoff.
 ├── health.rs               — liveness probe server.
 └── log.rs                  — tracing init.
 ```

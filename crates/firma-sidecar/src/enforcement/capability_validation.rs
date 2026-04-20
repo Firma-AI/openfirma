@@ -27,6 +27,7 @@
 //! - **Revoked token reuse** — bloom filter + LRU cache check rejects tokens
 //!   that have been explicitly invalidated.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
@@ -58,7 +59,7 @@ pub struct ValidatedCapability {
 pub struct CapabilityValidator {
     clock_skew_tolerance: Duration,
     capability_map: CapabilityMap,
-    revocation: Box<dyn RevocationStore + Send + Sync>,
+    revocation: Arc<dyn RevocationStore + Send + Sync>,
     verifier: Box<dyn TokenVerifier + Send + Sync>,
 }
 
@@ -69,7 +70,7 @@ impl CapabilityValidator {
     pub fn new(
         capability_map: CapabilityMap,
         verifier: Box<dyn TokenVerifier + Send + Sync>,
-        revocation: Box<dyn RevocationStore + Send + Sync>,
+        revocation: Arc<dyn RevocationStore + Send + Sync>,
         clock_skew_tolerance: Duration,
     ) -> Self {
         Self {
@@ -245,7 +246,7 @@ mod tests {
             Box::new(MockVerifier {
                 claims: valid_claims(),
             }),
-            Box::new(MockRevocationStore { revoked: vec![] }),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
         );
 
@@ -258,7 +259,7 @@ mod tests {
         let validator = CapabilityValidator::new(
             test_capability_map(),
             Box::new(FailingVerifier),
-            Box::new(MockRevocationStore { revoked: vec![] }),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
         );
 
@@ -278,7 +279,7 @@ mod tests {
             Box::new(MockVerifier {
                 claims: valid_claims(),
             }),
-            Box::new(MockRevocationStore {
+            Arc::new(MockRevocationStore {
                 revoked: vec!["tok_001".to_string()],
             }),
             Duration::from_secs(0),
@@ -301,7 +302,7 @@ mod tests {
         let validator = CapabilityValidator::new(
             test_capability_map(),
             Box::new(MockVerifier { claims }),
-            Box::new(MockRevocationStore { revoked: vec![] }),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
         );
 
@@ -328,7 +329,7 @@ mod tests {
         let validator = CapabilityValidator::new(
             test_capability_map(),
             Box::new(MalformedVerifier),
-            Box::new(MockRevocationStore { revoked: vec![] }),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
         );
 
@@ -348,7 +349,7 @@ mod tests {
         let validator = CapabilityValidator::new(
             test_capability_map(),
             Box::new(MockVerifier { claims }),
-            Box::new(MockRevocationStore { revoked: vec![] }),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(5),
         );
 
@@ -383,7 +384,7 @@ mod tests {
             Box::new(MockVerifier {
                 claims: claims.clone(),
             }),
-            Box::new(MockRevocationStore { revoked: vec![] }),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
         );
 
@@ -416,7 +417,7 @@ mod tests {
         let validator = CapabilityValidator::new(
             test_capability_map(),
             Box::new(MockVerifier { claims }),
-            Box::new(MockRevocationStore { revoked: vec![] }),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
         );
 
@@ -443,7 +444,7 @@ mod tests {
             let validator = CapabilityValidator::new(
                 test_capability_map(),
                 verifier,
-                Box::new(MockRevocationStore { revoked: vec![] }),
+                Arc::new(MockRevocationStore { revoked: vec![] }),
                 Duration::from_secs(0),
             );
             let result = validator.validate("any");

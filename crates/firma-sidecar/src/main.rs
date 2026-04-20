@@ -33,6 +33,7 @@
 
 mod args;
 mod audit;
+mod authority_client;
 mod config;
 mod connector;
 mod credential;
@@ -93,10 +94,12 @@ async fn main() -> anyhow::Result<()> {
         exit.clone(),
     )?;
 
-    let pipeline = startup::build_pipeline(&config)?;
+    let pipeline_runtime = startup::build_pipeline_runtime(&config)?;
+    let authority_handle =
+        startup::spawn_authority_client(&config, &pipeline_runtime, exit.clone())?;
     let connector_registry = startup::build_connector_registry(&config.connector)?;
     let handler = Arc::new(handler::RequestHandler::new(
-        pipeline,
+        pipeline_runtime.pipeline,
         connector_registry,
         audit_payload_tx,
     ));
@@ -108,11 +111,17 @@ async fn main() -> anyhow::Result<()> {
     let interceptor_handle = startup::spawn_interceptor(&config, handler, exit.clone())?;
 
     tracing::info!("all components initialized; entering main loop");
+    let authority_stream_tasks = async {
+        if let Some(handle) = authority_handle {
+            let _ = tokio::join!(handle.policy_task, handle.revocation_task);
+        }
+    };
     let _ = tokio::join!(
         audit_sink,
         health_server,
         interceptor_handle,
-        sigterm_handler
+        sigterm_handler,
+        authority_stream_tasks
     );
     tracing::info!("firma-sidecar exiting");
 

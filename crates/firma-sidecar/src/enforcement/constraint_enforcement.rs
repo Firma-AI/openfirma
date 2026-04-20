@@ -32,6 +32,8 @@
 //! - **Non-deterministic authorization** — same context + same bundle always
 //!   produces the same decision.
 
+use std::sync::Arc;
+
 use firma_core::{CapabilityClaims, DenyReason};
 
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
@@ -73,12 +75,12 @@ pub trait PolicyEvaluation: Send + Sync {
 ///
 /// Target: < 200us p95.
 pub struct ConstraintEnforcer {
-    policy: Box<dyn PolicyEvaluation>,
+    policy: Arc<dyn PolicyEvaluation>,
 }
 
 impl ConstraintEnforcer {
     #[must_use]
-    pub fn new(policy: Box<dyn PolicyEvaluation>) -> Self {
+    pub fn new(policy: Arc<dyn PolicyEvaluation>) -> Self {
         Self { policy }
     }
 
@@ -304,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_allow_when_in_scope_and_policy_allows() {
-        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -314,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_deny_scope_violation() {
-        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
         let envelope = test_envelope("file.delete");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -325,7 +327,7 @@ mod tests {
 
     #[test]
     fn test_wildcard_scope_allows_all() {
-        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
         let envelope = test_envelope("system.execute");
         let claims = test_claims(vec!["*"]);
 
@@ -335,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_deny_when_policy_denies() {
-        let evaluator = ConstraintEnforcer::new(Box::new(DenyAllPolicy));
+        let evaluator = ConstraintEnforcer::new(Arc::new(DenyAllPolicy));
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -346,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_deny_when_bundle_stale() {
-        let evaluator = ConstraintEnforcer::new(Box::new(StalePolicy));
+        let evaluator = ConstraintEnforcer::new(Arc::new(StalePolicy));
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -376,7 +378,7 @@ mod tests {
             }
         }
 
-        let evaluator = ConstraintEnforcer::new(Box::new(ErrorPolicy));
+        let evaluator = ConstraintEnforcer::new(Arc::new(ErrorPolicy));
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -387,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_scope_check_multiple_actions_in_set() {
-        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
         let envelope = test_envelope("http.get");
         let claims = test_claims(vec!["llm.inference", "http.get", "db.query"]);
 
@@ -397,7 +399,7 @@ mod tests {
 
     #[test]
     fn test_scope_check_empty_action_set_denies() {
-        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec![]);
 
@@ -408,7 +410,7 @@ mod tests {
 
     #[test]
     fn test_build_context_includes_required_fields() {
-        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -442,7 +444,7 @@ mod tests {
             }
         }
 
-        let evaluator = ConstraintEnforcer::new(Box::new(StaleButAllowPolicy));
+        let evaluator = ConstraintEnforcer::new(Arc::new(StaleButAllowPolicy));
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -458,7 +460,7 @@ mod tests {
 
     #[test]
     fn test_scope_violation_reports_correct_stage() {
-        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
         let envelope = test_envelope("file.delete");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -473,7 +475,7 @@ mod tests {
 
     #[test]
     fn test_policy_deny_reports_correct_stage() {
-        let evaluator = ConstraintEnforcer::new(Box::new(DenyAllPolicy));
+        let evaluator = ConstraintEnforcer::new(Arc::new(DenyAllPolicy));
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
