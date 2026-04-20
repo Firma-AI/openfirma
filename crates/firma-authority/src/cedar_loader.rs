@@ -115,7 +115,6 @@ impl CedarPolicyStore {
     }
 
     /// Get the current schema, if one was loaded.
-    #[expect(dead_code, reason = "will be used when schema validation is wired in")]
     pub async fn schema(&self) -> Option<Arc<Schema>> {
         self.state.read().await.schema.clone()
     }
@@ -195,13 +194,12 @@ pub struct CedarPolicyStoreWatcher {
 impl CedarPolicyStoreWatcher {
     /// Subscribe to policy bundle updates. Returns the current bundle
     /// immediately, then yields on changes.
-    #[must_use] 
+    #[must_use]
     pub fn subscribe(&self) -> watch::Receiver<PolicyBundle> {
         self.tx.subscribe()
     }
 
     /// Abort the background reload task immediately.
-    #[expect(dead_code, reason = "explicit shutdown hook for callers that need it")]
     pub fn abort(&self) {
         self.task.abort();
     }
