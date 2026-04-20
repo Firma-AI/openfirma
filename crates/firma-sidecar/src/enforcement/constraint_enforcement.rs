@@ -33,6 +33,7 @@
 //!   produces the same decision.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use firma_core::{CapabilityClaims, DenyReason};
 
@@ -62,6 +63,14 @@ pub trait PolicyEvaluation: Send + Sync {
 
     /// Check if the policy bundle is still fresh (TTL not expired).
     fn is_fresh(&self) -> bool;
+
+    /// Check if a policy bundle is currently available.
+    ///
+    /// Default assumes availability, preserving backwards compatibility for
+    /// evaluators that only model freshness.
+    fn is_available(&self) -> bool {
+        true
+    }
 
     /// Get the current policy bundle version.
     #[expect(dead_code, reason = "used by audit logging once wired")]
@@ -93,9 +102,10 @@ impl ConstraintEnforcer {
     ///
     /// Sequence:
     /// 1. Scope check -- is `action_class` in the token's `action_set`?
-    /// 2. Check policy bundle freshness
-    /// 3. Build Cedar context
-    /// 4. Evaluate Cedar policies
+    /// 2. Check policy availability
+    /// 3. Check policy bundle freshness
+    /// 4. Build Cedar context
+    /// 5. Evaluate Cedar policies
     ///
     /// # Errors
     ///
@@ -113,22 +123,34 @@ impl ConstraintEnforcer {
         // Step 1: Scope check (pre-Cedar gate)
         self.check_scope(envelope, claims)?;
 
-        // Step 2: Check policy bundle freshness
+        // Step 2: Check policy availability (fail-closed)
+        if !self.policy.is_available() {
+            return Err(EnforcementDecision::Deny {
+                reason: DenyReason::FailClosed,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::BundleFreshness,
+                ),
+                detail: "policy bundle unavailable; failing closed".to_string(),
+                envelope: Some(envelope.clone()),
+            });
+        }
+
+        // Step 3: Check policy bundle freshness
         if !self.policy.is_fresh() {
             return Err(EnforcementDecision::Deny {
                 reason: DenyReason::PolicyBundleStale,
                 stage: EnforcementStage::ConstraintEnforcement(
                     ConstraintEnforcementStage::BundleFreshness,
                 ),
-                detail: "policy bundle TTL expired".to_string(),
+                detail: "policy bundle unavailable or stale".to_string(),
                 envelope: Some(envelope.clone()),
             });
         }
 
-        // Step 3: Build context
+        // Step 4: Build context
         let context = self.build_context(envelope, claims);
 
-        // Step 4: Evaluate policies
+        // Step 5: Evaluate policies
         match self.policy.evaluate(
             &claims.agent_id,
             &envelope.intent.action_class,
@@ -148,11 +170,113 @@ impl ConstraintEnforcer {
                 envelope: Some(envelope.clone()),
             }),
             Err(err) => Err(EnforcementDecision::Deny {
+                reason: DenyReason::FailClosed,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::PolicyEvaluation,
+                ),
+                detail: format!("policy evaluation failed; failing closed: {err}"),
+                envelope: Some(envelope.clone()),
+            }),
+        }
+    }
+
+    /// Timeout-aware Stage 2 evaluation.
+    ///
+    /// Policy evaluation is bounded and any timeout yields a fail-closed DENY
+    /// with `EnforcementTimeout`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EnforcementDecision::Deny` if scope validation fails, the
+    /// policy bundle is unavailable (`FailClosed`) or stale
+    /// (`PolicyBundleStale`), policy evaluation times out
+    /// (`EnforcementTimeout`), or the policy evaluator returns an error
+    /// (`FailClosed`).
+    #[allow(clippy::result_large_err)]
+    pub async fn evaluate_with_timeout(
+        &self,
+        envelope: &NormalizedEnvelope,
+        claims: &CapabilityClaims,
+        timeout: Duration,
+    ) -> Result<(), EnforcementDecision> {
+        // Step 1: Scope check (pre-Cedar gate)
+        self.check_scope(envelope, claims)?;
+
+        // Step 2: Check policy availability (fail-closed)
+        if !self.policy.is_available() {
+            return Err(EnforcementDecision::Deny {
+                reason: DenyReason::FailClosed,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::BundleFreshness,
+                ),
+                detail: "policy bundle unavailable; failing closed".to_string(),
+                envelope: Some(envelope.clone()),
+            });
+        }
+
+        // Step 3: Deny stale policy bundle
+        if !self.policy.is_fresh() {
+            return Err(EnforcementDecision::Deny {
+                reason: DenyReason::PolicyBundleStale,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::BundleFreshness,
+                ),
+                detail: "policy bundle unavailable or stale".to_string(),
+                envelope: Some(envelope.clone()),
+            });
+        }
+
+        // Step 4: Build context from immutable request + validated claims.
+        let context = self.build_context(envelope, claims);
+        let policy = Arc::clone(&self.policy);
+        let principal = claims.agent_id.clone();
+        let action = envelope.intent.action_class.clone();
+        let resource = envelope.intent.resource.clone();
+        let eval_task = tokio::task::spawn_blocking(move || {
+            policy.evaluate(&principal, &action, &resource, &context)
+        });
+
+        let eval_result = tokio::time::timeout(timeout, eval_task)
+            .await
+            .map_err(|_| EnforcementDecision::Deny {
+                reason: DenyReason::EnforcementTimeout,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::PolicyEvaluation,
+                ),
+                detail: format!(
+                    "stage 2 policy evaluation timed out after {} ms",
+                    timeout.as_millis()
+                ),
+                envelope: Some(envelope.clone()),
+            })?
+            .map_err(|join_err| EnforcementDecision::Deny {
+                reason: DenyReason::FailClosed,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::PolicyEvaluation,
+                ),
+                detail: format!("policy evaluation task failed; failing closed: {join_err}"),
+                envelope: Some(envelope.clone()),
+            })?;
+
+        match eval_result {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(EnforcementDecision::Deny {
                 reason: DenyReason::PolicyDenied,
                 stage: EnforcementStage::ConstraintEnforcement(
                     ConstraintEnforcementStage::PolicyEvaluation,
                 ),
-                detail: format!("policy evaluation error: {err}"),
+                detail: format!(
+                    "policy denied action '{}' on resource '{}'",
+                    envelope.intent.action_class, envelope.intent.resource
+                ),
+                envelope: Some(envelope.clone()),
+            }),
+            Err(err) => Err(EnforcementDecision::Deny {
+                reason: DenyReason::FailClosed,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::PolicyEvaluation,
+                ),
+                detail: format!("policy evaluation failed; failing closed: {err}"),
                 envelope: Some(envelope.clone()),
             }),
         }
@@ -204,7 +328,7 @@ impl ConstraintEnforcer {
             "resource": envelope.intent.resource,
             "agent_id": claims.agent_id,
             "session_id": claims.session_id,
-            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "timestamp": envelope.timestamp.to_rfc3339(),
         })
     }
 }
@@ -254,6 +378,25 @@ mod tests {
         }
     }
 
+    struct ErrorPolicy;
+    impl PolicyEvaluation for ErrorPolicy {
+        fn evaluate(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> Result<bool, String> {
+            Err("evaluation backend error".to_string())
+        }
+        fn is_fresh(&self) -> bool {
+            true
+        }
+        fn version(&self) -> Option<String> {
+            Some("test-v1".to_string())
+        }
+    }
+
     struct StalePolicy;
     impl PolicyEvaluation for StalePolicy {
         fn evaluate(
@@ -270,6 +413,50 @@ mod tests {
         }
         fn version(&self) -> Option<String> {
             None
+        }
+    }
+
+    struct UnavailablePolicy;
+    impl PolicyEvaluation for UnavailablePolicy {
+        fn evaluate(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> Result<bool, String> {
+            Ok(true)
+        }
+        fn is_fresh(&self) -> bool {
+            true
+        }
+        fn is_available(&self) -> bool {
+            false
+        }
+        fn version(&self) -> Option<String> {
+            None
+        }
+    }
+
+    struct SlowPolicy;
+    impl PolicyEvaluation for SlowPolicy {
+        fn evaluate(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> Result<bool, String> {
+            std::thread::sleep(Duration::from_millis(200));
+            Ok(true)
+        }
+
+        fn is_fresh(&self) -> bool {
+            true
+        }
+
+        fn version(&self) -> Option<String> {
+            Some("test-v1".to_string())
         }
     }
 
@@ -358,33 +545,14 @@ mod tests {
     }
 
     #[test]
-    fn test_policy_evaluation_error_is_deny() {
-        struct ErrorPolicy;
-        impl PolicyEvaluation for ErrorPolicy {
-            fn evaluate(
-                &self,
-                _: &str,
-                _: &str,
-                _: &str,
-                _: &serde_json::Value,
-            ) -> Result<bool, String> {
-                Err("cedar engine crashed".to_string())
-            }
-            fn is_fresh(&self) -> bool {
-                true
-            }
-            fn version(&self) -> Option<String> {
-                Some("test-v1".to_string())
-            }
-        }
-
-        let evaluator = ConstraintEnforcer::new(Arc::new(ErrorPolicy));
+    fn test_deny_when_bundle_unavailable_fail_closed() {
+        let evaluator = ConstraintEnforcer::new(Arc::new(UnavailablePolicy));
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert!(decision.is_deny());
-        assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyDenied));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::FailClosed));
     }
 
     #[test]
@@ -486,5 +654,32 @@ mod tests {
                 ConstraintEnforcementStage::PolicyEvaluation
             ))
         );
+    }
+
+    #[test]
+    fn test_policy_evaluator_error_fails_closed() {
+        let evaluator = ConstraintEnforcer::new(Arc::new(ErrorPolicy));
+        let envelope = test_envelope("llm.inference");
+        let claims = test_claims(vec!["llm.inference"]);
+
+        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        assert!(decision.is_deny());
+        assert_eq!(decision.deny_reason(), Some(DenyReason::FailClosed));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_stage2_timeout_fails_closed() {
+        use std::time::Duration;
+        let evaluator = ConstraintEnforcer::new(Arc::new(SlowPolicy));
+        let envelope = test_envelope("llm.inference");
+        let claims = test_claims(vec!["llm.inference"]);
+
+        let decision = evaluator
+            .evaluate_with_timeout(&envelope, &claims, Duration::from_millis(20))
+            .await
+            .unwrap_err();
+
+        assert!(decision.is_deny());
+        assert_eq!(decision.deny_reason(), Some(DenyReason::EnforcementTimeout));
     }
 }

@@ -75,6 +75,7 @@ pub struct EnforcementPipeline {
     credential_injector: Box<dyn CredentialInjector>,
     normalizer: IntentNormalizer,
     readiness: ReadinessView,
+    stage2_timeout: Option<Duration>,
 }
 
 impl EnforcementPipeline {
@@ -88,6 +89,7 @@ impl EnforcementPipeline {
             credential_injector: args.credential_injector,
             normalizer: args.normalizer,
             readiness: ReadinessView::all_ready(),
+            stage2_timeout: None,
         }
     }
 
@@ -95,6 +97,17 @@ impl EnforcementPipeline {
     #[must_use]
     pub fn with_readiness(mut self, readiness: ReadinessView) -> Self {
         self.readiness = readiness;
+        self
+    }
+
+    /// Bound Stage 2 evaluation by a timeout.
+    ///
+    /// Any expiry DENYs with `EnforcementTimeout` to preserve fail-closed
+    /// behavior under load.
+    #[must_use]
+    #[expect(dead_code, reason = "wired once config plumbs stage2 timeout through")]
+    pub fn with_stage2_timeout(mut self, stage2_timeout: Duration) -> Self {
+        self.stage2_timeout = Some(stage2_timeout);
         self
     }
 
@@ -144,10 +157,17 @@ impl EnforcementPipeline {
         };
 
         // Constraint enforcement: scope check + Cedar policy evaluation
-        if let Err(deny) = self
-            .constraint_enforcer
-            .evaluate(&normalized, &capability.claims)
-        {
+        let stage2_result = match self.stage2_timeout {
+            Some(timeout) => {
+                self.constraint_enforcer
+                    .evaluate_with_timeout(&normalized, &capability.claims, timeout)
+                    .await
+            }
+            None => self
+                .constraint_enforcer
+                .evaluate(&normalized, &capability.claims),
+        };
+        if let Err(deny) = stage2_result {
             return deny;
         }
 

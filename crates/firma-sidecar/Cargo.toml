@@ -7,6 +7,9 @@ description = "HTTP proxy sidecar with enforcement pipeline for Firma OSS"
 license.workspace = true
 repository.workspace = true
 
+[features]
+loom-tests = []
+
 [dependencies]
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
@@ -63,8 +66,10 @@ xxhash-rust = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+loom = "0.7"
 proptest = { workspace = true }
 tempfile = "3"
+tokio = { workspace = true, features = ["test-util", "time"] }
 wiremock = "0.6"
 
 [[bench]]
