@@ -29,6 +29,7 @@ drain_timeout_secs = 15
 # socket_path = "/tmp/firma.sock"
 
 [policy]
+dir = "/etc/firma/policies"
 authority_url = "https://authority.example.com"
 
 [ca]
@@ -114,25 +115,21 @@ Validation:
 
 Policy source settings.
 
-| Field           | Type   | Default | Description                 |
-| --------------- | ------ | ------- | --------------------------- |
-| `authority_url` | string | none    | Optional Authority gRPC URL |
+| Field           | Type   | Default       | Description                         |
+| --------------- | ------ | ------------- | ----------------------------------- |
+| `dir`           | path   | `./policies/` | Directory containing `.cedar` files |
+| `authority_url` | string | none          | Optional Authority gRPC URL         |
 
 Validation:
 
+- `dir` must not be empty.
 - `authority_url`, when set, must not be empty or whitespace-only.
-
-The sidecar never reads policy bundles from disk. The Authority owns
-the on-disk bundle source and pushes bundles over `WatchPolicyBundle`
-(Component Reference §4.6). Bundle freshness TTL lives in
-[`[constraint_enforcement]`](#constraint_enforcement).
 
 When `authority_url` is set, the sidecar spawns the Authority stream
 clients (`WatchPolicyBundle`, `WatchRevocations`) described in
 [`[authority]`](#authority). When unset, the sidecar runs in dev
 mode: no stream clients, and the readiness gate is pre-populated so
-traffic is not blocked — but Stage 2 stays fail-closed with
-`POLICY_BUNDLE_STALE` until a bundle is installed.
+traffic is not blocked.
 
 ### `[ca]`
 
