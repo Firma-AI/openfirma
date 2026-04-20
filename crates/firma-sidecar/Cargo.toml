@@ -30,6 +30,7 @@ governor = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
+lru = { workspace = true }
 p256 = { workspace = true }
 pingora-core = { workspace = true }
 pingora-http = { workspace = true }
@@ -52,10 +53,17 @@ tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
+xxhash-rust = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
 tempfile = "3"
 wiremock = "0.6"
+
+[[bench]]
+name = "revocation"
+harness = false
 
 [lints]
 workspace = true

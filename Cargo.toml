@@ -30,6 +30,9 @@ anyhow = "1"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", default-features = false }
+criterion = { version = "0.8", default-features = false, features = [
+    "cargo_bench_support",
+] }
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
 elliptic-curve = { version = "0.13", features = ["pem"] }
 firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto" }
@@ -37,6 +40,7 @@ governor = "0.10"
 http-body-util = "0.1"
 hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
+lru = "0.17"
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 pasetors = "0.7"
 pingora-core = "0.8"
@@ -44,10 +48,16 @@ pingora-http = "0.8"
 pingora-proxy = "0.8"
 prost = "0.14"
 prost-types = "0.14"
-reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "rustls-tls"] }
+proptest = "1"
+reqwest = { version = "0.13", default-features = false, features = [
+    "charset",
+    "http2",
+    "query",
+    "rustls",
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 thiserror = "2"
 tokio = { version = "1", default-features = false, features = [
     "rt-multi-thread",
@@ -62,3 +72,4 @@ tonic-prost-build = "0.14"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v7"] }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }

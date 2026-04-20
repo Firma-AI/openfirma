@@ -200,10 +200,61 @@ the envelope. No LLM, no heuristic classifier on the hot path.
    `(session_id, action_class, resource)`.
 2. Parse and verify the PASETO v4 signature.
 3. Check expiry against the current clock (plus configured skew).
-4. Check revocation against the local `RevocationStore`.
+4. Check revocation against the local `RevocationStore`, a two-layer
+   cache implemented by `BloomLruRevocationStore`
+   (`enforcement::revocation`):
+   1. **Bloom filter (lock-free).** Compute k hash indices from
+      `xxh3_128(token_id)` and load the corresponding bits. Any bit
+      clear means definitely not revoked, returning `Ok(false)`. This
+      is the common path and stays sub-microsecond.
+   2. **LRU cache (mutex-guarded).** All bits set triggers a lookup in
+      the LRU: a hit confirms revocation (`Ok(true)`); a miss is either
+      a bloom false positive or an evicted true revocation, and also
+      returns `Ok(true)` to honor the spec's "REVOKED is terminal"
+      invariant.
 
 Every substep on failure maps to a DENY with a distinct `DenyReason`.
 Target: < 1 ms p95.
+
+Sizing is configurable via `[revocation]` in the sidecar TOML.
+Defaults: `capacity = 1_000_000`, `fpr = 0.0001`, and
+`lru_capacity = 100_000` — about 14 MB total (bloom 2.4 MB + LRU
+12 MB), well inside the < 100 MB RSS budget. Counters exposed:
+`bloom_hits`, `lru_hits`, `bloom_positive_lru_miss`, and
+`revocations_total`.
+
+#### 5.2.1 Revocation check flow
+
+**Reader (`is_revoked`) — hot path.**
+
+```mermaid
+flowchart TB
+    start([is_revoked&#40;token_id&#41;])
+    start --> hash[xxh3_128&#40;token_id&#41; → k indices]
+    hash --> bloom{All k bloom<br/>bits set?}
+    bloom -->|no: any bit clear| negret([Ok&#40;false&#41;<br/>definitely not revoked<br/>lock-free fast path])
+    bloom -->|yes: all bits set| bhit[bloom_hits++]
+    bhit --> lru{LRU contains<br/>token_id?}
+    lru -->|hit| lhit[lru_hits++] --> deny1([Ok&#40;true&#41;<br/>confirmed revoked])
+    lru -->|miss| lmiss[bloom_positive_lru_miss++] --> deny2([Ok&#40;true&#41;<br/>fail-closed:<br/>bloom false positive<br/>or evicted revocation<br/>&#40;rare&#41;])
+```
+
+**Writer (`add_revocation`) — off the hot path.**
+
+```mermaid
+flowchart LR
+    src([WatchRevocations<br/>Authority stream<br/>&#40;task 007&#41;]) --> add[add_revocation&#40;token_id&#41;]
+    add --> b1[bloom: fetch_or k bits<br/>lock-free, idempotent]
+    add --> l1[LRU: put&#40;token_id&#41;<br/>mutex, may evict oldest]
+    b1 --> m1[revocations_total++<br/>tracing::info event]
+    l1 --> m1
+```
+
+The writer side is driven by the WatchRevocations client (task 007);
+until that lands, the cache stays empty and no token is reported as
+revoked. The tracing event emitted on every insert anchors the
+revocation propagation metric: Authority push to first Stage 1 DENY
+< 1 s p99.
 
 ### 5.3 Stage 2 — Constraint Enforcement
 
@@ -339,9 +390,10 @@ crates/firma-sidecar/src/
 │   ├── capability_map.rs   — indexed token selection.
 │   ├── capability_validation.rs — Stage 1.
 │   ├── constraint_enforcement.rs — Stage 2 + PolicyEvaluation trait.
-│   ├── registry.rs         — 15-class Action Class Registry v0.1.
 │   ├── decision.rs         — EnforcementDecision + stage enums.
-│   └── error.rs            — fail-closed error → DENY mapping.
+│   ├── error.rs            — fail-closed error → DENY mapping.
+│   ├── registry.rs         — 15-class Action Class Registry v0.1.
+│   └── revocation{.rs,/}   — bloom filter + LRU revocation cache.
 ├── pipeline.rs             — EnforcementPipeline::enforce() + audit payload projection.
 ├── credential{.rs,/}       — CredentialInjector trait + Null / Basic / Vault providers.
 ├── connector{.rs,/}        — ConnectorRegistry + generic HTTP provider.
