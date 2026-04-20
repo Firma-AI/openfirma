@@ -13,11 +13,13 @@
 //! surface misconfigurations before the first request arrives.
 
 mod audit;
+mod authority;
 mod connector;
 mod enforcement;
 mod revocation;
 
 pub use self::audit::{AuditConfig, AuditSink};
+pub use self::authority::AuthorityConfig;
 pub use self::connector::ConnectorConfig;
 
 pub use self::enforcement::{EnforcementConfig, MappingRulesFile};
@@ -66,6 +68,9 @@ pub struct SidecarConfig {
     /// overrides with rate limits).
     #[serde(default)]
     pub connector: ConnectorConfig,
+    /// Background Authority stream client tuning.
+    #[serde(default)]
+    pub authority: AuthorityConfig,
     /// Enforcement engine settings (mapping rules, capability
     /// validation, constraint enforcement).
     #[serde(flatten)]
@@ -100,6 +105,9 @@ impl SidecarConfig {
         self.connector
             .validate()
             .map_err(|e| format!("connector: {e}"))?;
+        self.authority
+            .validate()
+            .map_err(|e| format!("authority: {e}"))?;
         self.enforcement.validate()?;
         self.revocation.validate()?;
         self.audit.validate().map_err(|e| format!("audit: {e}"))?;

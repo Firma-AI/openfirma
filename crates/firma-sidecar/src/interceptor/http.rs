@@ -396,10 +396,10 @@ mod tests {
                 claims: claims.clone(),
             }]),
             Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
         Arc::new(EnforcementPipeline::new(PipelineArgs {
             normalizer,
@@ -430,10 +430,10 @@ mod tests {
         let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![]),
             Box::new(MockVerifier { claims }),
-            Box::new(NoRevocations),
+            std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-        let constraint_enforcer = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
         Arc::new(EnforcementPipeline::new(PipelineArgs {
             normalizer,

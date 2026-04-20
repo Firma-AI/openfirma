@@ -62,6 +62,27 @@ clock_skew_tolerance_seconds = 5
 [constraint_enforcement]
 bundle_ttl_seconds = 60
 
+[connector]
+default_timeout_ms = 15000
+
+[[connector.hosts]]
+host = "api.openai.com"
+rps = 60
+burst = 10
+timeout_ms = 60000
+
+[authority]
+connect_timeout_secs = 10
+reconnect_min_backoff_ms = 250
+reconnect_max_backoff_secs = 30
+revocation_readiness_grace_ms = 500
+revocation_fail_closed_on_disconnect = false
+
+[revocation]
+capacity = 1000000
+fpr = 0.0001
+lru_capacity = 100000
+
 [audit]
 sink = "wal"
 file_path = "/var/log/firma/audit.jsonl"
@@ -103,6 +124,12 @@ Validation:
 
 - `dir` must not be empty.
 - `authority_url`, when set, must not be empty or whitespace-only.
+
+When `authority_url` is set, the sidecar spawns the Authority stream
+clients (`WatchPolicyBundle`, `WatchRevocations`) described in
+[`[authority]`](#authority). When unset, the sidecar runs in dev
+mode: no stream clients, and the readiness gate is pre-populated so
+traffic is not blocked.
 
 ### `[ca]`
 
@@ -216,20 +243,101 @@ Stage 2 settings.
 | -------------------- | ---- | ------- | ------------------------------------- |
 | `bundle_ttl_seconds` | u64  | `30`    | Policy bundle maximum age before deny |
 
+### `[connector]`
+
+Outbound dispatch defaults and per-host overrides.
+
+| Field                | Type | Default | Description                                  |
+| -------------------- | ---- | ------- | -------------------------------------------- |
+| `default_timeout_ms` | u64  | `30000` | Fallback dispatch timeout in milliseconds    |
+| `hosts`              | list | empty   | Per-host overrides, see table below          |
+
+Each `[[connector.hosts]]` entry is required to state every field
+explicitly — inheriting silent global defaults is not allowed.
+
+| Field        | Type   | Required | Description                                 |
+| ------------ | ------ | -------- | ------------------------------------------- |
+| `host`       | string | yes      | Target host (exact match)                   |
+| `rps`        | u32    | yes      | Sustained token-bucket refill rate (req/s)  |
+| `burst`      | u32    | yes      | Token-bucket burst capacity                 |
+| `timeout_ms` | u64    | yes      | Dispatch timeout in milliseconds            |
+
+Validation:
+
+- `default_timeout_ms` must be greater than `0`.
+- Each host entry must set a non-empty `host`, and each of `rps`,
+  `burst`, and `timeout_ms` must be greater than `0`.
+- Duplicate `host` entries are rejected.
+
+### `[authority]`
+
+Tuning for the background Authority stream clients
+(`WatchPolicyBundle`, `WatchRevocations`). Only consulted when
+`policy.authority_url` is set; when unset the sidecar runs in dev
+mode and this section is ignored.
+
+| Field                                    | Type | Default | Description                                                    |
+| ---------------------------------------- | ---- | ------- | -------------------------------------------------------------- |
+| `connect_timeout_secs`                   | u64  | `10`    | Connection timeout for the tonic channel                       |
+| `reconnect_min_backoff_ms`               | u64  | `250`   | Minimum reconnect backoff                                      |
+| `reconnect_max_backoff_secs`             | u64  | `30`    | Maximum reconnect backoff                                      |
+| `revocation_readiness_grace_ms`          | u64  | `500`   | Grace period after revocation stream opens before readiness    |
+| `revocation_fail_closed_on_disconnect`   | bool | `false` | Flip revocation readiness back to false when the stream drops  |
+
+Validation:
+
+- `connect_timeout_secs`, `reconnect_min_backoff_ms`, and
+  `reconnect_max_backoff_secs` must all be greater than `0`.
+- `reconnect_max_backoff_secs * 1000` must be ≥
+  `reconnect_min_backoff_ms`.
+
+Behavior notes:
+
+- Requests are denied with `POLICY_BUNDLE_NOT_READY` until the first
+  bundle has been applied and `REVOCATION_CACHE_NOT_READY` until the
+  revocation stream has either received its first event or the grace
+  period has elapsed — whichever happens first.
+- The policy bundle TTL (carried in each `PolicyBundleUpdate`) is
+  authoritative for fail-closed on disconnect. When the deadline
+  elapses without a refresh, Stage 2 denies with `PolicyBundleStale`.
+- `revocation_fail_closed_on_disconnect = true` is the opt-in strict
+  mode: a revocation stream drop flips readiness off and the sidecar
+  denies all traffic with `REVOCATION_CACHE_NOT_READY` until the
+  stream recovers.
+
+### `[revocation]`
+
+Two-layer revocation cache sizing. Bloom filter for O(1) negative
+checks; LRU for confirmed positives.
+
+| Field          | Type   | Default     | Description                                          |
+| -------------- | ------ | ----------- | ---------------------------------------------------- |
+| `capacity`     | usize  | `1000000`   | Expected distinct revoked tokens the bloom is sized  |
+| `fpr`          | f64    | `0.0001`    | Target bloom false positive rate                     |
+| `lru_capacity` | usize  | `100000`    | LRU capacity for confirmed-positive revocations      |
+
+Validation:
+
+- `capacity` and `lru_capacity` must be greater than `0`.
+- `fpr` must be in the open interval `(0.0, 1.0)`.
+
+Defaults give roughly 14 MB total footprint (bloom 2.4 MB + LRU
+12 MB), well inside the `< 100 MB` RSS budget.
+
 ### `[audit]`
 
 Audit event emitter settings. Controls where enforcement events are written and
 how they are signed.
 
-| Field              | Type   | Default     | Description                                     |
-| ------------------ | ------ | ----------- | ----------------------------------------------- |
-| `sink`             | string | `stdout`    | `stdout`, `file`, `grpc`, `wal`                 |
+| Field              | Type   | Default     | Description                                      |
+| ------------------ | ------ | ----------- | ------------------------------------------------ |
+| `sink`             | string | `stdout`    | `stdout`, `file`, `grpc`, `wal`                  |
 | `file_path`        | path   | none        | Append-only file path (required for `file` sink) |
-| `grpc_url`         | string | none        | Audit service URL (required for `grpc`/`wal`)   |
-| `wal_path`         | path   | none        | Local WAL directory (required for `wal` sink)   |
-| `wal_max_bytes`    | u64    | `104857600` | Maximum WAL size in bytes (100 MiB)             |
-| `signing_key_path` | path   | none        | ECDSA private key file path                     |
-| `signing_key_env`  | string | none        | Env var containing ECDSA private key (PEM)      |
+| `grpc_url`         | string | none        | Audit service URL (required for `grpc`/`wal`)    |
+| `wal_path`         | path   | none        | Local WAL directory (required for `wal` sink)    |
+| `wal_max_bytes`    | u64    | `104857600` | Maximum WAL size in bytes (100 MiB)              |
+| `signing_key_path` | path   | none        | ECDSA private key file path                      |
+| `signing_key_env`  | string | none        | Env var containing ECDSA private key (PEM)       |
 
 Validation:
 
