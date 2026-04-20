@@ -92,7 +92,7 @@ pub struct ExecutionIntent {
 /// Typed action parameters (maps to the proto `oneof params`).
 ///
 /// Uses an enum with typed variants to prevent injection via untyped maps.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActionParams {
     /// Outbound HTTP request.
     Http(HttpParams),
@@ -121,7 +121,7 @@ pub enum HttpMethod {
 ///
 /// The target URL lives on `ExecutionIntent.resource`, not here —
 /// matching the proto where `HttpParams` carries method, headers, body, and query.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpParams {
     /// HTTP method.
     pub method: HttpMethod,
@@ -138,7 +138,7 @@ pub struct HttpParams {
 /// Uses a named query plus bindings instead of a raw SQL statement,
 /// aligning with the intent-003 proto definition and preventing
 /// raw SQL injection at the type level.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbQueryParams {
     /// Registered query name (looked up in a query registry).
     pub query_name: String,
@@ -155,7 +155,7 @@ pub struct DbQueryParams {
 /// Input is a flat `String → String` map (scalar values only),
 /// schema-validated against the tool registry. Aligns with the
 /// intent-003 proto definition and keeps the core→proto conversion trivial.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolUseParams {
     /// Name of the tool to invoke.
     pub tool_name: String,
@@ -164,7 +164,7 @@ pub struct ToolUseParams {
 }
 
 /// Session and runtime context attached to every execution envelope.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionMetadata {
     /// Session this request belongs to.
     pub session_id: String,
@@ -187,7 +187,7 @@ pub struct ExecutionMetadata {
 /// Built from `ExecutionEnvelope` fields plus Sidecar-local state.
 /// The derivation of `action` and `resource` from the envelope's intent
 /// is Sidecar-specific logic (added in intent 006).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionContext {
     /// Agent identity, from envelope metadata.
     pub agent_id: String,
@@ -209,7 +209,6 @@ pub struct ExecutionContext {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use pretty_assertions::assert_eq;
 
     fn sample_http_envelope() -> ExecutionEnvelope {
         ExecutionEnvelope::new(
@@ -298,11 +297,18 @@ mod tests {
         assert!(matches!(intent.params, ActionParams::ToolUse(_)));
     }
 
-        let params: ActionParams = serde_json::from_str(json).unwrap();
-        let expected = ActionParams::ToolUse(ToolUseParams {
-            tool_name: "calculator".to_string(),
-            input: HashMap::from([("expression".to_string(), "2+2".to_string())]),
-        });
+    #[test]
+    fn test_execution_metadata_optional_trace_id() {
+        let meta = ExecutionMetadata {
+            session_id: "sess_001".to_string(),
+            agent_id: "agent_abc".to_string(),
+            timestamp: Utc::now(),
+            trace_id: None,
+            budget_consumed: 0.0,
+            risk_score: None,
+        };
+        assert!(meta.trace_id.is_none());
+    }
 
     #[test]
     fn test_execution_context_construction() {

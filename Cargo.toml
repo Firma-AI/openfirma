@@ -1,10 +1,10 @@
 [workspace]
 members = [
-    "crates/firma-authority",
     "crates/firma-core",
     "crates/firma-grpc-interceptor-proto",
     "crates/firma-proto",
     "crates/firma-sidecar",
+    "crates/firma-authority",
 ]
 resolver = "3"
 
