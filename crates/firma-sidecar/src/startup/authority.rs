@@ -11,14 +11,13 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::authority_client::policy_bundle::StubBundleParser;
 use crate::authority_client::{self, AuthorityClientHandle, AuthorityDeps};
 use crate::config;
 use crate::startup::pipeline::PipelineRuntime;
 
 /// Spawn the Authority stream clients when `policy.authority_url` is
-/// set. Uses the shared policy snapshot, revocation store, and
-/// readiness flag owned by the [`PipelineRuntime`].
+/// set. Uses the shared bundle loader, revocation store, and readiness
+/// flag owned by the [`PipelineRuntime`].
 ///
 /// # Errors
 ///
@@ -38,19 +37,14 @@ pub fn spawn_authority_client(
         authority_url,
         Duration::from_secs(config.authority.connect_timeout_secs),
     )?;
-    tracing::warn!(
-        "Authority stream clients wired with StubBundleParser — all policy evaluations will \
-         ALLOW until the Cedar bundle loader (task 013) replaces it"
-    );
 
     let handle = authority_client::spawn_authority_client(AuthorityDeps {
         channel,
-        swappable_policy: Arc::clone(&runtime.swappable_policy),
+        bundle_loader: Arc::clone(&runtime.bundle_loader),
         revocation_store: Arc::clone(&runtime.revocation_store),
         readiness: Arc::clone(&runtime.readiness),
         cancel,
         config: config.authority.clone(),
-        bundle_parser: Arc::new(StubBundleParser),
     });
     Ok(Some(handle))
 }

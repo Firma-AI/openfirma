@@ -28,5 +28,6 @@ pub(crate) mod capability_validation;
 pub(crate) mod constraint_enforcement;
 pub(crate) mod decision;
 pub(crate) mod error;
+pub(crate) mod policy;
 pub(crate) mod registry;
 pub(crate) mod revocation;

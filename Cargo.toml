@@ -29,6 +29,7 @@ unsafe_code = "deny"
 anyhow = "1"
 arc-swap = "1"
 async-trait = "0.1"
+cedar-policy = "4.9"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", default-features = false }
 criterion = { version = "0.8", default-features = false, features = [
