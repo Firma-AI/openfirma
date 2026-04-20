@@ -15,16 +15,16 @@
 mod audit;
 mod connector;
 mod enforcement;
+mod revocation;
 
 pub use self::audit::{AuditConfig, AuditSink};
 pub use self::connector::ConnectorConfig;
 
-#[cfg(test)]
-pub use self::connector::HostConnectorConfig;
 pub use self::enforcement::{EnforcementConfig, MappingRulesFile};
 
 #[cfg(test)]
 pub use self::enforcement::MappingRuleConfig;
+pub use self::revocation::RevocationConfig;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -70,6 +70,9 @@ pub struct SidecarConfig {
     /// validation, constraint enforcement).
     #[serde(flatten)]
     pub enforcement: EnforcementConfig,
+    /// Revocation cache settings (bloom filter + LRU sizing).
+    #[serde(default)]
+    pub revocation: RevocationConfig,
     /// Audit event emitter settings.
     #[serde(default)]
     pub audit: AuditConfig,
@@ -98,6 +101,7 @@ impl SidecarConfig {
             .validate()
             .map_err(|e| format!("connector: {e}"))?;
         self.enforcement.validate()?;
+        self.revocation.validate()?;
         self.audit.validate().map_err(|e| format!("audit: {e}"))?;
         Ok(())
     }
@@ -608,6 +612,11 @@ clock_skew_tolerance_seconds = 5
 [constraint_enforcement]
 bundle_ttl_seconds = 60
 
+[revocation]
+capacity = 500000
+fpr = 0.001
+lru_capacity = 50000
+
 [audit]
 sink = "wal"
 grpc_url = "https://audit.example.com"
@@ -652,6 +661,9 @@ signing_key_path = "/etc/firma/audit.pem"
             config.enforcement.constraint_enforcement.bundle_ttl_seconds,
             60
         );
+        assert_eq!(config.revocation.capacity, 500_000);
+        assert!((config.revocation.fpr - 0.001).abs() < f64::EPSILON);
+        assert_eq!(config.revocation.lru_capacity, 50_000);
         assert_eq!(config.audit.sink, audit::AuditSink::Wal);
         assert_eq!(
             config.audit.grpc_url.as_deref(),

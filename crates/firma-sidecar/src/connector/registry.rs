@@ -30,10 +30,6 @@ pub struct ConnectorRegistry {
     default: Arc<dyn Connector>,
 }
 
-#[expect(
-    dead_code,
-    reason = "public API consumed by main.rs and RequestHandler once task 005 wiring completes"
-)]
 impl ConnectorRegistry {
     /// Creates a new registry with the given default connector and
     /// no host overrides.
@@ -73,6 +69,7 @@ impl ConnectorRegistry {
 
     /// Returns `true` when `host` has an override registered.
     #[must_use]
+    #[cfg(test)]
     pub fn has_override(&self, host: &str) -> bool {
         self.hosts.contains_key(host)
     }

@@ -4,9 +4,10 @@
 //! enforcement stages, and the credential injector, and wraps them in
 //! an [`EnforcementPipeline`](crate::pipeline::EnforcementPipeline).
 //!
-//! Authority-backed token verification, revocation, and Cedar policy
-//! evaluation are stubbed until the corresponding integration tasks
-//! land (task 007+ / task 005 Cedar bundle loading).
+//! Authority-backed token verification and Cedar policy evaluation are
+//! stubbed until the corresponding integration tasks land (task 007+).
+//! The revocation cache is real (task 006) but stays empty until the
+//! `WatchRevocations` writer is wired up in task 007.
 
 use std::sync::Arc;
 
@@ -57,14 +58,19 @@ pub fn build_pipeline(
 
     let normalizer = pipeline::IntentNormalizer::new(table);
 
-    // Capability map and token verifier/revocation store are populated
-    // from the Authority at pre-flight; for now use empty defaults so
-    // the binary starts. Authority integration (task 007+) will
-    // populate these.
+    // Capability map and token verifier are populated from the Authority
+    // at pre-flight; for now use empty defaults so the binary starts.
+    // Authority integration (task 007+) will populate these.
+    let revocation_store =
+        crate::enforcement::revocation::BloomLruRevocationStore::new(config.revocation.into());
+    tracing::debug!(
+        initial_metrics = ?revocation_store.metrics(),
+        "revocation cache initialized"
+    );
     let capability_validator = pipeline::CapabilityValidator::new(
         pipeline::CapabilityMap::new(vec![]),
         Box::new(StubTokenVerifier),
-        Box::new(StubRevocationStore),
+        Box::new(revocation_store),
         std::time::Duration::from_secs(
             config
                 .enforcement
@@ -102,20 +108,6 @@ impl firma_core::TokenVerifier for StubTokenVerifier {
         Err(firma_core::TokenError::SignatureInvalid {
             reason: "stub verifier: no Authority configured".to_string(),
         })
-    }
-}
-
-/// Stub revocation store that reports nothing revoked. Replaced once
-/// Authority integration is wired in.
-struct StubRevocationStore;
-
-impl firma_core::RevocationStore for StubRevocationStore {
-    fn is_revoked(&self, _token_id: &str) -> Result<bool, firma_core::TokenError> {
-        Ok(false)
-    }
-
-    fn add_revocation(&self, _token_id: &str) -> Result<(), firma_core::TokenError> {
-        Ok(())
     }
 }
 
