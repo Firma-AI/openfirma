@@ -83,6 +83,8 @@ async fn main() {
 }
 
 async fn run_server(config: config::AuthorityConfig) {
+    tracing::warn!("NOT FOR PRODUCTION USE: This is the Mini Authority (Firma OSS v1) intended for local development and testing only.");
+
     tracing::info!(listen_addr = %config.listen_addr, "firma-authority starting");
 
     // FR-9: Load Ed25519 signing key
@@ -159,10 +161,14 @@ async fn run_server(config: config::AuthorityConfig) {
 
     tracing::info!(%addr, "gRPC server listening");
 
-    // FR-10: Health check via gRPC reflection / tonic-health could be added here.
-    // For V1, the gRPC server itself serves as the health indicator.
+    // FR-10: Health check via gRPC reflection / tonic-health.
+    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+    health_reporter
+        .set_service_status("", tonic_health::ServingStatus::Serving)
+        .await;
 
     if let Err(e) = Server::builder()
+        .add_service(health_service)
         .add_service(AuthorityServiceServer::new(authority_service))
         .serve_with_shutdown(addr, shutdown_signal())
         .await
