@@ -13,7 +13,8 @@ loom-tests = []
 [dependencies]
 firma-core = { workspace = true }
 firma-proto = { workspace = true }
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["sync", "time"] }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde = { workspace = true }
