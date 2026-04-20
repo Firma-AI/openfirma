@@ -7,11 +7,14 @@ description = "HTTP proxy sidecar with enforcement pipeline for Firma OSS"
 license.workspace = true
 repository.workspace = true
 
+[features]
+loom-tests = []
+
 [dependencies]
 cedar-policy = { workspace = true }
 firma-core = { workspace = true }
 firma-proto = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde = { workspace = true }
@@ -22,6 +25,8 @@ toml = { workspace = true }
 
 [dev-dependencies]
 pasetors = { workspace = true }
+loom = "0.7"
+tokio = { workspace = true, features = ["test-util", "time"] }
 
 [lints]
 workspace = true

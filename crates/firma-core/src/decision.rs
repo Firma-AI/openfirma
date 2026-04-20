@@ -48,6 +48,12 @@ pub enum DenyReason {
     /// Policy bundle TTL exceeded, no fresh bundle available.
     #[error("policy bundle stale")]
     PolicyBundleStale,
+    /// Fail-closed safety boundary triggered due to missing/invalid enforcement prerequisites.
+    #[error("fail closed")]
+    FailClosed,
+    /// Enforcement evaluation exceeded configured timeout budget.
+    #[error("enforcement timeout")]
+    EnforcementTimeout,
     /// Sidecar failed to inject credentials for Stage 3.
     #[error("credential injection failed")]
     CredentialInjectionFailed,
@@ -109,6 +115,8 @@ mod tests {
                 DenyReason::MalformedRequest => r#""MalformedRequest""#,
                 DenyReason::AuthorityUnavailable => r#""AuthorityUnavailable""#,
                 DenyReason::PolicyBundleStale => r#""PolicyBundleStale""#,
+                DenyReason::FailClosed => r#""FailClosed""#,
+                DenyReason::EnforcementTimeout => r#""EnforcementTimeout""#,
                 DenyReason::CredentialInjectionFailed => r#""CredentialInjectionFailed""#,
                 DenyReason::ConnectorTimeout => r#""ConnectorTimeout""#,
                 DenyReason::UnclassifiedIntent => r#""UnclassifiedIntent""#,
