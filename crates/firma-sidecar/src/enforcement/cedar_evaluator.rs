@@ -19,7 +19,9 @@
 use std::fmt;
 use std::time::Instant;
 
-use cedar_policy::{Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request};
+use cedar_policy::{
+    Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request, Schema,
+};
 use firma_core::agent::AgentId;
 use firma_core::policy::PolicyBundle;
 
@@ -76,6 +78,7 @@ impl fmt::Display for FirmaEntityUid {
 /// and evaluates Cedar policies schema-lessly.
 pub struct CedarPolicyEvaluator {
     policy_set: PolicySet,
+    schema: Option<Schema>,
     version: String,
     received_at: Instant,
     ttl_secs: u64,
@@ -105,8 +108,19 @@ impl CedarPolicyEvaluator {
 
         let ttl_secs = u64::try_from(bundle.ttl_seconds.max(0)).unwrap_or(0u64);
 
+        let schema = if bundle.entity_schema.is_empty() {
+            None
+        } else {
+            let schema_src = std::str::from_utf8(&bundle.entity_schema)
+                .map_err(|e| format!("schema bytes are not valid UTF-8: {e}"))?;
+            let (schema, _warnings) = Schema::from_cedarschema_str(schema_src)
+                .map_err(|e| format!("failed to parse Cedar schema from bundle: {e}"))?;
+            Some(schema)
+        };
+
         Ok(Self {
             policy_set,
+            schema,
             version: bundle.version.clone(),
             received_at: Instant::now(),
             ttl_secs,
@@ -141,18 +155,18 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
         let action_uid = FirmaEntityUid::Action(action.to_string()).to_cedar()?;
         let resource_uid = FirmaEntityUid::Resource(resource.to_string()).to_cedar()?;
 
-        // Build Cedar Context from the JSON object produced by build_context().
-        // Schema is None — no context attribute validation.
-        let cedar_context = Context::from_json_value(context.clone(), None)
+        // Context::from_json_value takes Option<(&Schema, &EntityUid)> — the action
+        // UID is used to look up the declared context shape for that action.
+        let schema_with_action = self.schema.as_ref().map(|s| (s, &action_uid));
+        let cedar_context = Context::from_json_value(context.clone(), schema_with_action)
             .map_err(|e| format!("failed to build Cedar context: {e}"))?;
 
-        // Schema is None — principal/action/resource types are not validated.
         let request = Request::new(
             Some(principal_uid),
             Some(action_uid),
             Some(resource_uid),
             cedar_context,
-            None,
+            self.schema.as_ref(),
         )
         .map_err(|e| format!("failed to build Cedar request: {e}"))?;
 
@@ -178,6 +192,27 @@ mod tests {
     use firma_core::policy::PolicyBundle;
     use serde_json::json;
 
+    /// The real Firma schema, same file loaded by the Authority at startup.
+    const FIRMA_SCHEMA: &str = include_str!("../../../firma-authority/policies/schema.cedarschema");
+
+    fn schema_bundle(policy_src: &[u8]) -> PolicyBundle {
+        PolicyBundle::new(
+            "schema-v1".to_string(),
+            policy_src.to_vec(),
+            FIRMA_SCHEMA.as_bytes().to_vec(),
+            30,
+        )
+    }
+
+    fn full_context() -> serde_json::Value {
+        json!({
+            "session_id": "sess_001",
+            "timestamp_ms": 1_700_000_000_000i64,
+            "params": "{}",
+            "risk_score": 0i64,
+        })
+    }
+
     fn permit_all_bundle() -> PolicyBundle {
         PolicyBundle::new(
             "test-v1".to_string(),
@@ -202,11 +237,10 @@ mod tests {
 
     fn test_context() -> serde_json::Value {
         json!({
-            "action_class": "llm.inference",
-            "resource": "api.openai.com/v1/chat/completions",
-            "agent_id": "agent_test",
             "session_id": "sess_001",
-            "timestamp": "2025-01-01T00:00:00Z"
+            "timestamp_ms": 1_700_000_000_000i64,
+            "params": "{}",
+            "risk_score": 0i64,
         })
     }
 
@@ -298,12 +332,12 @@ mod tests {
 
     #[test]
     fn context_attributes_accessible_in_policy() {
-        // Policy that references context.action_class — verifies context is wired through.
-        let src = br#"permit(principal, action, resource) when { context.action_class == "llm.inference" };"#;
+        // Policy referencing context.session_id — verifies context is wired through.
+        let src =
+            br#"permit(principal, action, resource) when { context.session_id == "sess_001" };"#;
         let bundle = PolicyBundle::new("ctx-v1".to_string(), src.to_vec(), vec![], 30);
         let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
 
-        // Matching action_class — should allow.
         let allow = evaluator
             .evaluate(
                 &agent("agent_test"),
@@ -314,22 +348,144 @@ mod tests {
             .unwrap();
         assert!(allow);
 
-        // Different action_class in context — should deny.
         let deny_context = json!({
-            "action_class": "file.delete",
-            "resource": "api.openai.com",
-            "agent_id": "agent_test",
-            "session_id": "sess_001",
-            "timestamp": "2025-01-01T00:00:00Z"
+            "session_id": "different_session",
+            "timestamp_ms": 1_700_000_000_000i64,
+            "params": "{}",
+            "risk_score": 0i64,
         });
         let deny = evaluator
             .evaluate(
                 &agent("agent_test"),
-                "file.delete",
+                "llm.inference",
                 "api.openai.com",
                 &deny_context,
             )
             .unwrap();
         assert!(!deny);
+    }
+
+    // ── Schema validation tests ───────────────────────────────────────────────
+
+    #[test]
+    fn schema_parses_from_bundle() {
+        let bundle = schema_bundle(b"permit(principal, action, resource);");
+        let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
+        assert!(
+            evaluator.schema.is_some(),
+            "schema must be parsed from bundle"
+        );
+    }
+
+    #[test]
+    fn schema_permit_all_allows_known_action() {
+        let bundle = schema_bundle(b"permit(principal, action, resource);");
+        let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
+        let result = evaluator
+            .evaluate(
+                &agent("agent_test"),
+                "llm.inference",
+                "api.openai.com",
+                &full_context(),
+            )
+            .unwrap();
+        assert!(result);
+    }
+
+    #[test]
+    fn schema_rejects_unknown_action() {
+        // "unknown.action" is not declared in the schema — Request::new should fail.
+        let bundle = schema_bundle(b"permit(principal, action, resource);");
+        let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
+        let result = evaluator.evaluate(
+            &agent("agent_test"),
+            "unknown.action",
+            "api.openai.com",
+            &full_context(),
+        );
+        assert!(
+            result.is_err(),
+            "unknown action must fail schema validation"
+        );
+    }
+
+    #[test]
+    fn schema_rejects_missing_context_field() {
+        // Context missing required fields — Context::from_json_value should fail.
+        let bundle = schema_bundle(b"permit(principal, action, resource);");
+        let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
+        let incomplete_context = json!({
+            "session_id": "sess_001"
+            // missing: timestamp_ms, params, risk_score
+        });
+        let result = evaluator.evaluate(
+            &agent("agent_test"),
+            "llm.inference",
+            "api.openai.com",
+            &incomplete_context,
+        );
+        assert!(
+            result.is_err(),
+            "context missing required fields must fail schema validation"
+        );
+    }
+
+    #[test]
+    fn schema_context_attribute_used_in_policy() {
+        // Policy referencing context.session_id — verifies context wiring with schema.
+        let src =
+            br#"permit(principal, action, resource) when { context.session_id == "sess_001" };"#;
+        let bundle = schema_bundle(src);
+        let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
+
+        let allow = evaluator
+            .evaluate(
+                &agent("agent_test"),
+                "llm.inference",
+                "api.openai.com",
+                &full_context(),
+            )
+            .unwrap();
+        assert!(allow);
+    }
+
+    #[test]
+    fn schema_all_15_actions_accepted() {
+        let actions = [
+            "http.get",
+            "http.post",
+            "http.put",
+            "http.delete",
+            "http.patch",
+            "network.connect",
+            "db.query",
+            "db.mutate",
+            "file.read",
+            "file.write",
+            "file.delete",
+            "code.execute",
+            "system.execute",
+            "messaging.send",
+            "llm.inference",
+        ];
+        let bundle = schema_bundle(b"permit(principal, action, resource);");
+        let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
+
+        for action in actions {
+            let result = evaluator.evaluate(
+                &agent("agent_test"),
+                action,
+                "some.resource",
+                &full_context(),
+            );
+            assert!(
+                result.is_ok(),
+                "action '{action}' must be accepted by schema"
+            );
+            assert!(
+                result.unwrap(),
+                "action '{action}' must be allowed by permit-all"
+            );
+        }
     }
 }
