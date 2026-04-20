@@ -18,6 +18,7 @@
 
 use firma_core::envelope::{ExecutionEnvelope, ExecutionMetadata};
 use firma_core::session::SessionId;
+use std::time::Duration;
 
 // Re-export public API for pipeline callers
 pub use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
@@ -50,6 +51,7 @@ pub struct EnforcementPipeline {
     normalizer: IntentNormalizer,
     stage1: CapabilityValidator,
     stage2: ConstraintEnforcer,
+    stage2_timeout: Option<Duration>,
 }
 
 impl EnforcementPipeline {
@@ -65,6 +67,26 @@ impl EnforcementPipeline {
             normalizer,
             stage1,
             stage2,
+            stage2_timeout: None,
+        }
+    }
+
+    /// Construct the pipeline with a bounded Stage 2 evaluation timeout.
+    ///
+    /// Any timeout expires to DENY (`EnforcementTimeout`) to preserve
+    /// fail-closed behavior under load.
+    #[must_use]
+    pub fn with_stage2_timeout(
+        normalizer: IntentNormalizer,
+        stage1: CapabilityValidator,
+        stage2: ConstraintEnforcer,
+        stage2_timeout: Duration,
+    ) -> Self {
+        Self {
+            normalizer,
+            stage1,
+            stage2,
+            stage2_timeout: Some(stage2_timeout),
         }
     }
 
@@ -99,6 +121,61 @@ impl EnforcementPipeline {
         }
 
         // All stages passed — assemble the fully populated envelope.
+        let envelope = ExecutionEnvelope {
+            intent: normalized.intent,
+            capability: capability.raw_token,
+            metadata: ExecutionMetadata {
+                session_id,
+                agent_id: capability.claims.agent_id.clone(),
+                timestamp: normalized.timestamp,
+                trace_id: None,
+                budget_consumed: 0.0,
+                risk_score: None,
+            },
+            provenance: None,
+        };
+
+        EnforcementDecision::Allow {
+            claims: capability.claims,
+            envelope: Box::new(envelope),
+        }
+    }
+
+    /// Async, timeout-aware enforcement entrypoint for load-sensitive callers.
+    ///
+    /// Concurrency invariants:
+    /// - The pipeline is read-only per-request; shared configuration/state is
+    ///   immutable after construction.
+    /// - Each request builds a fresh local context and decision object.
+    /// - Any timeout or policy-eval error fails closed as DENY.
+    pub async fn enforce_async(
+        &self,
+        request: &RawRequest,
+        session_id: SessionId,
+    ) -> EnforcementDecision {
+        let normalized = match self.normalizer.normalize(request) {
+            Ok(env) => env,
+            Err(decision) => return decision,
+        };
+
+        let capability = match self.stage1.enforce(&normalized, session_id.clone()) {
+            Ok(cap) => cap,
+            Err(deny) => return deny,
+        };
+
+        let stage2_result = match self.stage2_timeout {
+            Some(timeout) => {
+                self.stage2
+                    .evaluate_with_timeout(&normalized, &capability.claims, timeout)
+                    .await
+            }
+            None => self.stage2.evaluate(&normalized, &capability.claims),
+        };
+
+        if let Err(deny) = stage2_result {
+            return deny;
+        }
+
         let envelope = ExecutionEnvelope {
             intent: normalized.intent,
             capability: capability.raw_token,

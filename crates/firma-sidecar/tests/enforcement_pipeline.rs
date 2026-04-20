@@ -1,7 +1,7 @@
 //! Roundtrip integration tests.
 //!
 //! Authority signs a real PASETO v4 token → Sidecar Stage 1 verifies the Ed25519
-//! signature → Stage 2 CedarPolicyEvaluator evaluates the policy → Assert Allow.
+//! signature → Stage 2 `CedarPolicyEvaluator` evaluates the policy → Assert Allow.
 //!
 //! These tests exercise the full cryptographic and policy evaluation path without
 //! any mocking of the token layer.
