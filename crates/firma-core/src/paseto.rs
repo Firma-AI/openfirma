@@ -1,4 +1,6 @@
-use super::{CapabilityClaims, TokenError, TokenSigner, TokenVerifier};
+use crate::error::TokenError;
+use crate::token::CapabilityClaims;
+use crate::traits::{TokenSigner, TokenVerifier};
 
 use chrono::{DateTime, Utc};
 use pasetors::claims::Claims;
@@ -21,7 +23,7 @@ impl PasetoV4Signer {
     /// # Errors
     ///
     /// Returns `TokenError::Malformed` if the key bytes are invalid or wrong length.
-    pub fn try_new(secret_key_bytes: &[u8]) -> Result<Self, TokenError> {
+    pub fn new(secret_key_bytes: &[u8]) -> Result<Self, TokenError> {
         let secret_key = AsymmetricSecretKey::<V4>::from(secret_key_bytes).map_err(|e| {
             TokenError::Malformed {
                 reason: format!("invalid private key: {e:?}"),
@@ -50,47 +52,25 @@ impl TokenSigner for PasetoV4Signer {
 /// PASETO v4.public token verifier using Ed25519.
 ///
 /// Implements [`TokenVerifier`] by verifying the Ed25519 signature,
-/// checking expiration with a configurable clock skew leeway, and
-/// deserializing claims from the token payload.
-///
-/// The leeway absorbs NTP drift and scheduling jitter between the
-/// Authority (issuer) and the Sidecar (verifier).
+/// checking expiration, and deserializing claims from the token payload.
 #[derive(Debug)]
 pub struct PasetoV4Verifier {
     public_key: AsymmetricPublicKey<V4>,
-    /// Leeway added to the token expiry before comparing with the current
-    /// time. A token is rejected only when `expiry + leeway <= now`.
-    leeway: chrono::Duration,
 }
 
 impl PasetoV4Verifier {
     /// Construct from raw Ed25519 public key bytes (32 bytes).
     ///
-    /// Uses a default clock skew leeway of 10 seconds.
-    ///
     /// # Errors
     ///
     /// Returns `TokenError::Malformed` if the key bytes are invalid or wrong length.
-    pub fn try_new(public_key_bytes: &[u8]) -> Result<Self, TokenError> {
+    pub fn new(public_key_bytes: &[u8]) -> Result<Self, TokenError> {
         let public_key = AsymmetricPublicKey::<V4>::from(public_key_bytes).map_err(|e| {
             TokenError::Malformed {
                 reason: format!("invalid public key: {e:?}"),
             }
         })?;
-        Ok(Self {
-            public_key,
-            leeway: chrono::Duration::seconds(10),
-        })
-    }
-
-    /// Override the leeway applied during expiry validation.
-    ///
-    /// By default the verifier allows 10 seconds of leeway. Use this method
-    /// to tighten or loosen that window for specific deployment contexts.
-    #[must_use]
-    pub fn with_leeway(mut self, leeway: chrono::Duration) -> Self {
-        self.leeway = leeway;
-        self
+        Ok(Self { public_key })
     }
 }
 
@@ -118,10 +98,8 @@ impl TokenVerifier for PasetoV4Verifier {
         // 4. Extract all claims
         let capability_claims = extract_capability_claims(&claims)?;
 
-        // 5. Check expiration with clock skew leeway.
-        // A token is denied only when expiry + leeway <= now, so a token
-        // that expired up to `clock_skew` ago is still accepted.
-        if capability_claims.expiry + self.leeway <= Utc::now() {
+        // 5. Check expiration
+        if capability_claims.expiry <= Utc::now() {
             return Err(TokenError::Expired {
                 token_id: capability_claims.token_id,
             });
@@ -269,26 +247,26 @@ mod tests {
     // -- Story 001: PasetoV4Signer --
 
     #[test]
-    fn sign_produces_v4_public_token() {
+    fn test_sign_produces_v4_public_token() {
         let (sk, _pk) = generate_keypair();
-        let signer = PasetoV4Signer::try_new(&sk).unwrap();
+        let signer = PasetoV4Signer::new(&sk).unwrap();
         let claims = sample_claims(600);
         let token = signer.sign(&claims).unwrap();
         assert!(token.starts_with("v4.public."));
     }
 
     #[test]
-    fn signer_as_dyn_token_signer() {
+    fn test_signer_as_dyn_token_signer() {
         let (sk, _pk) = generate_keypair();
-        let signer = PasetoV4Signer::try_new(&sk).unwrap();
+        let signer: Box<dyn TokenSigner> = Box::new(PasetoV4Signer::new(&sk).unwrap());
         let claims = sample_claims(600);
         let token = signer.sign(&claims).unwrap();
         assert!(token.starts_with("v4.public."));
     }
 
     #[test]
-    fn invalid_secret_key_bytes() {
-        let result = PasetoV4Signer::try_new(&[0u8; 32]); // wrong size
+    fn test_invalid_secret_key_bytes() {
+        let result = PasetoV4Signer::new(&[0u8; 32]); // wrong size
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, TokenError::Malformed { .. }));
@@ -297,22 +275,22 @@ mod tests {
     // -- Story 002: PasetoV4Verifier --
 
     #[test]
-    fn verifier_as_dyn_token_verifier() {
+    fn test_verifier_as_dyn_token_verifier() {
         let (_sk, pk) = generate_keypair();
-        let _verifier: Box<dyn TokenVerifier> = Box::new(PasetoV4Verifier::try_new(&pk).unwrap());
+        let _verifier: Box<dyn TokenVerifier> = Box::new(PasetoV4Verifier::new(&pk).unwrap());
     }
 
     #[test]
-    fn invalid_public_key_bytes() {
-        let result = PasetoV4Verifier::try_new(&[0u8; 16]); // wrong size
+    fn test_invalid_public_key_bytes() {
+        let result = PasetoV4Verifier::new(&[0u8; 16]); // wrong size
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), TokenError::Malformed { .. }));
     }
 
     #[test]
-    fn verify_malformed_string() {
+    fn test_verify_malformed_string() {
         let (_sk, pk) = generate_keypair();
-        let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
+        let verifier = PasetoV4Verifier::new(&pk).unwrap();
         let result = verifier.verify("not-a-paseto-token");
         assert!(result.is_err());
         assert!(matches!(
@@ -322,9 +300,9 @@ mod tests {
     }
 
     #[test]
-    fn verify_empty_string() {
+    fn test_verify_empty_string() {
         let (_sk, pk) = generate_keypair();
-        let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
+        let verifier = PasetoV4Verifier::new(&pk).unwrap();
         let result = verifier.verify("");
         assert!(result.is_err());
         assert!(matches!(
@@ -336,26 +314,38 @@ mod tests {
     // -- Story 003: Round-trip and rejection tests --
 
     #[test]
-    fn round_trip_claims_match() {
+    fn test_round_trip_claims_match() {
         let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::try_new(&sk).unwrap();
-        let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
+        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let verifier = PasetoV4Verifier::new(&pk).unwrap();
 
         let original = sample_claims(600);
         let token = signer.sign(&original).unwrap();
         let recovered = verifier.verify(&token).unwrap();
 
-        assert_eq!(recovered, original);
+        assert_eq!(recovered.token_id, original.token_id);
+        assert_eq!(recovered.agent_id, original.agent_id);
+        assert_eq!(recovered.session_id, original.session_id);
+        assert_eq!(recovered.action_set, original.action_set);
+        assert_eq!(recovered.resource_scope, original.resource_scope);
+        assert_eq!(recovered.context_hash, original.context_hash);
+        // DateTime comparison: within 1 second tolerance (RFC 3339 round-trip may lose sub-second)
+        assert!(
+            (recovered.issued_at - original.issued_at)
+                .num_seconds()
+                .abs()
+                <= 1
+        );
+        assert!((recovered.expiry - original.expiry).num_seconds().abs() <= 1);
     }
 
     #[test]
-    fn expired_token_rejected() {
+    fn test_expired_token_rejected() {
         let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::try_new(&sk).unwrap();
-        let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
+        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let verifier = PasetoV4Verifier::new(&pk).unwrap();
 
-        // Expired 30s ago — well outside the 10s default leeway.
-        let claims = sample_claims(-30);
+        let claims = sample_claims(-1); // expired 1 second ago
         let token = signer.sign(&claims).unwrap();
         let result = verifier.verify(&token);
 
@@ -368,48 +358,10 @@ mod tests {
     }
 
     #[test]
-    fn token_within_leeway_accepted() {
+    fn test_tampered_token_rejected() {
         let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::try_new(&sk).unwrap();
-        let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
-
-        // Expired 5s ago — within the 10s default leeway.
-        let claims = sample_claims(-5);
-        let token = signer.sign(&claims).unwrap();
-        let result = verifier.verify(&token);
-
-        assert!(result.is_ok(), "token within leeway must be accepted");
-    }
-
-    #[test]
-    fn token_within_default_leeway_rejected_when_leeway_zeroed() {
-        let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::try_new(&sk).unwrap();
-        // Override leeway to zero — strict expiry enforcement.
-        let verifier = PasetoV4Verifier::try_new(&pk)
-            .unwrap()
-            .with_leeway(chrono::Duration::zero());
-
-        // Expired 5s ago — accepted by the default verifier but rejected here.
-        let claims = sample_claims(-5);
-        let token = signer.sign(&claims).unwrap();
-        let result = verifier.verify(&token);
-
-        assert!(
-            result.is_err(),
-            "token expired 5s ago must be rejected with zero leeway"
-        );
-        assert!(
-            matches!(result.unwrap_err(), TokenError::Expired { .. }),
-            "error must be Expired"
-        );
-    }
-
-    #[test]
-    fn tampered_token_rejected() {
-        let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::try_new(&sk).unwrap();
-        let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
+        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let verifier = PasetoV4Verifier::new(&pk).unwrap();
 
         let claims = sample_claims(600);
         let token = signer.sign(&claims).unwrap();
@@ -434,12 +386,12 @@ mod tests {
     }
 
     #[test]
-    fn wrong_public_key_rejected() {
+    fn test_wrong_public_key_rejected() {
         let (sk, _pk) = generate_keypair();
         let (_sk2, pk2) = generate_keypair(); // different key pair
 
-        let signer = PasetoV4Signer::try_new(&sk).unwrap();
-        let verifier = PasetoV4Verifier::try_new(&pk2).unwrap();
+        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let verifier = PasetoV4Verifier::new(&pk2).unwrap();
 
         let claims = sample_claims(600);
         let token = signer.sign(&claims).unwrap();
@@ -453,10 +405,10 @@ mod tests {
     }
 
     #[test]
-    fn future_token_accepted() {
+    fn test_future_token_accepted() {
         let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::try_new(&sk).unwrap();
-        let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
+        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let verifier = PasetoV4Verifier::new(&pk).unwrap();
 
         let claims = sample_claims(600); // 10 minutes in the future
         let token = signer.sign(&claims).unwrap();
@@ -465,10 +417,10 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_empty_action_set() {
+    fn test_round_trip_empty_action_set() {
         let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::try_new(&sk).unwrap();
-        let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
+        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let verifier = PasetoV4Verifier::new(&pk).unwrap();
 
         let mut claims = sample_claims(600);
         claims.action_set = vec![];
@@ -479,10 +431,10 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_unicode_agent_id() {
+    fn test_round_trip_unicode_agent_id() {
         let (sk, pk) = generate_keypair();
-        let signer = PasetoV4Signer::try_new(&sk).unwrap();
-        let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
+        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let verifier = PasetoV4Verifier::new(&pk).unwrap();
 
         let mut claims = sample_claims(600);
         claims.agent_id = "agent-\u{1F916}-bot".to_string(); // robot emoji
@@ -490,5 +442,56 @@ mod tests {
         let token = signer.sign(&claims).unwrap();
         let recovered = verifier.verify(&token).unwrap();
         assert_eq!(recovered.agent_id, "agent-\u{1F916}-bot");
+    }
+
+    #[test]
+    #[ignore] // NFR-1 targets apply to release builds; skip on debug CI runners
+    fn test_verify_performance() {
+        let (sk, pk) = generate_keypair();
+        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let verifier = PasetoV4Verifier::new(&pk).unwrap();
+
+        let claims = sample_claims(600);
+        let token = signer.sign(&claims).unwrap();
+
+        // Warm up
+        let _ = verifier.verify(&token).unwrap();
+
+        let start = std::time::Instant::now();
+        let iterations = 100;
+        for _ in 0..iterations {
+            let _ = verifier.verify(&token).unwrap();
+        }
+        let elapsed = start.elapsed();
+        let per_op = elapsed / iterations;
+
+        assert!(
+            per_op.as_micros() < 500,
+            "verify took {per_op:?} per op, expected < 500\u{00B5}s"
+        );
+    }
+
+    #[test]
+    #[ignore] // NFR-1 targets apply to release builds; skip on debug CI runners
+    fn test_sign_performance() {
+        let (sk, _pk) = generate_keypair();
+        let signer = PasetoV4Signer::new(&sk).unwrap();
+        let claims = sample_claims(600);
+
+        // Warm up
+        let _ = signer.sign(&claims).unwrap();
+
+        let start = std::time::Instant::now();
+        let iterations = 100;
+        for _ in 0..iterations {
+            let _ = signer.sign(&claims).unwrap();
+        }
+        let elapsed = start.elapsed();
+        let per_op = elapsed / iterations;
+
+        assert!(
+            per_op.as_micros() < 1000,
+            "sign took {per_op:?} per op, expected < 1ms"
+        );
     }
 }
