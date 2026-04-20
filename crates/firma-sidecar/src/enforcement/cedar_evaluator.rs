@@ -16,6 +16,7 @@
 //! | `action`    | `Firma::Action::"<action_class>"`    |
 //! | `resource`  | `Firma::Resource::"<resource_uri>"`  |
 
+use std::fmt;
 use std::time::Instant;
 
 use cedar_policy::{Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request};
@@ -23,6 +24,50 @@ use firma_core::agent::AgentId;
 use firma_core::policy::PolicyBundle;
 
 use super::constraint_enforcement::PolicyEvaluation;
+
+/// A typed Cedar entity UID in the `Firma` namespace.
+///
+/// Encodes the three roles used in policy evaluation — agent (principal),
+/// action, and resource — and produces the Cedar entity UID string via
+/// [`Display`]. Call [`FirmaEntityUid::to_cedar`] to parse into a Cedar
+/// [`EntityUid`] for request construction.
+///
+/// Conventions (must match Authority's `service.rs`):
+///
+/// | Variant   | Cedar format                          |
+/// |-----------|---------------------------------------|
+/// | `Agent`   | `Firma::Agent::"<id>"`                |
+/// | `Action`  | `Firma::Action::"<id>"`               |
+/// | `Resource`| `Firma::Resource::"<id>"`             |
+pub(crate) enum FirmaEntityUid {
+    Agent(String),
+    Action(String),
+    Resource(String),
+}
+
+impl FirmaEntityUid {
+    /// Parse into a Cedar [`EntityUid`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if the id contains characters that make the
+    /// Cedar entity UID string unparseable (e.g. unescaped quotes).
+    pub(crate) fn to_cedar(&self) -> Result<EntityUid, String> {
+        self.to_string()
+            .parse::<EntityUid>()
+            .map_err(|e| format!("invalid entity UID '{self}': {e}"))
+    }
+}
+
+impl fmt::Display for FirmaEntityUid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Agent(id) => write!(f, "Firma::Agent::\"{id}\""),
+            Self::Action(id) => write!(f, "Firma::Action::\"{id}\""),
+            Self::Resource(id) => write!(f, "Firma::Resource::\"{id}\""),
+        }
+    }
+}
 
 /// Concrete Cedar policy evaluator for Sidecar Stage 2.
 ///
@@ -67,27 +112,6 @@ impl CedarPolicyEvaluator {
             ttl_secs,
         })
     }
-
-    /// Build a Cedar `EntityUid` for the principal (agent).
-    fn agent_uid(agent_id: &str) -> Result<EntityUid, String> {
-        format!("Firma::Agent::\"{agent_id}\"")
-            .parse::<EntityUid>()
-            .map_err(|e| format!("invalid agent UID for '{agent_id}': {e}"))
-    }
-
-    /// Build a Cedar `EntityUid` for the action class.
-    fn action_uid(action_class: &str) -> Result<EntityUid, String> {
-        format!("Firma::Action::\"{action_class}\"")
-            .parse::<EntityUid>()
-            .map_err(|e| format!("invalid action UID for '{action_class}': {e}"))
-    }
-
-    /// Build a Cedar `EntityUid` for the resource.
-    fn resource_uid(resource: &str) -> Result<EntityUid, String> {
-        format!("Firma::Resource::\"{resource}\"")
-            .parse::<EntityUid>()
-            .map_err(|e| format!("invalid resource UID for '{resource}': {e}"))
-    }
 }
 
 impl PolicyEvaluation for CedarPolicyEvaluator {
@@ -97,9 +121,10 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
     /// `session_id`, `timestamp`) are passed as a Cedar `Context` built
     /// from the JSON object produced by `ConstraintEnforcer::build_context`.
     ///
-    /// Entity UIDs use the `Firma` namespace to match the Authority's issuance
-    /// evaluation. No schema validation is performed on the request — policies
-    /// that reference unknown attributes will receive Cedar's default deny.
+    /// Entity UIDs are constructed via [`FirmaEntityUid`] to match the
+    /// Authority's issuance evaluation. No schema validation is performed on
+    /// the request — policies that reference unknown attributes will receive
+    /// Cedar's default deny.
     ///
     /// # Errors
     ///
@@ -112,9 +137,9 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
         resource: &str,
         context: &serde_json::Value,
     ) -> Result<bool, String> {
-        let principal_uid = Self::agent_uid(principal.as_ref())?;
-        let action_uid = Self::action_uid(action)?;
-        let resource_uid = Self::resource_uid(resource)?;
+        let principal_uid = FirmaEntityUid::Agent(principal.as_ref().to_string()).to_cedar()?;
+        let action_uid = FirmaEntityUid::Action(action.to_string()).to_cedar()?;
+        let resource_uid = FirmaEntityUid::Resource(resource.to_string()).to_cedar()?;
 
         // Build Cedar Context from the JSON object produced by build_context().
         // Schema is None — no context attribute validation.

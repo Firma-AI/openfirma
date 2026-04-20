@@ -103,7 +103,7 @@ impl CedarPolicyStore {
         };
 
         // Notify all watchers — ignore error (no receivers is fine)
-        let _ = self.bundle_tx.send(new_bundle);
+        self.bundle_tx.send_replace(new_bundle);
 
         tracing::info!(version = %new_version, "cedar policies reloaded");
         Ok(())
@@ -121,7 +121,7 @@ impl CedarPolicyStore {
     }
 
     /// Get the current policy bundle for distribution to sidecars.
-    pub async fn bundle(&self) -> PolicyBundle {
+    pub fn bundle(&self) -> PolicyBundle {
         self.bundle_tx.borrow().clone()
     }
 
@@ -371,7 +371,7 @@ mod tests {
     async fn reload_detects_changes() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
-        let v1 = store.bundle().await.version.clone();
+        let v1 = store.bundle().version.clone();
 
         // Add a new policy file
         fs::write(
@@ -382,7 +382,7 @@ mod tests {
 
         let result = store.reload().await;
         assert!(result.is_ok());
-        let v2 = store.bundle().await.version;
+        let v2 = store.bundle().version;
         assert_ne!(v1, v2);
     }
 
@@ -390,7 +390,7 @@ mod tests {
     async fn watch_reloads_on_policy_change() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
-        let v1 = store.bundle().await.version.clone();
+        let v1 = store.bundle().version.clone();
 
         let watcher = store.watch().unwrap_or_else(|e| panic!("{e}"));
         let mut rx = watcher.subscribe();
@@ -408,7 +408,7 @@ mod tests {
             .unwrap_or_else(|_| panic!("timed out waiting for policy reload"))
             .unwrap_or_else(|e| panic!("{e}"));
 
-        assert_ne!(store.bundle().await.version, v1);
+        assert_ne!(store.bundle().version, v1);
     }
 
     #[tokio::test]
