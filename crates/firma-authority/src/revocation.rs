@@ -287,6 +287,7 @@ pub struct RevocationStoreWatcher {
 
 impl RevocationStoreWatcher {
     /// Subscribe to new revocation events as they are ingested from the file.
+    #[must_use] 
     pub fn subscribe(&self) -> broadcast::Receiver<RevocationEntry> {
         self.tx.subscribe()
     }

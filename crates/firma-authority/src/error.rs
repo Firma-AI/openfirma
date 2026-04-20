@@ -20,6 +20,9 @@ pub enum AuthorityError {
 
     #[error("file watch failed: {reason}")]
     WatchFailed { reason: String },
+
+    #[error("server failed: {reason}")]
+    Server { reason: String },
 }
 
 impl From<crate::config::ConfigError> for AuthorityError {
