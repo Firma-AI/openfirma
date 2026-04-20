@@ -1,4 +1,9 @@
 //! `WatchPolicyBundle` stream task.
+//!
+//! Owns one connection to the Authority, receives bundle pushes, hands
+//! them to the shared [`BundleLoader`] for parse + atomic swap, and
+//! flips readiness once the first valid bundle lands. Parse failures
+//! retain the previous snapshot (Component Reference §12).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,54 +15,20 @@ use tonic::transport::Channel;
 
 use crate::authority_client::backoff::ExponentialBackoff;
 use crate::authority_client::readiness::ReadinessFlag;
-use crate::authority_client::swappable_policy::SwappablePolicyEvaluation;
-use crate::enforcement::constraint_enforcement::PolicyEvaluation;
-
-/// Parses policy bundle bytes into a policy evaluator snapshot.
-pub trait BundleParser {
-    /// Parse a bundle into an evaluator.
-    ///
-    /// # Errors
-    ///
-    /// Returns a message suitable for logs when bundle data is invalid.
-    fn parse(
-        &self,
-        policies: &[u8],
-        entity_schema: &[u8],
-    ) -> Result<Box<dyn PolicyEvaluation + Send + Sync>, String>;
-}
-
-/// Temporary parser until Cedar bundle loading lands.
-#[derive(Debug, Default)]
-pub struct StubBundleParser;
-
-impl BundleParser for StubBundleParser {
-    fn parse(
-        &self,
-        policies: &[u8],
-        _entity_schema: &[u8],
-    ) -> Result<Box<dyn PolicyEvaluation + Send + Sync>, String> {
-        if policies.is_empty() {
-            return Err("policy bundle policies must not be empty".to_string());
-        }
-        Ok(Box::new(AllowAllPolicyEvaluation))
-    }
-}
+use crate::enforcement::policy::{BundleLoader, RawBundle};
 
 /// Server-streaming task for policy bundle updates.
 pub struct PolicyBundleTask {
     /// Shared Authority channel.
     pub channel: Channel,
-    /// Swappable evaluator read by Stage 2.
-    pub swappable: Arc<SwappablePolicyEvaluation>,
+    /// Loader that parses bundles and swaps the evaluator snapshot.
+    pub loader: Arc<BundleLoader>,
     /// Readiness writer.
     pub readiness: Arc<ReadinessFlag>,
     /// Reconnect backoff.
     pub backoff: ExponentialBackoff,
     /// Shutdown token.
     pub cancel: CancellationToken,
-    /// Bundle parser.
-    pub bundle_parser: Arc<dyn BundleParser + Send + Sync>,
 }
 
 impl PolicyBundleTask {
@@ -137,8 +108,7 @@ impl PolicyBundleTask {
             );
             return None;
         };
-        let ttl_seconds = u32::try_from(bundle.ttl_seconds).unwrap_or(0);
-        if ttl_seconds == 0 {
+        if bundle.ttl_seconds <= 0 {
             tracing::warn!(
                 stream = "policy_bundle",
                 version = %bundle.version,
@@ -146,33 +116,61 @@ impl PolicyBundleTask {
             );
             return None;
         }
-        let policies_bytes = bundle.policies.len();
-        let evaluator = match self
-            .bundle_parser
-            .parse(&bundle.policies, &bundle.entity_schema)
-        {
-            Ok(evaluator) => evaluator,
+        let policies_cedar = match String::from_utf8(bundle.policies) {
+            Ok(text) => text,
             Err(err) => {
                 tracing::warn!(
                     stream = "policy_bundle",
                     version = %bundle.version,
                     error = %err,
-                    "policy bundle parse failed"
+                    "policy bundle policies are not valid utf-8"
                 );
                 return None;
             }
         };
-        let version = bundle.version;
-        self.swappable
-            .swap(evaluator, ttl_seconds, Some(version.clone()));
+        let schema_json = if bundle.entity_schema.is_empty() {
+            None
+        } else {
+            match String::from_utf8(bundle.entity_schema) {
+                Ok(text) => Some(text),
+                Err(err) => {
+                    tracing::warn!(
+                        stream = "policy_bundle",
+                        version = %bundle.version,
+                        error = %err,
+                        "policy bundle schema is not valid utf-8"
+                    );
+                    return None;
+                }
+            }
+        };
+        let policies_bytes = policies_cedar.len();
+        let raw = RawBundle {
+            policies_cedar,
+            schema_json,
+            // Proto does not yet carry static entities; bundle with the
+            // empty store. Authority-pushed entities can be added once
+            // PolicyBundle gains the field.
+            entities_json: "[]".to_string(),
+            version: bundle.version.clone(),
+        };
+        if let Err(err) = self.loader.apply(raw) {
+            tracing::warn!(
+                stream = "policy_bundle",
+                version = %bundle.version,
+                error = %err,
+                "policy bundle parse failed"
+            );
+            return None;
+        }
         self.readiness.set_policy_bundle_ready(true);
         tracing::info!(
-            version,
-            ttl_seconds,
+            version = %bundle.version,
+            ttl_seconds = bundle.ttl_seconds,
             policies_bytes,
             "policy bundle swapped"
         );
-        Some(version)
+        Some(bundle.version)
     }
 }
 
@@ -180,28 +178,5 @@ async fn wait_or_cancel(delay: Duration, cancel: &CancellationToken) -> bool {
     tokio::select! {
         () = cancel.cancelled() => true,
         () = tokio::time::sleep(delay) => false,
-    }
-}
-
-#[derive(Debug)]
-struct AllowAllPolicyEvaluation;
-
-impl PolicyEvaluation for AllowAllPolicyEvaluation {
-    fn evaluate(
-        &self,
-        _principal: &str,
-        _action: &str,
-        _resource: &str,
-        _context: &serde_json::Value,
-    ) -> Result<bool, String> {
-        Ok(true)
-    }
-
-    fn is_fresh(&self) -> bool {
-        true
-    }
-
-    fn version(&self) -> Option<String> {
-        None
     }
 }

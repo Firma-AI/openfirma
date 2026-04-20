@@ -216,37 +216,31 @@ impl Default for InterceptorConfig {
 }
 
 /// Policy source settings.
-#[derive(Debug, Clone, Deserialize)]
+///
+/// The sidecar never loads bundles from disk — the Authority owns the
+/// disk source and pushes bundles over `WatchPolicyBundle` (Component
+/// Reference §4.6). The sidecar only needs the Authority endpoint plus
+/// freshness tuning; freshness lives under
+/// `[constraint_enforcement]` alongside Stage 2 settings.
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct PolicyConfig {
-    /// Directory containing `.cedar` policy files.
-    #[serde(default = "default_policy_dir")]
-    pub dir: PathBuf,
     /// Optional Authority gRPC URL. When set, the sidecar streams
-    /// policy bundles and revocations from the Authority.
+    /// policy bundles and revocations from the Authority. Without it
+    /// the sidecar boots in a standalone mode where Stage 2 fails
+    /// closed with `POLICY_BUNDLE_STALE` until some bundle is
+    /// installed.
     #[serde(default)]
     pub authority_url: Option<String>,
 }
 
 impl PolicyConfig {
     fn validate(&self) -> Result<(), String> {
-        if self.dir.as_os_str().is_empty() {
-            return Err("policy.dir must not be empty".into());
-        }
         if let Some(ref url) = self.authority_url {
             if url.trim().is_empty() {
                 return Err("policy.authority_url must not be empty when set".into());
             }
         }
         Ok(())
-    }
-}
-
-impl Default for PolicyConfig {
-    fn default() -> Self {
-        Self {
-            dir: default_policy_dir(),
-            authority_url: None,
-        }
     }
 }
 
@@ -388,10 +382,6 @@ fn default_listen_addr() -> SocketAddr {
 
 const fn default_drain_timeout() -> u64 {
     30
-}
-
-fn default_policy_dir() -> PathBuf {
-    PathBuf::from("./policies/")
 }
 
 fn default_ca_dir() -> PathBuf {
@@ -595,7 +585,6 @@ listen_addr = "127.0.0.1:9090"
 drain_timeout_secs = 15
 
 [policy]
-dir = "/etc/firma/policies"
 authority_url = "https://authority.example.com"
 
 [ca]
@@ -642,7 +631,6 @@ signing_key_path = "/etc/firma/audit.pem"
             "127.0.0.1:9090".parse().unwrap_or_else(|e| panic!("{e}"))
         );
         assert_eq!(config.interceptor.drain_timeout_secs, 15);
-        assert_eq!(config.policy.dir, PathBuf::from("/etc/firma/policies"));
         assert_eq!(
             config.policy.authority_url.as_deref(),
             Some("https://authority.example.com")

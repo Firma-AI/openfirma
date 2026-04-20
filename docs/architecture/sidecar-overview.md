@@ -75,7 +75,7 @@ graph TB
         sig[Signal handler task]
         pbtask[PolicyBundleTask<br/>WatchPolicyBundle]
         rvtask[RevocationTask<br/>WatchRevocations]
-        swap[SwappablePolicyEvaluation<br/>Arc-shared]
+        swap[CedarPolicyEvaluator<br/>+ BundleLoader<br/>Arc-shared]
         rev[BloomLruRevocationStore<br/>Arc-shared]
         ready[ReadinessFlag<br/>tokio::watch]
     end
@@ -117,10 +117,16 @@ Key wiring facts:
   `Channel` to the Authority but run independent stream loops with
   per-stream exponential backoff, so a failure on one stream does not
   stall the other.
-- `SwappablePolicyEvaluation` is a lock-free `ArcSwap` wrapper over the
-  current `PolicyEvaluation`. Stage 2 reads it through the trait; the
-  policy-bundle task swaps a new evaluator into it on every accepted
-  bundle and refreshes the TTL deadline used by `is_fresh()`.
+- `CedarPolicyEvaluator` is the Cedar-backed `PolicyEvaluation`
+  implementation. It wraps an `ArcSwapOption<BundleSnapshot>` holding
+  the parsed `PolicySet`, optional `Schema`, `Entities`, version, and
+  install instant. Stage 2 reads through the trait; the policy-bundle
+  task hands every push to a shared `BundleLoader`, which parses the
+  raw bundle text and atomically swaps in a new `BundleSnapshot`.
+  `is_fresh()` compares the snapshot's install instant to the
+  configured `bundle_ttl_seconds`. The evaluator boots empty — Stage 2
+  fails closed with `POLICY_BUNDLE_STALE` until the first accepted
+  bundle lands.
 - `BloomLruRevocationStore` is shared as `Arc<dyn RevocationStore>`
   between Stage 1 (reader) and the revocation task (writer).
 - `ReadinessFlag` fans out to the pipeline as a `tokio::watch::Receiver`
@@ -297,16 +303,21 @@ Authority push to first Stage 1 DENY < 1 s p99.
 2. **Bundle freshness** — is `PolicyEvaluation::is_fresh()` true?
 3. **Cedar evaluation** — build the context and call the policy engine.
 
-Stage 2 holds the evaluator as `Arc<dyn PolicyEvaluation>`. In the
-Authority-backed runtime the concrete pointer targets a
-`SwappablePolicyEvaluation`: an `ArcSwap` over the compiled evaluator
-plus an atomic TTL deadline. `evaluate()` reads through the current
-snapshot; `is_fresh()` reads the atomic deadline. The
-`PolicyBundleTask` (§5.6) updates both atomically when a new bundle
-arrives, so in-flight calls finish against the previous snapshot. When
-the deadline elapses without a refresh, `is_fresh()` flips to `false`
-and this stage denies with `PolicyBundleStale` — the fail-closed
-behavior required by the spec.
+Stage 2 holds the evaluator as `Arc<dyn PolicyEvaluation>`. The
+concrete pointer targets a `CedarPolicyEvaluator`
+(`enforcement::policy`): an `ArcSwapOption<BundleSnapshot>` containing
+the parsed Cedar `PolicySet`, optional `Schema`, `Entities`, version,
+and install `Instant`. `evaluate()` builds a `cedar_policy::Request`
+(`Agent::"<id>"`, `Action::"<class>"`, `Resource::"<name>"`) plus a
+`Context` from the envelope attributes and calls
+`Authorizer::is_authorized` against the snapshot — fully local, no
+external calls. `is_fresh()` compares `loaded_at.elapsed()` to the
+configured `bundle_ttl_seconds`. `BundleLoader::apply` (§5.6) parses
+every push and performs a single atomic `ArcSwap::store`, so
+in-flight calls finish against the previous snapshot. When the TTL
+elapses without a refresh, or before the first bundle has ever
+landed, `is_fresh()` is `false` and this stage denies with
+`PolicyBundleStale` — the fail-closed behavior required by the spec.
 
 Target: < 200 µs p95. Like Stage 1, this runs entirely in-process;
 the Authority is never on the hot path.
@@ -342,14 +353,16 @@ When `policy.authority_url` is set, `startup` spawns two long-lived
 tasks from `authority_client`:
 
 - **`PolicyBundleTask`** calls `WatchPolicyBundle` and, on each
-  `PolicyBundleUpdate`, parses the bytes into a fresh
-  `PolicyEvaluation` via the pluggable `BundleParser` trait and calls
-  `SwappablePolicyEvaluation::swap`, which updates the evaluator
-  snapshot, TTL deadline, and version in a single store. A failed
-  parse is logged and the previous bundle is retained. The first
-  accepted bundle flips `ReadinessFlag::policy_bundle_ready`. Cedar
-  parsing lands in task 013; until then the Stub parser accepts
-  non-empty byte payloads and installs an allow-all evaluator.
+  `PolicyBundleUpdate`, converts the proto payload into a `RawBundle`
+  (`policies_cedar` + optional `schema_json` + `entities_json`) and
+  hands it to the shared `BundleLoader`
+  (`enforcement::policy::loader`). The loader parses each part with
+  `cedar-policy`, constructs a fresh `BundleSnapshot`, and performs a
+  single atomic `ArcSwap::store` into the `CedarPolicyEvaluator`. Any
+  parse failure — `BundleError::Policy` / `Schema` / `Entities` — is
+  logged and the previous snapshot is retained, so a malformed push
+  never replaces a working bundle. The first accepted bundle flips
+  `ReadinessFlag::policy_bundle_ready`.
 
 - **`RevocationTask`** calls `WatchRevocations` and forwards each
   `RevocationEvent` to `RevocationStore::add_revocation` on the shared
@@ -477,14 +490,17 @@ crates/firma-sidecar/src/
 │   ├── constraint_enforcement.rs — Stage 2 + PolicyEvaluation trait.
 │   ├── decision.rs         — EnforcementDecision + stage enums.
 │   ├── error.rs            — fail-closed error → DENY mapping.
+│   ├── policy{.rs,/}       — CedarPolicyEvaluator + BundleSnapshot +
+│   │                          BundleLoader / RawBundle / BundleError.
 │   ├── registry.rs         — 15-class Action Class Registry v0.1.
 │   └── revocation{.rs,/}   — bloom filter + LRU revocation cache.
 ├── pipeline.rs             — EnforcementPipeline::enforce() + audit payload projection.
 ├── credential{.rs,/}       — CredentialInjector trait + Null / Basic / Vault providers.
 ├── connector{.rs,/}        — ConnectorRegistry + generic HTTP provider.
 ├── audit{.rs,/}            — AuditPayload, ExecutionEvent, EventBuilder, sinks.
-├── authority_client{.rs,/} — WatchPolicyBundle + WatchRevocations stream tasks,
-│                             SwappablePolicyEvaluation, ReadinessFlag, backoff.
+├── authority_client{.rs,/} — WatchPolicyBundle + WatchRevocations stream
+│                             tasks, ReadinessFlag, backoff. Bundle pushes
+│                             flow through enforcement::policy::BundleLoader.
 ├── health.rs               — liveness probe server.
 └── log.rs                  — tracing init.
 ```
