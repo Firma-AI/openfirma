@@ -1,5 +1,7 @@
-use firma_proto::firma::v1::IssueCapabilityRequest;
+use std::path::PathBuf;
+
 use firma_proto::firma::v1::authority_service_client::AuthorityServiceClient;
+use firma_proto::firma::v1::{IssueCapabilityRequest, WatchPolicyBundleRequest, WatchRevocationsRequest};
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 use tempfile::TempDir;
@@ -9,6 +11,8 @@ use firma_authority::{AuthorityConfig, Server};
 
 struct TestServer {
     addr: String,
+    policy_dir: PathBuf,
+    revocation_file: PathBuf,
     _temp_dir: TempDir,
     shutdown_tx: oneshot::Sender<()>,
 }
@@ -19,7 +23,6 @@ impl TestServer {
         let policy_dir = temp_dir.path().join("policies");
         std::fs::create_dir(&policy_dir).expect("failed to create policy dir");
 
-        // Add a permit-all policy
         std::fs::write(
             policy_dir.join("permit_all.cedar"),
             "permit(principal, action, resource);",
@@ -30,16 +33,13 @@ impl TestServer {
         std::fs::write(&revocation_file, "").expect("failed to create revocation file");
 
         let key_file = temp_dir.path().join("authority.key");
-
-        // Generate a real Ed25519 key for the test
         let kp = AsymmetricKeyPair::<V4>::generate().expect("failed to generate key");
         std::fs::write(&key_file, kp.secret.as_bytes()).expect("failed to write key");
 
-        // Bind to port 0 for random port assignment
         let config = AuthorityConfig {
             listen_addr: "127.0.0.1:0".to_string(),
-            policy_dir,
-            revocation_file,
+            policy_dir: policy_dir.clone(),
+            revocation_file: revocation_file.clone(),
             key_file,
             max_ttl_seconds: 3600,
             log_level: "info".to_string(),
@@ -63,6 +63,8 @@ impl TestServer {
 
         Self {
             addr: addr_str,
+            policy_dir,
+            revocation_file,
             _temp_dir: temp_dir,
             shutdown_tx,
         }
@@ -97,6 +99,113 @@ async fn test_issue_capability_e2e() {
     let token = inner.token.expect("token missing");
     assert_eq!(token.agent_id, "test_agent");
     assert!(!token.signature.is_empty());
+
+    server.stop();
+}
+
+#[tokio::test]
+async fn watch_policy_bundle_streams_on_connect() {
+    let server = TestServer::start().await;
+
+    let mut client = AuthorityServiceClient::connect(server.addr.clone())
+        .await
+        .expect("failed to connect");
+
+    let mut stream = client
+        .watch_policy_bundle(WatchPolicyBundleRequest { current_version: String::new() })
+        .await
+        .expect("RPC failed")
+        .into_inner();
+
+    let update = tokio::time::timeout(
+        tokio::time::Duration::from_millis(500),
+        stream.message(),
+    )
+    .await
+    .expect("timed out waiting for initial bundle")
+    .expect("stream error")
+    .expect("stream ended");
+
+    let bundle = update.bundle.expect("bundle missing");
+    assert!(!bundle.version.is_empty());
+    assert_eq!(bundle.ttl_seconds, 30);
+
+    server.stop();
+}
+
+#[tokio::test]
+async fn watch_policy_bundle_pushes_on_file_change() {
+    let server = TestServer::start().await;
+
+    let mut client = AuthorityServiceClient::connect(server.addr.clone())
+        .await
+        .expect("failed to connect");
+
+    let mut stream = client
+        .watch_policy_bundle(WatchPolicyBundleRequest { current_version: String::new() })
+        .await
+        .expect("RPC failed")
+        .into_inner();
+
+    let initial = tokio::time::timeout(
+        tokio::time::Duration::from_millis(500),
+        stream.message(),
+    )
+    .await
+    .expect("timed out waiting for initial bundle")
+    .expect("stream error")
+    .expect("stream ended");
+    let v1 = initial.bundle.expect("bundle missing").version;
+
+    std::fs::write(
+        server.policy_dir.join("permit_all.cedar"),
+        "forbid(principal, action, resource);",
+    )
+    .expect("failed to overwrite policy");
+
+    let update = tokio::time::timeout(
+        tokio::time::Duration::from_secs(2),
+        stream.message(),
+    )
+    .await
+    .expect("timed out waiting for bundle update")
+    .expect("stream error")
+    .expect("stream ended");
+    let v2 = update.bundle.expect("bundle missing").version;
+
+    assert_ne!(v1, v2);
+
+    server.stop();
+}
+
+#[tokio::test]
+async fn watch_revocations_streams_new_events() {
+    let server = TestServer::start().await;
+
+    let mut client = AuthorityServiceClient::connect(server.addr.clone())
+        .await
+        .expect("failed to connect");
+
+    let mut stream = client
+        .watch_revocations(WatchRevocationsRequest { since: None })
+        .await
+        .expect("RPC failed")
+        .into_inner();
+
+    let token_id = firma_core::token::TokenId::new();
+    std::fs::write(&server.revocation_file, format!("{token_id}\n"))
+        .expect("failed to write revocation");
+
+    let event = tokio::time::timeout(
+        tokio::time::Duration::from_secs(2),
+        stream.message(),
+    )
+    .await
+    .expect("timed out waiting for revocation event")
+    .expect("stream error")
+    .expect("stream ended");
+
+    assert_eq!(event.token_id, token_id.to_string());
 
     server.stop();
 }
