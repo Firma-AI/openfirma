@@ -424,7 +424,7 @@ mod tests {
 
     fn fixed_time() -> DateTime<Utc> {
         DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-            .unwrap_or_else(|_| panic!("invalid fixed timestamp"))
+            .unwrap()
             .with_timezone(&Utc)
     }
 
@@ -499,10 +499,7 @@ mod tests {
 
         assert_eq!(connector.calls(), 0);
 
-        let event = rx
-            .recv()
-            .await
-            .unwrap_or_else(|| panic!("missing audit event"));
+        let event = rx.recv().await.unwrap();
         assert!(matches!(event, SidecarAuditEvent::DenyTool { .. }));
     }
 
@@ -524,10 +521,7 @@ mod tests {
 
         assert_eq!(connector.calls(), 0);
 
-        let event = rx
-            .recv()
-            .await
-            .unwrap_or_else(|| panic!("missing audit event"));
+        let event = rx.recv().await.unwrap();
         assert!(matches!(event, SidecarAuditEvent::DenyApi { .. }));
     }
 
@@ -543,7 +537,7 @@ mod tests {
     async fn abort_signal_cancels_all_matching_inflight_for_token_or_session() {
         let tok1 = TokenId::new();
         let tok2 = TokenId::new();
-        let sess_a: SessionId = "sess-a".parse().unwrap_or_else(|e| panic!("{e}"));
+        let sess_a: SessionId = "sess-a".parse().unwrap();
         let manager = InFlightAbortManager::new();
         let token_cancel = manager.register("exec-1", &tok1, &sess_a).await;
         let session_cancel = manager.register("exec-2", &tok2, &sess_a).await;
@@ -566,10 +560,7 @@ mod tests {
         assert!(token_cancel.is_cancelled());
         assert!(session_cancel.is_cancelled());
 
-        let event = rx
-            .recv()
-            .await
-            .unwrap_or_else(|| panic!("missing abort audit event"));
+        let event = rx.recv().await.unwrap();
         assert!(matches!(event, SidecarAuditEvent::Abort { .. }));
     }
 
@@ -577,8 +568,8 @@ mod tests {
     async fn abort_signal_by_token_only_cancels_matching_execution() {
         let tok1 = TokenId::new();
         let tok2 = TokenId::new();
-        let sess_a: SessionId = "sess-a".parse().unwrap_or_else(|e| panic!("{e}"));
-        let sess_b: SessionId = "sess-b".parse().unwrap_or_else(|e| panic!("{e}"));
+        let sess_a: SessionId = "sess-a".parse().unwrap();
+        let sess_b: SessionId = "sess-b".parse().unwrap();
         let manager = InFlightAbortManager::new();
         let token_cancel = manager.register("exec-1", &tok1, &sess_a).await;
         let other_cancel = manager.register("exec-2", &tok2, &sess_b).await;
@@ -604,8 +595,8 @@ mod tests {
 
     #[tokio::test]
     async fn abort_signal_by_session_only_cancels_all_session_executions() {
-        let sess_a: SessionId = "sess-a".parse().unwrap_or_else(|e| panic!("{e}"));
-        let sess_b: SessionId = "sess-b".parse().unwrap_or_else(|e| panic!("{e}"));
+        let sess_a: SessionId = "sess-a".parse().unwrap();
+        let sess_b: SessionId = "sess-b".parse().unwrap();
         let manager = InFlightAbortManager::new();
         let first = manager.register("exec-1", &TokenId::new(), &sess_a).await;
         let second = manager.register("exec-2", &TokenId::new(), &sess_a).await;
@@ -634,7 +625,7 @@ mod tests {
     #[tokio::test]
     async fn revoked_signal_does_not_abort_inflight() {
         let tok1 = TokenId::new();
-        let sess_a: SessionId = "sess-a".parse().unwrap_or_else(|e| panic!("{e}"));
+        let sess_a: SessionId = "sess-a".parse().unwrap();
         let manager = InFlightAbortManager::new();
         let token_cancel = manager.register("exec-1", &tok1, &sess_a).await;
 
@@ -664,12 +655,12 @@ mod tests {
             timestamp: None,
         };
 
-        let signal = RevocationSignal::from_proto(&event).unwrap_or_else(|e| panic!("{e}"));
+        let signal = RevocationSignal::from_proto(&event).unwrap();
         assert_eq!(
             signal,
             RevocationSignal::Abort {
                 token_id: Some(tok),
-                session_id: Some("sess-a".parse().unwrap_or_else(|e| panic!("{e}"))),
+                session_id: Some("sess-a".parse().unwrap()),
                 reason: "ABORT session_id=sess-a".to_string(),
             }
         );
@@ -678,7 +669,7 @@ mod tests {
     #[tokio::test]
     async fn abort_proto_event_path_cancels_inflight() {
         let tok = TokenId::new();
-        let sess_a: SessionId = "sess-a".parse().unwrap_or_else(|e| panic!("{e}"));
+        let sess_a: SessionId = "sess-a".parse().unwrap();
         let manager = InFlightAbortManager::new();
         let token_cancel = manager.register("exec-1", &tok, &sess_a).await;
 
@@ -691,10 +682,7 @@ mod tests {
             timestamp: None,
         };
 
-        let cancelled = manager
-            .process_proto_event(&event, &audit)
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
+        let cancelled = manager.process_proto_event(&event, &audit).await.unwrap();
         assert_eq!(cancelled, 1);
         assert!(token_cancel.is_cancelled());
     }
