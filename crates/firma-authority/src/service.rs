@@ -295,18 +295,29 @@ fn evaluate_cedar_policy(
         };
     }
 
+    let principal = match parse_entity_uid(agent_id) {
+        Ok(uid) => uid,
+        Err(e) => return CedarDecision::Deny { reason: "INVALID_REQUEST".to_string(), message: e.to_string() },
+    };
+    let resource_entity = match parse_resource_uid(resource) {
+        Ok(uid) => uid,
+        Err(e) => return CedarDecision::Deny { reason: "INVALID_REQUEST".to_string(), message: e.to_string() },
+    };
     let authorizer = Authorizer::new();
     let timestamp_ms = Utc::now().timestamp_millis();
 
     for action in actions {
-        let action_uid = parse_action_uid(action);
+        let action_entity = match parse_action_uid(action) {
+            Ok(uid) => uid,
+            Err(e) => return CedarDecision::Deny { reason: "INVALID_REQUEST".to_string(), message: e.to_string() },
+        };
         let context_json = json!({
             "session_id": session_id,
             "timestamp_ms": timestamp_ms,
             "params": "{}",
             "risk_score": 0i64,
         });
-        let schema_with_action = schema.map(|s| (s, &action_uid));
+        let schema_with_action = schema.map(|s| (s, &action_entity));
         let cedar_context = match Context::from_json_value(context_json, schema_with_action) {
             Ok(c) => c,
             Err(e) => {
@@ -318,9 +329,9 @@ fn evaluate_cedar_policy(
         };
 
         let request = match Request::new(
-            Some(parse_entity_uid(agent_id)),
-            Some(action_uid),
-            Some(parse_resource_uid(resource)),
+            Some(principal.clone()),
+            Some(action_entity),
+            Some(resource_entity.clone()),
             cedar_context,
             schema,
         ) {
@@ -364,47 +375,27 @@ fn evaluate_cedar_policy(
     CedarDecision::Allow
 }
 
-/// Parse an agent ID into a Cedar `EntityUid`.
-/// Uses the namespace `Firma::Agent`.
-fn parse_entity_uid(agent_id: &str) -> EntityUid {
-    let uid_str = format!("Firma::Agent::\"{agent_id}\"");
-    uid_str
+fn parse_entity_uid(agent_id: &str) -> Result<EntityUid, crate::error::AuthorityError> {
+    format!("Firma::Agent::\"{agent_id}\"")
         .parse::<EntityUid>()
-        .or_else(|_| "Firma::Agent::\"unknown\"".parse::<EntityUid>())
-        .unwrap_or_else(|e| unknown_entity_uid("Agent", &e))
+        .map_err(|e| crate::error::AuthorityError::EvaluationFailed {
+            reason: format!("invalid agent_id '{agent_id}': {e}"),
+        })
 }
 
-/// Parse an action class string into a Cedar `EntityUid`.
-/// Uses the namespace `Firma::Action`.
-fn parse_action_uid(action: &str) -> EntityUid {
-    let uid_str = format!("Firma::Action::\"{action}\"");
-    uid_str
+fn parse_action_uid(action: &str) -> Result<EntityUid, crate::error::AuthorityError> {
+    format!("Firma::Action::\"{action}\"")
         .parse::<EntityUid>()
-        .or_else(|_| "Firma::Action::\"unknown\"".parse::<EntityUid>())
-        .unwrap_or_else(|e| unknown_entity_uid("Action", &e))
+        .map_err(|e| crate::error::AuthorityError::EvaluationFailed {
+            reason: format!("invalid action '{action}': {e}"),
+        })
 }
 
-/// Parse a resource scope into a Cedar `EntityUid`.
-/// Uses the namespace `Firma::Resource`.
-fn parse_resource_uid(resource: &str) -> EntityUid {
-    let uid_str = format!("Firma::Resource::\"{resource}\"");
-    uid_str
+fn parse_resource_uid(resource: &str) -> Result<EntityUid, crate::error::AuthorityError> {
+    format!("Firma::Resource::\"{resource}\"")
         .parse::<EntityUid>()
-        .or_else(|_| "Firma::Resource::\"unknown\"".parse::<EntityUid>())
-        .unwrap_or_else(|e| unknown_entity_uid("Resource", &e))
-}
-
-/// Fallback: construct a minimal unknown entity UID.
-/// This should never be reached since the hardcoded fallback parses always succeed.
-fn unknown_entity_uid(kind: &str, err: &cedar_policy::ParseErrors) -> EntityUid {
-    tracing::error!(kind, %err, "failed to parse fallback entity UID");
-    // Return a best-effort UID — parse_entity_uid("unknown") with a type that always works
-    format!("Firma::{kind}::\"unknown\"")
-        .parse::<EntityUid>()
-        .unwrap_or_else(|_| {
-            // Absolute last resort — this is unreachable in practice
-            tracing::error!("critical: cannot parse any entity UID");
-            std::process::exit(1);
+        .map_err(|e| crate::error::AuthorityError::EvaluationFailed {
+            reason: format!("invalid resource '{resource}': {e}"),
         })
 }
 

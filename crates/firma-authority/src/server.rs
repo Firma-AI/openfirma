@@ -42,6 +42,11 @@ impl Server {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        tracing::info!(
+            listen_addr = %config.listen_addr,
+            policy_dir = %config.policy_dir.display(),
+            "firma-authority starting"
+        );
         tracing::warn!(
             "NOT FOR PRODUCTION USE: This is the Mini Authority (Firma OSS v1) intended for local development and testing only."
         );
@@ -55,14 +60,10 @@ impl Server {
             ),
         })?;
 
-        let signer = match PasetoV4Signer::try_new(&key_bytes) {
-            Ok(s) => Arc::new(s),
-            Err(e) => {
-                return Err(AuthorityError::KeyError {
-                    reason: format!("invalid signing key: {e}"),
-                });
-            }
-        };
+        let signer = Arc::new(
+            PasetoV4Signer::try_new(&key_bytes)
+                .map_err(|e| AuthorityError::KeyError { reason: format!("invalid signing key: {e}") })?,
+        );
 
         // Load Cedar policies
         let policy_store = Arc::new(CedarPolicyStore::load(

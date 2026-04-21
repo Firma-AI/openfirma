@@ -10,4 +10,3 @@ pub use config::AuthorityConfig;
 pub use error::AuthorityError;
 pub use revocation::RevocationStore;
 pub use server::Server;
-pub use service::AuthorityServiceImpl;
