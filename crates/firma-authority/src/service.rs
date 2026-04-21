@@ -262,6 +262,59 @@ enum CedarDecision {
     Deny { reason: String, message: String },
 }
 
+impl CedarDecision {
+    fn no_policies() -> Self {
+        Self::Deny {
+            reason: "NO_POLICIES".to_string(),
+            message: "no Cedar policies loaded".to_string(),
+        }
+    }
+    fn no_action() -> Self {
+        Self::Deny {
+            reason: "NO_POLICIES".to_string(),
+            message: "no Cedar policies loaded".to_string(),
+        }
+    }
+
+    fn invalid_request(msg: impl Into<String>) -> Self {
+        Self::Deny {
+            reason: "INVALID_REQUEST".to_string(),
+            message: msg.into(),
+        }
+    }
+
+    fn context_build(action: &str, reason: &str) -> Self {
+        Self::Deny {
+            reason: "CONTEXT_BUILD_FAILED".to_string(),
+            message: format!("failed to build Cedar context for '{action}': {reason}"),
+        }
+    }
+
+    fn policy_deny(action: &str, diagnostics: &cedar_policy::Diagnostics) -> Self {
+        let reasons: Vec<String> = diagnostics
+            .reason()
+            .map(std::string::ToString::to_string)
+            .collect();
+        let errors: Vec<String> = diagnostics
+            .errors()
+            .map(std::string::ToString::to_string)
+            .collect();
+
+        let message = if !errors.is_empty() {
+            format!("policy errors for '{action}': {}", errors.join("; "))
+        } else if !reasons.is_empty() {
+            format!("denied '{action}' by policies: {}", reasons.join(", "))
+        } else {
+            format!("denied '{action}' by default (no matching permit policy)")
+        };
+
+        Self::Deny {
+            reason: "POLICY_DENIED".to_string(),
+            message,
+        }
+    }
+}
+
 /// Evaluate Cedar policies for a capability issuance request.
 ///
 /// Uses Cedar's unspecified principal/action/resource when the schema is
@@ -283,37 +336,25 @@ fn evaluate_cedar_policy(
     resource: &str,
 ) -> CedarDecision {
     if policy_set.policies().next().is_none() {
-        return CedarDecision::Deny {
-            reason: "NO_POLICIES".to_string(),
-            message: "no Cedar policies loaded".to_string(),
-        };
+        return CedarDecision::no_policies();
     }
 
     if actions.is_empty() {
-        return CedarDecision::Deny {
-            reason: "NO_ACTIONS".to_string(),
-            message: "no actions requested".to_string(),
-        };
+        return CedarDecision::no_action();
     }
 
     let principal: cedar_policy::EntityUid =
         match FirmaEntityUid::Agent(agent_id.to_string()).try_into() {
             Ok(uid) => uid,
             Err(e) => {
-                return CedarDecision::Deny {
-                    reason: "INVALID_REQUEST".to_string(),
-                    message: format!("invalid agent_id '{agent_id}': {e}"),
-                };
+                return CedarDecision::invalid_request(format!("invalid agent_id: {e}"));
             }
         };
     let resource_entity: cedar_policy::EntityUid =
         match FirmaEntityUid::Resource(resource.to_string()).try_into() {
             Ok(uid) => uid,
             Err(e) => {
-                return CedarDecision::Deny {
-                    reason: "INVALID_REQUEST".to_string(),
-                    message: format!("invalid resource '{resource}': {e}"),
-                };
+                return CedarDecision::invalid_request(format!("invalid resource: {e}"));
             }
         };
     let authorizer = Authorizer::new();
@@ -324,10 +365,7 @@ fn evaluate_cedar_policy(
             match FirmaEntityUid::Action(action.clone()).try_into() {
                 Ok(uid) => uid,
                 Err(e) => {
-                    return CedarDecision::Deny {
-                        reason: "INVALID_REQUEST".to_string(),
-                        message: format!("invalid action '{action}': {e}"),
-                    };
+                    return CedarDecision::invalid_request(format!("invalid action: {e}"));
                 }
             };
         let context_json = json!({
@@ -339,11 +377,8 @@ fn evaluate_cedar_policy(
         let schema_with_action = schema.map(|s| (s, &action_entity));
         let cedar_context = match Context::from_json_value(context_json, schema_with_action) {
             Ok(c) => c,
-            Err(e) => {
-                return CedarDecision::Deny {
-                    reason: "CONTEXT_BUILD_FAILED".to_string(),
-                    message: format!("failed to build Cedar context for '{action}': {e}"),
-                };
+            Err(err) => {
+                return CedarDecision::context_build(action, &err.to_string());
             }
         };
 
@@ -356,38 +391,14 @@ fn evaluate_cedar_policy(
         ) {
             Ok(r) => r,
             Err(e) => {
-                return CedarDecision::Deny {
-                    reason: "CONTEXT_BUILD_FAILED".to_string(),
-                    message: format!("failed to build Cedar request for '{action}': {e}"),
-                };
+                return CedarDecision::invalid_request(e.to_string());
             }
         };
 
         let response = authorizer.is_authorized(&request, policy_set, &Entities::empty());
 
-        if let cedar_policy::Decision::Deny = response.decision() {
-            let diagnostics = response.diagnostics();
-            let reasons: Vec<String> = diagnostics
-                .reason()
-                .map(std::string::ToString::to_string)
-                .collect();
-            let errors: Vec<String> = diagnostics
-                .errors()
-                .map(std::string::ToString::to_string)
-                .collect();
-
-            let message = if !errors.is_empty() {
-                format!("policy errors for '{action}': {}", errors.join("; "))
-            } else if !reasons.is_empty() {
-                format!("denied '{action}' by policies: {}", reasons.join(", "))
-            } else {
-                format!("denied '{action}' by default (no matching permit policy)")
-            };
-
-            return CedarDecision::Deny {
-                reason: "POLICY_DENIED".to_string(),
-                message,
-            };
+        if response.decision() == cedar_policy::Decision::Deny {
+            return CedarDecision::policy_deny(action, response.diagnostics());
         }
     }
 

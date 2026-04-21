@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
+
 use std::path::PathBuf;
 
 use firma_proto::firma::v1::authority_service_client::AuthorityServiceClient;
