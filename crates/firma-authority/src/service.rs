@@ -114,8 +114,8 @@ impl AuthorityService for AuthorityServiceImpl {
 
                 let claims = CapabilityClaims {
                     token_id,
-                    agent_id: agent_id.clone(),
-                    session_id: session_id.clone(),
+                    agent_id,
+                    session_id,
                     action_set: req.requested_actions.clone(),
                     resource_scope: req.resource_scope.clone(),
                     issued_at: now,
