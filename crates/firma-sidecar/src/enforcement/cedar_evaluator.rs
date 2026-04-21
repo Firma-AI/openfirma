@@ -36,6 +36,9 @@ pub enum CedarEvaluatorError {
     #[error("policy bundle contains no policy statements")]
     EmptyPolicies,
 
+    #[error("policy bundle TTL is negative ({0}s); Authority contract violation")]
+    InvalidTtl(i32),
+
     #[error("failed to parse Cedar policies: {0}")]
     PolicyParse(#[source] cedar_policy::ParseErrors),
 
@@ -138,7 +141,8 @@ impl CedarPolicyEvaluator {
             .parse::<PolicySet>()
             .map_err(CedarEvaluatorError::PolicyParse)?;
 
-        let ttl_secs = u64::try_from(bundle.ttl_seconds.max(0)).unwrap_or(0u64);
+        let ttl_secs = u64::try_from(bundle.ttl_seconds)
+            .map_err(|_| CedarEvaluatorError::InvalidTtl(bundle.ttl_seconds))?;
 
         let schema = if bundle.entity_schema.is_empty() {
             None
@@ -345,6 +349,21 @@ mod tests {
         let evaluator = CedarPolicyEvaluator::from_bundle(&permit_all_bundle()).unwrap();
         // Just constructed — should be fresh with 30s TTL.
         assert!(evaluator.is_fresh());
+    }
+
+    #[test]
+    fn negative_ttl_rejected() {
+        let bad = PolicyBundle::new(
+            "bad-ttl".to_string(),
+            b"permit(principal, action, resource);".to_vec(),
+            vec![],
+            -1,
+        );
+        let err = CedarPolicyEvaluator::from_bundle(&bad).unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::InvalidTtl(-1)),
+            "expected InvalidTtl(-1), got {err}"
+        );
     }
 
     #[test]
