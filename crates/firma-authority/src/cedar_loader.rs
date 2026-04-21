@@ -120,6 +120,7 @@ impl CedarPolicyStore {
     }
 
     /// Get the current policy bundle for distribution to sidecars.
+    #[must_use]
     pub fn bundle(&self) -> PolicyBundle {
         self.bundle_tx.borrow().clone()
     }
