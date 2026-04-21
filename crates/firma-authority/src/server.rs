@@ -29,6 +29,12 @@ impl Server {
     ///
     /// This will bind to the configured address immediately, allowing the
     /// caller to retrieve the actual port (useful if port 0 was requested).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthorityError`] if the policy store cannot be loaded, the
+    /// TCP listener cannot bind to the configured address, or the file watcher
+    /// cannot be initialised.
     pub async fn try_new<F>(
         config: AuthorityConfig,
         shutdown_signal: F,
@@ -121,6 +127,10 @@ impl Server {
     }
 
     /// Run the server until the provided shutdown signal is received.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthorityError`] if the underlying gRPC transport fails.
     pub async fn run(mut self) -> Result<(), AuthorityError> {
         tracing::info!(port = %self.port, "gRPC server listening");
         self.health_reporter
@@ -132,7 +142,7 @@ impl Server {
     }
 
     /// Get the port the server is bound to.
-    #[must_use] 
+    #[must_use]
     pub fn port(&self) -> u16 {
         self.port
     }

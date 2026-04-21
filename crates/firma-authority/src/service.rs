@@ -33,7 +33,7 @@ pub struct AuthorityServiceImpl {
 }
 
 impl AuthorityServiceImpl {
-    #[must_use] 
+    #[must_use]
     pub fn new(
         policy_store: Arc<CedarPolicyStore>,
         policy_watcher: Arc<CedarPolicyStoreWatcher>,
