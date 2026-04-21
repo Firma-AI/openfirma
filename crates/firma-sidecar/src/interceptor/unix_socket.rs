@@ -257,6 +257,7 @@ fn deny_json_response(status: StatusCode, body: Vec<u8>) -> Response<Full<Bytes>
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use std::net::SocketAddr;
     use std::time::Duration;
@@ -282,7 +283,7 @@ mod tests {
     impl PolicyEvaluation for AllowAllPolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
@@ -308,19 +309,21 @@ mod tests {
 
     struct NoRevocations;
     impl RevocationStore for NoRevocations {
-        fn is_revoked(&self, _token_id: &str) -> Result<bool, TokenError> {
+        fn is_revoked(&self, _token_id: &TokenId) -> Result<bool, TokenError> {
             Ok(false)
         }
-        fn add_revocation(&self, _token_id: &str) -> Result<(), TokenError> {
+        fn add_revocation(&self, _token_id: &TokenId) -> Result<(), TokenError> {
             Ok(())
         }
     }
 
     fn test_claims() -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent_test".to_string(),
-            session_id: String::new(),
+            token_id: "3713c5fc-b569-650c-c780-c64051473370"
+                .parse()
+                .expect("literal token id"),
+            agent_id: "agent_test".parse().expect("literal agent id"),
+            session_id: "_test_".parse().expect("literal session id"),
             action_set: vec!["llm.inference".to_string()],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),

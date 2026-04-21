@@ -159,6 +159,7 @@ fn timestamp_nanos() -> u128 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -192,9 +193,11 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 
     fn test_claims() -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent_test".to_string(),
-            session_id: "sess_001".to_string(),
+            token_id: "3713c5fc-b569-650c-c780-c64051473370"
+                .parse()
+                .expect("literal token id"),
+            agent_id: "agent_test".parse().expect("literal agent id"),
+            session_id: "sess_001".parse().expect("literal session id"),
             action_set: vec!["llm.inference".to_string()],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
@@ -219,8 +222,8 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             },
             "v4.public.test_token".to_string(),
             ExecutionMetadata {
-                session_id: "sess_001".to_string(),
-                agent_id: "agent_test".to_string(),
+                session_id: "sess_001".parse().expect("literal session id"),
+                agent_id: "agent_test".parse().expect("literal agent id"),
                 timestamp: Utc::now(),
                 trace_id: None,
                 budget_consumed: 0.0,
@@ -272,7 +275,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let event = builder.build(payload);
 
         assert_eq!(event.session_id, "sess_001");
-        assert_eq!(event.token_id, "tok_001");
+        assert_eq!(event.token_id, "3713c5fc-b569-650c-c780-c64051473370");
         assert_eq!(event.agent_id, "agent_test");
         assert_eq!(event.action, "llm.inference");
         assert_eq!(event.resource, "api.openai.com/v1/chat/completions");
@@ -405,9 +408,9 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let builder = EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
 
         let payload1 = AuditPayload {
-            session_id: "s".to_string(),
+            session_id: "s".parse().expect("literal session id"),
             token_id: String::new(),
-            agent_id: String::new(),
+            agent_id: "_test_".parse().expect("literal agent id"),
             action: String::new(),
             resource: String::new(),
             decision: 1,

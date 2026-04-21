@@ -78,10 +78,12 @@ fn token_error_to_deny_reason(err: &TokenError) -> DenyReason {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
     use super::super::decision::{CapabilityValidationStage, ConstraintEnforcementStage};
+    use firma_core::token::TokenId;
 
     #[test]
     fn test_normalization_error_maps_to_unclassified() {
@@ -95,7 +97,7 @@ mod tests {
     #[test]
     fn test_token_expired_maps_correctly() {
         let err = EnforcementError::TokenValidation(TokenError::Expired {
-            token_id: "tok_001".to_string(),
+            token_id: TokenId::new(),
         });
         let decision = err.into_deny(EnforcementStage::CapabilityValidation(
             CapabilityValidationStage::TokenValidation,
@@ -128,7 +130,9 @@ mod tests {
     #[test]
     fn test_token_revoked_maps_correctly() {
         let err = EnforcementError::TokenValidation(TokenError::Revoked {
-            token_id: "tok_002".to_string(),
+            token_id: "14f89c0d-b675-c46e-ba6e-0f9d47ef316f"
+                .parse()
+                .expect("literal token id"),
         });
         let decision = err.into_deny(EnforcementStage::CapabilityValidation(
             CapabilityValidationStage::TokenValidation,
@@ -206,7 +210,9 @@ mod tests {
                 detail: "test".to_string(),
             },
             EnforcementError::TokenValidation(TokenError::Expired {
-                token_id: "tok".to_string(),
+                token_id: "60ae136e-5d49-fbdf-037f-ab5f1d805634"
+                    .parse()
+                    .expect("literal token id"),
             }),
             EnforcementError::ScopeViolation {
                 detail: "test".to_string(),

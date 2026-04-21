@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use firma_core::policy::PolicyBundle as CorePolicyBundle;
 use firma_proto::authority_service_client::AuthorityServiceClient;
 use firma_proto::{PolicyBundle, WatchPolicyBundleRequest};
 use tokio_util::sync::CancellationToken;
@@ -11,11 +12,14 @@ use tonic::transport::Channel;
 use crate::authority_client::backoff::ExponentialBackoff;
 use crate::authority_client::readiness::ReadinessFlag;
 use crate::authority_client::swappable_policy::SwappablePolicyEvaluation;
+use crate::enforcement::cedar_evaluator::CedarPolicyEvaluator;
 use crate::enforcement::constraint_enforcement::PolicyEvaluation;
 
 /// Parses policy bundle bytes into a policy evaluator snapshot.
 pub trait BundleParser {
-    /// Parse a bundle into an evaluator.
+    /// Parse a bundle into an evaluator, seeded with the bundle's TTL
+    /// and version so the evaluator can track freshness without a
+    /// separate writer.
     ///
     /// # Errors
     ///
@@ -24,23 +28,33 @@ pub trait BundleParser {
         &self,
         policies: &[u8],
         entity_schema: &[u8],
+        ttl_seconds: u32,
+        version: &str,
     ) -> Result<Box<dyn PolicyEvaluation + Send + Sync>, String>;
 }
 
-/// Temporary parser until Cedar bundle loading lands.
+/// Production [`BundleParser`] that builds a [`CedarPolicyEvaluator`]
+/// from the bundle bytes pushed by the Authority.
 #[derive(Debug, Default)]
-pub struct StubBundleParser;
+pub struct CedarBundleParser;
 
-impl BundleParser for StubBundleParser {
+impl BundleParser for CedarBundleParser {
     fn parse(
         &self,
         policies: &[u8],
-        _entity_schema: &[u8],
+        entity_schema: &[u8],
+        ttl_seconds: u32,
+        version: &str,
     ) -> Result<Box<dyn PolicyEvaluation + Send + Sync>, String> {
-        if policies.is_empty() {
-            return Err("policy bundle policies must not be empty".to_string());
-        }
-        Ok(Box::new(AllowAllPolicyEvaluation))
+        let bundle = CorePolicyBundle::new(
+            version.to_string(),
+            policies.to_vec(),
+            entity_schema.to_vec(),
+            ttl_seconds,
+        );
+        let evaluator =
+            CedarPolicyEvaluator::from_bundle(&bundle).map_err(|err| err.to_string())?;
+        Ok(Box::new(evaluator))
     }
 }
 
@@ -137,7 +151,7 @@ impl PolicyBundleTask {
             );
             return None;
         };
-        let ttl_seconds = u32::try_from(bundle.ttl_seconds).unwrap_or(0);
+        let ttl_seconds = bundle.ttl_seconds;
         if ttl_seconds == 0 {
             tracing::warn!(
                 stream = "policy_bundle",
@@ -147,10 +161,12 @@ impl PolicyBundleTask {
             return None;
         }
         let policies_bytes = bundle.policies.len();
-        let evaluator = match self
-            .bundle_parser
-            .parse(&bundle.policies, &bundle.entity_schema)
-        {
+        let evaluator = match self.bundle_parser.parse(
+            &bundle.policies,
+            &bundle.entity_schema,
+            ttl_seconds,
+            &bundle.version,
+        ) {
             Ok(evaluator) => evaluator,
             Err(err) => {
                 tracing::warn!(
@@ -180,28 +196,5 @@ async fn wait_or_cancel(delay: Duration, cancel: &CancellationToken) -> bool {
     tokio::select! {
         () = cancel.cancelled() => true,
         () = tokio::time::sleep(delay) => false,
-    }
-}
-
-#[derive(Debug)]
-struct AllowAllPolicyEvaluation;
-
-impl PolicyEvaluation for AllowAllPolicyEvaluation {
-    fn evaluate(
-        &self,
-        _principal: &str,
-        _action: &str,
-        _resource: &str,
-        _context: &serde_json::Value,
-    ) -> Result<bool, String> {
-        Ok(true)
-    }
-
-    fn is_fresh(&self) -> bool {
-        true
-    }
-
-    fn version(&self) -> Option<String> {
-        None
     }
 }

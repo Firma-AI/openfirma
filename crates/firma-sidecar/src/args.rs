@@ -73,6 +73,7 @@ impl From<LogLevel> for tracing::level_filters::LevelFilter {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
 
     use super::*;

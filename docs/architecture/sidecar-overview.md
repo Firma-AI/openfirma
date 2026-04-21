@@ -119,8 +119,9 @@ Key wiring facts:
   stall the other.
 - `SwappablePolicyEvaluation` is a lock-free `ArcSwap` wrapper over the
   current `PolicyEvaluation`. Stage 2 reads it through the trait; the
-  policy-bundle task swaps a new evaluator into it on every accepted
-  bundle and refreshes the TTL deadline used by `is_fresh()`.
+  policy-bundle task parses each accepted bundle into a
+  `CedarPolicyEvaluator` via `CedarBundleParser`, swaps it into the
+  container, and refreshes the TTL deadline used by `is_fresh()`.
 - `BloomLruRevocationStore` is shared as `Arc<dyn RevocationStore>`
   between Stage 1 (reader) and the revocation task (writer).
 - `ReadinessFlag` fans out to the pipeline as a `tokio::watch::Receiver`
@@ -300,7 +301,9 @@ Authority push to first Stage 1 DENY < 1 s p99.
 Stage 2 holds the evaluator as `Arc<dyn PolicyEvaluation>`. In the
 Authority-backed runtime the concrete pointer targets a
 `SwappablePolicyEvaluation`: an `ArcSwap` over the compiled evaluator
-plus an atomic TTL deadline. `evaluate()` reads through the current
+plus an atomic TTL deadline. The inner snapshot is a
+`CedarPolicyEvaluator` built from the bundle bytes the Authority pushed
+over `WatchPolicyBundle`. `evaluate()` reads through the current
 snapshot; `is_fresh()` reads the atomic deadline. The
 `PolicyBundleTask` (§5.6) updates both atomically when a new bundle
 arrives, so in-flight calls finish against the previous snapshot. When
@@ -347,9 +350,10 @@ tasks from `authority_client`:
   `SwappablePolicyEvaluation::swap`, which updates the evaluator
   snapshot, TTL deadline, and version in a single store. A failed
   parse is logged and the previous bundle is retained. The first
-  accepted bundle flips `ReadinessFlag::policy_bundle_ready`. Cedar
-  parsing lands in task 013; until then the Stub parser accepts
-  non-empty byte payloads and installs an allow-all evaluator.
+  accepted bundle flips `ReadinessFlag::policy_bundle_ready`. On each
+  accepted bundle, `CedarBundleParser` parses the policy bytes and
+  (when present) the Cedar schema bytes into a `CedarPolicyEvaluator`;
+  parse failures retain the previous snapshot.
 
 - **`RevocationTask`** calls `WatchRevocations` and forwards each
   `RevocationEvent` to `RevocationStore::add_revocation` on the shared

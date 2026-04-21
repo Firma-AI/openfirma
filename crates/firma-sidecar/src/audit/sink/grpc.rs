@@ -117,6 +117,7 @@ impl AuditSink for GrpcAuditSink {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -126,9 +127,11 @@ mod tests {
     fn sample_event(id: &str) -> ExecutionEvent {
         ExecutionEvent {
             event_id: id.to_string(),
-            session_id: "sess-1".to_string(),
-            token_id: "tok-1".to_string(),
-            agent_id: "agent-1".to_string(),
+            session_id: "sess-1".parse().expect("literal session id"),
+            token_id: "2acea42e-bb57-44d6-3ad3-aad955ec50af"
+                .parse()
+                .expect("literal token id"),
+            agent_id: "agent-1".parse().expect("literal agent id"),
             action: "http_get".to_string(),
             resource: "https://api.example.com/v1".to_string(),
             decision: 1,

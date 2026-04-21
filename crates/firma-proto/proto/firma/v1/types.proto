@@ -126,21 +126,23 @@ message CapabilityToken {
   string token_id = 1;
   // Identity of the agent this token was issued to.
   string agent_id = 2;
+  // Session within which this token is valid.
+  string session_id = 3;
   // Set of actions this token authorizes (e.g., ["http_get", "db_read"]).
-  repeated string action_set = 3;
+  repeated string action_set = 4;
   // Resource scope this token covers (e.g., "api.example.com/*").
-  string resource_scope = 4;
+  string resource_scope = 5;
   // When this token was issued.
-  google.protobuf.Timestamp issued_at = 5;
+  google.protobuf.Timestamp issued_at = 6;
   // When this token expires. After expiry, the agent must call
   // IssueCapability again to obtain a replacement.
-  google.protobuf.Timestamp expiry = 6;
+  google.protobuf.Timestamp expiry = 7;
   // Integrity hash of the Cedar context used at issuance.
-  string context_hash = 7;
+  string context_hash = 8;
   // The raw signed token bytes.
-  bytes signature = 8;
+  bytes signature = 9;
   // Token encoding format.
-  TokenFormat format = 9;
+  TokenFormat format = 10;
 }
 
 // EnforcementDecision is the outcome of Sidecar evaluation.
@@ -167,7 +169,7 @@ message PolicyBundle {
   bytes entity_schema = 3;
   // Time-to-live in seconds. If TTL expires without refresh,
   // the Sidecar enters fail-closed mode.
-  int32 ttl_seconds = 4;
+  uint32 ttl_seconds = 4;
 }
 
 // RevocationEvent signals the invalidation of a previously issued

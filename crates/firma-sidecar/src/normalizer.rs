@@ -211,6 +211,7 @@ fn parse_http_method(method: &str) -> Option<HttpMethod> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::config::{MappingRuleConfig, MappingRulesFile};

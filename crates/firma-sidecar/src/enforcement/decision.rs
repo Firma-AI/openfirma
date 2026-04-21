@@ -112,6 +112,7 @@ impl EnforcementDecision {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -141,9 +142,11 @@ mod tests {
         let decision = EnforcementDecision::Allow {
             credentials: InjectedCredentials::empty(),
             claims: CapabilityClaims {
-                token_id: "tok_001".to_string(),
-                agent_id: "agent".to_string(),
-                session_id: "sess".to_string(),
+                token_id: "3713c5fc-b569-650c-c780-c64051473370"
+                    .parse()
+                    .expect("literal token id"),
+                agent_id: "agent".parse().expect("literal agent id"),
+                session_id: "sess".parse().expect("literal session id"),
                 action_set: vec![],
                 resource_scope: String::new(),
                 issued_at: chrono::Utc::now(),
@@ -165,8 +168,8 @@ mod tests {
                 },
                 "token".to_string(),
                 firma_core::ExecutionMetadata {
-                    session_id: "sess".to_string(),
-                    agent_id: "agent".to_string(),
+                    session_id: "sess".parse().expect("literal session id"),
+                    agent_id: "agent".parse().expect("literal agent id"),
                     timestamp: chrono::Utc::now(),
                     trace_id: None,
                     budget_consumed: 0.0,

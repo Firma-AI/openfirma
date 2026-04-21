@@ -62,6 +62,7 @@ impl CredentialInjector for NullCredentialInjector {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use firma_core::{ActionParams, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams};
@@ -83,8 +84,8 @@ mod tests {
             },
             "v4.public.eyJ0...".to_string(),
             ExecutionMetadata {
-                session_id: "sess_001".to_string(),
-                agent_id: "agent_abc".to_string(),
+                session_id: "sess_001".parse().expect("literal session id"),
+                agent_id: "agent_abc".parse().expect("literal agent id"),
                 timestamp: chrono::Utc::now(),
                 trace_id: None,
                 budget_consumed: 0.0,

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use firma_core::RevocationStore;
+use firma_core::{RevocationStore, TokenId};
 use firma_proto::authority_service_client::AuthorityServiceClient;
 use firma_proto::{RevocationEvent, WatchRevocationsRequest};
 use prost_types::Timestamp;
@@ -108,8 +108,12 @@ impl RevocationTask {
     }
 
     fn apply_event(&mut self, event: &RevocationEvent) -> Result<(), String> {
+        let token_id = event
+            .token_id
+            .parse::<TokenId>()
+            .map_err(|e| format!("invalid token id in revocation event: {e}"))?;
         self.store
-            .add_revocation(&event.token_id)
+            .add_revocation(&token_id)
             .map_err(|err| err.to_string())?;
         self.last_event_time = event.timestamp;
         tracing::debug!(
