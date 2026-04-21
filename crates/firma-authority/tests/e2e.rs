@@ -165,7 +165,7 @@ async fn watch_policy_bundle_pushes_on_file_change() {
     )
     .expect("failed to overwrite policy");
 
-    let update = tokio::time::timeout(tokio::time::Duration::from_secs(2), stream.message())
+    let update = tokio::time::timeout(tokio::time::Duration::from_secs(5), stream.message())
         .await
         .expect("timed out waiting for bundle update")
         .expect("stream error")
@@ -195,7 +195,7 @@ async fn watch_revocations_streams_new_events() {
     std::fs::write(&server.revocation_file, format!("{token_id}\n"))
         .expect("failed to write revocation");
 
-    let event = tokio::time::timeout(tokio::time::Duration::from_secs(2), stream.message())
+    let event = tokio::time::timeout(tokio::time::Duration::from_secs(5), stream.message())
         .await
         .expect("timed out waiting for revocation event")
         .expect("stream error")

@@ -10,8 +10,11 @@ pub enum AuthorityError {
     #[error("key management error: {reason}")]
     KeyError { reason: String },
 
-    #[error("configuration error: {reason}")]
-    ConfigError { reason: String },
+    #[error("configuration error")]
+    ConfigError(#[from] crate::config::ConfigError),
+
+    #[error("bind failed: {reason}")]
+    BindFailed { reason: String },
 
     #[error("revocation error: {reason}")]
     RevocationError { reason: String },
@@ -21,12 +24,4 @@ pub enum AuthorityError {
 
     #[error("server failed: {reason}")]
     Server { reason: String },
-}
-
-impl From<crate::config::ConfigError> for AuthorityError {
-    fn from(e: crate::config::ConfigError) -> Self {
-        Self::ConfigError {
-            reason: e.to_string(),
-        }
-    }
 }

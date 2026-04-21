@@ -218,7 +218,7 @@ fn read_policy_files(policy_dir: &Path) -> Result<(String, String), AuthorityErr
     let mut policies = String::new();
     let mut entries: Vec<_> = std::fs::read_dir(policy_dir)
         .map_err(|e| AuthorityError::PolicyLoadFailed {
-            reason: format!("cannot read policy directory: {e}"),
+            reason: e.to_string(),
         })?
         .filter_map(Result::ok)
         .collect();
@@ -232,7 +232,7 @@ fn read_policy_files(policy_dir: &Path) -> Result<(String, String), AuthorityErr
             tracing::debug!(path = %path.display(), "reading policy file");
             let content =
                 std::fs::read_to_string(&path).map_err(|e| AuthorityError::PolicyLoadFailed {
-                    reason: format!("cannot read {}: {e}", path.display()),
+                    reason: e.to_string(),
                 })?;
             if !policies.is_empty() {
                 policies.push('\n');
@@ -437,8 +437,11 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unwrap_used)]
     fn schema_supports_firma_actions() {
-        use cedar_policy::{Context, EntityUid, Schema};
+        use cedar_policy::{
+            Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request, Schema,
+        };
 
         const SCHEMA_SRC: &str = include_str!("../policies/schema.cedarschema");
         const ACTIONS: &[&str] = &[
@@ -459,8 +462,10 @@ mod tests {
             "messaging.send",
         ];
 
-        let (schema, _) = Schema::from_cedarschema_str(SCHEMA_SRC)
-            .unwrap_or_else(|e| panic!("schema parse failed: {e}"));
+        let (schema, _) = Schema::from_cedarschema_str(SCHEMA_SRC).unwrap();
+        let policy_set = "permit(principal, action, resource);"
+            .parse::<PolicySet>()
+            .unwrap();
 
         let context_json = serde_json::json!({
             "session_id": "sess_test",
@@ -470,8 +475,28 @@ mod tests {
         });
 
         for action in ACTIONS {
+            let principal: EntityUid = "Firma::Agent::\"agent_test\"".parse().unwrap();
             let action_uid: EntityUid = format!("Firma::Action::\"{action}\"").parse().unwrap();
-            Context::from_json_value(context_json.clone(), Some((&schema, &action_uid))).unwrap();
+            let resource: EntityUid = "Firma::Resource::\"r\"".parse().unwrap();
+
+            let ctx = Context::from_json_value(context_json.clone(), Some((&schema, &action_uid)))
+                .unwrap();
+
+            let request = Request::new(
+                Some(principal),
+                Some(action_uid),
+                Some(resource),
+                ctx,
+                Some(&schema),
+            )
+            .unwrap();
+
+            let response =
+                Authorizer::new().is_authorized(&request, &policy_set, &Entities::empty());
+            assert!(
+                matches!(response.decision(), Decision::Allow),
+                "action '{action}' must be allowed"
+            );
         }
     }
 }

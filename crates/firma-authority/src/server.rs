@@ -95,20 +95,20 @@ impl Server {
             config
                 .listen_addr
                 .parse()
-                .map_err(|e| AuthorityError::ConfigError {
+                .map_err(|e| AuthorityError::BindFailed {
                     reason: format!("invalid listen address {}: {}", config.listen_addr, e),
                 })?;
 
         let listener =
             tokio::net::TcpListener::bind(addr)
                 .await
-                .map_err(|e| AuthorityError::ConfigError {
+                .map_err(|e| AuthorityError::BindFailed {
                     reason: format!("failed to bind to {addr}: {e}"),
                 })?;
 
         let local_addr = listener
             .local_addr()
-            .map_err(|e| AuthorityError::ConfigError {
+            .map_err(|e| AuthorityError::BindFailed {
                 reason: format!("failed to get local address: {e}"),
             })?;
 
