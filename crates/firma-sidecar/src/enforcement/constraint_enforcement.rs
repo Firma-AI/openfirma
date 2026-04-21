@@ -380,11 +380,12 @@ impl ConstraintEnforcer {
 
     /// Build the Cedar evaluation context from envelope + claims.
     ///
-    /// Produces the `EnforcementContext` record declared in `firma.cedarschema`:
+    /// Produces exactly the `EnforcementContext` record declared in
+    /// `firma.cedarschema`:
     /// - `session_id`   — enclosing session identity
-    /// - `timestamp_ms` — Unix epoch milliseconds at evaluation time
+    /// - `timestamp_ms` — Unix epoch milliseconds at evaluation time (Long)
     /// - `params`       — JSON-serialized `intent.params` (available to Cedar `when` clauses)
-    /// - `risk_score`   — V1 placeholder, always 0
+    /// - `risk_score`   — V1 placeholder, always 0 (Long)
     fn build_context(
         envelope: &NormalizedEnvelope,
         claims: &CapabilityClaims,
@@ -392,11 +393,8 @@ impl ConstraintEnforcer {
         let params =
             serde_json::to_string(&envelope.intent.params).unwrap_or_else(|_| "{}".to_string());
         serde_json::json!({
-            "action_class": envelope.intent.action_class,
-            "resource": envelope.intent.resource,
-            "agent_id": claims.agent_id,
             "session_id": claims.session_id,
-            "timestamp": envelope.timestamp.to_rfc3339(),
+            "timestamp_ms": envelope.timestamp.timestamp_millis(),
             "params": params,
             "risk_score": 0i64,
         })

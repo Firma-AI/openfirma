@@ -39,6 +39,9 @@ pub enum CedarEvaluatorError {
     #[error("policy bundle TTL is negative ({0}s); Authority contract violation")]
     InvalidTtl(i32),
 
+    #[error("policy bundle contains no entity schema; schema is required")]
+    MissingSchema,
+
     #[error("failed to parse Cedar policies: {0}")]
     PolicyParse(#[source] cedar_policy::ParseErrors),
 
@@ -111,7 +114,7 @@ impl fmt::Display for FirmaEntityUid {
 #[derive(Debug)]
 pub struct CedarPolicyEvaluator {
     policy_set: PolicySet,
-    schema: Option<Schema>,
+    schema: Schema,
     version: String,
     received_at: Instant,
     ttl_secs: u64,
@@ -144,14 +147,12 @@ impl CedarPolicyEvaluator {
         let ttl_secs = u64::try_from(bundle.ttl_seconds)
             .map_err(|_| CedarEvaluatorError::InvalidTtl(bundle.ttl_seconds))?;
 
-        let schema = if bundle.entity_schema.is_empty() {
-            None
-        } else {
-            let schema_src = std::str::from_utf8(&bundle.entity_schema)?;
-            let (schema, _warnings) = Schema::from_cedarschema_str(schema_src)
-                .map_err(|e| CedarEvaluatorError::SchemaParse(Box::new(e)))?;
-            Some(schema)
-        };
+        if bundle.entity_schema.is_empty() {
+            return Err(CedarEvaluatorError::MissingSchema);
+        }
+        let schema_src = std::str::from_utf8(&bundle.entity_schema)?;
+        let (schema, _warnings) = Schema::from_cedarschema_str(schema_src)
+            .map_err(|e| CedarEvaluatorError::SchemaParse(Box::new(e)))?;
 
         Ok(Self {
             policy_set,
@@ -194,16 +195,16 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
 
         // Context::from_json_value takes Option<(&Schema, &EntityUid)> — the action
         // UID is used to look up the declared context shape for that action.
-        let schema_with_action = self.schema.as_ref().map(|s| (s, &action_uid));
-        let cedar_context = Context::from_json_value(context.clone(), schema_with_action)
-            .map_err(|e| CedarEvaluatorError::ContextBuild(Box::new(e)))?;
+        let cedar_context =
+            Context::from_json_value(context.clone(), Some((&self.schema, &action_uid)))
+                .map_err(|e| CedarEvaluatorError::ContextBuild(Box::new(e)))?;
 
         let request = Request::new(
             Some(principal_uid),
             Some(action_uid),
             Some(resource_uid),
             cedar_context,
-            self.schema.as_ref(),
+            Some(&self.schema),
         )
         .map_err(|e| CedarEvaluatorError::RequestBuild(Box::new(e)))?;
 
@@ -254,7 +255,7 @@ mod tests {
         PolicyBundle::new(
             "test-v1".to_string(),
             b"permit(principal, action, resource);".to_vec(),
-            vec![],
+            FIRMA_SCHEMA.as_bytes().to_vec(),
             30,
         )
     }
@@ -263,7 +264,7 @@ mod tests {
         PolicyBundle::new(
             "test-v2".to_string(),
             b"forbid(principal, action, resource);".to_vec(),
-            vec![],
+            FIRMA_SCHEMA.as_bytes().to_vec(),
             30,
         )
     }
@@ -353,6 +354,7 @@ mod tests {
 
     #[test]
     fn negative_ttl_rejected() {
+        // Schema bytes not reached — TTL is validated before schema parsing.
         let bad = PolicyBundle::new(
             "bad-ttl".to_string(),
             b"permit(principal, action, resource);".to_vec(),
@@ -367,11 +369,26 @@ mod tests {
     }
 
     #[test]
+    fn missing_schema_rejected() {
+        let no_schema = PolicyBundle::new(
+            "no-schema".to_string(),
+            b"permit(principal, action, resource);".to_vec(),
+            vec![],
+            30,
+        );
+        let err = CedarPolicyEvaluator::from_bundle(&no_schema).unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::MissingSchema),
+            "expected MissingSchema, got {err}"
+        );
+    }
+
+    #[test]
     fn is_stale_with_zero_ttl() {
         let zero_ttl = PolicyBundle::new(
             "v0".to_string(),
             b"permit(principal, action, resource);".to_vec(),
-            vec![],
+            FIRMA_SCHEMA.as_bytes().to_vec(),
             0,
         );
         let evaluator = CedarPolicyEvaluator::from_bundle(&zero_ttl).unwrap();
@@ -390,7 +407,12 @@ mod tests {
         // Policy referencing context.session_id — verifies context is wired through.
         let src =
             br#"permit(principal, action, resource) when { context.session_id == "sess_001" };"#;
-        let bundle = PolicyBundle::new("ctx-v1".to_string(), src.to_vec(), vec![], 30);
+        let bundle = PolicyBundle::new(
+            "ctx-v1".to_string(),
+            src.to_vec(),
+            FIRMA_SCHEMA.as_bytes().to_vec(),
+            30,
+        );
         let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
 
         let allow = evaluator
@@ -424,12 +446,10 @@ mod tests {
 
     #[test]
     fn schema_parses_from_bundle() {
+        // schema is now mandatory — from_bundle succeeds only when schema bytes
+        // are present; the field is Schema (not Option<Schema>).
         let bundle = schema_bundle(b"permit(principal, action, resource);");
-        let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
-        assert!(
-            evaluator.schema.is_some(),
-            "schema must be parsed from bundle"
-        );
+        CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
     }
 
     #[test]
