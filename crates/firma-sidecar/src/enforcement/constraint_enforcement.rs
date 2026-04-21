@@ -75,6 +75,40 @@ pub trait PolicyEvaluation: Send + Sync {
     fn version(&self) -> Option<String>;
 }
 
+/// Sentinel evaluator installed in the watch channel at sidecar boot, before
+/// the Authority delivers the first [`PolicyBundle`].
+///
+/// `is_available()` returns `false`, so every evaluation attempt hits the
+/// existing availability check and fails closed as
+/// [`DenyReason::PolicyBundleStale`].  The bundle consumer task replaces
+/// this sentinel with a real [`CedarPolicyEvaluator`] on first delivery.
+#[allow(dead_code)] // used by the bundle consumer task (not yet wired)
+struct NoBundleInstalled;
+
+impl PolicyEvaluation for NoBundleInstalled {
+    fn evaluate(
+        &self,
+        _: &AgentId,
+        _: &str,
+        _: &str,
+        _: &serde_json::Value,
+    ) -> Result<bool, super::cedar_evaluator::CedarEvaluatorError> {
+        Ok(false)
+    }
+
+    fn is_fresh(&self) -> bool {
+        false
+    }
+
+    fn is_available(&self) -> bool {
+        false
+    }
+
+    fn version(&self) -> Option<String> {
+        None
+    }
+}
+
 /// Stage 2: Constraint Enforcement Engine (CEE).
 ///
 /// Performs scope check (action within token's allowed set), builds the
@@ -83,11 +117,14 @@ pub trait PolicyEvaluation: Send + Sync {
 /// Target: < 200us p95.
 ///
 /// The active evaluator is read from a [`tokio::sync::watch`] channel.
-/// The channel `Sender` is owned by the bundle consumer task, which calls
-/// `tx.send_replace()` whenever the Authority streams a new
-/// [`PolicyBundle`].  Hot-path readers call `self.policy.borrow()` — a
-/// momentary read-lock that never blocks the writer — and hold a consistent
-/// snapshot for the duration of their call.
+/// The channel `Sender` is held by the bundle consumer task, which calls
+/// `tx.send_replace(Arc::new(evaluator))` whenever the Authority streams a
+/// new [`PolicyBundle`].  Before the first bundle arrives the channel holds
+/// a [`NoBundleInstalled`] sentinel whose `is_available()` returns `false`,
+/// causing every evaluation to fail closed as
+/// [`DenyReason::PolicyBundleStale`].  Hot-path readers call
+/// `self.policy.borrow()` — a momentary read-lock that never blocks the
+/// writer.
 pub struct ConstraintEnforcer {
     policy: watch::Receiver<Arc<dyn PolicyEvaluation>>,
 }
@@ -95,9 +132,10 @@ pub struct ConstraintEnforcer {
 impl ConstraintEnforcer {
     /// Construct with an externally owned [`watch::Receiver`].
     ///
-    /// The matching [`watch::Sender`] is held by the bundle consumer task,
-    /// which calls `tx.send_replace()` to hot-swap the evaluator when the
-    /// Authority streams a new [`PolicyBundle`].
+    /// The matching [`watch::Sender`] is held by the bundle consumer task.
+    /// Seed the channel with `Arc::new(NoBundleInstalled)` at boot so
+    /// evaluations fail closed until the first real bundle is installed.
+    /// Use [`watch::channel`] directly to create the pair.
     #[must_use]
     pub fn new(policy: watch::Receiver<Arc<dyn PolicyEvaluation>>) -> Self {
         Self { policy }
@@ -106,8 +144,7 @@ impl ConstraintEnforcer {
     /// Construct with a fixed evaluator — no hot-swap.
     ///
     /// Creates an internal watch channel and immediately drops the sender.
-    /// `borrow()` on the receiver still works after sender drop, so the
-    /// snapshot is readable for the lifetime of the enforcer.
+    /// The snapshot is readable for the lifetime of the enforcer.
     ///
     /// Use this for static-policy deployments and in tests.
     #[must_use]

@@ -33,6 +33,9 @@ pub enum CedarEvaluatorError {
     #[error("policy bytes are not valid UTF-8: {0}")]
     InvalidUtf8(#[from] std::str::Utf8Error),
 
+    #[error("policy bundle contains no policy statements")]
+    EmptyPolicies,
+
     #[error("failed to parse Cedar policies: {0}")]
     PolicyParse(#[source] cedar_policy::ParseErrors),
 
@@ -102,6 +105,7 @@ impl fmt::Display for FirmaEntityUid {
 /// Constructed from a [`PolicyBundle`] received from the Authority via
 /// `WatchPolicyBundle`. Tracks freshness against the bundle's `ttl_seconds`
 /// and evaluates Cedar policies schema-lessly.
+#[derive(Debug)]
 pub struct CedarPolicyEvaluator {
     policy_set: PolicySet,
     schema: Option<Schema>,
@@ -126,12 +130,13 @@ impl CedarPolicyEvaluator {
     pub fn from_bundle(bundle: &PolicyBundle) -> Result<Self, CedarEvaluatorError> {
         let src = std::str::from_utf8(&bundle.policies)?;
 
-        let policy_set = if src.trim().is_empty() {
-            PolicySet::new()
-        } else {
-            src.parse::<PolicySet>()
-                .map_err(CedarEvaluatorError::PolicyParse)?
-        };
+        if src.trim().is_empty() {
+            return Err(CedarEvaluatorError::EmptyPolicies);
+        }
+
+        let policy_set = src
+            .parse::<PolicySet>()
+            .map_err(CedarEvaluatorError::PolicyParse)?;
 
         let ttl_secs = u64::try_from(bundle.ttl_seconds.max(0)).unwrap_or(0u64);
 
@@ -285,17 +290,15 @@ mod tests {
 
     #[test]
     fn from_bundle_empty_policies_deny() {
-        let evaluator = CedarPolicyEvaluator::from_bundle(&empty_bundle()).unwrap();
-        // Empty policy set — Cedar default deny.
-        let result = evaluator
-            .evaluate(
-                &agent("agent_test"),
-                "llm.inference",
-                "api.openai.com",
-                &test_context(),
-            )
-            .unwrap();
-        assert!(!result, "empty policy set should deny");
+        // Empty policy bytes are rejected at construction time so the caller
+        // can surface a typed error rather than silently falling through to
+        // Cedar's default deny (which is indistinguishable from a legitimate
+        // forbid-all bundle).
+        let err = CedarPolicyEvaluator::from_bundle(&empty_bundle()).unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::EmptyPolicies),
+            "expected EmptyPolicies, got {err}"
+        );
     }
 
     #[test]
@@ -346,7 +349,12 @@ mod tests {
 
     #[test]
     fn is_stale_with_zero_ttl() {
-        let zero_ttl = PolicyBundle::new("v0".to_string(), vec![], vec![], 0);
+        let zero_ttl = PolicyBundle::new(
+            "v0".to_string(),
+            b"permit(principal, action, resource);".to_vec(),
+            vec![],
+            0,
+        );
         let evaluator = CedarPolicyEvaluator::from_bundle(&zero_ttl).unwrap();
         // TTL = 0 means immediately stale.
         assert!(!evaluator.is_fresh());
