@@ -471,13 +471,15 @@ mod tests {
         });
 
         for action in ACTIONS {
-            let principal: EntityUid = "Firma::Agent::\"agent_test\"".to_string()
+            let principal: EntityUid = "Firma::Agent::\"agent_test\""
+                .to_string()
                 .parse()
                 .unwrap_or_else(|e| panic!("principal parse failed: {e}"));
             let action_uid: EntityUid = format!("Firma::Action::\"{action}\"")
                 .parse()
                 .unwrap_or_else(|e| panic!("action parse failed for '{action}': {e}"));
-            let resource: EntityUid = "Firma::Resource::\"r\"".to_string()
+            let resource: EntityUid = "Firma::Resource::\"r\""
+                .to_string()
                 .parse()
                 .unwrap_or_else(|e| panic!("resource parse failed: {e}"));
 
