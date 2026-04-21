@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::authority_client::policy_bundle::StubBundleParser;
+use crate::authority_client::policy_bundle::CedarBundleParser;
 use crate::authority_client::{self, AuthorityClientHandle, AuthorityDeps};
 use crate::config;
 use crate::startup::pipeline::PipelineRuntime;
@@ -38,10 +38,7 @@ pub fn spawn_authority_client(
         authority_url,
         Duration::from_secs(config.authority.connect_timeout_secs),
     )?;
-    tracing::warn!(
-        "Authority stream clients wired with StubBundleParser — all policy evaluations will \
-         ALLOW until the Cedar bundle loader (task 013) replaces it"
-    );
+    tracing::info!("Authority stream clients wired with Cedar bundle parser");
 
     let handle = authority_client::spawn_authority_client(AuthorityDeps {
         channel,
@@ -50,7 +47,7 @@ pub fn spawn_authority_client(
         readiness: Arc::clone(&runtime.readiness),
         cancel,
         config: config.authority.clone(),
-        bundle_parser: Arc::new(StubBundleParser),
+        bundle_parser: Arc::new(CedarBundleParser),
     });
     Ok(Some(handle))
 }

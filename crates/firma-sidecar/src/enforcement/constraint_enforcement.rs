@@ -35,7 +35,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use firma_core::{CapabilityClaims, DenyReason};
+use firma_core::{AgentId, CapabilityClaims, DenyReason};
 
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
 use crate::normalizer::NormalizedEnvelope;
@@ -55,7 +55,7 @@ pub trait PolicyEvaluation: Send + Sync {
     /// context or engine error).
     fn evaluate(
         &self,
-        principal: &str,
+        principal: &AgentId,
         action: &str,
         resource: &str,
         context: &serde_json::Value,
@@ -334,6 +334,7 @@ impl ConstraintEnforcer {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use chrono::Utc;
@@ -344,7 +345,7 @@ mod tests {
     impl PolicyEvaluation for AllowAllPolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
@@ -363,7 +364,7 @@ mod tests {
     impl PolicyEvaluation for DenyAllPolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
@@ -382,7 +383,7 @@ mod tests {
     impl PolicyEvaluation for ErrorPolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
@@ -401,7 +402,7 @@ mod tests {
     impl PolicyEvaluation for StalePolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
@@ -420,7 +421,7 @@ mod tests {
     impl PolicyEvaluation for UnavailablePolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
@@ -442,7 +443,7 @@ mod tests {
     impl PolicyEvaluation for SlowPolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
@@ -480,9 +481,11 @@ mod tests {
 
     fn test_claims(actions: Vec<&str>) -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent_test".to_string(),
-            session_id: "sess_001".to_string(),
+            token_id: "3713c5fc-b569-650c-c780-c64051473370"
+                .parse()
+                .expect("literal token id"),
+            agent_id: "agent_test".parse().expect("literal agent id"),
+            session_id: "sess_001".parse().expect("literal session id"),
             action_set: actions.into_iter().map(String::from).collect(),
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
@@ -597,7 +600,7 @@ mod tests {
         impl PolicyEvaluation for StaleButAllowPolicy {
             fn evaluate(
                 &self,
-                _: &str,
+                _: &AgentId,
                 _: &str,
                 _: &str,
                 _: &serde_json::Value,

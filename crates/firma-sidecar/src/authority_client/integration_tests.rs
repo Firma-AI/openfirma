@@ -6,10 +6,13 @@
 //! reconnect with bundle swap, and parse-failure retention of the last
 //! valid bundle.
 
+#![cfg(test)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use firma_core::RevocationStore;
+use firma_core::{AgentId, RevocationStore, TokenId};
 use firma_proto::authority_service_server::{AuthorityService, AuthorityServiceServer};
 use firma_proto::{
     IssueCapabilityRequest, IssueCapabilityResponse, PolicyBundle, PolicyBundleUpdate,
@@ -24,7 +27,7 @@ use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
 use super::channel::build_channel;
-use super::policy_bundle::StubBundleParser;
+use super::policy_bundle::CedarBundleParser;
 use super::readiness::{ReadinessFlag, ReadinessState, ReadinessView};
 use super::swappable_policy::SwappablePolicyEvaluation;
 use super::{AuthorityClientHandle, AuthorityDeps, spawn_authority_client};
@@ -227,7 +230,7 @@ async fn spawn_sidecar(url: &str, config: AuthorityConfig) -> anyhow::Result<Sid
         readiness,
         cancel: cancel.clone(),
         config,
-        bundle_parser: Arc::new(StubBundleParser),
+        bundle_parser: Arc::new(CedarBundleParser),
     });
 
     Ok(SidecarHarness {
@@ -244,7 +247,7 @@ struct DenyAllEvaluation;
 impl PolicyEvaluation for DenyAllEvaluation {
     fn evaluate(
         &self,
-        _principal: &str,
+        _principal: &AgentId,
         _action: &str,
         _resource: &str,
         _context: &serde_json::Value,
@@ -261,16 +264,32 @@ impl PolicyEvaluation for DenyAllEvaluation {
     }
 }
 
-fn bundle_update(version: &str, ttl_seconds: i32, policies: &[u8]) -> PolicyBundleUpdate {
+/// Minimal valid Cedar policy source that parses under [`TEST_CEDAR_SCHEMA`].
+const VALID_CEDAR_POLICY: &str = "permit(principal, action, resource);";
+
+/// Cedar schema scoped to the test suite; the production schema is wider
+/// and lives under `firma-authority/policies/schema.cedarschema`.
+const TEST_CEDAR_SCHEMA: &str = "\
+namespace Firma {
+    entity Agent;
+    entity Resource;
+    action \"test.action\" appliesTo { principal: [Agent], resource: [Resource] };
+}";
+
+fn bundle_update(version: &str, ttl_seconds: u32, policies: &[u8]) -> PolicyBundleUpdate {
     PolicyBundleUpdate {
         bundle: Some(PolicyBundle {
             version: version.to_string(),
             policies: policies.to_vec(),
-            entity_schema: Vec::new(),
+            entity_schema: TEST_CEDAR_SCHEMA.as_bytes().to_vec(),
             ttl_seconds,
         }),
         updated_at: None,
     }
+}
+
+fn valid_bundle_update(version: &str, ttl_seconds: u32) -> PolicyBundleUpdate {
+    bundle_update(version, ttl_seconds, VALID_CEDAR_POLICY.as_bytes())
 }
 
 fn revocation(token_id: &str, reason: &str) -> RevocationEvent {
@@ -302,7 +321,7 @@ async fn wait_for<F: Fn() -> bool>(deadline: Duration, predicate: F) -> bool {
     predicate()
 }
 
-fn is_revoked(store: &BloomLruRevocationStore, token_id: &str) -> bool {
+fn is_revoked(store: &BloomLruRevocationStore, token_id: &TokenId) -> bool {
     matches!(store.is_revoked(token_id), Ok(true))
 }
 
@@ -315,7 +334,7 @@ async fn readiness_flips_after_initial_bundle_and_revocation_grace() -> anyhow::
     let server = spawn_mock_authority().await?;
     server
         .handle
-        .set_initial_bundle(bundle_update("v1", 60, b"stub-policies"));
+        .set_initial_bundle(valid_bundle_update("v1", 60));
     let harness = spawn_sidecar(&server.url, test_config()).await?;
 
     let policy_ready = wait_for(Duration::from_secs(2), || {
@@ -346,7 +365,7 @@ async fn revocation_event_propagates_to_store_within_one_second() -> anyhow::Res
     let server = spawn_mock_authority().await?;
     server
         .handle
-        .set_initial_bundle(bundle_update("v1", 60, b"stub-policies"));
+        .set_initial_bundle(valid_bundle_update("v1", 60));
     let harness = spawn_sidecar(&server.url, test_config()).await?;
 
     assert!(
@@ -358,12 +377,15 @@ async fn revocation_event_propagates_to_store_within_one_second() -> anyhow::Res
     );
 
     let pushed_at = Instant::now();
+    let propagate_id: TokenId = "11111111-1111-1111-1111-111111111111"
+        .parse()
+        .expect("literal uuid");
     server
         .handle
-        .push_revocation(revocation("tok_propagate", "test"));
+        .push_revocation(revocation(&propagate_id.to_string(), "test"));
 
     let propagated = wait_for(Duration::from_secs(1), || {
-        is_revoked(&harness.revocation_store, "tok_propagate")
+        is_revoked(&harness.revocation_store, &propagate_id)
     })
     .await;
     assert!(
@@ -382,7 +404,7 @@ async fn ttl_expiry_marks_policy_stale_after_authority_disappears() -> anyhow::R
     let server = spawn_mock_authority().await?;
     server
         .handle
-        .set_initial_bundle(bundle_update("v-ttl", 1, b"stub-policies"));
+        .set_initial_bundle(valid_bundle_update("v-ttl", 1));
     let harness = spawn_sidecar(&server.url, test_config()).await?;
 
     assert!(
@@ -417,7 +439,7 @@ async fn reconnect_applies_new_bundle_version() -> anyhow::Result<()> {
     let server = spawn_mock_authority().await?;
     server
         .handle
-        .set_initial_bundle(bundle_update("v1", 60, b"stub-policies"));
+        .set_initial_bundle(valid_bundle_update("v1", 60));
     let harness = spawn_sidecar(&server.url, test_config()).await?;
 
     assert!(
@@ -429,9 +451,7 @@ async fn reconnect_applies_new_bundle_version() -> anyhow::Result<()> {
     );
     assert_eq!(harness.swappable_policy.version().as_deref(), Some("v1"));
 
-    server
-        .handle
-        .push_bundle(bundle_update("v2", 60, b"stub-policies-next"));
+    server.handle.push_bundle(valid_bundle_update("v2", 60));
 
     let swapped = wait_for(Duration::from_secs(2), || {
         harness.swappable_policy.version().as_deref() == Some("v2")
@@ -449,7 +469,7 @@ async fn malformed_bundle_retains_previous_version() -> anyhow::Result<()> {
     let server = spawn_mock_authority().await?;
     server
         .handle
-        .set_initial_bundle(bundle_update("v1", 60, b"stub-policies"));
+        .set_initial_bundle(valid_bundle_update("v1", 60));
     let harness = spawn_sidecar(&server.url, test_config()).await?;
 
     assert!(
@@ -461,7 +481,7 @@ async fn malformed_bundle_retains_previous_version() -> anyhow::Result<()> {
         .await
     );
 
-    // StubBundleParser rejects empty policy bytes. Sidecar must keep v1.
+    // CedarBundleParser rejects empty policy bytes. Sidecar must keep v1.
     server.handle.push_bundle(bundle_update("v-bad", 60, b""));
 
     tokio::time::sleep(Duration::from_millis(250)).await;
@@ -472,14 +492,139 @@ async fn malformed_bundle_retains_previous_version() -> anyhow::Result<()> {
     );
 
     // A follow-up valid bundle must still apply normally.
-    server
-        .handle
-        .push_bundle(bundle_update("v2", 60, b"stub-policies"));
+    server.handle.push_bundle(valid_bundle_update("v2", 60));
     let swapped = wait_for(Duration::from_secs(2), || {
         harness.swappable_policy.version().as_deref() == Some("v2")
     })
     .await;
     assert!(swapped, "recovery bundle v2 did not apply");
+
+    harness.shutdown().await;
+    server.stop().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invalid_cedar_bundle_retains_previous_snapshot() -> anyhow::Result<()> {
+    let server = spawn_mock_authority().await?;
+    server
+        .handle
+        .set_initial_bundle(valid_bundle_update("v1", 60));
+    let harness = spawn_sidecar(&server.url, test_config()).await?;
+
+    assert!(
+        wait_for(Duration::from_secs(2), || harness
+            .swappable_policy
+            .version()
+            .as_deref()
+            == Some("v1"))
+        .await,
+        "initial Cedar bundle did not apply"
+    );
+
+    // Cedar policy source that is syntactically invalid — CedarBundleParser
+    // rejects it, the sidecar keeps the last valid snapshot.
+    let bad = bundle_update("v-bad-cedar", 60, b"this is not a cedar policy");
+    server.handle.push_bundle(bad);
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert_eq!(
+        harness.swappable_policy.version().as_deref(),
+        Some("v1"),
+        "invalid Cedar bundle must not replace the last valid snapshot"
+    );
+
+    harness.shutdown().await;
+    server.stop().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sequential_valid_bundles_swap_observed_by_evaluate() -> anyhow::Result<()> {
+    let server = spawn_mock_authority().await?;
+    server
+        .handle
+        .set_initial_bundle(valid_bundle_update("v1", 60));
+    let harness = spawn_sidecar(&server.url, test_config()).await?;
+
+    assert!(
+        wait_for(Duration::from_secs(2), || harness
+            .swappable_policy
+            .version()
+            .as_deref()
+            == Some("v1"))
+        .await,
+        "v1 bundle did not apply"
+    );
+
+    let agent: AgentId = "agent-eval".parse().expect("literal agent id");
+    let ctx = serde_json::json!({});
+    // v1 permits everything, so evaluate should ALLOW.
+    let allowed_v1 = harness
+        .swappable_policy
+        .evaluate(&agent, "test.action", "resource", &ctx)
+        .expect("cedar evaluator returns Ok for valid request");
+    assert!(
+        allowed_v1,
+        "v1 permit(principal, action, resource) must ALLOW"
+    );
+
+    // Push v2 — a deny-only bundle. Next evaluate() must observe the swap.
+    let forbid_bundle = bundle_update("v2", 60, b"forbid(principal, action, resource);");
+    server.handle.push_bundle(forbid_bundle);
+    assert!(
+        wait_for(Duration::from_secs(2), || harness
+            .swappable_policy
+            .version()
+            .as_deref()
+            == Some("v2"))
+        .await,
+        "v2 bundle did not apply"
+    );
+
+    let allowed_v2 = harness
+        .swappable_policy
+        .evaluate(&agent, "test.action", "resource", &ctx)
+        .expect("cedar evaluator returns Ok for valid request");
+    assert!(!allowed_v2, "v2 forbid(...) must DENY on the next evaluate");
+
+    harness.shutdown().await;
+    server.stop().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cold_boot_without_bundle_stays_not_ready() -> anyhow::Result<()> {
+    // Authority is reachable but never pushes a bundle. Sidecar must stay
+    // fail-closed: `policy_bundle_ready` never flips, and every request
+    // that reaches the pipeline is denied with `PolicyBundleNotReady`.
+    let server = spawn_mock_authority().await?;
+    // Intentionally no set_initial_bundle / push_bundle.
+    let harness = spawn_sidecar(&server.url, test_config()).await?;
+
+    // Give the stream client a window to settle.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert!(
+        !harness.readiness_view.snapshot().policy_bundle_ready,
+        "policy_bundle_ready must stay false without a bundle push"
+    );
+    assert_eq!(
+        harness.swappable_policy.version(),
+        None,
+        "no bundle version should be installed",
+    );
+    assert!(
+        !harness.swappable_policy.is_fresh(),
+        "sentinel DenyAll evaluator must report is_fresh() == false",
+    );
+
+    let agent: AgentId = "agent-cold".parse().expect("literal agent id");
+    let ctx = serde_json::json!({});
+    let allowed = harness
+        .swappable_policy
+        .evaluate(&agent, "test.action", "resource", &ctx)
+        .expect("sentinel evaluator returns Ok(false)");
+    assert!(!allowed, "sentinel DenyAll must refuse every evaluate()");
 
     harness.shutdown().await;
     server.stop().await;

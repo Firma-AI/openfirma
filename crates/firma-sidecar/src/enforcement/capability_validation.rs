@@ -30,6 +30,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(test)]
+use firma_core::TokenId;
 use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
 
 use crate::normalizer::NormalizedEnvelope;
@@ -158,7 +160,7 @@ impl CapabilityValidator {
             .unwrap_or(chrono::Duration::zero());
         if claims.expiry + tolerance <= now {
             return Err(EnforcementError::TokenValidation(TokenError::Expired {
-                token_id: claims.token_id.clone(),
+                token_id: claims.token_id,
             })
             .into_deny(stage));
         }
@@ -171,7 +173,7 @@ impl CapabilityValidator {
 
         if is_revoked {
             return Err(EnforcementError::TokenValidation(TokenError::Revoked {
-                token_id: claims.token_id.clone(),
+                token_id: claims.token_id,
             })
             .into_deny(stage));
         }
@@ -181,6 +183,7 @@ impl CapabilityValidator {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::enforcement::capability_map::CapabilityEntry;
@@ -211,19 +214,21 @@ mod tests {
     }
 
     impl RevocationStore for MockRevocationStore {
-        fn is_revoked(&self, token_id: &str) -> Result<bool, TokenError> {
+        fn is_revoked(&self, token_id: &TokenId) -> Result<bool, TokenError> {
             Ok(self.revoked.contains(&token_id.to_string()))
         }
-        fn add_revocation(&self, _token_id: &str) -> Result<(), TokenError> {
+        fn add_revocation(&self, _token_id: &TokenId) -> Result<(), TokenError> {
             Ok(())
         }
     }
 
     fn valid_claims() -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent_test".to_string(),
-            session_id: "sess_001".to_string(),
+            token_id: "3713c5fc-b569-650c-c780-c64051473370"
+                .parse()
+                .expect("literal token id"),
+            agent_id: "agent_test".parse().expect("literal agent id"),
+            session_id: "sess_001".parse().expect("literal session id"),
             action_set: vec!["llm.inference".to_string()],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
@@ -280,7 +285,7 @@ mod tests {
                 claims: valid_claims(),
             }),
             Arc::new(MockRevocationStore {
-                revoked: vec!["tok_001".to_string()],
+                revoked: vec!["3713c5fc-b569-650c-c780-c64051473370".to_string()],
             }),
             Duration::from_secs(0),
         );
@@ -391,7 +396,10 @@ mod tests {
         let result = validator.enforce(&envelope, "sess_001");
         assert!(result.is_ok());
         let validated = result.unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(validated.claims.token_id, "tok_001");
+        assert_eq!(
+            validated.claims.token_id.to_string(),
+            "3713c5fc-b569-650c-c780-c64051473370"
+        );
         assert_eq!(validated.raw_token, "v4.public.test_token");
     }
 

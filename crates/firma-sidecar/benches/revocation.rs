@@ -6,47 +6,49 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use firma_core::RevocationStore;
+use firma_core::{RevocationStore, TokenId};
 use firma_sidecar::revocation_bench_api::{BloomLruRevocationStore, RevocationConfig};
 
 fn bench_is_revoked_miss(c: &mut Criterion) {
     let store = BloomLruRevocationStore::new(RevocationConfig::default());
-    for i in 0..100_000_u64 {
-        let _ = store.add_revocation(&format!("tok-{i}"));
+    let mut populated = Vec::with_capacity(100_000);
+    for _ in 0..100_000_u64 {
+        let id = TokenId::new();
+        let _ = store.add_revocation(&id);
+        populated.push(id);
     }
-    let mut i = 0_u64;
+    let _ = populated;
     c.bench_function("is_revoked_miss", |b| {
         b.iter(|| {
-            i = i.wrapping_add(1);
-            let key = format!("miss-{i}");
-            let _ = black_box(store.is_revoked(&key));
+            let id = TokenId::new();
+            let _ = black_box(store.is_revoked(&id));
         });
     });
 }
 
 fn bench_is_revoked_hit(c: &mut Criterion) {
     let store = BloomLruRevocationStore::new(RevocationConfig::default());
-    for i in 0..10_000_u64 {
-        let _ = store.add_revocation(&format!("hit-{i}"));
+    let mut ids = Vec::with_capacity(10_000);
+    for _ in 0..10_000_u64 {
+        let id = TokenId::new();
+        let _ = store.add_revocation(&id);
+        ids.push(id);
     }
-    let mut i = 0_u64;
+    let mut i = 0_usize;
     c.bench_function("is_revoked_hit", |b| {
         b.iter(|| {
-            i = i.wrapping_add(1) % 10_000;
-            let key = format!("hit-{i}");
-            let _ = black_box(store.is_revoked(&key));
+            i = (i + 1) % ids.len();
+            let _ = black_box(store.is_revoked(&ids[i]));
         });
     });
 }
 
 fn bench_add_revocation(c: &mut Criterion) {
     let store = BloomLruRevocationStore::new(RevocationConfig::default());
-    let mut i = 0_u64;
     c.bench_function("add_revocation", |b| {
         b.iter(|| {
-            i = i.wrapping_add(1);
-            let key = format!("add-{i}");
-            let _ = black_box(store.add_revocation(&key));
+            let id = TokenId::new();
+            let _ = black_box(store.add_revocation(&id));
         });
     });
 }

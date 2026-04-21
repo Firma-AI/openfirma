@@ -14,6 +14,7 @@ loom-tests = []
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
+cedar-policy = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = [
   "color",
@@ -27,9 +28,9 @@ clap = { workspace = true, features = [
 ] }
 ecdsa = { workspace = true }
 elliptic-curve = { workspace = true }
-firma-core = { path = "../firma-core" }
-firma-grpc-interceptor-proto = { path = "../firma-grpc-interceptor-proto" }
-firma-proto = { path = "../firma-proto" }
+firma-core = { workspace = true }
+firma-grpc-interceptor-proto = { workspace = true }
+firma-proto = { workspace = true }
 governor = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
@@ -67,14 +68,19 @@ xxhash-rust = { workspace = true }
 [dev-dependencies]
 criterion = { workspace = true }
 loom = "0.7"
+pasetors = { workspace = true }
 proptest = { workspace = true }
-tempfile = "3"
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "time"] }
 wiremock = "0.6"
+
+[lints]
+workspace = true
 
 [[bench]]
 name = "revocation"
 harness = false
 
-[lints]
-workspace = true
+[[bench]]
+name = "cedar_evaluator"
+harness = false

@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
+use firma_core::AgentId;
 
 use crate::enforcement::constraint_enforcement::PolicyEvaluation;
 
@@ -48,7 +49,7 @@ impl SwappablePolicyEvaluation {
 impl PolicyEvaluation for SwappablePolicyEvaluation {
     fn evaluate(
         &self,
-        principal: &str,
+        principal: &AgentId,
         action: &str,
         resource: &str,
         context: &serde_json::Value,
@@ -75,4 +76,32 @@ fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_millis() as i64)
+}
+
+/// Sentinel evaluator installed as the initial snapshot of
+/// [`SwappablePolicyEvaluation`] before the first Authority bundle
+/// arrives. Denies every call and reports itself as stale so Stage 2
+/// falls through to `PolicyBundleStale` if the readiness gate is ever
+/// bypassed.
+#[derive(Debug, Default)]
+pub(crate) struct DenyAllPolicyEvaluation;
+
+impl PolicyEvaluation for DenyAllPolicyEvaluation {
+    fn evaluate(
+        &self,
+        _principal: &AgentId,
+        _action: &str,
+        _resource: &str,
+        _context: &serde_json::Value,
+    ) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    fn is_fresh(&self) -> bool {
+        false
+    }
+
+    fn version(&self) -> Option<String> {
+        None
+    }
 }

@@ -13,6 +13,8 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use firma_core::CapabilityClaims;
+#[cfg(test)]
+use firma_core::TokenId;
 
 use crate::enforcement::decision::{
     CapabilityValidationStage, EnforcementDecision, EnforcementStage,
@@ -223,15 +225,18 @@ impl CapabilityMap {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use chrono::Utc;
 
     fn test_claims(actions: Vec<&str>, resource_scope: &str) -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent_test".to_string(),
-            session_id: "sess_001".to_string(),
+            token_id: "3713c5fc-b569-650c-c780-c64051473370"
+                .parse()
+                .expect("literal token id"),
+            agent_id: "agent_test".parse().expect("literal agent id"),
+            session_id: "sess_001".parse().expect("literal session id"),
             action_set: actions.into_iter().map(String::from).collect(),
             resource_scope: resource_scope.to_string(),
             issued_at: Utc::now(),
@@ -306,9 +311,9 @@ mod tests {
         CapabilityEntry {
             raw_token: format!("v4.public.{token_id}"),
             claims: CapabilityClaims {
-                token_id: token_id.to_string(),
-                agent_id: "agent_test".to_string(),
-                session_id: "sess_001".to_string(),
+                token_id: TokenId::new(),
+                agent_id: "agent_test".parse().expect("literal agent id"),
+                session_id: "sess_001".parse().expect("literal session id"),
                 action_set: actions.into_iter().map(String::from).collect(),
                 resource_scope: resource_scope.to_string(),
                 issued_at,
@@ -329,7 +334,7 @@ mod tests {
         let result = map
             .select("sess_001", "llm.inference", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result.claims.token_id, "narrow");
+        assert_eq!(result.raw_token, "v4.public.narrow");
     }
 
     #[test]
@@ -351,7 +356,7 @@ mod tests {
         let result = map
             .select("sess_001", "llm.inference", "some.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result.claims.token_id, "slim");
+        assert_eq!(result.raw_token, "v4.public.slim");
 
         // Now two tokens with same action_set size: one wildcard, one specific
         // resource. Primary scores differ here (101 vs 150) so the specific one
@@ -360,7 +365,7 @@ mod tests {
         let result2 = map2
             .select("sess_001", "llm.inference", "api.openai.com/v1/chat")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result2.claims.token_id, "spec_r");
+        assert_eq!(result2.raw_token, "v4.public.spec_r");
     }
 
     #[test]
@@ -377,7 +382,7 @@ mod tests {
         let result = map
             .select("sess_001", "llm.inference", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result.claims.token_id, "fresh");
+        assert_eq!(result.raw_token, "v4.public.fresh");
     }
 
     #[test]
@@ -396,13 +401,13 @@ mod tests {
         let r1 = map1
             .select("sess_001", "llm.inference", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(r1.claims.token_id, "b");
+        assert_eq!(r1.raw_token, "v4.public.b");
 
         let map2 = CapabilityMap::new(vec![c, a, b]);
         let r2 = map2
             .select("sess_001", "llm.inference", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(r2.claims.token_id, "b");
+        assert_eq!(r2.raw_token, "v4.public.b");
     }
 
     #[test]
@@ -449,7 +454,7 @@ mod tests {
         let result = map
             .select("sess_001", "llm.inference", "api.openai.com/v1/chat")
             .unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(result.claims.token_id, "specific");
+        assert_eq!(result.raw_token, "v4.public.specific");
     }
 
     #[test]

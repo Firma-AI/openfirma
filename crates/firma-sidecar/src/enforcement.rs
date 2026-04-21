@@ -25,6 +25,7 @@
 
 pub(crate) mod capability_map;
 pub(crate) mod capability_validation;
+pub(crate) mod cedar_evaluator;
 pub(crate) mod constraint_enforcement;
 pub(crate) mod decision;
 pub(crate) mod error;

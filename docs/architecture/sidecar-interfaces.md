@@ -136,7 +136,11 @@ pub fn evaluate(
 `ExecutionEnvelope` after this stage succeeds.
 
 **Dependency:** `PolicyEvaluation`, which abstracts the policy engine through
-`evaluate()`, `is_fresh()`, and `version()`.
+`evaluate()`, `is_fresh()`, and `version()`. `evaluate()` takes
+`principal: &AgentId, action: &str, resource: &str, context: &serde_json::Value`
+and returns `Result<bool, String>`. The production implementation is
+`CedarPolicyEvaluator` (fed by `CedarBundleParser` on every accepted
+`WatchPolicyBundle` push).
 
 **Steps:**
 

@@ -243,6 +243,11 @@ Stage 2 settings.
 | -------------------- | ---- | ------- | ------------------------------------- |
 | `bundle_ttl_seconds` | u64  | `30`    | Policy bundle maximum age before deny |
 
+The authoritative TTL at runtime comes from the `ttl_seconds` field on
+the `PolicyBundle` pushed by the Authority over `WatchPolicyBundle`.
+`bundle_ttl_seconds` here is the dev-mode fallback used only until the
+first push arrives.
+
 ### `[connector]`
 
 Outbound dispatch defaults and per-host overrides.

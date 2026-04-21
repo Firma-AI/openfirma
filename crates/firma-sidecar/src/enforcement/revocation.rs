@@ -20,7 +20,7 @@ pub(crate) mod lru;
 #[path = "revocation/metrics.rs"]
 pub(crate) mod metrics;
 
-use firma_core::{RevocationStore, TokenError};
+use firma_core::{RevocationStore, TokenError, TokenId};
 
 use self::bloom::AtomicBloom;
 use self::lru::LruSet;
@@ -74,12 +74,13 @@ impl BloomLruRevocationStore {
 }
 
 impl RevocationStore for BloomLruRevocationStore {
-    fn is_revoked(&self, token_id: &str) -> Result<bool, TokenError> {
-        if !self.bloom.contains(token_id) {
+    fn is_revoked(&self, token_id: &TokenId) -> Result<bool, TokenError> {
+        let key = token_id.to_string();
+        if !self.bloom.contains(&key) {
             return Ok(false);
         }
         self.metrics.record_bloom_hit();
-        if self.lru.contains(token_id) {
+        if self.lru.contains(&key) {
             self.metrics.record_lru_hit();
         } else {
             self.metrics.record_lru_miss();
@@ -87,13 +88,14 @@ impl RevocationStore for BloomLruRevocationStore {
         Ok(true)
     }
 
-    fn add_revocation(&self, token_id: &str) -> Result<(), TokenError> {
-        self.bloom.insert(token_id);
-        self.lru.insert(token_id.to_owned());
+    fn add_revocation(&self, token_id: &TokenId) -> Result<(), TokenError> {
+        let key = token_id.to_string();
+        self.bloom.insert(&key);
+        self.lru.insert(key.clone());
         self.metrics.record_revocation();
         let snap = self.metrics.snapshot();
         tracing::info!(
-            token_id,
+            token_id = %key,
             bloom_hits = snap.bloom_hits,
             lru_hits = snap.lru_hits,
             bloom_positive_lru_miss = snap.bloom_positive_lru_miss,
@@ -105,6 +107,7 @@ impl RevocationStore for BloomLruRevocationStore {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use std::sync::Arc;
     use std::thread;
@@ -123,25 +126,27 @@ mod tests {
     #[test]
     fn unknown_token_not_revoked() {
         let store = small_store();
-        let result = store.is_revoked("never-seen");
+        let result = store.is_revoked(&TokenId::new());
         assert_eq!(result.ok(), Some(false));
     }
 
     #[test]
     fn added_token_is_revoked() -> Result<(), TokenError> {
         let store = small_store();
-        store.add_revocation("tok-1")?;
-        assert_eq!(store.is_revoked("tok-1").ok(), Some(true));
+        let id = TokenId::new();
+        store.add_revocation(&id)?;
+        assert_eq!(store.is_revoked(&id).ok(), Some(true));
         Ok(())
     }
 
     #[test]
     fn bloom_hit_lru_miss_returns_revoked() -> Result<(), TokenError> {
         let store = small_store();
-        for i in 0..5 {
-            store.add_revocation(&format!("t-{i}"))?;
+        let ids: Vec<TokenId> = (0..5).map(|_| TokenId::new()).collect();
+        for id in &ids {
+            store.add_revocation(id)?;
         }
-        assert_eq!(store.is_revoked("t-0").ok(), Some(true));
+        assert_eq!(store.is_revoked(&ids[0]).ok(), Some(true));
         let snapshot = store.metrics();
         assert!(snapshot.bloom_positive_lru_miss >= 1);
         Ok(())
@@ -150,9 +155,10 @@ mod tests {
     #[test]
     fn idempotent_add_revocation() -> Result<(), TokenError> {
         let store = small_store();
-        store.add_revocation("same")?;
-        store.add_revocation("same")?;
-        assert_eq!(store.is_revoked("same").ok(), Some(true));
+        let id = TokenId::new();
+        store.add_revocation(&id)?;
+        store.add_revocation(&id)?;
+        assert_eq!(store.is_revoked(&id).ok(), Some(true));
         assert_eq!(store.metrics().revocations_total, 2);
         Ok(())
     }
@@ -167,15 +173,15 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_millis(200);
         let mut handles = Vec::new();
-        for thread_id in 0..4 {
+        for _ in 0..4 {
             let store = Arc::clone(&store);
             handles.push(thread::spawn(move || {
                 let mut i = 0_u64;
                 while Instant::now() < deadline {
-                    let key = format!("t-{thread_id}-{i}");
-                    let _ = store.is_revoked(&key);
+                    let id = TokenId::new();
+                    let _ = store.is_revoked(&id);
                     if i % 8 == 0 {
-                        let _ = store.add_revocation(&key);
+                        let _ = store.add_revocation(&id);
                     }
                     i = i.wrapping_add(1);
                 }
@@ -199,9 +205,8 @@ mod proptests {
 
     proptest! {
         #[test]
-        fn members_always_revoked(
-            members in proptest::collection::hash_set("[a-z0-9]{8,16}", 1..200),
-        ) {
+        fn members_always_revoked(count in 1usize..200) {
+            let members: Vec<TokenId> = (0..count).map(|_| TokenId::new()).collect();
             let store = BloomLruRevocationStore::new(RevocationConfig {
                 capacity: 10_000,
                 fpr: 0.001,
@@ -220,9 +225,9 @@ mod proptests {
             clippy::cast_precision_loss,
             reason = "Empirical false-positive rate calculation is test-only."
         )]
-        fn non_members_mostly_not_revoked(
-            members in proptest::collection::hash_set("[a-z0-9]{8,16}", 100..500),
-        ) {
+        fn non_members_mostly_not_revoked(count in 100usize..500) {
+            let members: Vec<TokenId> = (0..count).map(|_| TokenId::new()).collect();
+            let member_set: HashSet<TokenId> = members.iter().copied().collect();
             let store = BloomLruRevocationStore::new(RevocationConfig {
                 capacity: 10_000,
                 fpr: 0.001,
@@ -233,15 +238,12 @@ mod proptests {
             }
             let mut false_positives = 0_usize;
             let samples = 2_000_usize;
-            let mut tried = HashSet::new();
-            let mut i = 0_u64;
-            while tried.len() < samples {
-                let key = format!("NM-{i}");
-                i = i.wrapping_add(1);
-                if members.contains(&key) || !tried.insert(key.clone()) {
+            for _ in 0..samples {
+                let candidate = TokenId::new();
+                if member_set.contains(&candidate) {
                     continue;
                 }
-                if store.is_revoked(&key).ok() == Some(true) {
+                if store.is_revoked(&candidate).ok() == Some(true) {
                     false_positives += 1;
                 }
             }

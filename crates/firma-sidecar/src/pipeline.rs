@@ -18,7 +18,9 @@
 
 use std::time::Duration;
 
-use firma_core::{DenyReason, ExecutionEnvelope, ExecutionMetadata, InjectedCredentials};
+use firma_core::{
+    DenyReason, ExecutionEnvelope, ExecutionMetadata, InjectedCredentials, SessionId,
+};
 
 use crate::audit::AuditPayload;
 use crate::authority_client::readiness::ReadinessView;
@@ -41,6 +43,16 @@ pub(crate) const DECISION_DENY: i32 = 2;
 /// step 6. Emitted when the connector aborts an already-approved call
 /// (currently only `CONNECTOR_TIMEOUT`).
 pub(crate) const DECISION_ABORT: i32 = 3;
+
+#[expect(
+    clippy::expect_used,
+    reason = "the literal `_anonymous_` session id is non-empty by construction"
+)]
+fn anonymous_session_id() -> SessionId {
+    "_anonymous_"
+        .parse()
+        .expect("literal anonymous session id is non-empty")
+}
 
 /// Construction arguments for [`EnforcementPipeline`].
 ///
@@ -172,11 +184,17 @@ impl EnforcementPipeline {
         }
 
         // All stages passed — assemble the fully populated envelope.
+        // Empty session_id falls back to the `_anonymous_` sentinel so
+        // in-tree tests and callers that do not propagate a session
+        // header still reach the connector.
+        let session_id_typed = session_id
+            .parse::<SessionId>()
+            .unwrap_or_else(|_| anonymous_session_id());
         let envelope = ExecutionEnvelope::new(
             normalized.intent,
             capability.raw_token,
             ExecutionMetadata {
-                session_id: session_id.to_string(),
+                session_id: session_id_typed,
                 agent_id: capability.claims.agent_id.clone(),
                 timestamp: normalized.timestamp,
                 trace_id: None,
@@ -283,8 +301,8 @@ pub fn audit_payload_from_decision(
         EnforcementDecision::Allow {
             claims, envelope, ..
         } => (
-            claims.token_id.clone(),
-            claims.agent_id.clone(),
+            claims.token_id.to_string(),
+            claims.agent_id.to_string(),
             envelope.intent().action_class.clone(),
             envelope.intent().resource.clone(),
             DECISION_ALLOW,
@@ -352,6 +370,7 @@ fn extract_host(resource: &str) -> &str {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::config::{MappingRuleConfig, MappingRulesFile};
@@ -368,7 +387,7 @@ mod tests {
     impl PolicyEvaluation for AllowAllPolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
@@ -394,19 +413,21 @@ mod tests {
 
     struct NoRevocations;
     impl RevocationStore for NoRevocations {
-        fn is_revoked(&self, _token_id: &str) -> Result<bool, TokenError> {
+        fn is_revoked(&self, _token_id: &TokenId) -> Result<bool, TokenError> {
             Ok(false)
         }
-        fn add_revocation(&self, _token_id: &str) -> Result<(), TokenError> {
+        fn add_revocation(&self, _token_id: &TokenId) -> Result<(), TokenError> {
             Ok(())
         }
     }
 
     fn test_claims() -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent_test".to_string(),
-            session_id: "sess_001".to_string(),
+            token_id: "3713c5fc-b569-650c-c780-c64051473370"
+                .parse()
+                .expect("literal token id"),
+            agent_id: "agent_test".parse().expect("literal agent id"),
+            session_id: "sess_001".parse().expect("literal session id"),
             action_set: vec!["llm.inference".to_string(), "http.get".to_string()],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
@@ -492,9 +513,9 @@ mod tests {
             claims, envelope, ..
         } = decision
         {
-            assert_eq!(claims.agent_id, "agent_test");
-            assert_eq!(envelope.metadata().agent_id, "agent_test");
-            assert_eq!(envelope.metadata().session_id, "sess_001");
+            assert_eq!(claims.agent_id.as_ref(), "agent_test");
+            assert_eq!(envelope.metadata().agent_id.as_ref(), "agent_test");
+            assert_eq!(envelope.metadata().session_id.as_ref(), "sess_001");
             assert!(
                 !envelope.capability().is_empty(),
                 "capability must be populated on Allow"
@@ -626,7 +647,7 @@ mod tests {
         impl PolicyEvaluation for DenyDeletePolicy {
             fn evaluate(
                 &self,
-                _: &str,
+                _: &AgentId,
                 action: &str,
                 _: &str,
                 _: &serde_json::Value,
@@ -843,8 +864,8 @@ mod tests {
             );
 
             // Verify metadata fields
-            assert_eq!(envelope.metadata().session_id, "sess_001");
-            assert_eq!(envelope.metadata().agent_id, "agent_test");
+            assert_eq!(envelope.metadata().session_id.as_ref(), "sess_001");
+            assert_eq!(envelope.metadata().agent_id.as_ref(), "agent_test");
             assert!(envelope.metadata().trace_id.is_none());
             assert!((envelope.metadata().budget_consumed - 0.0).abs() < f64::EPSILON);
             assert!(envelope.metadata().risk_score.is_none());
@@ -856,8 +877,11 @@ mod tests {
             assert!(!envelope.capability().is_empty());
 
             // Verify claims match
-            assert_eq!(claims.token_id, "tok_001");
-            assert_eq!(claims.agent_id, "agent_test");
+            assert_eq!(
+                claims.token_id.to_string(),
+                "3713c5fc-b569-650c-c780-c64051473370"
+            );
+            assert_eq!(claims.agent_id.as_ref(), "agent_test");
         }
     }
 
@@ -873,10 +897,10 @@ mod tests {
 
         struct RevokedStore;
         impl firma_core::RevocationStore for RevokedStore {
-            fn is_revoked(&self, _token_id: &str) -> Result<bool, firma_core::TokenError> {
+            fn is_revoked(&self, _token_id: &TokenId) -> Result<bool, firma_core::TokenError> {
                 Ok(true)
             }
-            fn add_revocation(&self, _: &str) -> Result<(), firma_core::TokenError> {
+            fn add_revocation(&self, _token_id: &TokenId) -> Result<(), firma_core::TokenError> {
                 Ok(())
             }
         }
@@ -1058,7 +1082,7 @@ mod tests {
         impl PolicyEvaluation for StalePolicy {
             fn evaluate(
                 &self,
-                _: &str,
+                _: &AgentId,
                 _: &str,
                 _: &str,
                 _: &serde_json::Value,
@@ -1134,7 +1158,7 @@ mod tests {
 
         assert_eq!(payload.session_id, "sess_audit");
         assert_eq!(payload.decision, 1); // ALLOW
-        assert_eq!(payload.token_id, "tok_001");
+        assert_eq!(payload.token_id, "3713c5fc-b569-650c-c780-c64051473370");
         assert_eq!(payload.agent_id, "agent_test");
         assert_eq!(payload.action, "llm.inference");
         assert!(payload.enforcement_latency_us >= 0);

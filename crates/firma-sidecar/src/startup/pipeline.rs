@@ -90,7 +90,7 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
     );
 
     let initial_policy: Box<dyn pipeline::PolicyEvaluation + Send + Sync> =
-        Box::new(DenyAllPolicyEvaluation);
+        Box::new(crate::authority_client::swappable_policy::DenyAllPolicyEvaluation);
     let swappable_policy = Arc::new(SwappablePolicyEvaluation::new(initial_policy));
     let policy_for_stage: Arc<dyn pipeline::PolicyEvaluation + Send + Sync> =
         Arc::clone(&swappable_policy) as Arc<dyn pipeline::PolicyEvaluation + Send + Sync>;
@@ -138,28 +138,5 @@ impl firma_core::TokenVerifier for StubTokenVerifier {
         Err(firma_core::TokenError::SignatureInvalid {
             reason: "stub verifier: no Authority configured".to_string(),
         })
-    }
-}
-
-/// Initial policy evaluator used before the first Authority bundle arrives.
-struct DenyAllPolicyEvaluation;
-
-impl pipeline::PolicyEvaluation for DenyAllPolicyEvaluation {
-    fn evaluate(
-        &self,
-        _principal: &str,
-        _action: &str,
-        _resource: &str,
-        _context: &serde_json::Value,
-    ) -> Result<bool, String> {
-        Ok(false)
-    }
-
-    fn is_fresh(&self) -> bool {
-        false
-    }
-
-    fn version(&self) -> Option<String> {
-        None
     }
 }

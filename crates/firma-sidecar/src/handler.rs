@@ -8,8 +8,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use firma_core::{
-    ActionParams, ConnectorError, ConnectorResponse, DenyReason, ExecutionEnvelope,
-    ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams, InjectedCredentials, TransportView,
+    ActionParams, AgentId, ConnectorError, ConnectorResponse, DenyReason, ExecutionEnvelope,
+    ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams, InjectedCredentials, SessionId,
+    TransportView,
 };
 use tokio::sync::mpsc;
 
@@ -353,12 +354,15 @@ fn passthrough_envelope(request: &RawRequest, session_id: &str) -> ExecutionEnve
         raw_transport: scheme.to_string(),
         raw_action_ref: format!("{} {}", request.method, request.path),
     };
+    let session_id = session_id
+        .parse::<SessionId>()
+        .unwrap_or_else(|_| passthrough_session_id());
     ExecutionEnvelope::new(
         intent,
         String::new(),
         ExecutionMetadata {
-            session_id: session_id.to_string(),
-            agent_id: String::new(),
+            session_id,
+            agent_id: passthrough_agent_id(),
             timestamp: chrono::Utc::now(),
             trace_id: None,
             budget_consumed: 0.0,
@@ -366,6 +370,26 @@ fn passthrough_envelope(request: &RawRequest, session_id: &str) -> ExecutionEnve
         },
         None,
     )
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "literal passthrough ids are non-empty by construction; parse cannot fail"
+)]
+fn passthrough_agent_id() -> AgentId {
+    "_passthrough_"
+        .parse()
+        .expect("literal passthrough agent id is non-empty")
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "literal passthrough ids are non-empty by construction; parse cannot fail"
+)]
+fn passthrough_session_id() -> SessionId {
+    "_passthrough_"
+        .parse()
+        .expect("literal passthrough session id is non-empty")
 }
 
 fn parse_http_method(method: &str) -> HttpMethod {
@@ -381,13 +405,14 @@ fn parse_http_method(method: &str) -> HttpMethod {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::time::Duration;
 
     use chrono::Utc;
-    use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
+    use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenId, TokenVerifier};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio_util::sync::CancellationToken;
@@ -405,7 +430,7 @@ mod tests {
     impl PolicyEvaluation for AllowAllPolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
@@ -434,20 +459,22 @@ mod tests {
 
     struct NoRevocations;
     impl RevocationStore for NoRevocations {
-        fn is_revoked(&self, _token_id: &str) -> Result<bool, TokenError> {
+        fn is_revoked(&self, _token_id: &TokenId) -> Result<bool, TokenError> {
             Ok(false)
         }
 
-        fn add_revocation(&self, _token_id: &str) -> Result<(), TokenError> {
+        fn add_revocation(&self, _token_id: &TokenId) -> Result<(), TokenError> {
             Ok(())
         }
     }
 
     fn test_claims() -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent_test".to_string(),
-            session_id: "sess_001".to_string(),
+            token_id: "3713c5fc-b569-650c-c780-c64051473370"
+                .parse()
+                .expect("literal token id"),
+            agent_id: "agent_test".parse().expect("literal agent id"),
+            session_id: "sess_001".parse().expect("literal session id"),
             action_set: vec!["llm.inference".to_string()],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
