@@ -15,10 +15,12 @@
 
 use cedar_policy::EntityUid;
 
+use crate::agent::AgentId;
+
 /// A typed Cedar entity UID in the `Firma` namespace.
 #[derive(Debug, Clone)]
 pub enum FirmaEntityUid {
-    Agent(String),
+    Agent(AgentId),
     Action(String),
     Resource(String),
 }
