@@ -169,7 +169,7 @@ message PolicyBundle {
   bytes entity_schema = 3;
   // Time-to-live in seconds. If TTL expires without refresh,
   // the Sidecar enters fail-closed mode.
-  int32 ttl_seconds = 4;
+  uint32 ttl_seconds = 4;
 }
 
 // RevocationEvent signals the invalidation of a previously issued

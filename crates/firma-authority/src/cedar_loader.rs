@@ -30,7 +30,7 @@ pub struct CedarPolicyStore {
     /// Policy directory path.
     policy_dir: PathBuf,
     /// Bundle TTL in seconds.
-    bundle_ttl_seconds: i32,
+    bundle_ttl_seconds: u32,
 }
 
 impl CedarPolicyStore {
@@ -42,7 +42,7 @@ impl CedarPolicyStore {
     ///
     /// Returns [`AuthorityError`] if the policy directory cannot be read or
     /// any `.cedar` file contains invalid syntax.
-    pub fn load(policy_dir: &Path, bundle_ttl_seconds: i32) -> Result<Self, AuthorityError> {
+    pub fn load(policy_dir: &Path, bundle_ttl_seconds: u32) -> Result<Self, AuthorityError> {
         let (policies_src, schema_src) = read_policy_files(policy_dir)?;
         let policy_set = parse_policies(&policies_src)?;
         let schema = parse_schema(&schema_src)?;

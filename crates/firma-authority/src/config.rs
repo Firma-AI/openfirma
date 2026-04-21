@@ -21,7 +21,7 @@ pub struct AuthorityConfig {
     /// Log level filter (default: `info`).
     pub log_level: String,
     /// Policy bundle TTL advertised to sidecars in seconds (default: 30).
-    pub bundle_ttl_seconds: i32,
+    pub bundle_ttl_seconds: u32,
 }
 
 impl AuthorityConfig {
@@ -66,7 +66,7 @@ impl AuthorityConfig {
             config.log_level = v;
         }
         if let Ok(v) = std::env::var("FIRMA_AUTHORITY_BUNDLE_TTL_SECONDS")
-            && let Ok(n) = v.parse::<i32>()
+            && let Ok(n) = v.parse::<u32>()
         {
             config.bundle_ttl_seconds = n;
         }
