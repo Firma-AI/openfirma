@@ -27,6 +27,31 @@ use firma_core::policy::PolicyBundle;
 
 use super::constraint_enforcement::PolicyEvaluation;
 
+/// Errors produced by Cedar policy loading and evaluation.
+#[derive(Debug, thiserror::Error)]
+pub enum CedarEvaluatorError {
+    #[error("policy bytes are not valid UTF-8: {0}")]
+    InvalidUtf8(#[from] std::str::Utf8Error),
+
+    #[error("failed to parse Cedar policies: {0}")]
+    PolicyParse(#[source] cedar_policy::ParseErrors),
+
+    #[error("failed to parse Cedar schema: {0}")]
+    SchemaParse(#[source] Box<cedar_policy::HumanSchemaError>),
+
+    #[error("invalid entity UID: {0}")]
+    EntityUidParse(#[source] cedar_policy::ParseErrors),
+
+    #[error("failed to build Cedar context: {0}")]
+    ContextBuild(#[source] Box<cedar_policy::ContextJsonError>),
+
+    /// `cedar_policy::RequestValidationError` is intentionally not re-exported
+    /// by the cedar-policy crate (it contains internal types), so we erase it
+    /// via `Box<dyn Error>` while preserving the source chain.
+    #[error("failed to build Cedar request: {0}")]
+    RequestBuild(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
 /// A typed Cedar entity UID in the `Firma` namespace.
 ///
 /// Encodes the three roles used in policy evaluation — agent (principal),
@@ -52,12 +77,13 @@ impl FirmaEntityUid {
     ///
     /// # Errors
     ///
-    /// Returns an error string if the id contains characters that make the
-    /// Cedar entity UID string unparseable (e.g. unescaped quotes).
-    pub(crate) fn to_cedar(&self) -> Result<EntityUid, String> {
+    /// Returns [`CedarEvaluatorError::EntityUidParse`] if the id contains
+    /// characters that make the Cedar entity UID string unparseable (e.g.
+    /// unescaped quotes).
+    pub(crate) fn to_cedar(&self) -> Result<EntityUid, CedarEvaluatorError> {
         self.to_string()
             .parse::<EntityUid>()
-            .map_err(|e| format!("invalid entity UID '{self}': {e}"))
+            .map_err(CedarEvaluatorError::EntityUidParse)
     }
 }
 
@@ -93,17 +119,18 @@ impl CedarPolicyEvaluator {
     ///
     /// # Errors
     ///
-    /// Returns an error string if policy bytes are not valid UTF-8 or contain
-    /// invalid Cedar syntax.
-    pub fn from_bundle(bundle: &PolicyBundle) -> Result<Self, String> {
-        let src = std::str::from_utf8(&bundle.policies)
-            .map_err(|e| format!("policy bundle bytes are not valid UTF-8: {e}"))?;
+    /// Returns [`CedarEvaluatorError::InvalidUtf8`] if policy or schema bytes
+    /// are not valid UTF-8, [`CedarEvaluatorError::PolicyParse`] if the Cedar
+    /// policy source is syntactically invalid, or
+    /// [`CedarEvaluatorError::SchemaParse`] if the Cedar schema is invalid.
+    pub fn from_bundle(bundle: &PolicyBundle) -> Result<Self, CedarEvaluatorError> {
+        let src = std::str::from_utf8(&bundle.policies)?;
 
         let policy_set = if src.trim().is_empty() {
             PolicySet::new()
         } else {
             src.parse::<PolicySet>()
-                .map_err(|e| format!("failed to parse Cedar policies from bundle: {e}"))?
+                .map_err(CedarEvaluatorError::PolicyParse)?
         };
 
         let ttl_secs = u64::try_from(bundle.ttl_seconds.max(0)).unwrap_or(0u64);
@@ -111,10 +138,9 @@ impl CedarPolicyEvaluator {
         let schema = if bundle.entity_schema.is_empty() {
             None
         } else {
-            let schema_src = std::str::from_utf8(&bundle.entity_schema)
-                .map_err(|e| format!("schema bytes are not valid UTF-8: {e}"))?;
+            let schema_src = std::str::from_utf8(&bundle.entity_schema)?;
             let (schema, _warnings) = Schema::from_cedarschema_str(schema_src)
-                .map_err(|e| format!("failed to parse Cedar schema from bundle: {e}"))?;
+                .map_err(|e| CedarEvaluatorError::SchemaParse(Box::new(e)))?;
             Some(schema)
         };
 
@@ -142,15 +168,17 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
     ///
     /// # Errors
     ///
-    /// Returns an error string if entity UIDs cannot be parsed, the context
-    /// cannot be built from the JSON value, or the Cedar request is invalid.
+    /// Returns [`CedarEvaluatorError::EntityUidParse`] if any entity UID is
+    /// unparseable, [`CedarEvaluatorError::ContextBuild`] if the context JSON
+    /// is invalid for the action's schema, or [`CedarEvaluatorError::RequestBuild`]
+    /// if the Cedar request fails schema validation.
     fn evaluate(
         &self,
         principal: &AgentId,
         action: &str,
         resource: &str,
         context: &serde_json::Value,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, CedarEvaluatorError> {
         let principal_uid = FirmaEntityUid::Agent(principal.as_ref().to_string()).to_cedar()?;
         let action_uid = FirmaEntityUid::Action(action.to_string()).to_cedar()?;
         let resource_uid = FirmaEntityUid::Resource(resource.to_string()).to_cedar()?;
@@ -159,7 +187,7 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
         // UID is used to look up the declared context shape for that action.
         let schema_with_action = self.schema.as_ref().map(|s| (s, &action_uid));
         let cedar_context = Context::from_json_value(context.clone(), schema_with_action)
-            .map_err(|e| format!("failed to build Cedar context: {e}"))?;
+            .map_err(|e| CedarEvaluatorError::ContextBuild(Box::new(e)))?;
 
         let request = Request::new(
             Some(principal_uid),
@@ -168,7 +196,7 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
             cedar_context,
             self.schema.as_ref(),
         )
-        .map_err(|e| format!("failed to build Cedar request: {e}"))?;
+        .map_err(|e| CedarEvaluatorError::RequestBuild(Box::new(e)))?;
 
         let entities = Entities::empty();
         let response = Authorizer::new().is_authorized(&request, &self.policy_set, &entities);
