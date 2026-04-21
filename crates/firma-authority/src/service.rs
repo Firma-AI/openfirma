@@ -271,8 +271,8 @@ impl CedarDecision {
     }
     fn no_action() -> Self {
         Self::Deny {
-            reason: "NO_POLICIES".to_string(),
-            message: "no Cedar policies loaded".to_string(),
+            reason: "NO_ACTIONS".to_string(),
+            message: "no actions requested".to_string(),
         }
     }
 
