@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use cedar_policy::{Authorizer, Context, Entities, PolicySet, Request, Schema};
 use chrono::{Duration, Utc};
+use firma_core::agent::AgentId;
+use firma_core::session::SessionId;
 use firma_core::FirmaEntityUid;
 use firma_core::policy::PolicyBundle;
 use firma_core::token::paseto::PasetoV4Signer;
@@ -71,14 +73,23 @@ impl AuthorityService for AuthorityServiceImpl {
             "capability issuance requested"
         );
 
+        let agent_id: AgentId = req
+            .agent_id
+            .parse()
+            .map_err(|e| Status::invalid_argument(format!("invalid agent_id: {e}")))?;
+        let session_id: SessionId = req
+            .session_id
+            .parse()
+            .map_err(|e| Status::invalid_argument(format!("invalid session_id: {e}")))?;
+
         // Build Cedar evaluation context
         let policy_set = self.policy_store.policy_set().await;
         let schema = self.policy_store.schema().await;
         let decision = evaluate_cedar_policy(
             &policy_set,
             schema.as_deref(),
-            &req.agent_id,
-            &req.session_id,
+            &agent_id,
+            &session_id,
             &req.requested_actions,
             &req.resource_scope,
         );
@@ -95,25 +106,16 @@ impl AuthorityService for AuthorityServiceImpl {
                 // This binds the token to both the identity being granted and the policy state at issuance.
                 let bundle_version = self.policy_store.bundle().version.clone();
                 let context_hash = compute_context_hash(
-                    &req.agent_id,
+                    agent_id.as_ref(),
                     &req.requested_actions,
                     &req.resource_scope,
                     &bundle_version,
                 );
 
-                let agent_id = req
-                    .agent_id
-                    .parse()
-                    .map_err(|e| Status::invalid_argument(format!("invalid agent_id: {e}")))?;
-                let session_id = req
-                    .session_id
-                    .parse()
-                    .map_err(|e| Status::invalid_argument(format!("invalid session_id: {e}")))?;
-
                 let claims = CapabilityClaims {
                     token_id,
-                    agent_id,
-                    session_id,
+                    agent_id: agent_id.clone(),
+                    session_id: session_id.clone(),
                     action_set: req.requested_actions.clone(),
                     resource_scope: req.resource_scope.clone(),
                     issued_at: now,
@@ -330,8 +332,8 @@ impl CedarDecision {
 fn evaluate_cedar_policy(
     policy_set: &PolicySet,
     schema: Option<&Schema>,
-    agent_id: &str,
-    session_id: &str,
+    agent_id: &AgentId,
+    session_id: &SessionId,
     actions: &[String],
     resource: &str,
 ) -> CedarDecision {
@@ -344,7 +346,7 @@ fn evaluate_cedar_policy(
     }
 
     let principal: cedar_policy::EntityUid =
-        match FirmaEntityUid::Agent(agent_id.to_string()).try_into() {
+        match FirmaEntityUid::Agent(agent_id.clone()).try_into() {
             Ok(uid) => uid,
             Err(e) => {
                 return CedarDecision::invalid_request(format!("invalid agent_id: {e}"));
@@ -476,6 +478,14 @@ fn clamp_ttl(requested: i32, max: i32) -> i32 {
 mod tests {
     use super::*;
 
+    fn agent(id: &str) -> AgentId {
+        id.parse().unwrap()
+    }
+
+    fn session(id: &str) -> SessionId {
+        id.parse().unwrap()
+    }
+
     #[test]
     fn test_clamp_ttl_within_max() {
         assert_eq!(clamp_ttl(600, 3600), 600);
@@ -521,8 +531,8 @@ mod tests {
         let result = evaluate_cedar_policy(
             &PolicySet::new(),
             None,
-            "agent_1",
-            "sess_1",
+            &agent("agent_1"),
+            &session("sess_1"),
             &["http.get".to_string()],
             "api.example.com",
         );
@@ -534,8 +544,8 @@ mod tests {
         let result = evaluate_cedar_policy(
             &permit_all(),
             None,
-            "agent_1",
-            "sess_1",
+            &agent("agent_1"),
+            &session("sess_1"),
             &[],
             "api.example.com",
         );
@@ -547,8 +557,8 @@ mod tests {
         let result = evaluate_cedar_policy(
             &permit_all(),
             None,
-            "agent_1",
-            "sess_1",
+            &agent("agent_1"),
+            &session("sess_1"),
             &["http.get".to_string()],
             "api.example.com",
         );
@@ -560,8 +570,8 @@ mod tests {
         let result = evaluate_cedar_policy(
             &forbid_all(),
             None,
-            "agent_1",
-            "sess_1",
+            &agent("agent_1"),
+            &session("sess_1"),
             &["http.get".to_string()],
             "api.example.com",
         );
@@ -573,8 +583,8 @@ mod tests {
         let result = evaluate_cedar_policy(
             &permit_all(),
             None,
-            "agent_1",
-            "sess_1",
+            &agent("agent_1"),
+            &session("sess_1"),
             &["llm.inference".to_string(), "http.get".to_string()],
             "api.example.com",
         );
@@ -587,8 +597,8 @@ mod tests {
         let result = evaluate_cedar_policy(
             &forbid_all(),
             None,
-            "agent_1",
-            "sess_1",
+            &agent("agent_1"),
+            &session("sess_1"),
             &["llm.inference".to_string(), "http.get".to_string()],
             "api.example.com",
         );
@@ -601,8 +611,8 @@ mod tests {
         let result = evaluate_cedar_policy(
             &permit_all(),
             Some(&schema),
-            "agent_1",
-            "sess_1",
+            &agent("agent_1"),
+            &session("sess_1"),
             &["llm.inference".to_string()],
             "api.example.com",
         );
@@ -616,8 +626,8 @@ mod tests {
         let result = evaluate_cedar_policy(
             &permit_all(),
             Some(&schema),
-            "agent_1",
-            "sess_1",
+            &agent("agent_1"),
+            &session("sess_1"),
             &["unknown.action".to_string()],
             "api.example.com",
         );
@@ -651,8 +661,8 @@ mod tests {
         let result = evaluate_cedar_policy(
             &permit_all(),
             Some(&schema),
-            "agent_1",
-            "sess_1",
+            &agent("agent_1"),
+            &session("sess_1"),
             &actions,
             "api.example.com",
         );

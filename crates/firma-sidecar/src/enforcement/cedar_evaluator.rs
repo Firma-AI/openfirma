@@ -138,7 +138,7 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
         resource: &str,
         context: &serde_json::Value,
     ) -> Result<bool, CedarEvaluatorError> {
-        let principal_uid: EntityUid = FirmaEntityUid::Agent(principal.as_ref().to_string())
+        let principal_uid: EntityUid = FirmaEntityUid::Agent(principal.clone())
             .try_into()
             .map_err(CedarEvaluatorError::EntityUidParse)?;
         let action_uid: EntityUid = FirmaEntityUid::Action(action.to_string())
