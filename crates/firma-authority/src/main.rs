@@ -64,7 +64,7 @@ async fn main() {
 
     match command {
         Commands::Serve => run_server(config).await,
-        Commands::Revoke { token_id } => run_revoke(config, token_id),
+        Commands::Revoke { token_id } => run_revoke(&config, token_id),
         Commands::GenerateKey { output } => run_generate_key(&output),
     }
 }
@@ -85,7 +85,7 @@ async fn run_server(config: AuthorityConfig) {
 }
 
 /// FR-7: Revoke a token by appending its ID to the revocation file.
-fn run_revoke(config: AuthorityConfig, token_id: TokenId) {
+fn run_revoke(config: &AuthorityConfig, token_id: TokenId) {
     use std::io::Write;
 
     let mut file = match std::fs::OpenOptions::new()

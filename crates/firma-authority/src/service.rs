@@ -1,8 +1,9 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use cedar_policy::{Authorizer, Context, Entities, EntityUid, PolicySet, Request, Schema};
+use cedar_policy::{Authorizer, Context, Entities, PolicySet, Request, Schema};
 use chrono::{Duration, Utc};
+use firma_core::FirmaEntityUid;
 use firma_core::policy::PolicyBundle;
 use firma_core::token::paseto::PasetoV4Signer;
 use firma_core::token::{CapabilityClaims, TokenId, TokenSigner};
@@ -295,37 +296,40 @@ fn evaluate_cedar_policy(
         };
     }
 
-    let principal = match parse_entity_uid(agent_id) {
-        Ok(uid) => uid,
-        Err(e) => {
-            return CedarDecision::Deny {
-                reason: "INVALID_REQUEST".to_string(),
-                message: e.to_string(),
-            };
-        }
-    };
-    let resource_entity = match parse_resource_uid(resource) {
-        Ok(uid) => uid,
-        Err(e) => {
-            return CedarDecision::Deny {
-                reason: "INVALID_REQUEST".to_string(),
-                message: e.to_string(),
-            };
-        }
-    };
-    let authorizer = Authorizer::new();
-    let timestamp_ms = Utc::now().timestamp_millis();
-
-    for action in actions {
-        let action_entity = match parse_action_uid(action) {
+    let principal: cedar_policy::EntityUid =
+        match FirmaEntityUid::Agent(agent_id.to_string()).try_into() {
             Ok(uid) => uid,
             Err(e) => {
                 return CedarDecision::Deny {
                     reason: "INVALID_REQUEST".to_string(),
-                    message: e.to_string(),
+                    message: format!("invalid agent_id '{agent_id}': {e}"),
                 };
             }
         };
+    let resource_entity: cedar_policy::EntityUid =
+        match FirmaEntityUid::Resource(resource.to_string()).try_into() {
+            Ok(uid) => uid,
+            Err(e) => {
+                return CedarDecision::Deny {
+                    reason: "INVALID_REQUEST".to_string(),
+                    message: format!("invalid resource '{resource}': {e}"),
+                };
+            }
+        };
+    let authorizer = Authorizer::new();
+    let timestamp_ms = Utc::now().timestamp_millis();
+
+    for action in actions {
+        let action_entity: cedar_policy::EntityUid =
+            match FirmaEntityUid::Action(action.clone()).try_into() {
+                Ok(uid) => uid,
+                Err(e) => {
+                    return CedarDecision::Deny {
+                        reason: "INVALID_REQUEST".to_string(),
+                        message: format!("invalid action '{action}': {e}"),
+                    };
+                }
+            };
         let context_json = json!({
             "session_id": session_id,
             "timestamp_ms": timestamp_ms,
@@ -388,30 +392,6 @@ fn evaluate_cedar_policy(
     }
 
     CedarDecision::Allow
-}
-
-fn parse_entity_uid(agent_id: &str) -> Result<EntityUid, crate::error::AuthorityError> {
-    format!("Firma::Agent::\"{agent_id}\"")
-        .parse::<EntityUid>()
-        .map_err(|e| crate::error::AuthorityError::EvaluationFailed {
-            reason: format!("invalid agent_id '{agent_id}': {e}"),
-        })
-}
-
-fn parse_action_uid(action: &str) -> Result<EntityUid, crate::error::AuthorityError> {
-    format!("Firma::Action::\"{action}\"")
-        .parse::<EntityUid>()
-        .map_err(|e| crate::error::AuthorityError::EvaluationFailed {
-            reason: format!("invalid action '{action}': {e}"),
-        })
-}
-
-fn parse_resource_uid(resource: &str) -> Result<EntityUid, crate::error::AuthorityError> {
-    format!("Firma::Resource::\"{resource}\"")
-        .parse::<EntityUid>()
-        .map_err(|e| crate::error::AuthorityError::EvaluationFailed {
-            reason: format!("invalid resource '{resource}': {e}"),
-        })
 }
 
 // --- Proto conversion helpers ---
