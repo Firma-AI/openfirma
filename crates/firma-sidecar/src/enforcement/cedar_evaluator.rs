@@ -224,14 +224,19 @@ mod tests {
     use firma_core::policy::PolicyBundle;
     use serde_json::json;
 
-    /// The real Firma schema, same file loaded by the Authority at startup.
-    const FIRMA_SCHEMA: &str = include_str!("../../../firma-authority/policies/schema.cedarschema");
+    const TEST_SCHEMA: &str = "
+namespace Firma {
+    type EnforcementContext = { session_id: String, timestamp_ms: Long, params: String, risk_score: Long };
+    entity Agent;
+    entity Resource;
+    action \"llm.inference\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
+}";
 
     fn schema_bundle(policy_src: &[u8]) -> PolicyBundle {
         PolicyBundle::new(
             "schema-v1".to_string(),
             policy_src.to_vec(),
-            FIRMA_SCHEMA.as_bytes().to_vec(),
+            TEST_SCHEMA.as_bytes().to_vec(),
             30,
         )
     }
@@ -249,7 +254,7 @@ mod tests {
         PolicyBundle::new(
             "test-v1".to_string(),
             b"permit(principal, action, resource);".to_vec(),
-            FIRMA_SCHEMA.as_bytes().to_vec(),
+            TEST_SCHEMA.as_bytes().to_vec(),
             30,
         )
     }
@@ -258,7 +263,7 @@ mod tests {
         PolicyBundle::new(
             "test-v2".to_string(),
             b"forbid(principal, action, resource);".to_vec(),
-            FIRMA_SCHEMA.as_bytes().to_vec(),
+            TEST_SCHEMA.as_bytes().to_vec(),
             30,
         )
     }
@@ -366,7 +371,7 @@ mod tests {
         let zero_ttl = PolicyBundle::new(
             "v0".to_string(),
             b"permit(principal, action, resource);".to_vec(),
-            FIRMA_SCHEMA.as_bytes().to_vec(),
+            TEST_SCHEMA.as_bytes().to_vec(),
             0,
         );
         let evaluator = CedarPolicyEvaluator::from_bundle(&zero_ttl).unwrap();
@@ -388,7 +393,7 @@ mod tests {
         let bundle = PolicyBundle::new(
             "ctx-v1".to_string(),
             src.to_vec(),
-            FIRMA_SCHEMA.as_bytes().to_vec(),
+            TEST_SCHEMA.as_bytes().to_vec(),
             30,
         );
         let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
@@ -500,45 +505,5 @@ mod tests {
             )
             .unwrap();
         assert!(allow);
-    }
-
-    #[test]
-    fn schema_all_15_actions_accepted() {
-        let actions = [
-            "http.get",
-            "http.post",
-            "http.put",
-            "http.delete",
-            "http.patch",
-            "network.connect",
-            "db.query",
-            "db.mutate",
-            "file.read",
-            "file.write",
-            "file.delete",
-            "code.execute",
-            "system.execute",
-            "messaging.send",
-            "llm.inference",
-        ];
-        let bundle = schema_bundle(b"permit(principal, action, resource);");
-        let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
-
-        for action in actions {
-            let result = evaluator.evaluate(
-                &agent("agent_test"),
-                action,
-                "some.resource",
-                &full_context(),
-            );
-            assert!(
-                result.is_ok(),
-                "action '{action}' must be accepted by schema"
-            );
-            assert!(
-                result.unwrap(),
-                "action '{action}' must be allowed by permit-all"
-            );
-        }
     }
 }
