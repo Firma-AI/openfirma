@@ -23,6 +23,8 @@ use firma_sidecar::pipeline::{
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 
+const FIRMA_SCHEMA: &str = include_str!("../../firma-authority/policies/schema.cedarschema");
+
 struct NoRevocations;
 impl RevocationStore for NoRevocations {
     fn is_revoked(&self, _: &TokenId) -> Result<bool, TokenError> {
@@ -42,7 +44,7 @@ fn permit_all_bundle() -> PolicyBundle {
     PolicyBundle::new(
         "roundtrip-v1".to_string(),
         b"permit(principal, action, resource);".to_vec(),
-        vec![],
+        FIRMA_SCHEMA.as_bytes().to_vec(),
         30,
     )
 }
@@ -85,7 +87,7 @@ fn openai_pipeline(
         Box::new(verifier_for_stage1),
         Box::new(NoRevocations),
     );
-    let stage2 = ConstraintEnforcer::new(Box::new(cedar_eval));
+    let stage2 = ConstraintEnforcer::fixed(cedar_eval);
 
     let rules = vec![MappingRuleConfig {
         method: Some("POST".to_string()),
@@ -170,7 +172,7 @@ fn wrong_key_denied_at_stage1() {
     let pipeline = EnforcementPipeline::new(
         IntentNormalizer::new(make_mapping_table(&rules)),
         stage1,
-        ConstraintEnforcer::new(Box::new(cedar_eval)),
+        ConstraintEnforcer::fixed(cedar_eval),
     );
 
     let request = RawRequest {
@@ -198,7 +200,7 @@ fn forbid_all_policy_denied_at_stage2() {
     let forbid_bundle = PolicyBundle::new(
         "forbid-v1".to_string(),
         b"forbid(principal, action, resource);".to_vec(),
-        vec![],
+        FIRMA_SCHEMA.as_bytes().to_vec(),
         30,
     );
     let cedar_eval = CedarPolicyEvaluator::from_bundle(&forbid_bundle).unwrap();
