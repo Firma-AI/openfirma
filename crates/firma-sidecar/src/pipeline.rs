@@ -17,11 +17,13 @@
 //! external system latency).
 
 use firma_core::envelope::{ExecutionEnvelope, ExecutionMetadata};
+use firma_core::session::SessionId;
 use std::time::Duration;
 
 // Re-export public API for pipeline callers
 pub use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
 pub use crate::enforcement::capability_validation::{CapabilityValidator, ValidatedCapability};
+pub use crate::enforcement::cedar_evaluator::{CedarEvaluatorError, CedarPolicyEvaluator};
 pub use crate::enforcement::config::{
     EnforcementConfig, MappingConfig, MappingRuleConfig, MappingRulesFile, Stage1Config,
     Stage2Config,
@@ -100,7 +102,7 @@ impl EnforcementPipeline {
     /// 4. On Allow: assemble a fully populated `ExecutionEnvelope` from
     ///    the normalized envelope + validated capability + session context.
     #[must_use]
-    pub fn enforce(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
+    pub fn enforce(&self, request: &RawRequest, session_id: SessionId) -> EnforcementDecision {
         // Normalize intent (may short-circuit with Deny or Passthrough)
         let normalized = match self.normalizer.normalize(request) {
             Ok(env) => env,
@@ -108,7 +110,7 @@ impl EnforcementPipeline {
         };
 
         // Stage 1: Select token → validate
-        let capability = match self.stage1.enforce(&normalized, session_id) {
+        let capability = match self.stage1.enforce(&normalized, session_id.clone()) {
             Ok(cap) => cap,
             Err(deny) => return deny,
         };
@@ -123,7 +125,7 @@ impl EnforcementPipeline {
             intent: normalized.intent,
             capability: capability.raw_token,
             metadata: ExecutionMetadata {
-                session_id: session_id.to_string(),
+                session_id,
                 agent_id: capability.claims.agent_id.clone(),
                 timestamp: normalized.timestamp,
                 trace_id: None,
@@ -149,14 +151,14 @@ impl EnforcementPipeline {
     pub async fn enforce_async(
         &self,
         request: &RawRequest,
-        session_id: &str,
+        session_id: SessionId,
     ) -> EnforcementDecision {
         let normalized = match self.normalizer.normalize(request) {
             Ok(env) => env,
             Err(decision) => return decision,
         };
 
-        let capability = match self.stage1.enforce(&normalized, session_id) {
+        let capability = match self.stage1.enforce(&normalized, session_id.clone()) {
             Ok(cap) => cap,
             Err(deny) => return deny,
         };
@@ -178,7 +180,7 @@ impl EnforcementPipeline {
             intent: normalized.intent,
             capability: capability.raw_token,
             metadata: ExecutionMetadata {
-                session_id: session_id.to_string(),
+                session_id,
                 agent_id: capability.claims.agent_id.clone(),
                 timestamp: normalized.timestamp,
                 trace_id: None,
@@ -204,19 +206,24 @@ mod tests {
     use crate::enforcement::registry::ActionClassRegistry;
     use crate::normalizer::MappingTable;
     use chrono::Utc;
+    use firma_core::agent::AgentId;
     use firma_core::decision::DenyReason;
-    use firma_core::token::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
+    use firma_core::token::{
+        CapabilityClaims, RevocationStore, TokenError, TokenId, TokenVerifier,
+    };
     use std::collections::HashMap;
+
+    use crate::enforcement::cedar_evaluator::CedarEvaluatorError;
 
     struct AllowAllPolicy;
     impl PolicyEvaluation for AllowAllPolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
-        ) -> Result<bool, String> {
+        ) -> Result<bool, CedarEvaluatorError> {
             Ok(true)
         }
         fn is_fresh(&self) -> bool {
@@ -243,19 +250,19 @@ mod tests {
 
     struct NoRevocations;
     impl RevocationStore for NoRevocations {
-        fn is_revoked(&self, _token_id: &str) -> Result<bool, TokenError> {
+        fn is_revoked(&self, _token_id: &TokenId) -> Result<bool, TokenError> {
             Ok(false)
         }
-        fn add_revocation(&self, _token_id: &str) -> Result<(), TokenError> {
+        fn add_revocation(&self, _token_id: &TokenId) -> Result<(), TokenError> {
             Ok(())
         }
     }
 
     fn test_claims() -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent_test".to_string(),
-            session_id: "sess_001".to_string(),
+            token_id: TokenId::new(),
+            agent_id: "agent_test".parse().unwrap(),
+            session_id: "sess_001".parse().unwrap(),
             action_set: vec!["llm.inference".to_string(), "http.get".to_string()],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
@@ -264,7 +271,7 @@ mod tests {
         }
     }
 
-    fn test_mapping_table(rules: &[MappingRuleConfig]) -> MappingTable {
+    pub(crate) fn test_mapping_table(rules: &[MappingRuleConfig]) -> MappingTable {
         test_mapping_table_with_protection(rules, true)
     }
 
@@ -308,13 +315,13 @@ mod tests {
             Box::new(NoRevocations),
         );
 
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let stage2 = ConstraintEnforcer::fixed(AllowAllPolicy);
 
         EnforcementPipeline::new(normalizer, stage1, stage2)
     }
 
     #[test]
-    fn test_enforce_happy_path() {
+    fn enforce_happy_path() {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: "POST".to_string(),
@@ -325,13 +332,13 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
         assert!(decision.is_allow());
 
         if let EnforcementDecision::Allow { claims, envelope } = decision {
-            assert_eq!(claims.agent_id, "agent_test");
-            assert_eq!(envelope.metadata.agent_id, "agent_test");
-            assert_eq!(envelope.metadata.session_id, "sess_001");
+            assert_eq!(claims.agent_id.as_ref(), "agent_test");
+            assert_eq!(envelope.metadata.agent_id.as_ref(), "agent_test");
+            assert_eq!(envelope.metadata.session_id.as_ref(), "sess_001");
             assert!(
                 !envelope.capability.is_empty(),
                 "capability must be populated on Allow"
@@ -341,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enforce_unclassified_intent() {
+    fn enforce_unclassified_intent() {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: "DELETE".to_string(),
@@ -352,13 +359,13 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
     }
 
     #[test]
-    fn test_enforce_not_protected_returns_passthrough() {
+    fn enforce_not_protected_returns_passthrough() {
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
             method: Some("POST".to_string()),
@@ -374,7 +381,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
         );
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let stage2 = ConstraintEnforcer::fixed(AllowAllPolicy);
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
 
         let request = RawRequest {
@@ -386,7 +393,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
         assert!(
             decision.is_passthrough(),
             "non-protected traffic should passthrough, not deny"
@@ -396,7 +403,25 @@ mod tests {
     }
 
     #[test]
-    fn test_enforce_scope_violation() {
+    fn enforce_scope_violation() {
+        struct DenyDeletePolicy;
+        impl PolicyEvaluation for DenyDeletePolicy {
+            fn evaluate(
+                &self,
+                _: &AgentId,
+                action: &str,
+                _: &str,
+                _: &serde_json::Value,
+            ) -> Result<bool, CedarEvaluatorError> {
+                Ok(action != "http.delete")
+            }
+            fn is_fresh(&self) -> bool {
+                true
+            }
+            fn version(&self) -> Option<String> {
+                Some("test".to_string())
+            }
+        }
         let rules = vec![MappingRuleConfig {
             method: Some("DELETE".to_string()),
             host: "api.example.com".to_string(),
@@ -416,27 +441,7 @@ mod tests {
             }),
             Box::new(NoRevocations),
         );
-
-        struct DenyDeletePolicy;
-        impl PolicyEvaluation for DenyDeletePolicy {
-            fn evaluate(
-                &self,
-                _: &str,
-                action: &str,
-                _: &str,
-                _: &serde_json::Value,
-            ) -> Result<bool, String> {
-                Ok(action != "http.delete")
-            }
-            fn is_fresh(&self) -> bool {
-                true
-            }
-            fn version(&self) -> Option<String> {
-                Some("test".to_string())
-            }
-        }
-
-        let stage2 = ConstraintEnforcer::new(Box::new(DenyDeletePolicy));
+        let stage2 = ConstraintEnforcer::fixed(DenyDeletePolicy);
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
 
         let request = RawRequest {
@@ -448,7 +453,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyDenied));
     }
@@ -456,15 +461,7 @@ mod tests {
     // ===== Fail-closed discipline tests =====
 
     #[test]
-    fn test_enforce_stage1_failure_short_circuits_stage2() {
-        let claims = test_claims();
-        let rules = vec![MappingRuleConfig {
-            method: Some("POST".to_string()),
-            host: "api.openai.com".to_string(),
-            path: Some("/v1/chat/completions".to_string()),
-            action_class: "llm.inference".to_string(),
-        }];
-
+    fn enforce_stage1_failure_short_circuits_stage2() {
         struct RejectingVerifier;
         impl TokenVerifier for RejectingVerifier {
             fn verify(&self, _: &str) -> Result<CapabilityClaims, TokenError> {
@@ -474,6 +471,14 @@ mod tests {
             }
         }
 
+        let claims = test_claims();
+        let rules = vec![MappingRuleConfig {
+            method: Some("POST".to_string()),
+            host: "api.openai.com".to_string(),
+            path: Some("/v1/chat/completions".to_string()),
+            action_class: "llm.inference".to_string(),
+        }];
+
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
 
         let stage1 = CapabilityValidator::new(
@@ -481,7 +486,7 @@ mod tests {
             Box::new(RejectingVerifier),
             Box::new(NoRevocations),
         );
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let stage2 = ConstraintEnforcer::fixed(AllowAllPolicy);
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
 
         let request = RawRequest {
@@ -493,7 +498,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
         assert_eq!(
@@ -507,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enforce_no_capability_token_denies() {
+    fn enforce_no_capability_token_denies() {
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
             method: Some("POST".to_string()),
@@ -523,7 +528,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
         );
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let stage2 = ConstraintEnforcer::fixed(AllowAllPolicy);
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
 
         let request = RawRequest {
@@ -535,7 +540,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
     }
@@ -543,7 +548,7 @@ mod tests {
     // ===== Determinism test =====
 
     #[test]
-    fn test_enforce_deterministic_same_input_same_output() {
+    fn enforce_deterministic_same_input_same_output() {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: "POST".to_string(),
@@ -555,7 +560,7 @@ mod tests {
         };
 
         for _ in 0..100 {
-            let decision = pipeline.enforce(&request, "sess_001");
+            let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
             assert!(
                 decision.is_allow(),
                 "non-deterministic: got DENY on repeated call"
@@ -564,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enforce_deterministic_deny_same_input() {
+    fn enforce_deterministic_deny_same_input() {
         let pipeline = test_pipeline();
         let request = RawRequest {
             method: "DELETE".to_string(),
@@ -576,7 +581,7 @@ mod tests {
         };
 
         for _ in 0..100 {
-            let decision = pipeline.enforce(&request, "sess_001");
+            let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
             assert!(decision.is_deny());
             assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
         }
@@ -585,7 +590,26 @@ mod tests {
     // ===== Policy bundle staleness =====
 
     #[test]
-    fn test_enforce_stale_bundle_denies() {
+    fn enforce_stale_bundle_denies() {
+        struct StalePolicy;
+        impl PolicyEvaluation for StalePolicy {
+            fn evaluate(
+                &self,
+                _: &AgentId,
+                _: &str,
+                _: &str,
+                _: &serde_json::Value,
+            ) -> Result<bool, CedarEvaluatorError> {
+                Ok(true)
+            }
+            fn is_fresh(&self) -> bool {
+                false
+            }
+            fn version(&self) -> Option<String> {
+                None
+            }
+        }
+
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
             method: Some("POST".to_string()),
@@ -602,26 +626,7 @@ mod tests {
             Box::new(NoRevocations),
         );
 
-        struct StalePolicy;
-        impl PolicyEvaluation for StalePolicy {
-            fn evaluate(
-                &self,
-                _: &str,
-                _: &str,
-                _: &str,
-                _: &serde_json::Value,
-            ) -> Result<bool, String> {
-                Ok(true)
-            }
-            fn is_fresh(&self) -> bool {
-                false
-            }
-            fn version(&self) -> Option<String> {
-                None
-            }
-        }
-
-        let stage2 = ConstraintEnforcer::new(Box::new(StalePolicy));
+        let stage2 = ConstraintEnforcer::fixed(StalePolicy);
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
 
         let request = RawRequest {
@@ -633,7 +638,7 @@ mod tests {
             is_https: true,
         };
 
-        let decision = pipeline.enforce(&request, "sess_001");
+        let decision = pipeline.enforce(&request, "sess_001".parse().unwrap());
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
     }

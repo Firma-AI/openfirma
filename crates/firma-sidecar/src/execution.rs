@@ -11,13 +11,26 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
-use firma_core::{decision::DenyReason, envelope::ExecutionEnvelope};
+use firma_core::{
+    SessionId, TokenId, decision::DenyReason, envelope::ExecutionEnvelope,
+    session::InvalidSessionIdError, token::InvalidTokenIdError,
+};
 use firma_proto::RevocationEvent;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, mpsc::UnboundedSender};
 use tokio_util::sync::CancellationToken;
 
 use crate::enforcement::decision::EnforcementDecision;
+
+/// Errors produced when parsing a proto [`RevocationEvent`] into a typed
+/// [`RevocationSignal`].
+#[derive(Debug, thiserror::Error)]
+pub enum RevocationSignalError {
+    #[error("invalid token_id in revocation event: {0}")]
+    InvalidTokenId(#[from] InvalidTokenIdError),
+    #[error("invalid session_id in revocation event: {0}")]
+    InvalidSessionId(#[from] InvalidSessionIdError),
+}
 
 /// Runtime surface for a denial.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,8 +75,8 @@ pub enum SidecarAuditEvent {
         timestamp: DateTime<Utc>,
     },
     Abort {
-        token_id: Option<String>,
-        session_id: Option<String>,
+        token_id: Option<TokenId>,
+        session_id: Option<SessionId>,
         reason: String,
         timestamp: DateTime<Utc>,
     },
@@ -184,37 +197,44 @@ pub fn deny_surface_from_transport(raw_transport: &str) -> DenySurface {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RevocationSignal {
     Revoked {
-        token_id: String,
+        token_id: TokenId,
         reason: String,
     },
     Abort {
-        token_id: Option<String>,
-        session_id: Option<String>,
+        token_id: Option<TokenId>,
+        session_id: Option<SessionId>,
         reason: String,
     },
 }
 
 impl RevocationSignal {
-    #[must_use]
-    pub fn from_proto(event: &RevocationEvent) -> Self {
+    /// Parse a proto [`RevocationEvent`] into a typed signal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RevocationSignalError`] if `token_id` is not a valid UUID or
+    /// `session_id` extracted from the reason string is not a valid session ID.
+    pub fn from_proto(event: &RevocationEvent) -> Result<Self, RevocationSignalError> {
         let reason_upper = event.reason.to_ascii_uppercase();
         if reason_upper.starts_with("ABORT") {
-            let session_id = parse_session_hint(&event.reason);
             let token_id = if event.token_id.is_empty() {
                 None
             } else {
-                Some(event.token_id.clone())
+                Some(event.token_id.parse::<TokenId>()?)
             };
-            Self::Abort {
+            let session_id = parse_session_hint(&event.reason)
+                .map(|s| s.parse::<SessionId>())
+                .transpose()?;
+            Ok(Self::Abort {
                 token_id,
                 session_id,
                 reason: event.reason.clone(),
-            }
+            })
         } else {
-            Self::Revoked {
-                token_id: event.token_id.clone(),
+            Ok(Self::Revoked {
+                token_id: event.token_id.parse::<TokenId>()?,
                 reason: event.reason.clone(),
-            }
+            })
         }
     }
 }
@@ -234,16 +254,16 @@ fn parse_session_hint(reason: &str) -> Option<String> {
 
 #[derive(Debug, Clone)]
 struct ExecutionEntry {
-    token_id: String,
-    session_id: String,
+    token_id: TokenId,
+    session_id: SessionId,
     cancel: CancellationToken,
 }
 
 #[derive(Default)]
 struct InFlightState {
     executions: HashMap<String, ExecutionEntry>,
-    token_index: HashMap<String, HashSet<String>>,
-    session_index: HashMap<String, HashSet<String>>,
+    token_index: HashMap<TokenId, HashSet<String>>,
+    session_index: HashMap<SessionId, HashSet<String>>,
 }
 
 /// Manages in-flight executions and async ABORT cancellation.
@@ -262,13 +282,13 @@ impl InFlightAbortManager {
     pub async fn register(
         &self,
         execution_id: &str,
-        token_id: &str,
-        session_id: &str,
+        token_id: &TokenId,
+        session_id: &SessionId,
     ) -> CancellationToken {
         let cancel = CancellationToken::new();
         let entry = ExecutionEntry {
-            token_id: token_id.to_string(),
-            session_id: session_id.to_string(),
+            token_id: *token_id,
+            session_id: session_id.clone(),
             cancel: cancel.clone(),
         };
 
@@ -278,12 +298,12 @@ impl InFlightAbortManager {
             .insert(execution_id.to_string(), entry.clone());
         state
             .token_index
-            .entry(token_id.to_string())
+            .entry(*token_id)
             .or_default()
             .insert(execution_id.to_string());
         state
             .session_index
-            .entry(session_id.to_string())
+            .entry(session_id.clone())
             .or_default()
             .insert(execution_id.to_string());
 
@@ -309,7 +329,7 @@ impl InFlightAbortManager {
                 reason,
             } => {
                 let cancelled = self
-                    .abort_matching(token_id.as_deref(), session_id.as_deref())
+                    .abort_matching(token_id.as_ref(), session_id.as_ref())
                     .await;
                 audit.emit_async(SidecarAuditEvent::Abort {
                     token_id,
@@ -323,27 +343,36 @@ impl InFlightAbortManager {
     }
 
     /// Parse and process a proto revocation event in one step.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RevocationSignalError`] if the proto event carries an
+    /// unparseable `token_id` or `session_id`.
     pub async fn process_proto_event(
         &self,
         event: &RevocationEvent,
         audit: &AuditEmitter,
-    ) -> usize {
-        self.process_signal(RevocationSignal::from_proto(event), audit)
-            .await
+    ) -> Result<usize, RevocationSignalError> {
+        let signal = RevocationSignal::from_proto(event)?;
+        Ok(self.process_signal(signal, audit).await)
     }
 
-    async fn abort_matching(&self, token_id: Option<&str>, session_id: Option<&str>) -> usize {
+    async fn abort_matching(
+        &self,
+        token_id: Option<&TokenId>,
+        session_id: Option<&SessionId>,
+    ) -> usize {
         let mut ids = HashSet::new();
         let mut cancels = Vec::new();
 
         let state = self.state.read().await;
-        if let Some(token) = token_id
-            && let Some(found) = state.token_index.get(token)
+        if let Some(token_id) = token_id
+            && let Some(found) = state.token_index.get(token_id)
         {
             ids.extend(found.iter().cloned());
         }
-        if let Some(session) = session_id
-            && let Some(found) = state.session_index.get(session)
+        if let Some(session_id) = session_id
+            && let Some(found) = state.session_index.get(session_id)
         {
             ids.extend(found.iter().cloned());
         }
@@ -366,7 +395,10 @@ impl InFlightAbortManager {
     }
 }
 
-fn remove_index(index: &mut HashMap<String, HashSet<String>>, key: &str, execution_id: &str) {
+fn remove_index<K>(index: &mut HashMap<K, HashSet<String>>, key: &K, execution_id: &str)
+where
+    K: Eq + std::hash::Hash,
+{
     if let Some(values) = index.get_mut(key) {
         values.remove(execution_id);
         if values.is_empty() {
@@ -392,7 +424,7 @@ mod tests {
 
     fn fixed_time() -> DateTime<Utc> {
         DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-            .unwrap_or_else(|_| panic!("invalid fixed timestamp"))
+            .unwrap()
             .with_timezone(&Utc)
     }
 
@@ -467,10 +499,7 @@ mod tests {
 
         assert_eq!(connector.calls(), 0);
 
-        let event = rx
-            .recv()
-            .await
-            .unwrap_or_else(|| panic!("missing audit event"));
+        let event = rx.recv().await.unwrap();
         assert!(matches!(event, SidecarAuditEvent::DenyTool { .. }));
     }
 
@@ -492,10 +521,7 @@ mod tests {
 
         assert_eq!(connector.calls(), 0);
 
-        let event = rx
-            .recv()
-            .await
-            .unwrap_or_else(|| panic!("missing audit event"));
+        let event = rx.recv().await.unwrap();
         assert!(matches!(event, SidecarAuditEvent::DenyApi { .. }));
     }
 
@@ -509,9 +535,12 @@ mod tests {
 
     #[tokio::test]
     async fn abort_signal_cancels_all_matching_inflight_for_token_or_session() {
+        let tok1 = TokenId::new();
+        let tok2 = TokenId::new();
+        let sess_a: SessionId = "sess-a".parse().unwrap();
         let manager = InFlightAbortManager::new();
-        let token_cancel = manager.register("exec-1", "tok-1", "sess-a").await;
-        let session_cancel = manager.register("exec-2", "tok-2", "sess-a").await;
+        let token_cancel = manager.register("exec-1", &tok1, &sess_a).await;
+        let session_cancel = manager.register("exec-2", &tok2, &sess_a).await;
 
         let (tx, mut rx) = mpsc::unbounded_channel();
         let audit = AuditEmitter::new(tx);
@@ -519,8 +548,8 @@ mod tests {
         let cancelled = manager
             .process_signal(
                 RevocationSignal::Abort {
-                    token_id: Some("tok-1".to_string()),
-                    session_id: Some("sess-a".to_string()),
+                    token_id: Some(tok1),
+                    session_id: Some(sess_a),
                     reason: "ABORT session_id=sess-a".to_string(),
                 },
                 &audit,
@@ -531,18 +560,19 @@ mod tests {
         assert!(token_cancel.is_cancelled());
         assert!(session_cancel.is_cancelled());
 
-        let event = rx
-            .recv()
-            .await
-            .unwrap_or_else(|| panic!("missing abort audit event"));
+        let event = rx.recv().await.unwrap();
         assert!(matches!(event, SidecarAuditEvent::Abort { .. }));
     }
 
     #[tokio::test]
     async fn abort_signal_by_token_only_cancels_matching_execution() {
+        let tok1 = TokenId::new();
+        let tok2 = TokenId::new();
+        let sess_a: SessionId = "sess-a".parse().unwrap();
+        let sess_b: SessionId = "sess-b".parse().unwrap();
         let manager = InFlightAbortManager::new();
-        let token_cancel = manager.register("exec-1", "tok-1", "sess-a").await;
-        let other_cancel = manager.register("exec-2", "tok-2", "sess-b").await;
+        let token_cancel = manager.register("exec-1", &tok1, &sess_a).await;
+        let other_cancel = manager.register("exec-2", &tok2, &sess_b).await;
 
         let (tx, _rx) = mpsc::unbounded_channel();
         let audit = AuditEmitter::new(tx);
@@ -550,7 +580,7 @@ mod tests {
         let cancelled = manager
             .process_signal(
                 RevocationSignal::Abort {
-                    token_id: Some("tok-1".to_string()),
+                    token_id: Some(tok1),
                     session_id: None,
                     reason: "ABORT token".to_string(),
                 },
@@ -565,10 +595,12 @@ mod tests {
 
     #[tokio::test]
     async fn abort_signal_by_session_only_cancels_all_session_executions() {
+        let sess_a: SessionId = "sess-a".parse().unwrap();
+        let sess_b: SessionId = "sess-b".parse().unwrap();
         let manager = InFlightAbortManager::new();
-        let first = manager.register("exec-1", "tok-1", "sess-a").await;
-        let second = manager.register("exec-2", "tok-2", "sess-a").await;
-        let third = manager.register("exec-3", "tok-3", "sess-b").await;
+        let first = manager.register("exec-1", &TokenId::new(), &sess_a).await;
+        let second = manager.register("exec-2", &TokenId::new(), &sess_a).await;
+        let third = manager.register("exec-3", &TokenId::new(), &sess_b).await;
 
         let (tx, _rx) = mpsc::unbounded_channel();
         let audit = AuditEmitter::new(tx);
@@ -577,7 +609,7 @@ mod tests {
             .process_signal(
                 RevocationSignal::Abort {
                     token_id: None,
-                    session_id: Some("sess-a".to_string()),
+                    session_id: Some(sess_a),
                     reason: "ABORT session".to_string(),
                 },
                 &audit,
@@ -592,8 +624,10 @@ mod tests {
 
     #[tokio::test]
     async fn revoked_signal_does_not_abort_inflight() {
+        let tok1 = TokenId::new();
+        let sess_a: SessionId = "sess-a".parse().unwrap();
         let manager = InFlightAbortManager::new();
-        let token_cancel = manager.register("exec-1", "tok-1", "sess-a").await;
+        let token_cancel = manager.register("exec-1", &tok1, &sess_a).await;
 
         let (tx, _rx) = mpsc::unbounded_channel();
         let audit = AuditEmitter::new(tx);
@@ -601,7 +635,7 @@ mod tests {
         let cancelled = manager
             .process_signal(
                 RevocationSignal::Revoked {
-                    token_id: "tok-1".to_string(),
+                    token_id: tok1,
                     reason: "REVOKED".to_string(),
                 },
                 &audit,
@@ -614,18 +648,19 @@ mod tests {
 
     #[test]
     fn abort_proto_parsing_extracts_abort_semantics() {
+        let tok = TokenId::new();
         let event = RevocationEvent {
-            token_id: "tok-1".to_string(),
+            token_id: tok.to_string(),
             reason: "ABORT session_id=sess-a".to_string(),
             timestamp: None,
         };
 
-        let signal = RevocationSignal::from_proto(&event);
+        let signal = RevocationSignal::from_proto(&event).unwrap();
         assert_eq!(
             signal,
             RevocationSignal::Abort {
-                token_id: Some("tok-1".to_string()),
-                session_id: Some("sess-a".to_string()),
+                token_id: Some(tok),
+                session_id: Some("sess-a".parse().unwrap()),
                 reason: "ABORT session_id=sess-a".to_string(),
             }
         );
@@ -633,19 +668,21 @@ mod tests {
 
     #[tokio::test]
     async fn abort_proto_event_path_cancels_inflight() {
+        let tok = TokenId::new();
+        let sess_a: SessionId = "sess-a".parse().unwrap();
         let manager = InFlightAbortManager::new();
-        let token_cancel = manager.register("exec-1", "tok-1", "sess-a").await;
+        let token_cancel = manager.register("exec-1", &tok, &sess_a).await;
 
         let (tx, _rx) = mpsc::unbounded_channel();
         let audit = AuditEmitter::new(tx);
 
         let event = RevocationEvent {
-            token_id: "tok-1".to_string(),
+            token_id: tok.to_string(),
             reason: "ABORT".to_string(),
             timestamp: None,
         };
 
-        let cancelled = manager.process_proto_event(&event, &audit).await;
+        let cancelled = manager.process_proto_event(&event, &audit).await.unwrap();
         assert_eq!(cancelled, 1);
         assert!(token_cancel.is_cancelled());
     }

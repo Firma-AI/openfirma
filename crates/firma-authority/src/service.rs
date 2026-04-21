@@ -1,30 +1,33 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use cedar_policy::{Authorizer, Context, Entities, EntityUid, PolicySet, Request};
+use cedar_policy::{Authorizer, Context, Entities, EntityUid, PolicySet, Request, Schema};
 use chrono::{Duration, Utc};
 use firma_core::policy::PolicyBundle;
 use firma_core::token::paseto::PasetoV4Signer;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::{Stream, StreamExt};
-use tonic::{Request as TonicRequest, Response, Status};
-use uuid::Uuid;
-
-use firma_core::token::{CapabilityClaims, TokenSigner};
+use firma_core::token::{CapabilityClaims, TokenId, TokenSigner};
 use firma_proto::RevocationEvent;
 use firma_proto::firma::v1::authority_service_server::AuthorityService;
 use firma_proto::firma::v1::{
     CapabilityToken, IssueCapabilityRequest, IssueCapabilityResponse, PolicyBundleUpdate,
     TokenFormat, WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio_stream::{Stream, StreamExt};
+use tonic::{Request as TonicRequest, Response, Status};
 
-use crate::cedar_loader::CedarPolicyStore;
-use crate::revocation::RevocationStore;
+use crate::cedar_loader::{CedarPolicyStore, CedarPolicyStoreWatcher};
+use crate::revocation::{RevocationStore, RevocationStoreWatcher};
 
 /// gRPC implementation of the `AuthorityService` defined in `authority.proto`.
 pub struct AuthorityServiceImpl {
     policy_store: Arc<CedarPolicyStore>,
+    policy_watcher: Arc<CedarPolicyStoreWatcher>,
     revocation_store: Arc<RevocationStore>,
+    revocation_watcher: Arc<RevocationStoreWatcher>,
     signer: Arc<PasetoV4Signer>,
     max_ttl_seconds: i32,
 }
@@ -32,13 +35,17 @@ pub struct AuthorityServiceImpl {
 impl AuthorityServiceImpl {
     pub fn new(
         policy_store: Arc<CedarPolicyStore>,
+        policy_watcher: Arc<CedarPolicyStoreWatcher>,
         revocation_store: Arc<RevocationStore>,
+        revocation_watcher: Arc<RevocationStoreWatcher>,
         signer: Arc<PasetoV4Signer>,
         max_ttl_seconds: i32,
     ) -> Self {
         Self {
             policy_store,
+            policy_watcher,
             revocation_store,
+            revocation_watcher,
             signer,
             max_ttl_seconds,
         }
@@ -64,9 +71,12 @@ impl AuthorityService for AuthorityServiceImpl {
 
         // Build Cedar evaluation context
         let policy_set = self.policy_store.policy_set().await;
+        let schema = self.policy_store.schema().await;
         let decision = evaluate_cedar_policy(
             &policy_set,
+            schema.as_deref(),
             &req.agent_id,
+            &req.session_id,
             &req.requested_actions,
             &req.resource_scope,
         );
@@ -77,15 +87,31 @@ impl AuthorityService for AuthorityServiceImpl {
                 let ttl = clamp_ttl(req.requested_ttl_seconds, self.max_ttl_seconds);
                 let now = Utc::now();
                 let expires_at = now + Duration::seconds(i64::from(ttl));
-                let token_id = format!("tok_{}", Uuid::new_v4());
+                let token_id = TokenId::new();
 
-                // Build context hash from the current policy bundle version
-                let context_hash = self.policy_store.bundle().await.version.clone();
+                // Build context hash: SHA-256 of (agent_id | sorted_actions | resource | bundle_version).
+                // This binds the token to both the identity being granted and the policy state at issuance.
+                let bundle_version = self.policy_store.bundle().version.clone();
+                let context_hash = compute_context_hash(
+                    &req.agent_id,
+                    &req.requested_actions,
+                    &req.resource_scope,
+                    &bundle_version,
+                );
+
+                let agent_id = req
+                    .agent_id
+                    .parse()
+                    .map_err(|e| Status::invalid_argument(format!("invalid agent_id: {e}")))?;
+                let session_id = req
+                    .session_id
+                    .parse()
+                    .map_err(|e| Status::invalid_argument(format!("invalid session_id: {e}")))?;
 
                 let claims = CapabilityClaims {
-                    token_id: token_id.clone(),
-                    agent_id: req.agent_id.clone(),
-                    session_id: req.session_id.clone(),
+                    token_id,
+                    agent_id,
+                    session_id,
                     action_set: req.requested_actions.clone(),
                     resource_scope: req.resource_scope.clone(),
                     issued_at: now,
@@ -103,7 +129,7 @@ impl AuthorityService for AuthorityServiceImpl {
                 let expiry_ts = to_proto_timestamp(expires_at);
 
                 let token = CapabilityToken {
-                    token_id,
+                    token_id: token_id.to_string(),
                     agent_id: req.agent_id.clone(),
                     session_id: req.session_id.clone(),
                     action_set: req.requested_actions,
@@ -116,7 +142,7 @@ impl AuthorityService for AuthorityServiceImpl {
                 };
 
                 tracing::info!(
-                    agent_id = %req.agent_id,
+                    agent_id = %token.agent_id,
                     token_id = %token.token_id,
                     ttl = ttl,
                     "capability granted"
@@ -162,7 +188,7 @@ impl AuthorityService for AuthorityServiceImpl {
             "sidecar connected to policy bundle stream"
         );
 
-        let mut rx = self.policy_store.subscribe();
+        let mut rx = self.policy_watcher.subscribe();
 
         let stream = async_stream::try_stream! {
             // Send current bundle immediately (unless client already has it)
@@ -203,7 +229,7 @@ impl AuthorityService for AuthorityServiceImpl {
 
         // Replay events after `since` timestamp
         let replay_events = self.revocation_store.events_since(since).await;
-        let broadcast_rx = self.revocation_store.subscribe();
+        let broadcast_rx = self.revocation_watcher.subscribe();
 
         let stream = async_stream::try_stream! {
             // First, replay historical events
@@ -213,8 +239,13 @@ impl AuthorityService for AuthorityServiceImpl {
 
             // Then stream new events as they arrive
             let mut broadcast_stream = BroadcastStream::new(broadcast_rx);
-            while let Some(Ok(entry)) = broadcast_stream.next().await {
-                yield entry_to_proto(&entry);
+            while let Some(result) = broadcast_stream.next().await {
+                match result {
+                    Ok(entry) => yield entry_to_proto(&entry),
+                    Err(BroadcastStreamRecvError::Lagged(n)) => {
+                        tracing::warn!(missed = n, "sidecar missed revocation events due to slow consumption");
+                    }
+                }
             }
         };
 
@@ -233,13 +264,22 @@ enum CedarDecision {
 ///
 /// Uses Cedar's unspecified principal/action/resource when the schema is
 /// not loaded, falling back to a simple "any policy allows" evaluation.
+/// Evaluate Cedar policies for a capability issuance request.
+///
+/// Evaluates every requested action independently — all must be allowed for
+/// the request to succeed (fail-closed across the full action set).
+///
+/// Context at issuance time carries `session_id`, `timestamp_ms`, and
+/// `risk_score` (V1 placeholder = 0). `params` is empty (`"{}"`) because no
+/// specific intent exists yet at issuance.
 fn evaluate_cedar_policy(
     policy_set: &PolicySet,
+    schema: Option<&Schema>,
     agent_id: &str,
+    session_id: &str,
     actions: &[String],
     resource: &str,
 ) -> CedarDecision {
-    // If no policies are loaded, deny by default (fail-closed)
     if policy_set.policies().next().is_none() {
         return CedarDecision::Deny {
             reason: "NO_POLICIES".to_string(),
@@ -247,33 +287,54 @@ fn evaluate_cedar_policy(
         };
     }
 
+    if actions.is_empty() {
+        return CedarDecision::Deny {
+            reason: "NO_ACTIONS".to_string(),
+            message: "no actions requested".to_string(),
+        };
+    }
+
     let authorizer = Authorizer::new();
+    let timestamp_ms = Utc::now().timestamp_millis();
 
-    // Build Cedar request with unspecified entity UIDs (schema-less evaluation)
-    // This allows policies to use `permit(principal, action, resource)` patterns
-    // without requiring entity types to be defined in a schema.
-    let request = match Request::new(
-        Some(parse_entity_uid(agent_id)),
-        Some(parse_action_uid(actions)),
-        Some(parse_resource_uid(resource)),
-        Context::empty(),
-        None, // no schema validation on request
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            return CedarDecision::Deny {
-                reason: "CONTEXT_BUILD_FAILED".to_string(),
-                message: format!("failed to build Cedar request: {e}"),
-            };
-        }
-    };
+    for action in actions {
+        let action_uid = parse_action_uid(action);
+        let context_json = json!({
+            "session_id": session_id,
+            "timestamp_ms": timestamp_ms,
+            "params": "{}",
+            "risk_score": 0i64,
+        });
+        let schema_with_action = schema.map(|s| (s, &action_uid));
+        let cedar_context = match Context::from_json_value(context_json, schema_with_action) {
+            Ok(c) => c,
+            Err(e) => {
+                return CedarDecision::Deny {
+                    reason: "CONTEXT_BUILD_FAILED".to_string(),
+                    message: format!("failed to build Cedar context for '{action}': {e}"),
+                };
+            }
+        };
 
-    let entities = Entities::empty();
-    let response = authorizer.is_authorized(&request, policy_set, &entities);
+        let request = match Request::new(
+            Some(parse_entity_uid(agent_id)),
+            Some(action_uid),
+            Some(parse_resource_uid(resource)),
+            cedar_context,
+            schema,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                return CedarDecision::Deny {
+                    reason: "CONTEXT_BUILD_FAILED".to_string(),
+                    message: format!("failed to build Cedar request for '{action}': {e}"),
+                };
+            }
+        };
 
-    match response.decision() {
-        cedar_policy::Decision::Allow => CedarDecision::Allow,
-        cedar_policy::Decision::Deny => {
+        let response = authorizer.is_authorized(&request, policy_set, &Entities::empty());
+
+        if let cedar_policy::Decision::Deny = response.decision() {
             let diagnostics = response.diagnostics();
             let reasons: Vec<String> = diagnostics
                 .reason()
@@ -285,19 +346,21 @@ fn evaluate_cedar_policy(
                 .collect();
 
             let message = if !errors.is_empty() {
-                format!("policy errors: {}", errors.join("; "))
+                format!("policy errors for '{action}': {}", errors.join("; "))
             } else if !reasons.is_empty() {
-                format!("denied by policies: {}", reasons.join(", "))
+                format!("denied '{action}' by policies: {}", reasons.join(", "))
             } else {
-                "denied by default (no matching permit policy)".to_string()
+                format!("denied '{action}' by default (no matching permit policy)")
             };
 
-            CedarDecision::Deny {
+            return CedarDecision::Deny {
                 reason: "POLICY_DENIED".to_string(),
                 message,
-            }
+            };
         }
     }
+
+    CedarDecision::Allow
 }
 
 /// Parse an agent ID into a Cedar `EntityUid`.
@@ -310,10 +373,9 @@ fn parse_entity_uid(agent_id: &str) -> EntityUid {
         .unwrap_or_else(|e| unknown_entity_uid("Agent", &e))
 }
 
-/// Parse the first action into a Cedar `EntityUid`.
+/// Parse an action class string into a Cedar `EntityUid`.
 /// Uses the namespace `Firma::Action`.
-fn parse_action_uid(actions: &[String]) -> EntityUid {
-    let action = actions.first().map_or("unknown", String::as_str);
+fn parse_action_uid(action: &str) -> EntityUid {
     let uid_str = format!("Firma::Action::\"{action}\"");
     uid_str
         .parse::<EntityUid>()
@@ -368,10 +430,38 @@ fn bundle_to_update(bundle: &PolicyBundle) -> PolicyBundleUpdate {
 
 fn entry_to_proto(entry: &crate::revocation::RevocationEntry) -> RevocationEvent {
     RevocationEvent {
-        token_id: entry.token_id.clone(),
+        token_id: entry.token_id.to_string(),
         reason: entry.reason.clone(),
         timestamp: Some(to_proto_timestamp(entry.timestamp)),
     }
+}
+
+/// Compute the context hash for a capability token.
+///
+/// SHA-256 of `agent_id | sorted_actions | resource | bundle_version`.
+/// Binds the issued token to both the principal's identity and the policy
+/// state that governed the evaluation.
+fn compute_context_hash(
+    agent_id: &str,
+    actions: &[String],
+    resource: &str,
+    bundle_version: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(agent_id.as_bytes());
+    hasher.update(b"|");
+    // Sort actions for a deterministic hash regardless of request order.
+    let mut sorted = actions.to_vec();
+    sorted.sort_unstable();
+    for action in &sorted {
+        hasher.update(action.as_bytes());
+        hasher.update(b",");
+    }
+    hasher.update(b"|");
+    hasher.update(resource.as_bytes());
+    hasher.update(b"|");
+    hasher.update(bundle_version.as_bytes());
+    hex::encode(hasher.finalize())
 }
 
 /// FR-4: Clamp requested TTL to the configured maximum.
@@ -408,36 +498,167 @@ mod tests {
         assert_eq!(clamp_ttl(-1, 3600), 3600);
     }
 
+    fn permit_all() -> PolicySet {
+        "permit(principal, action, resource);"
+            .parse()
+            .unwrap_or_else(|e| panic!("{e:?}"))
+    }
+
+    fn forbid_all() -> PolicySet {
+        "forbid(principal, action, resource);"
+            .parse()
+            .unwrap_or_else(|e| panic!("{e:?}"))
+    }
+
+    const FIRMA_SCHEMA: &str = include_str!("../../firma-authority/policies/schema.cedarschema");
+
+    fn firma_schema() -> Schema {
+        let (schema, _) = Schema::from_cedarschema_str(FIRMA_SCHEMA)
+            .unwrap_or_else(|e| panic!("schema parse failed: {e}"));
+        schema
+    }
+
     #[test]
     fn test_evaluate_no_policies_denies() {
-        let empty = PolicySet::new();
         let result = evaluate_cedar_policy(
-            &empty,
+            &PolicySet::new(),
+            None,
             "agent_1",
-            &["http:GET".to_string()],
+            "sess_1",
+            &["http.get".to_string()],
             "api.example.com",
         );
         assert!(matches!(result, CedarDecision::Deny { .. }));
     }
 
     #[test]
+    fn test_evaluate_no_actions_denies() {
+        let result = evaluate_cedar_policy(
+            &permit_all(),
+            None,
+            "agent_1",
+            "sess_1",
+            &[],
+            "api.example.com",
+        );
+        assert!(matches!(result, CedarDecision::Deny { reason, .. } if reason == "NO_ACTIONS"));
+    }
+
+    #[test]
     fn test_evaluate_permit_all_allows() {
-        let ps: PolicySet = "permit(principal, action, resource);"
-            .parse()
-            .unwrap_or_else(|e| panic!("{e:?}"));
-        let result =
-            evaluate_cedar_policy(&ps, "agent_1", &["http:GET".to_string()], "api.example.com");
+        let result = evaluate_cedar_policy(
+            &permit_all(),
+            None,
+            "agent_1",
+            "sess_1",
+            &["http.get".to_string()],
+            "api.example.com",
+        );
         assert!(matches!(result, CedarDecision::Allow));
     }
 
     #[test]
     fn test_evaluate_forbid_all_denies() {
-        let ps: PolicySet = "forbid(principal, action, resource);"
-            .parse()
-            .unwrap_or_else(|e| panic!("{e:?}"));
-        let result =
-            evaluate_cedar_policy(&ps, "agent_1", &["http:GET".to_string()], "api.example.com");
+        let result = evaluate_cedar_policy(
+            &forbid_all(),
+            None,
+            "agent_1",
+            "sess_1",
+            &["http.get".to_string()],
+            "api.example.com",
+        );
         assert!(matches!(result, CedarDecision::Deny { .. }));
+    }
+
+    #[test]
+    fn test_evaluate_multi_action_all_allowed() {
+        let result = evaluate_cedar_policy(
+            &permit_all(),
+            None,
+            "agent_1",
+            "sess_1",
+            &["llm.inference".to_string(), "http.get".to_string()],
+            "api.example.com",
+        );
+        assert!(matches!(result, CedarDecision::Allow));
+    }
+
+    #[test]
+    fn test_evaluate_multi_action_one_denied() {
+        // forbid-all → every action in the set is denied; first one short-circuits
+        let result = evaluate_cedar_policy(
+            &forbid_all(),
+            None,
+            "agent_1",
+            "sess_1",
+            &["llm.inference".to_string(), "http.get".to_string()],
+            "api.example.com",
+        );
+        assert!(matches!(result, CedarDecision::Deny { .. }));
+    }
+
+    #[test]
+    fn test_evaluate_with_schema_valid_action() {
+        let schema = firma_schema();
+        let result = evaluate_cedar_policy(
+            &permit_all(),
+            Some(&schema),
+            "agent_1",
+            "sess_1",
+            &["llm.inference".to_string()],
+            "api.example.com",
+        );
+        assert!(matches!(result, CedarDecision::Allow));
+    }
+
+    #[test]
+    fn test_evaluate_with_schema_unknown_action_denies() {
+        // "unknown.action" not declared in schema → Cedar rejects the request
+        let schema = firma_schema();
+        let result = evaluate_cedar_policy(
+            &permit_all(),
+            Some(&schema),
+            "agent_1",
+            "sess_1",
+            &["unknown.action".to_string()],
+            "api.example.com",
+        );
+        assert!(matches!(result, CedarDecision::Deny { .. }));
+    }
+
+    #[test]
+    fn test_evaluate_with_schema_all_15_actions_allowed() {
+        let schema = firma_schema();
+        let actions: Vec<String> = [
+            "http.get",
+            "http.post",
+            "http.put",
+            "http.delete",
+            "http.patch",
+            "network.connect",
+            "db.query",
+            "db.mutate",
+            "file.read",
+            "file.write",
+            "file.delete",
+            "code.execute",
+            "system.execute",
+            "messaging.send",
+            "llm.inference",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+
+        let result = evaluate_cedar_policy(
+            &permit_all(),
+            Some(&schema),
+            "agent_1",
+            "sess_1",
+            &actions,
+            "api.example.com",
+        );
+        assert!(matches!(result, CedarDecision::Allow));
     }
 
     #[test]
@@ -445,5 +666,74 @@ mod tests {
         let now = Utc::now();
         let ts = to_proto_timestamp(now);
         assert_eq!(ts.seconds, now.timestamp());
+    }
+
+    #[test]
+    fn context_hash_deterministic() {
+        let h1 = compute_context_hash(
+            "agent_1",
+            &["http.get".to_string(), "llm.inference".to_string()],
+            "api.example.com",
+            "bundle_v1",
+        );
+        let h2 = compute_context_hash(
+            "agent_1",
+            &["http.get".to_string(), "llm.inference".to_string()],
+            "api.example.com",
+            "bundle_v1",
+        );
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn context_hash_action_order_independent() {
+        // Actions sorted before hashing — different order must produce same hash.
+        let h1 = compute_context_hash(
+            "agent_1",
+            &["http.get".to_string(), "llm.inference".to_string()],
+            "api.example.com",
+            "v1",
+        );
+        let h2 = compute_context_hash(
+            "agent_1",
+            &["llm.inference".to_string(), "http.get".to_string()],
+            "api.example.com",
+            "v1",
+        );
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn context_hash_changes_with_agent() {
+        let h1 = compute_context_hash(
+            "agent_a",
+            &["http.get".to_string()],
+            "resource",
+            "bundle_v1",
+        );
+        let h2 = compute_context_hash(
+            "agent_b",
+            &["http.get".to_string()],
+            "resource",
+            "bundle_v1",
+        );
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn context_hash_changes_with_bundle_version() {
+        let h1 = compute_context_hash(
+            "agent_1",
+            &["http.get".to_string()],
+            "resource",
+            "bundle_v1",
+        );
+        let h2 = compute_context_hash(
+            "agent_1",
+            &["http.get".to_string()],
+            "resource",
+            "bundle_v2",
+        );
+        assert_ne!(h1, h2);
     }
 }

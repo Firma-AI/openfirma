@@ -7,6 +7,7 @@
 //! Validated eagerly at startup via [`EnforcementConfig::validate`] to
 //! surface misconfigurations before the first request arrives.
 
+use firma_core::agent::AgentId;
 use serde::Deserialize;
 
 const VALID_HTTP_METHODS: &[&str] = &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
@@ -132,7 +133,7 @@ impl MappingRulesFile {
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct CapabilityManifestEntry {
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub action_set: Vec<String>,
     pub resource_scope: String,
 }
@@ -145,9 +146,6 @@ impl CapabilityManifestEntry {
     /// Returns a message describing the first invalid field.
     #[allow(dead_code)]
     pub fn validate(&self) -> Result<(), String> {
-        if self.agent_id.trim().is_empty() {
-            return Err("agent_id must not be empty".to_string());
-        }
         if self.action_set.is_empty() {
             return Err("action_set must not be empty".to_string());
         }
@@ -279,7 +277,7 @@ mod tests {
     #[test]
     fn test_valid_capability_manifest_entry() {
         let entry = CapabilityManifestEntry {
-            agent_id: "agent_1".to_string(),
+            agent_id: "agent_1".parse().unwrap(),
             action_set: vec!["llm.inference".to_string()],
             resource_scope: "*".to_string(),
         };
@@ -287,23 +285,18 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_agent_id_rejected() {
-        let entry = CapabilityManifestEntry {
-            agent_id: String::new(),
-            action_set: vec!["llm.inference".to_string()],
-            resource_scope: "*".to_string(),
-        };
-        let err = entry.validate().unwrap_err();
-        assert!(
-            err.contains("agent_id"),
-            "error should mention agent_id: {err}"
+    fn test_empty_agent_id_rejected_via_deserialize() {
+        // AgentId validates non-empty at deserialization time.
+        let result = serde_json::from_str::<CapabilityManifestEntry>(
+            r#"{"agent_id":"","action_set":["llm.inference"],"resource_scope":"*"}"#,
         );
+        assert!(result.is_err(), "empty agent_id must be rejected by serde");
     }
 
     #[test]
     fn test_empty_action_set_rejected() {
         let entry = CapabilityManifestEntry {
-            agent_id: "agent_1".to_string(),
+            agent_id: "agent_1".parse().unwrap(),
             action_set: vec![],
             resource_scope: "*".to_string(),
         };
@@ -317,7 +310,7 @@ mod tests {
     #[test]
     fn test_empty_resource_scope_rejected() {
         let entry = CapabilityManifestEntry {
-            agent_id: "agent_1".to_string(),
+            agent_id: "agent_1".parse().unwrap(),
             action_set: vec!["*".to_string()],
             resource_scope: "  ".to_string(),
         };

@@ -148,15 +148,15 @@ fn build_paseto_claims(claims: &CapabilityClaims) -> Result<Claims, TokenError> 
         })?;
 
     // Custom string claims
-    pc.add_additional("token_id", claims.token_id.as_str())
+    pc.add_additional("token_id", claims.token_id.to_string().as_str())
         .map_err(|e| TokenError::Malformed {
             reason: format!("add token_id: {e:?}"),
         })?;
-    pc.add_additional("agent_id", claims.agent_id.as_str())
+    pc.add_additional("agent_id", claims.agent_id.as_ref())
         .map_err(|e| TokenError::Malformed {
             reason: format!("add agent_id: {e:?}"),
         })?;
-    pc.add_additional("session_id", claims.session_id.as_str())
+    pc.add_additional("session_id", claims.session_id.as_ref())
         .map_err(|e| TokenError::Malformed {
             reason: format!("add session_id: {e:?}"),
         })?;
@@ -182,15 +182,21 @@ fn build_paseto_claims(claims: &CapabilityClaims) -> Result<Claims, TokenError> 
     Ok(pc)
 }
 
-/// Extract a string claim from PASETO claims.
-fn extract_string_claim(claims: &Claims, name: &str) -> Result<String, TokenError> {
-    claims
+/// Extract and parse a claim from PASETO claims into any `FromStr` type.
+fn extract_claim<T>(claims: &Claims, name: &str) -> Result<T, TokenError>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    let s = claims
         .get_claim(name)
         .and_then(serde_json::Value::as_str)
-        .map(String::from)
         .ok_or_else(|| TokenError::Malformed {
             reason: format!("missing or invalid claim: {name}"),
-        })
+        })?;
+    s.parse::<T>().map_err(|e| TokenError::Malformed {
+        reason: format!("invalid {name}: {e}"),
+    })
 }
 
 /// Extract a `Vec<String>` claim from PASETO claims.
@@ -230,14 +236,14 @@ fn extract_datetime_claim(claims: &Claims, name: &str) -> Result<DateTime<Utc>, 
 /// Extract all fields from PASETO claims into `CapabilityClaims`.
 fn extract_capability_claims(claims: &Claims) -> Result<CapabilityClaims, TokenError> {
     Ok(CapabilityClaims {
-        token_id: extract_string_claim(claims, "token_id")?,
-        agent_id: extract_string_claim(claims, "agent_id")?,
-        session_id: extract_string_claim(claims, "session_id")?,
+        token_id: extract_claim(claims, "token_id")?,
+        agent_id: extract_claim(claims, "agent_id")?,
+        session_id: extract_claim(claims, "session_id")?,
         action_set: extract_vec_claim(claims, "action_set")?,
-        resource_scope: extract_string_claim(claims, "resource_scope")?,
+        resource_scope: extract_claim(claims, "resource_scope")?,
         issued_at: extract_datetime_claim(claims, "iat")?,
         expiry: extract_datetime_claim(claims, "exp")?,
-        context_hash: extract_string_claim(claims, "context_hash")?,
+        context_hash: extract_claim(claims, "context_hash")?,
     })
 }
 
@@ -245,6 +251,7 @@ fn extract_capability_claims(claims: &Claims) -> Result<CapabilityClaims, TokenE
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::token::TokenId;
     use pasetors::keys::{AsymmetricKeyPair, Generate};
 
     fn generate_keypair() -> (Vec<u8>, Vec<u8>) {
@@ -255,9 +262,9 @@ mod tests {
     fn sample_claims(expires_in_secs: i64) -> CapabilityClaims {
         let now = Utc::now();
         CapabilityClaims {
-            token_id: "tok_test_001".to_string(),
-            agent_id: "agent_abc".to_string(),
-            session_id: "sess_xyz".to_string(),
+            token_id: TokenId::new(),
+            agent_id: "agent_abc".parse().unwrap(),
+            session_id: "sess_xyz".parse().unwrap(),
             action_set: vec!["http:GET".to_string(), "tool:execute".to_string()],
             resource_scope: "https://api.example.com/*".to_string(),
             issued_at: now,
@@ -356,13 +363,14 @@ mod tests {
 
         // Expired 30s ago — well outside the 10s default leeway.
         let claims = sample_claims(-30);
+        let expected_token_id = claims.token_id;
         let token = signer.sign(&claims).unwrap();
         let result = verifier.verify(&token);
 
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            matches!(err, TokenError::Expired { ref token_id } if token_id == "tok_test_001"),
+            matches!(err, TokenError::Expired { ref token_id } if token_id == &expected_token_id),
             "expected Expired with token_id, got: {err:?}"
         );
     }
@@ -485,10 +493,10 @@ mod tests {
         let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
 
         let mut claims = sample_claims(600);
-        claims.agent_id = "agent-\u{1F916}-bot".to_string(); // robot emoji
+        claims.agent_id = "agent-\u{1F916}-bot".parse().unwrap(); // robot emoji
 
         let token = signer.sign(&claims).unwrap();
         let recovered = verifier.verify(&token).unwrap();
-        assert_eq!(recovered.agent_id, "agent-\u{1F916}-bot");
+        assert_eq!(recovered.agent_id.to_string(), "agent-\u{1F916}-bot");
     }
 }
