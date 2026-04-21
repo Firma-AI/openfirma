@@ -30,7 +30,7 @@ pub struct CedarPolicyStore {
     /// Policy directory path.
     policy_dir: PathBuf,
     /// Bundle TTL in seconds.
-    bundle_ttl_seconds: i32,
+    bundle_ttl_seconds: u32,
 }
 
 impl CedarPolicyStore {
@@ -42,7 +42,7 @@ impl CedarPolicyStore {
     ///
     /// Returns [`AuthorityError`] if the policy directory cannot be read or
     /// any `.cedar` file contains invalid syntax.
-    pub fn load(policy_dir: &Path, bundle_ttl_seconds: i32) -> Result<Self, AuthorityError> {
+    pub fn load(policy_dir: &Path, bundle_ttl_seconds: u32) -> Result<Self, AuthorityError> {
         let (policies_src, schema_src) = read_policy_files(policy_dir)?;
         let policy_set = parse_policies(&policies_src)?;
         let schema = parse_schema(&schema_src)?;
@@ -103,7 +103,7 @@ impl CedarPolicyStore {
         };
 
         // Notify all watchers — ignore error (no receivers is fine)
-        let _ = self.bundle_tx.send(new_bundle);
+        self.bundle_tx.send_replace(new_bundle);
 
         tracing::info!(version = %new_version, "cedar policies reloaded");
         Ok(())
@@ -120,7 +120,7 @@ impl CedarPolicyStore {
     }
 
     /// Get the current policy bundle for distribution to sidecars.
-    pub async fn bundle(&self) -> PolicyBundle {
+    pub fn bundle(&self) -> PolicyBundle {
         self.bundle_tx.borrow().clone()
     }
 
@@ -385,7 +385,7 @@ mod tests {
     async fn reload_detects_changes() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
-        let v1 = store.bundle().await.version.clone();
+        let v1 = store.bundle().version.clone();
 
         // Add a new policy file
         fs::write(
@@ -396,7 +396,7 @@ mod tests {
 
         let result = store.reload().await;
         assert!(result.is_ok());
-        let v2 = store.bundle().await.version;
+        let v2 = store.bundle().version;
         assert_ne!(v1, v2);
     }
 
@@ -404,7 +404,7 @@ mod tests {
     async fn watch_reloads_on_policy_change() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
-        let v1 = store.bundle().await.version.clone();
+        let v1 = store.bundle().version.clone();
 
         let watcher = store.watch().unwrap_or_else(|e| panic!("{e}"));
         let mut rx = watcher.subscribe();
@@ -422,7 +422,7 @@ mod tests {
             .unwrap_or_else(|_| panic!("timed out waiting for policy reload"))
             .unwrap_or_else(|e| panic!("{e}"));
 
-        assert_ne!(store.bundle().await.version, v1);
+        assert_ne!(store.bundle().version, v1);
     }
 
     #[tokio::test]
@@ -446,5 +446,76 @@ mod tests {
 
         let bundle = rx.borrow_and_update().clone();
         assert!(!bundle.version.is_empty());
+    }
+
+    #[test]
+    fn schema_supports_firma_actions() {
+        use cedar_policy::{
+            Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request, Schema,
+        };
+
+        const SCHEMA_SRC: &str = include_str!("../policies/schema.cedarschema");
+        const ACTIONS: &[&str] = &[
+            "llm.inference",
+            "http.get",
+            "http.post",
+            "http.put",
+            "http.delete",
+            "http.patch",
+            "network.connect",
+            "db.query",
+            "db.mutate",
+            "file.read",
+            "file.write",
+            "file.delete",
+            "code.execute",
+            "system.execute",
+            "messaging.send",
+        ];
+
+        let (schema, _) = Schema::from_cedarschema_str(SCHEMA_SRC)
+            .unwrap_or_else(|e| panic!("schema parse failed: {e}"));
+        let policy_set = "permit(principal, action, resource);"
+            .parse::<PolicySet>()
+            .unwrap_or_else(|e| panic!("policy parse failed: {e}"));
+        let context_json = serde_json::json!({
+            "session_id": "sess_test",
+            "timestamp_ms": 0i64,
+            "params": "{}",
+            "risk_score": 0i64,
+        });
+
+        for action in ACTIONS {
+            let principal: EntityUid = "Firma::Agent::\"agent_test\""
+                .to_string()
+                .parse()
+                .unwrap_or_else(|e| panic!("principal parse failed: {e}"));
+            let action_uid: EntityUid = format!("Firma::Action::\"{action}\"")
+                .parse()
+                .unwrap_or_else(|e| panic!("action parse failed for '{action}': {e}"));
+            let resource: EntityUid = "Firma::Resource::\"r\""
+                .to_string()
+                .parse()
+                .unwrap_or_else(|e| panic!("resource parse failed: {e}"));
+
+            let ctx = Context::from_json_value(context_json.clone(), Some((&schema, &action_uid)))
+                .unwrap_or_else(|e| panic!("context build failed for '{action}': {e}"));
+
+            let request = Request::new(
+                Some(principal),
+                Some(action_uid),
+                Some(resource),
+                ctx,
+                Some(&schema),
+            )
+            .unwrap_or_else(|e| panic!("request build failed for '{action}': {e}"));
+
+            let response =
+                Authorizer::new().is_authorized(&request, &policy_set, &Entities::empty());
+            assert!(
+                matches!(response.decision(), Decision::Allow),
+                "action '{action}' must be allowed"
+            );
+        }
     }
 }
