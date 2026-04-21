@@ -85,7 +85,7 @@ fn openai_pipeline(
         Box::new(verifier_for_stage1),
         Box::new(NoRevocations),
     );
-    let stage2 = ConstraintEnforcer::new(Box::new(cedar_eval));
+    let stage2 = ConstraintEnforcer::fixed(cedar_eval);
 
     let rules = vec![MappingRuleConfig {
         method: Some("POST".to_string()),
@@ -170,7 +170,7 @@ fn wrong_key_denied_at_stage1() {
     let pipeline = EnforcementPipeline::new(
         IntentNormalizer::new(make_mapping_table(&rules)),
         stage1,
-        ConstraintEnforcer::new(Box::new(cedar_eval)),
+        ConstraintEnforcer::fixed(cedar_eval),
     );
 
     let request = RawRequest {

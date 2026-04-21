@@ -20,6 +20,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
+use tokio::sync::watch;
 
 struct AllowAllPolicy;
 impl PolicyEvaluation for AllowAllPolicy {
@@ -275,10 +276,11 @@ fn build_pipeline_with_revocation(
         revocation,
     );
 
+    let (_, rx) = watch::channel(Arc::from(policy) as Arc<dyn PolicyEvaluation>);
     EnforcementPipeline::with_stage2_timeout(
         firma_sidecar::pipeline::IntentNormalizer::new(test_mapping_table()),
         stage1,
-        ConstraintEnforcer::new(policy),
+        ConstraintEnforcer::new(rx),
         stage2_timeout,
     )
 }

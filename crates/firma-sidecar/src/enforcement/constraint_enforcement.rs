@@ -37,6 +37,7 @@ use super::decision::{ConstraintEnforcementStage, EnforcementDecision, Enforceme
 use crate::normalizer::NormalizedEnvelope;
 use firma_core::{agent::AgentId, decision::DenyReason, token::CapabilityClaims};
 use std::{sync::Arc, time::Duration};
+use tokio::sync::watch;
 
 /// Trait for policy evaluation — abstracts Cedar or any other policy engine.
 ///
@@ -80,16 +81,39 @@ pub trait PolicyEvaluation: Send + Sync {
 /// Cedar evaluation context, and evaluates policies. Fully local.
 ///
 /// Target: < 200us p95.
+///
+/// The active evaluator is read from a [`tokio::sync::watch`] channel.
+/// The channel `Sender` is owned by the bundle consumer task, which calls
+/// `tx.send_replace()` whenever the Authority streams a new
+/// [`PolicyBundle`].  Hot-path readers call `self.policy.borrow()` — a
+/// momentary read-lock that never blocks the writer — and hold a consistent
+/// snapshot for the duration of their call.
 pub struct ConstraintEnforcer {
-    policy: Arc<dyn PolicyEvaluation>,
+    policy: watch::Receiver<Arc<dyn PolicyEvaluation>>,
 }
 
 impl ConstraintEnforcer {
+    /// Construct with an externally owned [`watch::Receiver`].
+    ///
+    /// The matching [`watch::Sender`] is held by the bundle consumer task,
+    /// which calls `tx.send_replace()` to hot-swap the evaluator when the
+    /// Authority streams a new [`PolicyBundle`].
     #[must_use]
-    pub fn new(policy: Box<dyn PolicyEvaluation>) -> Self {
-        Self {
-            policy: Arc::from(policy),
-        }
+    pub fn new(policy: watch::Receiver<Arc<dyn PolicyEvaluation>>) -> Self {
+        Self { policy }
+    }
+
+    /// Construct with a fixed evaluator — no hot-swap.
+    ///
+    /// Creates an internal watch channel and immediately drops the sender.
+    /// `borrow()` on the receiver still works after sender drop, so the
+    /// snapshot is readable for the lifetime of the enforcer.
+    ///
+    /// Use this for static-policy deployments and in tests.
+    #[must_use]
+    pub fn fixed(policy: impl PolicyEvaluation + 'static) -> Self {
+        let (_, rx) = watch::channel(Arc::new(policy) as Arc<dyn PolicyEvaluation>);
+        Self { policy: rx }
     }
 
     /// Evaluate the request against Cedar policies.
@@ -119,8 +143,13 @@ impl ConstraintEnforcer {
         // Step 1: Scope check (pre-Cedar gate)
         self.check_scope(envelope, claims)?;
 
+        // Borrow the active snapshot once; all checks in this call see the
+        // same evaluator version.  The borrow holds a short read-lock that
+        // does not block concurrent writers.
+        let policy = self.policy.borrow();
+
         // Step 2: Check policy availability (fail-closed)
-        if !self.policy.is_available() {
+        if !policy.is_available() {
             return Err(EnforcementDecision::Deny {
                 reason: DenyReason::FailClosed,
                 stage: EnforcementStage::ConstraintEnforcement(
@@ -132,7 +161,7 @@ impl ConstraintEnforcer {
         }
 
         // Step 3: Check policy bundle freshness
-        if !self.policy.is_fresh() {
+        if !policy.is_fresh() {
             return Err(EnforcementDecision::Deny {
                 reason: DenyReason::PolicyBundleStale,
                 stage: EnforcementStage::ConstraintEnforcement(
@@ -147,7 +176,7 @@ impl ConstraintEnforcer {
         let context = Self::build_context(envelope, claims);
 
         // Step 5: Evaluate policies
-        match self.policy.evaluate(
+        match policy.evaluate(
             &claims.agent_id,
             &envelope.intent.action_class,
             &envelope.intent.resource,
@@ -198,8 +227,12 @@ impl ConstraintEnforcer {
         // Step 1: Scope check (pre-Cedar gate)
         self.check_scope(envelope, claims)?;
 
+        // Clone the Arc from a momentary borrow so it can be moved into
+        // spawn_blocking without holding the read-lock across the await.
+        let policy = Arc::clone(&*self.policy.borrow());
+
         // Step 2: Check policy availability (fail-closed)
-        if !self.policy.is_available() {
+        if !policy.is_available() {
             return Err(EnforcementDecision::Deny {
                 reason: DenyReason::FailClosed,
                 stage: EnforcementStage::ConstraintEnforcement(
@@ -211,7 +244,7 @@ impl ConstraintEnforcer {
         }
 
         // Step 3: Deny stale policy bundle
-        if !self.policy.is_fresh() {
+        if !policy.is_fresh() {
             return Err(EnforcementDecision::Deny {
                 reason: DenyReason::PolicyBundleStale,
                 stage: EnforcementStage::ConstraintEnforcement(
@@ -224,7 +257,6 @@ impl ConstraintEnforcer {
 
         // Step 4: Build context from immutable request + validated claims.
         let context = Self::build_context(envelope, claims);
-        let policy = Arc::clone(&self.policy);
         let principal = claims.agent_id.clone();
         let action = envelope.intent.action_class.clone();
         let resource = envelope.intent.resource.clone();
@@ -499,7 +531,7 @@ mod tests {
 
     #[test]
     fn test_allow_when_in_scope_and_policy_allows() {
-        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::fixed(AllowAllPolicy);
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -509,7 +541,7 @@ mod tests {
 
     #[test]
     fn test_deny_scope_violation() {
-        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::fixed(AllowAllPolicy);
         let envelope = test_envelope("file.delete");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -520,7 +552,7 @@ mod tests {
 
     #[test]
     fn test_wildcard_scope_allows_all() {
-        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::fixed(AllowAllPolicy);
         let envelope = test_envelope("system.execute");
         let claims = test_claims(vec!["*"]);
 
@@ -530,7 +562,7 @@ mod tests {
 
     #[test]
     fn test_deny_when_policy_denies() {
-        let evaluator = ConstraintEnforcer::new(Box::new(DenyAllPolicy));
+        let evaluator = ConstraintEnforcer::fixed(DenyAllPolicy);
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -541,7 +573,7 @@ mod tests {
 
     #[test]
     fn test_deny_when_bundle_stale() {
-        let evaluator = ConstraintEnforcer::new(Box::new(StalePolicy));
+        let evaluator = ConstraintEnforcer::fixed(StalePolicy);
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -552,7 +584,7 @@ mod tests {
 
     #[test]
     fn test_deny_when_bundle_unavailable_fail_closed() {
-        let evaluator = ConstraintEnforcer::new(Box::new(UnavailablePolicy));
+        let evaluator = ConstraintEnforcer::fixed(UnavailablePolicy);
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -563,7 +595,7 @@ mod tests {
 
     #[test]
     fn test_policy_evaluator_error_fails_closed() {
-        let evaluator = ConstraintEnforcer::new(Box::new(ErrorPolicy));
+        let evaluator = ConstraintEnforcer::fixed(ErrorPolicy);
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -574,7 +606,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_stage2_timeout_fails_closed() {
-        let evaluator = ConstraintEnforcer::new(Box::new(SlowPolicy));
+        let evaluator = ConstraintEnforcer::fixed(SlowPolicy);
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 

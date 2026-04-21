@@ -315,7 +315,7 @@ mod tests {
             Box::new(NoRevocations),
         );
 
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let stage2 = ConstraintEnforcer::fixed(AllowAllPolicy);
 
         EnforcementPipeline::new(normalizer, stage1, stage2)
     }
@@ -381,7 +381,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
         );
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let stage2 = ConstraintEnforcer::fixed(AllowAllPolicy);
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
 
         let request = RawRequest {
@@ -441,7 +441,7 @@ mod tests {
             }),
             Box::new(NoRevocations),
         );
-        let stage2 = ConstraintEnforcer::new(Box::new(DenyDeletePolicy));
+        let stage2 = ConstraintEnforcer::fixed(DenyDeletePolicy);
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
 
         let request = RawRequest {
@@ -486,7 +486,7 @@ mod tests {
             Box::new(RejectingVerifier),
             Box::new(NoRevocations),
         );
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let stage2 = ConstraintEnforcer::fixed(AllowAllPolicy);
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
 
         let request = RawRequest {
@@ -528,7 +528,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             Box::new(NoRevocations),
         );
-        let stage2 = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let stage2 = ConstraintEnforcer::fixed(AllowAllPolicy);
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
 
         let request = RawRequest {
@@ -626,7 +626,7 @@ mod tests {
             Box::new(NoRevocations),
         );
 
-        let stage2 = ConstraintEnforcer::new(Box::new(StalePolicy));
+        let stage2 = ConstraintEnforcer::fixed(StalePolicy);
         let pipeline = EnforcementPipeline::new(normalizer, stage1, stage2);
 
         let request = RawRequest {
