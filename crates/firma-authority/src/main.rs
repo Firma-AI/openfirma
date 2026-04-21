@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use firma_core::TokenId;
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 
@@ -27,7 +28,7 @@ enum Commands {
     /// Revoke a capability token by ID.
     Revoke {
         /// The token ID to revoke.
-        token_id: String,
+        token_id: TokenId,
     },
     /// Generate a new Ed25519 key pair for token signing.
     GenerateKey {
@@ -62,26 +63,29 @@ async fn main() {
     let command = cli.command.unwrap_or(Commands::Serve);
 
     match command {
-        Commands::Serve => {
-            let server = match Server::try_new(config, shutdown_signal()).await {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::error!(error = %e, "failed to initialize authority server");
-                    std::process::exit(1);
-                }
-            };
-            if let Err(e) = server.run().await {
-                tracing::error!(error = %e, "authority failed");
-                std::process::exit(1);
-            }
-        }
-        Commands::Revoke { token_id } => run_revoke(&config, &token_id),
+        Commands::Serve => run_server(config).await,
+        Commands::Revoke { token_id } => run_revoke(config, token_id),
         Commands::GenerateKey { output } => run_generate_key(&output),
     }
 }
 
+/// Run gRPC server.
+async fn run_server(config: AuthorityConfig) {
+    let server = match Server::try_new(config, shutdown_signal()).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to initialize authority server");
+            std::process::exit(1);
+        }
+    };
+    if let Err(error) = server.run().await {
+        tracing::error!(%error, "authority failed");
+        std::process::exit(1);
+    }
+}
+
 /// FR-7: Revoke a token by appending its ID to the revocation file.
-fn run_revoke(config: &AuthorityConfig, token_id: &str) {
+fn run_revoke(config: AuthorityConfig, token_id: TokenId) {
     use std::io::Write;
 
     let mut file = match std::fs::OpenOptions::new()

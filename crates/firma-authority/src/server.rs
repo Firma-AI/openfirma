@@ -60,10 +60,11 @@ impl Server {
             ),
         })?;
 
-        let signer = Arc::new(
-            PasetoV4Signer::try_new(&key_bytes)
-                .map_err(|e| AuthorityError::KeyError { reason: format!("invalid signing key: {e}") })?,
-        );
+        let signer = Arc::new(PasetoV4Signer::try_new(&key_bytes).map_err(|e| {
+            AuthorityError::KeyError {
+                reason: format!("invalid signing key: {e}"),
+            }
+        })?);
 
         // Load Cedar policies
         let policy_store = Arc::new(CedarPolicyStore::load(
