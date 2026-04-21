@@ -1,0 +1,138 @@
+// Firma enforcement schema.
+//
+// Canonical entity types and action declarations for capability issuance
+// (Authority) and constraint enforcement (Sidecar Stage 2). Single source of
+// truth for entity type definitions shared across both components.
+//
+// Entity UID conventions (matched by both Authority and Sidecar Cedar evaluators):
+//   principal: Firma::Agent::"<agent_id>"
+//   action:    Firma::Action::"<action_class>"   (e.g., "llm.inference")
+//   resource:  Firma::Resource::"<resource_uri>"
+//
+// Context attributes populated by ConstraintEnforcer::build_context():
+//   action_class : String  - canonical action class (mirrors the action UID ID)
+//   resource     : String  - target resource URI
+//   agent_id     : String  - requesting agent identity
+//   session_id   : String  - enclosing session identity
+//   timestamp    : String  - ISO 8601 request timestamp
+namespace Firma {
+    entity Agent;
+    entity Resource;
+
+    // Shared context shape for all 15 canonical enforcement actions.
+    // Must match the JSON object produced by ConstraintEnforcer::build_context().
+    //
+    // Fields:
+    //   session_id   : String  — enclosing session identity
+    //   timestamp_ms : Long    — Unix epoch milliseconds at evaluation time
+    //   params       : String  — JSON-serialized intent.params (ActionParams)
+    //   risk_score   : Long    — V1 placeholder, always 0
+    type EnforcementContext = {
+        session_id: String,
+        timestamp_ms: Long,
+        params: String,
+        risk_score: Long
+    };
+
+    // ── Network ──────────────────────────────────────────────────────────────
+
+    action "http.get" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "http.post" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "http.put" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "http.delete" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "http.patch" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "network.connect" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    // ── Database ─────────────────────────────────────────────────────────────
+
+    action "db.query" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "db.mutate" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    // ── File I/O ─────────────────────────────────────────────────────────────
+
+    action "file.read" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "file.write" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "file.delete" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    // ── Execution ─────────────────────────────────────────────────────────────
+
+    action "code.execute" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "system.execute" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    // ── Communication ─────────────────────────────────────────────────────────
+
+    action "messaging.send" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    // ── AI ───────────────────────────────────────────────────────────────────
+
+    action "llm.inference" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+}

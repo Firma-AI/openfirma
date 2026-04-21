@@ -1,12 +1,16 @@
+#![allow(clippy::panic)]
+#![allow(clippy::unwrap_used)]
+
 use chrono::Utc;
 use firma_core::{
+    AgentId, SessionId, TokenId,
     decision::DenyReason,
     token::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier},
 };
 use firma_sidecar::pipeline::{
-    ActionClassRegistry, CapabilityEntry, CapabilityMap, CapabilityValidator, ConstraintEnforcer,
-    EnforcementDecision, EnforcementPipeline, MappingRuleConfig, MappingRulesFile, MappingTable,
-    PolicyEvaluation, RawRequest,
+    ActionClassRegistry, CapabilityEntry, CapabilityMap, CapabilityValidator, CedarEvaluatorError,
+    ConstraintEnforcer, EnforcementDecision, EnforcementPipeline, MappingRuleConfig,
+    MappingRulesFile, MappingTable, PolicyEvaluation, RawRequest,
 };
 use std::{collections::HashMap, sync::Arc, thread, time::Duration};
 use std::{
@@ -16,10 +20,17 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
+use tokio::sync::watch;
 
 struct AllowAllPolicy;
 impl PolicyEvaluation for AllowAllPolicy {
-    fn evaluate(&self, _: &str, _: &str, _: &str, _: &serde_json::Value) -> Result<bool, String> {
+    fn evaluate(
+        &self,
+        _: &AgentId,
+        _: &str,
+        _: &str,
+        _: &serde_json::Value,
+    ) -> Result<bool, CedarEvaluatorError> {
         Ok(true)
     }
 
@@ -34,7 +45,13 @@ impl PolicyEvaluation for AllowAllPolicy {
 
 struct PolicyUnavailable;
 impl PolicyEvaluation for PolicyUnavailable {
-    fn evaluate(&self, _: &str, _: &str, _: &str, _: &serde_json::Value) -> Result<bool, String> {
+    fn evaluate(
+        &self,
+        _: &AgentId,
+        _: &str,
+        _: &str,
+        _: &serde_json::Value,
+    ) -> Result<bool, CedarEvaluatorError> {
         Ok(true)
     }
 
@@ -53,7 +70,13 @@ impl PolicyEvaluation for PolicyUnavailable {
 
 struct SlowPolicy;
 impl PolicyEvaluation for SlowPolicy {
-    fn evaluate(&self, _: &str, _: &str, _: &str, _: &serde_json::Value) -> Result<bool, String> {
+    fn evaluate(
+        &self,
+        _: &AgentId,
+        _: &str,
+        _: &str,
+        _: &serde_json::Value,
+    ) -> Result<bool, CedarEvaluatorError> {
         thread::sleep(Duration::from_millis(200));
         Ok(true)
     }
@@ -69,7 +92,13 @@ impl PolicyEvaluation for SlowPolicy {
 
 struct StalePolicy;
 impl PolicyEvaluation for StalePolicy {
-    fn evaluate(&self, _: &str, _: &str, _: &str, _: &serde_json::Value) -> Result<bool, String> {
+    fn evaluate(
+        &self,
+        _: &AgentId,
+        _: &str,
+        _: &str,
+        _: &serde_json::Value,
+    ) -> Result<bool, CedarEvaluatorError> {
         Ok(true)
     }
 
@@ -93,11 +122,11 @@ impl TokenVerifier for MockVerifier {
 
 struct NoRevocations;
 impl RevocationStore for NoRevocations {
-    fn is_revoked(&self, _token_id: &str) -> Result<bool, TokenError> {
+    fn is_revoked(&self, _token_id: &TokenId) -> Result<bool, TokenError> {
         Ok(false)
     }
 
-    fn add_revocation(&self, _token_id: &str) -> Result<(), TokenError> {
+    fn add_revocation(&self, _token_id: &TokenId) -> Result<(), TokenError> {
         Ok(())
     }
 }
@@ -117,24 +146,24 @@ struct SharedPolicyState {
 
 struct SharedPolicyEvaluator {
     state: Arc<SharedPolicyState>,
-    session_counters: Arc<RwLock<HashMap<String, u64>>>,
+    session_counters: Arc<RwLock<HashMap<AgentId, u64>>>,
 }
 
 impl PolicyEvaluation for SharedPolicyEvaluator {
     fn evaluate(
         &self,
-        principal: &str,
+        principal: &AgentId,
         _: &str,
         _: &str,
         _: &serde_json::Value,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, CedarEvaluatorError> {
         {
             let mut counters = self
                 .session_counters
                 .write()
                 .unwrap_or_else(|_| panic!("session counter lock poisoned"));
             let next = counters.get(principal).copied().unwrap_or(0) + 1;
-            counters.insert(principal.to_string(), next);
+            counters.insert(principal.clone(), next);
         }
 
         let allow = self
@@ -168,11 +197,11 @@ impl PolicyEvaluation for SharedPolicyEvaluator {
 
 #[derive(Clone)]
 struct SharedRevocationStore {
-    revoked: Arc<RwLock<HashSet<String>>>,
+    revoked: Arc<RwLock<HashSet<TokenId>>>,
 }
 
 impl RevocationStore for SharedRevocationStore {
-    fn is_revoked(&self, token_id: &str) -> Result<bool, TokenError> {
+    fn is_revoked(&self, token_id: &TokenId) -> Result<bool, TokenError> {
         let revoked = self
             .revoked
             .read()
@@ -180,12 +209,12 @@ impl RevocationStore for SharedRevocationStore {
         Ok(revoked.contains(token_id))
     }
 
-    fn add_revocation(&self, token_id: &str) -> Result<(), TokenError> {
+    fn add_revocation(&self, token_id: &TokenId) -> Result<(), TokenError> {
         let mut revoked = self
             .revoked
             .write()
             .unwrap_or_else(|_| panic!("revocation lock poisoned"));
-        revoked.insert(token_id.to_string());
+        revoked.insert(*token_id);
         Ok(())
     }
 }
@@ -195,9 +224,9 @@ fn test_claims() -> CapabilityClaims {
         .unwrap_or_else(|_| panic!("failed to build fixed issued_at timestamp"))
         .with_timezone(&Utc);
     CapabilityClaims {
-        token_id: "tok_stress_001".to_string(),
-        agent_id: "agent_stress".to_string(),
-        session_id: "sess_stress".to_string(),
+        token_id: TokenId::new(),
+        agent_id: "agent_stress".parse().unwrap(),
+        session_id: "sess_stress".parse().unwrap(),
         action_set: vec!["llm.inference".to_string()],
         resource_scope: "*".to_string(),
         issued_at,
@@ -247,10 +276,11 @@ fn build_pipeline_with_revocation(
         revocation,
     );
 
+    let (_, rx) = watch::channel(Arc::from(policy) as Arc<dyn PolicyEvaluation>);
     EnforcementPipeline::with_stage2_timeout(
         firma_sidecar::pipeline::IntentNormalizer::new(test_mapping_table()),
         stage1,
-        ConstraintEnforcer::new(policy),
+        ConstraintEnforcer::new(rx),
         stage2_timeout,
     )
 }
@@ -278,7 +308,7 @@ async fn stress_100_concurrent_requests_no_passthrough() {
         let pipeline = Arc::clone(&pipeline);
         tasks.push(tokio::spawn(async move {
             pipeline
-                .enforce_async(&protected_request(), "sess_stress")
+                .enforce_async(&protected_request(), "sess_stress".parse().unwrap())
                 .await
         }));
     }
@@ -305,7 +335,9 @@ async fn stage2_timeout_denies_with_enforcement_timeout() {
     let pipeline = build_pipeline(Box::new(SlowPolicy), Duration::from_millis(20));
     let request = protected_request();
 
-    let decision = pipeline.enforce_async(&request, "sess_stress").await;
+    let decision = pipeline
+        .enforce_async(&request, "sess_stress".parse().unwrap())
+        .await;
     assert!(decision.is_deny());
     assert_eq!(decision.deny_reason(), Some(DenyReason::EnforcementTimeout));
 }
@@ -315,7 +347,7 @@ async fn policy_unavailable_denies_fail_closed() {
     let pipeline = build_pipeline(Box::new(PolicyUnavailable), Duration::from_millis(50));
 
     let decision = pipeline
-        .enforce_async(&protected_request(), "sess_stress")
+        .enforce_async(&protected_request(), "sess_stress".parse().unwrap())
         .await;
 
     assert!(decision.is_deny());
@@ -328,7 +360,7 @@ async fn policy_stale_denies_policy_bundle_stale() {
     let pipeline = build_pipeline(Box::new(StalePolicy), Duration::from_millis(50));
 
     let decision = pipeline
-        .enforce_async(&protected_request(), "sess_stress")
+        .enforce_async(&protected_request(), "sess_stress".parse().unwrap())
         .await;
 
     assert!(decision.is_deny());
@@ -346,8 +378,8 @@ async fn stress_shared_state_mutation_produces_only_valid_decisions() {
             allow: true,
         }),
     });
-    let session_counters = Arc::new(RwLock::new(HashMap::<String, u64>::new()));
-    let revocations = Arc::new(RwLock::new(HashSet::<String>::new()));
+    let session_counters = Arc::new(RwLock::new(HashMap::new()));
+    let revocations = Arc::new(RwLock::new(HashSet::new()));
 
     let evaluator = SharedPolicyEvaluator {
         state: Arc::clone(&state),
@@ -364,6 +396,7 @@ async fn stress_shared_state_mutation_produces_only_valid_decisions() {
     let state_writer = Arc::clone(&state);
     let revocation_writer = Arc::clone(&revocations);
     let mutator = tokio::spawn(async move {
+        let token = TokenId::new();
         for i in 0..400 {
             state_writer.available.store(i % 7 != 0, Ordering::SeqCst);
             state_writer.fresh.store(i % 5 != 0, Ordering::SeqCst);
@@ -382,9 +415,9 @@ async fn stress_shared_state_mutation_produces_only_valid_decisions() {
                     .write()
                     .unwrap_or_else(|_| panic!("revocation lock poisoned"));
                 if i % 13 == 0 {
-                    revoked.insert("tok_stress_001".to_string());
+                    revoked.insert(token);
                 } else {
-                    revoked.remove("tok_stress_001");
+                    revoked.remove(&token);
                 }
             }
 
@@ -396,8 +429,9 @@ async fn stress_shared_state_mutation_produces_only_valid_decisions() {
     for _ in 0..100 {
         let pipeline = Arc::clone(&pipeline);
         tasks.push(tokio::spawn(async move {
+            let session_id: SessionId = "ses_stress".parse().unwrap();
             pipeline
-                .enforce_async(&protected_request(), "sess_stress")
+                .enforce_async(&protected_request(), session_id)
                 .await
         }));
     }
@@ -452,8 +486,9 @@ fn threaded_reads_do_not_panic_or_passthrough() {
     for _ in 0..16 {
         let pipeline = Arc::clone(&pipeline);
         workers.push(thread::spawn(move || {
+            let session_id: SessionId = "session".parse().unwrap();
             for _ in 0..50 {
-                let decision = pipeline.enforce(&protected_request(), "sess_stress");
+                let decision = pipeline.enforce(&protected_request(), session_id.clone());
                 assert!(
                     decision.is_allow(),
                     "expected allow in read-only threaded path"

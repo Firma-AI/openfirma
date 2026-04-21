@@ -33,3 +33,7 @@ build/
 *.egg
 .data/
 .env
+
+# generated key
+*.key
+*.pub

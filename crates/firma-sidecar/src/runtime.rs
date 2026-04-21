@@ -10,6 +10,8 @@
 
 use firma_proto::RevocationEvent;
 
+use firma_core::SessionId;
+
 use crate::{
     enforcement::decision::EnforcementDecision,
     execution::{AuditEmitter, DispatchOutcome, EnforcementDispatcher, InFlightAbortManager},
@@ -19,11 +21,11 @@ use crate::{
 
 /// Enforcement decision producer abstraction.
 pub trait Enforcer: Send + Sync {
-    fn enforce(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision;
+    fn enforce(&self, request: &RawRequest, session_id: SessionId) -> EnforcementDecision;
 }
 
 impl Enforcer for EnforcementPipeline {
-    fn enforce(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
+    fn enforce(&self, request: &RawRequest, session_id: SessionId) -> EnforcementDecision {
         Self::enforce(self, request, session_id)
     }
 }
@@ -68,13 +70,13 @@ where
         &self,
         execution_id: &str,
         request: &RawRequest,
-        session_id: &str,
+        session_id: SessionId,
     ) -> DispatchOutcome {
         let decision = self.enforcer.enforce(request, session_id);
 
         let maybe_reg = match &decision {
             EnforcementDecision::Allow { claims, .. } => Some((
-                claims.token_id.clone(),
+                claims.token_id,
                 claims.session_id.clone(),
                 self.inflight
                     .register(execution_id, &claims.token_id, &claims.session_id)
@@ -100,7 +102,15 @@ where
     /// Process one incoming revocation stream event.
     ///
     /// Returns number of cancelled in-flight executions (ABORT only).
-    pub async fn on_revocation_event(&self, event: &RevocationEvent) -> usize {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RevocationSignalError`] if the proto event carries an
+    /// unparseable `token_id` or `session_id`.
+    pub async fn on_revocation_event(
+        &self,
+        event: &RevocationEvent,
+    ) -> Result<usize, crate::execution::RevocationSignalError> {
         self.inflight.process_proto_event(event, &self.audit).await
     }
 }
@@ -117,6 +127,7 @@ mod tests {
     };
     use chrono::{DateTime, Utc};
     use firma_core::{
+        AgentId, SessionId, TokenId,
         decision::DenyReason,
         envelope::{
             ActionParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod,
@@ -166,7 +177,7 @@ mod tests {
     }
 
     impl Enforcer for FakeEnforcer {
-        fn enforce(&self, _request: &RawRequest, _session_id: &str) -> EnforcementDecision {
+        fn enforce(&self, _request: &RawRequest, _session_id: SessionId) -> EnforcementDecision {
             self.decision_from_template()
         }
     }
@@ -198,9 +209,9 @@ mod tests {
 
     fn allow_decision() -> EnforcementDecision {
         let claims = CapabilityClaims {
-            token_id: "tok-1".to_string(),
-            agent_id: "agent".to_string(),
-            session_id: "sess-a".to_string(),
+            token_id: TokenId::new(),
+            agent_id: "agent".parse::<AgentId>().unwrap(),
+            session_id: "sess-a".parse::<SessionId>().unwrap(),
             action_set: vec!["http.get".to_string()],
             resource_scope: "*".to_string(),
             issued_at: fixed_time(),
@@ -223,8 +234,8 @@ mod tests {
             },
             capability: "v4.public.test".to_string(),
             metadata: ExecutionMetadata {
-                session_id: "sess-a".to_string(),
-                agent_id: "agent".to_string(),
+                session_id: "sess-a".parse::<SessionId>().unwrap(),
+                agent_id: "agent".parse::<AgentId>().unwrap(),
                 timestamp: fixed_time(),
                 trace_id: None,
                 budget_consumed: 0.0,
@@ -292,7 +303,11 @@ mod tests {
         );
 
         let out = runtime
-            .handle_request("exec-1", &test_request(), "sess-a")
+            .handle_request(
+                "exec-1",
+                &test_request(),
+                "sess-a".parse::<SessionId>().unwrap(),
+            )
             .await;
 
         assert!(matches!(out, DispatchOutcome::ToolResult { .. }));
@@ -319,7 +334,11 @@ mod tests {
         );
 
         let out = runtime
-            .handle_request("exec-allow", &test_request(), "sess-a")
+            .handle_request(
+                "exec-allow",
+                &test_request(),
+                "sess-a".parse::<SessionId>().unwrap(),
+            )
             .await;
 
         assert!(matches!(out, DispatchOutcome::Forwarded { .. }));
@@ -328,12 +347,14 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_processes_abort_revocation_events() {
+        let tok = TokenId::new();
+        let sess_a: SessionId = "sess-a".parse().unwrap();
         let (tx, _rx) = mpsc::unbounded_channel();
         let audit = AuditEmitter::new(tx);
         let connector = CountingConnector::new();
         let dispatcher = EnforcementDispatcher::new(connector, audit.clone());
         let inflight = InFlightAbortManager::new();
-        let token = inflight.register("exec-1", "tok-1", "sess-a").await;
+        let token = inflight.register("exec-1", &tok, &sess_a).await;
 
         let runtime = SidecarRuntime::new(
             FakeEnforcer {
@@ -345,12 +366,12 @@ mod tests {
         );
 
         let event = RevocationEvent {
-            token_id: "tok-1".to_string(),
+            token_id: tok.to_string(),
             reason: "ABORT".to_string(),
             timestamp: None,
         };
 
-        let cancelled = runtime.on_revocation_event(&event).await;
+        let cancelled = runtime.on_revocation_event(&event).await.unwrap();
         assert_eq!(cancelled, 1);
         assert!(token.is_cancelled());
     }

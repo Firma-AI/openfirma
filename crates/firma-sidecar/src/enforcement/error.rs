@@ -82,6 +82,7 @@ mod tests {
     use super::*;
 
     use super::super::decision::{CapabilityValidationStage, ConstraintEnforcementStage};
+    use firma_core::token::TokenId;
 
     #[test]
     fn test_normalization_error_maps_to_unclassified() {
@@ -95,7 +96,7 @@ mod tests {
     #[test]
     fn test_token_expired_maps_correctly() {
         let err = EnforcementError::TokenValidation(TokenError::Expired {
-            token_id: "tok_001".to_string(),
+            token_id: TokenId::new(),
         });
         let decision = err.into_deny(EnforcementStage::CapabilityValidation(
             CapabilityValidationStage::TokenValidation,

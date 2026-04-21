@@ -700,7 +700,6 @@ dependencies = [
  "tonic",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
@@ -715,6 +714,7 @@ dependencies = [
  "serde_json",
  "strum",
  "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
@@ -731,10 +731,12 @@ dependencies = [
 name = "firma-sidecar"
 version = "0.1.0"
 dependencies = [
+ "cedar-policy",
  "chrono",
  "firma-core",
  "firma-proto",
  "loom",
+ "pasetors",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2678,6 +2680,7 @@ checksum = "5ac8b6f42ead25368cf5b098aeb3dc8a1a2c05a3eee8a9a1a68c640edbfc79d9"
 dependencies = [
  "getrandom 0.4.2",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 

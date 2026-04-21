@@ -3,6 +3,10 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::agent::AgentId;
+use crate::session::SessionId;
+use crate::token::TokenId;
+
 /// The core protocol unit wrapping each outbound agent call.
 ///
 /// Built by the Sidecar when intercepting an agent's request. Contains the
@@ -121,9 +125,9 @@ pub struct ToolUseParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionMetadata {
     /// Session this request belongs to.
-    pub session_id: String,
+    pub session_id: SessionId,
     /// Agent that initiated this request.
-    pub agent_id: String,
+    pub agent_id: AgentId,
     /// When the request was intercepted.
     pub timestamp: DateTime<Utc>,
     /// Optional distributed tracing correlation ID.
@@ -144,15 +148,15 @@ pub struct ExecutionMetadata {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionContext {
     /// Agent identity, from envelope metadata.
-    pub agent_id: String,
+    pub agent_id: AgentId,
     /// Derived action string (e.g., `http:GET`, `tool:execute`).
     pub action: String,
     /// Target resource derived from intent (e.g., URL, DB name, tool name).
     pub resource: String,
     /// Session ID, from envelope metadata.
-    pub session_id: String,
+    pub session_id: SessionId,
     /// Token ID, from parsed capability claims.
-    pub token_id: String,
+    pub token_id: TokenId,
     /// Allowed actions from capability claims, for scope checks.
     pub token_actions: Vec<String>,
     /// Allowed resources from capability claims, for scope checks.
@@ -213,8 +217,8 @@ mod tests {
             },
             capability: "v4.public.golden".to_string(),
             metadata: ExecutionMetadata {
-                session_id: "golden-sess".to_string(),
-                agent_id: "golden-agent".to_string(),
+                session_id: "golden-sess".parse().unwrap(),
+                agent_id: "golden-agent".parse().unwrap(),
                 timestamp: chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
                     .expect("fixed date")
                     .with_timezone(&Utc),

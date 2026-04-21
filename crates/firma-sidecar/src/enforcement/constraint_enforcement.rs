@@ -32,10 +32,12 @@
 //! - **Non-deterministic authorization** — same context + same bundle always
 //!   produces the same decision.
 
+use super::cedar_evaluator::CedarEvaluatorError;
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
 use crate::normalizer::NormalizedEnvelope;
-use firma_core::{decision::DenyReason, token::CapabilityClaims};
+use firma_core::{agent::AgentId, decision::DenyReason, token::CapabilityClaims};
 use std::{sync::Arc, time::Duration};
+use tokio::sync::watch;
 
 /// Trait for policy evaluation — abstracts Cedar or any other policy engine.
 ///
@@ -48,15 +50,15 @@ pub trait PolicyEvaluation: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns an error string if policy evaluation fails (e.g., malformed
-    /// context or engine error).
+    /// Returns a [`CedarEvaluatorError`] if policy evaluation fails (e.g.,
+    /// malformed entity UIDs, invalid context, or request schema violation).
     fn evaluate(
         &self,
-        principal: &str,
+        principal: &AgentId,
         action: &str,
         resource: &str,
         context: &serde_json::Value,
-    ) -> Result<bool, String>;
+    ) -> Result<bool, CedarEvaluatorError>;
 
     /// Check if the policy bundle is still fresh (TTL not expired).
     fn is_fresh(&self) -> bool;
@@ -73,22 +75,82 @@ pub trait PolicyEvaluation: Send + Sync {
     fn version(&self) -> Option<String>;
 }
 
+/// Sentinel evaluator installed in the watch channel at sidecar boot, before
+/// the Authority delivers the first [`PolicyBundle`].
+///
+/// `is_available()` returns `false`, so every evaluation attempt hits the
+/// existing availability check and fails closed as
+/// [`DenyReason::PolicyBundleStale`].  The bundle consumer task replaces
+/// this sentinel with a real [`CedarPolicyEvaluator`] on first delivery.
+#[allow(dead_code)] // used by the bundle consumer task (not yet wired)
+struct NoBundleInstalled;
+
+impl PolicyEvaluation for NoBundleInstalled {
+    fn evaluate(
+        &self,
+        _: &AgentId,
+        _: &str,
+        _: &str,
+        _: &serde_json::Value,
+    ) -> Result<bool, super::cedar_evaluator::CedarEvaluatorError> {
+        Ok(false)
+    }
+
+    fn is_fresh(&self) -> bool {
+        false
+    }
+
+    fn is_available(&self) -> bool {
+        false
+    }
+
+    fn version(&self) -> Option<String> {
+        None
+    }
+}
+
 /// Stage 2: Constraint Enforcement Engine (CEE).
 ///
 /// Performs scope check (action within token's allowed set), builds the
 /// Cedar evaluation context, and evaluates policies. Fully local.
 ///
 /// Target: < 200us p95.
+///
+/// The active evaluator is read from a [`tokio::sync::watch`] channel.
+/// The channel `Sender` is held by the bundle consumer task, which calls
+/// `tx.send_replace(Arc::new(evaluator))` whenever the Authority streams a
+/// new [`PolicyBundle`].  Before the first bundle arrives the channel holds
+/// a [`NoBundleInstalled`] sentinel whose `is_available()` returns `false`,
+/// causing every evaluation to fail closed as
+/// [`DenyReason::PolicyBundleStale`].  Hot-path readers call
+/// `self.policy.borrow()` — a momentary read-lock that never blocks the
+/// writer.
 pub struct ConstraintEnforcer {
-    policy: Arc<dyn PolicyEvaluation>,
+    policy: watch::Receiver<Arc<dyn PolicyEvaluation>>,
 }
 
 impl ConstraintEnforcer {
+    /// Construct with an externally owned [`watch::Receiver`].
+    ///
+    /// The matching [`watch::Sender`] is held by the bundle consumer task.
+    /// Seed the channel with `Arc::new(NoBundleInstalled)` at boot so
+    /// evaluations fail closed until the first real bundle is installed.
+    /// Use [`watch::channel`] directly to create the pair.
     #[must_use]
-    pub fn new(policy: Box<dyn PolicyEvaluation>) -> Self {
-        Self {
-            policy: Arc::from(policy),
-        }
+    pub fn new(policy: watch::Receiver<Arc<dyn PolicyEvaluation>>) -> Self {
+        Self { policy }
+    }
+
+    /// Construct with a fixed evaluator — no hot-swap.
+    ///
+    /// Creates an internal watch channel and immediately drops the sender.
+    /// The snapshot is readable for the lifetime of the enforcer.
+    ///
+    /// Use this for static-policy deployments and in tests.
+    #[must_use]
+    pub fn fixed(policy: impl PolicyEvaluation + 'static) -> Self {
+        let (_, rx) = watch::channel(Arc::new(policy) as Arc<dyn PolicyEvaluation>);
+        Self { policy: rx }
     }
 
     /// Evaluate the request against Cedar policies.
@@ -118,8 +180,13 @@ impl ConstraintEnforcer {
         // Step 1: Scope check (pre-Cedar gate)
         self.check_scope(envelope, claims)?;
 
+        // Borrow the active snapshot once; all checks in this call see the
+        // same evaluator version.  The borrow holds a short read-lock that
+        // does not block concurrent writers.
+        let policy = self.policy.borrow();
+
         // Step 2: Check policy availability (fail-closed)
-        if !self.policy.is_available() {
+        if !policy.is_available() {
             return Err(EnforcementDecision::Deny {
                 reason: DenyReason::FailClosed,
                 stage: EnforcementStage::ConstraintEnforcement(
@@ -131,7 +198,7 @@ impl ConstraintEnforcer {
         }
 
         // Step 3: Check policy bundle freshness
-        if !self.policy.is_fresh() {
+        if !policy.is_fresh() {
             return Err(EnforcementDecision::Deny {
                 reason: DenyReason::PolicyBundleStale,
                 stage: EnforcementStage::ConstraintEnforcement(
@@ -143,10 +210,10 @@ impl ConstraintEnforcer {
         }
 
         // Step 4: Build context
-        let context = self.build_context(envelope, claims);
+        let context = Self::build_context(envelope, claims);
 
         // Step 5: Evaluate policies
-        match self.policy.evaluate(
+        match policy.evaluate(
             &claims.agent_id,
             &envelope.intent.action_class,
             &envelope.intent.resource,
@@ -197,8 +264,12 @@ impl ConstraintEnforcer {
         // Step 1: Scope check (pre-Cedar gate)
         self.check_scope(envelope, claims)?;
 
+        // Clone the Arc from a momentary borrow so it can be moved into
+        // spawn_blocking without holding the read-lock across the await.
+        let policy = Arc::clone(&*self.policy.borrow());
+
         // Step 2: Check policy availability (fail-closed)
-        if !self.policy.is_available() {
+        if !policy.is_available() {
             return Err(EnforcementDecision::Deny {
                 reason: DenyReason::FailClosed,
                 stage: EnforcementStage::ConstraintEnforcement(
@@ -210,7 +281,7 @@ impl ConstraintEnforcer {
         }
 
         // Step 3: Deny stale policy bundle
-        if !self.policy.is_fresh() {
+        if !policy.is_fresh() {
             return Err(EnforcementDecision::Deny {
                 reason: DenyReason::PolicyBundleStale,
                 stage: EnforcementStage::ConstraintEnforcement(
@@ -222,8 +293,7 @@ impl ConstraintEnforcer {
         }
 
         // Step 4: Build context from immutable request + validated claims.
-        let context = self.build_context(envelope, claims);
-        let policy = Arc::clone(&self.policy);
+        let context = Self::build_context(envelope, claims);
         let principal = claims.agent_id.clone();
         let action = envelope.intent.action_class.clone();
         let resource = envelope.intent.resource.clone();
@@ -309,18 +379,24 @@ impl ConstraintEnforcer {
     }
 
     /// Build the Cedar evaluation context from envelope + claims.
-    #[allow(clippy::unused_self)] // will use self when Cedar is integrated
+    ///
+    /// Produces exactly the `EnforcementContext` record declared in
+    /// `firma.cedarschema`:
+    /// - `session_id`   — enclosing session identity
+    /// - `timestamp_ms` — Unix epoch milliseconds at evaluation time (Long)
+    /// - `params`       — JSON-serialized `intent.params` (available to Cedar `when` clauses)
+    /// - `risk_score`   — V1 placeholder, always 0 (Long)
     fn build_context(
-        &self,
         envelope: &NormalizedEnvelope,
         claims: &CapabilityClaims,
     ) -> serde_json::Value {
+        let params =
+            serde_json::to_string(&envelope.intent.params).unwrap_or_else(|_| "{}".to_string());
         serde_json::json!({
-            "action_class": envelope.intent.action_class,
-            "resource": envelope.intent.resource,
-            "agent_id": claims.agent_id,
             "session_id": claims.session_id,
-            "timestamp": envelope.timestamp.to_rfc3339(),
+            "timestamp_ms": envelope.timestamp.timestamp_millis(),
+            "params": params,
+            "risk_score": 0i64,
         })
     }
 }
@@ -330,17 +406,20 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use firma_core::envelope::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
+    use firma_core::token::TokenId;
     use std::{collections::HashMap, time::Duration};
+
+    use crate::enforcement::cedar_evaluator::CedarEvaluatorError;
 
     struct AllowAllPolicy;
     impl PolicyEvaluation for AllowAllPolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
-        ) -> Result<bool, String> {
+        ) -> Result<bool, CedarEvaluatorError> {
             Ok(true)
         }
         fn is_fresh(&self) -> bool {
@@ -355,11 +434,11 @@ mod tests {
     impl PolicyEvaluation for DenyAllPolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
-        ) -> Result<bool, String> {
+        ) -> Result<bool, CedarEvaluatorError> {
             Ok(false)
         }
         fn is_fresh(&self) -> bool {
@@ -374,12 +453,14 @@ mod tests {
     impl PolicyEvaluation for ErrorPolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
-        ) -> Result<bool, String> {
-            Err("evaluation backend error".to_string())
+        ) -> Result<bool, CedarEvaluatorError> {
+            Err(CedarEvaluatorError::RequestBuild(Box::new(
+                std::io::Error::other("evaluation backend error"),
+            )))
         }
         fn is_fresh(&self) -> bool {
             true
@@ -393,11 +474,11 @@ mod tests {
     impl PolicyEvaluation for StalePolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
-        ) -> Result<bool, String> {
+        ) -> Result<bool, CedarEvaluatorError> {
             Ok(true)
         }
         fn is_fresh(&self) -> bool {
@@ -412,11 +493,11 @@ mod tests {
     impl PolicyEvaluation for UnavailablePolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
-        ) -> Result<bool, String> {
+        ) -> Result<bool, CedarEvaluatorError> {
             Ok(true)
         }
         fn is_fresh(&self) -> bool {
@@ -434,11 +515,11 @@ mod tests {
     impl PolicyEvaluation for SlowPolicy {
         fn evaluate(
             &self,
-            _: &str,
+            _: &AgentId,
             _: &str,
             _: &str,
             _: &serde_json::Value,
-        ) -> Result<bool, String> {
+        ) -> Result<bool, CedarEvaluatorError> {
             std::thread::sleep(Duration::from_millis(200));
             Ok(true)
         }
@@ -472,9 +553,9 @@ mod tests {
 
     fn test_claims(actions: Vec<&str>) -> CapabilityClaims {
         CapabilityClaims {
-            token_id: "tok_001".to_string(),
-            agent_id: "agent_test".to_string(),
-            session_id: "sess_001".to_string(),
+            token_id: TokenId::new(),
+            agent_id: "agent_test".parse().unwrap(),
+            session_id: "sess_001".parse().unwrap(),
             action_set: actions.into_iter().map(String::from).collect(),
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
@@ -485,7 +566,7 @@ mod tests {
 
     #[test]
     fn test_allow_when_in_scope_and_policy_allows() {
-        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::fixed(AllowAllPolicy);
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -495,7 +576,7 @@ mod tests {
 
     #[test]
     fn test_deny_scope_violation() {
-        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::fixed(AllowAllPolicy);
         let envelope = test_envelope("file.delete");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -506,7 +587,7 @@ mod tests {
 
     #[test]
     fn test_wildcard_scope_allows_all() {
-        let evaluator = ConstraintEnforcer::new(Box::new(AllowAllPolicy));
+        let evaluator = ConstraintEnforcer::fixed(AllowAllPolicy);
         let envelope = test_envelope("system.execute");
         let claims = test_claims(vec!["*"]);
 
@@ -516,7 +597,7 @@ mod tests {
 
     #[test]
     fn test_deny_when_policy_denies() {
-        let evaluator = ConstraintEnforcer::new(Box::new(DenyAllPolicy));
+        let evaluator = ConstraintEnforcer::fixed(DenyAllPolicy);
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -527,7 +608,7 @@ mod tests {
 
     #[test]
     fn test_deny_when_bundle_stale() {
-        let evaluator = ConstraintEnforcer::new(Box::new(StalePolicy));
+        let evaluator = ConstraintEnforcer::fixed(StalePolicy);
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -538,7 +619,7 @@ mod tests {
 
     #[test]
     fn test_deny_when_bundle_unavailable_fail_closed() {
-        let evaluator = ConstraintEnforcer::new(Box::new(UnavailablePolicy));
+        let evaluator = ConstraintEnforcer::fixed(UnavailablePolicy);
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -549,7 +630,7 @@ mod tests {
 
     #[test]
     fn test_policy_evaluator_error_fails_closed() {
-        let evaluator = ConstraintEnforcer::new(Box::new(ErrorPolicy));
+        let evaluator = ConstraintEnforcer::fixed(ErrorPolicy);
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
@@ -560,7 +641,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_stage2_timeout_fails_closed() {
-        let evaluator = ConstraintEnforcer::new(Box::new(SlowPolicy));
+        let evaluator = ConstraintEnforcer::fixed(SlowPolicy);
         let envelope = test_envelope("llm.inference");
         let claims = test_claims(vec!["llm.inference"]);
 
