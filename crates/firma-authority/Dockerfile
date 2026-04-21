@@ -1,5 +1,5 @@
 # Build Stage
-FROM rust:1.86-slim-bookworm AS builder
+FROM rust:1.95-slim-trixies AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \

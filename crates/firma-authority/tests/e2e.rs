@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use firma_proto::firma::v1::authority_service_client::AuthorityServiceClient;
-use firma_proto::firma::v1::{IssueCapabilityRequest, WatchPolicyBundleRequest, WatchRevocationsRequest};
+use firma_proto::firma::v1::{
+    IssueCapabilityRequest, WatchPolicyBundleRequest, WatchRevocationsRequest,
+};
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 use tempfile::TempDir;
@@ -112,19 +114,18 @@ async fn watch_policy_bundle_streams_on_connect() {
         .expect("failed to connect");
 
     let mut stream = client
-        .watch_policy_bundle(WatchPolicyBundleRequest { current_version: String::new() })
+        .watch_policy_bundle(WatchPolicyBundleRequest {
+            current_version: String::new(),
+        })
         .await
         .expect("RPC failed")
         .into_inner();
 
-    let update = tokio::time::timeout(
-        tokio::time::Duration::from_millis(500),
-        stream.message(),
-    )
-    .await
-    .expect("timed out waiting for initial bundle")
-    .expect("stream error")
-    .expect("stream ended");
+    let update = tokio::time::timeout(tokio::time::Duration::from_millis(500), stream.message())
+        .await
+        .expect("timed out waiting for initial bundle")
+        .expect("stream error")
+        .expect("stream ended");
 
     let bundle = update.bundle.expect("bundle missing");
     assert!(!bundle.version.is_empty());
@@ -142,19 +143,18 @@ async fn watch_policy_bundle_pushes_on_file_change() {
         .expect("failed to connect");
 
     let mut stream = client
-        .watch_policy_bundle(WatchPolicyBundleRequest { current_version: String::new() })
+        .watch_policy_bundle(WatchPolicyBundleRequest {
+            current_version: String::new(),
+        })
         .await
         .expect("RPC failed")
         .into_inner();
 
-    let initial = tokio::time::timeout(
-        tokio::time::Duration::from_millis(500),
-        stream.message(),
-    )
-    .await
-    .expect("timed out waiting for initial bundle")
-    .expect("stream error")
-    .expect("stream ended");
+    let initial = tokio::time::timeout(tokio::time::Duration::from_millis(500), stream.message())
+        .await
+        .expect("timed out waiting for initial bundle")
+        .expect("stream error")
+        .expect("stream ended");
     let v1 = initial.bundle.expect("bundle missing").version;
 
     std::fs::write(
@@ -163,14 +163,11 @@ async fn watch_policy_bundle_pushes_on_file_change() {
     )
     .expect("failed to overwrite policy");
 
-    let update = tokio::time::timeout(
-        tokio::time::Duration::from_secs(2),
-        stream.message(),
-    )
-    .await
-    .expect("timed out waiting for bundle update")
-    .expect("stream error")
-    .expect("stream ended");
+    let update = tokio::time::timeout(tokio::time::Duration::from_secs(2), stream.message())
+        .await
+        .expect("timed out waiting for bundle update")
+        .expect("stream error")
+        .expect("stream ended");
     let v2 = update.bundle.expect("bundle missing").version;
 
     assert_ne!(v1, v2);
@@ -196,14 +193,11 @@ async fn watch_revocations_streams_new_events() {
     std::fs::write(&server.revocation_file, format!("{token_id}\n"))
         .expect("failed to write revocation");
 
-    let event = tokio::time::timeout(
-        tokio::time::Duration::from_secs(2),
-        stream.message(),
-    )
-    .await
-    .expect("timed out waiting for revocation event")
-    .expect("stream error")
-    .expect("stream ended");
+    let event = tokio::time::timeout(tokio::time::Duration::from_secs(2), stream.message())
+        .await
+        .expect("timed out waiting for revocation event")
+        .expect("stream error")
+        .expect("stream ended");
 
     assert_eq!(event.token_id, token_id.to_string());
 

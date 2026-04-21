@@ -297,11 +297,21 @@ fn evaluate_cedar_policy(
 
     let principal = match parse_entity_uid(agent_id) {
         Ok(uid) => uid,
-        Err(e) => return CedarDecision::Deny { reason: "INVALID_REQUEST".to_string(), message: e.to_string() },
+        Err(e) => {
+            return CedarDecision::Deny {
+                reason: "INVALID_REQUEST".to_string(),
+                message: e.to_string(),
+            };
+        }
     };
     let resource_entity = match parse_resource_uid(resource) {
         Ok(uid) => uid,
-        Err(e) => return CedarDecision::Deny { reason: "INVALID_REQUEST".to_string(), message: e.to_string() },
+        Err(e) => {
+            return CedarDecision::Deny {
+                reason: "INVALID_REQUEST".to_string(),
+                message: e.to_string(),
+            };
+        }
     };
     let authorizer = Authorizer::new();
     let timestamp_ms = Utc::now().timestamp_millis();
@@ -309,7 +319,12 @@ fn evaluate_cedar_policy(
     for action in actions {
         let action_entity = match parse_action_uid(action) {
             Ok(uid) => uid,
-            Err(e) => return CedarDecision::Deny { reason: "INVALID_REQUEST".to_string(), message: e.to_string() },
+            Err(e) => {
+                return CedarDecision::Deny {
+                    reason: "INVALID_REQUEST".to_string(),
+                    message: e.to_string(),
+                };
+            }
         };
         let context_json = json!({
             "session_id": session_id,
