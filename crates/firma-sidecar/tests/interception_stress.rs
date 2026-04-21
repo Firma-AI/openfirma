@@ -8,9 +8,9 @@ use firma_core::{
     token::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier},
 };
 use firma_sidecar::pipeline::{
-    ActionClassRegistry, CapabilityEntry, CapabilityMap, CapabilityValidator, ConstraintEnforcer,
-    EnforcementDecision, EnforcementPipeline, MappingRuleConfig, MappingRulesFile, MappingTable,
-    PolicyEvaluation, RawRequest,
+    ActionClassRegistry, CapabilityEntry, CapabilityMap, CapabilityValidator, CedarEvaluatorError,
+    ConstraintEnforcer, EnforcementDecision, EnforcementPipeline, MappingRuleConfig,
+    MappingRulesFile, MappingTable, PolicyEvaluation, RawRequest,
 };
 use std::{collections::HashMap, sync::Arc, thread, time::Duration};
 use std::{
@@ -29,7 +29,7 @@ impl PolicyEvaluation for AllowAllPolicy {
         _: &str,
         _: &str,
         _: &serde_json::Value,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, CedarEvaluatorError> {
         Ok(true)
     }
 
@@ -50,7 +50,7 @@ impl PolicyEvaluation for PolicyUnavailable {
         _: &str,
         _: &str,
         _: &serde_json::Value,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, CedarEvaluatorError> {
         Ok(true)
     }
 
@@ -75,7 +75,7 @@ impl PolicyEvaluation for SlowPolicy {
         _: &str,
         _: &str,
         _: &serde_json::Value,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, CedarEvaluatorError> {
         thread::sleep(Duration::from_millis(200));
         Ok(true)
     }
@@ -97,7 +97,7 @@ impl PolicyEvaluation for StalePolicy {
         _: &str,
         _: &str,
         _: &serde_json::Value,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, CedarEvaluatorError> {
         Ok(true)
     }
 
@@ -155,7 +155,7 @@ impl PolicyEvaluation for SharedPolicyEvaluator {
         _: &str,
         _: &str,
         _: &serde_json::Value,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, CedarEvaluatorError> {
         {
             let mut counters = self
                 .session_counters

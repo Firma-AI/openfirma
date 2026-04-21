@@ -32,6 +32,7 @@
 //! - **Non-deterministic authorization** — same context + same bundle always
 //!   produces the same decision.
 
+use super::cedar_evaluator::CedarEvaluatorError;
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
 use crate::normalizer::NormalizedEnvelope;
 use firma_core::{agent::AgentId, decision::DenyReason, token::CapabilityClaims};
@@ -48,15 +49,15 @@ pub trait PolicyEvaluation: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns an error string if policy evaluation fails (e.g., malformed
-    /// context or engine error).
+    /// Returns a [`CedarEvaluatorError`] if policy evaluation fails (e.g.,
+    /// malformed entity UIDs, invalid context, or request schema violation).
     fn evaluate(
         &self,
         principal: &AgentId,
         action: &str,
         resource: &str,
         context: &serde_json::Value,
-    ) -> Result<bool, String>;
+    ) -> Result<bool, CedarEvaluatorError>;
 
     /// Check if the policy bundle is still fresh (TTL not expired).
     fn is_fresh(&self) -> bool;
@@ -341,6 +342,8 @@ mod tests {
     use firma_core::token::TokenId;
     use std::{collections::HashMap, time::Duration};
 
+    use crate::enforcement::cedar_evaluator::CedarEvaluatorError;
+
     struct AllowAllPolicy;
     impl PolicyEvaluation for AllowAllPolicy {
         fn evaluate(
@@ -349,7 +352,7 @@ mod tests {
             _: &str,
             _: &str,
             _: &serde_json::Value,
-        ) -> Result<bool, String> {
+        ) -> Result<bool, CedarEvaluatorError> {
             Ok(true)
         }
         fn is_fresh(&self) -> bool {
@@ -368,7 +371,7 @@ mod tests {
             _: &str,
             _: &str,
             _: &serde_json::Value,
-        ) -> Result<bool, String> {
+        ) -> Result<bool, CedarEvaluatorError> {
             Ok(false)
         }
         fn is_fresh(&self) -> bool {
@@ -387,8 +390,10 @@ mod tests {
             _: &str,
             _: &str,
             _: &serde_json::Value,
-        ) -> Result<bool, String> {
-            Err("evaluation backend error".to_string())
+        ) -> Result<bool, CedarEvaluatorError> {
+            Err(CedarEvaluatorError::RequestBuild(Box::new(
+                std::io::Error::other("evaluation backend error"),
+            )))
         }
         fn is_fresh(&self) -> bool {
             true
@@ -406,7 +411,7 @@ mod tests {
             _: &str,
             _: &str,
             _: &serde_json::Value,
-        ) -> Result<bool, String> {
+        ) -> Result<bool, CedarEvaluatorError> {
             Ok(true)
         }
         fn is_fresh(&self) -> bool {
@@ -425,7 +430,7 @@ mod tests {
             _: &str,
             _: &str,
             _: &serde_json::Value,
-        ) -> Result<bool, String> {
+        ) -> Result<bool, CedarEvaluatorError> {
             Ok(true)
         }
         fn is_fresh(&self) -> bool {
@@ -447,7 +452,7 @@ mod tests {
             _: &str,
             _: &str,
             _: &serde_json::Value,
-        ) -> Result<bool, String> {
+        ) -> Result<bool, CedarEvaluatorError> {
             std::thread::sleep(Duration::from_millis(200));
             Ok(true)
         }

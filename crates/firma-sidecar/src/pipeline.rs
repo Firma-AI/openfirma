@@ -23,7 +23,7 @@ use std::time::Duration;
 // Re-export public API for pipeline callers
 pub use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
 pub use crate::enforcement::capability_validation::{CapabilityValidator, ValidatedCapability};
-pub use crate::enforcement::cedar_evaluator::CedarPolicyEvaluator;
+pub use crate::enforcement::cedar_evaluator::{CedarEvaluatorError, CedarPolicyEvaluator};
 pub use crate::enforcement::config::{
     EnforcementConfig, MappingConfig, MappingRuleConfig, MappingRulesFile, Stage1Config,
     Stage2Config,
@@ -213,6 +213,8 @@ mod tests {
     };
     use std::collections::HashMap;
 
+    use crate::enforcement::cedar_evaluator::CedarEvaluatorError;
+
     struct AllowAllPolicy;
     impl PolicyEvaluation for AllowAllPolicy {
         fn evaluate(
@@ -221,7 +223,7 @@ mod tests {
             _: &str,
             _: &str,
             _: &serde_json::Value,
-        ) -> Result<bool, String> {
+        ) -> Result<bool, CedarEvaluatorError> {
             Ok(true)
         }
         fn is_fresh(&self) -> bool {
@@ -410,7 +412,7 @@ mod tests {
                 action: &str,
                 _: &str,
                 _: &serde_json::Value,
-            ) -> Result<bool, String> {
+            ) -> Result<bool, CedarEvaluatorError> {
                 Ok(action != "http.delete")
             }
             fn is_fresh(&self) -> bool {
@@ -597,7 +599,7 @@ mod tests {
                 _: &str,
                 _: &str,
                 _: &serde_json::Value,
-            ) -> Result<bool, String> {
+            ) -> Result<bool, CedarEvaluatorError> {
                 Ok(true)
             }
             fn is_fresh(&self) -> bool {
