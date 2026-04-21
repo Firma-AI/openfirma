@@ -76,7 +76,7 @@ where
 
         let maybe_reg = match &decision {
             EnforcementDecision::Allow { claims, .. } => Some((
-                claims.token_id.clone(),
+                claims.token_id,
                 claims.session_id.clone(),
                 self.inflight
                     .register(execution_id, &claims.token_id, &claims.session_id)
