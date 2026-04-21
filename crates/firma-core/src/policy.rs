@@ -30,7 +30,7 @@ pub struct PolicyBundle {
     /// Raw Cedar entity schema bytes.
     pub entity_schema: Vec<u8>,
     /// Time-to-live in seconds. Sidecars enter fail-closed when stale.
-    pub ttl_seconds: i32,
+    pub ttl_seconds: u32,
 }
 
 impl PolicyBundle {
@@ -40,7 +40,7 @@ impl PolicyBundle {
         version: String,
         policies: Vec<u8>,
         entity_schema: Vec<u8>,
-        ttl_seconds: i32,
+        ttl_seconds: u32,
     ) -> Self {
         Self {
             version,

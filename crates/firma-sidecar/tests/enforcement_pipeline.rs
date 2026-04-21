@@ -23,8 +23,7 @@ use firma_sidecar::pipeline::{
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 
-const FIRMA_SCHEMA: &str =
-    include_str!("../../firma-authority/policies/schema.cedarschema");
+const FIRMA_SCHEMA: &str = include_str!("../../firma-authority/policies/schema.cedarschema");
 
 struct NoRevocations;
 impl RevocationStore for NoRevocations {

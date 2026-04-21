@@ -36,9 +36,6 @@ pub enum CedarEvaluatorError {
     #[error("policy bundle contains no policy statements")]
     EmptyPolicies,
 
-    #[error("policy bundle TTL is negative ({0}s); Authority contract violation")]
-    InvalidTtl(i32),
-
     #[error("policy bundle contains no entity schema; schema is required")]
     MissingSchema,
 
@@ -117,7 +114,7 @@ pub struct CedarPolicyEvaluator {
     schema: Schema,
     version: String,
     received_at: Instant,
-    ttl_secs: u64,
+    ttl_secs: u32,
 }
 
 impl CedarPolicyEvaluator {
@@ -144,9 +141,6 @@ impl CedarPolicyEvaluator {
             .parse::<PolicySet>()
             .map_err(CedarEvaluatorError::PolicyParse)?;
 
-        let ttl_secs = u64::try_from(bundle.ttl_seconds)
-            .map_err(|_| CedarEvaluatorError::InvalidTtl(bundle.ttl_seconds))?;
-
         if bundle.entity_schema.is_empty() {
             return Err(CedarEvaluatorError::MissingSchema);
         }
@@ -159,7 +153,7 @@ impl CedarPolicyEvaluator {
             schema,
             version: bundle.version.clone(),
             received_at: Instant::now(),
-            ttl_secs,
+            ttl_secs: bundle.ttl_seconds,
         })
     }
 }
@@ -215,7 +209,7 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
     }
 
     fn is_fresh(&self) -> bool {
-        self.received_at.elapsed().as_secs() < self.ttl_secs
+        self.received_at.elapsed().as_secs() < u64::from(self.ttl_secs)
     }
 
     fn version(&self) -> Option<String> {
@@ -350,22 +344,6 @@ mod tests {
         let evaluator = CedarPolicyEvaluator::from_bundle(&permit_all_bundle()).unwrap();
         // Just constructed — should be fresh with 30s TTL.
         assert!(evaluator.is_fresh());
-    }
-
-    #[test]
-    fn negative_ttl_rejected() {
-        // Schema bytes not reached — TTL is validated before schema parsing.
-        let bad = PolicyBundle::new(
-            "bad-ttl".to_string(),
-            b"permit(principal, action, resource);".to_vec(),
-            vec![],
-            -1,
-        );
-        let err = CedarPolicyEvaluator::from_bundle(&bad).unwrap_err();
-        assert!(
-            matches!(err, CedarEvaluatorError::InvalidTtl(-1)),
-            "expected InvalidTtl(-1), got {err}"
-        );
     }
 
     #[test]
