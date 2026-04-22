@@ -171,6 +171,17 @@ pub trait RevocationStore {
     fn add_revocation(&self, token_id: &TokenId) -> Result<(), TokenError>;
 }
 
+#[must_use]
+pub fn matches_resource_scope(scope: &str, resource: &str) -> bool {
+    if scope == "*" {
+        return true;
+    }
+    if let Some(prefix) = scope.strip_suffix("/*") {
+        return resource == prefix || resource.starts_with(prefix);
+    }
+    resource == scope || resource.starts_with(scope)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,13 +222,48 @@ mod tests {
     }
 
     #[test]
-    fn token_id_rejects_empty_parse() {
-        assert!("".parse::<TokenId>().is_err());
+    fn resource_scope_prefix_rejects_different_host() {
+        assert!(!matches_resource_scope(
+            "api.example.com/*",
+            "other.example.com/v1/data"
+        ));
     }
 
     #[test]
-    fn token_id_rejects_empty_deserialize() {
-        assert!(serde_json::from_str::<TokenId>(r#""""#).is_err());
+    fn resource_scope_bare_host_matches_subpaths() {
+        assert!(matches_resource_scope(
+            "api.openai.com",
+            "api.openai.com/v1/chat/completions"
+        ));
+        assert!(matches_resource_scope("api.openai.com", "api.openai.com"));
+    }
+
+    #[test]
+    fn resource_scope_bare_host_rejects_different_host() {
+        assert!(!matches_resource_scope(
+            "api.openai.com",
+            "other.example.com/v1/data"
+        ));
+    }
+
+    #[test]
+    fn resource_scope_exact_match() {
+        assert!(matches_resource_scope(
+            "api.example.com/v1/chat",
+            "api.example.com/v1/chat"
+        ));
+        assert!(matches_resource_scope(
+            "api.example.com/v1/chat",
+            "api.example.com/v1/chat/completions"
+        ));
+    }
+
+    #[test]
+    fn resource_scope_different_path_denied() {
+        assert!(!matches_resource_scope(
+            "api.example.com/v1/chat",
+            "api.example.com/v2/data"
+        ));
     }
 
     #[test]

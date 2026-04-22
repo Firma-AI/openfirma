@@ -13,7 +13,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use firma_core::session::SessionId;
-use firma_core::token::{CapabilityClaims, TokenError, TokenVerifier};
+use firma_core::token::{CapabilityClaims, TokenError, TokenVerifier, matches_resource_scope};
 
 use crate::enforcement::decision::{
     CapabilityValidationStage, EnforcementDecision, EnforcementStage,
@@ -181,7 +181,7 @@ impl CapabilityMap {
 
         if claims.resource_scope == "*" {
             score += 1;
-        } else if resource.starts_with(&claims.resource_scope) {
+        } else if matches_resource_scope(&claims.resource_scope, resource) {
             score += 50;
         } else if !claims.resource_scope.is_empty() {
             return 0;
