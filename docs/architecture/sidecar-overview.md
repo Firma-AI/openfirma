@@ -258,6 +258,44 @@ Defaults: `capacity = 1_000_000`, `fpr = 0.0001`, and
 `bloom_hits`, `lru_hits`, `bloom_positive_lru_miss`, and
 `revocations_total`.
 
+### 5.3 Cedar context attributes
+
+Stage 2 builds the Cedar `EnforcementContext` from the immutable request
+envelope, validated capability claims, and per-session runtime signals.
+The canonical schema lives in
+`crates/firma-authority/policies/schema.cedarschema`; the sidecar test
+schema in `cedar_evaluator.rs` must match it exactly.
+
+| Attribute            | Cedar type | Source |
+| -------------------- | ---------- | ------ |
+| `session_id`         | `String`   | `CapabilityClaims.session_id` from Stage 1 validation |
+| `timestamp_ms`       | `Long`     | `NormalizedEnvelope.timestamp` converted to epoch milliseconds |
+| `params`             | `String`   | JSON-serialized `ActionParams` from the normalized request |
+| `risk_score`         | `Long`     | `RuntimeSignals.risk_score_long()` from `SessionStateStore` |
+| `budget_remaining`   | `Long`     | `RuntimeSignals.budget_remaining_long(claims.budget_ceiling)` |
+| `session_duration_s` | `Long`     | `(envelope.timestamp - claims.issued_at).num_seconds()` clamped at zero |
+| `action_count`       | `Long`     | `RuntimeSignals.action_count`, including the current admitted call |
+
+### 5.4 Per-session state
+
+`SessionStateStore` holds runtime signals keyed by `SessionId`. The V1
+runtime uses `LruSessionStateStore`, an in-memory LRU cache with a fixed
+capacity of 8192 sessions per sidecar process.
+
+The pipeline updates this state between Stage 1 and Stage 2:
+
+- Stage 1 ALLOW calls `record_action(session_id)` before Cedar
+  evaluation, so the first policy-visible request sees
+  `action_count = 1`.
+- Stage 1 DENY returns before the store is touched, so malformed,
+  expired, or revoked tokens do not burn per-session quota.
+- The pipeline then reads `signals(session_id)` and reuses the same
+  `RuntimeSignals` for both Cedar context construction and
+  `ExecutionMetadata`, keeping policy inputs and audit metadata aligned.
+- In V1, `budget_consumed` and `risk_score` are placeholders sourced
+  from the same store but remain `0.0` unless a future task wires real
+  producers.
+
 #### 5.2.1 Revocation check flow
 
 **Reader (`is_revoked`) — hot path.**

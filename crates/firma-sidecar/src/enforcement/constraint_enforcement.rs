@@ -38,6 +38,7 @@ use std::time::Duration;
 use firma_core::{AgentId, CapabilityClaims, DenyReason};
 
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
+use crate::enforcement::session_state::RuntimeSignals;
 use crate::normalizer::NormalizedEnvelope;
 
 /// Trait for policy evaluation — abstracts Cedar or any other policy engine.
@@ -119,6 +120,7 @@ impl ConstraintEnforcer {
         &self,
         envelope: &NormalizedEnvelope,
         claims: &CapabilityClaims,
+        signals: &RuntimeSignals,
     ) -> Result<(), EnforcementDecision> {
         // Step 1: Scope check (pre-Cedar gate)
         self.check_scope(envelope, claims)?;
@@ -148,7 +150,7 @@ impl ConstraintEnforcer {
         }
 
         // Step 4: Build context
-        let context = self.build_context(envelope, claims);
+        let context = self.build_context(envelope, claims, signals);
 
         // Step 5: Evaluate policies
         match self.policy.evaluate(
@@ -197,6 +199,7 @@ impl ConstraintEnforcer {
         &self,
         envelope: &NormalizedEnvelope,
         claims: &CapabilityClaims,
+        signals: &RuntimeSignals,
         timeout: Duration,
     ) -> Result<(), EnforcementDecision> {
         // Step 1: Scope check (pre-Cedar gate)
@@ -227,7 +230,7 @@ impl ConstraintEnforcer {
         }
 
         // Step 4: Build context from immutable request + validated claims.
-        let context = self.build_context(envelope, claims);
+        let context = self.build_context(envelope, claims, signals);
         let policy = Arc::clone(&self.policy);
         let principal = claims.agent_id.clone();
         let action = envelope.intent.action_class.clone();
@@ -316,19 +319,30 @@ impl ConstraintEnforcer {
         })
     }
 
-    /// Build the Cedar evaluation context from envelope + claims.
-    #[expect(clippy::unused_self, reason = "will use self when Cedar is integrated")]
+    /// Build the Cedar evaluation context from envelope + claims + runtime signals.
+    ///
+    /// Emits the shape declared by `EnforcementContext` in the canonical
+    /// `schema.cedarschema`. `action_class`, `resource`, and `agent_id` are
+    /// not in the context — they are passed to Cedar as principal/action/
+    /// resource entity UIDs.
+    #[expect(clippy::unused_self, reason = "reserved for future stateful hooks")]
     fn build_context(
         &self,
         envelope: &NormalizedEnvelope,
         claims: &CapabilityClaims,
+        signals: &RuntimeSignals,
     ) -> serde_json::Value {
+        let session_duration_s = (envelope.timestamp - claims.issued_at).num_seconds().max(0);
+        let timestamp_ms = envelope.timestamp.timestamp_millis();
+        let params = serde_json::to_string(&envelope.intent.params).unwrap_or_else(|_| "{}".into());
         serde_json::json!({
-            "action_class": envelope.intent.action_class,
-            "resource": envelope.intent.resource,
-            "agent_id": claims.agent_id,
             "session_id": claims.session_id,
-            "timestamp": envelope.timestamp.to_rfc3339(),
+            "timestamp_ms": timestamp_ms,
+            "params": params,
+            "risk_score": signals.risk_score_long(),
+            "budget_remaining": signals.budget_remaining_long(claims.budget_ceiling),
+            "session_duration_s": session_duration_s,
+            "action_count": i64::try_from(signals.action_count).unwrap_or(i64::MAX),
         })
     }
 }
@@ -337,6 +351,7 @@ impl ConstraintEnforcer {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use crate::enforcement::session_state::RuntimeSignals;
     use chrono::Utc;
     use firma_core::*;
     use std::collections::HashMap;
@@ -491,6 +506,15 @@ mod tests {
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
             context_hash: String::new(),
+            budget_ceiling: None,
+        }
+    }
+
+    fn test_signals() -> RuntimeSignals {
+        RuntimeSignals {
+            action_count: 1,
+            budget_consumed: 0.0,
+            risk_score: 0.0,
         }
     }
 
@@ -500,7 +524,7 @@ mod tests {
         let envelope = test_envelope("communication.external.send");
         let claims = test_claims(vec!["communication.external.send"]);
 
-        let result = evaluator.evaluate(&envelope, &claims);
+        let result = evaluator.evaluate(&envelope, &claims, &test_signals());
         assert!(result.is_ok());
     }
 
@@ -510,7 +534,9 @@ mod tests {
         let envelope = test_envelope("filesystem.delete");
         let claims = test_claims(vec!["communication.external.send"]);
 
-        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        let decision = evaluator
+            .evaluate(&envelope, &claims, &test_signals())
+            .unwrap_err();
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::ScopeViolation));
     }
@@ -521,7 +547,7 @@ mod tests {
         let envelope = test_envelope("system.execute");
         let claims = test_claims(vec!["*"]);
 
-        let result = evaluator.evaluate(&envelope, &claims);
+        let result = evaluator.evaluate(&envelope, &claims, &test_signals());
         assert!(result.is_ok());
     }
 
@@ -531,7 +557,9 @@ mod tests {
         let envelope = test_envelope("communication.external.send");
         let claims = test_claims(vec!["communication.external.send"]);
 
-        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        let decision = evaluator
+            .evaluate(&envelope, &claims, &test_signals())
+            .unwrap_err();
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyDenied));
     }
@@ -542,7 +570,9 @@ mod tests {
         let envelope = test_envelope("communication.external.send");
         let claims = test_claims(vec!["communication.external.send"]);
 
-        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        let decision = evaluator
+            .evaluate(&envelope, &claims, &test_signals())
+            .unwrap_err();
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
     }
@@ -553,7 +583,9 @@ mod tests {
         let envelope = test_envelope("communication.external.send");
         let claims = test_claims(vec!["communication.external.send"]);
 
-        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        let decision = evaluator
+            .evaluate(&envelope, &claims, &test_signals())
+            .unwrap_err();
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::FailClosed));
     }
@@ -568,7 +600,7 @@ mod tests {
             "credential.read",
         ]);
 
-        let result = evaluator.evaluate(&envelope, &claims);
+        let result = evaluator.evaluate(&envelope, &claims, &test_signals());
         assert!(result.is_ok());
     }
 
@@ -578,7 +610,9 @@ mod tests {
         let envelope = test_envelope("communication.external.send");
         let claims = test_claims(vec![]);
 
-        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        let decision = evaluator
+            .evaluate(&envelope, &claims, &test_signals())
+            .unwrap_err();
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::ScopeViolation));
     }
@@ -587,14 +621,63 @@ mod tests {
     fn test_build_context_includes_required_fields() {
         let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
         let envelope = test_envelope("communication.external.send");
-        let claims = test_claims(vec!["communication.external.send"]);
+        let mut claims = test_claims(vec!["communication.external.send"]);
+        claims.issued_at = envelope.timestamp - chrono::Duration::seconds(42);
+        claims.budget_ceiling = Some(100.0);
+        let signals = RuntimeSignals {
+            action_count: 7,
+            budget_consumed: 12.75,
+            risk_score: 3.0,
+        };
 
-        let context = evaluator.build_context(&envelope, &claims);
-        assert_eq!(context["action_class"], "communication.external.send");
-        assert_eq!(context["resource"], "api.openai.com/v1/chat/completions");
-        assert_eq!(context["agent_id"], "agent_test");
+        let context = evaluator.build_context(&envelope, &claims, &signals);
+
+        // Canonical schema fields (7 total):
         assert_eq!(context["session_id"], "sess_001");
-        assert!(context["timestamp"].is_string());
+        assert!(context["timestamp_ms"].is_i64());
+        assert!(context["params"].is_string());
+        assert_eq!(context["risk_score"], serde_json::json!(3));
+        assert_eq!(context["budget_remaining"], serde_json::json!(87));
+        assert_eq!(context["session_duration_s"], serde_json::json!(42));
+        assert_eq!(context["action_count"], serde_json::json!(7));
+
+        // Schema does not declare action_class / resource / agent_id /
+        // timestamp — they are passed as Cedar principal/action/resource
+        // entity UIDs, not context attributes.
+        assert!(context.get("action_class").is_none());
+        assert!(context.get("resource").is_none());
+        assert!(context.get("agent_id").is_none());
+        assert!(context.get("timestamp").is_none());
+    }
+
+    #[test]
+    fn test_build_context_budget_remaining_unbounded_when_ceiling_none() {
+        let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
+        let signals = RuntimeSignals {
+            action_count: 1,
+            budget_consumed: 0.0,
+            risk_score: 0.0,
+        };
+        let context = evaluator.build_context(&envelope, &claims, &signals);
+        assert_eq!(context["budget_remaining"], serde_json::json!(i64::MAX));
+    }
+
+    #[test]
+    fn test_build_context_negative_session_duration_clamped_to_zero() {
+        let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
+        let envelope = test_envelope("communication.external.send");
+        let mut claims = test_claims(vec!["communication.external.send"]);
+        // Token issued AFTER request timestamp (clock skew edge case).
+        claims.issued_at = envelope.timestamp + chrono::Duration::seconds(10);
+        let signals = RuntimeSignals {
+            action_count: 1,
+            budget_consumed: 0.0,
+            risk_score: 0.0,
+        };
+        let context = evaluator.build_context(&envelope, &claims, &signals);
+        assert_eq!(context["session_duration_s"], serde_json::json!(0));
     }
 
     #[test]
@@ -623,7 +706,9 @@ mod tests {
         let envelope = test_envelope("communication.external.send");
         let claims = test_claims(vec!["communication.external.send"]);
 
-        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        let decision = evaluator
+            .evaluate(&envelope, &claims, &test_signals())
+            .unwrap_err();
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
         assert_eq!(
             decision.stage(),
@@ -639,7 +724,9 @@ mod tests {
         let envelope = test_envelope("filesystem.delete");
         let claims = test_claims(vec!["communication.external.send"]);
 
-        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        let decision = evaluator
+            .evaluate(&envelope, &claims, &test_signals())
+            .unwrap_err();
         assert_eq!(
             decision.stage(),
             Some(EnforcementStage::ConstraintEnforcement(
@@ -654,7 +741,9 @@ mod tests {
         let envelope = test_envelope("communication.external.send");
         let claims = test_claims(vec!["communication.external.send"]);
 
-        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        let decision = evaluator
+            .evaluate(&envelope, &claims, &test_signals())
+            .unwrap_err();
         assert_eq!(
             decision.stage(),
             Some(EnforcementStage::ConstraintEnforcement(
@@ -669,7 +758,9 @@ mod tests {
         let envelope = test_envelope("communication.external.send");
         let claims = test_claims(vec!["communication.external.send"]);
 
-        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        let decision = evaluator
+            .evaluate(&envelope, &claims, &test_signals())
+            .unwrap_err();
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::FailClosed));
     }
@@ -682,7 +773,12 @@ mod tests {
         let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator
-            .evaluate_with_timeout(&envelope, &claims, Duration::from_millis(20))
+            .evaluate_with_timeout(
+                &envelope,
+                &claims,
+                &test_signals(),
+                Duration::from_millis(20),
+            )
             .await
             .unwrap_err();
 

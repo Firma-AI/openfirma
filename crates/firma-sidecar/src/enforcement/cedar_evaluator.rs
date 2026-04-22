@@ -191,9 +191,11 @@ impl CedarPolicyEvaluator {
 impl PolicyEvaluation for CedarPolicyEvaluator {
     /// Evaluate Cedar policies for the given principal, action, and resource.
     ///
-    /// Context attributes (`action_class`, `resource`, `agent_id`,
-    /// `session_id`, `timestamp`) are passed as a Cedar `Context` built
-    /// from the JSON object produced by `ConstraintEnforcer::build_context`.
+    /// Context attributes (`session_id`, `timestamp_ms`, `params`,
+    /// `risk_score`, `budget_remaining`, `session_duration_s`,
+    /// `action_count`) — the shape declared by `EnforcementContext` in the
+    /// canonical `schema.cedarschema` — are built from the JSON object
+    /// produced by `ConstraintEnforcer::build_context`.
     ///
     /// Entity UIDs are constructed via [`FirmaEntityUid`] to match the
     /// Authority's issuance evaluation. No schema validation is performed on
@@ -235,7 +237,15 @@ mod tests {
 
     const TEST_SCHEMA: &str = "
 namespace Firma {
-    type EnforcementContext = { session_id: String, timestamp_ms: Long, params: String, risk_score: Long };
+    type EnforcementContext = {
+        session_id: String,
+        timestamp_ms: Long,
+        params: String,
+        risk_score: Long,
+        budget_remaining: Long,
+        session_duration_s: Long,
+        action_count: Long
+    };
     entity Agent;
     entity Resource;
     action \"communication.external.send\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
@@ -256,6 +266,9 @@ namespace Firma {
             "timestamp_ms": 1_700_000_000_000i64,
             "params": "{}",
             "risk_score": 0i64,
+            "budget_remaining": i64::MAX,
+            "session_duration_s": 0i64,
+            "action_count": 1i64,
         })
     }
 
@@ -287,6 +300,9 @@ namespace Firma {
             "timestamp_ms": 1_700_000_000_000i64,
             "params": "{}",
             "risk_score": 0i64,
+            "budget_remaining": i64::MAX,
+            "session_duration_s": 0i64,
+            "action_count": 1i64,
         })
     }
 
@@ -422,6 +438,9 @@ namespace Firma {
             "timestamp_ms": 1_700_000_000_000i64,
             "params": "{}",
             "risk_score": 0i64,
+            "budget_remaining": i64::MAX,
+            "session_duration_s": 0i64,
+            "action_count": 1i64,
         });
         let deny = evaluator
             .evaluate(
@@ -514,5 +533,67 @@ namespace Firma {
             )
             .unwrap();
         assert!(allow);
+    }
+
+    #[test]
+    fn cedar_policy_denies_when_budget_remaining_negative() {
+        let policy_src = br#"
+            forbid(principal, action, resource)
+            when { context.budget_remaining < 0 };
+            permit(principal, action, resource);
+        "#;
+        let bundle = schema_bundle(policy_src);
+        let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
+        let context = json!({
+            "session_id": "sess_001",
+            "timestamp_ms": 0i64,
+            "params": "{}",
+            "risk_score": 0i64,
+            "budget_remaining": -1i64,
+            "session_duration_s": 0i64,
+            "action_count": 1i64,
+        });
+
+        let allowed = evaluator
+            .evaluate(
+                &agent("agent_test"),
+                "communication.external.send",
+                "api.openai.com/v1/chat/completions",
+                &context,
+            )
+            .unwrap();
+
+        assert!(!allowed, "expected DENY when budget_remaining < 0");
+    }
+
+    #[test]
+    fn cedar_policy_denies_when_risk_score_exceeds_threshold() {
+        let policy_src = br#"
+            forbid(principal, action, resource)
+            when { context.risk_score > 50 };
+            permit(principal, action, resource);
+        "#;
+        let bundle = schema_bundle(policy_src);
+        let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
+        let context = json!({
+            "session_id": "sess_001",
+            "timestamp_ms": 0i64,
+            "params": "{}",
+            "risk_score": 75i64,
+            "budget_remaining": 1000i64,
+            "session_duration_s": 0i64,
+            "action_count": 1i64,
+        });
+
+        let allowed = evaluator
+            .evaluate(
+                &agent("agent_test"),
+                "communication.external.send",
+                "api.openai.com/v1/chat/completions",
+                &context,
+            )
+            .unwrap();
+
+        assert!(!allowed, "expected DENY when risk_score > threshold");
     }
 }

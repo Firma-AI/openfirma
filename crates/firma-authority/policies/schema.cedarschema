@@ -16,11 +16,13 @@
 //   resource:  Firma::Resource::"<resource_uri>"
 //
 // Context attributes populated by ConstraintEnforcer::build_context():
-//   action_class : String  - canonical action class (mirrors the action UID ID)
-//   resource     : String  - target resource URI
-//   agent_id     : String  - requesting agent identity
-//   session_id   : String  - enclosing session identity
-//   timestamp    : String  - ISO 8601 request timestamp
+//   session_id         : String  - enclosing session identity
+//   timestamp_ms       : Long    - Unix epoch milliseconds at evaluation time
+//   params             : String  - JSON-serialized intent.params (ActionParams)
+//   risk_score         : Long    - static or pre-computed risk attribute (V1 = 0)
+//   budget_remaining   : Long    - ceiling minus consumed, floored; i64::MAX when unbounded
+//   session_duration_s : Long    - seconds since claims.issued_at (non-negative)
+//   action_count       : Long    - monotonic per-session call counter, 1-based
 namespace Firma {
     entity Agent;
     entity Resource;
@@ -29,15 +31,21 @@ namespace Firma {
     // Must match the JSON object produced by ConstraintEnforcer::build_context().
     //
     // Fields:
-    //   session_id   : String  — enclosing session identity
-    //   timestamp_ms : Long    — Unix epoch milliseconds at evaluation time
-    //   params       : String  — JSON-serialized intent.params (ActionParams)
-    //   risk_score   : Long    — V1 placeholder, always 0
+    //   session_id         : String  — enclosing session identity
+    //   timestamp_ms       : Long    — Unix epoch milliseconds at evaluation time
+    //   params             : String  — JSON-serialized intent.params (ActionParams)
+    //   risk_score         : Long    — static or pre-computed risk attribute (V1 = 0)
+    //   budget_remaining   : Long    — ceiling minus consumed, floored; i64::MAX when unbounded
+    //   session_duration_s : Long    — seconds since claims.issued_at (non-negative)
+    //   action_count       : Long    — monotonic per-session call counter, 1-based
     type EnforcementContext = {
         session_id: String,
         timestamp_ms: Long,
         params: String,
-        risk_score: Long
+        risk_score: Long,
+        budget_remaining: Long,
+        session_duration_s: Long,
+        action_count: Long
     };
 
     action "account.permission.change" appliesTo {

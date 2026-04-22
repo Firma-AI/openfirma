@@ -583,6 +583,7 @@ mod tests {
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
             context_hash: String::new(),
+            budget_ceiling: None,
         }
     }
 
@@ -615,6 +616,9 @@ mod tests {
             ),
             constraint_enforcer: ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy)),
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         }))
     }
 

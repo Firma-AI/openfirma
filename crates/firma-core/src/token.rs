@@ -107,6 +107,12 @@ pub struct CapabilityClaims {
     pub expiry: DateTime<Utc>,
     /// Hex-encoded SHA-256 of the Cedar context snapshot at issuance time.
     pub context_hash: String,
+    /// Maximum cumulative budget the Authority grants for this token's
+    /// session (e.g., API cost in USD). `None` means unbounded — the
+    /// Sidecar emits `budget_remaining` as `i64::MAX` in that case.
+    /// Optional for wire compatibility with pre-010 tokens.
+    #[serde(default)]
+    pub budget_ceiling: Option<f64>,
 }
 
 /// Lifecycle state of a capability token.
@@ -206,6 +212,7 @@ mod tests {
                 .expect("fixed date")
                 .with_timezone(&Utc),
             context_hash: "deadbeef1234567890abcdef".to_string(),
+            budget_ceiling: None,
         };
 
         assert_eq!(claims, expected);
@@ -236,5 +243,42 @@ mod tests {
             .unwrap();
             assert_eq!(parsed, reason);
         }
+    }
+
+    #[test]
+    fn capability_claims_default_budget_ceiling_is_none() {
+        let json = serde_json::json!({
+            "token_id": "550e8400-e29b-41d4-a716-446655440000",
+            "agent_id": "agent_test",
+            "session_id": "sess_001",
+            "action_set": ["http_get"],
+            "resource_scope": "api.example.com/*",
+            "issued_at": "2026-01-01T00:00:00Z",
+            "expiry": "2026-01-01T01:00:00Z",
+            "context_hash": "deadbeef"
+        });
+        let claims: CapabilityClaims =
+            serde_json::from_value(json).expect("deserialization must succeed");
+        assert_eq!(claims.budget_ceiling, None);
+    }
+
+    #[test]
+    fn capability_claims_roundtrip_with_budget_ceiling() {
+        let claims = CapabilityClaims {
+            token_id: "550e8400-e29b-41d4-a716-446655440000"
+                .parse()
+                .expect("uuid"),
+            agent_id: "agent_test".parse().expect("agent_id"),
+            session_id: "sess_001".parse().expect("session_id"),
+            action_set: vec!["http_get".to_string()],
+            resource_scope: "api.example.com/*".to_string(),
+            issued_at: chrono::Utc::now(),
+            expiry: chrono::Utc::now() + chrono::Duration::hours(1),
+            context_hash: "deadbeef".to_string(),
+            budget_ceiling: Some(100.0),
+        };
+        let encoded = serde_json::to_value(&claims).expect("encode");
+        let decoded: CapabilityClaims = serde_json::from_value(encoded).expect("decode");
+        assert_eq!(decoded.budget_ceiling, Some(100.0));
     }
 }
