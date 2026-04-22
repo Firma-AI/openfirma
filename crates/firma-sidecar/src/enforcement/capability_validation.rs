@@ -229,7 +229,7 @@ mod tests {
                 .expect("literal token id"),
             agent_id: "agent_test".parse().expect("literal agent id"),
             session_id: "sess_001".parse().expect("literal session id"),
-            action_set: vec!["llm.inference".to_string()],
+            action_set: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
@@ -370,7 +370,7 @@ mod tests {
         let claims = valid_claims();
         let envelope = NormalizedEnvelope {
             intent: firma_core::ExecutionIntent {
-                action_class: "llm.inference".to_string(),
+                action_class: "communication.external.send".to_string(),
                 resource: "api.openai.com/v1/chat".to_string(),
                 params: firma_core::ActionParams::Http(firma_core::HttpParams {
                     method: firma_core::HttpMethod::POST,
@@ -408,7 +408,7 @@ mod tests {
         let claims = valid_claims();
         let envelope = NormalizedEnvelope {
             intent: firma_core::ExecutionIntent {
-                action_class: "file.delete".to_string(), // not in token's action_set
+                action_class: "filesystem.delete".to_string(), // not in token's action_set
                 resource: "any.resource".to_string(),
                 params: firma_core::ActionParams::Http(firma_core::HttpParams {
                     method: firma_core::HttpMethod::DELETE,

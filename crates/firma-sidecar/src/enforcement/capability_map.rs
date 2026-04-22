@@ -255,18 +255,22 @@ mod tests {
     #[test]
     fn test_select_exact_action_match() {
         let map = CapabilityMap::new(vec![
-            test_entry(vec!["llm.inference"], "api.openai.com"),
-            test_entry(vec!["http.get"], "*"),
+            test_entry(vec!["communication.external.send"], "api.openai.com"),
+            test_entry(vec!["filesystem.read"], "*"),
         ]);
 
-        let result = map.select("sess_001", "llm.inference", "api.openai.com/v1/chat");
+        let result = map.select(
+            "sess_001",
+            "communication.external.send",
+            "api.openai.com/v1/chat",
+        );
         assert!(result.is_ok());
         let entry = result.unwrap_or_else(|_| panic!("expected Ok"));
         assert!(
             entry
                 .claims
                 .action_set
-                .contains(&"llm.inference".to_string())
+                .contains(&"communication.external.send".to_string())
         );
     }
 
@@ -274,15 +278,15 @@ mod tests {
     fn test_select_wildcard_action() {
         let map = CapabilityMap::new(vec![test_entry(vec!["*"], "*")]);
 
-        let result = map.select("sess_001", "db.query", "any.resource");
+        let result = map.select("sess_001", "payment.transfer", "any.resource");
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_select_no_match_returns_deny() {
-        let map = CapabilityMap::new(vec![test_entry(vec!["llm.inference"], "*")]);
+        let map = CapabilityMap::new(vec![test_entry(vec!["communication.external.send"], "*")]);
 
-        let result = map.select("sess_001", "file.delete", "any.resource");
+        let result = map.select("sess_001", "filesystem.delete", "any.resource");
         assert!(result.is_err());
         let decision = result.unwrap_err();
         assert!(decision.is_deny());
@@ -292,10 +296,14 @@ mod tests {
     fn test_select_prefers_specific_over_wildcard() {
         let map = CapabilityMap::new(vec![
             test_entry(vec!["*"], "*"),
-            test_entry(vec!["llm.inference"], "api.openai.com"),
+            test_entry(vec!["communication.external.send"], "api.openai.com"),
         ]);
 
-        let result = map.select("sess_001", "llm.inference", "api.openai.com/v1/chat");
+        let result = map.select(
+            "sess_001",
+            "communication.external.send",
+            "api.openai.com/v1/chat",
+        );
         assert!(result.is_ok());
         let entry = result.unwrap_or_else(|_| panic!("expected Ok"));
         // Should prefer the specific token over wildcard
@@ -326,13 +334,18 @@ mod tests {
     #[test]
     fn test_tiebreak_prefers_narrower_action_set() {
         let now = Utc::now();
-        let wide = entry_with_issued("wide", vec!["llm.inference", "http.get"], "*", now);
-        let narrow = entry_with_issued("narrow", vec!["llm.inference"], "*", now);
+        let wide = entry_with_issued(
+            "wide",
+            vec!["communication.external.send", "filesystem.read"],
+            "*",
+            now,
+        );
+        let narrow = entry_with_issued("narrow", vec!["communication.external.send"], "*", now);
 
         // Insert wide first — without tie-breaking it would win by insertion order
         let map = CapabilityMap::new(vec![wide, narrow]);
         let result = map
-            .select("sess_001", "llm.inference", "any.resource")
+            .select("sess_001", "communication.external.send", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
         assert_eq!(result.raw_token, "v4.public.narrow");
     }
@@ -340,21 +353,31 @@ mod tests {
     #[test]
     fn test_tiebreak_prefers_specific_resource() {
         let now = Utc::now();
-        let wildcard_res = entry_with_issued("wild_r", vec!["llm.inference"], "*", now);
-        let specific_res =
-            entry_with_issued("spec_r", vec!["llm.inference"], "api.openai.com", now);
+        let wildcard_res =
+            entry_with_issued("wild_r", vec!["communication.external.send"], "*", now);
+        let specific_res = entry_with_issued(
+            "spec_r",
+            vec!["communication.external.send"],
+            "api.openai.com",
+            now,
+        );
 
         // Both have exact action match; wildcard resource scores 101, specific scores 150.
         // These actually have *different* primary scores, so test the reverse:
         // two wildcard-resource tokens where scope size differs.
-        let broad = entry_with_issued("broad", vec!["llm.inference", "http.get"], "*", now);
-        let slim = entry_with_issued("slim", vec!["llm.inference"], "*", now);
+        let broad = entry_with_issued(
+            "broad",
+            vec!["communication.external.send", "filesystem.read"],
+            "*",
+            now,
+        );
+        let slim = entry_with_issued("slim", vec!["communication.external.send"], "*", now);
 
         // Both score 101 (exact action + wildcard resource). Tie-break: slim has
         // fewer actions.
         let map = CapabilityMap::new(vec![broad, slim]);
         let result = map
-            .select("sess_001", "llm.inference", "some.resource")
+            .select("sess_001", "communication.external.send", "some.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
         assert_eq!(result.raw_token, "v4.public.slim");
 
@@ -363,7 +386,11 @@ mod tests {
         // wins by score, not by tie-breaking. Verify the primary scoring still works.
         let map2 = CapabilityMap::new(vec![wildcard_res, specific_res]);
         let result2 = map2
-            .select("sess_001", "llm.inference", "api.openai.com/v1/chat")
+            .select(
+                "sess_001",
+                "communication.external.send",
+                "api.openai.com/v1/chat",
+            )
             .unwrap_or_else(|_| panic!("expected Ok"));
         assert_eq!(result2.raw_token, "v4.public.spec_r");
     }
@@ -373,14 +400,14 @@ mod tests {
         let old = Utc::now() - chrono::Duration::hours(2);
         let new = Utc::now();
 
-        let stale = entry_with_issued("stale", vec!["llm.inference"], "*", old);
-        let fresh = entry_with_issued("fresh", vec!["llm.inference"], "*", new);
+        let stale = entry_with_issued("stale", vec!["communication.external.send"], "*", old);
+        let fresh = entry_with_issued("fresh", vec!["communication.external.send"], "*", new);
 
         // Insert stale first — same score, same action_set size, same resource
         // specificity. Tie-break on issued_at: fresh wins.
         let map = CapabilityMap::new(vec![stale, fresh]);
         let result = map
-            .select("sess_001", "llm.inference", "any.resource")
+            .select("sess_001", "communication.external.send", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
         assert_eq!(result.raw_token, "v4.public.fresh");
     }
@@ -391,21 +418,21 @@ mod tests {
         let t2 = Utc::now() - chrono::Duration::hours(1);
         let t3 = Utc::now();
 
-        let a = entry_with_issued("a", vec!["llm.inference"], "*", t1);
-        let b = entry_with_issued("b", vec!["llm.inference"], "*", t3);
-        let c = entry_with_issued("c", vec!["llm.inference"], "*", t2);
+        let a = entry_with_issued("a", vec!["communication.external.send"], "*", t1);
+        let b = entry_with_issued("b", vec!["communication.external.send"], "*", t3);
+        let c = entry_with_issued("c", vec!["communication.external.send"], "*", t2);
 
         // All identical except issued_at. b is freshest.
         // Try both orderings to verify order-independence.
         let map1 = CapabilityMap::new(vec![a.clone(), b.clone(), c.clone()]);
         let r1 = map1
-            .select("sess_001", "llm.inference", "any.resource")
+            .select("sess_001", "communication.external.send", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
         assert_eq!(r1.raw_token, "v4.public.b");
 
         let map2 = CapabilityMap::new(vec![c, a, b]);
         let r2 = map2
-            .select("sess_001", "llm.inference", "any.resource")
+            .select("sess_001", "communication.external.send", "any.resource")
             .unwrap_or_else(|_| panic!("expected Ok"));
         assert_eq!(r2.raw_token, "v4.public.b");
     }
@@ -413,9 +440,16 @@ mod tests {
     #[test]
     fn test_select_resource_scope_mismatch_rejected() {
         // Token scoped to "api.stripe.com" should not match "api.openai.com"
-        let map = CapabilityMap::new(vec![test_entry(vec!["llm.inference"], "api.stripe.com")]);
+        let map = CapabilityMap::new(vec![test_entry(
+            vec!["communication.external.send"],
+            "api.stripe.com",
+        )]);
 
-        let result = map.select("sess_001", "llm.inference", "api.openai.com/v1/chat");
+        let result = map.select(
+            "sess_001",
+            "communication.external.send",
+            "api.openai.com/v1/chat",
+        );
         assert!(result.is_err());
         let decision = result.unwrap_err();
         assert!(decision.is_deny());
@@ -423,16 +457,23 @@ mod tests {
 
     #[test]
     fn test_select_resource_scope_prefix_match() {
-        let map = CapabilityMap::new(vec![test_entry(vec!["llm.inference"], "api.openai.com")]);
+        let map = CapabilityMap::new(vec![test_entry(
+            vec!["communication.external.send"],
+            "api.openai.com",
+        )]);
 
-        let result = map.select("sess_001", "llm.inference", "api.openai.com/v1/chat");
+        let result = map.select(
+            "sess_001",
+            "communication.external.send",
+            "api.openai.com/v1/chat",
+        );
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_select_empty_map_returns_deny() {
         let map = CapabilityMap::new(vec![]);
-        let result = map.select("sess_001", "llm.inference", "any.resource");
+        let result = map.select("sess_001", "communication.external.send", "any.resource");
         assert!(result.is_err());
         let decision = result.unwrap_err();
         assert!(decision.is_deny());
@@ -447,12 +488,21 @@ mod tests {
     #[test]
     fn test_select_multiple_resource_scopes_picks_best() {
         let now = Utc::now();
-        let wildcard = entry_with_issued("wild", vec!["llm.inference"], "*", now);
-        let specific = entry_with_issued("specific", vec!["llm.inference"], "api.openai.com", now);
+        let wildcard = entry_with_issued("wild", vec!["communication.external.send"], "*", now);
+        let specific = entry_with_issued(
+            "specific",
+            vec!["communication.external.send"],
+            "api.openai.com",
+            now,
+        );
 
         let map = CapabilityMap::new(vec![wildcard, specific]);
         let result = map
-            .select("sess_001", "llm.inference", "api.openai.com/v1/chat")
+            .select(
+                "sess_001",
+                "communication.external.send",
+                "api.openai.com/v1/chat",
+            )
             .unwrap_or_else(|_| panic!("expected Ok"));
         assert_eq!(result.raw_token, "v4.public.specific");
     }
@@ -463,7 +513,7 @@ mod tests {
         assert!(empty_map.is_empty());
         assert_eq!(empty_map.len(), 0);
 
-        let map = CapabilityMap::new(vec![test_entry(vec!["http.get"], "*")]);
+        let map = CapabilityMap::new(vec![test_entry(vec!["filesystem.read"], "*")]);
         assert!(!map.is_empty());
         assert_eq!(map.len(), 1);
     }

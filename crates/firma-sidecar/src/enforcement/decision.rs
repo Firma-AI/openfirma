@@ -155,7 +155,7 @@ mod tests {
             },
             envelope: Box::new(ExecutionEnvelope::new(
                 firma_core::ExecutionIntent {
-                    action_class: "http.get".to_string(),
+                    action_class: "filesystem.read".to_string(),
                     resource: "example.com".to_string(),
                     params: firma_core::ActionParams::Http(firma_core::HttpParams {
                         method: firma_core::HttpMethod::GET,

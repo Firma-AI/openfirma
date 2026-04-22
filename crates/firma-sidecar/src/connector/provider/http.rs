@@ -281,7 +281,7 @@ mod tests {
 
     fn get_intent(resource: String) -> ExecutionIntent {
         ExecutionIntent {
-            action_class: "http.get".to_string(),
+            action_class: "filesystem.read".to_string(),
             resource,
             params: ActionParams::Http(HttpParams {
                 method: HttpMethod::GET,
@@ -493,7 +493,7 @@ mod tests {
             .await;
 
         let intent = ExecutionIntent {
-            action_class: "http.get".to_string(),
+            action_class: "filesystem.read".to_string(),
             resource: format!("{}/search", server.address()),
             params: ActionParams::Http(HttpParams {
                 method: HttpMethod::GET,

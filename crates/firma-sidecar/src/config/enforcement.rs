@@ -235,7 +235,7 @@ mod tests {
             method: Some("POST".to_string()),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
-            action_class: "llm.inference".to_string(),
+            action_class: "communication.external.send".to_string(),
         };
         assert!(rule.validate().is_ok());
     }
@@ -246,7 +246,7 @@ mod tests {
             method: None,
             host: String::new(),
             path: None,
-            action_class: "llm.inference".to_string(),
+            action_class: "communication.external.send".to_string(),
         };
         let err = rule.validate().unwrap_err();
         assert!(err.contains("host"), "error should mention host: {err}");
@@ -273,7 +273,7 @@ mod tests {
             method: Some("YEET".to_string()),
             host: "api.example.com".to_string(),
             path: None,
-            action_class: "http.get".to_string(),
+            action_class: "filesystem.read".to_string(),
         };
         let err = rule.validate().unwrap_err();
         assert!(
@@ -301,7 +301,7 @@ mod tests {
                 method: None,
                 host: String::new(),
                 path: None,
-                action_class: "llm.inference".to_string(),
+                action_class: "communication.external.send".to_string(),
             }],
         };
         let err = file.validate().unwrap_err();
@@ -317,7 +317,7 @@ mod tests {
     fn test_valid_capability_manifest_entry() {
         let entry = CapabilityManifestEntry {
             agent_id: "agent_1".to_string(),
-            action_set: vec!["llm.inference".to_string()],
+            action_set: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),
         };
         assert!(entry.validate().is_ok());
@@ -327,7 +327,7 @@ mod tests {
     fn test_empty_agent_id_rejected() {
         let entry = CapabilityManifestEntry {
             agent_id: String::new(),
-            action_set: vec!["llm.inference".to_string()],
+            action_set: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),
         };
         let err = entry.validate().unwrap_err();

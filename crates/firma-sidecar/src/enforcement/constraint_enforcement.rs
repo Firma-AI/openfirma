@@ -497,8 +497,8 @@ mod tests {
     #[test]
     fn test_allow_when_in_scope_and_policy_allows() {
         let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
-        let envelope = test_envelope("llm.inference");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let result = evaluator.evaluate(&envelope, &claims);
         assert!(result.is_ok());
@@ -507,8 +507,8 @@ mod tests {
     #[test]
     fn test_deny_scope_violation() {
         let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
-        let envelope = test_envelope("file.delete");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("filesystem.delete");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert!(decision.is_deny());
@@ -528,8 +528,8 @@ mod tests {
     #[test]
     fn test_deny_when_policy_denies() {
         let evaluator = ConstraintEnforcer::new(Arc::new(DenyAllPolicy));
-        let envelope = test_envelope("llm.inference");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert!(decision.is_deny());
@@ -539,8 +539,8 @@ mod tests {
     #[test]
     fn test_deny_when_bundle_stale() {
         let evaluator = ConstraintEnforcer::new(Arc::new(StalePolicy));
-        let envelope = test_envelope("llm.inference");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert!(decision.is_deny());
@@ -550,8 +550,8 @@ mod tests {
     #[test]
     fn test_deny_when_bundle_unavailable_fail_closed() {
         let evaluator = ConstraintEnforcer::new(Arc::new(UnavailablePolicy));
-        let envelope = test_envelope("llm.inference");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert!(decision.is_deny());
@@ -561,8 +561,12 @@ mod tests {
     #[test]
     fn test_scope_check_multiple_actions_in_set() {
         let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
-        let envelope = test_envelope("http.get");
-        let claims = test_claims(vec!["llm.inference", "http.get", "db.query"]);
+        let envelope = test_envelope("filesystem.read");
+        let claims = test_claims(vec![
+            "communication.external.send",
+            "filesystem.read",
+            "credential.read",
+        ]);
 
         let result = evaluator.evaluate(&envelope, &claims);
         assert!(result.is_ok());
@@ -571,7 +575,7 @@ mod tests {
     #[test]
     fn test_scope_check_empty_action_set_denies() {
         let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
-        let envelope = test_envelope("llm.inference");
+        let envelope = test_envelope("communication.external.send");
         let claims = test_claims(vec![]);
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
@@ -582,11 +586,11 @@ mod tests {
     #[test]
     fn test_build_context_includes_required_fields() {
         let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
-        let envelope = test_envelope("llm.inference");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let context = evaluator.build_context(&envelope, &claims);
-        assert_eq!(context["action_class"], "llm.inference");
+        assert_eq!(context["action_class"], "communication.external.send");
         assert_eq!(context["resource"], "api.openai.com/v1/chat/completions");
         assert_eq!(context["agent_id"], "agent_test");
         assert_eq!(context["session_id"], "sess_001");
@@ -616,8 +620,8 @@ mod tests {
         }
 
         let evaluator = ConstraintEnforcer::new(Arc::new(StaleButAllowPolicy));
-        let envelope = test_envelope("llm.inference");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
@@ -632,8 +636,8 @@ mod tests {
     #[test]
     fn test_scope_violation_reports_correct_stage() {
         let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
-        let envelope = test_envelope("file.delete");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("filesystem.delete");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert_eq!(
@@ -647,8 +651,8 @@ mod tests {
     #[test]
     fn test_policy_deny_reports_correct_stage() {
         let evaluator = ConstraintEnforcer::new(Arc::new(DenyAllPolicy));
-        let envelope = test_envelope("llm.inference");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert_eq!(
@@ -662,8 +666,8 @@ mod tests {
     #[test]
     fn test_policy_evaluator_error_fails_closed() {
         let evaluator = ConstraintEnforcer::new(Arc::new(ErrorPolicy));
-        let envelope = test_envelope("llm.inference");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert!(decision.is_deny());
@@ -674,8 +678,8 @@ mod tests {
     async fn test_stage2_timeout_fails_closed() {
         use std::time::Duration;
         let evaluator = ConstraintEnforcer::new(Arc::new(SlowPolicy));
-        let envelope = test_envelope("llm.inference");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator
             .evaluate_with_timeout(&envelope, &claims, Duration::from_millis(20))

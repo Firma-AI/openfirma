@@ -76,8 +76,10 @@ impl ExecutionEnvelope {
 /// Sidecar's intent normalizer after mapping the raw intercepted request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionIntent {
-    /// Canonical action class from the v0.1 registry (e.g., `"llm.inference"`,
-    /// `"http.get"`). Set by the intent normalizer.
+    /// Canonical action class from the v0.1 registry (e.g.,
+    /// `"communication.external.send"`, `"filesystem.read"`). Set by the
+    /// intent normalizer. See FEP §2.3.5 and
+    /// `docs/markdown/firma_action_class_registry.md`.
     pub action_class: String,
     /// Target resource identifier (e.g., URL, table name, tool name).
     pub resource: String,
@@ -216,7 +218,7 @@ mod tests {
     fn envelope_payload_backward_compat() {
         let json = r#"{
             "intent": {
-                "action_class": "http.get",
+                "action_class": "filesystem.read",
                 "resource": "https://api.example.com/data",
                 "params": {
                     "Http": {
@@ -244,7 +246,7 @@ mod tests {
 
         let expected = ExecutionEnvelope {
             intent: ExecutionIntent {
-                action_class: "http.get".to_string(),
+                action_class: "filesystem.read".to_string(),
                 resource: "https://api.example.com/data".to_string(),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,

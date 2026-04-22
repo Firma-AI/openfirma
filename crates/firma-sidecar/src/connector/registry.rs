@@ -174,7 +174,7 @@ mod tests {
 
         let envelope = ExecutionEnvelope::new(
             ExecutionIntent {
-                action_class: "http.get".to_string(),
+                action_class: "filesystem.read".to_string(),
                 resource: "https://api.example.com".to_string(),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
