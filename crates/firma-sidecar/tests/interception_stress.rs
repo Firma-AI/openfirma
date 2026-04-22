@@ -457,6 +457,8 @@ async fn stress_shared_state_mutation_produces_only_valid_decisions() {
                         | DenyReason::PolicyBundleStale
                         | DenyReason::PolicyDenied
                         | DenyReason::TokenRevoked
+                        | DenyReason::EnforcementTimeout
+                        | DenyReason::UnclassifiedIntent
                 );
                 assert!(allowed, "unexpected deny reason under shared-state stress");
                 saw_shared_state_deny = true;

@@ -16,12 +16,12 @@
 //! | `action`    | `Firma::Action::"<action_class>"`    |
 //! | `resource`  | `Firma::Resource::"<resource_uri>"`  |
 
-use std::fmt;
 use std::time::Instant;
 
 use cedar_policy::{
     Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request, Schema,
 };
+use firma_core::FirmaEntityUid;
 use firma_core::agent::AgentId;
 use firma_core::policy::PolicyBundle;
 
@@ -56,51 +56,6 @@ pub enum CedarEvaluatorError {
     /// via `Box<dyn Error>` while preserving the source chain.
     #[error("failed to build Cedar request: {0}")]
     RequestBuild(#[source] Box<dyn std::error::Error + Send + Sync>),
-}
-
-/// A typed Cedar entity UID in the `Firma` namespace.
-///
-/// Encodes the three roles used in policy evaluation — agent (principal),
-/// action, and resource — and produces the Cedar entity UID string via
-/// [`Display`]. Call [`FirmaEntityUid::to_cedar`] to parse into a Cedar
-/// [`EntityUid`] for request construction.
-///
-/// Conventions (must match Authority's `service.rs`):
-///
-/// | Variant   | Cedar format                          |
-/// |-----------|---------------------------------------|
-/// | `Agent`   | `Firma::Agent::"<id>"`                |
-/// | `Action`  | `Firma::Action::"<id>"`               |
-/// | `Resource`| `Firma::Resource::"<id>"`             |
-pub(crate) enum FirmaEntityUid {
-    Agent(String),
-    Action(String),
-    Resource(String),
-}
-
-impl FirmaEntityUid {
-    /// Parse into a Cedar [`EntityUid`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CedarEvaluatorError::EntityUidParse`] if the id contains
-    /// characters that make the Cedar entity UID string unparseable (e.g.
-    /// unescaped quotes).
-    pub(crate) fn to_cedar(&self) -> Result<EntityUid, CedarEvaluatorError> {
-        self.to_string()
-            .parse::<EntityUid>()
-            .map_err(CedarEvaluatorError::EntityUidParse)
-    }
-}
-
-impl fmt::Display for FirmaEntityUid {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Agent(id) => write!(f, "Firma::Agent::\"{id}\""),
-            Self::Action(id) => write!(f, "Firma::Action::\"{id}\""),
-            Self::Resource(id) => write!(f, "Firma::Resource::\"{id}\""),
-        }
-    }
 }
 
 /// Concrete Cedar policy evaluator for Sidecar Stage 2.
@@ -183,9 +138,15 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
         resource: &str,
         context: &serde_json::Value,
     ) -> Result<bool, CedarEvaluatorError> {
-        let principal_uid = FirmaEntityUid::Agent(principal.as_ref().to_string()).to_cedar()?;
-        let action_uid = FirmaEntityUid::Action(action.to_string()).to_cedar()?;
-        let resource_uid = FirmaEntityUid::Resource(resource.to_string()).to_cedar()?;
+        let principal_uid: EntityUid = FirmaEntityUid::Agent(principal.clone())
+            .try_into()
+            .map_err(CedarEvaluatorError::EntityUidParse)?;
+        let action_uid: EntityUid = FirmaEntityUid::Action(action.to_string())
+            .try_into()
+            .map_err(CedarEvaluatorError::EntityUidParse)?;
+        let resource_uid: EntityUid = FirmaEntityUid::Resource(resource.to_string())
+            .try_into()
+            .map_err(CedarEvaluatorError::EntityUidParse)?;
 
         // Context::from_json_value takes Option<(&Schema, &EntityUid)> — the action
         // UID is used to look up the declared context shape for that action.
