@@ -152,6 +152,7 @@ mod tests {
                 issued_at: chrono::Utc::now(),
                 expiry: chrono::Utc::now(),
                 context_hash: String::new(),
+                budget_ceiling: None,
             },
             envelope: Box::new(ExecutionEnvelope::new(
                 firma_core::ExecutionIntent {

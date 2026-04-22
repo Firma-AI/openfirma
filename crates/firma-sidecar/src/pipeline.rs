@@ -22,6 +22,8 @@ use firma_core::{
     DenyReason, ExecutionEnvelope, ExecutionMetadata, InjectedCredentials, SessionId,
 };
 
+use std::sync::Arc;
+
 use crate::audit::AuditPayload;
 use crate::authority_client::readiness::ReadinessView;
 use crate::credential::{CredentialInjectionError, CredentialInjector};
@@ -29,6 +31,7 @@ use crate::enforcement::decision::EnforcementStage;
 // Re-export public API for pipeline callers (test-only)
 #[cfg(test)]
 pub use crate::credential::NullCredentialInjector;
+use crate::enforcement::SessionStateStore;
 pub use crate::enforcement::capability_map::CapabilityMap;
 pub use crate::enforcement::capability_validation::CapabilityValidator;
 pub use crate::enforcement::constraint_enforcement::{ConstraintEnforcer, PolicyEvaluation};
@@ -67,6 +70,9 @@ pub struct PipelineArgs {
     pub constraint_enforcer: ConstraintEnforcer,
     /// Credential injector called after Stage 2 ALLOW.
     pub credential_injector: Box<dyn CredentialInjector>,
+    /// Per-session runtime state store — holds action count, budget
+    /// consumed, risk score keyed by `SessionId`.
+    pub session_state_store: Arc<dyn SessionStateStore>,
 }
 
 /// The enforcement pipeline. Orchestrates the full `enforce()` flow:
@@ -88,6 +94,7 @@ pub struct EnforcementPipeline {
     normalizer: IntentNormalizer,
     readiness: ReadinessView,
     stage2_timeout: Option<Duration>,
+    session_state_store: Arc<dyn SessionStateStore>,
 }
 
 impl EnforcementPipeline {
@@ -102,6 +109,7 @@ impl EnforcementPipeline {
             normalizer: args.normalizer,
             readiness: ReadinessView::all_ready(),
             stage2_timeout: None,
+            session_state_store: args.session_state_store,
         }
     }
 
@@ -168,16 +176,31 @@ impl EnforcementPipeline {
             Err(deny) => return deny,
         };
 
-        // Constraint enforcement: scope check + Cedar policy evaluation
+        // Constraint enforcement: scope check + Cedar policy evaluation.
+        //
+        // Record this admitted call. Session-scoped; first call is 1.
+        // Gate is Stage 1 ALLOW — Stage 1 DENY short-circuits above and
+        // must NOT bump the counter.
+        let action_count = self
+            .session_state_store
+            .record_action(&capability.claims.session_id);
+        let mut signals = self
+            .session_state_store
+            .signals(&capability.claims.session_id);
+        // `record_action` already incremented the counter — ensure Cedar
+        // sees the up-to-date value even if a concurrent writer raced
+        // between `record_action` and `signals` (the LRU mutex is taken
+        // twice; the second read could observe a later increment).
+        signals.action_count = action_count;
         let stage2_result = match self.stage2_timeout {
             Some(timeout) => {
                 self.constraint_enforcer
-                    .evaluate_with_timeout(&normalized, &capability.claims, timeout)
+                    .evaluate_with_timeout(&normalized, &capability.claims, &signals, timeout)
                     .await
             }
             None => self
                 .constraint_enforcer
-                .evaluate(&normalized, &capability.claims),
+                .evaluate(&normalized, &capability.claims, &signals),
         };
         if let Err(deny) = stage2_result {
             return deny;
@@ -198,8 +221,12 @@ impl EnforcementPipeline {
                 agent_id: capability.claims.agent_id.clone(),
                 timestamp: normalized.timestamp,
                 trace_id: None,
-                budget_consumed: 0.0,
-                risk_score: None,
+                budget_consumed: signals.budget_consumed,
+                risk_score: if signals.risk_score == 0.0 {
+                    None
+                } else {
+                    Some(signals.risk_score)
+                },
             },
             None,
         );
@@ -436,6 +463,7 @@ mod tests {
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
             context_hash: String::new(),
+            budget_ceiling: None,
         }
     }
 
@@ -473,6 +501,14 @@ mod tests {
     }
 
     fn test_pipeline() -> EnforcementPipeline {
+        test_pipeline_with_session_store(std::sync::Arc::new(
+            crate::enforcement::LruSessionStateStore::new(16),
+        ))
+    }
+
+    fn test_pipeline_with_session_store(
+        store: std::sync::Arc<dyn crate::enforcement::SessionStateStore>,
+    ) -> EnforcementPipeline {
         let claims = test_claims();
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
@@ -494,7 +530,51 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: store,
         })
+    }
+
+    /// Build a pipeline where Stage 1 denies every request: the
+    /// `CapabilityMap` is empty, so token selection fails before any
+    /// runtime-state bookkeeping.
+    fn test_pipeline_stage1_denies_with_session_store(
+        store: std::sync::Arc<dyn crate::enforcement::SessionStateStore>,
+    ) -> EnforcementPipeline {
+        let claims = test_claims();
+
+        let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
+
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![]), // empty — Stage 1 DENY
+            Box::new(MockVerifier { claims }),
+            std::sync::Arc::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
+
+        EnforcementPipeline::new(PipelineArgs {
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: store,
+        })
+    }
+
+    fn test_request(method: &str, host_and_path: &str) -> RawRequest {
+        let (host, path) = host_and_path.split_once('/').map_or_else(
+            || (host_and_path.to_string(), "/".to_string()),
+            |(h, p)| (h.to_string(), format!("/{p}")),
+        );
+        RawRequest {
+            method: method.to_string(),
+            host,
+            path,
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        }
     }
 
     #[tokio::test]
@@ -603,6 +683,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         });
 
         let request = RawRequest {
@@ -674,6 +757,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         });
 
         let request = RawRequest {
@@ -729,6 +815,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         });
 
         let request = RawRequest {
@@ -778,6 +867,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         });
 
         let request = RawRequest {
@@ -930,6 +1022,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         });
 
         let request = RawRequest {
@@ -974,6 +1069,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         });
 
         let request = RawRequest {
@@ -1019,6 +1117,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         });
 
         let request = RawRequest {
@@ -1113,6 +1214,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         });
 
         let request = RawRequest {
@@ -1151,6 +1255,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         });
 
         let request = RawRequest {
@@ -1190,6 +1297,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         });
 
         let request = RawRequest {
@@ -1234,6 +1344,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         });
 
         let request = RawRequest {
@@ -1272,6 +1385,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         });
 
         // Unclassified intent — denied at normalization stage
@@ -1322,6 +1438,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(injector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         });
 
         let request = RawRequest {
@@ -1364,6 +1483,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(injector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         });
 
         let request = RawRequest {
@@ -1415,6 +1537,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(injector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         });
 
         let request = RawRequest {
@@ -1435,5 +1560,60 @@ mod tests {
 
         assert_eq!(payload.session_id, "sess_fail");
         assert_eq!(payload.decision, 2); // DENY
+    }
+
+    // ===== SessionStateStore wiring (Task 5) =====
+
+    #[tokio::test]
+    async fn pipeline_builds_runtime_signals_and_populates_metadata() {
+        use crate::enforcement::session_state::{LruSessionStateStore, SessionStateStore};
+        use std::sync::Arc;
+
+        let store: Arc<dyn SessionStateStore> = Arc::new(LruSessionStateStore::new(16));
+
+        let pipeline = test_pipeline_with_session_store(Arc::clone(&store));
+        let request = test_request("POST", "api.openai.com/v1/chat/completions");
+
+        // First call: action_count should be 1.
+        let (decision, _) = pipeline.enforce(&request, "sess_001").await;
+        assert!(matches!(decision, EnforcementDecision::Allow { .. }));
+        assert_eq!(
+            store
+                .signals(&"sess_001".parse().expect("sid"))
+                .action_count,
+            1
+        );
+
+        // Second call: action_count should be 2.
+        let (decision, _) = pipeline.enforce(&request, "sess_001").await;
+        assert!(matches!(decision, EnforcementDecision::Allow { .. }));
+        assert_eq!(
+            store
+                .signals(&"sess_001".parse().expect("sid"))
+                .action_count,
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn pipeline_stage1_deny_does_not_increment_action_count() {
+        use crate::enforcement::session_state::{LruSessionStateStore, SessionStateStore};
+        use std::sync::Arc;
+
+        let store: Arc<dyn SessionStateStore> = Arc::new(LruSessionStateStore::new(16));
+
+        // Pipeline configured so Stage 1 denies (no valid capability for
+        // this session).
+        let pipeline = test_pipeline_stage1_denies_with_session_store(Arc::clone(&store));
+        let request = test_request("POST", "api.openai.com/v1/chat/completions");
+
+        let (decision, _) = pipeline.enforce(&request, "sess_denied").await;
+        assert!(matches!(decision, EnforcementDecision::Deny { .. }));
+        assert_eq!(
+            store
+                .signals(&"sess_denied".parse().expect("sid"))
+                .action_count,
+            0
+        );
     }
 }

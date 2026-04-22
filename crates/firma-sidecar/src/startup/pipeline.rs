@@ -109,11 +109,15 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
     let (readiness, readiness_view) = ReadinessFlag::new(initial_readiness);
     let readiness = Arc::new(readiness);
 
+    let session_state_store: Arc<dyn crate::enforcement::SessionStateStore> =
+        Arc::new(crate::enforcement::LruSessionStateStore::with_default_capacity());
+
     let pipeline = pipeline::EnforcementPipeline::new(pipeline::PipelineArgs {
         normalizer,
         capability_validator,
         constraint_enforcer,
         credential_injector,
+        session_state_store,
     })
     .with_readiness(readiness_view);
     tracing::info!("enforcement pipeline initialized");

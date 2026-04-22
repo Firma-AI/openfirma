@@ -117,6 +117,7 @@ impl AuthorityService for AuthorityServiceImpl {
                     issued_at: now,
                     expiry: expires_at,
                     context_hash: context_hash.clone(),
+                    budget_ceiling: None,
                 };
 
                 // Sign the token
@@ -139,6 +140,7 @@ impl AuthorityService for AuthorityServiceImpl {
                     context_hash,
                     signature: signed_token.into_bytes(),
                     format: TokenFormat::PasetoV4.into(),
+                    budget_ceiling: None,
                 };
 
                 tracing::info!(
@@ -271,7 +273,11 @@ enum CedarDecision {
 ///
 /// Context at issuance time carries `session_id`, `timestamp_ms`, and
 /// `risk_score` (V1 placeholder = 0). `params` is empty (`"{}"`) because no
-/// specific intent exists yet at issuance.
+/// specific intent exists yet at issuance. The runtime-signal fields
+/// (`budget_remaining`, `session_duration_s`, `action_count`) are populated
+/// with schema-compatible placeholders (`i64::MAX`, `0`, `0`) — the Authority
+/// has no session history at pre-flight, but all 7 fields are required by
+/// the canonical `EnforcementContext` schema.
 fn evaluate_cedar_policy(
     policy_set: &PolicySet,
     schema: Option<&Schema>,
@@ -304,6 +310,9 @@ fn evaluate_cedar_policy(
             "timestamp_ms": timestamp_ms,
             "params": "{}",
             "risk_score": 0i64,
+            "budget_remaining": i64::MAX,
+            "session_duration_s": 0i64,
+            "action_count": 0i64,
         });
         let schema_with_action = schema.map(|s| (s, &action_uid));
         let cedar_context = match Context::from_json_value(context_json, schema_with_action) {

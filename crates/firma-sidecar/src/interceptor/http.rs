@@ -378,6 +378,7 @@ mod tests {
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
             context_hash: String::new(),
+            budget_ceiling: None,
         }
     }
 
@@ -416,6 +417,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         }))
     }
 
@@ -450,6 +454,9 @@ mod tests {
             capability_validator,
             constraint_enforcer,
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
         }))
     }
 

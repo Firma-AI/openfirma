@@ -31,3 +31,5 @@ pub(crate) mod decision;
 pub(crate) mod error;
 pub(crate) mod registry;
 pub(crate) mod revocation;
+pub(crate) mod session_state;
+pub use session_state::{LruSessionStateStore, SessionStateStore};
