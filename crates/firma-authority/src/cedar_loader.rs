@@ -120,6 +120,7 @@ impl CedarPolicyStore {
     }
 
     /// Get the current policy bundle for distribution to sidecars.
+    #[must_use]
     pub fn bundle(&self) -> PolicyBundle {
         self.bundle_tx.borrow().clone()
     }
@@ -194,12 +195,12 @@ pub struct CedarPolicyStoreWatcher {
 impl CedarPolicyStoreWatcher {
     /// Subscribe to policy bundle updates. Returns the current bundle
     /// immediately, then yields on changes.
+    #[must_use]
     pub fn subscribe(&self) -> watch::Receiver<PolicyBundle> {
         self.tx.subscribe()
     }
 
     /// Abort the background reload task immediately.
-    #[expect(dead_code, reason = "explicit shutdown hook for callers that need it")]
     pub fn abort(&self) {
         self.task.abort();
     }
@@ -228,6 +229,7 @@ fn read_policy_files(policy_dir: &Path) -> Result<(String, String), AuthorityErr
     for entry in &entries {
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "cedar") {
+            tracing::debug!(path = %path.display(), "reading policy file");
             let content =
                 std::fs::read_to_string(&path).map_err(|e| AuthorityError::PolicyLoadFailed {
                     reason: format!("cannot read {}: {e}", path.display()),
@@ -238,6 +240,8 @@ fn read_policy_files(policy_dir: &Path) -> Result<(String, String), AuthorityErr
             policies.push_str(&content);
         }
     }
+
+    tracing::debug!(policies_len = policies.len(), "finished reading policies");
 
     // Try to load schema
     let schema_src = try_read_schema(policy_dir).unwrap_or_default();
@@ -304,7 +308,6 @@ fn compute_version_hash(policies: &str, schema: &str) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
     use std::fs;
@@ -434,6 +437,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unwrap_used)]
     fn schema_supports_firma_actions() {
         use cedar_policy::{
             Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request, Schema,
@@ -458,11 +462,11 @@ mod tests {
             "system.install",
         ];
 
-        let (schema, _) = Schema::from_cedarschema_str(SCHEMA_SRC)
-            .unwrap_or_else(|e| panic!("schema parse failed: {e}"));
+        let (schema, _) = Schema::from_cedarschema_str(SCHEMA_SRC).unwrap();
         let policy_set = "permit(principal, action, resource);"
             .parse::<PolicySet>()
-            .unwrap_or_else(|e| panic!("policy parse failed: {e}"));
+            .unwrap();
+
         let context_json = serde_json::json!({
             "session_id": "sess_test",
             "timestamp_ms": 0i64,
@@ -471,20 +475,12 @@ mod tests {
         });
 
         for action in ACTIONS {
-            let principal: EntityUid = "Firma::Agent::\"agent_test\""
-                .to_string()
-                .parse()
-                .unwrap_or_else(|e| panic!("principal parse failed: {e}"));
-            let action_uid: EntityUid = format!("Firma::Action::\"{action}\"")
-                .parse()
-                .unwrap_or_else(|e| panic!("action parse failed for '{action}': {e}"));
-            let resource: EntityUid = "Firma::Resource::\"r\""
-                .to_string()
-                .parse()
-                .unwrap_or_else(|e| panic!("resource parse failed: {e}"));
+            let principal: EntityUid = "Firma::Agent::\"agent_test\"".parse().unwrap();
+            let action_uid: EntityUid = format!("Firma::Action::\"{action}\"").parse().unwrap();
+            let resource: EntityUid = "Firma::Resource::\"r\"".parse().unwrap();
 
             let ctx = Context::from_json_value(context_json.clone(), Some((&schema, &action_uid)))
-                .unwrap_or_else(|e| panic!("context build failed for '{action}': {e}"));
+                .unwrap();
 
             let request = Request::new(
                 Some(principal),
@@ -493,7 +489,7 @@ mod tests {
                 ctx,
                 Some(&schema),
             )
-            .unwrap_or_else(|e| panic!("request build failed for '{action}': {e}"));
+            .unwrap();
 
             let response =
                 Authorizer::new().is_authorized(&request, &policy_set, &Entities::empty());

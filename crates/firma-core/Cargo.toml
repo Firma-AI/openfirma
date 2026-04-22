@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+cedar-policy = { workspace = true }
 chrono = { workspace = true }
 pasetors = { workspace = true }
 serde = { workspace = true }
