@@ -441,21 +441,21 @@ mod tests {
 
         const SCHEMA_SRC: &str = include_str!("../policies/schema.cedarschema");
         const ACTIONS: &[&str] = &[
-            "llm.inference",
-            "http.get",
-            "http.post",
-            "http.put",
-            "http.delete",
-            "http.patch",
-            "network.connect",
-            "db.query",
-            "db.mutate",
-            "file.read",
-            "file.write",
-            "file.delete",
-            "code.execute",
+            "account.permission.change",
+            "browser.purchase",
+            "communication.external.send",
+            "communication.internal.send",
+            "credential.read",
+            "credential.write",
+            "filesystem.delete",
+            "filesystem.read",
+            "filesystem.write",
+            "memory.cross_namespace.read",
+            "memory.cross_namespace.write",
+            "payment.purchase",
+            "payment.transfer",
             "system.execute",
-            "messaging.send",
+            "system.install",
         ];
 
         let (schema, _) = Schema::from_cedarschema_str(SCHEMA_SRC)
