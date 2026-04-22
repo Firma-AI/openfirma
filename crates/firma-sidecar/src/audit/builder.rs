@@ -198,7 +198,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
                 .expect("literal token id"),
             agent_id: "agent_test".parse().expect("literal agent id"),
             session_id: "sess_001".parse().expect("literal session id"),
-            action_set: vec!["llm.inference".to_string()],
+            action_set: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
@@ -209,7 +209,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
     fn test_envelope() -> ExecutionEnvelope {
         ExecutionEnvelope::new(
             ExecutionIntent {
-                action_class: "llm.inference".to_string(),
+                action_class: "communication.external.send".to_string(),
                 resource: "api.openai.com/v1/chat/completions".to_string(),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::POST,
@@ -236,7 +236,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
     fn test_normalized_envelope() -> NormalizedEnvelope {
         NormalizedEnvelope {
             intent: ExecutionIntent {
-                action_class: "llm.inference".to_string(),
+                action_class: "communication.external.send".to_string(),
                 resource: "api.openai.com/v1/chat/completions".to_string(),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::POST,
@@ -277,7 +277,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         assert_eq!(event.session_id, "sess_001");
         assert_eq!(event.token_id, "3713c5fc-b569-650c-c780-c64051473370");
         assert_eq!(event.agent_id, "agent_test");
-        assert_eq!(event.action, "llm.inference");
+        assert_eq!(event.action, "communication.external.send");
         assert_eq!(event.resource, "api.openai.com/v1/chat/completions");
         assert_eq!(event.decision, DECISION_ALLOW);
         assert!(event.deny_reason.is_empty());
@@ -306,7 +306,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         assert_eq!(event.session_id, "sess_deny");
         assert_eq!(event.decision, DECISION_DENY);
         assert!(event.deny_reason.contains("token expired"));
-        assert_eq!(event.action, "llm.inference");
+        assert_eq!(event.action, "communication.external.send");
         assert!(!event.signature.is_empty());
     }
 

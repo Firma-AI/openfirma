@@ -231,7 +231,7 @@ mod tests {
                 .expect("literal token id"),
             agent_id: "agent_test".parse().expect("literal agent id"),
             session_id: "_test_".parse().expect("literal session id"),
-            action_set: vec!["llm.inference".to_string()],
+            action_set: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
@@ -247,7 +247,7 @@ mod tests {
                 method: Some("POST".to_string()),
                 host: "*".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
-                action_class: "llm.inference".to_string(),
+                action_class: "communication.external.send".to_string(),
             }],
         };
         let table =
@@ -320,7 +320,7 @@ mod tests {
                 method: Some("POST".to_string()),
                 host: "api.openai.com".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
-                action_class: "llm.inference".to_string(),
+                action_class: "communication.external.send".to_string(),
             }],
         };
         let table =

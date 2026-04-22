@@ -578,7 +578,7 @@ mod tests {
                 .expect("literal token id"),
             agent_id: "agent_test".parse().expect("literal agent id"),
             session_id: "sess_001".parse().expect("literal session id"),
-            action_set: vec!["llm.inference".to_string()],
+            action_set: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
@@ -623,7 +623,7 @@ mod tests {
             method: Some("POST".to_string()),
             host: "*".to_string(),
             path: Some("/v1/chat/completions".to_string()),
-            action_class: "llm.inference".to_string(),
+            action_class: "communication.external.send".to_string(),
         }
     }
 
@@ -996,7 +996,7 @@ mod tests {
     fn denial_context_of_http_envelope_is_api() {
         let envelope = NormalizedEnvelope {
             intent: ExecutionIntent {
-                action_class: "http.get".to_string(),
+                action_class: "filesystem.read".to_string(),
                 resource: "https://example.test/resource".to_string(),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
@@ -1017,7 +1017,7 @@ mod tests {
         use firma_core::DbQueryParams;
         let envelope = NormalizedEnvelope {
             intent: ExecutionIntent {
-                action_class: "db.query".to_string(),
+                action_class: "credential.read".to_string(),
                 resource: "pg://orders".to_string(),
                 params: ActionParams::DbQuery(DbQueryParams {
                     query_name: "select_orders".to_string(),

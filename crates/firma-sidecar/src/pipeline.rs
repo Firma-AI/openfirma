@@ -428,7 +428,10 @@ mod tests {
                 .expect("literal token id"),
             agent_id: "agent_test".parse().expect("literal agent id"),
             session_id: "sess_001".parse().expect("literal session id"),
-            action_set: vec!["llm.inference".to_string(), "http.get".to_string()],
+            action_set: vec![
+                "communication.external.send".to_string(),
+                "filesystem.read".to_string(),
+            ],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
@@ -458,13 +461,13 @@ mod tests {
                 method: Some("POST".to_string()),
                 host: "api.openai.com".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
-                action_class: "llm.inference".to_string(),
+                action_class: "communication.external.send".to_string(),
             },
             MappingRuleConfig {
                 method: Some("GET".to_string()),
                 host: "*".to_string(),
                 path: None,
-                action_class: "http.get".to_string(),
+                action_class: "filesystem.read".to_string(),
             },
         ]
     }
@@ -520,7 +523,10 @@ mod tests {
                 !envelope.capability().is_empty(),
                 "capability must be populated on Allow"
             );
-            assert_eq!(envelope.intent().action_class, "llm.inference");
+            assert_eq!(
+                envelope.intent().action_class,
+                "communication.external.send"
+            );
         }
     }
 
@@ -577,7 +583,7 @@ mod tests {
             method: Some("POST".to_string()),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
-            action_class: "llm.inference".to_string(),
+            action_class: "communication.external.send".to_string(),
         }];
 
         let normalizer = IntentNormalizer::new(test_mapping_table_with_protection(&rules, false));
@@ -623,7 +629,7 @@ mod tests {
             method: Some("DELETE".to_string()),
             host: "api.example.com".to_string(),
             path: Some("/data".to_string()),
-            action_class: "http.delete".to_string(),
+            action_class: "filesystem.delete".to_string(),
         }];
 
         let mut wide_claims = test_claims();
@@ -652,7 +658,7 @@ mod tests {
                 _: &str,
                 _: &serde_json::Value,
             ) -> Result<bool, String> {
-                Ok(action != "http.delete")
+                Ok(action != "filesystem.delete")
             }
             fn is_fresh(&self) -> bool {
                 true
@@ -693,7 +699,7 @@ mod tests {
             method: Some("POST".to_string()),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
-            action_class: "llm.inference".to_string(),
+            action_class: "communication.external.send".to_string(),
         }];
 
         struct RejectingVerifier;
@@ -754,7 +760,7 @@ mod tests {
             method: Some("POST".to_string()),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
-            action_class: "llm.inference".to_string(),
+            action_class: "communication.external.send".to_string(),
         }];
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
@@ -852,7 +858,10 @@ mod tests {
         } = decision
         {
             // Verify intent fields
-            assert_eq!(envelope.intent().action_class, "llm.inference");
+            assert_eq!(
+                envelope.intent().action_class,
+                "communication.external.send"
+            );
             assert_eq!(
                 envelope.intent().resource,
                 "api.openai.com/v1/chat/completions"
@@ -892,7 +901,7 @@ mod tests {
             method: Some("POST".to_string()),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
-            action_class: "llm.inference".to_string(),
+            action_class: "communication.external.send".to_string(),
         }];
 
         struct RevokedStore;
@@ -946,7 +955,7 @@ mod tests {
             method: Some("POST".to_string()),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
-            action_class: "llm.inference".to_string(),
+            action_class: "communication.external.send".to_string(),
         }];
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
@@ -983,15 +992,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_enforce_scope_violation_through_pipeline() {
-        // Token only allows llm.inference, but request maps to http.get
+        // Token only allows communication.external.send, but request maps to filesystem.read
         let mut claims = test_claims();
-        claims.action_set = vec!["llm.inference".to_string()]; // no http.get
+        claims.action_set = vec!["communication.external.send".to_string()]; // no filesystem.read
 
         let rules = vec![MappingRuleConfig {
             method: Some("GET".to_string()),
             host: "api.example.com".to_string(),
             path: None,
-            action_class: "http.get".to_string(),
+            action_class: "filesystem.read".to_string(),
         }];
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
@@ -1022,7 +1031,7 @@ mod tests {
         };
 
         let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
-        // Token selection fails because no token covers http.get
+        // Token selection fails because no token covers filesystem.read
         assert!(decision.is_deny());
     }
 
@@ -1063,7 +1072,7 @@ mod tests {
             method: Some("POST".to_string()),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
-            action_class: "llm.inference".to_string(),
+            action_class: "communication.external.send".to_string(),
         }];
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
@@ -1160,7 +1169,7 @@ mod tests {
         assert_eq!(payload.decision, 1); // ALLOW
         assert_eq!(payload.token_id, "3713c5fc-b569-650c-c780-c64051473370");
         assert_eq!(payload.agent_id, "agent_test");
-        assert_eq!(payload.action, "llm.inference");
+        assert_eq!(payload.action, "communication.external.send");
         assert!(payload.enforcement_latency_us >= 0);
     }
 
@@ -1207,7 +1216,7 @@ mod tests {
             method: Some("POST".to_string()),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
-            action_class: "llm.inference".to_string(),
+            action_class: "communication.external.send".to_string(),
         }];
         let normalizer = IntentNormalizer::new(test_mapping_table_with_protection(&rules, false));
         let capability_validator = CapabilityValidator::new(
