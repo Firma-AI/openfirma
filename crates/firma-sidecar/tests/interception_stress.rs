@@ -227,7 +227,7 @@ fn test_claims() -> CapabilityClaims {
         token_id: TokenId::new(),
         agent_id: "agent_stress".parse().unwrap(),
         session_id: "sess_stress".parse().unwrap(),
-        action_set: vec!["llm.inference".to_string()],
+        action_set: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),
         issued_at,
         expiry: issued_at + chrono::Duration::hours(1),
@@ -242,7 +242,7 @@ fn test_mapping_table() -> MappingTable {
             method: Some("POST".to_string()),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
-            action_class: "llm.inference".to_string(),
+            action_class: "communication.external.send".to_string(),
         }],
     };
 

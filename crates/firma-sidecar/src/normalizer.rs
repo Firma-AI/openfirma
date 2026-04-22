@@ -195,13 +195,13 @@ mod tests {
                     method: Some("POST".to_string()),
                     host: "api.openai.com".to_string(),
                     path: Some("/v1/chat/completions".to_string()),
-                    action_class: "llm.inference".to_string(),
+                    action_class: "communication.external.send".to_string(),
                 },
                 MappingRuleConfig {
                     method: Some("GET".to_string()),
                     host: "*".to_string(),
                     path: None,
-                    action_class: "http.get".to_string(),
+                    action_class: "filesystem.read".to_string(),
                 },
             ],
         };
@@ -225,7 +225,7 @@ mod tests {
         let result = normalizer.normalize(&request);
         assert!(result.is_ok());
         let envelope = result.unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(envelope.intent.action_class, "llm.inference");
+        assert_eq!(envelope.intent.action_class, "communication.external.send");
         assert_eq!(envelope.intent.raw_transport, "https");
         assert_eq!(envelope.intent.raw_action_ref, "POST /v1/chat/completions");
     }
@@ -274,7 +274,7 @@ mod tests {
                 method: Some("POST".to_string()),
                 host: "api.openai.com".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
-                action_class: "llm.inference".to_string(),
+                action_class: "communication.external.send".to_string(),
             }],
         };
         let table =

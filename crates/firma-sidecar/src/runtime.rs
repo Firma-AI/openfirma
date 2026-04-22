@@ -212,7 +212,7 @@ mod tests {
             token_id: TokenId::new(),
             agent_id: "agent".parse::<AgentId>().unwrap(),
             session_id: "sess-a".parse::<SessionId>().unwrap(),
-            action_set: vec!["http.get".to_string()],
+            action_set: vec!["filesystem.read".to_string()],
             resource_scope: "*".to_string(),
             issued_at: fixed_time(),
             expiry: fixed_time(),
@@ -221,7 +221,7 @@ mod tests {
 
         let envelope = ExecutionEnvelope {
             intent: ExecutionIntent {
-                action_class: "http.get".to_string(),
+                action_class: "filesystem.read".to_string(),
                 resource: "api.example.com/data".to_string(),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
