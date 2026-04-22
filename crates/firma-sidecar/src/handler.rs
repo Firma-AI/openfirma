@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 
 use crate::audit::AuditPayload;
 use crate::connector::ConnectorRegistry;
+use crate::normalizer::NormalizedEnvelope;
 use crate::pipeline::{EnforcementDecision, EnforcementPipeline, RawRequest};
 
 /// Response produced by the transport-agnostic request handler.
@@ -31,6 +32,22 @@ pub enum HandledResponse {
         reason: DenyReason,
         /// Human-readable denial detail.
         detail: String,
+        /// Structural context of the denial. `Tool` means the body is
+        /// returned as a tool result (agent loop continues); `Api`
+        /// means a synchronous terminal failure (HTTP 403 for HTTP
+        /// interceptors). See FEP §5.1–§5.2.
+        ///
+        /// In V1 all wired interceptors serve HTTP-class traffic and
+        /// treat both contexts identically (403 + `deny_body_json`)
+        /// per the task 008 V1 scope note. The field is populated so
+        /// a future tool-call transport can read it without any
+        /// further handler/pipeline change.
+        // V1 interceptors discard `context` (Tool and Api get the
+        // same 403 response). Tests read it. `cfg_attr` keeps the
+        // non-test build warning-clean without marking the attribute
+        // unfulfilled during test compilation.
+        #[cfg_attr(not(test), allow(dead_code))]
+        context: DenialContext,
     },
     /// Request was approved by enforcement but the dispatch could not
     /// complete. The agent-visible outcome is a gateway-timeout class
@@ -68,6 +85,49 @@ impl AbortReason {
     }
 }
 
+/// Structural context of a denial.
+///
+/// Derived from the `NormalizedEnvelope` carried on
+/// [`EnforcementDecision::Deny`]. Interceptors select the transport
+/// response shape from this value without re-inspecting the envelope.
+///
+/// See FEP §5.1–§5.2 for the behavioural contract:
+/// - `Tool`: agent loop continues; body is a structured tool result.
+/// - `Api`: synchronous terminal failure; body is the canonical deny
+///   JSON (HTTP 403 for HTTP interceptors).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DenialContext {
+    /// Denial originated from a tool-call transport.
+    Tool,
+    /// Denial originated from an API-class transport (HTTP, DB, etc.)
+    /// or before normalization produced an envelope (fail-closed).
+    Api,
+}
+
+/// Maps an [`ActionParams`] variant to its [`DenialContext`].
+///
+/// `ToolUse` → `Tool`; `Http` / `DbQuery` → `Api`.
+#[must_use]
+pub fn denial_context_from_params(params: &ActionParams) -> DenialContext {
+    match params {
+        ActionParams::ToolUse(_) => DenialContext::Tool,
+        ActionParams::Http(_) | ActionParams::DbQuery(_) => DenialContext::Api,
+    }
+}
+
+/// Derives the denial context from a normalized envelope.
+///
+/// Fail-closed default: when no envelope is available (pre-normalization
+/// denial such as `MalformedRequest` or `UnclassifiedIntent`), returns
+/// [`DenialContext::Api`] — the hard-block shape. A tool denial on a
+/// non-tool call would silently mask the failure.
+#[must_use]
+pub fn denial_context_of(envelope: Option<&NormalizedEnvelope>) -> DenialContext {
+    envelope.map_or(DenialContext::Api, |e| {
+        denial_context_from_params(&e.intent.params)
+    })
+}
+
 /// Serialize a denial into the canonical JSON body used by HTTP-facing
 /// interceptors.
 #[must_use]
@@ -75,6 +135,33 @@ pub fn deny_body_json(reason: DenyReason, detail: &str) -> Vec<u8> {
     serde_json::json!({
         "denied": true,
         "reason": reason,
+        "detail": detail,
+    })
+    .to_string()
+    .into_bytes()
+}
+
+/// Serialize a tool-call denial into the canonical JSON body shape
+/// defined by FEP §5.1.
+///
+/// The agent receives this as it would any other tool result; the
+/// session continues. No HTTP status semantics are implied — the body
+/// is the tool's structured result.
+#[must_use]
+// Public API reserved for a future tool-call interceptor; V1 has no
+// tool-call transport so the function is only called from tests.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn tool_denial_body_json(
+    reason: DenyReason,
+    detail: &str,
+    action_class: &str,
+    tool_name: &str,
+) -> Vec<u8> {
+    serde_json::json!({
+        "denied": true,
+        "reason": reason,
+        "action_class": action_class,
+        "tool_name": tool_name,
         "detail": detail,
     })
     .to_string()
@@ -244,8 +331,18 @@ impl RequestHandler {
                     other => other,
                 }
             }
-            EnforcementDecision::Deny { reason, detail, .. } => {
-                HandledResponse::Deny { reason, detail }
+            EnforcementDecision::Deny {
+                reason,
+                detail,
+                envelope,
+                ..
+            } => {
+                let context = denial_context_of(envelope.as_ref());
+                HandledResponse::Deny {
+                    reason,
+                    detail,
+                    context,
+                }
             }
         };
 
@@ -269,6 +366,10 @@ impl RequestHandler {
     ) -> (HandledResponse, DispatchOutcome) {
         let host = extract_host(envelope.intent().resource.as_str()).unwrap_or_default();
         let connector = self.connector_registry.select(&host);
+        // Derive the denial context up-front: `TransportView::new`
+        // consumes the envelope below, and connector-originated
+        // denials need the context to build the response.
+        let dispatch_context = denial_context_from_params(&envelope.intent().params);
         let view = TransportView::new(envelope, credentials);
         match connector.dispatch(&view).await {
             Ok(response) => {
@@ -311,6 +412,7 @@ impl RequestHandler {
                     HandledResponse::Deny {
                         reason: DenyReason::ConnectorNetworkError,
                         detail,
+                        context: dispatch_context,
                     },
                     outcome,
                 )
@@ -324,6 +426,7 @@ impl RequestHandler {
                     HandledResponse::Deny {
                         reason: DenyReason::ConnectorInvalidRequest,
                         detail,
+                        context: dispatch_context,
                     },
                     outcome,
                 )
@@ -613,9 +716,17 @@ mod tests {
             .await;
 
         match response {
-            HandledResponse::Deny { reason, detail } => {
+            HandledResponse::Deny {
+                reason,
+                detail,
+                context,
+            } => {
                 assert_eq!(reason, DenyReason::TokenInvalid);
                 assert!(!detail.is_empty());
+                // Stage 1 TokenInvalid denies carry no envelope, so
+                // the handler falls back to Api per the fail-closed
+                // default.
+                assert_eq!(context, DenialContext::Api);
             }
             other => panic!("expected deny response, got {other:?}"),
         }
@@ -825,6 +936,145 @@ mod tests {
         assert_eq!(parsed["denied"], serde_json::Value::Bool(true));
         assert!(parsed["reason"].is_string());
         assert_eq!(parsed["detail"], "policy X blocked");
+    }
+
+    #[test]
+    fn tool_denial_body_json_has_documented_shape() {
+        let body = tool_denial_body_json(
+            DenyReason::PolicyDenied,
+            "disallowed by bundle v3",
+            "tool.generic",
+            "my_tool",
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&body).expect("body should be valid JSON");
+        assert_eq!(parsed["denied"], serde_json::Value::Bool(true));
+        assert_eq!(
+            parsed["reason"],
+            serde_json::json!(DenyReason::PolicyDenied)
+        );
+        assert_eq!(parsed["action_class"], "tool.generic");
+        assert_eq!(parsed["tool_name"], "my_tool");
+        assert_eq!(parsed["detail"], "disallowed by bundle v3");
+    }
+
+    #[test]
+    fn deny_body_json_shape_unchanged_by_task_008() {
+        let body = deny_body_json(DenyReason::ScopeViolation, "out of scope");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&body).expect("body should be valid JSON");
+        assert!(parsed.get("tool_name").is_none());
+        assert!(parsed.get("action_class").is_none());
+        assert_eq!(parsed["denied"], serde_json::Value::Bool(true));
+        assert_eq!(
+            parsed["reason"],
+            serde_json::json!(DenyReason::ScopeViolation)
+        );
+        assert_eq!(parsed["detail"], "out of scope");
+    }
+
+    #[test]
+    fn denial_context_of_tooluse_envelope_is_tool() {
+        use firma_core::ToolUseParams;
+        let envelope = NormalizedEnvelope {
+            intent: ExecutionIntent {
+                action_class: "tool.generic".to_string(),
+                resource: "my_tool".to_string(),
+                params: ActionParams::ToolUse(ToolUseParams {
+                    tool_name: "my_tool".to_string(),
+                    input: HashMap::new(),
+                }),
+                raw_transport: "mcp".to_string(),
+                raw_action_ref: "my_tool".to_string(),
+            },
+            timestamp: Utc::now(),
+        };
+        assert_eq!(denial_context_of(Some(&envelope)), DenialContext::Tool);
+    }
+
+    #[test]
+    fn denial_context_of_http_envelope_is_api() {
+        let envelope = NormalizedEnvelope {
+            intent: ExecutionIntent {
+                action_class: "http.get".to_string(),
+                resource: "https://example.test/resource".to_string(),
+                params: ActionParams::Http(HttpParams {
+                    method: HttpMethod::GET,
+                    headers: HashMap::new(),
+                    body: None,
+                    query: HashMap::new(),
+                }),
+                raw_transport: "http".to_string(),
+                raw_action_ref: "GET /resource".to_string(),
+            },
+            timestamp: Utc::now(),
+        };
+        assert_eq!(denial_context_of(Some(&envelope)), DenialContext::Api);
+    }
+
+    #[test]
+    fn denial_context_of_dbquery_envelope_is_api() {
+        use firma_core::DbQueryParams;
+        let envelope = NormalizedEnvelope {
+            intent: ExecutionIntent {
+                action_class: "db.query".to_string(),
+                resource: "pg://orders".to_string(),
+                params: ActionParams::DbQuery(DbQueryParams {
+                    query_name: "select_orders".to_string(),
+                    bindings: HashMap::new(),
+                    db_name: "orders".to_string(),
+                    read_only: true,
+                }),
+                raw_transport: "pg".to_string(),
+                raw_action_ref: "SELECT".to_string(),
+            },
+            timestamp: Utc::now(),
+        };
+        assert_eq!(denial_context_of(Some(&envelope)), DenialContext::Api);
+    }
+
+    #[test]
+    fn denial_context_of_none_envelope_is_api_fail_closed() {
+        assert_eq!(denial_context_of(None), DenialContext::Api);
+    }
+
+    #[test]
+    fn handled_response_deny_with_tooluse_envelope_carries_tool_context() {
+        // Fabricated-envelope path per FEP §5.1. The handler's Deny
+        // arm is a pure mapping over (reason, detail, envelope); this
+        // reproduces it exactly and asserts the context field is set
+        // to Tool for a ToolUse envelope.
+        use firma_core::ToolUseParams;
+        let envelope = NormalizedEnvelope {
+            intent: ExecutionIntent {
+                action_class: "tool.generic".to_string(),
+                resource: "my_tool".to_string(),
+                params: ActionParams::ToolUse(ToolUseParams {
+                    tool_name: "my_tool".to_string(),
+                    input: HashMap::new(),
+                }),
+                raw_transport: "mcp".to_string(),
+                raw_action_ref: "my_tool".to_string(),
+            },
+            timestamp: Utc::now(),
+        };
+        let response = HandledResponse::Deny {
+            reason: DenyReason::PolicyDenied,
+            detail: "fabricated tool denial".to_string(),
+            context: denial_context_of(Some(&envelope)),
+        };
+        match response {
+            HandledResponse::Deny {
+                context,
+                reason,
+                detail,
+            } => {
+                assert_eq!(context, DenialContext::Tool);
+                assert_eq!(reason, DenyReason::PolicyDenied);
+                assert_eq!(detail, "fabricated tool denial");
+            }
+            other => panic!("expected Deny, got {other:?}"),
+        }
     }
 
     #[tokio::test]

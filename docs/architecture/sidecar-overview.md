@@ -441,6 +441,47 @@ Contract highlights:
   drains in-flight work before returning `Ok(())`.
 - eBPF kernel-level capture is on the roadmap; not in V1.
 
+### 7.1 Denial contexts and response shapes
+
+FEP §5 distinguishes two structurally different denial contexts. The
+sidecar derives the context at the handler layer from the
+`NormalizedEnvelope` carried on `EnforcementDecision::Deny`.
+Interceptors select the transport response from
+`HandledResponse::Deny.context` without re-inspecting the envelope.
+
+- **`DenialContext::Api`** — synchronous terminal failure. HTTP
+  interceptors return **403 Forbidden** with the canonical
+  `deny_body_json` payload:
+  `{ "denied": true, "reason", "detail" }`. 403 is used (not 401)
+  because the token is valid but the action falls outside the
+  permission boundary.
+- **`DenialContext::Tool`** — tool-call denial. The body is a
+  machine-readable tool result produced by `tool_denial_body_json`:
+  `{ "denied": true, "reason", "action_class", "tool_name", "detail" }`.
+  The agent receives this as it would any other tool result and the
+  session continues.
+
+Context derivation (`denial_context_of`):
+
+| Envelope state                              | Context                  |
+| ------------------------------------------- | ------------------------ |
+| `intent.params == ActionParams::ToolUse`    | `Tool`                   |
+| `intent.params == ActionParams::Http`       | `Api`                    |
+| `intent.params == ActionParams::DbQuery`    | `Api`                    |
+| `envelope == None` (pre-normalization deny) | `Api` (fail-closed)      |
+
+Fail-closed rationale: when the sidecar cannot prove the call is a
+tool call, it defaults to the hard-block shape. A tool denial on a
+non-tool call would silently mask the failure.
+
+**V1 scope.** No interceptor currently originates from a tool-call
+transport (MCP stdio, tool-use gateway, etc.). The Pingora HTTP,
+Tonic gRPC, and UDS interceptors all serve HTTP-class traffic and
+treat both `Tool` and `Api` identically: HTTP 403 + `deny_body_json`
+(or the gRPC `allowed=false` equivalent). `tool_denial_body_json` is
+unit-tested and ready to be called from a future tool-call transport
+with no further changes to the pipeline or handler.
+
 ## 8. Audit subsystem
 
 ```mermaid

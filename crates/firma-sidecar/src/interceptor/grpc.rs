@@ -116,7 +116,14 @@ impl InterceptorHook for GrpcInterceptor {
                 allowed: true,
                 reason: String::new(),
             },
-            HandledResponse::Deny { reason, detail } => InterceptResponse {
+            HandledResponse::Deny {
+                reason,
+                detail,
+                context: _,
+            } => InterceptResponse {
+                // V1: gRPC hook reports denial as a reason string
+                // regardless of DenialContext. The context field exists
+                // for future tool-call transports.
                 allowed: false,
                 reason: format!("{reason}: {detail}"),
             },

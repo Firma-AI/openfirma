@@ -154,7 +154,14 @@ async fn handle_request(
         HandledResponse::Ok(response) | HandledResponse::Passthrough(response) => {
             dispatched_response(response)
         }
-        HandledResponse::Deny { reason, detail } => deny_json_response(
+        HandledResponse::Deny {
+            reason,
+            detail,
+            context: _,
+        } => deny_json_response(
+            // V1: UDS serves HTTP requests; Tool and Api both return
+            // 403 + deny_body_json. Fail-closed until a tool-call
+            // transport is wired.
             StatusCode::FORBIDDEN,
             crate::handler::deny_body_json(reason, &detail),
         ),
