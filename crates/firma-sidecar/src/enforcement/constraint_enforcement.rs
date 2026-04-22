@@ -567,8 +567,8 @@ mod tests {
     #[test]
     fn test_allow_when_in_scope_and_policy_allows() {
         let evaluator = ConstraintEnforcer::fixed(AllowAllPolicy);
-        let envelope = test_envelope("llm.inference");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let result = evaluator.evaluate(&envelope, &claims);
         assert!(result.is_ok());
@@ -577,8 +577,8 @@ mod tests {
     #[test]
     fn test_deny_scope_violation() {
         let evaluator = ConstraintEnforcer::fixed(AllowAllPolicy);
-        let envelope = test_envelope("file.delete");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("filesystem.delete");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert!(decision.is_deny());
@@ -598,8 +598,8 @@ mod tests {
     #[test]
     fn test_deny_when_policy_denies() {
         let evaluator = ConstraintEnforcer::fixed(DenyAllPolicy);
-        let envelope = test_envelope("llm.inference");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert!(decision.is_deny());
@@ -609,8 +609,8 @@ mod tests {
     #[test]
     fn test_deny_when_bundle_stale() {
         let evaluator = ConstraintEnforcer::fixed(StalePolicy);
-        let envelope = test_envelope("llm.inference");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert!(decision.is_deny());
@@ -620,8 +620,8 @@ mod tests {
     #[test]
     fn test_deny_when_bundle_unavailable_fail_closed() {
         let evaluator = ConstraintEnforcer::fixed(UnavailablePolicy);
-        let envelope = test_envelope("llm.inference");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert!(decision.is_deny());
@@ -631,8 +631,8 @@ mod tests {
     #[test]
     fn test_policy_evaluator_error_fails_closed() {
         let evaluator = ConstraintEnforcer::fixed(ErrorPolicy);
-        let envelope = test_envelope("llm.inference");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
         assert!(decision.is_deny());
@@ -642,8 +642,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_stage2_timeout_fails_closed() {
         let evaluator = ConstraintEnforcer::fixed(SlowPolicy);
-        let envelope = test_envelope("llm.inference");
-        let claims = test_claims(vec!["llm.inference"]);
+        let envelope = test_envelope("communication.external.send");
+        let claims = test_claims(vec!["communication.external.send"]);
 
         let decision = evaluator
             .evaluate_with_timeout(&envelope, &claims, Duration::from_millis(20))

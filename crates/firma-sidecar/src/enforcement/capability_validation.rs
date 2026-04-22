@@ -206,7 +206,7 @@ mod tests {
             token_id: TokenId::new(),
             agent_id: "agent_test".parse().unwrap(),
             session_id: "sess_001".parse().unwrap(),
-            action_set: vec!["llm.inference".to_string()],
+            action_set: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),

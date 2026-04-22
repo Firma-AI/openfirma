@@ -221,25 +221,25 @@ mod tests {
                     method: Some("POST".to_string()),
                     host: "api.openai.com".to_string(),
                     path: Some("/v1/chat/completions".to_string()),
-                    action_class: "llm.inference".to_string(),
+                    action_class: "communication.external.send".to_string(),
                 },
                 MappingRuleConfig {
                     method: Some("POST".to_string()),
                     host: "api.anthropic.com".to_string(),
                     path: Some("/v1/messages".to_string()),
-                    action_class: "llm.inference".to_string(),
+                    action_class: "communication.external.send".to_string(),
                 },
                 MappingRuleConfig {
                     method: Some("GET".to_string()),
                     host: "*".to_string(),
                     path: None,
-                    action_class: "http.get".to_string(),
+                    action_class: "filesystem.read".to_string(),
                 },
                 MappingRuleConfig {
                     method: Some("POST".to_string()),
                     host: "*".to_string(),
                     path: None,
-                    action_class: "http.post".to_string(),
+                    action_class: "communication.internal.send".to_string(),
                 },
             ],
         }
@@ -267,7 +267,9 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"));
 
         match table.find_match("POST", "api.openai.com", "/v1/chat/completions") {
-            MatchResult::Matched(rule) => assert_eq!(rule.action_class, "llm.inference"),
+            MatchResult::Matched(rule) => {
+                assert_eq!(rule.action_class, "communication.external.send");
+            }
             other => panic!("expected Matched, got {other:?}"),
         }
     }
@@ -279,7 +281,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"));
 
         match table.find_match("GET", "api.weather.com", "/forecast") {
-            MatchResult::Matched(rule) => assert_eq!(rule.action_class, "http.get"),
+            MatchResult::Matched(rule) => assert_eq!(rule.action_class, "filesystem.read"),
             other => panic!("expected Matched, got {other:?}"),
         }
     }
@@ -293,7 +295,7 @@ mod tests {
                 method: Some("POST".to_string()),
                 host: "api.openai.com".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
-                action_class: "llm.inference".to_string(),
+                action_class: "communication.external.send".to_string(),
             }],
         };
         let table =
