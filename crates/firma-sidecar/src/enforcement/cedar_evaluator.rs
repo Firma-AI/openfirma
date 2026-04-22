@@ -190,7 +190,7 @@ namespace Firma {
     type EnforcementContext = { session_id: String, timestamp_ms: Long, params: String, risk_score: Long };
     entity Agent;
     entity Resource;
-    action \"llm.inference\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
+    action \"communication.external.send\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
 }";
 
     fn schema_bundle(policy_src: &[u8]) -> PolicyBundle {
@@ -283,7 +283,7 @@ namespace Firma {
         let result = evaluator
             .evaluate(
                 &agent("agent_test"),
-                "llm.inference",
+                "communication.external.send",
                 "api.openai.com",
                 &test_context(),
             )
@@ -297,7 +297,7 @@ namespace Firma {
         let result = evaluator
             .evaluate(
                 &agent("agent_test"),
-                "llm.inference",
+                "communication.external.send",
                 "api.openai.com",
                 &test_context(),
             )
@@ -362,7 +362,7 @@ namespace Firma {
         let allow = evaluator
             .evaluate(
                 &agent("agent_test"),
-                "llm.inference",
+                "communication.external.send",
                 "api.openai.com",
                 &test_context(),
             )
@@ -378,7 +378,7 @@ namespace Firma {
         let deny = evaluator
             .evaluate(
                 &agent("agent_test"),
-                "llm.inference",
+                "communication.external.send",
                 "api.openai.com",
                 &deny_context,
             )
@@ -403,7 +403,7 @@ namespace Firma {
         let result = evaluator
             .evaluate(
                 &agent("agent_test"),
-                "llm.inference",
+                "communication.external.send",
                 "api.openai.com",
                 &full_context(),
             )
@@ -439,7 +439,7 @@ namespace Firma {
         });
         let result = evaluator.evaluate(
             &agent("agent_test"),
-            "llm.inference",
+            "communication.external.send",
             "api.openai.com",
             &incomplete_context,
         );
@@ -460,7 +460,7 @@ namespace Firma {
         let allow = evaluator
             .evaluate(
                 &agent("agent_test"),
-                "llm.inference",
+                "communication.external.send",
                 "api.openai.com",
                 &full_context(),
             )
