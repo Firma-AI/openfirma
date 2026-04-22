@@ -55,7 +55,7 @@ fn llm_inference_claims(session: &str) -> CapabilityClaims {
         token_id: TokenId::new(),
         agent_id: "agent_roundtrip".parse().unwrap(),
         session_id: session.parse().unwrap(),
-        action_set: vec!["llm.inference".to_string()],
+        action_set: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),
         issued_at: now,
         expiry: now + chrono::Duration::hours(1),
@@ -93,7 +93,7 @@ fn openai_pipeline(
         method: Some("POST".to_string()),
         host: "api.openai.com".to_string(),
         path: Some("/v1/chat/completions".to_string()),
-        action_class: "llm.inference".to_string(),
+        action_class: "communication.external.send".to_string(),
     }];
     let normalizer = IntentNormalizer::new(make_mapping_table(&rules));
 
@@ -135,7 +135,7 @@ fn authority_issues_sidecar_enforces_allow() {
     {
         assert_eq!(verified.agent_id.as_ref(), "agent_roundtrip");
         assert_eq!(verified.token_id, expected_token_id);
-        assert_eq!(envelope.intent.action_class, "llm.inference");
+        assert_eq!(envelope.intent.action_class, "communication.external.send");
         assert_eq!(envelope.metadata.agent_id.as_ref(), "agent_roundtrip");
     }
 }
@@ -167,7 +167,7 @@ fn wrong_key_denied_at_stage1() {
         method: Some("POST".to_string()),
         host: "api.openai.com".to_string(),
         path: Some("/v1/chat/completions".to_string()),
-        action_class: "llm.inference".to_string(),
+        action_class: "communication.external.send".to_string(),
     }];
     let pipeline = EnforcementPipeline::new(
         IntentNormalizer::new(make_mapping_table(&rules)),
