@@ -82,7 +82,6 @@ pub trait PolicyEvaluation: Send + Sync {
 /// existing availability check and fails closed as
 /// [`DenyReason::PolicyBundleStale`].  The bundle consumer task replaces
 /// this sentinel with a real [`CedarPolicyEvaluator`] on first delivery.
-#[allow(dead_code)] // used by the bundle consumer task (not yet wired)
 struct NoBundleInstalled;
 
 impl PolicyEvaluation for NoBundleInstalled {
@@ -399,6 +398,27 @@ impl ConstraintEnforcer {
             "risk_score": 0i64,
         })
     }
+}
+
+/// Create the watch channel for policy hot-swapping, seeded with the
+/// [`NoBundleInstalled`] fail-closed sentinel.
+///
+/// Returns `(tx, rx)`:
+/// - `tx` — held by [`crate::policy_watcher::PolicyWatcher`]; call
+///   `tx.send_replace(Arc::new(evaluator))` to atomically swap the active
+///   policy on each [`PolicyBundle`] delivery.
+/// - `rx` — pass to [`ConstraintEnforcer::new`].
+///
+/// Before the first bundle is installed every Stage 2 evaluation denies
+/// as [`firma_core::decision::DenyReason::FailClosed`] because
+/// `NoBundleInstalled::is_available()` returns `false`.
+/// Sender half of the policy evaluator watch channel.
+pub type PolicySender = watch::Sender<Arc<dyn PolicyEvaluation>>;
+/// Receiver half of the policy evaluator watch channel.
+pub type PolicyReceiver = watch::Receiver<Arc<dyn PolicyEvaluation>>;
+
+pub(crate) fn policy_channel() -> (PolicySender, PolicyReceiver) {
+    watch::channel(Arc::new(NoBundleInstalled) as Arc<dyn PolicyEvaluation>)
 }
 
 #[cfg(test)]
