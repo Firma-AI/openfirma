@@ -218,7 +218,7 @@ fn read_policy_files(policy_dir: &Path) -> Result<(String, String), AuthorityErr
     let mut policies = String::new();
     let mut entries: Vec<_> = std::fs::read_dir(policy_dir)
         .map_err(|e| AuthorityError::PolicyLoadFailed {
-            reason: e.to_string(),
+            reason: format!("cannot read policy directory: {e}"),
         })?
         .filter_map(Result::ok)
         .collect();
@@ -232,7 +232,7 @@ fn read_policy_files(policy_dir: &Path) -> Result<(String, String), AuthorityErr
             tracing::debug!(path = %path.display(), "reading policy file");
             let content =
                 std::fs::read_to_string(&path).map_err(|e| AuthorityError::PolicyLoadFailed {
-                    reason: e.to_string(),
+                    reason: format!("cannot read {}: {e}", path.display()),
                 })?;
             if !policies.is_empty() {
                 policies.push('\n');
