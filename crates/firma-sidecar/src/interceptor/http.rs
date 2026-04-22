@@ -194,7 +194,14 @@ async fn write_handled_response(
         HandledResponse::Ok(response) | HandledResponse::Passthrough(response) => {
             write_dispatched_response(session, response).await
         }
-        HandledResponse::Deny { reason, detail } => {
+        HandledResponse::Deny {
+            reason,
+            detail,
+            context: _,
+        } => {
+            // V1: no tool-call transport originates over HTTP, so Tool
+            // and Api both return 403 + deny_body_json. Fail-closed
+            // until a tool-call interceptor is wired.
             session
                 .respond_error_with_body(
                     403,
