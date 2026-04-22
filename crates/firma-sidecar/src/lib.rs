@@ -31,4 +31,5 @@ pub mod execution;
 pub mod interceptor;
 pub mod normalizer;
 pub mod pipeline;
+pub mod policy_watcher;
 pub mod runtime;
