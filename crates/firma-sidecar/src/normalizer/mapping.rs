@@ -10,7 +10,7 @@
 //! be deterministically mapped to a registry entry fail closed with
 //! `DENY: UNCLASSIFIED_INTENT` (FEP \[I-N1\]).
 
-use crate::enforcement::config::MappingRulesFile;
+use crate::config::MappingRulesFile;
 use crate::enforcement::registry::ActionClassRegistry;
 
 /// A validated mapping rule ready for matching.
@@ -61,7 +61,10 @@ impl MappingRule {
         if let Some(p) = path {
             score += 5;
             // Longer path = more specific
-            #[allow(clippy::cast_possible_truncation)] // path segments will never exceed u32
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "path segments will never exceed u32"
+            )]
             let segments = p.split('/').filter(|s| !s.is_empty()).count() as u32;
             score += segments;
             // No wildcards in path = more specific
@@ -206,9 +209,10 @@ fn glob_match(pattern: &str, value: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::enforcement::config::MappingRuleConfig;
+    use crate::config::MappingRuleConfig;
 
     fn test_registry() -> ActionClassRegistry {
         ActionClassRegistry::v0_1()

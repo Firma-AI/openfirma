@@ -25,3 +25,7 @@ pub mod firma {
 
 // Re-export commonly used types at crate root for ergonomics.
 pub use firma::v1::*;
+
+// Re-export prost_types so downstream crates can reference proto
+// well-known types (e.g. Timestamp) without a direct dependency.
+pub use prost_types;

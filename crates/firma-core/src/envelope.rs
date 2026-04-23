@@ -26,6 +26,48 @@ pub struct ExecutionEnvelope {
     pub provenance: Option<String>,
 }
 
+impl ExecutionEnvelope {
+    /// Constructs a new `ExecutionEnvelope`.
+    #[must_use]
+    pub fn new(
+        intent: ExecutionIntent,
+        capability: String,
+        metadata: ExecutionMetadata,
+        provenance: Option<String>,
+    ) -> Self {
+        Self {
+            intent,
+            capability,
+            metadata,
+            provenance,
+        }
+    }
+
+    /// Gets the typed action parameters describing what the agent wants to do.
+    #[must_use]
+    pub fn intent(&self) -> &ExecutionIntent {
+        &self.intent
+    }
+
+    /// Gets the raw signed token string.
+    #[must_use]
+    pub fn capability(&self) -> &str {
+        &self.capability
+    }
+
+    /// Gets the session and runtime metadata for correlation and audit.
+    #[must_use]
+    pub fn metadata(&self) -> &ExecutionMetadata {
+        &self.metadata
+    }
+
+    /// Gets the schema-reserved provenance field.
+    #[must_use]
+    pub fn provenance(&self) -> Option<&str> {
+        self.provenance.as_deref()
+    }
+}
+
 /// Typed description of the action an agent intends to perform.
 ///
 /// Contains five canonical intent sub-fields: `action_class`, `resource`,
@@ -166,6 +208,7 @@ pub struct ExecutionContext {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use chrono::Utc;
