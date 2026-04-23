@@ -121,6 +121,7 @@ impl AuthorityService for AuthorityServiceImpl {
                     issued_at: now,
                     expiry: expires_at,
                     context_hash: context_hash.clone(),
+                    budget_ceiling: None,
                 };
 
                 // Sign the token
@@ -143,6 +144,7 @@ impl AuthorityService for AuthorityServiceImpl {
                     context_hash,
                     signature: signed_token.into_bytes(),
                     format: TokenFormat::PasetoV4.into(),
+                    budget_ceiling: None,
                 };
 
                 tracing::info!(
@@ -328,7 +330,11 @@ impl CedarDecision {
 ///
 /// Context at issuance time carries `session_id`, `timestamp_ms`, and
 /// `risk_score` (V1 placeholder = 0). `params` is empty (`"{}"`) because no
-/// specific intent exists yet at issuance.
+/// specific intent exists yet at issuance. The runtime-signal fields
+/// (`budget_remaining`, `session_duration_s`, `action_count`) are populated
+/// with schema-compatible placeholders (`i64::MAX`, `0`, `0`) — the Authority
+/// has no session history at pre-flight, but all 7 fields are required by
+/// the canonical `EnforcementContext` schema.
 fn evaluate_cedar_policy(
     policy_set: &PolicySet,
     schema: Option<&Schema>,
@@ -375,6 +381,9 @@ fn evaluate_cedar_policy(
             "timestamp_ms": timestamp_ms,
             "params": "{}",
             "risk_score": 0i64,
+            "budget_remaining": i64::MAX,
+            "session_duration_s": 0i64,
+            "action_count": 0i64,
         });
         let schema_with_action = schema.map(|s| (s, &action_entity));
         let cedar_context = match Context::from_json_value(context_json, schema_with_action) {
@@ -533,7 +542,7 @@ mod tests {
             None,
             &agent("agent_1"),
             &session("sess_1"),
-            &["http.get".to_string()],
+            &["filesystem.read".to_string()],
             "api.example.com",
         );
         assert!(matches!(result, CedarDecision::Deny { .. }));
@@ -559,7 +568,7 @@ mod tests {
             None,
             &agent("agent_1"),
             &session("sess_1"),
-            &["http.get".to_string()],
+            &["filesystem.read".to_string()],
             "api.example.com",
         );
         assert!(matches!(result, CedarDecision::Allow));
@@ -572,7 +581,7 @@ mod tests {
             None,
             &agent("agent_1"),
             &session("sess_1"),
-            &["http.get".to_string()],
+            &["filesystem.read".to_string()],
             "api.example.com",
         );
         assert!(matches!(result, CedarDecision::Deny { .. }));
@@ -585,7 +594,10 @@ mod tests {
             None,
             &agent("agent_1"),
             &session("sess_1"),
-            &["llm.inference".to_string(), "http.get".to_string()],
+            &[
+                "communication.external.send".to_string(),
+                "filesystem.read".to_string(),
+            ],
             "api.example.com",
         );
         assert!(matches!(result, CedarDecision::Allow));
@@ -599,7 +611,10 @@ mod tests {
             None,
             &agent("agent_1"),
             &session("sess_1"),
-            &["llm.inference".to_string(), "http.get".to_string()],
+            &[
+                "communication.external.send".to_string(),
+                "filesystem.read".to_string(),
+            ],
             "api.example.com",
         );
         assert!(matches!(result, CedarDecision::Deny { .. }));
@@ -613,7 +628,7 @@ mod tests {
             Some(&schema),
             &agent("agent_1"),
             &session("sess_1"),
-            &["llm.inference".to_string()],
+            &["communication.external.send".to_string()],
             "api.example.com",
         );
         assert!(matches!(result, CedarDecision::Allow));
@@ -638,21 +653,21 @@ mod tests {
     fn test_evaluate_with_schema_all_15_actions_allowed() {
         let schema = firma_schema();
         let actions: Vec<String> = [
-            "http.get",
-            "http.post",
-            "http.put",
-            "http.delete",
-            "http.patch",
-            "network.connect",
-            "db.query",
-            "db.mutate",
-            "file.read",
-            "file.write",
-            "file.delete",
-            "code.execute",
+            "account.permission.change",
+            "browser.purchase",
+            "communication.external.send",
+            "communication.internal.send",
+            "credential.read",
+            "credential.write",
+            "filesystem.delete",
+            "filesystem.read",
+            "filesystem.write",
+            "memory.cross_namespace.read",
+            "memory.cross_namespace.write",
+            "payment.purchase",
+            "payment.transfer",
             "system.execute",
-            "messaging.send",
-            "llm.inference",
+            "system.install",
         ]
         .iter()
         .map(|s| (*s).to_string())
@@ -680,13 +695,19 @@ mod tests {
     fn context_hash_deterministic() {
         let h1 = compute_context_hash(
             "agent_1",
-            &["http.get".to_string(), "llm.inference".to_string()],
+            &[
+                "filesystem.read".to_string(),
+                "communication.external.send".to_string(),
+            ],
             "api.example.com",
             "bundle_v1",
         );
         let h2 = compute_context_hash(
             "agent_1",
-            &["http.get".to_string(), "llm.inference".to_string()],
+            &[
+                "filesystem.read".to_string(),
+                "communication.external.send".to_string(),
+            ],
             "api.example.com",
             "bundle_v1",
         );
@@ -698,13 +719,19 @@ mod tests {
         // Actions sorted before hashing — different order must produce same hash.
         let h1 = compute_context_hash(
             "agent_1",
-            &["http.get".to_string(), "llm.inference".to_string()],
+            &[
+                "filesystem.read".to_string(),
+                "communication.external.send".to_string(),
+            ],
             "api.example.com",
             "v1",
         );
         let h2 = compute_context_hash(
             "agent_1",
-            &["llm.inference".to_string(), "http.get".to_string()],
+            &[
+                "communication.external.send".to_string(),
+                "filesystem.read".to_string(),
+            ],
             "api.example.com",
             "v1",
         );
@@ -715,13 +742,13 @@ mod tests {
     fn context_hash_changes_with_agent() {
         let h1 = compute_context_hash(
             "agent_a",
-            &["http.get".to_string()],
+            &["filesystem.read".to_string()],
             "resource",
             "bundle_v1",
         );
         let h2 = compute_context_hash(
             "agent_b",
-            &["http.get".to_string()],
+            &["filesystem.read".to_string()],
             "resource",
             "bundle_v1",
         );
@@ -732,13 +759,13 @@ mod tests {
     fn context_hash_changes_with_bundle_version() {
         let h1 = compute_context_hash(
             "agent_1",
-            &["http.get".to_string()],
+            &["filesystem.read".to_string()],
             "resource",
             "bundle_v1",
         );
         let h2 = compute_context_hash(
             "agent_1",
-            &["http.get".to_string()],
+            &["filesystem.read".to_string()],
             "resource",
             "bundle_v2",
         );

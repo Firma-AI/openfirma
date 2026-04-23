@@ -25,11 +25,24 @@
 //!   a single `enforce()` entry point. This is the primary public API;
 //!   all types needed to construct and inspect the pipeline are re-exported
 //!   from here.
+//! - [`audit`] — Audit event emitter. Produces a signed event for every
+//!   enforcement decision. Supports stdout, file, gRPC, and WAL output
+//!   sinks.
+//! - [`startup`] — Per-subsystem builders that translate
+//!   [`config::SidecarConfig`] into runtime components.
 
+pub mod args;
+pub mod audit;
+pub mod authority_client;
+pub mod config;
+pub mod connector;
+pub mod credential;
 pub mod enforcement;
-pub mod execution;
+pub mod handler;
+pub mod health;
 pub mod interceptor;
+pub mod log;
 pub mod normalizer;
 pub mod pipeline;
 pub mod policy_watcher;
-pub mod runtime;
+pub mod startup;

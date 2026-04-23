@@ -58,15 +58,34 @@ message ToolUseParams {
 // ExecutionIntent describes the action the agent wants to perform.
 // The oneof params field enforces that exactly one action kind is present,
 // with schema validation at the proto level — no arbitrary key-value blobs.
+//
+// Fields action_class, raw_transport, and raw_action_ref mirror the core
+// ExecutionIntent struct and FEP §2.1: Stage 2 policy rules bind to
+// action_class and resource (FEP [I-N1]); raw_transport and raw_action_ref
+// are observational only and must not drive policy decisions.
 message ExecutionIntent {
-  // Target resource identifier (e.g., URL, table name, tool name).
-  string resource = 1;
+  // Target resource attribute map. Conventional keys: "host", "path",
+  // and optionally "provider" (e.g., "github"). Deterministic iteration
+  // order is maintained on the Rust side via BTreeMap. Wire format is
+  // unordered — ordering guarantees apply only after deserialization.
+  map<string, string> resource = 1;
   // Typed action parameters — only one action kind is valid per intent.
   oneof params {
     HttpParams    http = 2;
     DbQueryParams db   = 3;
     ToolUseParams tool = 4;
   }
+  // Canonical action class from the v0.1 registry (e.g.,
+  // "communication.external.send", "filesystem.read"). Set by the intent
+  // normalizer. Must be one of the identifiers defined by FEP §2.3.5.
+  string action_class = 5;
+  // Original transport protocol (e.g., "http", "https", "grpc", "exec").
+  // Observational only — must not be used by policy evaluation.
+  string raw_transport = 6;
+  // Original request signature for traceability (e.g.,
+  // "POST /v1/chat/completions"). Observational only — must not be used by
+  // policy evaluation.
+  string raw_action_ref = 7;
 }
 
 // ExecutionMetadata carries session and runtime context for an execution.
@@ -143,6 +162,9 @@ message CapabilityToken {
   bytes signature = 9;
   // Token encoding format.
   TokenFormat format = 10;
+  // Maximum cumulative budget granted by the Authority (e.g., API cost
+  // in USD). Optional — absent means unbounded.
+  optional double budget_ceiling = 11;
 }
 
 // EnforcementDecision is the outcome of Sidecar evaluation.

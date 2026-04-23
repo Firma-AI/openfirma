@@ -9,7 +9,7 @@ requires-python = ">=3.13"
 dependencies = [
     "openai-agents",
     "httpx",
-    "sqlalchemy",
+    "supabase>=2.28",
 ]
 
 [tool.hatch.build.targets.wheel]

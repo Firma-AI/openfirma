@@ -27,8 +27,12 @@
 //! - **Revoked token reuse** — bloom filter + LRU cache check rejects tokens
 //!   that have been explicitly invalidated.
 
-use firma_core::session::SessionId;
-use firma_core::token::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
+use std::sync::Arc;
+use std::time::Duration;
+
+#[cfg(test)]
+use firma_core::TokenId;
+use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
 
 use crate::normalizer::NormalizedEnvelope;
 
@@ -53,13 +57,11 @@ pub struct ValidatedCapability {
 /// revocation via bloom filter + LRU cache.
 /// Fully local — the Authority is never contacted.
 ///
-/// Expiry checking (including clock skew leeway) is the responsibility of
-/// the [`TokenVerifier`] implementation, not this stage.
-///
 /// Target: < 1ms p95.
 pub struct CapabilityValidator {
+    clock_skew_tolerance: Duration,
     capability_map: CapabilityMap,
-    revocation: Box<dyn RevocationStore + Send + Sync>,
+    revocation: Arc<dyn RevocationStore + Send + Sync>,
     verifier: Box<dyn TokenVerifier + Send + Sync>,
 }
 
@@ -70,9 +72,11 @@ impl CapabilityValidator {
     pub fn new(
         capability_map: CapabilityMap,
         verifier: Box<dyn TokenVerifier + Send + Sync>,
-        revocation: Box<dyn RevocationStore + Send + Sync>,
+        revocation: Arc<dyn RevocationStore + Send + Sync>,
+        clock_skew_tolerance: Duration,
     ) -> Self {
         Self {
+            clock_skew_tolerance,
             capability_map,
             revocation,
             verifier,
@@ -92,23 +96,27 @@ impl CapabilityValidator {
     ///
     /// Returns `EnforcementDecision::Deny` if no token matches or token
     /// validation fails.
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "domain decision carries denial context"
+    )]
     pub fn enforce(
         &self,
         envelope: &NormalizedEnvelope,
-        session_id: SessionId,
+        session_id: &str,
     ) -> Result<ValidatedCapability, EnforcementDecision> {
         // Step 1: Select capability token from map (ADR-002)
+        let resource_display = envelope.intent.resource_display();
         let entry = self.capability_map.select(
             session_id,
             &envelope.intent.action_class,
-            &envelope.intent.resource,
+            &resource_display,
         )?;
 
         // Step 2: Validate selected token
-        let claims = self.validate(entry.raw_token())?;
+        let claims = self.validate(&entry.raw_token)?;
         Ok(ValidatedCapability {
-            raw_token: entry.raw_token().to_string(),
+            raw_token: entry.raw_token.clone(),
             claims,
         })
     }
@@ -133,19 +141,32 @@ impl CapabilityValidator {
     ///
     /// Panics if the clock skew tolerance exceeds the range representable by
     /// `chrono::Duration` (practically unreachable).
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "domain decision carries denial context"
+    )]
     fn validate(&self, raw_token: &str) -> Result<CapabilityClaims, EnforcementDecision> {
         let stage =
             EnforcementStage::CapabilityValidation(CapabilityValidationStage::TokenValidation);
 
-        // Steps 1-3: Parse + verify signature + check expiry (with leeway) + extract claims.
-        // Expiry validation including clock skew leeway is owned by the verifier.
+        // Steps 1-3: Parse + verify + extract claims
         let claims = self
             .verifier
             .verify(raw_token)
             .map_err(|e| EnforcementError::from(e).into_deny(stage))?;
 
-        // Step 4: Check revocation
+        // Step 4: Check expiry with clock skew tolerance
+        let now = chrono::Utc::now();
+        let tolerance = chrono::Duration::from_std(self.clock_skew_tolerance)
+            .unwrap_or(chrono::Duration::zero());
+        if claims.expiry + tolerance <= now {
+            return Err(EnforcementError::TokenValidation(TokenError::Expired {
+                token_id: claims.token_id,
+            })
+            .into_deny(stage));
+        }
+
+        // Step 5: Check revocation
         let is_revoked = self
             .revocation
             .is_revoked(&claims.token_id)
@@ -163,11 +184,12 @@ impl CapabilityValidator {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::enforcement::capability_map::CapabilityEntry;
     use chrono::Utc;
-    use firma_core::token::{CapabilityClaims, TokenId};
+    use firma_core::CapabilityClaims;
 
     struct MockVerifier {
         claims: CapabilityClaims,
@@ -203,27 +225,25 @@ mod tests {
 
     fn valid_claims() -> CapabilityClaims {
         CapabilityClaims {
-            token_id: TokenId::new(),
-            agent_id: "agent_test".parse().unwrap(),
-            session_id: "sess_001".parse().unwrap(),
-            action_set: vec!["llm.inference".to_string()],
+            token_id: "3713c5fc-b569-650c-c780-c64051473370"
+                .parse()
+                .expect("literal token id"),
+            agent_id: "agent_test".parse().expect("literal agent id"),
+            session_id: "sess_001".parse().expect("literal session id"),
+            action_set: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
             context_hash: String::new(),
+            budget_ceiling: None,
         }
     }
 
     fn test_capability_map() -> CapabilityMap {
-        CapabilityMap::new(vec![
-            CapabilityEntry::from_raw_token(
-                "v4.public.test_token",
-                &MockVerifier {
-                    claims: valid_claims(),
-                },
-            )
-            .unwrap_or_else(|e| panic!("{e}")),
-        ])
+        CapabilityMap::new(vec![CapabilityEntry {
+            raw_token: "v4.public.test_token".to_string(),
+            claims: valid_claims(),
+        }])
     }
 
     #[test]
@@ -233,7 +253,8 @@ mod tests {
             Box::new(MockVerifier {
                 claims: valid_claims(),
             }),
-            Box::new(MockRevocationStore { revoked: vec![] }),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
+            Duration::from_secs(0),
         );
 
         let result = validator.validate("v4.public.test_token");
@@ -245,7 +266,8 @@ mod tests {
         let validator = CapabilityValidator::new(
             test_capability_map(),
             Box::new(FailingVerifier),
-            Box::new(MockRevocationStore { revoked: vec![] }),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
+            Duration::from_secs(0),
         );
 
         let result = validator.validate("v4.public.bad_token");
@@ -253,23 +275,21 @@ mod tests {
         let decision = result.unwrap_err();
         assert_eq!(
             decision.deny_reason(),
-            Some(firma_core::decision::DenyReason::TokenInvalid)
+            Some(firma_core::DenyReason::TokenInvalid)
         );
     }
 
     #[test]
     fn test_revoked_token_denied() {
-        let claims = valid_claims();
-        let token_id = claims.token_id;
-
         let validator = CapabilityValidator::new(
             test_capability_map(),
             Box::new(MockVerifier {
-                claims: claims.clone(),
+                claims: valid_claims(),
             }),
-            Box::new(MockRevocationStore {
-                revoked: vec![token_id.to_string()],
+            Arc::new(MockRevocationStore {
+                revoked: vec!["3713c5fc-b569-650c-c780-c64051473370".to_string()],
             }),
+            Duration::from_secs(0),
         );
 
         let result = validator.validate("v4.public.test_token");
@@ -277,35 +297,28 @@ mod tests {
         let decision = result.unwrap_err();
         assert_eq!(
             decision.deny_reason(),
-            Some(firma_core::decision::DenyReason::TokenRevoked)
+            Some(firma_core::DenyReason::TokenRevoked)
         );
     }
 
-    /// Expiry is the verifier's responsibility. This test verifies that when
-    /// the verifier returns `TokenError::Expired`, Stage 1 maps it to
-    /// `DenyReason::TokenExpired` and short-circuits.
     #[test]
     fn test_expired_token_denied() {
-        struct ExpiredVerifier;
-        impl TokenVerifier for ExpiredVerifier {
-            fn verify(&self, _: &str) -> Result<CapabilityClaims, TokenError> {
-                Err(TokenError::Expired {
-                    token_id: TokenId::new(),
-                })
-            }
-        }
+        let mut claims = valid_claims();
+        claims.expiry = Utc::now() - chrono::Duration::hours(1);
 
         let validator = CapabilityValidator::new(
             test_capability_map(),
-            Box::new(ExpiredVerifier),
-            Box::new(MockRevocationStore { revoked: vec![] }),
+            Box::new(MockVerifier { claims }),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
+            Duration::from_secs(0),
         );
 
         let result = validator.validate("v4.public.test_token");
         assert!(result.is_err());
+        let decision = result.unwrap_err();
         assert_eq!(
-            result.unwrap_err().deny_reason(),
-            Some(firma_core::decision::DenyReason::TokenExpired)
+            decision.deny_reason(),
+            Some(firma_core::DenyReason::TokenExpired)
         );
     }
 
@@ -323,19 +336,117 @@ mod tests {
         let validator = CapabilityValidator::new(
             test_capability_map(),
             Box::new(MalformedVerifier),
-            Box::new(MockRevocationStore { revoked: vec![] }),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
+            Duration::from_secs(0),
         );
 
         let result = validator.validate("garbage-not-a-token");
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().deny_reason(),
-            Some(firma_core::decision::DenyReason::TokenInvalid)
+            Some(firma_core::DenyReason::TokenInvalid)
         );
     }
 
     #[test]
-    fn test_every_stage1_error_is_deny() {
+    fn test_clock_skew_tolerance_allows_slightly_expired() {
+        let mut claims = valid_claims();
+        claims.expiry = Utc::now() - chrono::Duration::seconds(2);
+
+        let validator = CapabilityValidator::new(
+            test_capability_map(),
+            Box::new(MockVerifier { claims }),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
+            Duration::from_secs(5),
+        );
+
+        let result = validator.validate("v4.public.test_token");
+        assert!(
+            result.is_ok(),
+            "clock skew tolerance should allow slightly expired token"
+        );
+    }
+
+    #[test]
+    fn test_enforce_selects_and_validates_token() {
+        let claims = valid_claims();
+        let envelope = NormalizedEnvelope {
+            intent: firma_core::ExecutionIntent {
+                action_class: "communication.external.send".to_string(),
+                resource: firma_core::ExecutionIntent::resource_map_from("api.openai.com/v1/chat"),
+                params: firma_core::ActionParams::Http(firma_core::HttpParams {
+                    method: firma_core::HttpMethod::POST,
+                    headers: std::collections::HashMap::new(),
+                    body: None,
+                    query: std::collections::HashMap::new(),
+                }),
+                raw_transport: "https".to_string(),
+                raw_action_ref: "POST /v1/chat".to_string(),
+            },
+            timestamp: Utc::now(),
+        };
+
+        let validator = CapabilityValidator::new(
+            test_capability_map(),
+            Box::new(MockVerifier {
+                claims: claims.clone(),
+            }),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
+            Duration::from_secs(0),
+        );
+
+        let result = validator.enforce(&envelope, "sess_001");
+        assert!(result.is_ok());
+        let validated = result.unwrap_or_else(|_| panic!("expected Ok"));
+        assert_eq!(
+            validated.claims.token_id.to_string(),
+            "3713c5fc-b569-650c-c780-c64051473370"
+        );
+        assert_eq!(validated.raw_token, "v4.public.test_token");
+    }
+
+    #[test]
+    fn test_enforce_no_matching_token_denies() {
+        let claims = valid_claims();
+        let envelope = NormalizedEnvelope {
+            intent: firma_core::ExecutionIntent {
+                action_class: "filesystem.delete".to_string(), // not in token's action_set
+                resource: firma_core::ExecutionIntent::resource_map_from("any.resource"),
+                params: firma_core::ActionParams::Http(firma_core::HttpParams {
+                    method: firma_core::HttpMethod::DELETE,
+                    headers: std::collections::HashMap::new(),
+                    body: None,
+                    query: std::collections::HashMap::new(),
+                }),
+                raw_transport: "https".to_string(),
+                raw_action_ref: "DELETE /files".to_string(),
+            },
+            timestamp: Utc::now(),
+        };
+
+        let validator = CapabilityValidator::new(
+            test_capability_map(),
+            Box::new(MockVerifier { claims }),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
+            Duration::from_secs(0),
+        );
+
+        let result = validator.enforce(&envelope, "sess_001");
+        assert!(result.is_err());
+        let decision = result.unwrap_err();
+        assert!(decision.is_deny());
+        assert_eq!(
+            decision.stage(),
+            Some(
+                super::super::decision::EnforcementStage::CapabilityValidation(
+                    super::super::decision::CapabilityValidationStage::TokenSelection
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn test_every_validation_error_is_deny() {
         let error_verifiers: Vec<Box<dyn TokenVerifier + Send + Sync>> =
             vec![Box::new(FailingVerifier)];
 
@@ -343,7 +454,8 @@ mod tests {
             let validator = CapabilityValidator::new(
                 test_capability_map(),
                 verifier,
-                Box::new(MockRevocationStore { revoked: vec![] }),
+                Arc::new(MockRevocationStore { revoked: vec![] }),
+                Duration::from_secs(0),
             );
             let result = validator.validate("any");
             assert!(

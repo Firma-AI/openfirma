@@ -4,7 +4,7 @@
 //! This is the fail-closed boundary: errors become DENY decisions.
 //! These types are never exposed to external callers.
 
-use firma_core::{decision::DenyReason, token::TokenError};
+use firma_core::{DenyReason, TokenError};
 
 use super::decision::{EnforcementDecision, EnforcementStage};
 
@@ -24,19 +24,15 @@ pub enum EnforcementError {
     TokenValidation(#[from] TokenError),
 
     #[error("scope violation: {detail}")]
-    #[allow(dead_code)]
     ScopeViolation { detail: String },
 
     #[error("policy denied: {detail}")]
-    #[allow(dead_code)]
     PolicyDenied { detail: String },
 
     #[error("policy bundle stale")]
-    #[allow(dead_code)]
     PolicyBundleStale,
 
     #[error("configuration error: {0}")]
-    #[allow(dead_code)]
     Config(String),
 }
 
@@ -78,6 +74,7 @@ fn token_error_to_deny_reason(err: &TokenError) -> DenyReason {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -113,5 +110,122 @@ mod tests {
             ConstraintEnforcementStage::ScopeCheck,
         ));
         assert_eq!(decision.deny_reason(), Some(DenyReason::ScopeViolation));
+    }
+
+    #[test]
+    fn test_no_matching_token_maps_to_token_invalid() {
+        let err = EnforcementError::NoMatchingToken {
+            detail: "no token found".to_string(),
+        };
+        let decision = err.into_deny(EnforcementStage::CapabilityValidation(
+            CapabilityValidationStage::TokenSelection,
+        ));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
+    }
+
+    #[test]
+    fn test_token_revoked_maps_correctly() {
+        let err = EnforcementError::TokenValidation(TokenError::Revoked {
+            token_id: "14f89c0d-b675-c46e-ba6e-0f9d47ef316f"
+                .parse()
+                .expect("literal token id"),
+        });
+        let decision = err.into_deny(EnforcementStage::CapabilityValidation(
+            CapabilityValidationStage::TokenValidation,
+        ));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::TokenRevoked));
+    }
+
+    #[test]
+    fn test_token_signature_invalid_maps_to_token_invalid() {
+        let err = EnforcementError::TokenValidation(TokenError::SignatureInvalid {
+            reason: "bad key".to_string(),
+        });
+        let decision = err.into_deny(EnforcementStage::CapabilityValidation(
+            CapabilityValidationStage::TokenValidation,
+        ));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
+    }
+
+    #[test]
+    fn test_token_parse_failure_maps_to_token_invalid() {
+        let err = EnforcementError::TokenValidation(TokenError::ParseFailure {
+            reason: "not base64".to_string(),
+        });
+        let decision = err.into_deny(EnforcementStage::CapabilityValidation(
+            CapabilityValidationStage::TokenValidation,
+        ));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
+    }
+
+    #[test]
+    fn test_token_malformed_maps_to_token_invalid() {
+        let err = EnforcementError::TokenValidation(TokenError::Malformed {
+            reason: "missing fields".to_string(),
+        });
+        let decision = err.into_deny(EnforcementStage::CapabilityValidation(
+            CapabilityValidationStage::TokenValidation,
+        ));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::TokenInvalid));
+    }
+
+    #[test]
+    fn test_policy_denied_maps_correctly() {
+        let err = EnforcementError::PolicyDenied {
+            detail: "cedar denied".to_string(),
+        };
+        let decision = err.into_deny(EnforcementStage::ConstraintEnforcement(
+            ConstraintEnforcementStage::PolicyEvaluation,
+        ));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyDenied));
+    }
+
+    #[test]
+    fn test_policy_bundle_stale_maps_correctly() {
+        let err = EnforcementError::PolicyBundleStale;
+        let decision = err.into_deny(EnforcementStage::ConstraintEnforcement(
+            ConstraintEnforcementStage::BundleFreshness,
+        ));
+        assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyBundleStale));
+    }
+
+    #[test]
+    fn test_config_error_maps_to_malformed_request() {
+        let err = EnforcementError::Config("bad config".to_string());
+        let decision = err.into_deny(EnforcementStage::Normalization);
+        assert_eq!(decision.deny_reason(), Some(DenyReason::MalformedRequest));
+    }
+
+    #[test]
+    fn test_all_errors_produce_deny_decisions() {
+        let errors: Vec<EnforcementError> = vec![
+            EnforcementError::NormalizationFailed {
+                detail: "test".to_string(),
+            },
+            EnforcementError::NoMatchingToken {
+                detail: "test".to_string(),
+            },
+            EnforcementError::TokenValidation(TokenError::Expired {
+                token_id: "60ae136e-5d49-fbdf-037f-ab5f1d805634"
+                    .parse()
+                    .expect("literal token id"),
+            }),
+            EnforcementError::ScopeViolation {
+                detail: "test".to_string(),
+            },
+            EnforcementError::PolicyDenied {
+                detail: "test".to_string(),
+            },
+            EnforcementError::PolicyBundleStale,
+            EnforcementError::Config("test".to_string()),
+        ];
+
+        for err in errors {
+            let decision = err.into_deny(EnforcementStage::Normalization);
+            assert!(
+                decision.is_deny(),
+                "every EnforcementError must produce a DENY"
+            );
+        }
     }
 }

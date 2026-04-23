@@ -1,0 +1,23 @@
+namespace Firma {
+    entity Agent;
+    entity Resource;
+    action "bench.action.allow" appliesTo { principal: [Agent], resource: [Resource], context: { budget_remaining: Long, risk_score: Long } };
+    action "bench.action.deny"  appliesTo { principal: [Agent], resource: [Resource], context: { budget_remaining: Long, risk_score: Long } };
+    action "bench.action.ctx"   appliesTo { principal: [Agent], resource: [Resource], context: { budget_remaining: Long, risk_score: Long } };
+    // Full `EnforcementContext` shape as built by `ConstraintEnforcer::build_context`.
+    // Used by the pipeline end-to-end bench where the normalizer emits a canonical
+    // registry action class and Stage 2 assembles the full context.
+    action "communication.external.send" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: {
+            session_id: String,
+            timestamp_ms: Long,
+            params: String,
+            risk_score: Long,
+            budget_remaining: Long,
+            session_duration_s: Long,
+            action_count: Long
+        }
+    };
+}
