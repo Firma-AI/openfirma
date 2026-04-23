@@ -208,7 +208,7 @@ impl SidecarHarness {
     }
 }
 
-async fn spawn_sidecar(url: &str, config: AuthorityConfig) -> anyhow::Result<SidecarHarness> {
+fn spawn_sidecar(url: &str, config: AuthorityConfig) -> anyhow::Result<SidecarHarness> {
     let channel = build_channel(url, Duration::from_secs(config.connect_timeout_secs))?;
     let revocation_store = Arc::new(BloomLruRevocationStore::new(RevocationConfig {
         capacity: 1_024,
@@ -335,7 +335,7 @@ async fn readiness_flips_after_initial_bundle_and_revocation_grace() -> anyhow::
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     let policy_ready = wait_for(Duration::from_secs(2), || {
         harness.readiness_view.snapshot().policy_bundle_ready
@@ -366,7 +366,7 @@ async fn revocation_event_propagates_to_store_within_one_second() -> anyhow::Res
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -405,7 +405,7 @@ async fn ttl_expiry_marks_policy_stale_after_authority_disappears() -> anyhow::R
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v-ttl", 1));
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -440,7 +440,7 @@ async fn reconnect_applies_new_bundle_version() -> anyhow::Result<()> {
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -470,7 +470,7 @@ async fn malformed_bundle_retains_previous_version() -> anyhow::Result<()> {
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -510,7 +510,7 @@ async fn invalid_cedar_bundle_retains_previous_snapshot() -> anyhow::Result<()> 
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -544,7 +544,7 @@ async fn sequential_valid_bundles_swap_observed_by_evaluate() -> anyhow::Result<
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -599,7 +599,7 @@ async fn cold_boot_without_bundle_stays_not_ready() -> anyhow::Result<()> {
     // that reaches the pipeline is denied with `PolicyBundleNotReady`.
     let server = spawn_mock_authority().await?;
     // Intentionally no set_initial_bundle / push_bundle.
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     // Give the stream client a window to settle.
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -625,6 +625,93 @@ async fn cold_boot_without_bundle_stays_not_ready() -> anyhow::Result<()> {
         .evaluate(&agent, "test.action", "resource", &ctx)
         .expect("sentinel evaluator returns Ok(false)");
     assert!(!allowed, "sentinel DenyAll must refuse every evaluate()");
+
+    harness.shutdown().await;
+    server.stop().await;
+    Ok(())
+}
+
+/// Verifies criterion 6: once fail-closed is active (TTL expired), a fresh
+/// bundle delivery — whether via reconnect or the existing stream — exits
+/// fail-closed and restores normal operation.
+///
+/// This test drives the scenario without tearing down the TCP connection
+/// (which would introduce OS port-rebind timing) so it is deterministic:
+///
+/// 1. Install a 1-second TTL bundle; wait for it to be applied.
+/// 2. Do NOT push a refresh — let the TTL lapse while the stream stays open.
+/// 3. Assert `is_fresh()` == false (fail-closed active).
+/// 4. Push a new 60-second TTL bundle over the live stream.
+/// 5. Assert `is_fresh()` == true and version has advanced (fail-closed exited).
+///
+/// The stream-reconnect path is already exercised by
+/// `reconnect_applies_new_bundle_version`; the gap being closed here is the
+/// interaction between TTL expiry and subsequent bundle delivery.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fail_closed_exits_after_fresh_bundle_delivered() -> anyhow::Result<()> {
+    // Phase 1: initial bundle with 1 s TTL so staleness is fast.
+    let server = spawn_mock_authority().await?;
+    server
+        .handle
+        .set_initial_bundle(valid_bundle_update("v-stale", 1));
+    let harness = spawn_sidecar(&server.url, test_config())?;
+
+    assert!(
+        wait_for(Duration::from_secs(2), || harness
+            .readiness_view
+            .snapshot()
+            .policy_bundle_ready)
+        .await,
+        "initial bundle not applied"
+    );
+    assert_eq!(
+        harness.swappable_policy.version().as_deref(),
+        Some("v-stale")
+    );
+    assert!(
+        harness.swappable_policy.is_fresh(),
+        "bundle must be fresh initially"
+    );
+
+    // Phase 2 + 3: wait for TTL to lapse without any refresh push.
+    let went_stale = wait_for(Duration::from_secs(3), || {
+        !harness.swappable_policy.is_fresh()
+    })
+    .await;
+    assert!(went_stale, "policy did not go stale after TTL expiry");
+
+    // Confirm fail-closed is active: evaluate() must deny.
+    let agent: AgentId = "agent-stale".parse().expect("literal agent id");
+    let ctx = serde_json::json!({});
+    let result = harness
+        .swappable_policy
+        .evaluate(&agent, "test.action", "resource", &ctx);
+    // A stale (but available) evaluator still returns Ok but is_fresh() == false,
+    // so Stage 2 will deny. Here we just confirm the evaluator is reachable.
+    assert!(
+        result.is_ok(),
+        "stale evaluator must not error on evaluate()"
+    );
+
+    // Phase 4: push a fresh 60-second bundle over the live stream.
+    server
+        .handle
+        .push_bundle(valid_bundle_update("v-fresh", 60));
+
+    // Phase 5: fail-closed must exit once the fresh bundle is installed.
+    let recovered = wait_for(Duration::from_secs(2), || {
+        harness.swappable_policy.is_fresh()
+    })
+    .await;
+    assert!(
+        recovered,
+        "fail-closed did not exit after fresh bundle delivered"
+    );
+    assert_eq!(
+        harness.swappable_policy.version().as_deref(),
+        Some("v-fresh"),
+        "bundle version must advance to the newly delivered bundle"
+    );
 
     harness.shutdown().await;
     server.stop().await;

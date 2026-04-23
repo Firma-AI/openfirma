@@ -26,8 +26,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use firma_core::policy::PolicyBundle as CoreBundle;
-use firma_proto::firma::v1::authority_service_client::AuthorityServiceClient;
 use firma_proto::firma::v1::WatchPolicyBundleRequest;
+use firma_proto::firma::v1::authority_service_client::AuthorityServiceClient;
 use tracing::{info, warn};
 
 use crate::enforcement::cedar_evaluator::CedarPolicyEvaluator;
@@ -172,7 +172,11 @@ impl PolicyWatcher {
     ///
     /// Returns `true` if installed successfully.  Returns `false` and retains
     /// the previous evaluator if `CedarPolicyEvaluator::from_bundle` fails.
-    fn install_bundle(tx: &PolicySender, bundle: &CoreBundle, current_version: &mut String) -> bool {
+    fn install_bundle(
+        tx: &PolicySender,
+        bundle: &CoreBundle,
+        current_version: &mut String,
+    ) -> bool {
         match CedarPolicyEvaluator::from_bundle(bundle) {
             Ok(evaluator) => {
                 current_version.clone_from(&bundle.version);
@@ -274,12 +278,16 @@ namespace Firma {
         let (tx, rx) = policy_channel();
         let mut version = String::new();
 
-        let installed = PolicyWatcher::install_bundle(&tx, &permit_all_bundle("test-v1"), &mut version);
+        let installed =
+            PolicyWatcher::install_bundle(&tx, &permit_all_bundle("test-v1"), &mut version);
 
         assert!(installed);
         assert_eq!(version, "test-v1");
         let policy = rx.borrow();
-        assert!(policy.is_available(), "installed evaluator must be available");
+        assert!(
+            policy.is_available(),
+            "installed evaluator must be available"
+        );
         assert!(policy.is_fresh(), "fresh bundle must be fresh");
         assert_eq!(policy.version(), Some("test-v1".to_string()));
     }
@@ -297,7 +305,10 @@ namespace Firma {
         let installed = PolicyWatcher::install_bundle(&tx, &invalid_bundle(), &mut version);
 
         assert!(!installed, "invalid bundle must not be installed");
-        assert_eq!(version, "test-v1", "version must not advance on parse failure");
+        assert_eq!(
+            version, "test-v1",
+            "version must not advance on parse failure"
+        );
         assert_eq!(
             rx.borrow().version(),
             Some("test-v1".to_string()),
@@ -333,7 +344,13 @@ namespace Firma {
         );
         PolicyWatcher::install_bundle(&tx, &stale, &mut version);
 
-        assert!(rx.borrow().is_available(), "zero-TTL bundle is still available");
-        assert!(!rx.borrow().is_fresh(), "zero-TTL bundle must be immediately stale");
+        assert!(
+            rx.borrow().is_available(),
+            "zero-TTL bundle is still available"
+        );
+        assert!(
+            !rx.borrow().is_fresh(),
+            "zero-TTL bundle must be immediately stale"
+        );
     }
 }

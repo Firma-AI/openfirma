@@ -112,7 +112,6 @@ impl PolicyEvaluation for NoBundleInstalled {
     }
 }
 
-
 /// Stage 2: Constraint Enforcement Engine (CEE).
 ///
 /// Performs scope check (action within token's allowed set), builds the
@@ -127,6 +126,12 @@ impl ConstraintEnforcer {
     #[must_use]
     pub fn new(policy: Arc<dyn PolicyEvaluation>) -> Self {
         Self { policy }
+    }
+
+    /// Return the active policy bundle version, if one has been installed.
+    #[must_use]
+    pub fn policy_version(&self) -> Option<String> {
+        self.policy.version()
     }
 
     /// Evaluate the request against Cedar policies.
