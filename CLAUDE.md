@@ -27,7 +27,7 @@ L7 policy enforcement sidecar for AI agents. Every outbound agent call passes th
 - **firma-proto** — gRPC wire contract via protobuf. `build.rs` compiles `.proto` files with `tonic-build`. Generated code has relaxed clippy lints.
 - **firma-sidecar** — The enforcement proxy binary. Four top-level modules:
   - `interceptor` — Captures outbound agent traffic (placeholder).
-  - `normalizer` — Maps raw HTTP requests to canonical `ExecutionEnvelope` with normalized `intent.action_class` from a 15-class registry. Fail-closed: unclassifiable protected actions → DENY.
+  - `normalizer` — Maps raw HTTP requests to canonical `ExecutionEnvelope` with normalized `intent.action_class` from a 27-class registry (15 FEP v0.1 + 12 GitHub additions). `intent.resource` is a `BTreeMap<String, String>` with conventional keys `host`, `path`, and optionally `provider` (attached only when the request host exact-matches a known allowlist — currently `api.github.com` / `github.com` → `provider="github"`). Fail-closed: unclassifiable protected actions → DENY.
   - `enforcement` — Two-stage engine, both fully local with no network calls:
     - Stage 1 (`capability_validation`): Token selection from `CapabilityMap`, then parse/verify/expiry/revocation. Target < 1ms p95.
     - Stage 2 (`constraint_enforcement`): Scope check, bundle freshness, Cedar policy eval. Target < 200µs p95.
@@ -40,6 +40,36 @@ L7 policy enforcement sidecar for AI agents. Every outbound agent call passes th
 - **No network on hot path**: Stage 1 and Stage 2 are fully local. Authority is contacted only at pre-flight (capability issuance).
 - **Deterministic enforcement**: Same context + same policy bundle = same decision. No probabilistic classifiers on the hot path.
 - **ExecutionEnvelope immutability**: Treated as immutable once created. Enrichment (e.g., credential injection) produces derived structures.
+
+## Mapping rules configuration
+
+The normalizer's host/method/path → action_class mapping is loaded from TOML at
+startup by `startup::pipeline::build_pipeline_runtime`. Two config knobs on
+`[enforcement.mapping]` (see `crates/firma-sidecar/src/config/enforcement.rs`):
+
+- `rules_path: String` — primary mapping file (defaults to `mapping-rules.toml`).
+- `rules_paths: Vec<String>` — additional mapping files merged on top.
+
+Rules from `rules_path` and each entry of `rules_paths` are concatenated and
+passed to `MappingTable::from_config`. Duplicate `(method, host, path)` tuples
+across merged files fail at startup (fail-closed).
+
+Shipped mapping files live under `crates/firma-sidecar/config/mappings/`:
+
+| File          | Covers                                                        |
+|---------------|---------------------------------------------------------------|
+| `github.toml` | 44 GitHub REST endpoints → 12 action classes                  |
+
+Example operator config:
+
+```toml
+[enforcement.mapping]
+rules_path = "config/mappings/default.toml"
+rules_paths = ["crates/firma-sidecar/config/mappings/github.toml"]
+```
+
+See `docs/markdown/firma_action_class_registry.md` for the full 27-class
+registry and `intent.resource` shape conventions.
 
 ## Linting Rules
 

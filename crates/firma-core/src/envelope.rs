@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -81,14 +81,62 @@ pub struct ExecutionIntent {
     /// intent normalizer. See FEP §2.3.5 and
     /// `docs/markdown/firma_action_class_registry.md`.
     pub action_class: String,
-    /// Target resource identifier (e.g., URL, table name, tool name).
-    pub resource: String,
+    /// Target resource identifier as a structured attribute map.
+    ///
+    /// Conventional keys:
+    /// - `host` — request host (always present for HTTP intents).
+    /// - `path` — request path (always present for HTTP intents).
+    /// - `provider` — logical provider when detectable (e.g., `"github"`).
+    ///
+    /// `BTreeMap` (not `HashMap`) so audit serialization and hashing are
+    /// deterministic. Implementations MAY add free-form keys without
+    /// schema churn. No other keys are reserved by the protocol.
+    pub resource: BTreeMap<String, String>,
     /// Typed action parameters — exactly one action kind per intent.
     pub params: ActionParams,
     /// Original transport protocol (e.g., `"http"`, `"https"`).
     pub raw_transport: String,
     /// Original request signature for traceability (e.g., `"POST /v1/chat/completions"`).
     pub raw_action_ref: String,
+}
+
+impl ExecutionIntent {
+    /// Derive a display / scope-check string from the resource map.
+    ///
+    /// Returns `format!("{host}{path}")` where missing keys resolve to
+    /// an empty string. Consumed by scope prefix matching, Cedar
+    /// `resource` string attributes, and connector URL construction
+    /// (`scheme://{resource_display}`).
+    #[must_use]
+    pub fn resource_display(&self) -> String {
+        let host = self.resource.get("host").map_or("", String::as_str);
+        let path = self.resource.get("path").map_or("", String::as_str);
+        format!("{host}{path}")
+    }
+
+    /// Build a resource map from a display-form string `host[/path]`.
+    ///
+    /// Strips a leading `https://` / `http://` if present, then splits
+    /// the remainder at the first `/` into `host` and `path` keys.
+    /// Convenience constructor for tests and synthetic envelopes
+    /// (passthrough, deny-only). Production normalization uses the
+    /// `IntentNormalizer` which fills the map field-by-field including
+    /// the optional `provider` tag.
+    #[must_use]
+    pub fn resource_map_from(host_path: &str) -> BTreeMap<String, String> {
+        let stripped = host_path
+            .strip_prefix("https://")
+            .or_else(|| host_path.strip_prefix("http://"))
+            .unwrap_or(host_path);
+        let (host, path) = match stripped.find('/') {
+            Some(i) => (&stripped[..i], &stripped[i..]),
+            None => (stripped, ""),
+        };
+        let mut m = BTreeMap::new();
+        m.insert("host".to_string(), host.to_string());
+        m.insert("path".to_string(), path.to_string());
+        m
+    }
 }
 
 /// Typed action parameters (maps to the proto `oneof params`).
@@ -219,7 +267,7 @@ mod tests {
         let json = r#"{
             "intent": {
                 "action_class": "filesystem.read",
-                "resource": "https://api.example.com/data",
+                "resource": {"host": "api.example.com", "path": "/data"},
                 "params": {
                     "Http": {
                         "method": "GET",
@@ -247,7 +295,10 @@ mod tests {
         let expected = ExecutionEnvelope {
             intent: ExecutionIntent {
                 action_class: "filesystem.read".to_string(),
-                resource: "https://api.example.com/data".to_string(),
+                resource: BTreeMap::from([
+                    ("host".to_string(), "api.example.com".to_string()),
+                    ("path".to_string(), "/data".to_string()),
+                ]),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
                     headers: HashMap::from([(
@@ -275,6 +326,69 @@ mod tests {
         };
 
         assert_eq!(envelope, expected);
+    }
+
+    #[test]
+    fn resource_display_concats_host_and_path() {
+        let mut resource = BTreeMap::new();
+        resource.insert("host".to_string(), "api.github.com".to_string());
+        resource.insert("path".to_string(), "/repos/x/y".to_string());
+        let intent = ExecutionIntent {
+            action_class: "code.read".to_string(),
+            resource,
+            params: ActionParams::Http(HttpParams {
+                method: HttpMethod::GET,
+                headers: HashMap::new(),
+                body: None,
+                query: HashMap::new(),
+            }),
+            raw_transport: "https".to_string(),
+            raw_action_ref: "GET /repos/x/y".to_string(),
+        };
+        assert_eq!(intent.resource_display(), "api.github.com/repos/x/y");
+    }
+
+    #[test]
+    fn resource_display_missing_keys_yields_empty_string() {
+        let intent = ExecutionIntent {
+            action_class: "filesystem.read".to_string(),
+            resource: BTreeMap::new(),
+            params: ActionParams::Http(HttpParams {
+                method: HttpMethod::GET,
+                headers: HashMap::new(),
+                body: None,
+                query: HashMap::new(),
+            }),
+            raw_transport: "https".to_string(),
+            raw_action_ref: "GET /".to_string(),
+        };
+        assert_eq!(intent.resource_display(), "");
+    }
+
+    #[test]
+    fn resource_map_serializes_in_sorted_key_order() {
+        let mut resource = BTreeMap::new();
+        resource.insert("provider".to_string(), "github".to_string());
+        resource.insert("host".to_string(), "api.github.com".to_string());
+        resource.insert("path".to_string(), "/repos/x/y".to_string());
+        let intent = ExecutionIntent {
+            action_class: "code.read".to_string(),
+            resource,
+            params: ActionParams::Http(HttpParams {
+                method: HttpMethod::GET,
+                headers: HashMap::new(),
+                body: None,
+                query: HashMap::new(),
+            }),
+            raw_transport: "https".to_string(),
+            raw_action_ref: "GET /repos/x/y".to_string(),
+        };
+        let json = serde_json::to_string(&intent).expect("serialize");
+        let host_idx = json.find("\"host\"").expect("host");
+        let path_idx = json.find("\"path\"").expect("path");
+        let provider_idx = json.find("\"provider\"").expect("provider");
+        assert!(host_idx < path_idx);
+        assert!(path_idx < provider_idx);
     }
 
     #[test]

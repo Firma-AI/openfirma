@@ -229,8 +229,9 @@ impl EnforcementPipeline {
 
         // Credential injection: fetch credentials for the outbound
         // target. connector_id is the host portion of the resource.
-        let connector_id = extract_host(envelope.intent().resource.as_str());
-        let target = envelope.intent().resource.as_str();
+        let resource_display = envelope.intent().resource_display();
+        let connector_id = extract_host(&resource_display);
+        let target = resource_display.as_str();
         let credentials = match self
             .credential_injector
             .inject(&envelope, connector_id, target)
@@ -327,7 +328,7 @@ pub fn audit_payload_from_decision(
             claims.token_id.to_string(),
             claims.agent_id.to_string(),
             envelope.intent().action_class.clone(),
-            envelope.intent().resource.clone(),
+            envelope.intent().resource_display(),
             DECISION_ALLOW,
             String::new(),
             claims.context_hash.clone(),
@@ -341,7 +342,7 @@ pub fn audit_payload_from_decision(
         } => {
             let (action, resource) = envelope
                 .as_ref()
-                .map(|e| (e.intent.action_class.clone(), e.intent.resource.clone()))
+                .map(|e| (e.intent.action_class.clone(), e.intent.resource_display()))
                 .unwrap_or_default();
 
             (
@@ -952,7 +953,7 @@ mod tests {
                 "communication.external.send"
             );
             assert_eq!(
-                envelope.intent().resource,
+                envelope.intent().resource_display(),
                 "api.openai.com/v1/chat/completions"
             );
             assert_eq!(envelope.intent().raw_transport, "https");

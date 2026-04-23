@@ -89,6 +89,25 @@ impl MappingTable {
     ) -> Result<Self, String> {
         file.validate()?;
 
+        // Duplicate (method, host, path) tuple detection. Two rules
+        // with the same triple across merged mapping files produces
+        // ambiguous classification — fail-closed at startup.
+        let mut seen: std::collections::HashSet<(String, String, String)> =
+            std::collections::HashSet::new();
+        for (i, rule_cfg) in file.rules.iter().enumerate() {
+            let key = (
+                rule_cfg.method.clone().unwrap_or_default().to_uppercase(),
+                rule_cfg.host.clone(),
+                rule_cfg.path.clone().unwrap_or_default(),
+            );
+            if !seen.insert(key.clone()) {
+                return Err(format!(
+                    "rule {i}: duplicate mapping tuple method={:?} host={:?} path={:?}",
+                    key.0, key.1, key.2
+                ));
+            }
+        }
+
         let mut rules = Vec::with_capacity(file.rules.len());
 
         for (i, rule_cfg) in file.rules.iter().enumerate() {
@@ -262,6 +281,31 @@ mod tests {
         };
         let result = MappingTable::from_config(&bad_file, &registry, true);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn duplicate_tuple_across_merged_rules_is_startup_error() {
+        let registry = test_registry();
+        let file = MappingRulesFile {
+            rules: vec![
+                MappingRuleConfig {
+                    method: Some("GET".to_string()),
+                    host: "api.github.com".to_string(),
+                    path: Some("/repos/*/*".to_string()),
+                    action_class: "code.read".to_string(),
+                },
+                MappingRuleConfig {
+                    method: Some("GET".to_string()),
+                    host: "api.github.com".to_string(),
+                    path: Some("/repos/*/*".to_string()),
+                    action_class: "code.review.read".to_string(),
+                },
+            ],
+        };
+        let result = MappingTable::from_config(&file, &registry, true);
+        assert!(result.is_err());
+        let msg = result.err().unwrap_or_default();
+        assert!(msg.contains("duplicate"), "expected duplicate: {msg}");
     }
 
     #[test]

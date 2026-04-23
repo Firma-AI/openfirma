@@ -157,7 +157,7 @@ impl Connector for GenericHttpConnector {
         } else {
             "http"
         };
-        let url = format!("{scheme}://{}", intent.resource);
+        let url = format!("{scheme}://{}", intent.resource_display());
         let mut builder = self.client.request(method, url);
 
         if !http.query.is_empty() {
@@ -282,7 +282,7 @@ mod tests {
     fn get_intent(resource: String) -> ExecutionIntent {
         ExecutionIntent {
             action_class: "filesystem.read".to_string(),
-            resource,
+            resource: firma_core::ExecutionIntent::resource_map_from(&resource),
             params: ActionParams::Http(HttpParams {
                 method: HttpMethod::GET,
                 headers: HashMap::new(),
@@ -420,7 +420,7 @@ mod tests {
 
         let intent = ExecutionIntent {
             action_class: "tool.invoke".to_string(),
-            resource: "calculator".to_string(),
+            resource: firma_core::ExecutionIntent::resource_map_from("calculator"),
             params: ActionParams::ToolUse(ToolUseParams {
                 tool_name: "calc".to_string(),
                 input: HashMap::new(),
@@ -494,7 +494,10 @@ mod tests {
 
         let intent = ExecutionIntent {
             action_class: "filesystem.read".to_string(),
-            resource: format!("{}/search", server.address()),
+            resource: firma_core::ExecutionIntent::resource_map_from(&format!(
+                "{}/search",
+                server.address()
+            )),
             params: ActionParams::Http(HttpParams {
                 method: HttpMethod::GET,
                 headers: HashMap::new(),
