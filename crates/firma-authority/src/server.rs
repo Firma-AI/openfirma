@@ -133,7 +133,7 @@ impl Server {
     /// # Errors
     ///
     /// Returns [`AuthorityError`] if the underlying gRPC transport fails.
-    pub async fn run(mut self) -> Result<(), AuthorityError> {
+    pub async fn run(self) -> Result<(), AuthorityError> {
         tracing::info!(port = %self.port, "gRPC server listening");
         self.health_reporter
             .set_service_status("", tonic_health::ServingStatus::Serving)

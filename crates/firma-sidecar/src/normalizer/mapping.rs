@@ -10,7 +10,7 @@
 //! be deterministically mapped to a registry entry fail closed with
 //! `DENY: UNCLASSIFIED_INTENT` (FEP \[I-N1\]).
 
-use crate::enforcement::config::MappingRulesFile;
+use crate::config::MappingRulesFile;
 use crate::enforcement::registry::ActionClassRegistry;
 
 /// A validated mapping rule ready for matching.
@@ -61,7 +61,10 @@ impl MappingRule {
         if let Some(p) = path {
             score += 5;
             // Longer path = more specific
-            #[allow(clippy::cast_possible_truncation)] // path segments will never exceed u32
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "path segments will never exceed u32"
+            )]
             let segments = p.split('/').filter(|s| !s.is_empty()).count() as u32;
             score += segments;
             // No wildcards in path = more specific
@@ -85,6 +88,25 @@ impl MappingTable {
         default_protected: bool,
     ) -> Result<Self, String> {
         file.validate()?;
+
+        // Duplicate (method, host, path) tuple detection. Two rules
+        // with the same triple across merged mapping files produces
+        // ambiguous classification — fail-closed at startup.
+        let mut seen: std::collections::HashSet<(String, String, String)> =
+            std::collections::HashSet::new();
+        for (i, rule_cfg) in file.rules.iter().enumerate() {
+            let key = (
+                rule_cfg.method.clone().unwrap_or_default().to_uppercase(),
+                rule_cfg.host.clone(),
+                rule_cfg.path.clone().unwrap_or_default(),
+            );
+            if !seen.insert(key.clone()) {
+                return Err(format!(
+                    "rule {i}: duplicate mapping tuple method={:?} host={:?} path={:?}",
+                    key.0, key.1, key.2
+                ));
+            }
+        }
 
         let mut rules = Vec::with_capacity(file.rules.len());
 
@@ -206,9 +228,10 @@ fn glob_match(pattern: &str, value: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::enforcement::config::MappingRuleConfig;
+    use crate::config::MappingRuleConfig;
 
     fn test_registry() -> ActionClassRegistry {
         ActionClassRegistry::v0_1()
@@ -221,25 +244,25 @@ mod tests {
                     method: Some("POST".to_string()),
                     host: "api.openai.com".to_string(),
                     path: Some("/v1/chat/completions".to_string()),
-                    action_class: "llm.inference".to_string(),
+                    action_class: "communication.external.send".to_string(),
                 },
                 MappingRuleConfig {
                     method: Some("POST".to_string()),
                     host: "api.anthropic.com".to_string(),
                     path: Some("/v1/messages".to_string()),
-                    action_class: "llm.inference".to_string(),
+                    action_class: "communication.external.send".to_string(),
                 },
                 MappingRuleConfig {
                     method: Some("GET".to_string()),
                     host: "*".to_string(),
                     path: None,
-                    action_class: "http.get".to_string(),
+                    action_class: "filesystem.read".to_string(),
                 },
                 MappingRuleConfig {
                     method: Some("POST".to_string()),
                     host: "*".to_string(),
                     path: None,
-                    action_class: "http.post".to_string(),
+                    action_class: "communication.internal.send".to_string(),
                 },
             ],
         }
@@ -261,13 +284,40 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_tuple_across_merged_rules_is_startup_error() {
+        let registry = test_registry();
+        let file = MappingRulesFile {
+            rules: vec![
+                MappingRuleConfig {
+                    method: Some("GET".to_string()),
+                    host: "api.github.com".to_string(),
+                    path: Some("/repos/*/*".to_string()),
+                    action_class: "code.read".to_string(),
+                },
+                MappingRuleConfig {
+                    method: Some("GET".to_string()),
+                    host: "api.github.com".to_string(),
+                    path: Some("/repos/*/*".to_string()),
+                    action_class: "code.review.read".to_string(),
+                },
+            ],
+        };
+        let result = MappingTable::from_config(&file, &registry, true);
+        assert!(result.is_err());
+        let msg = result.err().unwrap_or_default();
+        assert!(msg.contains("duplicate"), "expected duplicate: {msg}");
+    }
+
+    #[test]
     fn test_specific_rule_matches_first() {
         let registry = test_registry();
         let table = MappingTable::from_config(&test_rules_file(), &registry, true)
             .unwrap_or_else(|e| panic!("{e}"));
 
         match table.find_match("POST", "api.openai.com", "/v1/chat/completions") {
-            MatchResult::Matched(rule) => assert_eq!(rule.action_class, "llm.inference"),
+            MatchResult::Matched(rule) => {
+                assert_eq!(rule.action_class, "communication.external.send");
+            }
             other => panic!("expected Matched, got {other:?}"),
         }
     }
@@ -279,7 +329,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"));
 
         match table.find_match("GET", "api.weather.com", "/forecast") {
-            MatchResult::Matched(rule) => assert_eq!(rule.action_class, "http.get"),
+            MatchResult::Matched(rule) => assert_eq!(rule.action_class, "filesystem.read"),
             other => panic!("expected Matched, got {other:?}"),
         }
     }
@@ -293,7 +343,7 @@ mod tests {
                 method: Some("POST".to_string()),
                 host: "api.openai.com".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
-                action_class: "llm.inference".to_string(),
+                action_class: "communication.external.send".to_string(),
             }],
         };
         let table =

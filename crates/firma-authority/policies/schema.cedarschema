@@ -4,17 +4,25 @@
 // (Authority) and constraint enforcement (Sidecar Stage 2). Single source of
 // truth for entity type definitions shared across both components.
 //
+// The 15 action identifiers below are defined by FEP v0.1 §2.3.5. They are
+// semantic action classes; transport names and provider names MUST NOT
+// appear in action identifiers (FEP §2.3.2). Actions are listed in
+// alphabetical order. See
+// `docs/markdown/firma_action_class_registry.md` for implementation notes.
+//
 // Entity UID conventions (matched by both Authority and Sidecar Cedar evaluators):
 //   principal: Firma::Agent::"<agent_id>"
-//   action:    Firma::Action::"<action_class>"   (e.g., "llm.inference")
+//   action:    Firma::Action::"<action_class>"   (e.g., "communication.external.send")
 //   resource:  Firma::Resource::"<resource_uri>"
 //
 // Context attributes populated by ConstraintEnforcer::build_context():
-//   action_class : String  - canonical action class (mirrors the action UID ID)
-//   resource     : String  - target resource URI
-//   agent_id     : String  - requesting agent identity
-//   session_id   : String  - enclosing session identity
-//   timestamp    : String  - ISO 8601 request timestamp
+//   session_id         : String  - enclosing session identity
+//   timestamp_ms       : Long    - Unix epoch milliseconds at evaluation time
+//   params             : String  - JSON-serialized intent.params (ActionParams)
+//   risk_score         : Long    - static or pre-computed risk attribute (V1 = 0)
+//   budget_remaining   : Long    - ceiling minus consumed, floored; i64::MAX when unbounded
+//   session_duration_s : Long    - seconds since claims.issued_at (non-negative)
+//   action_count       : Long    - monotonic per-session call counter, 1-based
 namespace Firma {
     entity Agent;
     entity Resource;
@@ -23,92 +31,96 @@ namespace Firma {
     // Must match the JSON object produced by ConstraintEnforcer::build_context().
     //
     // Fields:
-    //   session_id   : String  — enclosing session identity
-    //   timestamp_ms : Long    — Unix epoch milliseconds at evaluation time
-    //   params       : String  — JSON-serialized intent.params (ActionParams)
-    //   risk_score   : Long    — V1 placeholder, always 0
+    //   session_id         : String  — enclosing session identity
+    //   timestamp_ms       : Long    — Unix epoch milliseconds at evaluation time
+    //   params             : String  — JSON-serialized intent.params (ActionParams)
+    //   risk_score         : Long    — static or pre-computed risk attribute (V1 = 0)
+    //   budget_remaining   : Long    — ceiling minus consumed, floored; i64::MAX when unbounded
+    //   session_duration_s : Long    — seconds since claims.issued_at (non-negative)
+    //   action_count       : Long    — monotonic per-session call counter, 1-based
     type EnforcementContext = {
         session_id: String,
         timestamp_ms: Long,
         params: String,
-        risk_score: Long
+        risk_score: Long,
+        budget_remaining: Long,
+        session_duration_s: Long,
+        action_count: Long
     };
 
-    // ── Network ──────────────────────────────────────────────────────────────
-
-    action "http.get" appliesTo {
+    action "account.permission.change" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext
     };
 
-    action "http.post" appliesTo {
+    action "browser.purchase" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext
     };
 
-    action "http.put" appliesTo {
+    action "communication.external.send" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext
     };
 
-    action "http.delete" appliesTo {
+    action "communication.internal.send" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext
     };
 
-    action "http.patch" appliesTo {
+    action "credential.read" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext
     };
 
-    action "network.connect" appliesTo {
+    action "credential.write" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext
     };
 
-    // ── Database ─────────────────────────────────────────────────────────────
-
-    action "db.query" appliesTo {
+    action "filesystem.delete" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext
     };
 
-    action "db.mutate" appliesTo {
+    action "filesystem.read" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext
     };
 
-    // ── File I/O ─────────────────────────────────────────────────────────────
-
-    action "file.read" appliesTo {
+    action "filesystem.write" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext
     };
 
-    action "file.write" appliesTo {
+    action "memory.cross_namespace.read" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext
     };
 
-    action "file.delete" appliesTo {
+    action "memory.cross_namespace.write" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext
     };
 
-    // ── Execution ─────────────────────────────────────────────────────────────
+    action "payment.purchase" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
 
-    action "code.execute" appliesTo {
+    action "payment.transfer" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext
@@ -120,17 +132,7 @@ namespace Firma {
         context: EnforcementContext
     };
 
-    // ── Communication ─────────────────────────────────────────────────────────
-
-    action "messaging.send" appliesTo {
-        principal: [Agent],
-        resource: [Resource],
-        context: EnforcementContext
-    };
-
-    // ── AI ───────────────────────────────────────────────────────────────────
-
-    action "llm.inference" appliesTo {
+    action "system.install" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext

@@ -9,7 +9,7 @@
 //! ABORT is an asynchronous in-flight kill signal emitted by the Authority
 //! via `WatchAborts`, not produced by the enforcement pipeline itself.
 
-use firma_core::{decision::DenyReason, envelope::ExecutionEnvelope, token::CapabilityClaims};
+use firma_core::{CapabilityClaims, DenyReason, ExecutionEnvelope, InjectedCredentials};
 
 use crate::normalizer::NormalizedEnvelope;
 
@@ -42,6 +42,8 @@ pub enum EnforcementStage {
     CapabilityValidation(CapabilityValidationStage),
     /// Stage 2: Constraint Enforcement Engine (CEE).
     ConstraintEnforcement(ConstraintEnforcementStage),
+    /// Credential injection — post-enforcement credential fetch failed.
+    CredentialInjection,
 }
 
 /// Unified result of the enforcement pipeline.
@@ -52,10 +54,13 @@ pub enum EnforcementStage {
 /// unmodified on PASSTHROUGH.
 #[derive(Debug)]
 pub enum EnforcementDecision {
-    /// Request authorized. Proceed to credential injection + connector.
+    /// Request authorized. Proceed to connector dispatch.
     Allow {
         claims: CapabilityClaims,
         envelope: Box<ExecutionEnvelope>,
+        /// Credentials injected after enforcement passed, ready for
+        /// the connector layer to merge into the outbound request.
+        credentials: InjectedCredentials,
     },
     /// Request denied. Return structured denial to agent.
     Deny {
@@ -102,6 +107,7 @@ impl EnforcementDecision {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -124,5 +130,90 @@ mod tests {
                 CapabilityValidationStage::TokenValidation
             ))
         );
+    }
+
+    #[test]
+    fn test_allow_helpers() {
+        let decision = EnforcementDecision::Allow {
+            credentials: InjectedCredentials::empty(),
+            claims: CapabilityClaims {
+                token_id: "3713c5fc-b569-650c-c780-c64051473370"
+                    .parse()
+                    .expect("literal token id"),
+                agent_id: "agent".parse().expect("literal agent id"),
+                session_id: "sess".parse().expect("literal session id"),
+                action_set: vec![],
+                resource_scope: String::new(),
+                issued_at: chrono::Utc::now(),
+                expiry: chrono::Utc::now(),
+                context_hash: String::new(),
+                budget_ceiling: None,
+            },
+            envelope: Box::new(ExecutionEnvelope::new(
+                firma_core::ExecutionIntent {
+                    action_class: "filesystem.read".to_string(),
+                    resource: firma_core::ExecutionIntent::resource_map_from("example.com"),
+                    params: firma_core::ActionParams::Http(firma_core::HttpParams {
+                        method: firma_core::HttpMethod::GET,
+                        headers: std::collections::HashMap::new(),
+                        body: None,
+                        query: std::collections::HashMap::new(),
+                    }),
+                    raw_transport: "https".to_string(),
+                    raw_action_ref: "GET /".to_string(),
+                },
+                "token".to_string(),
+                firma_core::ExecutionMetadata {
+                    session_id: "sess".parse().expect("literal session id"),
+                    agent_id: "agent".parse().expect("literal agent id"),
+                    timestamp: chrono::Utc::now(),
+                    trace_id: None,
+                    budget_consumed: 0.0,
+                    risk_score: None,
+                },
+                None,
+            )),
+        };
+
+        assert!(decision.is_allow());
+        assert!(!decision.is_deny());
+        assert!(!decision.is_passthrough());
+        assert_eq!(decision.deny_reason(), None);
+        assert_eq!(decision.stage(), None);
+    }
+
+    #[test]
+    fn test_passthrough_helpers() {
+        let decision = EnforcementDecision::Passthrough {
+            detail: "non-protected host".to_string(),
+        };
+
+        assert!(decision.is_passthrough());
+        assert!(!decision.is_allow());
+        assert!(!decision.is_deny());
+        assert_eq!(decision.deny_reason(), None);
+        assert_eq!(decision.stage(), None);
+    }
+
+    #[test]
+    fn test_deny_all_stages() {
+        let stages = [
+            EnforcementStage::Normalization,
+            EnforcementStage::CapabilityValidation(CapabilityValidationStage::TokenSelection),
+            EnforcementStage::CapabilityValidation(CapabilityValidationStage::TokenValidation),
+            EnforcementStage::ConstraintEnforcement(ConstraintEnforcementStage::ScopeCheck),
+            EnforcementStage::ConstraintEnforcement(ConstraintEnforcementStage::BundleFreshness),
+            EnforcementStage::ConstraintEnforcement(ConstraintEnforcementStage::PolicyEvaluation),
+        ];
+
+        for stage in stages {
+            let decision = EnforcementDecision::Deny {
+                reason: DenyReason::PolicyDenied,
+                stage,
+                detail: "test".to_string(),
+                envelope: None,
+            };
+            assert_eq!(decision.stage(), Some(stage));
+        }
     }
 }

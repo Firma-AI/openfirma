@@ -21,10 +21,14 @@
 
 mod mapping;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
-use firma_core::envelope::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
+use firma_core::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
+
+/// Hosts whose traffic earns the `provider = "github"` resource tag.
+/// Exact match, not glob — typo-squat hostnames must not be tagged.
+const GITHUB_HOSTS: &[&str] = &["api.github.com", "github.com"];
 
 pub use self::mapping::{MappingTable, MatchResult};
 pub use crate::enforcement::decision::{EnforcementDecision, EnforcementStage};
@@ -51,14 +55,42 @@ pub struct NormalizedEnvelope {
 }
 
 /// Raw intercepted request — the input to the enforcement pipeline.
-/// Constructed by proxy-core from Pingora request data.
+///
+/// Produced by an [`Interceptor`](crate::interceptor::Interceptor) from
+/// transport-specific input and consumed by [`IntentNormalizer`] to build a
+/// canonical [`NormalizedEnvelope`]. All three interception modes (HTTP proxy,
+/// gRPC hook, Unix socket) produce an identical `RawRequest`, keeping
+/// downstream stages transport-agnostic.
+///
+/// Sensitive headers (`authorization`, `cookie`, `x-api-key`) are stripped
+/// during normalization and never reach policy evaluation.
 #[derive(Debug)]
 pub struct RawRequest {
+    /// HTTP method verb (e.g. `GET`, `POST`, `DELETE`).
+    ///
+    /// Together with `host` and `path`, determines the canonical
+    /// `action_class` via the mapping table.
     pub method: String,
+    /// Target host or domain (e.g. `api.stripe.com`).
+    ///
+    /// Maps to the `resource` sub-field of the normalized intent.
     pub host: String,
+    /// Request path including any query string (e.g. `/v1/charges`).
     pub path: String,
+    /// HTTP headers as key-value pairs.
+    ///
+    /// May contain sensitive headers at this stage; the normalizer filters
+    /// them before building the [`NormalizedEnvelope`].
     pub headers: HashMap<String, String>,
+    /// Optional request body as raw bytes.
+    ///
+    /// Used by the normalizer to extract `parameters` for the intent
+    /// sub-field. `None` for bodiless methods like `GET` or `DELETE`.
     pub body: Option<Vec<u8>>,
+    /// Whether the original request used HTTPS.
+    ///
+    /// Preserved as the `raw_transport` observational field in the
+    /// [`NormalizedEnvelope`]; not used for policy evaluation.
     pub is_https: bool,
 }
 
@@ -100,7 +132,10 @@ impl IntentNormalizer {
     /// - The HTTP method is not a recognized standard method (fail-closed).
     ///
     /// Returns `EnforcementDecision::Passthrough` if the host is not protected.
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "domain decision carries denial context"
+    )]
     pub fn normalize(
         &self,
         request: &RawRequest,
@@ -113,7 +148,12 @@ impl IntentNormalizer {
             MatchResult::Matched(rule) => {
                 let raw_action_ref = format!("{} {}", request.method.to_uppercase(), request.path);
                 let raw_transport = if request.is_https { "https" } else { "http" };
-                let resource = format!("{}{}", request.host, request.path);
+                let mut resource = BTreeMap::new();
+                resource.insert("host".to_string(), request.host.clone());
+                resource.insert("path".to_string(), request.path.clone());
+                if GITHUB_HOSTS.contains(&request.host.as_str()) {
+                    resource.insert("provider".to_string(), "github".to_string());
+                }
 
                 let Some(http_method) = parse_http_method(&request.method) else {
                     let detail = format!(
@@ -180,11 +220,10 @@ fn parse_http_method(method: &str) -> Option<HttpMethod> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
-    use firma_core::decision::DenyReason;
-
     use super::*;
-    use crate::enforcement::config::{MappingRuleConfig, MappingRulesFile};
+    use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::enforcement::registry::ActionClassRegistry;
 
     fn test_normalizer() -> IntentNormalizer {
@@ -195,18 +234,47 @@ mod tests {
                     method: Some("POST".to_string()),
                     host: "api.openai.com".to_string(),
                     path: Some("/v1/chat/completions".to_string()),
-                    action_class: "llm.inference".to_string(),
+                    action_class: "communication.external.send".to_string(),
                 },
                 MappingRuleConfig {
                     method: Some("GET".to_string()),
                     host: "*".to_string(),
                     path: None,
-                    action_class: "http.get".to_string(),
+                    action_class: "filesystem.read".to_string(),
+                },
+                MappingRuleConfig {
+                    method: Some("GET".to_string()),
+                    host: "api.github.com".to_string(),
+                    path: Some("/repos/*/*".to_string()),
+                    action_class: "code.read".to_string(),
                 },
             ],
         };
         let table =
             MappingTable::from_config(&file, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        IntentNormalizer::new(table)
+    }
+
+    fn make_request(method: &str, host: &str, path: &str) -> RawRequest {
+        RawRequest {
+            method: method.to_string(),
+            host: host.to_string(),
+            path: path.to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        }
+    }
+
+    fn github_normalizer() -> IntentNormalizer {
+        let registry = ActionClassRegistry::v0_1();
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/config/mappings/github.toml");
+        let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read github.toml: {e}"));
+        let file: MappingRulesFile =
+            toml::from_str(&src).unwrap_or_else(|e| panic!("parse github.toml: {e}"));
+        file.validate().unwrap_or_else(|e| panic!("validate: {e}"));
+        let table = MappingTable::from_config(&file, &registry, true)
+            .unwrap_or_else(|e| panic!("from_config: {e}"));
         IntentNormalizer::new(table)
     }
 
@@ -225,7 +293,7 @@ mod tests {
         let result = normalizer.normalize(&request);
         assert!(result.is_ok());
         let envelope = result.unwrap_or_else(|_| panic!("expected Ok"));
-        assert_eq!(envelope.intent.action_class, "llm.inference");
+        assert_eq!(envelope.intent.action_class, "communication.external.send");
         assert_eq!(envelope.intent.raw_transport, "https");
         assert_eq!(envelope.intent.raw_action_ref, "POST /v1/chat/completions");
     }
@@ -274,7 +342,7 @@ mod tests {
                 method: Some("POST".to_string()),
                 host: "api.openai.com".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
-                action_class: "llm.inference".to_string(),
+                action_class: "communication.external.send".to_string(),
             }],
         };
         let table =
@@ -312,7 +380,10 @@ mod tests {
         assert!(result.is_err());
         let decision = result.unwrap_err();
         assert!(decision.is_deny());
-        assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
+        assert_eq!(
+            decision.deny_reason(),
+            Some(firma_core::DenyReason::UnclassifiedIntent)
+        );
     }
 
     #[test]
@@ -331,6 +402,281 @@ mod tests {
         assert!(result.is_err());
         let decision = result.unwrap_err();
         assert!(decision.is_deny());
-        assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
+        assert_eq!(
+            decision.deny_reason(),
+            Some(firma_core::DenyReason::UnclassifiedIntent)
+        );
+    }
+
+    #[test]
+    fn test_normalize_strips_set_cookie_header() {
+        let normalizer = test_normalizer();
+        let mut headers = HashMap::new();
+        headers.insert("Set-Cookie".to_string(), "session=abc".to_string());
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers,
+            body: None,
+            is_https: true,
+        };
+
+        let envelope = normalizer
+            .normalize(&request)
+            .unwrap_or_else(|_| panic!("expected Ok"));
+        if let ActionParams::Http(ref params) = envelope.intent.params {
+            assert!(
+                !params.headers.contains_key("Set-Cookie"),
+                "set-cookie header must be stripped"
+            );
+            assert!(params.headers.contains_key("Content-Type"));
+        } else {
+            panic!("expected Http params");
+        }
+    }
+
+    #[test]
+    fn test_normalize_strips_proxy_authorization_header() {
+        let normalizer = test_normalizer();
+        let mut headers = HashMap::new();
+        headers.insert(
+            "Proxy-Authorization".to_string(),
+            "Basic abc123".to_string(),
+        );
+        headers.insert("Accept".to_string(), "application/json".to_string());
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers,
+            body: None,
+            is_https: true,
+        };
+
+        let envelope = normalizer
+            .normalize(&request)
+            .unwrap_or_else(|_| panic!("expected Ok"));
+        if let ActionParams::Http(ref params) = envelope.intent.params {
+            assert!(
+                !params.headers.contains_key("Proxy-Authorization"),
+                "proxy-authorization header must be stripped"
+            );
+            assert!(params.headers.contains_key("Accept"));
+        } else {
+            panic!("expected Http params");
+        }
+    }
+
+    #[test]
+    fn test_normalize_body_passthrough() {
+        let normalizer = test_normalizer();
+        let body_bytes = b"{\"model\":\"gpt-4\"}".to_vec();
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: Some(body_bytes.clone()),
+            is_https: true,
+        };
+
+        let envelope = normalizer
+            .normalize(&request)
+            .unwrap_or_else(|_| panic!("expected Ok"));
+        if let ActionParams::Http(ref params) = envelope.intent.params {
+            assert_eq!(
+                params.body.as_ref(),
+                Some(&body_bytes),
+                "body bytes must be preserved"
+            );
+        } else {
+            panic!("expected Http params");
+        }
+    }
+
+    #[test]
+    fn test_normalize_http_transport() {
+        let normalizer = test_normalizer();
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: false,
+        };
+
+        let envelope = normalizer
+            .normalize(&request)
+            .unwrap_or_else(|_| panic!("expected Ok"));
+        assert_eq!(envelope.intent.raw_transport, "http");
+    }
+
+    #[test]
+    fn test_normalize_resource_format() {
+        let normalizer = test_normalizer();
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let envelope = normalizer
+            .normalize(&request)
+            .unwrap_or_else(|_| panic!("expected Ok"));
+        assert_eq!(
+            envelope.intent.resource.get("host"),
+            Some(&"api.openai.com".to_string())
+        );
+        assert_eq!(
+            envelope.intent.resource.get("path"),
+            Some(&"/v1/chat/completions".to_string())
+        );
+        assert_eq!(
+            envelope.intent.resource_display(),
+            "api.openai.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn test_normalize_github_tags_provider() {
+        let normalizer = test_normalizer();
+        let envelope = normalizer
+            .normalize(&make_request("GET", "api.github.com", "/repos/acme/widget"))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(envelope.intent.action_class, "code.read");
+        assert_eq!(
+            envelope.intent.resource.get("provider"),
+            Some(&"github".to_string())
+        );
+        assert_eq!(
+            envelope.intent.resource.get("host"),
+            Some(&"api.github.com".to_string())
+        );
+    }
+
+    #[test]
+    fn test_normalize_non_github_host_has_no_provider_key() {
+        let normalizer = test_normalizer();
+        let envelope = normalizer
+            .normalize(&make_request(
+                "POST",
+                "api.openai.com",
+                "/v1/chat/completions",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert!(!envelope.intent.resource.contains_key("provider"));
+    }
+
+    #[test]
+    fn test_normalize_github_typosquat_no_provider() {
+        let normalizer = test_normalizer();
+        if let Ok(envelope) = normalizer.normalize(&make_request(
+            "GET",
+            "api.github.com.evil.example",
+            "/repos/x/y",
+        )) {
+            assert!(!envelope.intent.resource.contains_key("provider"));
+        }
+    }
+
+    #[test]
+    fn test_github_mapping_file_loads_and_has_44_rules() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/config/mappings/github.toml");
+        let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read: {e}"));
+        let file: MappingRulesFile = toml::from_str(&src).unwrap_or_else(|e| panic!("parse: {e}"));
+        file.validate().unwrap_or_else(|e| panic!("validate: {e}"));
+        assert_eq!(file.rules.len(), 44);
+        let registry = ActionClassRegistry::v0_1();
+        let _table = MappingTable::from_config(&file, &registry, true)
+            .unwrap_or_else(|e| panic!("from_config: {e}"));
+    }
+
+    #[test]
+    fn test_github_get_pulls_is_code_review_read() {
+        let normalizer = github_normalizer();
+        let env = normalizer
+            .normalize(&make_request("GET", "api.github.com", "/repos/x/y/pulls"))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "code.review.read");
+    }
+
+    #[test]
+    fn test_github_post_pulls_is_code_write() {
+        let normalizer = github_normalizer();
+        let env = normalizer
+            .normalize(&make_request("POST", "api.github.com", "/repos/x/y/pulls"))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "code.write");
+    }
+
+    #[test]
+    fn test_github_put_merge_is_code_merge() {
+        let normalizer = github_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                "PUT",
+                "api.github.com",
+                "/repos/x/y/pulls/1/merge",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "code.merge");
+    }
+
+    #[test]
+    fn test_github_delete_contents_is_code_destructive() {
+        let normalizer = github_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                "DELETE",
+                "api.github.com",
+                "/repos/x/y/contents/foo.txt",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "code.destructive");
+    }
+
+    #[test]
+    fn test_github_branch_protection_matches_repo_admin() {
+        let normalizer = github_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                "GET",
+                "api.github.com",
+                "/repos/x/y/branches/main/protection/restrictions",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "repo.admin");
+    }
+
+    #[test]
+    fn test_normalize_none_body_for_get() {
+        let normalizer = test_normalizer();
+        let request = RawRequest {
+            method: "GET".to_string(),
+            host: "api.example.com".to_string(),
+            path: "/data".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let envelope = normalizer
+            .normalize(&request)
+            .unwrap_or_else(|_| panic!("expected Ok"));
+        if let ActionParams::Http(ref params) = envelope.intent.params {
+            assert!(params.body.is_none());
+            assert_eq!(params.method, HttpMethod::GET);
+        } else {
+            panic!("expected Http params");
+        }
     }
 }

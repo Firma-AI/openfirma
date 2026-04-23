@@ -1,10 +1,16 @@
 //! Canonical Action Class Registry v0.1.
 //!
-//! Contains the 15 canonical action classes that the enforcement pipeline
-//! understands. Every `intent.action_class` field in an `ExecutionEnvelope`
-//! MUST be one of these identifiers. Unknown protected actions that cannot
-//! be deterministically mapped to a registry entry fail closed with
+//! Contains the 15 canonical action classes defined by FEP v0.1 §2.3.5.
+//! Every `intent.action_class` field in an `ExecutionEnvelope` MUST be one
+//! of these identifiers. Unknown protected actions that cannot be
+//! deterministically mapped to a registry entry fail closed with
 //! `DENY: UNCLASSIFIED_INTENT` (FEP \[I-N1\]).
+//!
+//! Identifiers follow the naming rules in FEP §2.3.2: lowercase ASCII,
+//! dot-separated, describing semantic meaning only. Transport, provider,
+//! and connector names MUST NOT appear in identifiers. See
+//! `docs/markdown/firma_action_class_registry.md` for the implementation
+//! notes and default mapping strategy.
 //!
 //! The same canonical class is produced regardless of whether the underlying
 //! action arrives as a native tool call, a CLI invocation, an HTTP request,
@@ -32,94 +38,158 @@ pub struct ActionClassDefinition {
 
 /// The v0.1 Canonical Action Class Registry.
 ///
-/// Contains all 15 action classes that the enforcement pipeline understands.
-/// Immutable after construction — defined at compile time for V1.
+/// Contains all 15 action classes defined by FEP v0.1 §2.3.5. Immutable
+/// after construction — runtime extension is not permitted by the spec.
 #[derive(Debug, Clone)]
 pub struct ActionClassRegistry {
     classes: HashMap<&'static str, ActionClassDefinition>,
 }
 
 impl ActionClassRegistry {
-    /// Build the v0.1 registry with all 15 canonical action classes.
+    /// Build the v0.1 registry: 15 canonical FEP §2.3.5 classes plus 12
+    /// in-place GitHub-coverage additions (code/issue/repo/notification/
+    /// security).
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn v0_1() -> Self {
         use RiskLevel::{Critical, High, Low, Medium};
 
         let entries: Vec<ActionClassDefinition> = vec![
             ActionClassDefinition {
-                name: "http.get",
-                domain: "network",
-                risk_level: Low,
-            },
-            ActionClassDefinition {
-                name: "http.post",
-                domain: "network",
-                risk_level: Medium,
-            },
-            ActionClassDefinition {
-                name: "http.put",
-                domain: "network",
-                risk_level: Medium,
-            },
-            ActionClassDefinition {
-                name: "http.delete",
-                domain: "network",
-                risk_level: High,
-            },
-            ActionClassDefinition {
-                name: "http.patch",
-                domain: "network",
-                risk_level: Medium,
-            },
-            ActionClassDefinition {
-                name: "db.query",
-                domain: "database",
-                risk_level: Low,
-            },
-            ActionClassDefinition {
-                name: "db.mutate",
-                domain: "database",
-                risk_level: High,
-            },
-            ActionClassDefinition {
-                name: "file.read",
-                domain: "file_io",
-                risk_level: Low,
-            },
-            ActionClassDefinition {
-                name: "file.write",
-                domain: "file_io",
-                risk_level: Medium,
-            },
-            ActionClassDefinition {
-                name: "file.delete",
-                domain: "file_io",
-                risk_level: High,
-            },
-            ActionClassDefinition {
-                name: "code.execute",
-                domain: "execution",
-                risk_level: High,
-            },
-            ActionClassDefinition {
-                name: "system.execute",
-                domain: "execution",
+                name: "account.permission.change",
+                domain: "account",
                 risk_level: Critical,
             },
             ActionClassDefinition {
-                name: "network.connect",
-                domain: "network",
-                risk_level: Medium,
+                name: "browser.purchase",
+                domain: "browser",
+                risk_level: High,
             },
             ActionClassDefinition {
-                name: "messaging.send",
+                name: "communication.external.send",
+                domain: "communication",
+                risk_level: High,
+            },
+            ActionClassDefinition {
+                name: "communication.internal.send",
                 domain: "communication",
                 risk_level: Medium,
             },
             ActionClassDefinition {
-                name: "llm.inference",
-                domain: "ai",
+                name: "credential.read",
+                domain: "credential",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "credential.write",
+                domain: "credential",
+                risk_level: Critical,
+            },
+            ActionClassDefinition {
+                name: "filesystem.delete",
+                domain: "filesystem",
+                risk_level: High,
+            },
+            ActionClassDefinition {
+                name: "filesystem.read",
+                domain: "filesystem",
                 risk_level: Low,
+            },
+            ActionClassDefinition {
+                name: "filesystem.write",
+                domain: "filesystem",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "memory.cross_namespace.read",
+                domain: "memory",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "memory.cross_namespace.write",
+                domain: "memory",
+                risk_level: High,
+            },
+            ActionClassDefinition {
+                name: "payment.purchase",
+                domain: "payment",
+                risk_level: High,
+            },
+            ActionClassDefinition {
+                name: "payment.transfer",
+                domain: "payment",
+                risk_level: Critical,
+            },
+            ActionClassDefinition {
+                name: "system.execute",
+                domain: "system",
+                risk_level: Critical,
+            },
+            ActionClassDefinition {
+                name: "system.install",
+                domain: "system",
+                risk_level: High,
+            },
+            // ----- GitHub coverage additions -----
+            ActionClassDefinition {
+                name: "code.read",
+                domain: "code",
+                risk_level: Low,
+            },
+            ActionClassDefinition {
+                name: "code.review.read",
+                domain: "code",
+                risk_level: Low,
+            },
+            ActionClassDefinition {
+                name: "code.review.submit",
+                domain: "code",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "code.write",
+                domain: "code",
+                risk_level: High,
+            },
+            ActionClassDefinition {
+                name: "code.destructive",
+                domain: "code",
+                risk_level: High,
+            },
+            ActionClassDefinition {
+                name: "code.merge",
+                domain: "code",
+                risk_level: Critical,
+            },
+            ActionClassDefinition {
+                name: "issue.read",
+                domain: "issue",
+                risk_level: Low,
+            },
+            ActionClassDefinition {
+                name: "issue.write",
+                domain: "issue",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "notification.manage",
+                domain: "notification",
+                risk_level: Low,
+            },
+            ActionClassDefinition {
+                name: "security.alert.read",
+                domain: "security",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "repo.lifecycle",
+                domain: "repo",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "repo.admin",
+                domain: "repo",
+                risk_level: Critical,
             },
         ];
 
@@ -157,19 +227,67 @@ impl ActionClassRegistry {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
+    /// Registry identifiers.
+    ///
+    /// The first 15 are FEP v0.1 §2.3.5 canonical classes. The following 12
+    /// cover GitHub REST and are appended in-place without a registry
+    /// version bump.
+    const FEP_V0_1_CLASSES: &[&str] = &[
+        "account.permission.change",
+        "browser.purchase",
+        "communication.external.send",
+        "communication.internal.send",
+        "credential.read",
+        "credential.write",
+        "filesystem.delete",
+        "filesystem.read",
+        "filesystem.write",
+        "memory.cross_namespace.read",
+        "memory.cross_namespace.write",
+        "payment.purchase",
+        "payment.transfer",
+        "system.execute",
+        "system.install",
+        // GitHub coverage additions.
+        "code.read",
+        "code.review.read",
+        "code.review.submit",
+        "code.write",
+        "code.destructive",
+        "code.merge",
+        "issue.read",
+        "issue.write",
+        "notification.manage",
+        "security.alert.read",
+        "repo.lifecycle",
+        "repo.admin",
+    ];
+
     #[test]
-    fn test_v0_1_registry_has_15_classes() {
+    fn test_v0_1_registry_has_27_classes() {
         let registry = ActionClassRegistry::v0_1();
-        assert_eq!(registry.len(), 15);
+        assert_eq!(registry.len(), 27);
     }
 
     #[test]
-    fn test_v0_1_registry_contains_all_classes() {
+    fn test_v0_1_registry_matches_fep_spec() {
         let registry = ActionClassRegistry::v0_1();
-        let expected = [
+        for class in FEP_V0_1_CLASSES {
+            assert!(
+                registry.contains(class),
+                "FEP v0.1 class missing from registry: {class}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_v0_1_registry_rejects_transport_names() {
+        let registry = ActionClassRegistry::v0_1();
+        for forbidden in [
             "http.get",
             "http.post",
             "http.put",
@@ -181,13 +299,16 @@ mod tests {
             "file.write",
             "file.delete",
             "code.execute",
-            "system.execute",
             "network.connect",
             "messaging.send",
             "llm.inference",
-        ];
-        for class in expected {
-            assert!(registry.contains(class), "missing action class: {class}");
+            "gmail.send",
+            "tool.email.send",
+        ] {
+            assert!(
+                !registry.contains(forbidden),
+                "non-conformant identifier present in registry: {forbidden}"
+            );
         }
     }
 
@@ -203,5 +324,47 @@ mod tests {
         let def = registry.get("system.execute");
         assert!(def.is_some());
         assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::Critical));
+    }
+
+    #[test]
+    fn test_payment_transfer_is_critical() {
+        let registry = ActionClassRegistry::v0_1();
+        let def = registry.get("payment.transfer");
+        assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::Critical));
+    }
+
+    #[test]
+    fn test_filesystem_read_is_low_risk() {
+        let registry = ActionClassRegistry::v0_1();
+        let def = registry.get("filesystem.read");
+        assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::Low));
+    }
+
+    #[test]
+    fn test_code_merge_is_critical() {
+        let registry = ActionClassRegistry::v0_1();
+        let def = registry.get("code.merge");
+        assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::Critical));
+    }
+
+    #[test]
+    fn test_repo_admin_is_critical() {
+        let registry = ActionClassRegistry::v0_1();
+        let def = registry.get("repo.admin");
+        assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::Critical));
+    }
+
+    #[test]
+    fn test_code_read_is_low_risk() {
+        let registry = ActionClassRegistry::v0_1();
+        let def = registry.get("code.read");
+        assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::Low));
+    }
+
+    #[test]
+    fn test_code_write_is_high_risk() {
+        let registry = ActionClassRegistry::v0_1();
+        let def = registry.get("code.write");
+        assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::High));
     }
 }

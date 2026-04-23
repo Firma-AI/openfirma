@@ -5,18 +5,17 @@
   "type": "module",
   "dependencies": {
     "@google/adk": "^0.6.1",
-    "better-sqlite3": "^12.8.0",
+    "@supabase/supabase-js": "^2.103.3",
+    "undici": "^6.21.0",
     "zod": "^4.3.6"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "better-sqlite3",
       "esbuild"
     ]
   },
   "devDependencies": {
     "@google/adk-devtools": "^0.6.1",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.15.3",
     "typescript": "^5.8.3"
   }

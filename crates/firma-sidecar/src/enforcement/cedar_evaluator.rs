@@ -111,14 +111,52 @@ impl CedarPolicyEvaluator {
             ttl_secs: bundle.ttl_seconds,
         })
     }
+
+    fn evaluate_inner(
+        &self,
+        principal: &AgentId,
+        action: &str,
+        resource: &str,
+        context: &serde_json::Value,
+    ) -> Result<bool, CedarEvaluatorError> {
+        let principal_uid: EntityUid = FirmaEntityUid::Agent(principal.clone())
+            .try_into()
+            .map_err(CedarEvaluatorError::EntityUidParse)?;
+        let action_uid: EntityUid = FirmaEntityUid::Action(action.to_string())
+            .try_into()
+            .map_err(CedarEvaluatorError::EntityUidParse)?;
+        let resource_uid: EntityUid = FirmaEntityUid::Resource(resource.to_string())
+            .try_into()
+            .map_err(CedarEvaluatorError::EntityUidParse)?;
+
+        let cedar_context =
+            Context::from_json_value(context.clone(), Some((&self.schema, &action_uid)))
+                .map_err(|e| CedarEvaluatorError::ContextBuild(Box::new(e)))?;
+
+        let request = Request::new(
+            Some(principal_uid),
+            Some(action_uid),
+            Some(resource_uid),
+            cedar_context,
+            Some(&self.schema),
+        )
+        .map_err(|e| CedarEvaluatorError::RequestBuild(Box::new(e)))?;
+
+        let entities = Entities::empty();
+        let response = Authorizer::new().is_authorized(&request, &self.policy_set, &entities);
+
+        Ok(matches!(response.decision(), Decision::Allow))
+    }
 }
 
 impl PolicyEvaluation for CedarPolicyEvaluator {
     /// Evaluate Cedar policies for the given principal, action, and resource.
     ///
-    /// Context attributes (`action_class`, `resource`, `agent_id`,
-    /// `session_id`, `timestamp`) are passed as a Cedar `Context` built
-    /// from the JSON object produced by `ConstraintEnforcer::build_context`.
+    /// Context attributes (`session_id`, `timestamp_ms`, `params`,
+    /// `risk_score`, `budget_remaining`, `session_duration_s`,
+    /// `action_count`) — the shape declared by `EnforcementContext` in the
+    /// canonical `schema.cedarschema` — are built from the JSON object
+    /// produced by `ConstraintEnforcer::build_context`.
     ///
     /// Entity UIDs are constructed via [`FirmaEntityUid`] to match the
     /// Authority's issuance evaluation. No schema validation is performed on
@@ -137,36 +175,9 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
         action: &str,
         resource: &str,
         context: &serde_json::Value,
-    ) -> Result<bool, CedarEvaluatorError> {
-        let principal_uid: EntityUid = FirmaEntityUid::Agent(principal.clone())
-            .try_into()
-            .map_err(CedarEvaluatorError::EntityUidParse)?;
-        let action_uid: EntityUid = FirmaEntityUid::Action(action.to_string())
-            .try_into()
-            .map_err(CedarEvaluatorError::EntityUidParse)?;
-        let resource_uid: EntityUid = FirmaEntityUid::Resource(resource.to_string())
-            .try_into()
-            .map_err(CedarEvaluatorError::EntityUidParse)?;
-
-        // Context::from_json_value takes Option<(&Schema, &EntityUid)> — the action
-        // UID is used to look up the declared context shape for that action.
-        let cedar_context =
-            Context::from_json_value(context.clone(), Some((&self.schema, &action_uid)))
-                .map_err(|e| CedarEvaluatorError::ContextBuild(Box::new(e)))?;
-
-        let request = Request::new(
-            Some(principal_uid),
-            Some(action_uid),
-            Some(resource_uid),
-            cedar_context,
-            Some(&self.schema),
-        )
-        .map_err(|e| CedarEvaluatorError::RequestBuild(Box::new(e)))?;
-
-        let entities = Entities::empty();
-        let response = Authorizer::new().is_authorized(&request, &self.policy_set, &entities);
-
-        Ok(matches!(response.decision(), Decision::Allow))
+    ) -> Result<bool, String> {
+        self.evaluate_inner(principal, action, resource, context)
+            .map_err(|e| e.to_string())
     }
 
     fn is_fresh(&self) -> bool {
@@ -187,10 +198,18 @@ mod tests {
 
     const TEST_SCHEMA: &str = "
 namespace Firma {
-    type EnforcementContext = { session_id: String, timestamp_ms: Long, params: String, risk_score: Long };
+    type EnforcementContext = {
+        session_id: String,
+        timestamp_ms: Long,
+        params: String,
+        risk_score: Long,
+        budget_remaining: Long,
+        session_duration_s: Long,
+        action_count: Long
+    };
     entity Agent;
     entity Resource;
-    action \"llm.inference\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
+    action \"communication.external.send\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
 }";
 
     fn schema_bundle(policy_src: &[u8]) -> PolicyBundle {
@@ -208,6 +227,9 @@ namespace Firma {
             "timestamp_ms": 1_700_000_000_000i64,
             "params": "{}",
             "risk_score": 0i64,
+            "budget_remaining": i64::MAX,
+            "session_duration_s": 0i64,
+            "action_count": 1i64,
         })
     }
 
@@ -239,6 +261,9 @@ namespace Firma {
             "timestamp_ms": 1_700_000_000_000i64,
             "params": "{}",
             "risk_score": 0i64,
+            "budget_remaining": i64::MAX,
+            "session_duration_s": 0i64,
+            "action_count": 1i64,
         })
     }
 
@@ -283,7 +308,7 @@ namespace Firma {
         let result = evaluator
             .evaluate(
                 &agent("agent_test"),
-                "llm.inference",
+                "communication.external.send",
                 "api.openai.com",
                 &test_context(),
             )
@@ -297,7 +322,7 @@ namespace Firma {
         let result = evaluator
             .evaluate(
                 &agent("agent_test"),
-                "llm.inference",
+                "communication.external.send",
                 "api.openai.com",
                 &test_context(),
             )
@@ -362,7 +387,7 @@ namespace Firma {
         let allow = evaluator
             .evaluate(
                 &agent("agent_test"),
-                "llm.inference",
+                "communication.external.send",
                 "api.openai.com",
                 &test_context(),
             )
@@ -374,11 +399,14 @@ namespace Firma {
             "timestamp_ms": 1_700_000_000_000i64,
             "params": "{}",
             "risk_score": 0i64,
+            "budget_remaining": i64::MAX,
+            "session_duration_s": 0i64,
+            "action_count": 1i64,
         });
         let deny = evaluator
             .evaluate(
                 &agent("agent_test"),
-                "llm.inference",
+                "communication.external.send",
                 "api.openai.com",
                 &deny_context,
             )
@@ -403,7 +431,7 @@ namespace Firma {
         let result = evaluator
             .evaluate(
                 &agent("agent_test"),
-                "llm.inference",
+                "communication.external.send",
                 "api.openai.com",
                 &full_context(),
             )
@@ -439,7 +467,7 @@ namespace Firma {
         });
         let result = evaluator.evaluate(
             &agent("agent_test"),
-            "llm.inference",
+            "communication.external.send",
             "api.openai.com",
             &incomplete_context,
         );
@@ -460,11 +488,73 @@ namespace Firma {
         let allow = evaluator
             .evaluate(
                 &agent("agent_test"),
-                "llm.inference",
+                "communication.external.send",
                 "api.openai.com",
                 &full_context(),
             )
             .unwrap();
         assert!(allow);
+    }
+
+    #[test]
+    fn cedar_policy_denies_when_budget_remaining_negative() {
+        let policy_src = br#"
+            forbid(principal, action, resource)
+            when { context.budget_remaining < 0 };
+            permit(principal, action, resource);
+        "#;
+        let bundle = schema_bundle(policy_src);
+        let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
+        let context = json!({
+            "session_id": "sess_001",
+            "timestamp_ms": 0i64,
+            "params": "{}",
+            "risk_score": 0i64,
+            "budget_remaining": -1i64,
+            "session_duration_s": 0i64,
+            "action_count": 1i64,
+        });
+
+        let allowed = evaluator
+            .evaluate(
+                &agent("agent_test"),
+                "communication.external.send",
+                "api.openai.com/v1/chat/completions",
+                &context,
+            )
+            .unwrap();
+
+        assert!(!allowed, "expected DENY when budget_remaining < 0");
+    }
+
+    #[test]
+    fn cedar_policy_denies_when_risk_score_exceeds_threshold() {
+        let policy_src = br#"
+            forbid(principal, action, resource)
+            when { context.risk_score > 50 };
+            permit(principal, action, resource);
+        "#;
+        let bundle = schema_bundle(policy_src);
+        let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
+        let context = json!({
+            "session_id": "sess_001",
+            "timestamp_ms": 0i64,
+            "params": "{}",
+            "risk_score": 75i64,
+            "budget_remaining": 1000i64,
+            "session_duration_s": 0i64,
+            "action_count": 1i64,
+        });
+
+        let allowed = evaluator
+            .evaluate(
+                &agent("agent_test"),
+                "communication.external.send",
+                "api.openai.com/v1/chat/completions",
+                &context,
+            )
+            .unwrap();
+
+        assert!(!allowed, "expected DENY when risk_score > threshold");
     }
 }
