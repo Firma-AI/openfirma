@@ -99,10 +99,11 @@ impl CapabilityValidator {
         session_id: SessionId,
     ) -> Result<ValidatedCapability, EnforcementDecision> {
         // Step 1: Select capability token from map (ADR-002)
+        let resource_display = envelope.intent.resource_display();
         let entry = self.capability_map.select(
             session_id,
             &envelope.intent.action_class,
-            &envelope.intent.resource,
+            &resource_display,
         )?;
 
         // Step 2: Validate selected token

@@ -222,7 +222,10 @@ mod tests {
         let envelope = ExecutionEnvelope {
             intent: ExecutionIntent {
                 action_class: "filesystem.read".to_string(),
-                resource: "api.example.com/data".to_string(),
+                resource: std::collections::BTreeMap::from([
+                    ("host".to_string(), "api.example.com".to_string()),
+                    ("path".to_string(), "/data".to_string()),
+                ]),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
                     headers: HashMap::new(),
@@ -260,7 +263,10 @@ mod tests {
             envelope: Some(NormalizedEnvelope {
                 intent: ExecutionIntent {
                     action_class: "tool.exec".to_string(),
-                    resource: "tool".to_string(),
+                    resource: std::collections::BTreeMap::from([
+                        ("host".to_string(), "tool".to_string()),
+                        ("path".to_string(), String::new()),
+                    ]),
                     params: ActionParams::Http(HttpParams {
                         method: HttpMethod::POST,
                         headers: HashMap::new(),

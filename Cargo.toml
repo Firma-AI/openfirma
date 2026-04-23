@@ -26,6 +26,7 @@ unsafe_code = "deny"
 
 [workspace.dependencies]
 async-stream = "0.3"
+async-trait = "0.1"
 cedar-policy = "3"
 chrono = { version = "0.4", features = ["serde"] }
 criterion = { version = "0.5", features = ["html_reports"] }

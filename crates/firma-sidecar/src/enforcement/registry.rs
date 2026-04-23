@@ -46,9 +46,10 @@ pub struct ActionClassRegistry {
 }
 
 impl ActionClassRegistry {
-    /// Build the v0.1 registry with all 15 canonical action classes from
-    /// FEP §2.3.5.
+    /// Build the v0.1 registry: 15 canonical FEP §2.3.5 classes plus the
+    /// 12 task-017 additions.
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn v0_1() -> Self {
         use RiskLevel::{Critical, High, Low, Medium};
 
@@ -128,6 +129,66 @@ impl ActionClassRegistry {
                 domain: "system",
                 risk_level: High,
             },
+            ActionClassDefinition {
+                name: "code.read",
+                domain: "code",
+                risk_level: Low,
+            },
+            ActionClassDefinition {
+                name: "code.review.read",
+                domain: "code",
+                risk_level: Low,
+            },
+            ActionClassDefinition {
+                name: "code.review.submit",
+                domain: "code",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "code.write",
+                domain: "code",
+                risk_level: High,
+            },
+            ActionClassDefinition {
+                name: "code.destructive",
+                domain: "code",
+                risk_level: High,
+            },
+            ActionClassDefinition {
+                name: "code.merge",
+                domain: "code",
+                risk_level: Critical,
+            },
+            ActionClassDefinition {
+                name: "issue.read",
+                domain: "issue",
+                risk_level: Low,
+            },
+            ActionClassDefinition {
+                name: "issue.write",
+                domain: "issue",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "notification.manage",
+                domain: "notification",
+                risk_level: Low,
+            },
+            ActionClassDefinition {
+                name: "security.alert.read",
+                domain: "security",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "repo.lifecycle",
+                domain: "repo",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "repo.admin",
+                domain: "repo",
+                risk_level: Critical,
+            },
         ];
 
         let mut classes = HashMap::with_capacity(entries.len());
@@ -167,11 +228,20 @@ impl ActionClassRegistry {
 mod tests {
     use super::*;
 
-    /// The exact 15 identifiers defined by FEP v0.1 §2.3.5. Drift from this
-    /// list is a spec conformance bug.
+    /// Registry identifiers.
+    ///
+    /// The first 15 are FEP v0.1 §2.3.5 canonical classes. The following 12
+    /// are added in-place without a
+    /// registry version bump. See `docs/markdown/firma_fep_overview.md`.
     const FEP_V0_1_CLASSES: &[&str] = &[
         "account.permission.change",
         "browser.purchase",
+        "code.destructive",
+        "code.merge",
+        "code.read",
+        "code.review.read",
+        "code.review.submit",
+        "code.write",
         "communication.external.send",
         "communication.internal.send",
         "credential.read",
@@ -179,18 +249,24 @@ mod tests {
         "filesystem.delete",
         "filesystem.read",
         "filesystem.write",
+        "issue.read",
+        "issue.write",
         "memory.cross_namespace.read",
         "memory.cross_namespace.write",
+        "notification.manage",
         "payment.purchase",
         "payment.transfer",
+        "repo.admin",
+        "repo.lifecycle",
+        "security.alert.read",
         "system.execute",
         "system.install",
     ];
 
     #[test]
-    fn test_v0_1_registry_has_15_classes() {
+    fn test_v0_1_registry_has_27_classes() {
         let registry = ActionClassRegistry::v0_1();
-        assert_eq!(registry.len(), 15);
+        assert_eq!(registry.len(), 27);
     }
 
     #[test]
@@ -258,5 +334,33 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let def = registry.get("filesystem.read");
         assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::Low));
+    }
+
+    #[test]
+    fn test_code_merge_is_critical() {
+        let registry = ActionClassRegistry::v0_1();
+        let def = registry.get("code.merge");
+        assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::Critical));
+    }
+
+    #[test]
+    fn test_repo_admin_is_critical() {
+        let registry = ActionClassRegistry::v0_1();
+        let def = registry.get("repo.admin");
+        assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::Critical));
+    }
+
+    #[test]
+    fn test_code_read_is_low_risk() {
+        let registry = ActionClassRegistry::v0_1();
+        let def = registry.get("code.read");
+        assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::Low));
+    }
+
+    #[test]
+    fn test_code_write_is_high_risk() {
+        let registry = ActionClassRegistry::v0_1();
+        let def = registry.get("code.write");
+        assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::High));
     }
 }

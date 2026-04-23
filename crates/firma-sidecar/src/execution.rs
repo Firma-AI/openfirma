@@ -438,7 +438,10 @@ mod tests {
             envelope: Some(NormalizedEnvelope {
                 intent: ExecutionIntent {
                     action_class: "tool.exec".to_string(),
-                    resource: "resource".to_string(),
+                    resource: std::collections::BTreeMap::from([
+                        ("host".to_string(), "resource".to_string()),
+                        ("path".to_string(), String::new()),
+                    ]),
                     params: ActionParams::Http(HttpParams {
                         method: HttpMethod::POST,
                         headers: HashMap::new(),

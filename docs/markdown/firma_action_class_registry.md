@@ -56,6 +56,29 @@ implementation choice (encoded in `registry.rs::RiskLevel`), not part of
 the FEP spec. They drive telemetry grouping and default HITL thresholds;
 they do NOT drive Cedar decisions on their own.
 
+### GitHub coverage (extended in-place)
+
+Appends 12 classes covering code/issue/repo/notification/security
+domains so the OSS Sidecar can classify GitHub REST traffic deterministically
+without encoding the provider into the action class. Extension is **in-place**
+on `ActionClassRegistry::v0_1()` — no registry version bump. A future FEP
+revision should absorb these or mark them optional.
+
+| Action class            | Domain        | Risk     | Notes                                                 |
+|-------------------------|---------------|----------|-------------------------------------------------------|
+| `code.read`             | Code          | Low      | Read repository / code content                        |
+| `code.review.read`      | Code          | Low      | Read pull-request review surface                      |
+| `code.review.submit`    | Code          | Medium   | Submit / mutate a PR review                           |
+| `code.write`            | Code          | High     | Mutate code, create or update PRs, push refs          |
+| `code.destructive`      | Code          | High     | Delete files or git refs                              |
+| `code.merge`            | Code          | Critical | Merge a pull request into a target branch             |
+| `issue.read`            | Issue         | Low      | Read issues and issue comments                        |
+| `issue.write`           | Issue         | Medium   | Create or mutate issues and issue comments            |
+| `notification.manage`   | Notification  | Low      | Manage notification state / subscriptions             |
+| `security.alert.read`   | Security      | Medium   | Read code-scanning / secret-scanning alerts           |
+| `repo.lifecycle`        | Repo          | Medium   | Create / fork repositories                            |
+| `repo.admin`            | Repo          | Critical | Mutate repo settings / branch protection              |
+
 Reserved for a future minor revision (MUST NOT appear in v0.1 policies):
 `memory.read`, `memory.write`, `browser.navigate`.
 
@@ -87,6 +110,30 @@ The same semantic action arriving via different providers MUST normalize to
 the same `action_class`. Provider identity lives in `intent.resource`. Cedar
 policies discriminate on the `(action, resource)` pair.
 
+### Resource shape
+
+`intent.resource` is a `BTreeMap<String, String>` (not a
+string). `BTreeMap` guarantees deterministic iteration / serialization so
+audit output is byte-stable and hashing is reproducible.
+
+Conventional keys:
+
+- `host` — request host (always present for HTTP intents).
+- `path` — request path (always present for HTTP intents).
+- `provider` — logical provider when detectable. Currently attached only
+  when the request host exact-matches a known allowlist. For v0.1 the
+  allowlist is `{"api.github.com", "github.com"}` → `provider = "github"`.
+  Exact match is deliberate: typo-squat hostnames (e.g.
+  `api.github.com.evil.example`) MUST NOT earn the tag.
+
+Implementations MAY add free-form keys without protocol churn. No other
+keys are reserved.
+
+Scope checks and `PolicyEvaluator::evaluate` still consume a single string
+derived via `ExecutionIntent::resource_display()` = `format!("{host}{path}")`.
+Structured attribute access (Cedar entity attributes keyed on
+`resource.provider`, etc.) is deferred to a follow-up task.
+
 Worked example — Slack message from an agent:
 
 - Agent call: `slack.post_message(channel = "general", text = "hello")`.
@@ -95,17 +142,20 @@ Worked example — Slack message from an agent:
 - Normalizer rule matches `host = slack.com`,
   `path = /api/chat.postMessage` and emits:
   - `intent.action_class = "communication.external.send"`
-  - `intent.resource = "slack.com/api/chat.postMessage"`
+  - `intent.resource = {"host": "slack.com", "path": "/api/chat.postMessage"}`
+    (no `provider` key — slack.com is not on the v0.1 allowlist)
   - `intent.params = Http { method: POST, ... }` (structured body preserved
     in params, sensitive headers stripped).
   - `intent.raw_transport = "https"`, `intent.raw_action_ref = "POST /api/chat.postMessage"`.
 - Cedar evaluates with `action = Firma::Action::"communication.external.send"`
-  and `resource = Firma::Resource::"slack.com/api/chat.postMessage"`.
+  and `resource = Firma::Resource::"slack.com/api/chat.postMessage"`
+  (the display-string derivation).
 
-A Stripe transfer, a Telegram message, and an email microservice all produce
-the same `action_class` and differ only in the `resource` URI. A policy that
-wants "allow Slack posts to #general, deny everything else" matches on
-`resource` prefix, not on a transport or provider embedded in `action_class`.
+A GitHub pull-request comment, a Stripe transfer, a Telegram message, and an
+email microservice all produce the same-shape resource map and differ by
+`host`/`path`/`provider`. A policy that wants "allow GitHub code.read only"
+matches on `action_class = "code.read"` plus `resource_display` prefix
+`api.github.com/`.
 
 ## Canonical mappings (authoring guidance)
 
@@ -114,6 +164,33 @@ Operators supply the mapping rules via the TOML file referenced by
 `crates/firma-sidecar/src/enforcement/config.rs`). Each rule maps
 `(host, path, method)` to one registry identifier. Rules validate against
 the registry at load time; unknown identifiers fail startup.
+
+### Shipping mapping files
+
+The sidecar ships optional ready-made mapping files under
+`crates/firma-sidecar/config/mappings/`:
+
+| File          | Covers                                                    |
+|---------------|-----------------------------------------------------------|
+| `github.toml` | 44 GitHub REST endpoint → 12 action class mappings (task 017) |
+
+Enable a shipped file in one of two ways:
+
+```toml
+# Option 1 — use the shipped file as the sole mapping source.
+[mapping]
+rules_path = "crates/firma-sidecar/config/mappings/github.toml"
+
+# Option 2 — merge the shipped file on top of a local default.
+[mapping]
+rules_path = "config/mappings/default.toml"
+rules_paths = ["crates/firma-sidecar/config/mappings/github.toml"]
+```
+
+`rules_paths` (plural) is additive. Rule lists from `rules_path` and
+each entry of `rules_paths` are concatenated. The
+`MappingTable::from_config` loader fails closed at startup if two merged
+files collide on the same `(method, host, path)` tuple.
 
 Authoring rules:
 

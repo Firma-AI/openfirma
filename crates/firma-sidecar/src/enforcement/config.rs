@@ -34,6 +34,11 @@ impl EnforcementConfig {
         if self.mapping.rules_path.trim().is_empty() {
             return Err("mapping.rules_path must not be empty".to_string());
         }
+        for (i, p) in self.mapping.rules_paths.iter().enumerate() {
+            if p.trim().is_empty() {
+                return Err(format!("mapping.rules_paths[{i}] must not be empty"));
+            }
+        }
         Ok(())
     }
 }
@@ -41,9 +46,14 @@ impl EnforcementConfig {
 /// Mapping rules configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MappingConfig {
-    /// Path to the mapping rules TOML file.
+    /// Path to the primary mapping rules TOML file.
     #[serde(default = "default_mapping_path")]
     pub rules_path: String,
+    /// Additional mapping rule files merged into `rules_path`.
+    /// Rules are concatenated; duplicate `(method, host, path)` tuples
+    /// across merged files → startup error (fail-closed).
+    #[serde(default)]
+    pub rules_paths: Vec<String>,
     /// Whether unlisted hosts are protected by default.
     #[serde(default = "default_true")]
     pub default_protected: bool,
@@ -176,6 +186,7 @@ impl Default for MappingConfig {
     fn default() -> Self {
         Self {
             rules_path: default_mapping_path(),
+            rules_paths: Vec::new(),
             default_protected: true,
         }
     }
@@ -272,6 +283,45 @@ mod tests {
             err.starts_with("rule 0:"),
             "error should identify rule index: {err}"
         );
+    }
+
+    #[test]
+    fn mapping_config_rules_paths_defaults_empty() {
+        let cfg: EnforcementConfig = toml::from_str(
+            r#"
+            [mapping]
+            rules_path = "config/mappings/default.toml"
+            "#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert!(cfg.mapping.rules_paths.is_empty());
+    }
+
+    #[test]
+    fn mapping_config_rules_paths_parses_vec() {
+        let cfg: EnforcementConfig = toml::from_str(
+            r#"
+            [mapping]
+            rules_path = "a.toml"
+            rules_paths = ["b.toml", "c.toml"]
+            "#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(cfg.mapping.rules_paths, vec!["b.toml", "c.toml"]);
+    }
+
+    #[test]
+    fn mapping_config_empty_rules_path_entry_rejected() {
+        let cfg: EnforcementConfig = toml::from_str(
+            r#"
+            [mapping]
+            rules_path = "a.toml"
+            rules_paths = ["b.toml", ""]
+            "#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("rules_paths[1]"), "err: {err}");
     }
 
     #[test]

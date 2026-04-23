@@ -707,6 +707,7 @@ dependencies = [
 name = "firma-core"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "cedar-policy",
  "chrono",
  "criterion",

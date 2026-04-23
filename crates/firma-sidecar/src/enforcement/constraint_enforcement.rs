@@ -217,10 +217,11 @@ impl ConstraintEnforcer {
         let context = Self::build_context(envelope, claims);
 
         // Step 5: Evaluate policies
+        let resource_display = envelope.intent.resource_display();
         match policy.evaluate(
             &claims.agent_id,
             &envelope.intent.action_class,
-            &envelope.intent.resource,
+            &resource_display,
             &context,
         ) {
             Ok(true) => Ok(()),
@@ -231,7 +232,7 @@ impl ConstraintEnforcer {
                 ),
                 detail: format!(
                     "policy denied action '{}' on resource '{}'",
-                    envelope.intent.action_class, envelope.intent.resource
+                    envelope.intent.action_class, resource_display
                 ),
                 envelope: Some(envelope.clone()),
             }),
@@ -300,7 +301,7 @@ impl ConstraintEnforcer {
         let context = Self::build_context(envelope, claims);
         let principal = claims.agent_id.clone();
         let action = envelope.intent.action_class.clone();
-        let resource = envelope.intent.resource.clone();
+        let resource = envelope.intent.resource_display();
         let eval_task = tokio::task::spawn_blocking(move || {
             policy.evaluate(&principal, &action, &resource, &context)
         });
@@ -336,7 +337,8 @@ impl ConstraintEnforcer {
                 ),
                 detail: format!(
                     "policy denied action '{}' on resource '{}'",
-                    envelope.intent.action_class, envelope.intent.resource
+                    envelope.intent.action_class,
+                    envelope.intent.resource_display()
                 ),
                 envelope: Some(envelope.clone()),
             }),
@@ -361,10 +363,10 @@ impl ConstraintEnforcer {
         claims: &CapabilityClaims,
     ) -> Result<(), EnforcementDecision> {
         let action = &envelope.intent.action_class;
-        let resource = &envelope.intent.resource;
+        let resource = envelope.intent.resource_display();
 
         if claims.action_set.iter().any(|a| a == "*") {
-            if matches_resource_scope(&claims.resource_scope, resource) {
+            if matches_resource_scope(&claims.resource_scope, &resource) {
                 return Ok(());
             }
             return Err(EnforcementDecision::Deny {
@@ -381,7 +383,7 @@ impl ConstraintEnforcer {
         }
 
         if claims.action_set.iter().any(|a| a == action) {
-            if matches_resource_scope(&claims.resource_scope, resource) {
+            if matches_resource_scope(&claims.resource_scope, &resource) {
                 return Ok(());
             }
             return Err(EnforcementDecision::Deny {
@@ -568,10 +570,17 @@ mod tests {
     }
 
     fn test_envelope_with_resource(action_class: &str, resource: &str) -> NormalizedEnvelope {
+        let (host, path) = match resource.find('/') {
+            Some(idx) => (&resource[..idx], &resource[idx..]),
+            None => (resource, ""),
+        };
+        let mut resource_map = std::collections::BTreeMap::new();
+        resource_map.insert("host".to_string(), host.to_string());
+        resource_map.insert("path".to_string(), path.to_string());
         NormalizedEnvelope {
             intent: ExecutionIntent {
                 action_class: action_class.to_string(),
-                resource: resource.to_string(),
+                resource: resource_map,
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::POST,
                     headers: HashMap::new(),
