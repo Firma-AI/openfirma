@@ -7,7 +7,7 @@
 //!
 //! # Fail-closed guarantee
 //!
-//! The watch channel is seeded (via [`new_policy_watch_pair`]) with a
+//! The watch channel is seeded (via [`PolicyWatcher::new`]) with a
 //! `NoBundleInstalled` sentinel whose `is_available()` returns `false` — all
 //! Stage 2 evaluations fail closed until the first bundle arrives.  After the
 //! installed bundle's `ttl_seconds` elapse without a fresh delivery,
@@ -76,21 +76,33 @@ pub enum PolicyWatcherError {
 /// swaps the active evaluator.  On parse failure, logs and retains the
 /// previous evaluator.  On disconnect, exponentially backs off and reconnects.
 ///
-/// Construct with [`PolicyWatcher::new`] (or [`new_policy_watch_pair`]) and
-/// spawn [`PolicyWatcher::run`] in a [`tokio::spawn`].
+/// Construct with [`PolicyWatcher::new`] and spawn [`PolicyWatcher::run`] in a
+/// [`tokio::spawn`].
 pub struct PolicyWatcher {
     config: PolicyWatcherConfig,
     tx: PolicySender,
+    rx: PolicyReceiver,
 }
 
 impl PolicyWatcher {
-    /// Create a watcher backed by the given watch sender.
+    /// Create a watcher with a fail-closed sentinel channel.
     ///
-    /// Prefer [`new_policy_watch_pair`] which seeds the channel with the
-    /// fail-closed sentinel in one step.
+    /// Call [`PolicyWatcher::subscribe`] to obtain a [`PolicyReceiver`] and
+    /// pass it to [`crate::enforcement::constraint_enforcement::ConstraintEnforcer::new`].
+    /// Spawn [`PolicyWatcher::run`] in a background task before processing requests.
     #[must_use]
-    pub fn new(config: PolicyWatcherConfig, tx: PolicySender) -> Self {
-        Self { config, tx }
+    pub fn new(config: PolicyWatcherConfig) -> Self {
+        let (tx, rx) = policy_channel();
+        Self { config, tx, rx }
+    }
+
+    /// Return a receiver subscribed to policy bundle updates.
+    ///
+    /// Each call returns a fresh clone; pass one to
+    /// [`crate::enforcement::constraint_enforcement::ConstraintEnforcer::new`].
+    #[must_use]
+    pub fn subscribe(&self) -> PolicyReceiver {
+        self.rx.clone()
     }
 
     /// Run the watcher loop forever.
@@ -192,17 +204,6 @@ impl PolicyWatcher {
     }
 }
 
-/// Create the watch channel seeded with the fail-closed sentinel and a
-/// ready-to-run [`PolicyWatcher`].
-///
-/// Returns `(rx, watcher)`:
-/// - Pass `rx` to [`crate::enforcement::constraint_enforcement::ConstraintEnforcer::new`].
-/// - Spawn `watcher.run()` in a background task before processing any requests.
-#[must_use]
-pub fn new_policy_watch_pair(config: PolicyWatcherConfig) -> (PolicyReceiver, PolicyWatcher) {
-    let (tx, rx) = policy_channel();
-    (rx, PolicyWatcher::new(config, tx))
-}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -263,11 +264,12 @@ namespace Firma {
     }
 
     #[test]
-    fn new_policy_watch_pair_channel_seeded_fail_closed() {
-        let (rx, _watcher) = new_policy_watch_pair(PolicyWatcherConfig::default());
+    fn new_channel_seeded_fail_closed() {
+        let watcher = PolicyWatcher::new(PolicyWatcherConfig::default());
+        let rx = watcher.subscribe();
         assert!(
             !rx.borrow().is_available(),
-            "pair channel must start fail-closed"
+            "channel must start fail-closed"
         );
     }
 
