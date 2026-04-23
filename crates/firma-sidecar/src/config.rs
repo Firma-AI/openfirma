@@ -22,10 +22,7 @@ pub use self::audit::{AuditConfig, AuditSink};
 pub use self::authority::AuthorityConfig;
 pub use self::connector::ConnectorConfig;
 
-pub use self::enforcement::{EnforcementConfig, MappingRulesFile};
-
-#[cfg(test)]
-pub use self::enforcement::MappingRuleConfig;
+pub use self::enforcement::{EnforcementConfig, MappingRuleConfig, MappingRulesFile};
 pub use self::revocation::RevocationConfig;
 
 use std::collections::HashMap;

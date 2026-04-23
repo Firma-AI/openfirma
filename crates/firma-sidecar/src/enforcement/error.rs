@@ -24,19 +24,15 @@ pub enum EnforcementError {
     TokenValidation(#[from] TokenError),
 
     #[error("scope violation: {detail}")]
-    #[expect(dead_code, reason = "reserved for later authority integration")]
     ScopeViolation { detail: String },
 
     #[error("policy denied: {detail}")]
-    #[expect(dead_code, reason = "reserved for later authority integration")]
     PolicyDenied { detail: String },
 
     #[error("policy bundle stale")]
-    #[expect(dead_code, reason = "reserved for later authority integration")]
     PolicyBundleStale,
 
     #[error("configuration error: {0}")]
-    #[expect(dead_code, reason = "reserved for later authority integration")]
     Config(String),
 }
 

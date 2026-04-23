@@ -22,7 +22,6 @@ pub struct EnforcementConfig {
     #[serde(default)]
     pub capability_validation: CapabilityValidationConfig,
     /// Constraint enforcement settings.
-    #[expect(dead_code, reason = "consumed once Cedar bundle loading is wired")]
     #[serde(default)]
     pub constraint_enforcement: ConstraintEnforcementConfig,
 }
@@ -71,7 +70,6 @@ pub struct CapabilityValidationConfig {
 }
 
 /// Constraint enforcement configuration.
-#[expect(dead_code, reason = "consumed once Cedar bundle loading is wired")]
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConstraintEnforcementConfig {
     /// Policy bundle TTL in seconds. Default: 30.
@@ -183,7 +181,7 @@ impl CapabilityManifestEntry {
     /// # Errors
     ///
     /// Returns a message describing the first invalid field.
-    #[expect(dead_code, reason = "consumed once Authority integration is wired")]
+    #[allow(dead_code, reason = "consumed once Authority integration is wired")]
     pub fn validate(&self) -> Result<(), String> {
         if self.agent_id.trim().is_empty() {
             return Err("agent_id must not be empty".into());

@@ -20,10 +20,6 @@ pub struct BasicCredentialInjector {
     credentials: HashMap<String, HashMap<String, String>>,
 }
 
-#[expect(
-    dead_code,
-    reason = "public API consumed by connector/interceptor callers once wired"
-)]
 impl BasicCredentialInjector {
     /// Creates a new `BasicCredentialInjector` from a pre-built map
     /// of connector IDs to header sets.

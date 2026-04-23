@@ -82,5 +82,17 @@ name = "revocation"
 harness = false
 
 [[bench]]
-name = "cedar_evaluator"
+name = "cedar_eval"
+harness = false
+
+[[bench]]
+name = "bundle_reload"
+harness = false
+
+[[bench]]
+name = "stage1"
+harness = false
+
+[[bench]]
+name = "pipeline"
 harness = false

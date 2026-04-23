@@ -298,11 +298,12 @@ mod tests {
 
     use super::*;
     use crate::config::{MappingRuleConfig, MappingRulesFile};
+    use crate::credential::NullCredentialInjector;
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
     use crate::pipeline::{
         ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, EnforcementPipeline,
-        IntentNormalizer, MappingTable, NullCredentialInjector, PipelineArgs,
+        IntentNormalizer, MappingTable, PipelineArgs,
     };
 
     // ── helpers ────────────────────────────────────────────────────────

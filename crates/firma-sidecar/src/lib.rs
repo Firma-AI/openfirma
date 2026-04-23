@@ -1,58 +1,47 @@
-//! Library surface for tests and benchmarks.
+//! Firma Sidecar — the enforcement layer between an agent and the outside
+//! world.
+//!
+//! Every outbound agent call passes through the Sidecar. It is a single
+//! statically-linked binary with no persistent database; all state is
+//! in-memory and re-populated from Authority streams on restart.
+//!
+//! # Architecture
+//!
+//! ```text
+//! agent → interceptor → normalizer → Stage 1 → Stage 2 → connector → external
+//! ```
+//!
+//! - [`interceptor`] — Captures outbound agent traffic before it
+//!   reaches the external system (HTTP proxy, gRPC hook, Unix socket).
+//! - [`normalizer`] — Intent Normalizer / Envelope Builder.
+//!   Deterministically maps raw intercepted events into canonical
+//!   `ExecutionEnvelope` instances with a normalized `intent.action_class`.
+//! - [`enforcement`] — Two-phase enforcement engine:
+//!   - Stage 1 (Capability Validation): token selection, parse, signature
+//!     verify, expiry, revocation check.
+//!   - Stage 2 (Constraint Enforcement Engine / CEE): scope check, policy
+//!     bundle freshness, Cedar policy evaluation.
+//! - [`pipeline`] — Orchestrates normalizer + both enforcement stages into
+//!   a single `enforce()` entry point. This is the primary public API;
+//!   all types needed to construct and inspect the pipeline are re-exported
+//!   from here.
+//! - [`audit`] — Audit event emitter. Produces a signed event for every
+//!   enforcement decision. Supports stdout, file, gRPC, and WAL output
+//!   sinks.
+//! - [`startup`] — Per-subsystem builders that translate
+//!   [`config::SidecarConfig`] into runtime components.
 
-#[path = "enforcement/revocation.rs"]
-mod revocation;
-
-/// Bench-only shim: the Cedar evaluator lives under `enforcement` in the
-/// binary crate; mirror that structure here so `super::constraint_enforcement`
-/// in `enforcement/cedar_evaluator.rs` resolves to the trait we redefine
-/// locally below. Nothing leaves `enforcement` — the public bench surface is
-/// `cedar_bench_api`.
-#[path = "enforcement"]
-mod enforcement {
-    #[path = "cedar_evaluator.rs"]
-    pub mod cedar_evaluator;
-
-    pub mod constraint_enforcement {
-        use firma_core::AgentId;
-
-        /// Mirror of `crate::enforcement::constraint_enforcement::PolicyEvaluation`
-        /// in the binary crate. Kept in sync manually.
-        pub trait PolicyEvaluation: Send + Sync {
-            /// See the binary-crate trait for full semantics.
-            ///
-            /// # Errors
-            ///
-            /// Propagates a human-readable error string on evaluation failure.
-            fn evaluate(
-                &self,
-                principal: &AgentId,
-                action: &str,
-                resource: &str,
-                context: &serde_json::Value,
-            ) -> Result<bool, String>;
-
-            fn is_fresh(&self) -> bool;
-
-            fn is_available(&self) -> bool {
-                true
-            }
-
-            #[allow(dead_code)]
-            fn version(&self) -> Option<String>;
-        }
-    }
-}
-
-/// Narrow re-export for Criterion benches.
-///
-/// This module is not part of the stable public API.
-pub mod revocation_bench_api {
-    pub use crate::revocation::{BloomLruRevocationStore, RevocationConfig};
-}
-
-/// Narrow re-export of the Cedar evaluator for Criterion benches.
-pub mod cedar_bench_api {
-    pub use crate::enforcement::cedar_evaluator::CedarPolicyEvaluator;
-    pub use crate::enforcement::constraint_enforcement::PolicyEvaluation;
-}
+pub mod args;
+pub mod audit;
+pub mod authority_client;
+pub mod config;
+pub mod connector;
+pub mod credential;
+pub mod enforcement;
+pub mod handler;
+pub mod health;
+pub mod interceptor;
+pub mod log;
+pub mod normalizer;
+pub mod pipeline;
+pub mod startup;
