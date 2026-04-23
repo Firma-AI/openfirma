@@ -118,14 +118,14 @@ mod tests {
         let result = handle.await;
         assert!(result.is_ok(), "task should not panic");
         assert!(
-            result.ok().and_then(|r| r.ok()).is_some(),
+            result.ok().and_then(std::result::Result::ok).is_some(),
             "sink should return Ok(())"
         );
     }
 
     #[tokio::test]
     async fn test_sink_returns_ok_when_channel_empty() {
-        let (_tx, rx) = mpsc::channel::<ExecutionEvent>(1);
+        let (tx, rx) = mpsc::channel::<ExecutionEvent>(1);
         let exit = CancellationToken::new();
 
         let sink = StdoutAuditSink::new();
@@ -134,7 +134,7 @@ mod tests {
 
         // Drop the sender so recv returns None immediately after
         // cancel.
-        drop(_tx);
+        drop(tx);
         exit.cancel();
 
         let result = handle.await;

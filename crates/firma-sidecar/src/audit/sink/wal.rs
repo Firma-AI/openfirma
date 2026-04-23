@@ -515,7 +515,7 @@ mod tests {
         let result = handle.await;
         assert!(result.is_ok(), "task should not panic");
         assert!(
-            result.ok().and_then(|r| r.ok()).is_some(),
+            result.ok().and_then(std::result::Result::ok).is_some(),
             "sink should return Ok(())"
         );
 
@@ -605,13 +605,13 @@ mod tests {
         let wal_path = dir.path().join("empty.jsonl");
 
         let sink = WalAuditSink::new("http://127.0.0.1:1", &wal_path, 10 * 1024 * 1024);
-        let (_tx, rx) = mpsc::channel::<ExecutionEvent>(1);
+        let (tx, rx) = mpsc::channel::<ExecutionEvent>(1);
         let exit = CancellationToken::new();
 
         let exit_clone = exit.clone();
         let handle = tokio::spawn(async move { sink.run(rx, exit_clone).await });
 
-        drop(_tx);
+        drop(tx);
         exit.cancel();
 
         let result = handle.await;

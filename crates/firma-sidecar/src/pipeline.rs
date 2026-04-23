@@ -146,9 +146,15 @@ impl EnforcementPipeline {
         session_id: &str,
     ) -> (EnforcementDecision, AuditPayload) {
         let start = std::time::Instant::now();
+        let bundle_version = self.constraint_enforcer.policy_version();
 
         let decision = self.enforce_inner(request, session_id).await;
-        let payload = audit_payload_from_decision(&decision, session_id, start.elapsed());
+        let payload = audit_payload_from_decision(
+            &decision,
+            session_id,
+            start.elapsed(),
+            bundle_version.as_deref(),
+        );
 
         (decision, payload)
     }
@@ -300,11 +306,16 @@ impl EnforcementPipeline {
 ///
 /// This is a pure data extraction — no cryptography, no I/O. Designed
 /// to run on the enforcement hot path with < 1µs overhead.
+///
+/// `bundle_version` should be the version of the policy bundle that was
+/// active when enforcement ran. Pass `None` when the bundle version is
+/// unknown (e.g. in tests that do not wire a real `ConstraintEnforcer`).
 #[must_use]
 pub fn audit_payload_from_decision(
     decision: &EnforcementDecision,
     session_id: &str,
     enforcement_latency: Duration,
+    bundle_version: Option<&str>,
 ) -> AuditPayload {
     #[expect(
         clippy::cast_possible_truncation,
@@ -332,7 +343,7 @@ pub fn audit_payload_from_decision(
             DECISION_ALLOW,
             String::new(),
             claims.context_hash.clone(),
-            String::new(),
+            bundle_version.unwrap_or("").to_string(),
         ),
         EnforcementDecision::Deny {
             reason,
@@ -706,6 +717,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_enforce_scope_violation() {
+        struct DenyDeletePolicy;
+        impl PolicyEvaluation for DenyDeletePolicy {
+            fn evaluate(
+                &self,
+                _: &AgentId,
+                action: &str,
+                _: &str,
+                _: &serde_json::Value,
+            ) -> Result<bool, String> {
+                Ok(action != "filesystem.delete")
+            }
+            fn is_fresh(&self) -> bool {
+                true
+            }
+            fn version(&self) -> Option<String> {
+                Some("test".to_string())
+            }
+        }
+
         let rules = vec![MappingRuleConfig {
             method: Some("DELETE".to_string()),
             host: "api.example.com".to_string(),
@@ -729,25 +759,6 @@ mod tests {
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-
-        struct DenyDeletePolicy;
-        impl PolicyEvaluation for DenyDeletePolicy {
-            fn evaluate(
-                &self,
-                _: &AgentId,
-                action: &str,
-                _: &str,
-                _: &serde_json::Value,
-            ) -> Result<bool, String> {
-                Ok(action != "filesystem.delete")
-            }
-            fn is_fresh(&self) -> bool {
-                true
-            }
-            fn version(&self) -> Option<String> {
-                Some("test".to_string())
-            }
-        }
 
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(DenyDeletePolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -778,14 +789,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_enforce_validation_failure_short_circuits_enforcement() {
-        let claims = test_claims();
-        let rules = vec![MappingRuleConfig {
-            method: Some("POST".to_string()),
-            host: "api.openai.com".to_string(),
-            path: Some("/v1/chat/completions".to_string()),
-            action_class: "communication.external.send".to_string(),
-        }];
-
         struct RejectingVerifier;
         impl TokenVerifier for RejectingVerifier {
             fn verify(&self, _: &str) -> Result<CapabilityClaims, TokenError> {
@@ -794,6 +797,14 @@ mod tests {
                 })
             }
         }
+
+        let claims = test_claims();
+        let rules = vec![MappingRuleConfig {
+            method: Some("POST".to_string()),
+            host: "api.openai.com".to_string(),
+            path: Some("/v1/chat/completions".to_string()),
+            action_class: "communication.external.send".to_string(),
+        }];
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
 
@@ -986,14 +997,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_enforce_revoked_token_denied_through_pipeline() {
-        let claims = test_claims();
-        let rules = vec![MappingRuleConfig {
-            method: Some("POST".to_string()),
-            host: "api.openai.com".to_string(),
-            path: Some("/v1/chat/completions".to_string()),
-            action_class: "communication.external.send".to_string(),
-        }];
-
         struct RevokedStore;
         impl firma_core::RevocationStore for RevokedStore {
             fn is_revoked(&self, _token_id: &TokenId) -> Result<bool, firma_core::TokenError> {
@@ -1003,6 +1006,14 @@ mod tests {
                 Ok(())
             }
         }
+
+        let claims = test_claims();
+        let rules = vec![MappingRuleConfig {
+            method: Some("POST".to_string()),
+            host: "api.openai.com".to_string(),
+            path: Some("/v1/chat/completions".to_string()),
+            action_class: "communication.external.send".to_string(),
+        }];
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&rules));
         let capability_validator = CapabilityValidator::new(
@@ -1166,6 +1177,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_enforce_stale_bundle_denies() {
+        struct StalePolicy;
+        impl PolicyEvaluation for StalePolicy {
+            fn evaluate(
+                &self,
+                _: &AgentId,
+                _: &str,
+                _: &str,
+                _: &serde_json::Value,
+            ) -> Result<bool, String> {
+                Ok(true)
+            }
+            fn is_fresh(&self) -> bool {
+                false
+            }
+            fn version(&self) -> Option<String> {
+                None
+            }
+        }
+
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
             method: Some("POST".to_string()),
@@ -1185,25 +1215,6 @@ mod tests {
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
         );
-
-        struct StalePolicy;
-        impl PolicyEvaluation for StalePolicy {
-            fn evaluate(
-                &self,
-                _: &AgentId,
-                _: &str,
-                _: &str,
-                _: &serde_json::Value,
-            ) -> Result<bool, String> {
-                Ok(true)
-            }
-            fn is_fresh(&self) -> bool {
-                false
-            }
-            fn version(&self) -> Option<String> {
-                None
-            }
-        }
 
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(StalePolicy));
 
@@ -1276,6 +1287,10 @@ mod tests {
         assert_eq!(payload.agent_id, "agent_test");
         assert_eq!(payload.action, "communication.external.send");
         assert!(payload.enforcement_latency_us >= 0);
+        assert_eq!(
+            payload.bundle_version, "test-v1",
+            "bundle_version must be populated from ConstraintEnforcer in Allow audit events"
+        );
     }
 
     #[tokio::test]

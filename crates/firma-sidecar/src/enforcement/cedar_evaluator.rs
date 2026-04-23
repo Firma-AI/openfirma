@@ -498,11 +498,11 @@ namespace Firma {
 
     #[test]
     fn cedar_policy_denies_when_budget_remaining_negative() {
-        let policy_src = br#"
+        let policy_src = br"
             forbid(principal, action, resource)
             when { context.budget_remaining < 0 };
             permit(principal, action, resource);
-        "#;
+        ";
         let bundle = schema_bundle(policy_src);
         let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
         let context = json!({
@@ -529,11 +529,11 @@ namespace Firma {
 
     #[test]
     fn cedar_policy_denies_when_risk_score_exceeds_threshold() {
-        let policy_src = br#"
+        let policy_src = br"
             forbid(principal, action, resource)
             when { context.risk_score > 50 };
             permit(principal, action, resource);
-        "#;
+        ";
         let bundle = schema_bundle(policy_src);
         let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
         let context = json!({

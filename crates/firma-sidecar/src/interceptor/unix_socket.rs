@@ -459,7 +459,7 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
         Arc::new(RequestHandler::new(
             pipeline,
-            crate::handler::test_connector_registry(),
+            crate::handler::tests::test_connector_registry(),
             tx,
         ))
     }
@@ -538,9 +538,8 @@ mod tests {
             let mut tmp = [0u8; 4096];
             loop {
                 match stream.read(&mut tmp).await {
-                    Ok(0) => break,
+                    Ok(0) | Err(_) => break,
                     Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                    Err(_) => break,
                 }
                 // If we have a full HTTP response (headers + body), stop
                 // waiting for more data.
