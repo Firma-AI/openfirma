@@ -152,7 +152,7 @@ mod tests {
             envelope: Box::new(ExecutionEnvelope::new(
                 firma_core::ExecutionIntent {
                     action_class: "filesystem.read".to_string(),
-                    resource: "example.com".to_string(),
+                    resource: firma_core::ExecutionIntent::resource_map_from("example.com"),
                     params: firma_core::ActionParams::Http(firma_core::HttpParams {
                         method: firma_core::HttpMethod::GET,
                         headers: std::collections::HashMap::new(),

@@ -56,8 +56,84 @@ implementation choice (encoded in `registry.rs::RiskLevel`), not part of
 the FEP spec. They drive telemetry grouping and default HITL thresholds;
 they do NOT drive Cedar decisions on their own.
 
+### GitHub coverage — extended in-place
+
+The registry appends 12 classes covering code/issue/repo/notification/security
+domains so the OSS Sidecar can classify GitHub REST traffic deterministically
+without encoding the provider into the action class. Extension is **in-place**
+on `ActionClassRegistry::v0_1()` — no registry version bump. A future FEP
+revision should absorb these or mark them optional.
+
+| Action class            | Domain        | Risk     | Notes                                                 |
+|-------------------------|---------------|----------|-------------------------------------------------------|
+| `code.read`             | Code          | Low      | Read repository / code content                        |
+| `code.review.read`      | Code          | Low      | Read pull-request review surface                      |
+| `code.review.submit`    | Code          | Medium   | Submit / mutate a PR review                           |
+| `code.write`            | Code          | High     | Mutate code, create or update PRs, push refs          |
+| `code.destructive`      | Code          | High     | Delete files or git refs                              |
+| `code.merge`            | Code          | Critical | Merge a pull request into a target branch             |
+| `issue.read`            | Issue         | Low      | Read issues and issue comments                        |
+| `issue.write`           | Issue         | Medium   | Create or mutate issues and issue comments            |
+| `notification.manage`   | Notification  | Low      | Manage notification state / subscriptions             |
+| `security.alert.read`   | Security      | Medium   | Read code-scanning / secret-scanning alerts           |
+| `repo.lifecycle`        | Repo          | Medium   | Create / fork repositories                            |
+| `repo.admin`            | Repo          | Critical | Mutate repo settings / branch protection              |
+
 Reserved for a future minor revision (MUST NOT appear in v0.1 policies):
 `memory.read`, `memory.write`, `browser.navigate`.
+
+## Resource shape
+
+`intent.resource` is a `BTreeMap<String, String>` (not a string). `BTreeMap`
+guarantees deterministic iteration and serialization so audit output is
+byte-stable and hashing is reproducible.
+
+Conventional keys:
+
+- `host` — request host (always present for HTTP intents).
+- `path` — request path (always present for HTTP intents).
+- `provider` — logical provider when detectable. Currently attached only when
+  the request host exact-matches a known allowlist. For v0.1 the allowlist is
+  `{"api.github.com", "github.com"}` → `provider = "github"`. Exact match is
+  deliberate: typo-squat hostnames (e.g. `api.github.com.evil.example`) MUST
+  NOT earn the tag.
+
+Implementations MAY add free-form keys without protocol churn. No other keys
+are reserved.
+
+Scope checks, the Cedar `PolicyEvaluator::evaluate` API, and the
+`GenericHttpConnector` URL construction all consume a single string derived
+via `ExecutionIntent::resource_display()` = `format!("{host}{path}")`.
+Structured Cedar attribute access (keyed on `resource.provider` etc.) is
+deferred to a follow-up task.
+
+## Shipping mapping files
+
+Operator-facing mapping files ship under
+`crates/firma-sidecar/config/mappings/`:
+
+| File          | Covers                                                |
+|---------------|-------------------------------------------------------|
+| `github.toml` | 44 GitHub REST endpoints → 12 action classes            |
+
+Enable a shipped file via the sidecar `[enforcement.mapping]` config:
+
+```toml
+# Option 1 — use the shipped file as the sole mapping source.
+[enforcement.mapping]
+rules_path = "crates/firma-sidecar/config/mappings/github.toml"
+
+# Option 2 — merge the shipped file on top of a local default.
+[enforcement.mapping]
+rules_path = "config/mappings/default.toml"
+rules_paths = ["crates/firma-sidecar/config/mappings/github.toml"]
+```
+
+`rules_paths` is additive. Rule lists from `rules_path` and each `rules_paths`
+entry are concatenated before `MappingTable::from_config` runs specificity
+sort. Duplicate `(method, host, path)` tuples across merged files fail at
+startup (fail-closed) — the loader rejects collisions rather than silently
+preferring one source.
 
 ## Naming rules (FEP §2.3.2)
 

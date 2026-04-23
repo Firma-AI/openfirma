@@ -106,10 +106,11 @@ impl CapabilityValidator {
         session_id: &str,
     ) -> Result<ValidatedCapability, EnforcementDecision> {
         // Step 1: Select capability token from map (ADR-002)
+        let resource_display = envelope.intent.resource_display();
         let entry = self.capability_map.select(
             session_id,
             &envelope.intent.action_class,
-            &envelope.intent.resource,
+            &resource_display,
         )?;
 
         // Step 2: Validate selected token
@@ -372,7 +373,7 @@ mod tests {
         let envelope = NormalizedEnvelope {
             intent: firma_core::ExecutionIntent {
                 action_class: "communication.external.send".to_string(),
-                resource: "api.openai.com/v1/chat".to_string(),
+                resource: firma_core::ExecutionIntent::resource_map_from("api.openai.com/v1/chat"),
                 params: firma_core::ActionParams::Http(firma_core::HttpParams {
                     method: firma_core::HttpMethod::POST,
                     headers: std::collections::HashMap::new(),
@@ -410,7 +411,7 @@ mod tests {
         let envelope = NormalizedEnvelope {
             intent: firma_core::ExecutionIntent {
                 action_class: "filesystem.delete".to_string(), // not in token's action_set
-                resource: "any.resource".to_string(),
+                resource: firma_core::ExecutionIntent::resource_map_from("any.resource"),
                 params: firma_core::ActionParams::Http(firma_core::HttpParams {
                     method: firma_core::HttpMethod::DELETE,
                     headers: std::collections::HashMap::new(),

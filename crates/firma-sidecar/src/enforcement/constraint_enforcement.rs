@@ -153,10 +153,11 @@ impl ConstraintEnforcer {
         let context = self.build_context(envelope, claims, signals);
 
         // Step 5: Evaluate policies
+        let resource_display = envelope.intent.resource_display();
         match self.policy.evaluate(
             &claims.agent_id,
             &envelope.intent.action_class,
-            &envelope.intent.resource,
+            &resource_display,
             &context,
         ) {
             Ok(true) => Ok(()),
@@ -167,7 +168,7 @@ impl ConstraintEnforcer {
                 ),
                 detail: format!(
                     "policy denied action '{}' on resource '{}'",
-                    envelope.intent.action_class, envelope.intent.resource
+                    envelope.intent.action_class, resource_display
                 ),
                 envelope: Some(envelope.clone()),
             }),
@@ -234,7 +235,7 @@ impl ConstraintEnforcer {
         let policy = Arc::clone(&self.policy);
         let principal = claims.agent_id.clone();
         let action = envelope.intent.action_class.clone();
-        let resource = envelope.intent.resource.clone();
+        let resource = envelope.intent.resource_display();
         let eval_task = tokio::task::spawn_blocking(move || {
             policy.evaluate(&principal, &action, &resource, &context)
         });
@@ -270,7 +271,8 @@ impl ConstraintEnforcer {
                 ),
                 detail: format!(
                     "policy denied action '{}' on resource '{}'",
-                    envelope.intent.action_class, envelope.intent.resource
+                    envelope.intent.action_class,
+                    envelope.intent.resource_display()
                 ),
                 envelope: Some(envelope.clone()),
             }),
@@ -298,10 +300,10 @@ impl ConstraintEnforcer {
         claims: &CapabilityClaims,
     ) -> Result<(), EnforcementDecision> {
         let action = &envelope.intent.action_class;
-        let resource = &envelope.intent.resource;
+        let resource = envelope.intent.resource_display();
 
         if claims.action_set.iter().any(|a| a == "*") {
-            if matches_resource_scope(&claims.resource_scope, resource) {
+            if matches_resource_scope(&claims.resource_scope, &resource) {
                 return Ok(());
             }
             return Err(EnforcementDecision::Deny {
@@ -318,7 +320,7 @@ impl ConstraintEnforcer {
         }
 
         if claims.action_set.iter().any(|a| a == action) {
-            if matches_resource_scope(&claims.resource_scope, resource) {
+            if matches_resource_scope(&claims.resource_scope, &resource) {
                 return Ok(());
             }
             return Err(EnforcementDecision::Deny {
@@ -510,7 +512,7 @@ mod tests {
         NormalizedEnvelope {
             intent: ExecutionIntent {
                 action_class: action_class.to_string(),
-                resource: resource.to_string(),
+                resource: firma_core::ExecutionIntent::resource_map_from(resource),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::POST,
                     headers: HashMap::new(),
