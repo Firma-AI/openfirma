@@ -175,7 +175,7 @@ mod tests {
         let envelope = ExecutionEnvelope::new(
             ExecutionIntent {
                 action_class: "filesystem.read".to_string(),
-                resource: "https://api.example.com".to_string(),
+                resource: firma_core::ExecutionIntent::resource_map_from("https://api.example.com"),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
                     headers: HashMap::new(),

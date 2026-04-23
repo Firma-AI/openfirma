@@ -211,7 +211,9 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         ExecutionEnvelope::new(
             ExecutionIntent {
                 action_class: "communication.external.send".to_string(),
-                resource: "api.openai.com/v1/chat/completions".to_string(),
+                resource: firma_core::ExecutionIntent::resource_map_from(
+                    "api.openai.com/v1/chat/completions",
+                ),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::POST,
                     headers: HashMap::new(),
@@ -238,7 +240,9 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         NormalizedEnvelope {
             intent: ExecutionIntent {
                 action_class: "communication.external.send".to_string(),
-                resource: "api.openai.com/v1/chat/completions".to_string(),
+                resource: firma_core::ExecutionIntent::resource_map_from(
+                    "api.openai.com/v1/chat/completions",
+                ),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::POST,
                     headers: HashMap::new(),

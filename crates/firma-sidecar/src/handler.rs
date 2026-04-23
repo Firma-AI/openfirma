@@ -364,7 +364,8 @@ impl RequestHandler {
         envelope: ExecutionEnvelope,
         credentials: InjectedCredentials,
     ) -> (HandledResponse, DispatchOutcome) {
-        let host = extract_host(envelope.intent().resource.as_str()).unwrap_or_default();
+        let resource_display = envelope.intent().resource_display();
+        let host = extract_host(&resource_display).unwrap_or_default();
         let connector = self.connector_registry.select(&host);
         // Derive the denial context up-front: `TransportView::new`
         // consumes the envelope below, and connector-originated
@@ -444,7 +445,9 @@ impl RequestHandler {
 fn passthrough_envelope(request: &RawRequest, session_id: &str) -> ExecutionEnvelope {
     let method = parse_http_method(&request.method);
     let scheme = if request.is_https { "https" } else { "http" };
-    let resource = format!("{}{}", request.host, request.path);
+    let mut resource = std::collections::BTreeMap::new();
+    resource.insert("host".to_string(), request.host.clone());
+    resource.insert("path".to_string(), request.path.clone());
     let intent = ExecutionIntent {
         action_class: "passthrough".to_string(),
         resource,
@@ -984,7 +987,7 @@ mod tests {
         let envelope = NormalizedEnvelope {
             intent: ExecutionIntent {
                 action_class: "tool.generic".to_string(),
-                resource: "my_tool".to_string(),
+                resource: firma_core::ExecutionIntent::resource_map_from("my_tool"),
                 params: ActionParams::ToolUse(ToolUseParams {
                     tool_name: "my_tool".to_string(),
                     input: HashMap::new(),
@@ -1002,7 +1005,9 @@ mod tests {
         let envelope = NormalizedEnvelope {
             intent: ExecutionIntent {
                 action_class: "filesystem.read".to_string(),
-                resource: "https://example.test/resource".to_string(),
+                resource: firma_core::ExecutionIntent::resource_map_from(
+                    "https://example.test/resource",
+                ),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
                     headers: HashMap::new(),
@@ -1023,7 +1028,7 @@ mod tests {
         let envelope = NormalizedEnvelope {
             intent: ExecutionIntent {
                 action_class: "credential.read".to_string(),
-                resource: "pg://orders".to_string(),
+                resource: firma_core::ExecutionIntent::resource_map_from("pg://orders"),
                 params: ActionParams::DbQuery(DbQueryParams {
                     query_name: "select_orders".to_string(),
                     bindings: HashMap::new(),
@@ -1053,7 +1058,7 @@ mod tests {
         let envelope = NormalizedEnvelope {
             intent: ExecutionIntent {
                 action_class: "tool.generic".to_string(),
-                resource: "my_tool".to_string(),
+                resource: firma_core::ExecutionIntent::resource_map_from("my_tool"),
                 params: ActionParams::ToolUse(ToolUseParams {
                     tool_name: "my_tool".to_string(),
                     input: HashMap::new(),

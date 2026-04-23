@@ -38,29 +38,35 @@ pub struct PipelineRuntime {
 ///
 /// Returns an error when pipeline component construction fails.
 pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<PipelineRuntime> {
-    let rules_content =
-        std::fs::read_to_string(&config.enforcement.mapping.rules_path).map_err(|e| {
-            anyhow::anyhow!(
-                "failed to read mapping rules from '{}': {e}",
-                config.enforcement.mapping.rules_path
-            )
+    let mut all_rules: Vec<config::MappingRuleConfig> = Vec::new();
+
+    let primary_path = &config.enforcement.mapping.rules_path;
+    let primary_content = std::fs::read_to_string(primary_path)
+        .map_err(|e| anyhow::anyhow!("failed to read mapping rules from '{primary_path}': {e}"))?;
+    let primary_file: config::MappingRulesFile = toml::from_str(&primary_content)
+        .map_err(|e| anyhow::anyhow!("failed to parse mapping rules '{primary_path}': {e}"))?;
+    primary_file
+        .validate()
+        .map_err(|e| anyhow::anyhow!("invalid mapping rules '{primary_path}': {e}"))?;
+    all_rules.extend(primary_file.rules);
+
+    for extra_path in &config.enforcement.mapping.rules_paths {
+        let extra_content = std::fs::read_to_string(extra_path).map_err(|e| {
+            anyhow::anyhow!("failed to read mapping rules from '{extra_path}': {e}")
         })?;
-    let rules_file: config::MappingRulesFile = toml::from_str(&rules_content).map_err(|e| {
-        anyhow::anyhow!(
-            "failed to parse mapping rules '{}': {e}",
-            config.enforcement.mapping.rules_path
-        )
-    })?;
-    rules_file.validate().map_err(|e| {
-        anyhow::anyhow!(
-            "invalid mapping rules '{}': {e}",
-            config.enforcement.mapping.rules_path
-        )
-    })?;
+        let extra_file: config::MappingRulesFile = toml::from_str(&extra_content)
+            .map_err(|e| anyhow::anyhow!("failed to parse mapping rules '{extra_path}': {e}"))?;
+        extra_file
+            .validate()
+            .map_err(|e| anyhow::anyhow!("invalid mapping rules '{extra_path}': {e}"))?;
+        all_rules.extend(extra_file.rules);
+    }
+
+    let merged_file = config::MappingRulesFile { rules: all_rules };
 
     let registry = pipeline::ActionClassRegistry::v0_1();
     let table = pipeline::MappingTable::from_config(
-        &rules_file,
+        &merged_file,
         &registry,
         config.enforcement.mapping.default_protected,
     )
