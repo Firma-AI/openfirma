@@ -21,8 +21,8 @@ use crate::credential;
 ///
 /// Returns an error if a basic-mode entry references a missing or
 /// empty environment variable.
-pub fn build_credential_injector(
-    creds: &HashMap<String, config::CredentialConfig>,
+pub fn build_credential_injector<S: std::hash::BuildHasher>(
+    creds: &HashMap<String, config::CredentialConfig, S>,
 ) -> anyhow::Result<Box<dyn credential::CredentialInjector>> {
     use config::CredentialMode;
 

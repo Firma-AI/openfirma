@@ -41,10 +41,6 @@ pub struct VaultCredentialInjector {
     entries: HashMap<String, Vec<VaultSecretEntry>>,
 }
 
-#[expect(
-    dead_code,
-    reason = "public API consumed by connector/interceptor callers once wired"
-)]
 impl VaultCredentialInjector {
     /// Creates a new injector from a pre-built mapping of connector
     /// IDs to secret entry lists.

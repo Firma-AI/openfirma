@@ -34,6 +34,10 @@ impl ExponentialBackoff {
     ///
     /// Applies symmetric jitter within ±15% of the current base so reconnect
     /// storms spread out in both directions rather than biasing upward.
+    #[allow(
+        clippy::should_implement_trait,
+        reason = "Backoff is not an iterator; `next` names the next delay"
+    )]
     pub fn next(&mut self) -> Duration {
         let base = self.current.min(self.max);
         let jitter = self.rng.random_range(0.85..=1.15);

@@ -27,15 +27,12 @@ use std::sync::Arc;
 use crate::audit::AuditPayload;
 use crate::authority_client::readiness::ReadinessView;
 use crate::credential::{CredentialInjectionError, CredentialInjector};
-use crate::enforcement::decision::EnforcementStage;
-// Re-export public API for pipeline callers (test-only)
-#[cfg(test)]
-pub use crate::credential::NullCredentialInjector;
 use crate::enforcement::SessionStateStore;
 pub use crate::enforcement::capability_map::CapabilityMap;
 pub use crate::enforcement::capability_validation::CapabilityValidator;
 pub use crate::enforcement::constraint_enforcement::{ConstraintEnforcer, PolicyEvaluation};
 pub use crate::enforcement::decision::EnforcementDecision;
+use crate::enforcement::decision::EnforcementStage;
 pub use crate::enforcement::registry::ActionClassRegistry;
 pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
 
@@ -125,7 +122,6 @@ impl EnforcementPipeline {
     /// Any expiry DENYs with `EnforcementTimeout` to preserve fail-closed
     /// behavior under load.
     #[must_use]
-    #[expect(dead_code, reason = "wired once config plumbs stage2 timeout through")]
     pub fn with_stage2_timeout(mut self, stage2_timeout: Duration) -> Self {
         self.stage2_timeout = Some(stage2_timeout);
         self
@@ -401,6 +397,7 @@ fn extract_host(resource: &str) -> &str {
 mod tests {
     use super::*;
     use crate::config::{MappingRuleConfig, MappingRulesFile};
+    use crate::credential::NullCredentialInjector;
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
     use crate::enforcement::registry::ActionClassRegistry;

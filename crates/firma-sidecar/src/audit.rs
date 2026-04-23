@@ -73,10 +73,6 @@ pub trait AuditSink {
 }
 
 /// An error that can occur on an [`AuditSink`].
-#[expect(
-    dead_code,
-    reason = "used by concrete sink implementations in follow-up"
-)]
 #[derive(Debug, thiserror::Error)]
 pub enum AuditSinkError {
     /// The audit sink failed to bind to the configured address or
