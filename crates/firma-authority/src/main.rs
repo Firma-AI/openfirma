@@ -1,24 +1,11 @@
-mod cedar_loader;
-mod config;
-mod error;
-mod revocation;
-mod service;
-
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
+use firma_core::TokenId;
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
-use tonic::transport::Server;
 
-use firma_core::token::paseto::PasetoV4Signer;
-use firma_proto::firma::v1::authority_service_server::AuthorityServiceServer;
-
-use crate::cedar_loader::CedarPolicyStore;
-use crate::config::AuthorityConfig;
-use crate::revocation::RevocationStore;
-use crate::service::AuthorityServiceImpl;
+use firma_authority::{AuthorityConfig, Server};
 
 #[derive(Parser)]
 #[command(
@@ -41,7 +28,7 @@ enum Commands {
     /// Revoke a capability token by ID.
     Revoke {
         /// The token ID to revoke.
-        token_id: String,
+        token_id: TokenId,
     },
     /// Generate a new Ed25519 key pair for token signing.
     GenerateKey {
@@ -77,105 +64,28 @@ async fn main() {
 
     match command {
         Commands::Serve => run_server(config).await,
-        Commands::Revoke { token_id } => run_revoke(&config, &token_id),
+        Commands::Revoke { token_id } => run_revoke(&config, token_id),
         Commands::GenerateKey { output } => run_generate_key(&output),
     }
 }
 
-async fn run_server(config: config::AuthorityConfig) {
-    tracing::info!(listen_addr = %config.listen_addr, "firma-authority starting");
-
-    // FR-9: Load Ed25519 signing key
-    let key_bytes = match std::fs::read(&config.key_file) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            tracing::error!(
-                path = %config.key_file.display(),
-                %error,
-                "failed to read signing key file — run `firma-authority generate-key` first"
-            );
-            std::process::exit(1);
-        }
-    };
-
-    let signer = match PasetoV4Signer::try_new(&key_bytes) {
-        Ok(s) => Arc::new(s),
+/// Run gRPC server.
+async fn run_server(config: AuthorityConfig) {
+    let server = match Server::try_new(config, shutdown_signal()).await {
+        Ok(s) => s,
         Err(e) => {
-            tracing::error!(error = %e, "invalid signing key");
+            tracing::error!(error = %e, "failed to initialize authority server");
             std::process::exit(1);
         }
     };
-
-    // FR-1: Load Cedar policies
-    let policy_store = match CedarPolicyStore::load(&config.policy_dir, config.bundle_ttl_seconds) {
-        Ok(store) => Arc::new(store),
-        Err(e) => {
-            tracing::error!(error = %e, "failed to load Cedar policies");
-            std::process::exit(1);
-        }
-    };
-
-    // Load revocation store
-    let revocation_store = match RevocationStore::new(&config.revocation_file) {
-        Ok(store) => Arc::new(store),
-        Err(e) => {
-            tracing::error!(error = %e, "failed to initialize revocation store");
-            std::process::exit(1);
-        }
-    };
-
-    // FR-2: Start policy directory watcher for hot-reload
-    let policy_watcher = match policy_store.watch() {
-        Ok(w) => Arc::new(w),
-        Err(e) => {
-            tracing::error!(error = %e, "failed to start policy directory watcher");
-            std::process::exit(1);
-        }
-    };
-
-    // Start revocation file watcher
-    let revocation_watcher = match revocation_store.watch() {
-        Ok(w) => Arc::new(w),
-        Err(e) => {
-            tracing::error!(error = %e, "failed to start revocation file watcher");
-            std::process::exit(1);
-        }
-    };
-
-    // Build gRPC service
-    let authority_service = AuthorityServiceImpl::new(
-        Arc::clone(&policy_store),
-        policy_watcher,
-        Arc::clone(&revocation_store),
-        revocation_watcher,
-        signer,
-        config.max_ttl_seconds,
-    );
-
-    let addr = config.listen_addr.parse().unwrap_or_else(|e| {
-        tracing::error!(error = %e, addr = %config.listen_addr, "invalid listen address");
-        std::process::exit(1);
-    });
-
-    tracing::info!(%addr, "gRPC server listening");
-
-    // FR-10: Health check via gRPC reflection / tonic-health could be added here.
-    // For V1, the gRPC server itself serves as the health indicator.
-
-    if let Err(e) = Server::builder()
-        .add_service(AuthorityServiceServer::new(authority_service))
-        .serve_with_shutdown(addr, shutdown_signal())
-        .await
-    {
-        tracing::error!(error = %e, "gRPC server error");
+    if let Err(error) = server.run().await {
+        tracing::error!(%error, "authority failed");
         std::process::exit(1);
     }
-
-    tracing::info!("firma-authority shut down gracefully");
 }
 
 /// FR-7: Revoke a token by appending its ID to the revocation file.
-fn run_revoke(config: &config::AuthorityConfig, token_id: &str) {
+fn run_revoke(config: &AuthorityConfig, token_id: TokenId) {
     use std::io::Write;
 
     let mut file = match std::fs::OpenOptions::new()

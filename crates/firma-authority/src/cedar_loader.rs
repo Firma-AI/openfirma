@@ -120,6 +120,7 @@ impl CedarPolicyStore {
     }
 
     /// Get the current policy bundle for distribution to sidecars.
+    #[must_use]
     pub fn bundle(&self) -> PolicyBundle {
         self.bundle_tx.borrow().clone()
     }
@@ -235,12 +236,12 @@ enum WatchBackend {
 impl CedarPolicyStoreWatcher {
     /// Subscribe to policy bundle updates. Returns the current bundle
     /// immediately, then yields on changes.
+    #[must_use]
     pub fn subscribe(&self) -> watch::Receiver<PolicyBundle> {
         self.tx.subscribe()
     }
 
     /// Abort the background reload task immediately.
-    #[expect(dead_code, reason = "explicit shutdown hook for callers that need it")]
     pub fn abort(&self) {
         self.task.abort();
     }

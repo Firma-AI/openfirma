@@ -1,6 +1,7 @@
 // Firma Core — shared types, traits, and error types for the Firma workspace.
 
 pub mod agent;
+pub mod cedar;
 pub mod connector;
 pub mod credential;
 pub mod decision;
@@ -11,6 +12,7 @@ pub mod token;
 pub mod transport;
 
 pub use agent::AgentId;
+pub use cedar::FirmaEntityUid;
 pub use connector::{Connector, ConnectorError, ConnectorResponse};
 pub use credential::InjectedCredentials;
 pub use decision::{Decision, DenyReason};

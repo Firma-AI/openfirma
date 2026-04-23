@@ -272,7 +272,7 @@ mod tests {
 
         match table.find_match("POST", "api.openai.com", "/v1/chat/completions") {
             MatchResult::Matched(rule) => {
-                assert_eq!(rule.action_class, "communication.external.send")
+                assert_eq!(rule.action_class, "communication.external.send");
             }
             other => panic!("expected Matched, got {other:?}"),
         }

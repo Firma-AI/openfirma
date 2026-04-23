@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use firma_core::CapabilityClaims;
 #[cfg(test)]
 use firma_core::TokenId;
+use firma_core::token::matches_resource_scope;
 
 use crate::enforcement::decision::{
     CapabilityValidationStage, EnforcementDecision, EnforcementStage,
@@ -158,7 +159,7 @@ impl CapabilityMap {
 
         if claims.resource_scope == "*" {
             score += 1;
-        } else if resource.starts_with(&claims.resource_scope) {
+        } else if matches_resource_scope(&claims.resource_scope, resource) {
             score += 50;
         } else if !claims.resource_scope.is_empty() {
             return 0;
