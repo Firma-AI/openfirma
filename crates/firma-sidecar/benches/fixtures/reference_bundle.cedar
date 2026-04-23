@@ -1,0 +1,110 @@
+forbid(
+  principal,
+  action == Firma::Action::"bench.action.deny",
+  resource
+);
+
+permit(
+  principal,
+  action == Firma::Action::"bench.action.ctx",
+  resource
+) when { context.budget_remaining >= 0 && context.risk_score < 100 };
+
+permit(principal == Firma::Agent::"agent-000", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-001", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-002", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-003", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-004", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-005", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-006", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-007", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-008", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-009", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-010", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-011", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-012", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-013", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-014", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-015", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-016", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-017", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-018", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-019", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-020", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-021", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-022", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-023", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-024", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-025", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-026", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-027", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-028", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-029", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-030", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-031", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-032", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-033", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-034", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-035", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-036", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-037", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-038", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-039", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-040", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-041", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-042", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-043", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-044", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-045", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-046", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-047", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-048", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-049", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-050", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-051", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-052", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-053", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-054", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-055", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-056", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-057", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-058", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-059", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-060", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-061", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-062", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-063", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-064", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-065", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-066", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-067", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-068", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-069", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-070", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-071", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-072", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-073", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-074", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-075", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-076", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-077", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-078", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-079", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-080", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-081", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-082", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-083", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-084", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-085", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-086", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-087", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-088", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-089", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-090", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-091", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-092", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-093", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-094", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-095", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agent-bench", action == Firma::Action::"communication.external.send", resource);
+permit(principal == Firma::Agent::"agent-bench", action == Firma::Action::"bench.action.allow", resource);

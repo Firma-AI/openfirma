@@ -143,30 +143,64 @@ impl CedarPolicyStore {
         let (tx_signal, mut rx_signal) = tokio::sync::mpsc::channel::<()>(16);
 
         let watch_path = path.clone();
-        let mut watcher = notify::recommended_watcher(
-            move |res: notify::Result<notify::Event>| match res {
-                Ok(event)
-                    if matches!(
-                        event.kind,
-                        notify::event::EventKind::Modify(_)
-                            | notify::event::EventKind::Create(_)
-                            | notify::event::EventKind::Remove(_)
-                    ) =>
-                {
-                    tracing::info!(path = %watch_path.display(), "policy directory changed; reloading");
-                    let _ = tx_signal.try_send(());
-                }
-                Err(error) => tracing::error!(?error, "policy directory watch error"),
-                _ => {}
-            },
-        )
-        .map_err(|e| AuthorityError::WatchFailed { reason: e.to_string() })?;
+        let event_handler = move |res: notify::Result<notify::Event>| match res {
+            Ok(event)
+                if matches!(
+                    event.kind,
+                    notify::event::EventKind::Modify(_)
+                        | notify::event::EventKind::Create(_)
+                        | notify::event::EventKind::Remove(_)
+                ) =>
+            {
+                tracing::info!(path = %watch_path.display(), "policy directory changed; reloading");
+                let _ = tx_signal.try_send(());
+            }
+            Err(error) => tracing::error!(?error, "policy directory watch error"),
+            _ => {}
+        };
 
-        watcher
-            .watch(&path, notify::RecursiveMode::NonRecursive)
-            .map_err(|e| AuthorityError::WatchFailed {
-                reason: e.to_string(),
-            })?;
+        #[cfg(target_os = "macos")]
+        let mut watcher =
+            {
+                // The workspace uses notify's kqueue backend on macOS. For local
+                // tempdir-based policy reloads, polling is more reliable than the
+                // native directory watcher and the added latency is acceptable for
+                // Authority-side hot reload.
+                let config = notify::Config::default()
+                    .with_poll_interval(std::time::Duration::from_millis(250));
+                WatchBackend::Poll(notify::PollWatcher::new(event_handler, config).map_err(
+                    |e| AuthorityError::WatchFailed {
+                        reason: e.to_string(),
+                    },
+                )?)
+            };
+
+        #[cfg(not(target_os = "macos"))]
+        let mut watcher =
+            WatchBackend::Recommended(notify::recommended_watcher(event_handler).map_err(|e| {
+                AuthorityError::WatchFailed {
+                    reason: e.to_string(),
+                }
+            })?);
+
+        match &mut watcher {
+            #[cfg(not(target_os = "macos"))]
+            WatchBackend::Recommended(inner) => {
+                inner
+                    .watch(&path, notify::RecursiveMode::Recursive)
+                    .map_err(|e| AuthorityError::WatchFailed {
+                        reason: e.to_string(),
+                    })?;
+            }
+            #[cfg(target_os = "macos")]
+            WatchBackend::Poll(inner) => {
+                inner
+                    .watch(&path, notify::RecursiveMode::Recursive)
+                    .map_err(|e| AuthorityError::WatchFailed {
+                        reason: e.to_string(),
+                    })?;
+            }
+        }
 
         let task = tokio::spawn(async move {
             while rx_signal.recv().await.is_some() {
@@ -187,9 +221,16 @@ impl CedarPolicyStore {
 /// Owns the file watcher and reload task for a [`CedarPolicyStore`].
 /// Dropping this handle stops the file watch and the reload task.
 pub struct CedarPolicyStoreWatcher {
-    _watcher: notify::RecommendedWatcher,
+    _watcher: WatchBackend,
     task: JoinHandle<()>,
     tx: watch::Sender<PolicyBundle>,
+}
+
+enum WatchBackend {
+    #[cfg(not(target_os = "macos"))]
+    Recommended(notify::RecommendedWatcher),
+    #[cfg(target_os = "macos")]
+    Poll(notify::PollWatcher),
 }
 
 impl CedarPolicyStoreWatcher {
@@ -229,7 +270,6 @@ fn read_policy_files(policy_dir: &Path) -> Result<(String, String), AuthorityErr
     for entry in &entries {
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "cedar") {
-            tracing::debug!(path = %path.display(), "reading policy file");
             let content =
                 std::fs::read_to_string(&path).map_err(|e| AuthorityError::PolicyLoadFailed {
                     reason: format!("cannot read {}: {e}", path.display()),
@@ -240,8 +280,6 @@ fn read_policy_files(policy_dir: &Path) -> Result<(String, String), AuthorityErr
             policies.push_str(&content);
         }
     }
-
-    tracing::debug!(policies_len = policies.len(), "finished reading policies");
 
     // Try to load schema
     let schema_src = try_read_schema(policy_dir).unwrap_or_default();
@@ -308,6 +346,7 @@ fn compute_version_hash(policies: &str, schema: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use std::fs;
@@ -397,18 +436,27 @@ mod tests {
         let watcher = store.watch().unwrap_or_else(|e| panic!("{e}"));
         let mut rx = watcher.subscribe();
         let _ = rx.borrow_and_update().clone(); // mark initial value as seen
+        tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
 
         std::fs::write(
-            dir.path().join("basic.cedar"),
+            dir.path().join("deny.cedar"),
             "forbid(principal, action, resource);",
         )
         .unwrap_or_else(|e| panic!("{e}"));
 
-        // The watch::changed() future is the completion signal — no polling needed.
-        tokio::time::timeout(tokio::time::Duration::from_millis(500), rx.changed())
-            .await
-            .unwrap_or_else(|_| panic!("timed out waiting for policy reload"))
-            .unwrap_or_else(|e| panic!("{e}"));
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+        loop {
+            if store.bundle().version != v1 {
+                break;
+            }
+            let now = tokio::time::Instant::now();
+            assert!(now < deadline, "timed out waiting for policy reload");
+            let remaining = deadline.saturating_duration_since(now);
+            tokio::time::timeout(remaining, rx.changed())
+                .await
+                .unwrap_or_else(|_| panic!("timed out waiting for policy reload"))
+                .unwrap_or_else(|e| panic!("{e}"));
+        }
 
         assert_ne!(store.bundle().version, v1);
     }
@@ -420,24 +468,59 @@ mod tests {
         let watcher = store.watch().unwrap_or_else(|e| panic!("{e}"));
         let mut rx = watcher.subscribe();
         let _ = rx.borrow_and_update().clone(); // mark initial value as seen
+        tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
 
         std::fs::write(
-            dir.path().join("basic.cedar"),
+            dir.path().join("deny.cedar"),
             "forbid(principal, action, resource);",
         )
         .unwrap_or_else(|e| panic!("{e}"));
 
-        tokio::time::timeout(tokio::time::Duration::from_millis(500), rx.changed())
-            .await
-            .unwrap_or_else(|_| panic!("timed out waiting for bundle update"))
-            .unwrap_or_else(|e| panic!("{e}"));
+        let initial_bundle = rx.borrow().clone();
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+        loop {
+            let bundle = rx.borrow().clone();
+            if bundle.version != initial_bundle.version {
+                break;
+            }
+            let now = tokio::time::Instant::now();
+            assert!(now < deadline, "timed out waiting for bundle update");
+            let remaining = deadline.saturating_duration_since(now);
+            tokio::time::timeout(remaining, rx.changed())
+                .await
+                .unwrap_or_else(|_| panic!("timed out waiting for bundle update"))
+                .unwrap_or_else(|e| panic!("{e}"));
+        }
 
         let bundle = rx.borrow_and_update().clone();
         assert!(!bundle.version.is_empty());
+        assert_ne!(bundle.version, initial_bundle.version);
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)]
+    fn extended_enforcement_context_parses() {
+        use cedar_policy::{Context, EntityUid, Schema};
+
+        const SCHEMA_SRC: &str = include_str!("../policies/schema.cedarschema");
+        let (schema, _) = Schema::from_cedarschema_str(SCHEMA_SRC)
+            .unwrap_or_else(|e| panic!("schema parse failed: {e}"));
+        let action_uid: EntityUid = "Firma::Action::\"communication.external.send\""
+            .parse()
+            .unwrap_or_else(|e| panic!("action parse: {e}"));
+        let context_json = serde_json::json!({
+            "session_id": "sess_test",
+            "timestamp_ms": 0i64,
+            "params": "{}",
+            "risk_score": 0i64,
+            "budget_remaining": 1000i64,
+            "session_duration_s": 42i64,
+            "action_count": 3i64,
+        });
+        Context::from_json_value(context_json, Some((&schema, &action_uid)))
+            .unwrap_or_else(|e| panic!("context validation failed: {e}"));
+    }
+
+    #[test]
     fn schema_supports_firma_actions() {
         use cedar_policy::{
             Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request, Schema,
@@ -462,25 +545,36 @@ mod tests {
             "system.install",
         ];
 
-        let (schema, _) = Schema::from_cedarschema_str(SCHEMA_SRC).unwrap();
+        let (schema, _) = Schema::from_cedarschema_str(SCHEMA_SRC)
+            .unwrap_or_else(|e| panic!("schema parse failed: {e}"));
         let policy_set = "permit(principal, action, resource);"
             .parse::<PolicySet>()
-            .unwrap();
-
+            .unwrap_or_else(|e| panic!("policy parse failed: {e}"));
         let context_json = serde_json::json!({
             "session_id": "sess_test",
             "timestamp_ms": 0i64,
             "params": "{}",
             "risk_score": 0i64,
+            "budget_remaining": i64::MAX,
+            "session_duration_s": 0i64,
+            "action_count": 0i64,
         });
 
         for action in ACTIONS {
-            let principal: EntityUid = "Firma::Agent::\"agent_test\"".parse().unwrap();
-            let action_uid: EntityUid = format!("Firma::Action::\"{action}\"").parse().unwrap();
-            let resource: EntityUid = "Firma::Resource::\"r\"".parse().unwrap();
+            let principal: EntityUid = "Firma::Agent::\"agent_test\""
+                .to_string()
+                .parse()
+                .unwrap_or_else(|e| panic!("principal parse failed: {e}"));
+            let action_uid: EntityUid = format!("Firma::Action::\"{action}\"")
+                .parse()
+                .unwrap_or_else(|e| panic!("action parse failed for '{action}': {e}"));
+            let resource: EntityUid = "Firma::Resource::\"r\""
+                .to_string()
+                .parse()
+                .unwrap_or_else(|e| panic!("resource parse failed: {e}"));
 
             let ctx = Context::from_json_value(context_json.clone(), Some((&schema, &action_uid)))
-                .unwrap();
+                .unwrap_or_else(|e| panic!("context build failed for '{action}': {e}"));
 
             let request = Request::new(
                 Some(principal),
@@ -489,7 +583,7 @@ mod tests {
                 ctx,
                 Some(&schema),
             )
-            .unwrap();
+            .unwrap_or_else(|e| panic!("request build failed for '{action}': {e}"));
 
             let response =
                 Authorizer::new().is_authorized(&request, &policy_set, &Entities::empty());

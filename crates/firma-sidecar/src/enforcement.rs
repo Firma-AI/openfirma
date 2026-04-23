@@ -20,14 +20,16 @@
 //! - [`decision`] — Unified ALLOW/DENY result type for every enforcement call.
 //! - [`error`] — Internal error types; every variant maps to a DENY decision
 //!   (fail-closed boundary).
-//! - [`config`] — Deserialized enforcement configuration (TOML).
 //! - [`registry`] — Canonical Action Class Registry v0.1 (15 action classes).
+//! - [`revocation`] — Bloom filter + LRU revocation cache.
 
-pub(crate) mod capability_map;
-pub(crate) mod capability_validation;
-pub(crate) mod cedar_evaluator;
-pub(crate) mod config;
-pub(crate) mod constraint_enforcement;
-pub(crate) mod decision;
-pub(crate) mod error;
-pub(crate) mod registry;
+pub mod capability_map;
+pub mod capability_validation;
+pub mod cedar_evaluator;
+pub mod constraint_enforcement;
+pub mod decision;
+pub mod error;
+pub mod registry;
+pub mod revocation;
+pub mod session_state;
+pub use session_state::{LruSessionStateStore, SessionStateStore};

@@ -159,6 +159,9 @@ message CapabilityToken {
   bytes signature = 9;
   // Token encoding format.
   TokenFormat format = 10;
+  // Maximum cumulative budget granted by the Authority (e.g., API cost
+  // in USD). Optional — absent means unbounded.
+  optional double budget_ceiling = 11;
 }
 
 // EnforcementDecision is the outcome of Sidecar evaluation.
