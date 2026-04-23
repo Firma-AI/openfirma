@@ -35,7 +35,11 @@
 use super::cedar_evaluator::CedarEvaluatorError;
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
 use crate::normalizer::NormalizedEnvelope;
-use firma_core::{agent::AgentId, decision::DenyReason, token::CapabilityClaims};
+use firma_core::{
+    agent::AgentId,
+    decision::DenyReason,
+    token::{CapabilityClaims, matches_resource_scope},
+};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::watch;
 
@@ -357,14 +361,40 @@ impl ConstraintEnforcer {
         claims: &CapabilityClaims,
     ) -> Result<(), EnforcementDecision> {
         let action = &envelope.intent.action_class;
+        let resource = &envelope.intent.resource;
 
-        // Wildcard means all actions allowed
         if claims.action_set.iter().any(|a| a == "*") {
-            return Ok(());
+            if matches_resource_scope(&claims.resource_scope, resource) {
+                return Ok(());
+            }
+            return Err(EnforcementDecision::Deny {
+                reason: DenyReason::ScopeViolation,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::ScopeCheck,
+                ),
+                detail: format!(
+                    "resource '{}' not in token's scope '{}'",
+                    resource, claims.resource_scope
+                ),
+                envelope: Some(envelope.clone()),
+            });
         }
 
         if claims.action_set.iter().any(|a| a == action) {
-            return Ok(());
+            if matches_resource_scope(&claims.resource_scope, resource) {
+                return Ok(());
+            }
+            return Err(EnforcementDecision::Deny {
+                reason: DenyReason::ScopeViolation,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::ScopeCheck,
+                ),
+                detail: format!(
+                    "resource '{}' not in token's scope '{}'",
+                    resource, claims.resource_scope
+                ),
+                envelope: Some(envelope.clone()),
+            });
         }
 
         Err(EnforcementDecision::Deny {
@@ -534,10 +564,14 @@ mod tests {
     }
 
     fn test_envelope(action_class: &str) -> NormalizedEnvelope {
+        test_envelope_with_resource(action_class, "api.openai.com/v1/chat/completions")
+    }
+
+    fn test_envelope_with_resource(action_class: &str, resource: &str) -> NormalizedEnvelope {
         NormalizedEnvelope {
             intent: ExecutionIntent {
                 action_class: action_class.to_string(),
-                resource: "api.openai.com/v1/chat/completions".to_string(),
+                resource: resource.to_string(),
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::POST,
                     headers: HashMap::new(),
@@ -552,12 +586,16 @@ mod tests {
     }
 
     fn test_claims(actions: Vec<&str>) -> CapabilityClaims {
+        test_claims_with_scope(actions, "*")
+    }
+
+    fn test_claims_with_scope(actions: Vec<&str>, resource_scope: &str) -> CapabilityClaims {
         CapabilityClaims {
             token_id: TokenId::new(),
             agent_id: "agent_test".parse().unwrap(),
             session_id: "sess_001".parse().unwrap(),
             action_set: actions.into_iter().map(String::from).collect(),
-            resource_scope: "*".to_string(),
+            resource_scope: resource_scope.to_string(),
             issued_at: Utc::now(),
             expiry: Utc::now() + chrono::Duration::hours(1),
             context_hash: String::new(),
@@ -652,5 +690,76 @@ mod tests {
 
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::EnforcementTimeout));
+    }
+
+    #[test]
+    fn test_resource_scope_prefix_allows_matching_resource() {
+        let evaluator = ConstraintEnforcer::fixed(AllowAllPolicy);
+        let envelope = test_envelope_with_resource(
+            "communication.external.send",
+            "api.openai.com/v1/chat/completions",
+        );
+        let claims =
+            test_claims_with_scope(vec!["communication.external.send"], "api.openai.com/*");
+
+        let result = evaluator.evaluate(&envelope, &claims);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_resource_scope_exact_match_allows() {
+        let evaluator = ConstraintEnforcer::fixed(AllowAllPolicy);
+        let envelope = test_envelope_with_resource(
+            "communication.external.send",
+            "api.openai.com/v1/chat/completions",
+        );
+        let claims = test_claims_with_scope(
+            vec!["communication.external.send"],
+            "api.openai.com/v1/chat/completions",
+        );
+
+        let result = evaluator.evaluate(&envelope, &claims);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_resource_scope_denies_different_host() {
+        let evaluator = ConstraintEnforcer::fixed(AllowAllPolicy);
+        let envelope =
+            test_envelope_with_resource("communication.external.send", "other.example.com/v1/data");
+        let claims =
+            test_claims_with_scope(vec!["communication.external.send"], "api.openai.com/*");
+
+        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        assert!(decision.is_deny());
+        assert_eq!(decision.deny_reason(), Some(DenyReason::ScopeViolation));
+    }
+
+    #[test]
+    fn test_resource_scope_denies_subpath_mismatch() {
+        let evaluator = ConstraintEnforcer::fixed(AllowAllPolicy);
+        let envelope = test_envelope_with_resource(
+            "communication.external.send",
+            "api.openai.com/v1/chat/completions",
+        );
+        let claims = test_claims_with_scope(
+            vec!["communication.external.send"],
+            "api.openai.com/v1/files",
+        );
+
+        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        assert!(decision.is_deny());
+        assert_eq!(decision.deny_reason(), Some(DenyReason::ScopeViolation));
+    }
+
+    #[test]
+    fn test_resource_scope_wildcard_action_denied_by_resource_scope() {
+        let evaluator = ConstraintEnforcer::fixed(AllowAllPolicy);
+        let envelope = test_envelope_with_resource("system.execute", "other.example.com/anything");
+        let claims = test_claims_with_scope(vec!["*"], "api.openai.com/*");
+
+        let decision = evaluator.evaluate(&envelope, &claims).unwrap_err();
+        assert!(decision.is_deny());
+        assert_eq!(decision.deny_reason(), Some(DenyReason::ScopeViolation));
     }
 }
