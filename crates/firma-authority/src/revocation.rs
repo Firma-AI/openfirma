@@ -411,14 +411,14 @@ mod tests {
     }
 
     #[test]
-    fn test_new_revocation_store_empty() {
+    fn new_revocation_store_empty() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
         assert!(RevocationStore::try_new(&file, ttl_1h()).is_ok());
     }
 
     #[test]
-    fn test_load_existing_revocations_legacy_format() {
+    fn load_existing_revocations_legacy_format() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
         let id1 = TokenId::new();
@@ -431,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_existing_revocations_new_format() {
+    fn load_existing_revocations_new_format() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
         let id = TokenId::new();
@@ -445,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_ignores_empty_lines() {
+    fn load_ignores_empty_lines() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
         let id1 = TokenId::new();
@@ -456,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn test_expired_entries_skipped_on_load() {
+    fn expired_entries_skipped_on_load() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
         let id = TokenId::new();
@@ -471,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn test_non_expired_entries_loaded() {
+    fn non_expired_entries_loaded() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
         let id = TokenId::new();
@@ -486,7 +486,7 @@ mod tests {
     /// After the first broadcast the ID is in memory, so a second `revoke()` is
     /// a no-op (idempotency check passes in-memory) and the entry count stays 1.
     #[tokio::test]
-    async fn test_revoke_idempotent() {
+    async fn revoke_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
         std::fs::write(&file, "").unwrap();
@@ -508,7 +508,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_revoke_writes_timestamp_and_reason() {
+    async fn revoke_writes_timestamp_and_reason() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
         std::fs::write(&file, "").unwrap();
@@ -537,7 +537,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_is_revoked() {
+    async fn is_revoked() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
         std::fs::write(&file, "").unwrap();
@@ -560,7 +560,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_events_since() {
+    async fn events_since() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
         std::fs::write(&file, "").unwrap();
@@ -593,7 +593,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_compact_file_removes_expired() {
+    async fn compact_file_removes_expired() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("revocations.txt");
 
