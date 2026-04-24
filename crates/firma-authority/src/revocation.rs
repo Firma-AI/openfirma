@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::{Context as _, Result};
 use chrono::{DateTime, Duration, Utc};
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::{RwLock, broadcast};
 use tokio::task::JoinHandle;
 
-use crate::error::AuthorityError;
 use firma_core::token::TokenId;
 
 /// An event representing the revocation of a capability token.
@@ -54,8 +54,8 @@ impl RevocationStore {
     ///
     /// # Errors
     ///
-    /// Returns `AuthorityError` if the file exists but cannot be read.
-    pub fn try_new(revocation_file: &Path, token_ttl: Duration) -> Result<Self, AuthorityError> {
+    /// Returns an error if the file exists but cannot be read.
+    pub fn try_new(revocation_file: &Path, token_ttl: Duration) -> Result<Self> {
         let store = Self {
             entries: Arc::new(RwLock::new(HashMap::new())),
             log: Arc::new(RwLock::new(Vec::new())),
@@ -67,13 +67,8 @@ impl RevocationStore {
         // `load_from_content` uses blocking_write and must not be called in an
         // async context, so we skip it when the file has no parseable lines.
         if revocation_file.is_file() {
-            let content = std::fs::read_to_string(revocation_file).map_err(|e| {
-                AuthorityError::RevocationError {
-                    reason: format!(
-                        "cannot read revocation file {}: {e}",
-                        revocation_file.display()
-                    ),
-                }
+            let content = std::fs::read_to_string(revocation_file).with_context(|| {
+                format!("cannot read revocation file {}", revocation_file.display())
             })?;
             if content.lines().any(|l| !l.trim().is_empty()) {
                 let count = store.load_from_content(&content);
@@ -167,8 +162,8 @@ impl RevocationStore {
     ///
     /// # Errors
     ///
-    /// Returns `AuthorityError` if the revocation file cannot be opened or written to.
-    pub async fn revoke(&self, token_id: TokenId, reason: &str) -> Result<(), AuthorityError> {
+    /// Returns an error if the revocation file cannot be opened or written to.
+    pub async fn revoke(&self, token_id: TokenId, reason: &str) -> Result<()> {
         if self.entries.read().await.contains_key(&token_id) {
             tracing::debug!(%token_id, "duplicate revocation ignored");
             return Ok(());
@@ -179,20 +174,18 @@ impl RevocationStore {
             .append(true)
             .open(&self.revocation_file)
             .await
-            .map_err(|e| AuthorityError::RevocationError {
-                reason: format!(
-                    "cannot open revocation file {}: {e}",
+            .with_context(|| {
+                format!(
+                    "cannot open revocation file {}",
                     self.revocation_file.display()
-                ),
+                )
             })?;
 
         let revoked_at = Utc::now();
         let line = format!("{token_id}\t{}\t{reason}\n", revoked_at.to_rfc3339());
         file.write_all(line.as_bytes())
             .await
-            .map_err(|e| AuthorityError::RevocationError {
-                reason: format!("cannot write to revocation file: {e}"),
-            })?;
+            .context("cannot write to revocation file")?;
 
         tracing::info!(%token_id, %reason, %revoked_at, "token written to revocation file; watcher will update memory");
         Ok(())
@@ -218,16 +211,16 @@ impl RevocationStore {
     ///
     /// Returns the newly-added entries so that callers (e.g. [`RevocationStoreWatcher`])
     /// can broadcast them to live subscribers.
-    async fn reload_from_file(&self) -> Result<Vec<RevocationEntry>, AuthorityError> {
+    async fn reload_from_file(&self) -> Result<Vec<RevocationEntry>> {
         let content = match tokio::fs::read_to_string(&self.revocation_file).await {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => {
-                return Err(AuthorityError::RevocationError {
-                    reason: format!(
-                        "cannot read revocation file {}: {e}",
+                return Err(e).with_context(|| {
+                    format!(
+                        "cannot read revocation file {}",
                         self.revocation_file.display()
-                    ),
+                    )
                 });
             }
         };
@@ -273,8 +266,8 @@ impl RevocationStore {
     ///
     /// # Errors
     ///
-    /// Returns `AuthorityError` if the file cannot be written.
-    pub async fn compact_file(&self) -> Result<(), AuthorityError> {
+    /// Returns an error if the file cannot be written.
+    pub async fn compact_file(&self) -> Result<()> {
         let now = Utc::now();
         let entries = self.entries.read().await;
         let mut lines: Vec<String> = entries
@@ -294,11 +287,11 @@ impl RevocationStore {
         let content: String = lines.concat();
         tokio::fs::write(&self.revocation_file, content)
             .await
-            .map_err(|e| AuthorityError::RevocationError {
-                reason: format!(
-                    "cannot compact revocation file {}: {e}",
+            .with_context(|| {
+                format!(
+                    "cannot compact revocation file {}",
                     self.revocation_file.display()
-                ),
+                )
             })?;
         tracing::info!(path = %self.revocation_file.display(), "revocation file compacted");
         Ok(())
@@ -312,8 +305,8 @@ impl RevocationStore {
     ///
     /// # Errors
     ///
-    /// Returns `AuthorityError` if the OS file watcher cannot be created or registered.
-    pub fn watch(&self) -> Result<RevocationStoreWatcher, AuthorityError> {
+    /// Returns an error if the OS file watcher cannot be created or registered.
+    pub fn watch(&self) -> Result<RevocationStoreWatcher> {
         use notify::Watcher as _;
 
         let path = self.revocation_file.clone();
@@ -347,12 +340,15 @@ impl RevocationStore {
                 _ => {}
             },
         )
-        .map_err(|e| AuthorityError::WatchFailed { reason: e.to_string() })?;
+        .context("failed to create revocation file watcher")?;
 
         watcher
             .watch(&watch_root, notify::RecursiveMode::NonRecursive)
-            .map_err(|e| AuthorityError::WatchFailed {
-                reason: e.to_string(),
+            .with_context(|| {
+                format!(
+                    "failed to watch revocation path root {}",
+                    watch_root.display()
+                )
             })?;
 
         let task = tokio::spawn(async move {
