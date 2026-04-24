@@ -136,8 +136,6 @@ impl CedarPolicyStore {
     ///
     /// Returns `AuthorityError` if the OS file watcher cannot be created or registered.
     pub fn watch(&self) -> Result<CedarPolicyStoreWatcher, AuthorityError> {
-        use notify::Watcher as _;
-
         let path = self.policy_dir.clone();
         let this = self.clone();
         let (tx_signal, mut rx_signal) = tokio::sync::mpsc::channel::<()>(16);
@@ -159,48 +157,11 @@ impl CedarPolicyStore {
             _ => {}
         };
 
-        #[cfg(target_os = "macos")]
-        let mut watcher =
-            {
-                // The workspace uses notify's kqueue backend on macOS. For local
-                // tempdir-based policy reloads, polling is more reliable than the
-                // native directory watcher and the added latency is acceptable for
-                // Authority-side hot reload.
-                let config = notify::Config::default()
-                    .with_poll_interval(std::time::Duration::from_millis(250));
-                WatchBackend::Poll(notify::PollWatcher::new(event_handler, config).map_err(
-                    |e| AuthorityError::WatchFailed {
-                        reason: e.to_string(),
-                    },
-                )?)
-            };
-
-        #[cfg(not(target_os = "macos"))]
-        let mut watcher =
-            WatchBackend::Recommended(notify::recommended_watcher(event_handler).map_err(|e| {
-                AuthorityError::WatchFailed {
-                    reason: e.to_string(),
-                }
-            })?);
-
-        match &mut watcher {
-            #[cfg(not(target_os = "macos"))]
-            WatchBackend::Recommended(inner) => {
-                inner
-                    .watch(&path, notify::RecursiveMode::Recursive)
-                    .map_err(|e| AuthorityError::WatchFailed {
-                        reason: e.to_string(),
-                    })?;
+        let watcher = notify::recommended_watcher(event_handler).map_err(|e| {
+            AuthorityError::WatchFailed {
+                reason: e.to_string(),
             }
-            #[cfg(target_os = "macos")]
-            WatchBackend::Poll(inner) => {
-                inner
-                    .watch(&path, notify::RecursiveMode::Recursive)
-                    .map_err(|e| AuthorityError::WatchFailed {
-                        reason: e.to_string(),
-                    })?;
-            }
-        }
+        })?;
 
         let task = tokio::spawn(async move {
             while rx_signal.recv().await.is_some() {
@@ -221,16 +182,9 @@ impl CedarPolicyStore {
 /// Owns the file watcher and reload task for a [`CedarPolicyStore`].
 /// Dropping this handle stops the file watch and the reload task.
 pub struct CedarPolicyStoreWatcher {
-    _watcher: WatchBackend,
+    _watcher: notify::RecommendedWatcher,
     task: JoinHandle<()>,
     tx: watch::Sender<PolicyBundle>,
-}
-
-enum WatchBackend {
-    #[cfg(not(target_os = "macos"))]
-    Recommended(notify::RecommendedWatcher),
-    #[cfg(target_os = "macos")]
-    Poll(notify::PollWatcher),
 }
 
 impl CedarPolicyStoreWatcher {
