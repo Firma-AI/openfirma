@@ -496,22 +496,22 @@ mod tests {
     }
 
     #[test]
-    fn test_clamp_ttl_within_max() {
+    fn clamp_ttl_within_max() {
         assert_eq!(clamp_ttl(600, 3600), 600);
     }
 
     #[test]
-    fn test_clamp_ttl_exceeds_max() {
+    fn clamp_ttl_exceeds_max() {
         assert_eq!(clamp_ttl(7200, 3600), 3600);
     }
 
     #[test]
-    fn test_clamp_ttl_zero_uses_max() {
+    fn clamp_ttl_zero_uses_max() {
         assert_eq!(clamp_ttl(0, 3600), 3600);
     }
 
     #[test]
-    fn test_clamp_ttl_negative_uses_max() {
+    fn clamp_ttl_negative_uses_max() {
         assert_eq!(clamp_ttl(-1, 3600), 3600);
     }
 
@@ -536,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_no_policies_denies() {
+    fn evaluate_no_policies_denies() {
         let result = evaluate_cedar_policy(
             &PolicySet::new(),
             None,
@@ -549,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_no_actions_denies() {
+    fn evaluate_no_actions_denies() {
         let result = evaluate_cedar_policy(
             &permit_all(),
             None,
@@ -562,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_permit_all_allows() {
+    fn evaluate_permit_all_allows() {
         let result = evaluate_cedar_policy(
             &permit_all(),
             None,
@@ -575,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_forbid_all_denies() {
+    fn evaluate_forbid_all_denies() {
         let result = evaluate_cedar_policy(
             &forbid_all(),
             None,
@@ -588,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_multi_action_all_allowed() {
+    fn evaluate_multi_action_all_allowed() {
         let result = evaluate_cedar_policy(
             &permit_all(),
             None,
@@ -604,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_multi_action_one_denied() {
+    fn evaluate_multi_action_one_denied() {
         // forbid-all → every action in the set is denied; first one short-circuits
         let result = evaluate_cedar_policy(
             &forbid_all(),
@@ -621,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_with_schema_valid_action() {
+    fn evaluate_with_schema_valid_action() {
         let schema = firma_schema();
         let result = evaluate_cedar_policy(
             &permit_all(),
@@ -635,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_with_schema_unknown_action_denies() {
+    fn evaluate_with_schema_unknown_action_denies() {
         // "unknown.action" not declared in schema → Cedar rejects the request
         let schema = firma_schema();
         let result = evaluate_cedar_policy(
@@ -650,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_with_schema_all_15_actions_allowed() {
+    fn evaluate_with_schema_all_15_actions_allowed() {
         let schema = firma_schema();
         let actions: Vec<String> = [
             "account.permission.change",
@@ -685,7 +685,7 @@ mod tests {
     }
 
     #[test]
-    fn test_to_proto_timestamp_roundtrip() {
+    fn to_proto_timestamp_roundtrip() {
         let now = Utc::now();
         let ts = to_proto_timestamp(now);
         assert_eq!(ts.seconds, now.timestamp());
