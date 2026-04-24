@@ -282,7 +282,7 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::channel(10);
         Arc::new(RequestHandler::new(
             pipeline,
-            crate::handler::test_connector_registry(),
+            crate::handler::tests::test_connector_registry(),
             tx,
         ))
     }

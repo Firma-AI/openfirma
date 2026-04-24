@@ -94,6 +94,12 @@ impl ConstraintEnforcer {
         Self { policy }
     }
 
+    /// Return the active policy bundle version, if one has been installed.
+    #[must_use]
+    pub fn policy_version(&self) -> Option<String> {
+        self.policy.version()
+    }
+
     /// Evaluate the request against Cedar policies.
     ///
     /// Returns `Ok(())` if the request passes all checks, or

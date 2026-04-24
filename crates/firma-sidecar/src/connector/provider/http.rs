@@ -279,10 +279,10 @@ mod tests {
         TransportView::new(envelope, creds)
     }
 
-    fn get_intent(resource: String) -> ExecutionIntent {
+    fn get_intent(resource: &str) -> ExecutionIntent {
         ExecutionIntent {
             action_class: "filesystem.read".to_string(),
-            resource: firma_core::ExecutionIntent::resource_map_from(&resource),
+            resource: firma_core::ExecutionIntent::resource_map_from(resource),
             params: ActionParams::Http(HttpParams {
                 method: HttpMethod::GET,
                 headers: HashMap::new(),
@@ -306,7 +306,7 @@ mod tests {
         let connector = GenericHttpConnector::default_for_unconfigured()
             .expect("connector build should succeed");
         let view = view_for(
-            get_intent(format!("{}/data", server.address())),
+            get_intent(&format!("{}/data", server.address())),
             InjectedCredentials::empty(),
         );
 
@@ -335,7 +335,7 @@ mod tests {
             "Authorization".to_string(),
             "Bearer secret".to_string(),
         )]));
-        let view = view_for(get_intent(format!("{}/secure", server.address())), creds);
+        let view = view_for(get_intent(&format!("{}/secure", server.address())), creds);
 
         let response = connector
             .dispatch(&view)
@@ -356,7 +356,7 @@ mod tests {
         let connector = GenericHttpConnector::default_for_unconfigured()
             .expect("connector build should succeed");
         let view = view_for(
-            get_intent(format!("{}/boom", server.address())),
+            get_intent(&format!("{}/boom", server.address())),
             InjectedCredentials::empty(),
         );
 
@@ -383,7 +383,7 @@ mod tests {
         })
         .expect("connector build should succeed");
         let view = view_for(
-            get_intent(format!("{}/slow", server.address())),
+            get_intent(&format!("{}/slow", server.address())),
             InjectedCredentials::empty(),
         );
 
@@ -400,7 +400,7 @@ mod tests {
             .expect("connector build should succeed");
         // Port 1 is reserved; a connect attempt reliably fails.
         let view = view_for(
-            get_intent("http://127.0.0.1:1/".to_string()),
+            get_intent("http://127.0.0.1:1/"),
             InjectedCredentials::empty(),
         );
 
@@ -459,7 +459,7 @@ mod tests {
         let url = format!("{}/quick", server.address());
 
         // First call consumes the burst.
-        let first_view = view_for(get_intent(url.clone()), InjectedCredentials::empty());
+        let first_view = view_for(get_intent(&url), InjectedCredentials::empty());
         let first = connector
             .dispatch(&first_view)
             .await
@@ -468,7 +468,7 @@ mod tests {
 
         // Second call must wait for the limiter to refill. Measure the
         // wall-clock gap to confirm the limiter actually throttled.
-        let second_view = view_for(get_intent(url), InjectedCredentials::empty());
+        let second_view = view_for(get_intent(&url), InjectedCredentials::empty());
         let started = Instant::now();
         let second = connector
             .dispatch(&second_view)

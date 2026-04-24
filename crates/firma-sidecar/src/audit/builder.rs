@@ -263,7 +263,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         session_id: &str,
         latency: Duration,
     ) -> AuditPayload {
-        crate::pipeline::audit_payload_from_decision(decision, session_id, latency)
+        crate::pipeline::audit_payload_from_decision(decision, session_id, latency, None)
     }
 
     #[test]

@@ -173,7 +173,7 @@ mod tests {
         let result = handle.await;
         assert!(result.is_ok(), "task should not panic");
         assert!(
-            result.ok().and_then(|r| r.ok()).is_some(),
+            result.ok().and_then(std::result::Result::ok).is_some(),
             "sink should return Ok(())"
         );
 
@@ -251,14 +251,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("failed to create tempdir: {e}"));
         let path = dir.path().join("empty.jsonl");
 
-        let (_tx, rx) = mpsc::channel::<ExecutionEvent>(1);
+        let (tx, rx) = mpsc::channel::<ExecutionEvent>(1);
         let exit = CancellationToken::new();
 
         let sink = FileAuditSink::new(&path);
         let exit_clone = exit.clone();
         let handle = tokio::spawn(async move { sink.run(rx, exit_clone).await });
 
-        drop(_tx);
+        drop(tx);
         exit.cancel();
 
         let result = handle.await;
