@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
 async-stream = { workspace = true }
 cedar-policy = { workspace = true }
 chrono = { workspace = true }
