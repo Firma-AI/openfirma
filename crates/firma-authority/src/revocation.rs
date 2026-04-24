@@ -317,6 +317,11 @@ impl RevocationStore {
         use notify::Watcher as _;
 
         let path = self.revocation_file.clone();
+        let watch_root = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
         let this = self.clone();
         let (tx_signal, mut rx_signal) = tokio::sync::mpsc::channel::<()>(16);
         let (tx_broadcast, _) = broadcast::channel(1024);
@@ -332,6 +337,9 @@ impl RevocationStore {
                             | notify::event::EventKind::Create(_)
                     ) =>
                 {
+                    if !event.paths.iter().any(|event_path| event_path == &watch_path) {
+                        return;
+                    }
                     tracing::info!(path = %watch_path.display(), "revocation file changed; reloading");
                     let _ = tx_signal.try_send(());
                 }
@@ -342,7 +350,7 @@ impl RevocationStore {
         .map_err(|e| AuthorityError::WatchFailed { reason: e.to_string() })?;
 
         watcher
-            .watch(&path, notify::RecursiveMode::NonRecursive)
+            .watch(&watch_root, notify::RecursiveMode::NonRecursive)
             .map_err(|e| AuthorityError::WatchFailed {
                 reason: e.to_string(),
             })?;
@@ -631,7 +639,6 @@ mod tests {
         let file = dir.path().join("revocations.txt");
 
         let s = store(&file);
-        std::fs::write(&file, "").unwrap();
         let watcher = s.watch().unwrap();
         let mut rx = watcher.subscribe();
 

@@ -34,7 +34,6 @@ impl TestServer {
         .expect("failed to write policy");
 
         let revocation_file = temp_dir.path().join("revocations.txt");
-        std::fs::write(&revocation_file, "").expect("failed to create revocation file");
 
         let key_file = temp_dir.path().join("authority.key");
         let kp = AsymmetricKeyPair::<V4>::generate().expect("failed to generate key");
