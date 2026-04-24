@@ -136,6 +136,8 @@ impl CedarPolicyStore {
     ///
     /// Returns `AuthorityError` if the OS file watcher cannot be created or registered.
     pub fn watch(&self) -> Result<CedarPolicyStoreWatcher, AuthorityError> {
+        use notify::Watcher as _;
+
         let path = self.policy_dir.clone();
         let this = self.clone();
         let (tx_signal, mut rx_signal) = tokio::sync::mpsc::channel::<()>(16);
@@ -162,6 +164,12 @@ impl CedarPolicyStore {
                 reason: e.to_string(),
             }
         })?;
+        let mut watcher = watcher;
+        watcher
+            .watch(&path, notify::RecursiveMode::Recursive)
+            .map_err(|e| AuthorityError::WatchFailed {
+                reason: e.to_string(),
+            })?;
 
         let task = tokio::spawn(async move {
             while rx_signal.recv().await.is_some() {
