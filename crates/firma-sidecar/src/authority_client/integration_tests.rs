@@ -630,4 +630,3 @@ async fn cold_boot_without_bundle_stays_not_ready() -> anyhow::Result<()> {
     server.stop().await;
     Ok(())
 }
-
