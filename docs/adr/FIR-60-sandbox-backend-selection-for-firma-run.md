@@ -8,212 +8,294 @@ superseded_by: null
 
 # FIR-60 ADR: Sandbox backend selection for Firma Run
 
-## Context
+## Status
 
-FIR-56 identified a hard governance gap: process-forking tools (`run_shell`, browser automation, subprocess flows) are outside the HTTP proxy interception primitive.
+Accepted on 2026-04-24.
 
-On April 23, 2026, the architecture direction changed from "new enforcement primitive" to "new enforcement boundary":
+## Context and problem statement
 
-- Keep Pingora/HTTP as the single policy enforcement plane.
-- Run the agent process inside a sandbox.
-- Force all sandbox egress through the sidecar.
+FIR-56 surfaced a structural gap: sidecar HTTP interception does not directly govern process-forking execution (`run_shell`, browser automation, subprocess trees) unless process network egress is confined.
 
-Under this model, shell and subprocess traffic become governable because network confinement is structural at the sandbox boundary.
+On 2026-04-23, the architecture direction changed:
 
-This ADR selects the sandbox backend for Firma Run (implemented in FIR-61, specialized for Claude Code/run_shell in FIR-62).
+- Do not introduce a second policy plane.
+- Keep Pingora/HTTP enforcement as the single decision plane.
+- Move the hard boundary to sandboxed process execution and mandatory egress routing through the sidecar.
 
-## Decision
+This ADR chooses sandbox backend(s) for Firma Run so FIR-61 and FIR-62 can implement that boundary consistently across Linux, macOS, and Windows.
 
-Adopt a **dual-backend strategy** with a pluggable backend interface in Firma Run:
+## Decision drivers
 
-1. **Default backend family by host OS**:
-   - Linux: bubblewrap-based sandboxing (OSS runtime adapter path).
-   - macOS: lightweight VM sandbox profile (Apple Virtualization Framework based).
-   - Windows: WSL2-backed sandbox profile (Linux guest confinement model).
-2. **Enterprise backend (additive): Firecracker microVM on Linux**, exposed as a dedicated profile, not a migration.
+1. Structural interception: no trust in cooperative `HTTP_PROXY` behavior.
+2. Cross-platform coverage: Linux, macOS, Windows must all have a first-class path.
+3. Fast developer workflow: interactive CLI/TUI usage must remain usable.
+4. Security posture: fail-closed when sidecar path is unavailable.
+5. Reuse over reinvention: no custom sandbox engine.
+6. Enterprise extensibility: stronger isolation profile must be possible without redesign.
 
-Decision summary:
+## Considered options
 
-- Default for `firma run --profile generic` and `--profile codex` is OS-specific:
-  - Linux: bubblewrap-class sandboxing.
-  - macOS: VM-based sandbox profile.
-  - Windows: WSL2-based sandbox profile.
-- Firecracker is reserved for stricter isolation deployments on Linux (enterprise profile).
-- gVisor and nsjail/firejail are not selected as first-class backends in v1.
-- Docker/Podman OCI backends are intentionally excluded from FIR-60 scope.
+### A. OS-specific multi-backend with common enforcement invariants (selected)
 
-## Requirements mapping
+Backend family:
 
-| Requirement                                     | Selected handling                                                                              |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Structural interception (no `HTTP_PROXY` trust) | Sandbox network namespace confinement + mandatory sidecar routing                              |
-| DNS confinement                                 | Resolver path confined inside sandbox and routed through the controlled network path           |
-| Cross-platform support                          | OS-specific backend strategy (Linux native namespaces, macOS VM profile, Windows WSL2 profile) |
-| Fast local developer UX                         | bubblewrap as default for low startup overhead and simple tool wrapping                        |
-| Strong enterprise isolation option              | Firecracker profile for kernel boundary isolation                                              |
-| No from-scratch sandbox engine                  | Reuse existing OSS runtimes and kernel primitives                                              |
+- Linux default: `sandbox-bwrap` (bubblewrap-class namespace isolation).
+- macOS default: `sandbox-vz` (Linux guest via Apple Virtualization Framework).
+- Windows default: `sandbox-wsl2` (Linux guest via WSL2).
+- Linux enterprise additive: `sandbox-firecracker`.
 
-## Option analysis (best to worst for v1)
+Why selected:
 
-### A. bubblewrap + OSS runtime adapter
+- Preserves one enforcement model while supporting all required host OSes.
+- Allows fast Linux path now and enterprise microVM path later.
+- Keeps FIR-61 pluggable and avoids lock-in to one runtime.
+
+### B. Firecracker-first for all paths
 
 Pros:
 
-- Good balance of isolation and startup speed for interactive developer workflows.
-- Native fit for wrapping arbitrary commands (`firma run -- <cmd>`).
-- Reuses existing OSS runtime ecosystem instead of custom sandbox engineering.
+- Strong isolation on Linux.
 
 Cons:
 
-- Weaker isolation than microVMs.
-- Depends on Linux namespace posture and host configuration.
+- Linux/KVM-centric; no practical universal path for macOS/Windows defaults.
+- Overhead/ops complexity too high for default local developer loop.
 
-Decision: **Selected as v1 default backend**.
+Decision: not selected as default strategy.
 
-### B. Firecracker microVM
+### C. OCI runtime default (Docker/Podman)
 
 Pros:
 
-- Strongest isolation boundary (microVM/kernel boundary).
-- Excellent fit for strict multi-tenant or regulated enterprise workloads.
+- Mature ecosystem and operational familiarity.
 
 Cons:
 
-- Higher operational complexity (image lifecycle, VM orchestration, KVM constraints).
-- Heavier for local dev and per-invocation CLI loops.
+- Larger runtime/daemon/networking surface than required for FIR-61 wrapper goals.
+- Adds complexity without improving the chosen enforcement-plane model.
 
-Decision: **Selected as secondary/enterprise backend**, not v1 default.
+Decision: explicitly out of scope for FIR-60/FIR-61 default path.
 
-### C. gVisor
+### D. gVisor/Kata as default
 
 Pros:
 
-- Strong syscall mediation with user-space kernel model.
+- Strong sandboxing properties in container-centric environments.
 
 Cons:
 
-- Added operational complexity for limited near-term benefit over selected default.
-- Less aligned with fast local CLI wrapping as the initial delivery priority.
+- Better fit for orchestrated/container fleets than local universal CLI wrapping.
+- Higher integration cost relative to the selected path.
 
-Decision: **Not selected for v1**.
+Decision: not selected for v1 default; can be revisited as future backend profiles.
 
-### D. nsjail / firejail
+### E. Linux-only initial release
 
 Pros:
 
-- Lightweight alternatives for namespace-style confinement.
+- Lower immediate implementation complexity.
 
 Cons:
 
-- No clear advantage over bubblewrap path once ecosystem/runtime integration is considered.
-- Would fragment backend effort early.
+- Fails explicit cross-platform requirement from this decision cycle.
 
-Decision: **Fallback options only if bubblewrap path hits a hard blocker**.
+Decision: rejected.
 
-### E. Docker / Podman OCI runtime
+### F. Managed sandbox platforms as FIR-60 primary backend (E2B, Beam, Daytona)
 
 Pros:
 
-- Very mature ecosystem and strong operational familiarity.
-- Easy reuse where teams already run OCI-based workflows.
+- Mature productized sandbox workflows with SDKs and orchestration features.
+- Can provide strong isolation depending on platform/runtime configuration.
 
 Cons:
 
-- Not a minimal process-sandbox primitive; adds runtime/daemon surface and networking complexity relative to FIR-61 goals.
-- Less aligned with "invisible wrapper over arbitrary agent command" as the primary v1 constraint.
-- Increases implementation scope while not improving the selected enforcement boundary model.
+- FIR-60 requirement is a local wrapper boundary (`firma run -- <agent-command>`) with deterministic sidecar routing semantics under Firma control.
+- Introducing an external control plane as the default backend shifts trust and lifecycle ownership away from the local Firma Run contract.
+- Licensing and deployment complexity differ significantly by platform (for example AGPL-based stacks), which is undesirable for the default OSS path.
 
-Decision: **Explicitly out of scope for FIR-60/FIR-61 default path**.
+Decision: not selected as FIR-60 default backend strategy.
 
-## Cross-platform backend matrix
+### G. Build a new custom cross-platform sandbox framework
 
-| Host OS          | v1 backend path                             | Enforcement approach                                                                           | Notes                                                                                        |
-| ---------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Linux            | bubblewrap default (`sandbox-bwrap`)        | Native namespace/network confinement + mandatory sidecar routing                               | Primary implementation target and reference path                                             |
-| macOS            | VM-backed profile (`sandbox-vz`)            | Agent runs inside managed Linux guest VM; guest egress forced through sidecar path             | Uses OS-supported virtualization primitives; avoids deprecated macOS process sandbox tooling |
-| Windows          | WSL2-backed profile (`sandbox-wsl2`)        | Agent runs in WSL2 guest; egress confinement and sidecar routing enforced in guest/bridge path | Works with modern Windows developer environments without Docker dependency                   |
-| Linux enterprise | Firecracker profile (`sandbox-firecracker`) | MicroVM isolation + sidecar routing                                                            | Additive hard-isolation option for regulated environments                                    |
+Pros:
 
-Implementation contract for FIR-61:
+- Maximum design freedom.
 
-- `firma run` selects backend automatically by host OS, with explicit override flags.
-- Security invariants stay constant across OSes:
-  - fail-closed if sidecar is unreachable,
-  - no direct egress bypass,
-  - deterministic identity attribution for policy and audit.
-- Performance and startup SLOs are measured per backend profile (not one global number).
+Cons:
+
+- High security and maintenance risk for a safety-critical boundary.
+- Reinvents mature OS/runtime primitives already available.
+
+Decision: rejected.
+
+## Decision outcome
+
+Adopt **Option A**: an OS-specific backend matrix with a common backend contract and common security invariants.
+
+### Backend matrix
+
+| Host OS          | Default backend       | Isolation substrate                                 | Notes                                           |
+| ---------------- | --------------------- | --------------------------------------------------- | ----------------------------------------------- |
+| Linux            | `sandbox-bwrap`       | Namespaces/seccomp/cgroup-style process isolation   | Primary fast path for local and CI              |
+| macOS            | `sandbox-vz`          | Linux guest VM using Apple Virtualization Framework | Aligns semantics with Linux enforcement model   |
+| Windows          | `sandbox-wsl2`        | Linux guest VM via WSL2                             | Reuses Linux confinement/routing logic in guest |
+| Linux enterprise | `sandbox-firecracker` | KVM microVM                                         | Additive stronger isolation profile             |
+
+### Enforcement invariants (MUST hold on every backend)
+
+1. All agent outbound TCP egress is transparently redirected to sidecar.
+2. DNS is confined; direct resolver bypass is blocked.
+3. Sidecar unreachable implies fail-closed (no external network from agent sandbox).
+4. Each execution has deterministic sandbox/session identity for policy attribution and audit.
+5. Wrapper remains interactive-safe (`stdin/stdout/stderr` passthrough, no TUI breakage).
+
+### Backend interface contract (FIR-61)
+
+Every backend implements:
+
+- `prepare(config) -> SandboxHandle`
+- `start_sidecar(handle, sidecar_config) -> SidecarHandle`
+- `enforce_network(handle, sidecar_endpoint) -> EnforcementProof`
+- `start_agent(handle, command, argv, env) -> AgentHandle`
+- `verify_fail_closed(handle) -> Result`
+- `teardown(handle) -> Result`
+
+The wrapper chooses backend automatically by host OS with explicit override flags.
+
+## Technical notes by OS
+
+### Linux (`sandbox-bwrap`)
+
+- Use namespace isolation and mandatory egress redirection in sandbox network namespace.
+- Enforce deny-by-default outbound policy except sidecar path.
+- Validate host prerequisites at startup (user namespace support, required tooling).
+
+### macOS (`sandbox-vz`)
+
+- Run agent and sidecar within managed Linux guest to keep enforcement mechanics consistent with Linux.
+- Host launcher manages VM lifecycle and bridges audited output back to host CLI.
+
+### Windows (`sandbox-wsl2`)
+
+- Run agent and sidecar inside WSL2 distro/instance dedicated to Firma Run profile.
+- Apply Linux guest-level routing and DNS confinement; account for WSL2 NAT/mirrored networking modes.
+
+### Linux enterprise (`sandbox-firecracker`)
+
+- Optional hard-isolation profile for stricter environments.
+- Uses same logical interface and invariants as other backends.
+
+## External ecosystem notes (informative)
+
+The following external discussions and tools were reviewed to pressure-test FIR-60. They are informative, not normative for the decision.
+
+| Project family | Verified from primary sources | FIR-60 relevance |
+|---|---|---|
+| E2B | Linux VM sandbox model; configurable timeout/pause-resume lifecycle; managed SDK-first platform | Useful reference for remote sandbox APIs, but not selected as FIR-60 default because FIR-60 targets local wrapper enforcement under direct runtime control |
+| Beam | Open-source platform components with AGPL core; cloud-oriented sandbox workflows | Valuable for cloud execution patterns, but not selected as default local backend |
+| Daytona | AGPL platform with multi-service control/compute architecture and sandbox runners | Strong orchestration platform, but heavier than FIR-60 default requirements |
+| Microsandbox | Apache-2.0 self-hosted microVM execution layer; docs indicate Linux/macOS support and Windows pending | Strong candidate for future backend experimentation, especially enterprise/high-isolation tracks |
+| Dify Sandbox | Apache-2.0 code execution sandbox; Linux/container-oriented requirements | Useful design reference, but not a direct FIR-60 cross-platform default fit |
+
+Interpretation rule used in this ADR:
+
+- Vendor/blog performance claims are treated as directional unless corroborated by primary technical documentation and reproducible benchmarks in FIR-61.
+- Reddit/community discussion is treated as qualitative signal, not as architectural proof.
 
 ## Licensing and redistribution check
 
-This ADR records licensing posture for selected candidates:
+Recorded licensing posture for selected ecosystem components:
 
-- `anthropic-experimental/sandbox-runtime`: Apache-2.0 (compatible with Firma OSS Apache-2.0 distribution model).
-- Firecracker: Apache-2.0.
-- bubblewrap: LGPL-2.0-or-later.
-- gVisor: Apache-2.0.
+- `anthropic-experimental/sandbox-runtime`: Apache-2.0
+- Firecracker: Apache-2.0
+- bubblewrap: LGPL-2.0-or-later
+- gVisor: Apache-2.0
 
-Redistribution policy for FIR-61 implementation:
+Implementation policy:
 
-- Do not vendor or statically embed bubblewrap.
-- Treat bubblewrap as a system/runtime dependency.
-- Keep third-party notices for any bundled adapter code and transitive artifacts.
-- Add CI license scanning gate before release tagging of Firma Run binaries.
+- Do not statically embed bubblewrap.
+- Treat system-level sandbox binaries as runtime dependencies.
+- Keep third-party notices current.
+- Add CI license scan gate before release tagging.
 
-## Benchmark harness decision (ADR-level scope)
+## Benchmark and confirmation plan (ADR scope)
 
-No production runtime code is shipped in FIR-60, but FIR-61 must include a benchmark harness with these outputs:
+FIR-60 ships no runtime code. FIR-61 must provide benchmark and confirmation artifacts per backend profile.
 
-1. Startup latency:
-   - Time from `firma run` invocation to first successful mediated HTTP request.
-   - Report p50/p95/p99 for `generic` and `codex` profiles.
-2. Proxy overhead:
-   - Baseline direct sandbox egress (control sample where allowed in test rig).
-   - Sandboxed + sidecar-routed egress.
-   - Delta latency and throughput under fixed request volumes.
-3. Fail-closed behavior:
-   - Sidecar unavailable at launch and mid-session.
-   - Assertion: zero network egress from sandbox.
+Required measurements:
 
-Benchmark output format:
+1. Startup:
+   - `t_backend_ready`: wrapper invoke -> sandbox ready
+   - `t_sidecar_ready`: sandbox ready -> sidecar healthy
+   - `t_first_request`: wrapper invoke -> first mediated HTTP request
+2. Overhead:
+   - Direct baseline vs sidecar-routed path latency/throughput deltas
+   - p50/p95/p99 by profile (`generic`, `codex`)
+3. Security behavior:
+   - Sidecar unavailable at startup and mid-session
+   - Assertion: zero direct external egress from sandboxed agent process
 
-- Machine-readable JSON artifacts committed under `target/benchmarks/` in CI jobs.
-- Human-readable summary in `docs/security/` for launch narrative and partner review.
+Artifacts:
+
+- Machine-readable JSON under `target/benchmarks/`
+- Human-readable summary in `docs/security/`
 
 ## Consequences
 
-Positive:
+### Positive
 
-- Unblocks FIR-61 and FIR-62 with a clear backend contract.
-- Preserves single enforcement-plane message (HTTP/Pingora) while expanding practical coverage through sandbox confinement.
-- Avoids overcommitting to microVM overhead for all use cases.
+- Unblocks FIR-61 and FIR-62 with concrete, implementable backend constraints.
+- Keeps single HTTP enforcement-plane narrative intact.
+- Supports cross-platform adoption without promising one-size-fits-all runtime internals.
 
-Tradeoffs:
+### Negative / tradeoffs
 
-- Two backends increase abstraction and test matrix surface.
-- v1 default isolation is namespace-level, not microVM-level.
+- Increased test matrix and backend-specific operational code.
+- macOS/Windows paths depend on guest runtime provisioning and lifecycle management.
+- Firecracker remains Linux-only and non-default.
 
-Risks and mitigations:
+### Risks and mitigations
 
-- Host kernel/user-namespace variance: detect capabilities at startup and fail with actionable diagnostics.
-- Routing bypass risk: enforce no-default-route/no-direct-egress invariants in integration tests.
-- Complexity creep: keep Firecracker as additive profile behind the same backend trait.
+- Backend drift:
+  - Mitigation: strict shared backend interface and invariant test suite.
+- Host capability variability:
+  - Mitigation: startup preflight checks with actionable diagnostics.
+- Egress bypass regressions:
+  - Mitigation: mandatory fail-closed integration tests in CI for every backend.
 
 ## Non-goals
 
 - Building a custom sandbox engine.
-- Replacing sidecar policy logic with sandbox-local policy logic.
-- Delivering Claude Code specialization in this ADR (that is FIR-62).
-- Shipping Docker/Podman as a Firma Run backend in this phase.
-- Requiring one universal sandbox implementation across all operating systems.
+- Introducing a second policy engine outside sidecar.
+- Shipping Docker/Podman backend in FIR-60/FIR-61 default scope.
+- Implementing Claude Code specialization in this ADR (FIR-62 scope).
 
-## Rollout plan alignment
+## Rollout alignment
 
-- FIR-60 (this ADR): backend selection and constraints.
-- FIR-61: implement `firma run` wrapper and default backend path.
-- FIR-62: Claude Code/run_shell specialization on top of FIR-61.
+- FIR-60: decision and constraints (this ADR).
+- FIR-61: implement backend interface + default profiles.
+- FIR-62: Claude Code / `run_shell` specialization on FIR-61 foundation.
 
-## Owner and sign-off
+## Ownership and sign-off
 
 - Author: Dario
-- Sign-off required: Derek
-- External narrative alignment required: Tommaso
+- Sign-off: Derek
+- External narrative alignment: Tommaso
+
+## References (informative)
+
+- MADR and ADR structure guidance: https://adr.github.io/madr/
+- Bubblewrap project: https://github.com/containers/bubblewrap
+- Anthropic sandbox runtime: https://github.com/anthropic-experimental/sandbox-runtime
+- Apple Virtualization Framework docs: https://developer.apple.com/documentation/virtualization
+- WSL networking model: https://learn.microsoft.com/en-us/windows/wsl/networking
+- Firecracker overview and usage in Lambda/Fargate: https://aws.amazon.com/about-aws/whats-new/2018/11/firecracker-lightweight-virtualization-for-serverless-computing/
+- E2B sandbox lifecycle docs: https://e2b.dev/docs/legacy/sandbox/api/timeouts
+- E2B auto-resume docs: https://e2b.dev/docs/sandbox/auto-resume
+- Beam sandbox docs: https://docs.beam.cloud/v2/sandbox/overview
+- Daytona OSS deployment docs: https://www.daytona.io/docs/en/oss-deployment/
+- Daytona architecture docs: https://www.daytona.io/docs/ja/architecture/
+- Microsandbox docs: https://docs.microsandbox.dev/
+- Microsandbox repository: https://github.com/zerocore-ai/microsandbox
+- Dify Sandbox repository: https://github.com/langgenius/dify-sandbox
