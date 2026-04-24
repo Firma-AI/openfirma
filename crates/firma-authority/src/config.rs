@@ -103,7 +103,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_config_has_sensible_values() {
+    fn default_config_has_sensible_values() {
         let config = AuthorityConfig::default();
         assert_eq!(config.listen_addr, "[::1]:50051");
         assert_eq!(config.max_ttl_seconds, 3600);
@@ -127,7 +127,7 @@ mod tests {
     }
 
     #[test]
-    fn test_toml_deserialization() {
+    fn toml_deserialization() {
         let toml_str = r#"
 listen_addr = "0.0.0.0:9090"
 policy_dir = "/etc/firma/policies"

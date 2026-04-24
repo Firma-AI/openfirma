@@ -79,7 +79,7 @@ impl TestServer {
 }
 
 #[tokio::test]
-async fn test_issue_capability_e2e() {
+async fn issue_capability_e2e() {
     let server = TestServer::start().await;
 
     // Connect to the server
