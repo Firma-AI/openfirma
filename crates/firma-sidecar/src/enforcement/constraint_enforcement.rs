@@ -37,7 +37,6 @@ use std::time::Duration;
 
 use firma_core::token::matches_resource_scope;
 use firma_core::{AgentId, CapabilityClaims, DenyReason};
-use tokio::sync::watch;
 
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
 use crate::enforcement::session_state::RuntimeSignals;
@@ -79,38 +78,6 @@ pub trait PolicyEvaluation: Send + Sync {
     fn version(&self) -> Option<String>;
 }
 
-/// Sentinel evaluator installed in the watch channel at sidecar boot, before
-/// the Authority delivers the first [`PolicyBundle`].
-///
-/// `is_available()` returns `false`, so every evaluation attempt hits the
-/// existing availability check and fails closed as
-/// [`DenyReason::PolicyBundleStale`].  The bundle consumer task replaces
-/// this sentinel with a real [`CedarPolicyEvaluator`] on first delivery.
-struct NoBundleInstalled;
-
-impl PolicyEvaluation for NoBundleInstalled {
-    fn evaluate(
-        &self,
-        _: &AgentId,
-        _: &str,
-        _: &str,
-        _: &serde_json::Value,
-    ) -> Result<bool, String> {
-        Ok(false)
-    }
-
-    fn is_fresh(&self) -> bool {
-        false
-    }
-
-    fn is_available(&self) -> bool {
-        false
-    }
-
-    fn version(&self) -> Option<String> {
-        None
-    }
-}
 
 /// Stage 2: Constraint Enforcement Engine (CEE).
 ///
@@ -415,26 +382,6 @@ impl ConstraintEnforcer {
     }
 }
 
-/// Create the watch channel for policy hot-swapping, seeded with the
-/// [`NoBundleInstalled`] fail-closed sentinel.
-///
-/// Returns `(tx, rx)`:
-/// - `tx` — held by [`crate::policy_watcher::PolicyWatcher`]; call
-///   `tx.send_replace(Arc::new(evaluator))` to atomically swap the active
-///   policy on each [`PolicyBundle`] delivery.
-/// - `rx` — pass to [`ConstraintEnforcer::new`].
-///
-/// Before the first bundle is installed every Stage 2 evaluation denies
-/// as [`firma_core::decision::DenyReason::FailClosed`] because
-/// `NoBundleInstalled::is_available()` returns `false`.
-/// Sender half of the policy evaluator watch channel.
-pub type PolicySender = watch::Sender<Arc<dyn PolicyEvaluation>>;
-/// Receiver half of the policy evaluator watch channel.
-pub type PolicyReceiver = watch::Receiver<Arc<dyn PolicyEvaluation>>;
-
-pub(crate) fn policy_channel() -> (PolicySender, PolicyReceiver) {
-    watch::channel(Arc::new(NoBundleInstalled) as Arc<dyn PolicyEvaluation>)
-}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
