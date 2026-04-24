@@ -78,10 +78,14 @@ async fn main() {
 
     match command {
         Commands::Serve => run_server(config).await,
-        Commands::Revoke { action: RevokeAction::Token { token_id, reason } } => {
+        Commands::Revoke {
+            action: RevokeAction::Token { token_id, reason },
+        } => {
             run_revoke(&config, token_id, &reason).await;
         }
-        Commands::Revoke { action: RevokeAction::Compact } => run_compact(&config).await,
+        Commands::Revoke {
+            action: RevokeAction::Compact,
+        } => run_compact(&config).await,
         Commands::GenerateKey { output } => run_generate_key(&output),
     }
 }
