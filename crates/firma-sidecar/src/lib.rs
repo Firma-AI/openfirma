@@ -44,5 +44,4 @@ pub mod interceptor;
 pub mod log;
 pub mod normalizer;
 pub mod pipeline;
-pub mod policy_watcher;
 pub mod startup;
