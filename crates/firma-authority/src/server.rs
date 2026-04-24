@@ -73,7 +73,8 @@ impl Server {
         )?);
 
         // Load revocation store
-        let revocation_store = Arc::new(RevocationStore::new(&config.revocation_file)?);
+        let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds));
+        let revocation_store = Arc::new(RevocationStore::try_new(&config.revocation_file, token_ttl)?);
 
         // Start policy directory watcher for hot-reload
         let policy_watcher = Arc::new(policy_store.watch()?);
