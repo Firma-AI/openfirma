@@ -102,8 +102,7 @@ impl RevocationStore {
         let (timestamp, reason) = match (parts.next(), parts.next()) {
             (Some(raw_ts), Some(reason)) => {
                 let ts = DateTime::parse_from_rfc3339(raw_ts)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or(fallback_timestamp);
+                    .map_or(fallback_timestamp, |dt| dt.with_timezone(&Utc));
                 (ts, reason.to_string())
             }
             _ => (fallback_timestamp, "file-based revocation".to_string()),
