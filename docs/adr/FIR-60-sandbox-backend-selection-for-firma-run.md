@@ -26,13 +26,19 @@ This ADR selects the sandbox backend for Firma Run (implemented in FIR-61, speci
 
 Adopt a **dual-backend strategy** with a pluggable backend interface in Firma Run:
 
-1. **Default backend (v1): bubblewrap-based sandboxing**, integrated through an OSS runtime adapter (Anthropic Sandbox Runtime compatibility path).
-2. **Enterprise backend (v2+ profile): Firecracker microVM**, exposed as an additive profile, not a migration.
+1. **Default backend family by host OS**:
+   - Linux: bubblewrap-based sandboxing (OSS runtime adapter path).
+   - macOS: lightweight VM sandbox profile (Apple Virtualization Framework based).
+   - Windows: WSL2-backed sandbox profile (Linux guest confinement model).
+2. **Enterprise backend (additive): Firecracker microVM on Linux**, exposed as a dedicated profile, not a migration.
 
 Decision summary:
 
-- Default for `firma run --profile generic` and `--profile codex` is bubblewrap-class sandboxing.
-- Firecracker is reserved for stricter isolation deployments (enterprise profile).
+- Default for `firma run --profile generic` and `--profile codex` is OS-specific:
+  - Linux: bubblewrap-class sandboxing.
+  - macOS: VM-based sandbox profile.
+  - Windows: WSL2-based sandbox profile.
+- Firecracker is reserved for stricter isolation deployments on Linux (enterprise profile).
 - gVisor and nsjail/firejail are not selected as first-class backends in v1.
 - Docker/Podman OCI backends are intentionally excluded from FIR-60 scope.
 
@@ -42,7 +48,7 @@ Decision summary:
 |---|---|
 | Structural interception (no `HTTP_PROXY` trust) | Sandbox network namespace confinement + mandatory sidecar routing |
 | DNS confinement | Resolver path confined inside sandbox and routed through the controlled network path |
-| Linux-first support | bubblewrap and Firecracker both support Linux deployment targets |
+| Cross-platform support | OS-specific backend strategy (Linux native namespaces, macOS VM profile, Windows WSL2 profile) |
 | Fast local developer UX | bubblewrap as default for low startup overhead and simple tool wrapping |
 | Strong enterprise isolation option | Firecracker profile for kernel boundary isolation |
 | No from-scratch sandbox engine | Reuse existing OSS runtimes and kernel primitives |
@@ -119,6 +125,24 @@ Cons:
 
 Decision: **Explicitly out of scope for FIR-60/FIR-61 default path**.
 
+## Cross-Platform Backend Matrix
+
+| Host OS | v1 backend path | Enforcement approach | Notes |
+|---|---|---|---|
+| Linux | bubblewrap default (`sandbox-bwrap`) | Native namespace/network confinement + mandatory sidecar routing | Primary implementation target and reference path |
+| macOS | VM-backed profile (`sandbox-vz`) | Agent runs inside managed Linux guest VM; guest egress forced through sidecar path | Uses OS-supported virtualization primitives; avoids deprecated macOS process sandbox tooling |
+| Windows | WSL2-backed profile (`sandbox-wsl2`) | Agent runs in WSL2 guest; egress confinement and sidecar routing enforced in guest/bridge path | Works with modern Windows developer environments without Docker dependency |
+| Linux enterprise | Firecracker profile (`sandbox-firecracker`) | MicroVM isolation + sidecar routing | Additive hard-isolation option for regulated environments |
+
+Implementation contract for FIR-61:
+
+- `firma run` selects backend automatically by host OS, with explicit override flags.
+- Security invariants stay constant across OSes:
+  - fail-closed if sidecar is unreachable,
+  - no direct egress bypass,
+  - deterministic identity attribution for policy and audit.
+- Performance and startup SLOs are measured per backend profile (not one global number).
+
 ## Licensing and Redistribution Check
 
 This ADR records licensing posture for selected candidates:
@@ -179,8 +203,8 @@ Risks and mitigations:
 - Building a custom sandbox engine.
 - Replacing sidecar policy logic with sandbox-local policy logic.
 - Delivering Claude Code specialization in this ADR (that is FIR-62).
-- Cross-platform parity in v1 (Linux is the launch target).
 - Shipping Docker/Podman as a Firma Run backend in this phase.
+- Requiring one universal sandbox implementation across all operating systems.
 
 ## Rollout Plan Alignment
 
