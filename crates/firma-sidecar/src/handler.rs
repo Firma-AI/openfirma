@@ -184,15 +184,6 @@ pub fn abort_body_json(reason: AbortReason, detail: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-/// Test-only helper that builds an [`Arc<ConnectorRegistry>`] whose
-/// default is the generic HTTP connector with 30s timeout.
-#[cfg(test)]
-pub(crate) fn test_connector_registry() -> Arc<ConnectorRegistry> {
-    let default = crate::connector::provider::GenericHttpConnector::default_for_unconfigured()
-        .expect("default connector should build in tests");
-    Arc::new(ConnectorRegistry::new(Arc::new(default)))
-}
-
 /// Connector-side metadata captured after dispatch so the handler
 /// can enrich the audit payload with the call outcome (status,
 /// latency, body size) and, when needed, override the pipeline's
@@ -512,7 +503,7 @@ fn parse_http_method(method: &str) -> HttpMethod {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::time::Duration;
@@ -532,6 +523,12 @@ mod tests {
         ActionClassRegistry, CapabilityValidator, ConstraintEnforcer, IntentNormalizer,
         MappingTable, PipelineArgs,
     };
+
+    pub(crate) fn test_connector_registry() -> Arc<ConnectorRegistry> {
+        let default = crate::connector::provider::GenericHttpConnector::default_for_unconfigured()
+            .expect("default connector should build in tests");
+        Arc::new(ConnectorRegistry::new(Arc::new(default)))
+    }
 
     struct AllowAllPolicy;
     impl PolicyEvaluation for AllowAllPolicy {

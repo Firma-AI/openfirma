@@ -208,7 +208,7 @@ impl SidecarHarness {
     }
 }
 
-async fn spawn_sidecar(url: &str, config: AuthorityConfig) -> anyhow::Result<SidecarHarness> {
+fn spawn_sidecar(url: &str, config: AuthorityConfig) -> anyhow::Result<SidecarHarness> {
     let channel = build_channel(url, Duration::from_secs(config.connect_timeout_secs))?;
     let revocation_store = Arc::new(BloomLruRevocationStore::new(RevocationConfig {
         capacity: 1_024,
@@ -335,7 +335,7 @@ async fn readiness_flips_after_initial_bundle_and_revocation_grace() -> anyhow::
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     let policy_ready = wait_for(Duration::from_secs(2), || {
         harness.readiness_view.snapshot().policy_bundle_ready
@@ -366,7 +366,7 @@ async fn revocation_event_propagates_to_store_within_one_second() -> anyhow::Res
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -405,7 +405,7 @@ async fn ttl_expiry_marks_policy_stale_after_authority_disappears() -> anyhow::R
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v-ttl", 1));
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -440,7 +440,7 @@ async fn reconnect_applies_new_bundle_version() -> anyhow::Result<()> {
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -470,7 +470,7 @@ async fn malformed_bundle_retains_previous_version() -> anyhow::Result<()> {
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -510,7 +510,7 @@ async fn invalid_cedar_bundle_retains_previous_snapshot() -> anyhow::Result<()> 
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -544,7 +544,7 @@ async fn sequential_valid_bundles_swap_observed_by_evaluate() -> anyhow::Result<
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -599,7 +599,7 @@ async fn cold_boot_without_bundle_stays_not_ready() -> anyhow::Result<()> {
     // that reaches the pipeline is denied with `PolicyBundleNotReady`.
     let server = spawn_mock_authority().await?;
     // Intentionally no set_initial_bundle / push_bundle.
-    let harness = spawn_sidecar(&server.url, test_config()).await?;
+    let harness = spawn_sidecar(&server.url, test_config())?;
 
     // Give the stream client a window to settle.
     tokio::time::sleep(Duration::from_millis(300)).await;
