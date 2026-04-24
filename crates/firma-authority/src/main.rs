@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use firma_core::TokenId;
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
@@ -23,12 +23,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the authority gRPC server (default).
-    Serve,
-    /// Revocation management.
-    Revoke {
+    /// Manage revocation entries.
+    #[command(visible_alias = "revoke", visible_alias = "rev")]
+    Revocations {
         #[command(subcommand)]
-        action: RevokeAction,
+        action: RevocationsCommand,
     },
     /// Generate a new Ed25519 key pair for token signing.
     GenerateKey {
@@ -39,17 +38,20 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
-enum RevokeAction {
-    /// Revoke a capability token by ID.
-    Token {
-        /// The token ID to revoke.
-        token_id: TokenId,
-        /// Human-readable reason for the revocation.
-        #[arg(short, long, default_value = "operator-revoked")]
-        reason: String,
-    },
+enum RevocationsCommand {
+    /// Add a token ID to the revocation store.
+    Add(RevocationsAddArgs),
     /// Remove expired entries from the revocation file.
     Compact,
+}
+
+#[derive(Args)]
+struct RevocationsAddArgs {
+    /// The token ID to revoke.
+    token_id: TokenId,
+    /// Human-readable reason for the revocation.
+    #[arg(short, long, default_value = "operator-revoked")]
+    reason: String,
 }
 
 #[tokio::main]
@@ -74,19 +76,15 @@ async fn main() {
         .json()
         .init();
 
-    let command = cli.command.unwrap_or(Commands::Serve);
-
-    match command {
-        Commands::Serve => run_server(config).await,
-        Commands::Revoke {
-            action: RevokeAction::Token { token_id, reason },
-        } => {
-            run_revoke(&config, token_id, &reason).await;
-        }
-        Commands::Revoke {
-            action: RevokeAction::Compact,
-        } => run_compact(&config).await,
-        Commands::GenerateKey { output } => run_generate_key(&output),
+    match cli.command {
+        None => run_server(config).await,
+        Some(Commands::Revocations {
+            action: RevocationsCommand::Add(args),
+        }) => run_revoke(&config, args.token_id, &args.reason).await,
+        Some(Commands::Revocations {
+            action: RevocationsCommand::Compact,
+        }) => run_compact(&config).await,
+        Some(Commands::GenerateKey { output }) => run_generate_key(&output),
     }
 }
 
