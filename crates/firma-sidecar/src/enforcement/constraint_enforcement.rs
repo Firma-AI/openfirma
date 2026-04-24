@@ -78,7 +78,6 @@ pub trait PolicyEvaluation: Send + Sync {
     fn version(&self) -> Option<String>;
 }
 
-
 /// Stage 2: Constraint Enforcement Engine (CEE).
 ///
 /// Performs scope check (action within token's allowed set), builds the
@@ -381,7 +380,6 @@ impl ConstraintEnforcer {
         })
     }
 }
-
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
