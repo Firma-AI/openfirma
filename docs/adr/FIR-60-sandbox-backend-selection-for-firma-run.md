@@ -42,18 +42,18 @@ Decision summary:
 - gVisor and nsjail/firejail are not selected as first-class backends in v1.
 - Docker/Podman OCI backends are intentionally excluded from FIR-60 scope.
 
-## Requirements Mapping
+## Requirements mapping
 
-| Requirement | Selected handling |
-|---|---|
-| Structural interception (no `HTTP_PROXY` trust) | Sandbox network namespace confinement + mandatory sidecar routing |
-| DNS confinement | Resolver path confined inside sandbox and routed through the controlled network path |
-| Cross-platform support | OS-specific backend strategy (Linux native namespaces, macOS VM profile, Windows WSL2 profile) |
-| Fast local developer UX | bubblewrap as default for low startup overhead and simple tool wrapping |
-| Strong enterprise isolation option | Firecracker profile for kernel boundary isolation |
-| No from-scratch sandbox engine | Reuse existing OSS runtimes and kernel primitives |
+| Requirement                                     | Selected handling                                                                              |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Structural interception (no `HTTP_PROXY` trust) | Sandbox network namespace confinement + mandatory sidecar routing                              |
+| DNS confinement                                 | Resolver path confined inside sandbox and routed through the controlled network path           |
+| Cross-platform support                          | OS-specific backend strategy (Linux native namespaces, macOS VM profile, Windows WSL2 profile) |
+| Fast local developer UX                         | bubblewrap as default for low startup overhead and simple tool wrapping                        |
+| Strong enterprise isolation option              | Firecracker profile for kernel boundary isolation                                              |
+| No from-scratch sandbox engine                  | Reuse existing OSS runtimes and kernel primitives                                              |
 
-## Option Analysis (Best to Worst for v1)
+## Option analysis (best to worst for v1)
 
 ### A. bubblewrap + OSS runtime adapter
 
@@ -125,14 +125,14 @@ Cons:
 
 Decision: **Explicitly out of scope for FIR-60/FIR-61 default path**.
 
-## Cross-Platform Backend Matrix
+## Cross-platform backend matrix
 
-| Host OS | v1 backend path | Enforcement approach | Notes |
-|---|---|---|---|
-| Linux | bubblewrap default (`sandbox-bwrap`) | Native namespace/network confinement + mandatory sidecar routing | Primary implementation target and reference path |
-| macOS | VM-backed profile (`sandbox-vz`) | Agent runs inside managed Linux guest VM; guest egress forced through sidecar path | Uses OS-supported virtualization primitives; avoids deprecated macOS process sandbox tooling |
-| Windows | WSL2-backed profile (`sandbox-wsl2`) | Agent runs in WSL2 guest; egress confinement and sidecar routing enforced in guest/bridge path | Works with modern Windows developer environments without Docker dependency |
-| Linux enterprise | Firecracker profile (`sandbox-firecracker`) | MicroVM isolation + sidecar routing | Additive hard-isolation option for regulated environments |
+| Host OS          | v1 backend path                             | Enforcement approach                                                                           | Notes                                                                                        |
+| ---------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Linux            | bubblewrap default (`sandbox-bwrap`)        | Native namespace/network confinement + mandatory sidecar routing                               | Primary implementation target and reference path                                             |
+| macOS            | VM-backed profile (`sandbox-vz`)            | Agent runs inside managed Linux guest VM; guest egress forced through sidecar path             | Uses OS-supported virtualization primitives; avoids deprecated macOS process sandbox tooling |
+| Windows          | WSL2-backed profile (`sandbox-wsl2`)        | Agent runs in WSL2 guest; egress confinement and sidecar routing enforced in guest/bridge path | Works with modern Windows developer environments without Docker dependency                   |
+| Linux enterprise | Firecracker profile (`sandbox-firecracker`) | MicroVM isolation + sidecar routing                                                            | Additive hard-isolation option for regulated environments                                    |
 
 Implementation contract for FIR-61:
 
@@ -143,7 +143,7 @@ Implementation contract for FIR-61:
   - deterministic identity attribution for policy and audit.
 - Performance and startup SLOs are measured per backend profile (not one global number).
 
-## Licensing and Redistribution Check
+## Licensing and redistribution check
 
 This ADR records licensing posture for selected candidates:
 
@@ -159,7 +159,7 @@ Redistribution policy for FIR-61 implementation:
 - Keep third-party notices for any bundled adapter code and transitive artifacts.
 - Add CI license scanning gate before release tagging of Firma Run binaries.
 
-## Benchmark Harness Decision (ADR-level scope)
+## Benchmark harness decision (ADR-level scope)
 
 No production runtime code is shipped in FIR-60, but FIR-61 must include a benchmark harness with these outputs:
 
@@ -206,13 +206,13 @@ Risks and mitigations:
 - Shipping Docker/Podman as a Firma Run backend in this phase.
 - Requiring one universal sandbox implementation across all operating systems.
 
-## Rollout Plan Alignment
+## Rollout plan alignment
 
 - FIR-60 (this ADR): backend selection and constraints.
 - FIR-61: implement `firma run` wrapper and default backend path.
 - FIR-62: Claude Code/run_shell specialization on top of FIR-61.
 
-## Owner and Sign-off
+## Owner and sign-off
 
 - Author: Dario
 - Sign-off required: Derek
