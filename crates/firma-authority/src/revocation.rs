@@ -109,7 +109,11 @@ impl RevocationStore {
             _ => (fallback_timestamp, "file-based revocation".to_string()),
         };
 
-        Some(RevocationEntry { token_id, reason, timestamp })
+        Some(RevocationEntry {
+            token_id,
+            reason,
+            timestamp,
+        })
     }
 
     /// Returns `true` if the revocation entry is old enough that the token
@@ -129,7 +133,11 @@ impl RevocationStore {
         for (line_number, line) in content.lines().enumerate() {
             let Some(entry) = Self::parse_line(line, now) else {
                 if !line.trim().is_empty() {
-                    tracing::warn!(line_number, line, "unparseable line in revocation file, ignoring");
+                    tracing::warn!(
+                        line_number,
+                        line,
+                        "unparseable line in revocation file, ignoring"
+                    );
                 }
                 continue;
             };
@@ -273,7 +281,14 @@ impl RevocationStore {
         let mut lines: Vec<String> = entries
             .values()
             .filter(|e| !self.is_expired(e, now))
-            .map(|e| format!("{}\t{}\t{}\n", e.token_id, e.timestamp.to_rfc3339(), e.reason))
+            .map(|e| {
+                format!(
+                    "{}\t{}\t{}\n",
+                    e.token_id,
+                    e.timestamp.to_rfc3339(),
+                    e.reason
+                )
+            })
             .collect();
         drop(entries);
         lines.sort_unstable();
@@ -450,7 +465,10 @@ mod tests {
         let old_ts = (Utc::now() - Duration::hours(2)).to_rfc3339();
         std::fs::write(&file, format!("{id}\t{old_ts}\told revocation\n")).unwrap();
 
-        assert!(store(&file).entries.blocking_read().is_empty(), "expired entry must not load");
+        assert!(
+            store(&file).entries.blocking_read().is_empty(),
+            "expired entry must not load"
+        );
     }
 
     #[test]
@@ -512,7 +530,10 @@ mod tests {
         let line = content.lines().next().unwrap();
         let parts: Vec<&str> = line.splitn(3, '\t').collect();
         assert_eq!(parts.len(), 3, "line must have 3 tab-separated fields");
-        assert!(parts[1].contains('T'), "second field must be an ISO 8601 timestamp");
+        assert!(
+            parts[1].contains('T'),
+            "second field must be an ISO 8601 timestamp"
+        );
         assert_eq!(parts[2], "security breach");
     }
 
@@ -554,7 +575,9 @@ mod tests {
         let id2 = TokenId::new();
 
         // Write both IDs at once so one file event triggers a single reload for both.
-        tokio::fs::write(&file, format!("{id1}\n{id2}\n")).await.unwrap();
+        tokio::fs::write(&file, format!("{id1}\n{id2}\n"))
+            .await
+            .unwrap();
 
         for _ in 0..2 {
             tokio::time::timeout(tokio::time::Duration::from_millis(500), rx.recv())
@@ -587,12 +610,20 @@ mod tests {
 
         // store() calls blocking_write; spawn_blocking keeps it off the async executor.
         let file_clone = file.clone();
-        let s = tokio::task::spawn_blocking(move || store(&file_clone)).await.unwrap();
+        let s = tokio::task::spawn_blocking(move || store(&file_clone))
+            .await
+            .unwrap();
         s.compact_file().await.unwrap();
 
         let content = std::fs::read_to_string(&file).unwrap();
-        assert!(content.contains(&id_new.to_string()), "non-expired entry must be kept");
-        assert!(!content.contains(&id_old.to_string()), "expired entry must be removed");
+        assert!(
+            content.contains(&id_new.to_string()),
+            "non-expired entry must be kept"
+        );
+        assert!(
+            !content.contains(&id_old.to_string()),
+            "expired entry must be removed"
+        );
     }
 
     #[tokio::test]
