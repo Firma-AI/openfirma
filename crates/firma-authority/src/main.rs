@@ -5,7 +5,7 @@ use firma_core::TokenId;
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 
-use firma_authority::{AuthorityConfig, Server};
+use firma_authority::{AuthorityConfig, RevocationStore, Server};
 
 #[derive(Parser)]
 #[command(
@@ -25,10 +25,10 @@ struct Cli {
 enum Commands {
     /// Start the authority gRPC server (default).
     Serve,
-    /// Revoke a capability token by ID.
+    /// Revocation management.
     Revoke {
-        /// The token ID to revoke.
-        token_id: TokenId,
+        #[command(subcommand)]
+        action: RevokeAction,
     },
     /// Generate a new Ed25519 key pair for token signing.
     GenerateKey {
@@ -36,6 +36,20 @@ enum Commands {
         #[arg(short, long, default_value = "firma-authority.key")]
         output: PathBuf,
     },
+}
+
+#[derive(Subcommand)]
+enum RevokeAction {
+    /// Revoke a capability token by ID.
+    Token {
+        /// The token ID to revoke.
+        token_id: TokenId,
+        /// Human-readable reason for the revocation.
+        #[arg(short, long, default_value = "operator-revoked")]
+        reason: String,
+    },
+    /// Remove expired entries from the revocation file.
+    Compact,
 }
 
 #[tokio::main]
@@ -64,7 +78,10 @@ async fn main() {
 
     match command {
         Commands::Serve => run_server(config).await,
-        Commands::Revoke { token_id } => run_revoke(&config, token_id),
+        Commands::Revoke { action: RevokeAction::Token { token_id, reason } } => {
+            run_revoke(&config, token_id, &reason).await;
+        }
+        Commands::Revoke { action: RevokeAction::Compact } => run_compact(&config).await,
         Commands::GenerateKey { output } => run_generate_key(&output),
     }
 }
@@ -84,31 +101,37 @@ async fn run_server(config: AuthorityConfig) {
     }
 }
 
-/// FR-7: Revoke a token by appending its ID to the revocation file.
-fn run_revoke(config: &AuthorityConfig, token_id: TokenId) {
-    use std::io::Write;
-
-    let mut file = match std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&config.revocation_file)
-    {
-        Ok(f) => f,
+/// FR-7: Revoke a token by delegating to [`RevocationStore::revoke`].
+async fn run_revoke(config: &AuthorityConfig, token_id: TokenId, reason: &str) {
+    let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds));
+    let store = match RevocationStore::try_new(&config.revocation_file, token_ttl) {
+        Ok(s) => s,
         Err(e) => {
-            eprintln!(
-                "failed to open revocation file {}: {e}",
-                config.revocation_file.display()
-            );
+            eprintln!("failed to open revocation store: {e}");
             std::process::exit(1);
         }
     };
-
-    if let Err(e) = writeln!(file, "{token_id}") {
-        eprintln!("failed to write to revocation file: {e}");
+    if let Err(e) = store.revoke(token_id, reason).await {
+        eprintln!("failed to revoke token: {e}");
         std::process::exit(1);
     }
-
     println!("revoked token: {token_id}");
+}
+
+async fn run_compact(config: &AuthorityConfig) {
+    let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds));
+    let store = match RevocationStore::try_new(&config.revocation_file, token_ttl) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("failed to open revocation store: {e}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = store.compact_file().await {
+        eprintln!("failed to compact revocation file: {e}");
+        std::process::exit(1);
+    }
+    println!("compacted: {}", config.revocation_file.display());
 }
 
 /// FR-9: Generate a new Ed25519 key pair and write to file.
