@@ -37,3 +37,6 @@ build/
 # generated key
 *.key
 *.pub
+
+# authority
+revocations.txt

@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use anyhow::{Context as _, Result};
 use firma_core::token::paseto::PasetoV4Signer;
 use firma_proto::firma::v1::authority_service_server::AuthorityServiceServer;
 use tonic::transport::Server as TonicServer;
@@ -10,7 +11,6 @@ use tonic_health::server::HealthReporter;
 
 use crate::cedar_loader::CedarPolicyStore;
 use crate::config::AuthorityConfig;
-use crate::error::AuthorityError;
 use crate::revocation::RevocationStore;
 use crate::service::AuthorityServiceImpl;
 
@@ -32,13 +32,10 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns [`AuthorityError`] if the policy store cannot be loaded, the
+    /// Returns an error if the policy store cannot be loaded, the
     /// TCP listener cannot bind to the configured address, or the file watcher
     /// cannot be initialised.
-    pub async fn try_new<F>(
-        config: AuthorityConfig,
-        shutdown_signal: F,
-    ) -> Result<Self, AuthorityError>
+    pub async fn try_new<F>(config: AuthorityConfig, shutdown_signal: F) -> Result<Self>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -52,19 +49,10 @@ impl Server {
         );
 
         // Load Ed25519 signing key
-        let key_bytes = std::fs::read(&config.key_file).map_err(|e| AuthorityError::KeyError {
-            reason: format!(
-                "failed to read key file {}: {}",
-                config.key_file.display(),
-                e
-            ),
-        })?;
+        let key_bytes = std::fs::read(&config.key_file)
+            .with_context(|| format!("failed to read key file {}", config.key_file.display()))?;
 
-        let signer = Arc::new(PasetoV4Signer::try_new(&key_bytes).map_err(|e| {
-            AuthorityError::KeyError {
-                reason: format!("invalid signing key: {e}"),
-            }
-        })?);
+        let signer = Arc::new(PasetoV4Signer::try_new(&key_bytes).context("invalid signing key")?);
 
         // Load Cedar policies
         let policy_store = Arc::new(CedarPolicyStore::load(
@@ -73,7 +61,11 @@ impl Server {
         )?);
 
         // Load revocation store
-        let revocation_store = Arc::new(RevocationStore::new(&config.revocation_file)?);
+        let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds));
+        let revocation_store = Arc::new(RevocationStore::try_new(
+            &config.revocation_file,
+            token_ttl,
+        )?);
 
         // Start policy directory watcher for hot-reload
         let policy_watcher = Arc::new(policy_store.watch()?);
@@ -91,26 +83,18 @@ impl Server {
             config.max_ttl_seconds,
         );
 
-        let addr: SocketAddr =
-            config
-                .listen_addr
-                .parse()
-                .map_err(|e| AuthorityError::BindFailed {
-                    reason: format!("invalid listen address {}: {}", config.listen_addr, e),
-                })?;
+        let addr: SocketAddr = config
+            .listen_addr
+            .parse()
+            .with_context(|| format!("invalid listen address {}", config.listen_addr))?;
 
-        let listener =
-            tokio::net::TcpListener::bind(addr)
-                .await
-                .map_err(|e| AuthorityError::BindFailed {
-                    reason: format!("failed to bind to {addr}: {e}"),
-                })?;
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("failed to bind to {addr}"))?;
 
         let local_addr = listener
             .local_addr()
-            .map_err(|e| AuthorityError::BindFailed {
-                reason: format!("failed to get local address: {e}"),
-            })?;
+            .context("failed to get local address")?;
 
         let port = local_addr.port();
         let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
@@ -132,15 +116,13 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns [`AuthorityError`] if the underlying gRPC transport fails.
-    pub async fn run(self) -> Result<(), AuthorityError> {
+    /// Returns an error if the underlying gRPC transport fails.
+    pub async fn run(self) -> Result<()> {
         tracing::info!(port = %self.port, "gRPC server listening");
         self.health_reporter
             .set_service_status("", tonic_health::ServingStatus::Serving)
             .await;
-        self.future.await.map_err(|error| AuthorityError::Server {
-            reason: error.to_string(),
-        })
+        self.future.await.context("gRPC transport server failed")
     }
 
     /// Get the port the server is bound to.
