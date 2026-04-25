@@ -1,14 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::{Context as _, Result, bail};
 use cedar_policy::{PolicySet, Schema};
 use sha2::{Digest, Sha256};
 use tokio::sync::{RwLock, watch};
 use tokio::task::JoinHandle;
 
 use firma_core::policy::PolicyBundle;
-
-use crate::error::AuthorityError;
 
 /// All mutable policy state kept under a single lock for atomic swaps.
 struct PolicyState {
@@ -40,9 +39,9 @@ impl CedarPolicyStore {
     ///
     /// # Errors
     ///
-    /// Returns [`AuthorityError`] if the policy directory cannot be read or
+    /// Returns an error if the policy directory cannot be read or
     /// any `.cedar` file contains invalid syntax.
-    pub fn load(policy_dir: &Path, bundle_ttl_seconds: u32) -> Result<Self, AuthorityError> {
+    pub fn load(policy_dir: &Path, bundle_ttl_seconds: u32) -> Result<Self> {
         let (policies_src, schema_src) = read_policy_files(policy_dir)?;
         let policy_set = parse_policies(&policies_src)?;
         let schema = parse_schema(&schema_src)?;
@@ -77,7 +76,7 @@ impl CedarPolicyStore {
     /// Reload policies from disk, atomically swapping all state in one lock
     /// acquisition. If the new policy set is invalid, keeps the previous set
     /// (FR-2). No-ops if the version hash has not changed.
-    async fn reload(&self) -> Result<(), AuthorityError> {
+    async fn reload(&self) -> Result<()> {
         let (policies_src, schema_src) = read_policy_files(&self.policy_dir)?;
         let new_policy_set = parse_policies(&policies_src)?;
         let new_schema = parse_schema(&schema_src)?;
@@ -134,8 +133,8 @@ impl CedarPolicyStore {
     ///
     /// # Errors
     ///
-    /// Returns `AuthorityError` if the OS file watcher cannot be created or registered.
-    pub fn watch(&self) -> Result<CedarPolicyStoreWatcher, AuthorityError> {
+    /// Returns an error if the OS file watcher cannot be created or registered.
+    pub fn watch(&self) -> Result<CedarPolicyStoreWatcher> {
         use notify::Watcher as _;
 
         let path = self.policy_dir.clone();
@@ -159,48 +158,12 @@ impl CedarPolicyStore {
             _ => {}
         };
 
-        #[cfg(target_os = "macos")]
-        let mut watcher =
-            {
-                // The workspace uses notify's kqueue backend on macOS. For local
-                // tempdir-based policy reloads, polling is more reliable than the
-                // native directory watcher and the added latency is acceptable for
-                // Authority-side hot reload.
-                let config = notify::Config::default()
-                    .with_poll_interval(std::time::Duration::from_millis(250));
-                WatchBackend::Poll(notify::PollWatcher::new(event_handler, config).map_err(
-                    |e| AuthorityError::WatchFailed {
-                        reason: e.to_string(),
-                    },
-                )?)
-            };
-
-        #[cfg(not(target_os = "macos"))]
-        let mut watcher =
-            WatchBackend::Recommended(notify::recommended_watcher(event_handler).map_err(|e| {
-                AuthorityError::WatchFailed {
-                    reason: e.to_string(),
-                }
-            })?);
-
-        match &mut watcher {
-            #[cfg(not(target_os = "macos"))]
-            WatchBackend::Recommended(inner) => {
-                inner
-                    .watch(&path, notify::RecursiveMode::Recursive)
-                    .map_err(|e| AuthorityError::WatchFailed {
-                        reason: e.to_string(),
-                    })?;
-            }
-            #[cfg(target_os = "macos")]
-            WatchBackend::Poll(inner) => {
-                inner
-                    .watch(&path, notify::RecursiveMode::Recursive)
-                    .map_err(|e| AuthorityError::WatchFailed {
-                        reason: e.to_string(),
-                    })?;
-            }
-        }
+        let watcher = notify::recommended_watcher(event_handler)
+            .context("failed to create policy directory watcher")?;
+        let mut watcher = watcher;
+        watcher
+            .watch(&path, notify::RecursiveMode::Recursive)
+            .with_context(|| format!("failed to watch policy directory {}", path.display()))?;
 
         let task = tokio::spawn(async move {
             while rx_signal.recv().await.is_some() {
@@ -221,16 +184,9 @@ impl CedarPolicyStore {
 /// Owns the file watcher and reload task for a [`CedarPolicyStore`].
 /// Dropping this handle stops the file watch and the reload task.
 pub struct CedarPolicyStoreWatcher {
-    _watcher: WatchBackend,
+    _watcher: notify::RecommendedWatcher,
     task: JoinHandle<()>,
     tx: watch::Sender<PolicyBundle>,
-}
-
-enum WatchBackend {
-    #[cfg(not(target_os = "macos"))]
-    Recommended(notify::RecommendedWatcher),
-    #[cfg(target_os = "macos")]
-    Poll(notify::PollWatcher),
 }
 
 impl CedarPolicyStoreWatcher {
@@ -249,18 +205,14 @@ impl CedarPolicyStoreWatcher {
 
 /// Read all `.cedar` files from a directory and concatenate their contents.
 /// Also reads `schema.cedarschema` or `schema.json` if present.
-fn read_policy_files(policy_dir: &Path) -> Result<(String, String), AuthorityError> {
+fn read_policy_files(policy_dir: &Path) -> Result<(String, String)> {
     if !policy_dir.is_dir() {
-        return Err(AuthorityError::PolicyLoadFailed {
-            reason: format!("policy directory does not exist: {}", policy_dir.display()),
-        });
+        bail!("policy directory does not exist: {}", policy_dir.display());
     }
 
     let mut policies = String::new();
     let mut entries: Vec<_> = std::fs::read_dir(policy_dir)
-        .map_err(|e| AuthorityError::PolicyLoadFailed {
-            reason: format!("cannot read policy directory: {e}"),
-        })?
+        .with_context(|| format!("cannot read policy directory {}", policy_dir.display()))?
         .filter_map(Result::ok)
         .collect();
 
@@ -270,10 +222,8 @@ fn read_policy_files(policy_dir: &Path) -> Result<(String, String), AuthorityErr
     for entry in &entries {
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "cedar") {
-            let content =
-                std::fs::read_to_string(&path).map_err(|e| AuthorityError::PolicyLoadFailed {
-                    reason: format!("cannot read {}: {e}", path.display()),
-                })?;
+            let content = std::fs::read_to_string(&path)
+                .with_context(|| format!("cannot read {}", path.display()))?;
             if !policies.is_empty() {
                 policies.push('\n');
             }
@@ -310,26 +260,24 @@ fn try_read_schema(policy_dir: &Path) -> std::io::Result<String> {
 }
 
 /// Parse Cedar policy source into a `PolicySet`.
-fn parse_policies(source: &str) -> Result<PolicySet, AuthorityError> {
+fn parse_policies(source: &str) -> Result<PolicySet> {
     if source.is_empty() {
         return Ok(PolicySet::new());
     }
     source
         .parse::<PolicySet>()
-        .map_err(|e| AuthorityError::PolicyLoadFailed {
-            reason: format!("cedar policy parse error: {e}"),
-        })
+        .map_err(anyhow::Error::from)
+        .context("cedar policy parse error")
 }
 
 /// Parse Cedar schema source into a `Schema`.
-fn parse_schema(source: &str) -> Result<Option<Schema>, AuthorityError> {
+fn parse_schema(source: &str) -> Result<Option<Schema>> {
     if source.is_empty() {
         return Ok(None);
     }
-    let (schema, warnings) =
-        Schema::from_cedarschema_str(source).map_err(|e| AuthorityError::PolicyLoadFailed {
-            reason: format!("cedar schema parse error: {e}"),
-        })?;
+    let (schema, warnings) = Schema::from_cedarschema_str(source)
+        .map_err(anyhow::Error::from)
+        .context("cedar schema parse error")?;
     for w in warnings {
         tracing::warn!(%w, "cedar schema warning");
     }
