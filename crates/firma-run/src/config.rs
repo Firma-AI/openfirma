@@ -276,11 +276,13 @@ pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
         .backend
         .unwrap_or_else(BackendKind::default_for_current_host);
 
-    let sidecar_endpoint_value = patch
-        .sidecar_endpoint
-        .as_deref()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| std::env::var("FIRMA_SIDECAR_ENDPOINT").unwrap_or_else(|_| "tcp://127.0.0.1:8080".to_string()));
+    let sidecar_endpoint_value = patch.sidecar_endpoint.as_deref().map_or_else(
+        || {
+            std::env::var("FIRMA_SIDECAR_ENDPOINT")
+                .unwrap_or_else(|_| "tcp://127.0.0.1:8080".to_string())
+        },
+        ToOwned::to_owned,
+    );
     let sidecar_endpoint = sidecar_endpoint_value
         .parse::<SidecarEndpoint>()
         .map_err(RunError::ConfigValidation)?;
