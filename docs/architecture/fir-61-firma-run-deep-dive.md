@@ -5,23 +5,22 @@
 This document translates FIR-60 direction into an implementation-ready FIR-61 blueprint.
 
 - FIR-60 decision: move enforcement boundary to sandboxed runtime, keep sidecar as single enforcement plane.
-- FIR-61 scope: implement generic wrapper plumbing (`firma run`) with Linux-first backend delivery.
+- FIR-61 scope: implement generic wrapper plumbing (`firma run`) with cross-OS backend paths.
 - FIR-62 scope: Claude-specific specialization.
 
 ## Scope Reconciliation
 
-FIR-60 accepted an OS-matrix strategy (`bwrap`, `vz`, `wsl2`, optional Firecracker). FIR-61 delivery scope is Linux-only.
+FIR-60 accepted an OS-matrix strategy (`bwrap`, `vz`, `wsl2`, optional Firecracker). FIR-61 now ships runtime paths for Linux, macOS, and Windows.
 
 Implementation stance for FIR-61:
 
 1. Keep backend contract pluggable and backend-neutral in orchestration.
-2. Ship Linux `bwrap` backend now.
-3. Return explicit unsupported errors for non-Linux hosts in FIR-61.
-4. Keep enterprise profile seam additive (no rewrites).
+2. Ship Linux `bwrap`, macOS `vz`, and Windows `wsl2` runtime paths.
+3. Keep enterprise profile seam additive (no rewrites).
 
 ## Architecture Blueprint
 
-### Runtime topology (Linux FIR-61)
+### Runtime topology (cross-OS FIR-61)
 
 ```text
 Host:
@@ -29,7 +28,7 @@ Host:
   firma-sidecar
   sidecar uds: /run/firma-sidecar/<sandbox_id>.sock
 
-Sandbox (bwrap net namespace):
+Sandbox / wrapped runtime:
   agent process (python/node/codex/...)
   local egress bridge (127.0.0.1:18080)
   local dns stub (127.0.0.1:53)
@@ -133,7 +132,6 @@ Recommended bolt order:
 
 ## Non-goals (FIR-61)
 
-- Cross-platform backend implementation.
 - Firecracker runtime implementation.
 - Claude-specific workflow behavior (FIR-62).
 - New policy logic plane outside sidecar.

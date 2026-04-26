@@ -40,6 +40,18 @@ Terminal B:
 cargo run -p firma-run -- run --profile codex -- codex
 ```
 
+Backend defaults by host OS:
+
+- Linux: `bwrap`
+- macOS: `vz`
+- Windows: `wsl2`
+
+Manual backend override example:
+
+```bash
+cargo run -p firma-run -- run --backend vz --profile codex -- codex
+```
+
 ## Run the local E2E harness
 
 ```bash
