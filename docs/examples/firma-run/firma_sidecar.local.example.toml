@@ -1,0 +1,16 @@
+[interceptor]
+mode = "http_proxy"
+listen_addr = "127.0.0.1:8080"
+drain_timeout_secs = 5
+
+[mapping]
+rules_path = ".local/mapping-rules.toml"
+default_protected = false
+
+[audit]
+sink = "file"
+file_path = ".local/audit.jsonl"
+signing_key_path = ".local/audit-key.pem"
+
+[log]
+level = "info"
