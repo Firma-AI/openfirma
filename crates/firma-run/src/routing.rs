@@ -16,7 +16,10 @@ use crate::backend::SandboxHandle;
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 
-const STRUCTURAL_PROXY_LISTEN_ADDR: &str = "127.0.0.1:18080";
+fn structural_proxy_listen_addr() -> &'static str {
+    static ADDR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ADDR.get_or_init(|| std::env::var("FIRMA_PROXY_LISTEN_ADDR").unwrap_or("127.0.0.1:18080".to_string()))
+}
 
 /// Runtime-side network artifacts that must live while the wrapped process runs.
 pub struct NetworkRuntime {
@@ -74,34 +77,35 @@ pub fn prepare_network_runtime(
             ))
         })?;
 
+        let proxy_addr = structural_proxy_listen_addr();
         let mut env_overrides = BTreeMap::new();
         env_overrides.insert(
             "HTTP_PROXY".to_string(),
-            format!("http://{STRUCTURAL_PROXY_LISTEN_ADDR}"),
+            format!("http://{proxy_addr}"),
         );
         env_overrides.insert(
             "HTTPS_PROXY".to_string(),
-            format!("http://{STRUCTURAL_PROXY_LISTEN_ADDR}"),
+            format!("http://{proxy_addr}"),
         );
         env_overrides.insert(
             "http_proxy".to_string(),
-            format!("http://{STRUCTURAL_PROXY_LISTEN_ADDR}"),
+            format!("http://{proxy_addr}"),
         );
         env_overrides.insert(
             "https_proxy".to_string(),
-            format!("http://{STRUCTURAL_PROXY_LISTEN_ADDR}"),
+            format!("http://{proxy_addr}"),
         );
         env_overrides.insert(
             "ALL_PROXY".to_string(),
-            format!("http://{STRUCTURAL_PROXY_LISTEN_ADDR}"),
+            format!("http://{proxy_addr}"),
         );
         env_overrides.insert(
             "all_proxy".to_string(),
-            format!("http://{STRUCTURAL_PROXY_LISTEN_ADDR}"),
+            format!("http://{proxy_addr}"),
         );
         env_overrides.insert(
             "FIRMA_RUN_PROXY_LISTEN_ADDR".to_string(),
-            STRUCTURAL_PROXY_LISTEN_ADDR.to_string(),
+            proxy_addr.to_string(),
         );
         env_overrides.insert(
             "FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS".to_string(),
