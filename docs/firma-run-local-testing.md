@@ -26,6 +26,21 @@ Templates used:
 - `docs/examples/firma-run/mapping-rules.local.example.toml`
 - `docs/examples/firma-run/firma_sidecar.local.example.toml`
 
+## Environment Variables
+
+`firma run` supports the following environment variables to customize addresses and avoid port conflicts:
+
+- `FIRMA_SIDECAR_ENDPOINT`: Sidecar endpoint (default: `tcp://127.0.0.1:8080`)
+- `FIRMA_PROXY_LISTEN_ADDR`: Proxy bridge listen address (default: `127.0.0.1:18080`)
+
+Example:
+
+```bash
+export FIRMA_SIDECAR_ENDPOINT=tcp://127.0.0.1:9090
+export FIRMA_PROXY_LISTEN_ADDR=127.0.0.1:18181
+cargo run -p firma-run -- run -- "your command"
+```
+
 ## Run sidecar + codex
 
 Terminal A:
