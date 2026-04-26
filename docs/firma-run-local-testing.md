@@ -3,6 +3,7 @@
 This guide shows how to test `firma run` locally without committing local secrets/config.
 
 ## Why this guide
+
 `firma run` local testing needs a sidecar config, mapping rules, and an audit signing key. Those are machine-local artifacts and should not be committed.
 
 The repo now reserves `/.local/` for this purpose and ignores it in git.
