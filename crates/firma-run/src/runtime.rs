@@ -120,6 +120,10 @@ fn build_execution_env(
         SidecarEndpoint::Tcp { addr } => {
             env.insert("HTTP_PROXY".to_string(), format!("http://{addr}"));
             env.insert("HTTPS_PROXY".to_string(), format!("http://{addr}"));
+            env.insert("http_proxy".to_string(), format!("http://{addr}"));
+            env.insert("https_proxy".to_string(), format!("http://{addr}"));
+            env.insert("ALL_PROXY".to_string(), format!("http://{addr}"));
+            env.insert("all_proxy".to_string(), format!("http://{addr}"));
         }
         SidecarEndpoint::Unix { path } => {
             env.insert(
