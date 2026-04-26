@@ -514,7 +514,36 @@ Contract highlights:
   drains in-flight work before returning `Ok(())`.
 - eBPF kernel-level capture is on the roadmap; not in V1.
 
-### 7.1 Denial contexts and response shapes
+### 7.1 HTTPS CONNECT behavior
+
+The sidecar now provides explicit HTTPS `CONNECT` support in the HTTP interceptor to
+unblock real-world HTTPS agent traffic (OpenAI, Supabase, Resend, etc.)
+through `firma run`.
+
+Implementation model (no MITM):
+
+- The sidecar evaluates policy at CONNECT handshake time on `host:port`.
+- On allow, the sidecar returns `200` and relays raw TCP bytes
+  bidirectionally.
+- On deny, the sidecar returns structured `403` deny JSON.
+- CONNECT allow/deny outcomes emit audit events.
+
+Pingora-specific note:
+
+- We observed that Pingora default behavior rejects CONNECT with `405`
+  unless `allow_connect_method_proxying` is enabled.
+- Even after enabling that flag, our forward-proxy path still produced
+  `502` for real HTTPS CONNECT targets in E2E.
+- The sidecar resolves this by handling CONNECT tunnel lifecycle explicitly in
+  the sidecar HTTP interceptor runtime, preserving fail-closed semantics
+  without TLS MITM.
+
+Follow-up boundary:
+
+- Payload-level HTTPS path/method policy requires TLS interception
+  (MITM) and trusted CA propagation, tracked as a separate card.
+
+### 7.2 Denial contexts and response shapes
 
 FEP §5 distinguishes two structurally different denial contexts. The
 sidecar derives the context at the handler layer from the
@@ -548,7 +577,7 @@ tool call, it defaults to the hard-block shape. A tool denial on a
 non-tool call would silently mask the failure.
 
 **V1 scope.** No interceptor currently originates from a tool-call
-transport (MCP stdio, tool-use gateway, etc.). The Pingora HTTP,
+transport (MCP stdio, tool-use gateway, etc.). The HTTP proxy,
 Tonic gRPC, and UDS interceptors all serve HTTP-class traffic and
 treat both `Tool` and `Api` identically: HTTP 403 + `deny_body_json`
 (or the gRPC `allowed=false` equivalent). `tool_denial_body_json` is
