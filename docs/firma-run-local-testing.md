@@ -56,6 +56,25 @@ Terminal B:
 cargo run -p firma-run -- run --profile codex -- codex
 ```
 
+Identity default:
+
+- `firma run` defaults to sandbox identity masking mode (`sandbox_user`).
+- Inside the sandbox, username/group labels are presented as `firma-user` while preserving host UID/GID compatibility for mounted workspace writes.
+
+Compatibility override:
+
+```bash
+cargo run -p firma-run -- run --profile codex --preserve-host-user -- codex
+```
+
+Config override (`firma-run.yaml`):
+
+```yaml
+profiles:
+  codex:
+    identity_mode: host_user
+```
+
 Backend defaults by host OS:
 
 - Linux: `bwrap`

@@ -6,6 +6,7 @@ use crate::backend::{
 };
 use crate::config::MountSpec;
 use crate::config::NetworkPolicy;
+use crate::config::SandboxIdentityMode;
 use crate::error::RunError;
 
 const BWRAP_ENTRYPOINT_SCRIPT: &str = include_str!("../resources/bwrap_entrypoint.sh");
@@ -53,6 +54,44 @@ impl SandboxBackend for BwrapBackend {
         })?;
 
         let mut mounts = request.profile.mounts.clone();
+
+        if request.profile.identity_mode == SandboxIdentityMode::SandboxUser {
+            let (uid, gid) = host_uid_gid()?;
+            let passwd_path = runtime_dir.join("passwd");
+            let group_path = runtime_dir.join("group");
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+
+            let passwd = format!(
+                "root:x:0:0:root:/root:/bin/sh\nfirma-user:x:{uid}:{gid}:firma-user:{home}:/bin/sh\n"
+            );
+            let group = format!("root:x:0:\nfirma-user:x:{gid}:\nnogroup:x:65534:\n");
+
+            std::fs::write(&passwd_path, passwd).map_err(|error| RunError::Backend {
+                backend: BackendKind::Bwrap.to_string(),
+                reason: format!(
+                    "failed to write sandbox passwd file {}: {error}",
+                    passwd_path.display()
+                ),
+            })?;
+            std::fs::write(&group_path, group).map_err(|error| RunError::Backend {
+                backend: BackendKind::Bwrap.to_string(),
+                reason: format!(
+                    "failed to write sandbox group file {}: {error}",
+                    group_path.display()
+                ),
+            })?;
+
+            mounts.push(MountSpec {
+                source: passwd_path,
+                target: PathBuf::from("/etc/passwd"),
+                read_only: true,
+            });
+            mounts.push(MountSpec {
+                source: group_path,
+                target: PathBuf::from("/etc/group"),
+                read_only: true,
+            });
+        }
 
         if request.profile.network.enforce_network_namespace {
             let resolv_conf_path = runtime_dir.join("resolv.conf");
@@ -152,6 +191,11 @@ impl SandboxBackend for BwrapBackend {
             command.arg("--setenv").arg(key).arg(value);
         }
 
+        if launch.identity_mode == SandboxIdentityMode::SandboxUser {
+            command.arg("--setenv").arg("USER").arg("firma-user");
+            command.arg("--setenv").arg("LOGNAME").arg("firma-user");
+        }
+
         command.arg("--");
         if let Some(entrypoint) = maybe_write_entrypoint_script(handle, launch)? {
             command.arg("/bin/sh");
@@ -181,6 +225,49 @@ fn command_available(binary: &str) -> bool {
         .arg("--version")
         .status()
         .is_ok_and(|status| status.success())
+}
+
+fn host_uid_gid() -> Result<(u32, u32), RunError> {
+    let uid = command_stdout_trimmed("id", &["-u"])?;
+    let gid = command_stdout_trimmed("id", &["-g"])?;
+    let uid = uid.parse::<u32>().map_err(|error| RunError::Backend {
+        backend: BackendKind::Bwrap.to_string(),
+        reason: format!("failed to parse host uid '{uid}': {error}"),
+    })?;
+    let gid = gid.parse::<u32>().map_err(|error| RunError::Backend {
+        backend: BackendKind::Bwrap.to_string(),
+        reason: format!("failed to parse host gid '{gid}': {error}"),
+    })?;
+    Ok((uid, gid))
+}
+
+fn command_stdout_trimmed(binary: &str, args: &[&str]) -> Result<String, RunError> {
+    let output = Command::new(binary)
+        .args(args)
+        .output()
+        .map_err(|error| RunError::Backend {
+            backend: BackendKind::Bwrap.to_string(),
+            reason: format!("failed to execute {binary} {}: {error}", args.join(" ")),
+        })?;
+    if !output.status.success() {
+        return Err(RunError::Backend {
+            backend: BackendKind::Bwrap.to_string(),
+            reason: format!(
+                "command failed: {binary} {} (status {})",
+                args.join(" "),
+                output.status
+            ),
+        });
+    }
+    String::from_utf8(output.stdout)
+        .map(|s| s.trim().to_string())
+        .map_err(|error| RunError::Backend {
+            backend: BackendKind::Bwrap.to_string(),
+            reason: format!(
+                "command output for {binary} {} is not utf-8: {error}",
+                args.join(" ")
+            ),
+        })
 }
 
 fn remove_runtime_dir(runtime_dir: &std::path::Path) {

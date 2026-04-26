@@ -36,6 +36,7 @@ fn generic_profile() -> ProfilePatch {
             enforce_network_namespace: Some(true),
             fail_closed: Some(true),
         }),
+        identity_mode: None,
         capability: Some(CapabilityLeasePatch {
             source: Some(CapabilitySourcePatch::Disabled),
             kind: None,
