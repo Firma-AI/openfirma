@@ -107,3 +107,16 @@ Current behavior:
 1. Sidecar can allow/deny `CONNECT host:port` and audit that decision.
 2. Allowed HTTPS tunnels are forwarded transparently end-to-end.
 3. Policy evaluation over decrypted HTTPS paths/verbs requires a future MITM card.
+
+## CONNECT implementation note
+
+Why this exists:
+
+1. Pingora defaults to rejecting CONNECT with `405 Method Not Allowed` unless CONNECT proxying is explicitly enabled.
+2. In E2E runs, enabling that switch still yielded `502 Bad Gateway` for real HTTPS CONNECT targets in our flow.
+
+What was changed:
+
+1. Sidecar now handles CONNECT tunnel lifecycle explicitly in the HTTP interceptor runtime.
+2. The handshake (`host:port`) is still enforced and audited before tunnel establishment.
+3. Tunnel relay is transparent TCP forwarding (no TLS MITM).
