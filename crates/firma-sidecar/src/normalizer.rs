@@ -215,6 +215,7 @@ fn parse_http_method(method: &str) -> Option<HttpMethod> {
         "PATCH" => Some(HttpMethod::PATCH),
         "HEAD" => Some(HttpMethod::HEAD),
         "OPTIONS" => Some(HttpMethod::OPTIONS),
+        "CONNECT" => Some(HttpMethod::CONNECT),
         _ => None,
     }
 }

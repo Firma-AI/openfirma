@@ -1,31 +1,38 @@
 //! HTTP proxy interceptor.
 //!
-//! Implements the [`Interceptor`](super::Interceptor) trait using a
-//! Pingora-based forward proxy. The agent sets
+//! Implements the [`Interceptor`](super::Interceptor) trait using a TCP
+//! HTTP/1.1 proxy endpoint. The agent sets
 //! `HTTP_PROXY=http://localhost:<port>` and all outbound HTTP traffic flows
 //! through this interceptor before reaching external systems.
 //!
-//! The Pingora `ProxyHttp` lifecycle hooks parse each inbound request into a
-//! [`RawRequest`](crate::normalizer::RawRequest), pass it to the shared
-//! [`RequestHandler`](crate::handler::RequestHandler), and write the handled
-//! response downstream. HTTPS CONNECT tunneling with dynamic certificate
-//! generation is planned but not yet implemented.
+//! The interceptor parses each inbound request into a
+//! [`RawRequest`](crate::normalizer::RawRequest), passes it to the shared
+//! [`RequestHandler`](crate::handler::RequestHandler), and writes the handled
+//! response downstream.
+//!
+//! HTTPS `CONNECT` is supported as transparent TCP tunneling (no MITM): the
+//! sidecar authorizes `host:port` at handshake time, emits audit events, then
+//! relays bytes bidirectionally between client and upstream target.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use pingora_core::server::configuration::ServerConf;
-use pingora_core::server::{RunArgs, Server, ShutdownSignal, ShutdownSignalWatch};
-use pingora_core::upstreams::peer::HttpPeer;
-use pingora_http::ResponseHeader;
-use pingora_proxy::{ProxyHttp, Session, http_proxy_service};
+use http_body_util::{BodyExt, Full};
+use hyper::body::{Bytes, Incoming};
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{Method, Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
+use tokio::io::copy_bidirectional;
+use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
 
-use crate::handler::{DispatchedResponse, HandledResponse, RequestHandler};
-use crate::interceptor::Interceptor;
+use crate::handler::{ConnectDecision, DispatchedResponse, HandledResponse, RequestHandler};
+use crate::interceptor::{Interceptor, InterceptorError};
 use crate::pipeline::RawRequest;
 
-/// Pingora-based HTTP forward proxy interceptor.
+/// HTTP forward proxy interceptor.
 ///
 /// Listens on a configurable TCP port (default 8080) and captures every
 /// outbound HTTP request made by the agent. Each request is converted into a
@@ -58,197 +65,258 @@ impl From<SocketAddr> for HttpInterceptor {
     }
 }
 
-#[async_trait::async_trait]
-impl ProxyHttp for HttpInterceptor {
-    type CTX = ();
-
-    fn new_ctx(&self) -> Self::CTX {}
-
-    async fn request_filter(
-        &self,
-        session: &mut Session,
-        _ctx: &mut Self::CTX,
-    ) -> pingora_core::Result<bool> {
-        let raw_request = build_raw_request(session).await?;
-
-        let handler = self
-            .handler
-            .as_ref()
-            .ok_or_else(|| pingora_core::Error::new(pingora_core::ErrorType::InternalError))?;
-
-        let session_id = raw_request
-            .headers
-            .get("x-firma-session-id")
-            .cloned()
-            .unwrap_or_default();
-        let outcome = handler.handle(raw_request, &session_id).await;
-
-        write_handled_response(session, outcome).await?;
-        Ok(true)
-    }
-
-    async fn upstream_peer(
-        &self,
-        session: &mut Session,
-        _ctx: &mut Self::CTX,
-    ) -> pingora_core::Result<Box<HttpPeer>> {
-        Ok(Box::new(resolve_upstream(&raw_request_from_header(
-            session,
-        )?)))
-    }
-}
-
-async fn build_raw_request(session: &mut Session) -> pingora_core::Result<RawRequest> {
-    let body = if session.is_body_empty() {
-        None
-    } else {
-        let mut body = vec![];
-        loop {
-            match session.read_request_body().await {
-                Ok(Some(chunk)) => body.extend(chunk.to_vec()),
-                Ok(None) => break,
-                Err(_error) => {
-                    return Err(pingora_core::Error::new(
-                        pingora_core::ErrorType::InternalError,
-                    ));
-                }
-            }
-        }
-
-        Some(body)
-    };
-
-    let mut raw = raw_request_from_header(session)?;
-    raw.body = body;
-    Ok(raw)
-}
-
-fn raw_request_from_header(session: &Session) -> pingora_core::Result<RawRequest> {
-    let header = session.req_header();
-    let host = header
-        .headers
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string)
-        .or_else(|| header.uri.authority().map(ToString::to_string))
-        .unwrap_or_default();
-
-    // Fail-closed: reject requests without a resolvable host.
-    if host.is_empty() {
-        return Err(pingora_core::Error::because(
-            pingora_core::ErrorType::HTTPStatus(400),
-            "MALFORMED_REQUEST: missing host",
-            pingora_core::Error::new(pingora_core::ErrorType::InternalError),
-        ));
-    }
-
-    Ok(RawRequest {
-        method: header.method.to_string(),
-        host,
-        headers: header
-            .headers
-            .iter()
-            .filter_map(|(key, value)| Some((key.to_string(), value.to_str().ok()?.to_string())))
-            .collect(),
-        path: extract_path(header.raw_path()),
-        body: None,
-        is_https: header.method == "CONNECT",
-    })
-}
-
 impl Interceptor for HttpInterceptor {
     async fn run(
         mut self,
         handler: Arc<RequestHandler>,
         cancel: CancellationToken,
-    ) -> Result<(), super::InterceptorError> {
-        let address = self.address;
+    ) -> Result<(), InterceptorError> {
         self.handler = Some(handler);
+        let listener = TcpListener::bind(self.address)
+            .await
+            .map_err(|e| InterceptorError::BindFailed(e.to_string()))?;
 
-        let conf = Arc::new(ServerConf::default());
-        let mut svc = http_proxy_service(&conf, self);
-        svc.add_tcp(&address.to_string());
+        let handler =
+            Arc::clone(self.handler.as_ref().ok_or_else(|| {
+                InterceptorError::ServerError("request handler not set".to_string())
+            })?);
 
-        let mut server = Server::new_with_opt_and_conf(None, ServerConf::default());
-        server.add_service(svc);
-        server.bootstrap();
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    if let Ok((stream, _)) = accepted {
+                        let handler = Arc::clone(&handler);
+                        tokio::spawn(async move {
+                            if let Err(e) = serve_connection(stream, handler).await {
+                                tracing::warn!("http proxy connection error: {e}");
+                            }
+                        });
+                    }
+                }
+                () = cancel.cancelled() => break,
+            }
+        }
 
-        // Run Pingora in a blocking thread so we don't block the async
-        // runtime. The `CancellationTokenShutdown` bridges our token into
-        // Pingora's shutdown mechanism.
-        tokio::task::spawn_blocking(move || {
-            server.run(RunArgs {
-                shutdown_signal: Box::new(CancellationTokenShutdown(cancel)),
-            });
-        })
-        .await
-        .map_err(|e| super::InterceptorError::ServerError(e.to_string()))
+        Ok(())
     }
 }
 
-async fn write_handled_response(
-    session: &mut Session,
-    outcome: HandledResponse,
-) -> pingora_core::Result<()> {
-    match outcome {
+async fn serve_connection(
+    socket: TcpStream,
+    handler: Arc<RequestHandler>,
+) -> Result<(), InterceptorError> {
+    let io = TokioIo::new(socket);
+    http1::Builder::new()
+        .serve_connection(
+            io,
+            service_fn(move |req: Request<Incoming>| {
+                let handler = Arc::clone(&handler);
+                async move { handle_request(req, &handler).await }
+            }),
+        )
+        .with_upgrades()
+        .await
+        .map_err(|e| InterceptorError::ServerError(format!("HTTP connection error: {e}")))
+}
+
+async fn handle_request(
+    mut req: Request<Incoming>,
+    handler: &RequestHandler,
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    if req.method() == Method::CONNECT {
+        return handle_connect_request(&mut req, handler).await;
+    }
+
+    let raw = match build_raw_request(req).await {
+        Ok(raw) => raw,
+        Err(detail) => return Ok(deny_response(StatusCode::FORBIDDEN, &detail)),
+    };
+    let session_id = raw
+        .headers
+        .get("x-firma-session-id")
+        .cloned()
+        .unwrap_or_default();
+
+    let response = match handler.handle(raw, &session_id).await {
         HandledResponse::Ok(response) | HandledResponse::Passthrough(response) => {
-            write_dispatched_response(session, response).await
+            dispatched_response(response)
         }
         HandledResponse::Deny {
             reason,
             detail,
             context: _,
-        } => {
-            // V1: no tool-call transport originates over HTTP, so Tool
-            // and Api both return 403 + deny_body_json. Fail-closed
-            // until a tool-call interceptor is wired.
-            session
-                .respond_error_with_body(
-                    403,
-                    hyper::body::Bytes::from(crate::handler::deny_body_json(reason, &detail)),
-                )
-                .await
-        }
-        HandledResponse::Aborted { reason, detail } => {
-            session
-                .respond_error_with_body(
-                    504,
-                    hyper::body::Bytes::from(crate::handler::abort_body_json(reason, &detail)),
-                )
-                .await
+        } => deny_json_response(
+            StatusCode::FORBIDDEN,
+            crate::handler::deny_body_json(reason, &detail),
+        ),
+        HandledResponse::Aborted { reason, detail } => deny_json_response(
+            StatusCode::GATEWAY_TIMEOUT,
+            crate::handler::abort_body_json(reason, &detail),
+        ),
+    };
+
+    Ok(response)
+}
+
+async fn handle_connect_request(
+    req: &mut Request<Incoming>,
+    handler: &RequestHandler,
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    let raw = match build_raw_request_head(req, true) {
+        Ok(raw) => raw,
+        Err(detail) => return Ok(deny_response(StatusCode::FORBIDDEN, &detail)),
+    };
+    let session_id = raw
+        .headers
+        .get("x-firma-session-id")
+        .cloned()
+        .unwrap_or_default();
+
+    match handler.handle_connect(raw, &session_id).await {
+        ConnectDecision::Deny { reason, detail } => Ok(deny_json_response(
+            StatusCode::FORBIDDEN,
+            crate::handler::deny_body_json(reason, &detail),
+        )),
+        ConnectDecision::Allow => {
+            let target = connect_target(&host_with_default_port(req, true));
+            let on_upgrade = hyper::upgrade::on(req);
+            tokio::spawn(async move {
+                if let Err(e) = relay_connect_tunnel(on_upgrade, &target).await {
+                    tracing::warn!("CONNECT tunnel failed: {e}");
+                }
+            });
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .body(Full::new(Bytes::new()))
+                .unwrap_or_else(|_| {
+                    Response::new(Full::new(Bytes::from_static(b"internal error")))
+                }))
         }
     }
 }
 
-async fn write_dispatched_response(
-    session: &mut Session,
-    response: DispatchedResponse,
-) -> pingora_core::Result<()> {
-    let mut header = ResponseHeader::build(response.status, Some(response.headers.len()))?;
-    for (name, value) in response.headers {
-        let _inserted = header.append_header(name, value)?;
-    }
-    let is_empty = response.body.is_empty();
-    session
-        .write_response_header(Box::new(header), is_empty)
-        .await?;
-    if !is_empty {
-        session
-            .write_response_body(Some(hyper::body::Bytes::from(response.body)), true)
-            .await?;
-    }
+async fn relay_connect_tunnel(
+    on_upgrade: hyper::upgrade::OnUpgrade,
+    target: &str,
+) -> Result<(), String> {
+    let upgraded = on_upgrade
+        .await
+        .map_err(|e| format!("upgrade failed: {e}"))?;
+    let mut downstream = TokioIo::new(upgraded);
+    let mut upstream = TcpStream::connect(target)
+        .await
+        .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
+    let _ = copy_bidirectional(&mut downstream, &mut upstream)
+        .await
+        .map_err(|e| format!("tunnel relay failed: {e}"))?;
     Ok(())
 }
 
-/// Bridges a [`CancellationToken`] into Pingora's [`ShutdownSignalWatch`].
-struct CancellationTokenShutdown(CancellationToken);
+async fn build_raw_request(req: Request<Incoming>) -> Result<RawRequest, String> {
+    let mut raw = build_raw_request_head(&req, false)?;
+    let body_bytes = req
+        .into_body()
+        .collect()
+        .await
+        .map_err(|e| format!("MALFORMED_REQUEST: failed to read body: {e}"))?
+        .to_bytes();
+    raw.body = if body_bytes.is_empty() {
+        None
+    } else {
+        Some(body_bytes.to_vec())
+    };
+    Ok(raw)
+}
 
-#[async_trait::async_trait]
-impl ShutdownSignalWatch for CancellationTokenShutdown {
-    async fn recv(&self) -> ShutdownSignal {
-        self.0.cancelled().await;
-        ShutdownSignal::FastShutdown
+fn build_raw_request_head(req: &Request<Incoming>, is_connect: bool) -> Result<RawRequest, String> {
+    let method = req.method().to_string();
+    let host = host_with_default_port(req, is_connect);
+    if host.is_empty() {
+        return Err("MALFORMED_REQUEST: missing host".to_string());
     }
+    let path = if is_connect {
+        "/".to_string()
+    } else {
+        extract_path(req.uri().to_string().as_bytes())
+    };
+    let headers: HashMap<String, String> = req
+        .headers()
+        .iter()
+        .filter_map(|(k, v)| Some((k.to_string(), v.to_str().ok()?.to_string())))
+        .collect();
+    let is_https = is_connect
+        || req
+            .uri()
+            .scheme_str()
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https"));
+
+    Ok(RawRequest {
+        method,
+        host,
+        headers,
+        path,
+        body: None,
+        is_https,
+    })
+}
+
+fn host_with_default_port(req: &Request<Incoming>, is_connect: bool) -> String {
+    req.headers()
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string)
+        .or_else(|| req.uri().authority().map(ToString::to_string))
+        .or_else(|| {
+            req.uri().host().map(|h| {
+                let port = req
+                    .uri()
+                    .port_u16()
+                    .unwrap_or(if is_connect { 443 } else { 80 });
+                format!("{h}:{port}")
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn connect_target(host: &str) -> String {
+    if let Ok(authority) = host.parse::<hyper::http::uri::Authority>() {
+        let host = authority.host();
+        let port = authority.port_u16().unwrap_or(443);
+        if host.contains(':') {
+            format!("[{host}]:{port}")
+        } else {
+            format!("{host}:{port}")
+        }
+    } else {
+        host.to_string()
+    }
+}
+
+fn dispatched_response(response: DispatchedResponse) -> Response<Full<Bytes>> {
+    let mut builder = Response::builder().status(response.status);
+    for (name, value) in response.headers {
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(Full::new(Bytes::from(response.body)))
+        .unwrap_or_else(|_| {
+            deny_response(StatusCode::INTERNAL_SERVER_ERROR, "response build failed")
+        })
+}
+
+fn deny_response(status: StatusCode, detail: &str) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(status)
+        .body(Full::new(Bytes::copy_from_slice(detail.as_bytes())))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b"internal error"))))
+}
+
+fn deny_json_response(status: StatusCode, body: Vec<u8>) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .body(Full::new(Bytes::from(body)))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b"internal error"))))
 }
 
 /// Extracts the path component from a raw request-target.
@@ -274,16 +342,7 @@ fn extract_path(raw_path: &[u8]) -> String {
 ///
 /// Parses `host` into address and port, defaulting to 443 for HTTPS
 /// and 80 for HTTP.
-fn resolve_upstream(request: &RawRequest) -> HttpPeer {
-    let default_port: u16 = if request.is_https { 443 } else { 80 };
-    let (host, port) = if let Some((h, p)) = request.host.rsplit_once(':') {
-        (h, p.parse::<u16>().unwrap_or(default_port))
-    } else {
-        (request.host.as_str(), default_port)
-    };
-
-    HttpPeer::new((host, port), request.is_https, String::new())
-}
+// Note: CONNECT routing is handled explicitly in `handle_connect_request`.
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -307,17 +366,6 @@ mod tests {
     };
 
     // ── helpers ────────────────────────────────────────────────────────
-
-    fn raw_request(host: &str, is_https: bool) -> RawRequest {
-        RawRequest {
-            method: "GET".to_string(),
-            host: host.to_string(),
-            path: "/".to_string(),
-            headers: HashMap::new(),
-            body: None,
-            is_https,
-        }
-    }
 
     /// Returns an available localhost address by binding to port 0.
     fn free_addr() -> SocketAddr {
@@ -424,6 +472,43 @@ mod tests {
         }))
     }
 
+    fn test_pipeline_allow_connect() -> Arc<EnforcementPipeline> {
+        let claims = test_claims();
+        let registry = ActionClassRegistry::v0_1();
+        let rules = MappingRulesFile {
+            rules: vec![MappingRuleConfig {
+                method: Some("CONNECT".to_string()),
+                host: "*".to_string(),
+                path: Some("/".to_string()),
+                action_class: "communication.external.send".to_string(),
+            }],
+        };
+        let table =
+            MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+
+        let normalizer = IntentNormalizer::new(table);
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test_token".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier { claims }),
+            std::sync::Arc::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
+
+        Arc::new(EnforcementPipeline::new(PipelineArgs {
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
+        }))
+    }
+
     /// Builds a pipeline that DENYs classified requests to `host` (empty
     /// capability map). Uses `default_protected: false` so unmapped hosts
     /// pass through.
@@ -435,6 +520,40 @@ mod tests {
                 method: Some("POST".to_string()),
                 host: host.to_string(),
                 path: Some("/v1/chat/completions".to_string()),
+                action_class: "communication.external.send".to_string(),
+            }],
+        };
+        let table =
+            MappingTable::from_config(&rules, &registry, false).unwrap_or_else(|e| panic!("{e}"));
+
+        let normalizer = IntentNormalizer::new(table);
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![]),
+            Box::new(MockVerifier { claims }),
+            std::sync::Arc::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
+
+        Arc::new(EnforcementPipeline::new(PipelineArgs {
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
+        }))
+    }
+
+    fn test_pipeline_deny_connect_for_host(host: &str) -> Arc<EnforcementPipeline> {
+        let claims = test_claims();
+        let registry = ActionClassRegistry::v0_1();
+        let rules = MappingRulesFile {
+            rules: vec![MappingRuleConfig {
+                method: Some("CONNECT".to_string()),
+                host: host.to_string(),
+                path: Some("/".to_string()),
                 action_class: "communication.external.send".to_string(),
             }],
         };
@@ -504,6 +623,38 @@ mod tests {
         (addr, cancel)
     }
 
+    /// Starts a raw TCP target for CONNECT tunnel testing.
+    ///
+    /// After receiving bytes through the tunnel it replies with `pong`.
+    async fn mock_connect_target() -> (SocketAddr, CancellationToken) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.ok();
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
+        let listener = listener.unwrap();
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
+        let addr = listener.local_addr().unwrap();
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        if let Ok((mut stream, _)) = accepted {
+                            let mut buf = [0u8; 4];
+                            if stream.read_exact(&mut buf).await.is_ok() && &buf == b"ping" {
+                                let _ = stream.write_all(b"pong").await;
+                            }
+                            let _ = stream.shutdown().await;
+                        }
+                    }
+                    () = cancel_clone.cancelled() => break,
+                }
+            }
+        });
+
+        (addr, cancel)
+    }
+
     /// Sends a raw HTTP/1.1 request through the proxy and returns the response
     /// status code.
     async fn proxy_request(proxy_addr: SocketAddr, request: &str) -> u16 {
@@ -533,6 +684,23 @@ mod tests {
             .unwrap_or(0)
     }
 
+    async fn read_connect_response(stream: &mut TcpStream) -> String {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 512];
+        for _ in 0..32 {
+            match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut chunk)).await {
+                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                Ok(Ok(n)) => {
+                    buf.extend_from_slice(&chunk[..n]);
+                    if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+            }
+        }
+        String::from_utf8_lossy(&buf).to_string()
+    }
+
     /// Starts the HTTP proxy interceptor and waits for it to be ready.
     /// Returns a handle to the server task.
     async fn start_proxy(
@@ -552,49 +720,6 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         panic!("proxy did not become ready within 2.5 seconds");
-    }
-
-    // ── resolve_upstream unit tests ───────────────────────────────────
-
-    #[test]
-    fn test_resolve_upstream_https_default_port() {
-        let peer = resolve_upstream(&raw_request("127.0.0.1", true));
-        let debug = format!("{peer:?}");
-        assert!(
-            debug.contains("127.0.0.1:443"),
-            "expected :443, got: {debug}"
-        );
-        assert!(
-            debug.contains("HTTPS"),
-            "expected HTTPS scheme, got: {debug}"
-        );
-    }
-
-    #[test]
-    fn test_resolve_upstream_http_default_port() {
-        let peer = resolve_upstream(&raw_request("127.0.0.1", false));
-        let debug = format!("{peer:?}");
-        assert!(debug.contains("127.0.0.1:80"), "expected :80, got: {debug}");
-    }
-
-    #[test]
-    fn test_resolve_upstream_explicit_port() {
-        let peer = resolve_upstream(&raw_request("127.0.0.1:9090", false));
-        let debug = format!("{peer:?}");
-        assert!(
-            debug.contains("127.0.0.1:9090"),
-            "expected :9090, got: {debug}"
-        );
-    }
-
-    #[test]
-    fn test_resolve_upstream_invalid_port_uses_default() {
-        let peer = resolve_upstream(&raw_request("127.0.0.1:notaport", true));
-        let debug = format!("{peer:?}");
-        assert!(
-            debug.contains("127.0.0.1:443"),
-            "expected :443 fallback, got: {debug}"
-        );
     }
 
     // ── extract_path unit tests ─────────────────────────────────────────
@@ -727,6 +852,73 @@ mod tests {
 
         cancel.cancel();
         upstream_cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_proxy_connect_allows_and_tunnels_bytes() {
+        let (target_addr, target_cancel) = mock_connect_target().await;
+        let proxy_addr = free_addr();
+        let host = format!("127.0.0.1:{}", target_addr.port());
+        let handler = test_handler(test_pipeline_allow_connect());
+        let cancel = CancellationToken::new();
+        let server_handle = start_proxy(proxy_addr, handler, cancel.clone()).await;
+
+        let mut stream = TcpStream::connect(proxy_addr)
+            .await
+            .unwrap_or_else(|e| panic!("failed to connect to proxy: {e}"));
+        let connect_req = format!(
+            "CONNECT {host} HTTP/1.1\r\n\
+             Host: {host}\r\n\
+             \r\n"
+        );
+        stream
+            .write_all(connect_req.as_bytes())
+            .await
+            .unwrap_or_else(|e| panic!("failed to write CONNECT request: {e}"));
+
+        let response = read_connect_response(&mut stream).await;
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "expected CONNECT 200, got: {response:?}"
+        );
+
+        stream
+            .write_all(b"ping")
+            .await
+            .unwrap_or_else(|e| panic!("failed to write tunnel payload: {e}"));
+        let mut reply = [0u8; 4];
+        stream
+            .read_exact(&mut reply)
+            .await
+            .unwrap_or_else(|e| panic!("failed to read tunnel reply: {e}"));
+        assert_eq!(&reply, b"pong");
+
+        cancel.cancel();
+        target_cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_proxy_connect_denies_without_capability() {
+        let (target_addr, target_cancel) = mock_connect_target().await;
+        let proxy_addr = free_addr();
+        let host = format!("127.0.0.1:{}", target_addr.port());
+        let handler = test_handler(test_pipeline_deny_connect_for_host("*"));
+        let cancel = CancellationToken::new();
+        let server_handle = start_proxy(proxy_addr, handler, cancel.clone()).await;
+
+        let request = format!(
+            "CONNECT {host} HTTP/1.1\r\n\
+             Host: {host}\r\n\
+             \r\n"
+        );
+
+        let status = proxy_request(proxy_addr, &request).await;
+        assert_eq!(status, 403, "expected 403 for denied CONNECT");
+
+        cancel.cancel();
+        target_cancel.cancel();
         let _ = server_handle.await;
     }
 }

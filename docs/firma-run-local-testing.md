@@ -74,6 +74,12 @@ cargo run -p firma-run -- run --backend vz --profile codex -- codex
 scripts/e2e-firma-run.sh
 ```
 
+HTTPS CONNECT scenario:
+
+```bash
+scripts/e2e-firma-run.sh --https-check
+```
+
 Custom command example:
 
 ```bash
@@ -94,9 +100,10 @@ scripts/e2e-firma-run.sh --keep-artifacts
 
 ## Known limitation (current)
 
-`firma-sidecar` HTTP interceptor currently lacks full HTTPS CONNECT tunneling/MITM support, so real HTTPS API flows (for example OpenAI over HTTPS proxy) are not fully functional yet.
+HTTPS `CONNECT` tunneling is supported for proxy routing and enforcement decisions, but payload-level HTTPS inspection is not implemented yet (no MITM/TLS termination in sidecar).
 
-Tracking recommendation:
+Current behavior:
 
-1. Card for HTTPS CONNECT support.
-2. Separate card for HTTPS MITM/L7 inspection.
+1. Sidecar can allow/deny `CONNECT host:port` and audit that decision.
+2. Allowed HTTPS tunnels are forwarded transparently end-to-end.
+3. Policy evaluation over decrypted HTTPS paths/verbs requires a future MITM card.
