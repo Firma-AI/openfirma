@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::backend::BackendKind;
+use crate::config::SandboxIdentityMode;
 
 /// Top-level CLI for `firma` binary.
 #[derive(Debug, Parser)]
@@ -49,6 +50,14 @@ pub struct RunArgs {
     #[arg(long)]
     pub capability_file: Option<PathBuf>,
 
+    /// Override sandbox identity mode.
+    #[arg(long, value_enum)]
+    pub identity_mode: Option<IdentityModeOverride>,
+
+    /// Preserve host user identity inside sandbox for compatibility workflows.
+    #[arg(long, default_value_t = false)]
+    pub preserve_host_user: bool,
+
     /// Print the resolved effective config as JSON before execution.
     #[arg(long, default_value_t = false)]
     pub print_effective_config: bool,
@@ -79,6 +88,13 @@ pub enum BackendOverride {
     Firecracker,
 }
 
+/// User-facing identity mode override values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum IdentityModeOverride {
+    SandboxUser,
+    HostUser,
+}
+
 impl From<BackendOverride> for BackendKind {
     fn from(value: BackendOverride) -> Self {
         match value {
@@ -86,6 +102,15 @@ impl From<BackendOverride> for BackendKind {
             BackendOverride::Vz => Self::Vz,
             BackendOverride::Wsl2 => Self::Wsl2,
             BackendOverride::Firecracker => Self::Firecracker,
+        }
+    }
+}
+
+impl From<IdentityModeOverride> for SandboxIdentityMode {
+    fn from(value: IdentityModeOverride) -> Self {
+        match value {
+            IdentityModeOverride::SandboxUser => Self::SandboxUser,
+            IdentityModeOverride::HostUser => Self::HostUser,
         }
     }
 }
