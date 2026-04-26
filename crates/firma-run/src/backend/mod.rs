@@ -10,7 +10,7 @@ use std::process::Child;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{MountSpec, NetworkPolicy, ResolvedProfile};
+use crate::config::{MountSpec, NetworkPolicy, ResolvedProfile, SandboxIdentityMode};
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 
@@ -99,6 +99,7 @@ pub struct LaunchSpec {
     pub args: Vec<String>,
     pub cwd: PathBuf,
     pub env: BTreeMap<String, String>,
+    pub identity_mode: SandboxIdentityMode,
 }
 
 /// Backend interface for sandbox runtime implementations.

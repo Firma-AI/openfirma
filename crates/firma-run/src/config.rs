@@ -22,6 +22,7 @@ pub struct ResolvedProfile {
     pub mounts: Vec<MountSpec>,
     pub allowed_domains: Vec<String>,
     pub network: NetworkPolicy,
+    pub identity_mode: SandboxIdentityMode,
     pub capability: CapabilityLeaseConfig,
 }
 
@@ -129,6 +130,14 @@ pub struct NetworkPolicy {
     pub fail_closed: bool,
 }
 
+/// Identity mode used inside sandboxed execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxIdentityMode {
+    SandboxUser,
+    HostUser,
+}
+
 /// Capability lease refresh settings.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CapabilityLeaseConfig {
@@ -169,6 +178,7 @@ pub(crate) struct ProfilePatch {
     #[serde(default)]
     pub(crate) allowed_domains: Vec<String>,
     pub(crate) network: Option<NetworkPolicyPatch>,
+    pub(crate) identity_mode: Option<SandboxIdentityMode>,
     pub(crate) capability: Option<CapabilityLeasePatch>,
 }
 
@@ -232,6 +242,7 @@ impl ProfilePatch {
             mounts,
             allowed_domains,
             network: higher.network.or(self.network),
+            identity_mode: higher.identity_mode.or(self.identity_mode),
             capability: higher.capability.or(self.capability),
         }
     }
@@ -259,6 +270,11 @@ pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
         mounts: Vec::new(),
         allowed_domains: Vec::new(),
         network: None,
+        identity_mode: if args.preserve_host_user {
+            Some(SandboxIdentityMode::HostUser)
+        } else {
+            args.identity_mode.map(Into::into)
+        },
         capability: args
             .capability_file
             .as_ref()
@@ -320,6 +336,10 @@ pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
         .capability
         .map_or_else(default_capability_config, capability_from_patch);
 
+    let identity_mode = patch
+        .identity_mode
+        .unwrap_or(SandboxIdentityMode::SandboxUser);
+
     let resolved = ResolvedProfile {
         id: args.profile.clone(),
         backend,
@@ -329,6 +349,7 @@ pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
         mounts,
         allowed_domains: patch.allowed_domains,
         network,
+        identity_mode,
         capability,
     };
 
@@ -407,7 +428,9 @@ mod tests {
 
     use crate::args::RunArgs;
 
-    use super::{BackendKind, CapabilitySource, SidecarEndpoint, resolve_profile};
+    use super::{
+        BackendKind, CapabilitySource, SandboxIdentityMode, SidecarEndpoint, resolve_profile,
+    };
 
     fn args(profile: &str) -> RunArgs {
         RunArgs {
@@ -416,6 +439,8 @@ mod tests {
             backend: None,
             sidecar_endpoint: None,
             capability_file: None,
+            identity_mode: None,
+            preserve_host_user: false,
             print_effective_config: false,
             command: vec!["echo".to_string(), "ok".to_string()],
         }
@@ -432,6 +457,7 @@ mod tests {
                 addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}"))
             }
         );
+        assert_eq!(resolved.identity_mode, SandboxIdentityMode::SandboxUser);
     }
 
     #[test]
@@ -445,6 +471,7 @@ defaults:
 profiles:
   codex:
     backend: bwrap
+    identity_mode: host_user
     env_passthrough:
       - HOME
     capability:
@@ -458,6 +485,7 @@ profiles:
 
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved.backend, BackendKind::Bwrap);
+        assert_eq!(resolved.identity_mode, SandboxIdentityMode::HostUser);
         assert!(resolved.env_passthrough.contains("HOME"));
         assert_eq!(
             resolved.capability.source,
@@ -465,5 +493,15 @@ profiles:
                 path: PathBuf::from("/tmp/capability.token")
             }
         );
+    }
+
+    #[test]
+    fn preserve_host_user_cli_overrides_profile_identity_mode() {
+        let mut run_args = args("generic");
+        run_args.identity_mode = Some(crate::args::IdentityModeOverride::SandboxUser);
+        run_args.preserve_host_user = true;
+
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(resolved.identity_mode, SandboxIdentityMode::HostUser);
     }
 }

@@ -78,6 +78,7 @@ pub fn execute_run(args: &RunArgs) -> Result<i32, RunError> {
             args: args.command.iter().skip(1).cloned().collect(),
             cwd: working_dir,
             env,
+            identity_mode: profile.identity_mode,
         };
 
         let child = backend.start_agent(handle_ref, &launch)?;
@@ -181,7 +182,7 @@ mod tests {
 
     use crate::config::{
         CapabilityLeaseConfig, CapabilitySource, MountSpec, NetworkPolicy, ResolvedProfile,
-        SidecarEndpoint,
+        SandboxIdentityMode, SidecarEndpoint,
     };
 
     use super::{RunIdentity, build_execution_env};
@@ -202,6 +203,7 @@ mod tests {
                 enforce_network_namespace: false,
                 fail_closed: true,
             },
+            identity_mode: SandboxIdentityMode::SandboxUser,
             capability: CapabilityLeaseConfig {
                 source: CapabilitySource::Disabled,
                 refresh_ratio: 0.60,
@@ -238,6 +240,7 @@ mod tests {
                 enforce_network_namespace: false,
                 fail_closed: true,
             },
+            identity_mode: SandboxIdentityMode::SandboxUser,
             capability: CapabilityLeaseConfig {
                 source: CapabilitySource::File {
                     path: token_path.clone(),
