@@ -165,6 +165,7 @@ pub enum HttpMethod {
     PATCH,
     HEAD,
     OPTIONS,
+    CONNECT,
 }
 
 /// Parameters for an outbound HTTP request.
