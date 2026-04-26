@@ -8,7 +8,7 @@ fail() { printf '[fail] %s\n' "$1" >&2; exit 1; }
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/e2e-firma-run.sh [--cmd "<shell command>"] [--keep-artifacts]
+  scripts/e2e-firma-run.sh [--cmd "<shell command>"] [--https-check] [--keep-artifacts]
 
 Description:
   End-to-end local harness for firma-run runtime plumbing.
@@ -20,6 +20,7 @@ Description:
 
 Options:
   --cmd "<command>"   Command executed inside sandbox (default: HTTP smoke request)
+  --https-check       Use HTTPS smoke command (CONNECT tunnel path)
   --keep-artifacts    Keep temp files/logs for debugging
   -h, --help          Show this help
 
@@ -78,6 +79,7 @@ stop_sidecar() {
 
 KEEP_ARTIFACTS=0
 USER_CMD=""
+HTTPS_CHECK=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -88,6 +90,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --keep-artifacts)
       KEEP_ARTIFACTS=1
+      ;;
+    --https-check)
+      HTTPS_CHECK=1
       ;;
     -h|--help)
       usage
@@ -171,9 +176,17 @@ if [[ -n "$USER_CMD" ]]; then
   SANDBOX_CMD=(/bin/sh -lc "$USER_CMD")
 else
   if command -v curl >/dev/null 2>&1; then
-    SANDBOX_CMD=(curl -fsS --max-time 20 http://httpbin.org/get)
+    if [[ "$HTTPS_CHECK" -eq 1 ]]; then
+      SANDBOX_CMD=(curl -fsS --max-time 20 https://httpbin.org/get)
+    else
+      SANDBOX_CMD=(curl -fsS --max-time 20 http://httpbin.org/get)
+    fi
   elif command -v python3 >/dev/null 2>&1; then
-    SANDBOX_CMD=(python3 -c 'import urllib.request; print(urllib.request.urlopen("http://httpbin.org/get", timeout=20).read().decode())')
+    if [[ "$HTTPS_CHECK" -eq 1 ]]; then
+      SANDBOX_CMD=(python3 -c 'import urllib.request; print(urllib.request.urlopen("https://httpbin.org/get", timeout=20).read().decode())')
+    else
+      SANDBOX_CMD=(python3 -c 'import urllib.request; print(urllib.request.urlopen("http://httpbin.org/get", timeout=20).read().decode())')
+    fi
   else
     fail "no default HTTP client found (need curl or python3), or pass --cmd"
   fi

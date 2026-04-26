@@ -262,6 +262,7 @@ fn to_reqwest_method(method: HttpMethod) -> reqwest::Method {
         HttpMethod::PATCH => reqwest::Method::PATCH,
         HttpMethod::HEAD => reqwest::Method::HEAD,
         HttpMethod::OPTIONS => reqwest::Method::OPTIONS,
+        HttpMethod::CONNECT => reqwest::Method::CONNECT,
     }
 }
 

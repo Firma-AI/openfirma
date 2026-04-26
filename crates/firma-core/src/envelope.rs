@@ -165,6 +165,7 @@ pub enum HttpMethod {
     PATCH,
     HEAD,
     OPTIONS,
+    CONNECT,
 }
 
 impl HttpMethod {
