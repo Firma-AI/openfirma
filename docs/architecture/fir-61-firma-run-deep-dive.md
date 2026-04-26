@@ -1,18 +1,18 @@
-# FIR-61 Deep Dive: Firma Run Sandbox Launcher
+# Firma Run Deep Dive: Sandbox Launcher
 
 ## Purpose
 
-This document translates FIR-60 direction into an implementation-ready FIR-61 blueprint.
+This document translates the sandbox-boundary decision into an implementation-ready blueprint for `firma run`.
 
-- FIR-60 decision: move enforcement boundary to sandboxed runtime, keep sidecar as single enforcement plane.
-- FIR-61 scope: implement generic wrapper plumbing (`firma run`) with cross-OS backend paths.
-- FIR-62 scope: Claude-specific specialization.
+- Decision: move enforcement boundary to sandboxed runtime, keep sidecar as single enforcement plane.
+- Scope: implement generic wrapper plumbing (`firma run`) with cross-OS backend paths.
+- Follow-up scope: Claude-specific specialization.
 
 ## Scope Reconciliation
 
-FIR-60 accepted an OS-matrix strategy (`bwrap`, `vz`, `wsl2`, optional Firecracker). FIR-61 now ships runtime paths for Linux, macOS, and Windows.
+The architecture accepted an OS-matrix strategy (`bwrap`, `vz`, `wsl2`, optional Firecracker). `firma run` now ships runtime paths for Linux, macOS, and Windows.
 
-Implementation stance for FIR-61:
+Implementation stance:
 
 1. Keep backend contract pluggable and backend-neutral in orchestration.
 2. Ship Linux `bwrap`, macOS `vz`, and Windows `wsl2` runtime paths.
@@ -20,7 +20,7 @@ Implementation stance for FIR-61:
 
 ## Architecture Blueprint
 
-### Runtime topology (cross-OS FIR-61)
+### Runtime topology (cross-OS)
 
 ```text
 Host:
@@ -53,9 +53,9 @@ Sandbox / wrapped runtime:
 
 ### Problem
 
-FIR-61 required DNS confinement but did not define concrete implementation. With `bwrap`, relying on inherited host resolver is a bypass risk.
+DNS confinement was required but initially lacked concrete implementation. With `bwrap`, relying on inherited host resolver is a bypass risk.
 
-### FIR-61 implementation decision
+### Implementation decision
 
 1. `firma-run` generates sandbox-specific `resolv.conf`.
 2. `resolv.conf` points to sandbox-local DNS stub (`127.0.0.1`).
@@ -72,7 +72,7 @@ DNS resolution from inside sandbox is sidecar-controlled or fails; host ambient 
 
 Yes. Persistent processes (OpenClaw-like) outlive short token/session assumptions and will hit expiry unless capability material rotates.
 
-### FIR-61 implementation decision
+### Implementation decision
 
 Add a capability rotation contract in wrapper runtime:
 
@@ -81,9 +81,9 @@ Add a capability rotation contract in wrapper runtime:
 3. If renewal fails beyond grace threshold, egress remains fail-closed.
 4. Renewal events are observable and attributable by run identity.
 
-### Why in FIR-61
+### Why in this phase
 
-This is runtime-plumbing behavior, not Claude specialization. Deferring it fully to FIR-62 leaves a correctness gap for generic persistent agents.
+This is runtime-plumbing behavior, not Claude specialization. Deferring it fully to the Claude-specific phase leaves a correctness gap for generic persistent agents.
 
 ## Identity and Attribution Model
 
@@ -103,7 +103,7 @@ These values are injected into mediated requests (header/claim projection), so s
 4. DNS stub failure -> resolution fails closed.
 5. Capability renewal failure past grace window -> egress blocked until valid capability restored.
 
-## Benchmark Plan (FIR-61 deliverable)
+## Benchmark plan
 
 Required metrics:
 
@@ -130,8 +130,8 @@ Recommended bolt order:
 6. `018-identity-and-capability-lifecycle`
 7. `020-e2e-bench-and-docs`
 
-## Non-goals (FIR-61)
+## Non-goals
 
 - Firecracker runtime implementation.
-- Claude-specific workflow behavior (FIR-62).
+- Claude-specific workflow behavior.
 - New policy logic plane outside sidecar.
