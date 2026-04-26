@@ -68,14 +68,20 @@ pub fn execute_run(args: &RunArgs) -> Result<i32, RunError> {
         let network_runtime = prepare_network_runtime(handle_ref, &profile.sidecar_endpoint)?;
         let env = build_execution_env(&profile, &identity, &lease, network_runtime.env_overrides());
 
-        let executable = args
-            .command
-            .first()
-            .cloned()
-            .ok_or(RunError::MissingCommand)?;
+        let (executable, args_for_launch) = if args.command.len() == 1 {
+            (
+                "sh".to_string(),
+                vec!["-c".to_string(), args.command[0].clone()],
+            )
+        } else {
+            (
+                args.command[0].clone(),
+                args.command.iter().skip(1).cloned().collect(),
+            )
+        };
         let launch = LaunchSpec {
             executable,
-            args: args.command.iter().skip(1).cloned().collect(),
+            args: args_for_launch,
             cwd: working_dir,
             env,
         };
