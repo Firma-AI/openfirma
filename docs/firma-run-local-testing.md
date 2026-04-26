@@ -8,17 +8,17 @@ Verification reference:
 
 Latest verification snapshot (2026-04-26):
 
-| Check | Expected | Observed | Verdict | Notes |
-|---|---|---|---|---|
-| env/proxy wiring | `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` + `FIRMA_RUN_*` present | `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY=http://127.0.0.1:18080`; `FIRMA_RUN_SANDBOX_ID`, `FIRMA_RUN_SESSION_ID`, runtime/bridge vars present | PASS | `FIRMA_SIDECAR_*` not present in env output |
-| identity masking | Non-root constrained identity | `uid=1000(firma-user) gid=1000(firma-user)`; `whoami=firma-user`; passwd entry for `firma-user` | PASS | |
-| bridge listener healthy | Listener on `127.0.0.1:18080` | `LISTEN ... 127.0.0.1:18080` | PASS | Initial `ss -ltn` attempt reported `Cannot open netlink socket: Operation not permitted`; elevated rerun succeeded |
-| bridge log clean/startup | Bridge log shows startup and no errors | `/tmp/firma-run/<sandbox_id>/proxy-bridge.log` exists and includes startup/ready entries | PASS | If entries are missing, inspect `bwrap_entrypoint.sh` bridge bootstrap path |
-| HTTP proxied success | status `200`, exit `0` via proxy path | `http status=200`, `http exit=0` | PASS | |
-| HTTPS proxied success | status `200`, exit `0` via proxy path | `https status=200`, `https exit=0` | PASS | |
-| bypass blocked | Direct egress (no proxy env) fails closed | `direct status=000`, `direct exit=7` | PASS | `curl: (7) Failed to connect to httpbin.org port 443` |
-| DNS confinement signal | Local resolver confinement visible | `/etc/resolv.conf => nameserver 127.0.0.1`; `getent hosts localhost` works; `getent hosts httpbin.org` returns nothing | PASS | |
-| 5x HTTPS determinism | 5/5 successful proxied HTTPS calls | Attempts `1-5` all `status=200`, each `exit=0`; times: `0.481664`, `0.465131`, `0.855019`, `0.543627`, `0.455090` | PASS | Outer loop command exit was `1` because `[ -s /tmp/repeat.$i.err ]` was false (empty stderr), not due to curl failure |
+| Check                    | Expected                                                       | Observed                                                                                                                                   | Verdict | Notes                                                                                                                 |
+| ------------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------- | --------------------------------------------------------------------------------------------------------------------- |
+| env/proxy wiring         | `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` + `FIRMA_RUN_*` present | `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY=http://127.0.0.1:18080`; `FIRMA_RUN_SANDBOX_ID`, `FIRMA_RUN_SESSION_ID`, runtime/bridge vars present | PASS    | `FIRMA_SIDECAR_*` not present in env output                                                                           |
+| identity masking         | Non-root constrained identity                                  | `uid=1000(firma-user) gid=1000(firma-user)`; `whoami=firma-user`; passwd entry for `firma-user`                                            | PASS    |                                                                                                                       |
+| bridge listener healthy  | Listener on `127.0.0.1:18080`                                  | `LISTEN ... 127.0.0.1:18080`                                                                                                               | PASS    | Initial `ss -ltn` attempt reported `Cannot open netlink socket: Operation not permitted`; elevated rerun succeeded    |
+| bridge log clean/startup | Bridge log shows startup and no errors                         | `/tmp/firma-run/<sandbox_id>/proxy-bridge.log` exists and includes startup/ready entries                                                   | PASS    | If entries are missing, inspect `bwrap_entrypoint.sh` bridge bootstrap path                                           |
+| HTTP proxied success     | status `200`, exit `0` via proxy path                          | `http status=200`, `http exit=0`                                                                                                           | PASS    |                                                                                                                       |
+| HTTPS proxied success    | status `200`, exit `0` via proxy path                          | `https status=200`, `https exit=0`                                                                                                         | PASS    |                                                                                                                       |
+| bypass blocked           | Direct egress (no proxy env) fails closed                      | `direct status=000`, `direct exit=7`                                                                                                       | PASS    | `curl: (7) Failed to connect to httpbin.org port 443`                                                                 |
+| DNS confinement signal   | Local resolver confinement visible                             | `/etc/resolv.conf => nameserver 127.0.0.1`; `getent hosts localhost` works; `getent hosts httpbin.org` returns nothing                     | PASS    |                                                                                                                       |
+| 5x HTTPS determinism     | 5/5 successful proxied HTTPS calls                             | Attempts `1-5` all `status=200`, each `exit=0`; times: `0.481664`, `0.465131`, `0.855019`, `0.543627`, `0.455090`                          | PASS    | Outer loop command exit was `1` because `[ -s /tmp/repeat.$i.err ]` was false (empty stderr), not due to curl failure |
 
 Overall verdict: READY
 
@@ -53,6 +53,8 @@ Templates used:
 
 - `FIRMA_SIDECAR_ENDPOINT`: Sidecar endpoint (default: `tcp://127.0.0.1:8080`)
 - `FIRMA_PROXY_LISTEN_ADDR`: Proxy bridge listen address (default: `127.0.0.1:18080`)
+- `FIRMA_SIDECAR_CA_CERT_PATH`: Explicit path to sidecar MITM CA cert (preferred override)
+- `FIRMA_SIDECAR_CA_DIR`: Directory containing `firma-ca.crt` (fallback override)
 
 Example:
 
@@ -61,6 +63,17 @@ export FIRMA_SIDECAR_ENDPOINT=tcp://127.0.0.1:9090
 export FIRMA_PROXY_LISTEN_ADDR=127.0.0.1:18181
 cargo run -p firma-run -- run -- "your command"
 ```
+
+When a sidecar MITM CA certificate is detected, `firma run` automatically exports trust env vars for common runtimes:
+
+- `FIRMA_SIDECAR_CA_CERT_PATH`
+- `REQUESTS_CA_BUNDLE`
+- `SSL_CERT_FILE`
+- `CURL_CA_BUNDLE`
+- `NODE_EXTRA_CA_CERTS`
+- `GIT_SSL_CAINFO`
+
+This prevents `UnknownCA` failures for managed HTTPS MITM targets.
 
 ## Run sidecar + codex
 
@@ -145,15 +158,20 @@ scripts/e2e-firma-run.sh --keep-artifacts
 - `.env` is ignored by git.
 - Keep real API keys only in local files or local shell env.
 
-## Known limitation (current)
+## HTTPS behavior (current)
 
-HTTPS `CONNECT` tunneling is supported for proxy routing and enforcement decisions, but payload-level HTTPS inspection is not implemented yet (no MITM/TLS termination in sidecar).
+Sidecar supports both HTTPS modes:
 
-Current behavior:
+1. TLS MITM mode (default for configured `intercept_hosts`): sidecar decrypts,
+   normalizes, and enforces HTTPS requests at L7 (method/path/action class).
+2. CONNECT tunnel mode (fallback for hosts outside `intercept_hosts` or explicit
+   `bypass_hosts`): sidecar enforces/audits on `host:port`.
 
-1. Sidecar can allow/deny `CONNECT host:port` and audit that decision.
-2. Allowed HTTPS tunnels are forwarded transparently end-to-end.
-3. Policy evaluation over decrypted HTTPS paths/verbs requires a future MITM card.
+Important operational note:
+
+- MITM requires agent trust for the sidecar CA (`firma-ca.crt`); if trust is
+  not propagated into the runtime, TLS clients will fail handshake by design.
+- For hosts in `strict_hosts`, MITM failures are fail-closed (no direct egress).
 
 If proxied calls fail with `Failed to connect to 127.0.0.1:18080`, inspect bridge startup diagnostics:
 
@@ -173,4 +191,4 @@ What was changed:
 
 1. Sidecar now handles CONNECT tunnel lifecycle explicitly in the HTTP interceptor runtime.
 2. The handshake (`host:port`) is still enforced and audited before tunnel establishment.
-3. Tunnel relay is transparent TCP forwarding (no TLS MITM).
+3. Optional TLS MITM interception is available for configured hosts.
