@@ -24,7 +24,8 @@ Keep mocks thin — just enough to prove wiring works. The value is in the feedb
 | 004 | Example agents & test harness | Python + TypeScript agents exercising ALLOW/DENY/ABORT scenarios, example Cedar policies & base schema (entity types, action types, context attributes), mock authority, validates proxy flow end-to-end | 002, 003 |
 | 005 | Mini Authority service | Real `firma-authority` — Cedar policy loader from `.cedar` files, IssueCapability RPC, WatchPolicyBundle streaming, WatchRevocations streaming, capability token generation | 002, 003 |
 | 006 | Sidecar proxy & enforcement | Real `firma-sidecar` — Pingora HTTP proxy, Stage 1 (token parse, sig verify, revocation bloom filter), Stage 2 / CEE (context build, Cedar eval, budget/scope/threshold), generic HTTP connector, credential injector, audit emitter | 002, 003 |
-| 007 | Local dev mode | `firma dev up` orchestration — wires Mini Authority (:50051) + Sidecar (:8080) + Example Agent, Cedar hot-reload, audit to stdout, end-to-end demo in under 2 minutes | 004, 005, 006 |
+| 007 | Firma Run sandbox launcher | `firma run` generic wrapper — sandboxed agent launch, mandatory sidecar routing, DNS confinement, built-in `generic` + `codex` profiles | 006 |
+| 008 | Local dev mode | `firma dev up` orchestration — wires Mini Authority (:50051) + Sidecar (:8080) + Example Agent, Cedar hot-reload, audit to stdout, end-to-end demo in under 2 minutes | 004, 005, 006, 007 |
 
 ## V1 Scope Exclusions
 
@@ -43,10 +44,11 @@ Current design requires operators to touch 4 files minimum (sidecar config, mapp
 
 ## Key Principles
 
-- **No sandbox required**: Firma's security model is proxy-based (HTTP_PROXY), not sandbox-based. Agents don't need containerization for Firma to work. The sandbox/container layer is orthogonal — provides runtime containment, not policy enforcement.
+- **Single enforcement plane remains Sidecar**: Policy decisions still happen in the Sidecar; runtime wrappers do not introduce a second policy engine.
+- **Sandbox boundary is now required for complete coverage**: FIR-60 updated architecture direction on 2026-04-23. `firma-run` (FIR-61) moves the hard boundary to sandboxed execution plus mandatory sidecar routing so shell/subprocess/browser-originated traffic is structurally governed.
 - **Natural build order**: Each intent builds on previous foundations.
 - **Example agent as validator**: Intent 004 becomes the living integration test that proves the system works end-to-end as components are swapped from mock to real.
-- **Defense-in-depth via deployment**: Docker/K8s provide container isolation but that's infrastructure, not a Firma requirement.
+- **Defense-in-depth via deployment**: Container/sandbox isolation and sidecar policy enforcement are complementary, not interchangeable.
 - **Cedar policies are content, not code**: The base schema and example policies ship with intent 004 to make the system usable from the first integration test. They evolve alongside the components they validate.
 
 ## Component Reference Mapping
@@ -61,4 +63,4 @@ How intents map to components from `firma_oss_component_reference.md`:
 | Section 6 — Example Agents (Python, TypeScript) | 004 |
 | Section 7 — Connector/Adapter Layer (generic HTTP connector) | 006 |
 | Section 9 — Cedar Policies/Schema/Examples | 004 (base schema + examples), 005 (runtime loading) |
-| Section 10 — Local Dev Mode (`firma dev up`) | 007 |
+| Section 10 — Local Dev Mode (`firma dev up`) | 008 |
