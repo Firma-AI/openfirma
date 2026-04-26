@@ -1,0 +1,41 @@
+[package]
+name = "firma-run"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "firma"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap = { workspace = true, features = [
+  "color",
+  "derive",
+  "env",
+  "error-context",
+  "help",
+  "std",
+  "suggestions",
+  "usage",
+] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+serde_yaml = "0.9"
+ctrlc = "3.5"
+
+[dev-dependencies]
+tempfile.workspace = true
+pretty_assertions.workspace = true
