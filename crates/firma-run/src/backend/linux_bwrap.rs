@@ -190,6 +190,10 @@ impl SandboxBackend for BwrapBackend {
         for (key, value) in &launch.env {
             command.arg("--setenv").arg(key).arg(value);
         }
+        command
+            .arg("--setenv")
+            .arg("FIRMA_RUN_RUNTIME_DIR")
+            .arg(&handle.runtime_dir);
 
         if launch.identity_mode == SandboxIdentityMode::SandboxUser {
             command.arg("--setenv").arg("USER").arg("firma-user");
