@@ -40,3 +40,6 @@ build/
 
 # authority
 revocations.txt
+
+# Local runtime/testing artifacts
+/.local/

@@ -8,8 +8,8 @@ fail() { printf '[fail] %s\n' "$1"; exit 1; }
 uname_s="$(uname -s)"
 case "$uname_s" in
   Linux) ok "host OS is Linux" ;;
-  Darwin) warn "host OS is macOS (FIR-61 runtime backend not yet implemented)" ;;
-  MINGW*|MSYS*|CYGWIN*) warn "host OS is Windows-like (FIR-61 runtime backend not yet implemented)" ;;
+  Darwin) warn "host OS is macOS (runtime backend not yet implemented)" ;;
+  MINGW*|MSYS*|CYGWIN*) warn "host OS is Windows-like (runtime backend not yet implemented)" ;;
   *) warn "unrecognized host OS: $uname_s" ;;
 esac
 
