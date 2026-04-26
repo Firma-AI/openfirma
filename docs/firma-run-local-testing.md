@@ -2,6 +2,26 @@
 
 This guide shows how to test `firma run` locally without committing local secrets/config.
 
+Verification reference:
+
+- `docs/firma-run-verification-report.md` contains a full reproducible checklist and an example PASS/FAIL matrix from a successful run.
+
+Latest verification snapshot (2026-04-26):
+
+| Check | Expected | Observed | Verdict | Notes |
+|---|---|---|---|---|
+| env/proxy wiring | `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` + `FIRMA_RUN_*` present | `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY=http://127.0.0.1:18080`; `FIRMA_RUN_SANDBOX_ID`, `FIRMA_RUN_SESSION_ID`, runtime/bridge vars present | PASS | `FIRMA_SIDECAR_*` not present in env output |
+| identity masking | Non-root constrained identity | `uid=1000(firma-user) gid=1000(firma-user)`; `whoami=firma-user`; passwd entry for `firma-user` | PASS | |
+| bridge listener healthy | Listener on `127.0.0.1:18080` | `LISTEN ... 127.0.0.1:18080` | PASS | Initial `ss -ltn` attempt reported `Cannot open netlink socket: Operation not permitted`; elevated rerun succeeded |
+| bridge log clean/startup | Bridge log shows startup and no errors | `/tmp/firma-run/<sandbox_id>/proxy-bridge.log` exists and includes startup/ready entries | PASS | If entries are missing, inspect `bwrap_entrypoint.sh` bridge bootstrap path |
+| HTTP proxied success | status `200`, exit `0` via proxy path | `http status=200`, `http exit=0` | PASS | |
+| HTTPS proxied success | status `200`, exit `0` via proxy path | `https status=200`, `https exit=0` | PASS | |
+| bypass blocked | Direct egress (no proxy env) fails closed | `direct status=000`, `direct exit=7` | PASS | `curl: (7) Failed to connect to httpbin.org port 443` |
+| DNS confinement signal | Local resolver confinement visible | `/etc/resolv.conf => nameserver 127.0.0.1`; `getent hosts localhost` works; `getent hosts httpbin.org` returns nothing | PASS | |
+| 5x HTTPS determinism | 5/5 successful proxied HTTPS calls | Attempts `1-5` all `status=200`, each `exit=0`; times: `0.481664`, `0.465131`, `0.855019`, `0.543627`, `0.455090` | PASS | Outer loop command exit was `1` because `[ -s /tmp/repeat.$i.err ]` was false (empty stderr), not due to curl failure |
+
+Overall verdict: READY
+
 ## Why this guide
 
 `firma run` local testing needs a sidecar config, mapping rules, and an audit signing key. Those are machine-local artifacts and should not be committed.
@@ -126,6 +146,13 @@ Current behavior:
 1. Sidecar can allow/deny `CONNECT host:port` and audit that decision.
 2. Allowed HTTPS tunnels are forwarded transparently end-to-end.
 3. Policy evaluation over decrypted HTTPS paths/verbs requires a future MITM card.
+
+If proxied calls fail with `Failed to connect to 127.0.0.1:18080`, inspect bridge startup diagnostics:
+
+```bash
+ls -la /tmp/firma-run/<sandbox_id>/
+sed -n '1,200p' /tmp/firma-run/<sandbox_id>/proxy-bridge.log
+```
 
 ## CONNECT implementation note
 
