@@ -1,0 +1,233 @@
+use std::path::PathBuf;
+use std::process::{Child, Command};
+
+use crate::backend::{
+    BackendKind, EnforcementProof, LaunchSpec, PrepareRequest, SandboxBackend, SandboxHandle,
+};
+use crate::config::MountSpec;
+use crate::config::NetworkPolicy;
+use crate::error::RunError;
+
+/// Linux bubblewrap backend.
+#[derive(Debug, Default)]
+pub struct BwrapBackend;
+
+impl BwrapBackend {
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl SandboxBackend for BwrapBackend {
+    fn kind(&self) -> BackendKind {
+        BackendKind::Bwrap
+    }
+
+    fn prepare(&self, request: &PrepareRequest) -> Result<SandboxHandle, RunError> {
+        if !cfg!(target_os = "linux") {
+            return Err(RunError::UnsupportedBackend {
+                backend: BackendKind::Bwrap.to_string(),
+                reason: "bwrap backend is only available on Linux hosts".to_string(),
+            });
+        }
+
+        if !command_available("bwrap") {
+            return Err(RunError::Backend {
+                backend: BackendKind::Bwrap.to_string(),
+                reason: "bubblewrap is not installed or not executable".to_string(),
+            });
+        }
+
+        let runtime_dir = std::env::temp_dir()
+            .join("firma-run")
+            .join(&request.identity.sandbox_id);
+        std::fs::create_dir_all(&runtime_dir).map_err(|error| RunError::Backend {
+            backend: BackendKind::Bwrap.to_string(),
+            reason: format!(
+                "failed to create runtime dir {}: {error}",
+                runtime_dir.display()
+            ),
+        })?;
+
+        let mut mounts = request.profile.mounts.clone();
+
+        if request.profile.network.enforce_network_namespace {
+            let resolv_conf_path = runtime_dir.join("resolv.conf");
+            std::fs::write(
+                &resolv_conf_path,
+                "nameserver 127.0.0.1\noptions ndots:0 timeout:1 attempts:1\n",
+            )
+            .map_err(|error| RunError::Backend {
+                backend: BackendKind::Bwrap.to_string(),
+                reason: format!(
+                    "failed to write sandbox resolv.conf {}: {error}",
+                    resolv_conf_path.display()
+                ),
+            })?;
+
+            mounts.push(MountSpec {
+                source: resolv_conf_path,
+                target: PathBuf::from("/etc/resolv.conf"),
+                read_only: true,
+            });
+        }
+
+        Ok(SandboxHandle {
+            backend: BackendKind::Bwrap,
+            runtime_dir,
+            identity: request.identity.clone(),
+            mounts,
+            network_policy: request.profile.network.clone(),
+        })
+    }
+
+    fn enforce_network(
+        &self,
+        _handle: &SandboxHandle,
+        policy: &NetworkPolicy,
+    ) -> Result<EnforcementProof, RunError> {
+        let structural = policy.enforce_network_namespace;
+        let detail = if structural {
+            "network namespace isolation enabled with sandbox-local proxy bridge path".to_string()
+        } else {
+            "network namespace isolation disabled; cooperative routing mode".to_string()
+        };
+
+        Ok(EnforcementProof {
+            backend: BackendKind::Bwrap,
+            structural,
+            fail_closed: policy.fail_closed,
+            detail,
+        })
+    }
+
+    fn verify_fail_closed(
+        &self,
+        _handle: &SandboxHandle,
+        proof: &EnforcementProof,
+    ) -> Result<(), RunError> {
+        if !proof.fail_closed {
+            return Err(RunError::Backend {
+                backend: BackendKind::Bwrap.to_string(),
+                reason: "fail-closed policy is disabled".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn start_agent(&self, handle: &SandboxHandle, launch: &LaunchSpec) -> Result<Child, RunError> {
+        if !cfg!(target_os = "linux") {
+            return Err(RunError::UnsupportedBackend {
+                backend: BackendKind::Bwrap.to_string(),
+                reason: "cannot start bwrap agent on non-Linux host".to_string(),
+            });
+        }
+
+        let mut command = Command::new("bwrap");
+        command.arg("--die-with-parent");
+        command.arg("--new-session");
+        command.arg("--bind").arg("/").arg("/");
+        command.arg("--chdir").arg(&launch.cwd);
+
+        if handle.network_policy.enforce_network_namespace {
+            command.arg("--unshare-net");
+        }
+
+        for mount in &handle.mounts {
+            if mount.read_only {
+                command
+                    .arg("--ro-bind")
+                    .arg(&mount.source)
+                    .arg(&mount.target);
+            } else {
+                command.arg("--bind").arg(&mount.source).arg(&mount.target);
+            }
+        }
+
+        for (key, value) in &launch.env {
+            command.arg("--setenv").arg(key).arg(value);
+        }
+
+        command.arg("--");
+        if let Some(entrypoint) = maybe_write_entrypoint_script(handle, launch)? {
+            command.arg("/bin/sh");
+            command.arg(entrypoint);
+            command.arg(&launch.executable);
+            command.args(&launch.args);
+        } else {
+            command.arg(&launch.executable);
+            command.args(&launch.args);
+        }
+
+        command.spawn().map_err(|error| {
+            RunError::Spawn(format!(
+                "failed to spawn wrapped command through bwrap: {error}"
+            ))
+        })
+    }
+
+    fn teardown(&self, handle: SandboxHandle) -> Result<(), RunError> {
+        remove_runtime_dir(&handle.runtime_dir);
+        Ok(())
+    }
+}
+
+fn command_available(binary: &str) -> bool {
+    Command::new(binary)
+        .arg("--version")
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn remove_runtime_dir(runtime_dir: &std::path::Path) {
+    if runtime_dir.exists() {
+        let _ = std::fs::remove_dir_all(runtime_dir);
+    }
+}
+
+fn maybe_write_entrypoint_script(
+    handle: &SandboxHandle,
+    launch: &LaunchSpec,
+) -> Result<Option<PathBuf>, RunError> {
+    let uses_proxy_bridge = launch
+        .env
+        .contains_key("FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS");
+    if !uses_proxy_bridge {
+        return Ok(None);
+    }
+
+    let script_path = handle.runtime_dir.join("entrypoint.sh");
+    let script = r#"#!/bin/sh
+set -eu
+
+bridge_pid=""
+
+cleanup() {
+  if [ -n "$bridge_pid" ]; then
+    kill "$bridge_pid" >/dev/null 2>&1 || true
+  fi
+}
+
+trap cleanup EXIT INT TERM
+
+if [ -n "${FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS:-}" ]; then
+  "${FIRMA_RUN_SELF_EXE}" __proxy-bridge \
+    --listen "${FIRMA_RUN_PROXY_LISTEN_ADDR:-127.0.0.1:18080}" \
+    --upstream-uds "${FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS}" &
+  bridge_pid="$!"
+fi
+
+exec "$@"
+"#;
+
+    std::fs::write(&script_path, script).map_err(|error| RunError::Backend {
+        backend: BackendKind::Bwrap.to_string(),
+        reason: format!(
+            "failed to write sandbox entrypoint script {}: {error}",
+            script_path.display()
+        ),
+    })?;
+
+    Ok(Some(script_path))
+}
