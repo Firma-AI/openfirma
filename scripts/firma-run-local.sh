@@ -6,4 +6,8 @@ if [[ $# -lt 1 ]]; then
   exit 1
 fi
 
+if [[ $1 == "--" ]]; then
+  shift
+fi
+
 cargo run -p firma-run -- run -- "$@"
