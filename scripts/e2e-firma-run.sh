@@ -11,7 +11,7 @@ Usage:
   scripts/e2e-firma-run.sh [--cmd "<shell command>"] [--keep-artifacts]
 
 Description:
-  End-to-end local harness for FIR-61 runtime plumbing.
+  End-to-end local harness for firma-run runtime plumbing.
   It:
     1) boots a local firma-sidecar with temporary config,
     2) runs a sandboxed command via firma run,
@@ -101,7 +101,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$(uname -s)" != "Linux" ]]; then
-  fail "this E2E harness is Linux-only (FIR-61 scope)"
+  fail "this E2E harness is Linux-only"
 fi
 
 require_command cargo

@@ -1,0 +1,5 @@
+[[rules]]
+method = "GET"
+host = "never.match.local"
+path = "/"
+action_class = "communication.external.send"
