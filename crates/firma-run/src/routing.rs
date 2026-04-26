@@ -84,6 +84,22 @@ pub fn prepare_network_runtime(
             format!("http://{STRUCTURAL_PROXY_LISTEN_ADDR}"),
         );
         env_overrides.insert(
+            "http_proxy".to_string(),
+            format!("http://{STRUCTURAL_PROXY_LISTEN_ADDR}"),
+        );
+        env_overrides.insert(
+            "https_proxy".to_string(),
+            format!("http://{STRUCTURAL_PROXY_LISTEN_ADDR}"),
+        );
+        env_overrides.insert(
+            "ALL_PROXY".to_string(),
+            format!("http://{STRUCTURAL_PROXY_LISTEN_ADDR}"),
+        );
+        env_overrides.insert(
+            "all_proxy".to_string(),
+            format!("http://{STRUCTURAL_PROXY_LISTEN_ADDR}"),
+        );
+        env_overrides.insert(
             "FIRMA_RUN_PROXY_LISTEN_ADDR".to_string(),
             STRUCTURAL_PROXY_LISTEN_ADDR.to_string(),
         );
