@@ -33,23 +33,23 @@ rules. See §Extending the registry for the coupled sites and procedure.
 
 Identifiers listed in alphabetical order.
 
-| Action class                     | Domain        | Risk level | Notes                                                       |
-|----------------------------------|---------------|------------|-------------------------------------------------------------|
-| `account.permission.change`      | Permissions   | Critical   | Change account or role permissions                          |
-| `browser.purchase`               | Browser       | High       | Browser-driven purchase flow                                |
-| `communication.external.send`    | Communication | High       | Outbound message / request to an external system            |
-| `communication.internal.send`    | Communication | Medium     | Message to an internal recipient inside the trust boundary  |
-| `credential.read`                | Credentials   | Medium     | Read a secret, API key, or token                            |
-| `credential.write`               | Credentials   | Critical   | Create, rotate, or store a secret                           |
-| `filesystem.delete`              | Filesystem    | High       | Delete a file-like resource                                 |
-| `filesystem.read`                | Filesystem    | Low        | Read a file or file-like resource                           |
-| `filesystem.write`               | Filesystem    | Medium     | Create or overwrite a file-like resource                    |
-| `memory.cross_namespace.read`    | Memory        | Medium     | Cross-namespace agent memory read                           |
-| `memory.cross_namespace.write`   | Memory        | High       | Cross-namespace agent memory write                          |
-| `payment.purchase`               | Payments      | High       | Purchase of goods or services via a payment rail            |
-| `payment.transfer`               | Payments      | Critical   | Value transfer between accounts                             |
-| `system.execute`                 | System        | Critical   | Raw execution fallback; see §2.3.6 anti-convenience rule    |
-| `system.install`                 | System        | High       | Install a package or runtime dependency                     |
+| Action class                   | Domain        | Risk level | Notes                                                      |
+| ------------------------------ | ------------- | ---------- | ---------------------------------------------------------- |
+| `account.permission.change`    | Permissions   | Critical   | Change account or role permissions                         |
+| `browser.purchase`             | Browser       | High       | Browser-driven purchase flow                               |
+| `communication.external.send`  | Communication | High       | Outbound message / request to an external system           |
+| `communication.internal.send`  | Communication | Medium     | Message to an internal recipient inside the trust boundary |
+| `credential.read`              | Credentials   | Medium     | Read a secret, API key, or token                           |
+| `credential.write`             | Credentials   | Critical   | Create, rotate, or store a secret                          |
+| `filesystem.delete`            | Filesystem    | High       | Delete a file-like resource                                |
+| `filesystem.read`              | Filesystem    | Low        | Read a file or file-like resource                          |
+| `filesystem.write`             | Filesystem    | Medium     | Create or overwrite a file-like resource                   |
+| `memory.cross_namespace.read`  | Memory        | Medium     | Cross-namespace agent memory read                          |
+| `memory.cross_namespace.write` | Memory        | High       | Cross-namespace agent memory write                         |
+| `payment.purchase`             | Payments      | High       | Purchase of goods or services via a payment rail           |
+| `payment.transfer`             | Payments      | Critical   | Value transfer between accounts                            |
+| `system.execute`               | System        | Critical   | Raw execution fallback; see §2.3.6 anti-convenience rule   |
+| `system.install`               | System        | High       | Install a package or runtime dependency                    |
 
 Risk levels above are the Firma OSS v0.1 starting values. They are an
 implementation choice (encoded in `registry.rs::RiskLevel`), not part of
@@ -64,20 +64,20 @@ without encoding the provider into the action class. Extension is **in-place**
 on `ActionClassRegistry::v0_1()` — no registry version bump. A future FEP
 revision should absorb these or mark them optional.
 
-| Action class            | Domain        | Risk     | Notes                                                 |
-|-------------------------|---------------|----------|-------------------------------------------------------|
-| `code.read`             | Code          | Low      | Read repository / code content                        |
-| `code.review.read`      | Code          | Low      | Read pull-request review surface                      |
-| `code.review.submit`    | Code          | Medium   | Submit / mutate a PR review                           |
-| `code.write`            | Code          | High     | Mutate code, create or update PRs, push refs          |
-| `code.destructive`      | Code          | High     | Delete files or git refs                              |
-| `code.merge`            | Code          | Critical | Merge a pull request into a target branch             |
-| `issue.read`            | Issue         | Low      | Read issues and issue comments                        |
-| `issue.write`           | Issue         | Medium   | Create or mutate issues and issue comments            |
-| `notification.manage`   | Notification  | Low      | Manage notification state / subscriptions             |
-| `security.alert.read`   | Security      | Medium   | Read code-scanning / secret-scanning alerts           |
-| `repo.lifecycle`        | Repo          | Medium   | Create / fork repositories                            |
-| `repo.admin`            | Repo          | Critical | Mutate repo settings / branch protection              |
+| Action class          | Domain       | Risk     | Notes                                        |
+| --------------------- | ------------ | -------- | -------------------------------------------- |
+| `code.read`           | Code         | Low      | Read repository / code content               |
+| `code.review.read`    | Code         | Low      | Read pull-request review surface             |
+| `code.review.submit`  | Code         | Medium   | Submit / mutate a PR review                  |
+| `code.write`          | Code         | High     | Mutate code, create or update PRs, push refs |
+| `code.destructive`    | Code         | High     | Delete files or git refs                     |
+| `code.merge`          | Code         | Critical | Merge a pull request into a target branch    |
+| `issue.read`          | Issue        | Low      | Read issues and issue comments               |
+| `issue.write`         | Issue        | Medium   | Create or mutate issues and issue comments   |
+| `notification.manage` | Notification | Low      | Manage notification state / subscriptions    |
+| `security.alert.read` | Security     | Medium   | Read code-scanning / secret-scanning alerts  |
+| `repo.lifecycle`      | Repo         | Medium   | Create / fork repositories                   |
+| `repo.admin`          | Repo         | Critical | Mutate repo settings / branch protection     |
 
 Reserved for a future minor revision (MUST NOT appear in v0.1 policies):
 `memory.read`, `memory.write`, `browser.navigate`.
@@ -112,9 +112,9 @@ deferred to a follow-up task.
 Operator-facing mapping files ship under
 `crates/firma-sidecar/config/mappings/`:
 
-| File          | Covers                                                |
-|---------------|-------------------------------------------------------|
-| `github.toml` | 44 GitHub REST endpoints → 12 action classes            |
+| File          | Covers                                       |
+| ------------- | -------------------------------------------- |
+| `github.toml` | 44 GitHub REST endpoints → 12 action classes |
 
 Enable a shipped file via the sidecar `[enforcement.mapping]` config:
 
@@ -204,22 +204,22 @@ Authoring rules:
 
 Reference mappings operators commonly use (alphabetical by host):
 
-| Host pattern           | Method | Path pattern                     | Action class                    |
-|------------------------|--------|----------------------------------|---------------------------------|
-| `api.anthropic.com`    | POST   | `/v1/messages`                   | `communication.external.send`   |
-| `api.github.com`       | GET    | `/repos/*/actions/secrets/*`     | `credential.read`               |
-| `api.github.com`       | PUT    | `/orgs/*/members/*`              | `account.permission.change`     |
-| `api.github.com`       | PUT    | `/repos/*/actions/secrets/*`     | `credential.write`              |
-| `api.openai.com`       | POST   | `/v1/chat/completions`           | `communication.external.send`   |
-| `api.openai.com`       | POST   | `/v1/responses`                  | `communication.external.send`   |
-| `api.stripe.com`       | POST   | `/v1/charges`                    | `payment.purchase`              |
-| `api.stripe.com`       | POST   | `/v1/payment_intents`            | `payment.purchase`              |
-| `api.stripe.com`       | POST   | `/v1/transfers`                  | `payment.transfer`              |
-| `api.telegram.org`     | POST   | `/bot*/sendMessage`              | `communication.external.send`   |
-| `hooks.slack.com`      | POST   | `/services/*`                    | `communication.external.send`   |
-| `pypi.org`             | POST   | `/legacy/`                       | `system.install`                |
-| `registry.npmjs.org`   | PUT    | `/*`                             | `system.install`                |
-| `slack.com`            | POST   | `/api/chat.postMessage`          | `communication.external.send`   |
+| Host pattern         | Method | Path pattern                 | Action class                  |
+| -------------------- | ------ | ---------------------------- | ----------------------------- |
+| `api.anthropic.com`  | POST   | `/v1/messages`               | `communication.external.send` |
+| `api.github.com`     | GET    | `/repos/*/actions/secrets/*` | `credential.read`             |
+| `api.github.com`     | PUT    | `/orgs/*/members/*`          | `account.permission.change`   |
+| `api.github.com`     | PUT    | `/repos/*/actions/secrets/*` | `credential.write`            |
+| `api.openai.com`     | POST   | `/v1/chat/completions`       | `communication.external.send` |
+| `api.openai.com`     | POST   | `/v1/responses`              | `communication.external.send` |
+| `api.stripe.com`     | POST   | `/v1/charges`                | `payment.purchase`            |
+| `api.stripe.com`     | POST   | `/v1/payment_intents`        | `payment.purchase`            |
+| `api.stripe.com`     | POST   | `/v1/transfers`              | `payment.transfer`            |
+| `api.telegram.org`   | POST   | `/bot*/sendMessage`          | `communication.external.send` |
+| `hooks.slack.com`    | POST   | `/services/*`                | `communication.external.send` |
+| `pypi.org`           | POST   | `/legacy/`                   | `system.install`              |
+| `registry.npmjs.org` | PUT    | `/*`                         | `system.install`              |
+| `slack.com`          | POST   | `/api/chat.postMessage`      | `communication.external.send` |
 
 LLM inference API calls are classified as `communication.external.send`
 in Firma OSS v0.1. FEP v0.1 does not define an `llm.*` class; LLM API
