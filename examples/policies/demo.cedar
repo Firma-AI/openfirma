@@ -34,10 +34,10 @@ permit (
     context.risk_score < 70
 };
 
-// Hard-block data exfiltration to paste.rs — the canonical demo DENY.
-// This forbid overrides any permit above for the paste.rs resource.
+// Block httpbin.org/ip — exposes the agent's egress IP, data-leak risk.
+// Demo: curl -x http://127.0.0.1:8080 http://httpbin.org/ip → DENY
 forbid (
     principal,
     action == Firma::Action::"communication.external.send",
-    resource == Firma::Resource::"paste.rs"
+    resource == Firma::Resource::"httpbin.org/ip"
 );

@@ -4,7 +4,6 @@
 # Interceptor: HTTP forward proxy on :8080
 # Enforcement: policy bundle streamed from Authority on :50051
 # Default: unlisted hosts PASSTHROUGH (default_protected = false)
-# Enforcement: paste.rs → communication.external.send → Stage 1 DENY
 
 [interceptor]
 mode              = "http_proxy"
@@ -36,11 +35,11 @@ enforcement_timeout_ms = 50
 default_timeout_ms = 120000
 
 # Local agent configuration (lm-studio)
-#[[connector.hosts]]
-#host       = "localhost:1234"
-#rps        = 10
-#burst      = 5
-#timeout_ms = 300000
+[[connector.hosts]]
+host       = "localhost:1234"
+rps        = 10
+burst      = 5
+timeout_ms = 300000
 
 [audit]
 sink             = "stdout"
