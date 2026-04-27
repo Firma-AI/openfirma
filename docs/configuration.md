@@ -28,6 +28,14 @@ listen_addr = "127.0.0.1:9090"
 drain_timeout_secs = 15
 # socket_path = "/tmp/firma.sock"
 
+[interceptor.https_mitm]
+enabled = true
+intercept_hosts = ["api.openai.com", "api.supabase.com", "*.resend.com"]
+bypass_hosts = ["status.openai.com"]
+strict_hosts = ["api.openai.com"]
+cert_ttl_secs = 86400
+cert_cache_capacity = 1024
+
 [policy]
 dir = "/etc/firma/policies"
 authority_url = "https://authority.example.com"
@@ -110,6 +118,34 @@ Validation:
 
 - `drain_timeout_secs` must be greater than `0`.
 - On Unix, `socket_path` must be set and non-empty when mode is `unix_socket`.
+
+### `[interceptor.https_mitm]`
+
+Optional TLS MITM controls for HTTPS `CONNECT` traffic in `http_proxy` mode.
+When disabled, CONNECT flows stay in transparent tunnel mode (destination-level
+enforcement only). When enabled, matched hosts are decrypted, normalized, and
+enforced at L7 (method/path/action class).
+
+| Field                 | Type        | Default  | Description                                        |
+| --------------------- | ----------- | -------- | -------------------------------------------------- |
+| `enabled`             | bool        | `false`  | Enables MITM for hosts matched by `intercept_hosts` |
+| `ca_cert_path`        | path        | none     | Optional explicit CA certificate path              |
+| `ca_key_path`         | path        | none     | Optional explicit CA private key path              |
+| `intercept_hosts`     | list<string>| `[]`     | Host patterns to intercept (`*` wildcard supported) |
+| `bypass_hosts`        | list<string>| `[]`     | Host patterns to force CONNECT tunnel mode         |
+| `strict_hosts`        | list<string>| `[]`     | Host patterns that must be intercepted             |
+| `cert_ttl_secs`       | u64         | `86400`  | Leaf certificate cache TTL in seconds              |
+| `cert_cache_capacity` | usize       | `1024`   | Maximum number of cached leaf certificates         |
+
+Validation:
+
+- Host lists (`intercept_hosts`, `bypass_hosts`, `strict_hosts`) cannot contain
+  empty patterns.
+- If `enabled = true`, `intercept_hosts` must be non-empty.
+- If `enabled = true`, `cert_ttl_secs` and `cert_cache_capacity` must be
+  greater than `0`.
+- If `ca_cert_path` / `ca_key_path` are omitted, files are created under
+  [`[ca].dir`](#ca) as `firma-ca.crt` and `firma-ca.key`.
 
 ### `[policy]`
 

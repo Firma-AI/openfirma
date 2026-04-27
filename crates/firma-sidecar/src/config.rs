@@ -174,6 +174,9 @@ pub struct InterceptorConfig {
     /// Seconds to wait for in-flight requests to drain on shutdown.
     #[serde(default = "default_drain_timeout")]
     pub drain_timeout_secs: u64,
+    /// HTTPS MITM settings used by the HTTP proxy interceptor.
+    #[serde(default)]
+    pub https_mitm: HttpsMitmConfig,
 }
 
 impl InterceptorConfig {
@@ -181,6 +184,7 @@ impl InterceptorConfig {
         if self.drain_timeout_secs == 0 {
             return Err("interceptor.drain_timeout_secs must be > 0".into());
         }
+        self.https_mitm.validate()?;
         #[cfg(unix)]
         if self.mode == InterceptorMode::UnixSocket {
             match &self.socket_path {
@@ -208,6 +212,85 @@ impl Default for InterceptorConfig {
             listen_addr: default_listen_addr(),
             socket_path: None,
             drain_timeout_secs: default_drain_timeout(),
+            https_mitm: HttpsMitmConfig::default(),
+        }
+    }
+}
+
+/// HTTPS MITM controls for the HTTP proxy interceptor.
+///
+/// When disabled, HTTPS `CONNECT` requests are handled as blind tunnels.
+/// When enabled, hosts matched by `intercept_hosts` are decrypted and
+/// re-encrypted by the sidecar.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HttpsMitmConfig {
+    /// Enables TLS MITM interception for selected hosts.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Optional explicit CA certificate path. Defaults under `ca.dir`.
+    #[serde(default)]
+    pub ca_cert_path: Option<PathBuf>,
+    /// Optional explicit CA private key path. Defaults under `ca.dir`.
+    #[serde(default)]
+    pub ca_key_path: Option<PathBuf>,
+    /// Host patterns that should be intercepted (supports `*` wildcard).
+    #[serde(default)]
+    pub intercept_hosts: Vec<String>,
+    /// Host patterns that should bypass interception and use CONNECT tunnel.
+    #[serde(default)]
+    pub bypass_hosts: Vec<String>,
+    /// Dynamic leaf certificate TTL in seconds.
+    #[serde(default = "default_https_mitm_cert_ttl_secs")]
+    pub cert_ttl_secs: u64,
+    /// Maximum number of cached leaf certificates.
+    #[serde(default = "default_https_mitm_cert_cache_capacity")]
+    pub cert_cache_capacity: usize,
+    /// Host patterns that must be intercepted; failures are hard deny.
+    #[serde(default)]
+    pub strict_hosts: Vec<String>,
+}
+
+impl HttpsMitmConfig {
+    fn validate(&self) -> Result<(), String> {
+        validate_host_patterns(
+            "interceptor.https_mitm.intercept_hosts",
+            &self.intercept_hosts,
+        )?;
+        validate_host_patterns("interceptor.https_mitm.bypass_hosts", &self.bypass_hosts)?;
+        validate_host_patterns("interceptor.https_mitm.strict_hosts", &self.strict_hosts)?;
+
+        if !self.enabled {
+            return Ok(());
+        }
+
+        if self.intercept_hosts.is_empty() {
+            return Err(
+                "interceptor.https_mitm.intercept_hosts must not be empty when MITM is enabled"
+                    .to_string(),
+            );
+        }
+        if self.cert_ttl_secs == 0 {
+            return Err("interceptor.https_mitm.cert_ttl_secs must be > 0".to_string());
+        }
+        if self.cert_cache_capacity == 0 {
+            return Err("interceptor.https_mitm.cert_cache_capacity must be > 0".to_string());
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for HttpsMitmConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ca_cert_path: None,
+            ca_key_path: None,
+            intercept_hosts: Vec::new(),
+            bypass_hosts: Vec::new(),
+            cert_ttl_secs: default_https_mitm_cert_ttl_secs(),
+            cert_cache_capacity: default_https_mitm_cert_cache_capacity(),
+            strict_hosts: Vec::new(),
         }
     }
 }
@@ -387,6 +470,14 @@ const fn default_drain_timeout() -> u64 {
     30
 }
 
+const fn default_https_mitm_cert_ttl_secs() -> u64 {
+    86_400
+}
+
+const fn default_https_mitm_cert_cache_capacity() -> usize {
+    1_024
+}
+
 fn default_policy_dir() -> PathBuf {
     PathBuf::from("./policies/")
 }
@@ -397,6 +488,15 @@ fn default_ca_dir() -> PathBuf {
 
 fn default_log_level() -> String {
     "info".to_string()
+}
+
+fn validate_host_patterns(field: &str, patterns: &[String]) -> Result<(), String> {
+    for (idx, pattern) in patterns.iter().enumerate() {
+        if pattern.trim().is_empty() {
+            return Err(format!("{field}[{idx}] must not be empty"));
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -522,6 +622,65 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_https_mitm_enabled_requires_intercept_hosts() {
+        let config = SidecarConfig {
+            interceptor: InterceptorConfig {
+                https_mitm: HttpsMitmConfig {
+                    enabled: true,
+                    ..HttpsMitmConfig::default()
+                },
+                ..InterceptorConfig::default()
+            },
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("intercept_hosts"),
+            "error should mention intercept_hosts: {err}"
+        );
+    }
+
+    #[test]
+    fn test_https_mitm_rejects_empty_host_pattern() {
+        let config = SidecarConfig {
+            interceptor: InterceptorConfig {
+                https_mitm: HttpsMitmConfig {
+                    enabled: true,
+                    intercept_hosts: vec![" ".to_string()],
+                    ..HttpsMitmConfig::default()
+                },
+                ..InterceptorConfig::default()
+            },
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("interceptor.https_mitm.intercept_hosts"),
+            "error should mention MITM host pattern list: {err}"
+        );
+    }
+
+    #[test]
+    fn test_https_mitm_enabled_config_valid() {
+        let config = SidecarConfig {
+            interceptor: InterceptorConfig {
+                https_mitm: HttpsMitmConfig {
+                    enabled: true,
+                    intercept_hosts: vec!["api.openai.com".to_string()],
+                    bypass_hosts: vec!["example.com".to_string()],
+                    strict_hosts: vec!["api.openai.com".to_string()],
+                    cert_ttl_secs: 60,
+                    cert_cache_capacity: 8,
+                    ..HttpsMitmConfig::default()
+                },
+                ..InterceptorConfig::default()
+            },
+            ..SidecarConfig::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_unix_socket_mode_requires_socket_path() {
@@ -592,6 +751,14 @@ mode = "http_proxy"
 listen_addr = "127.0.0.1:9090"
 drain_timeout_secs = 15
 
+[interceptor.https_mitm]
+enabled = true
+intercept_hosts = ["api.openai.com"]
+bypass_hosts = ["example.com"]
+strict_hosts = ["api.openai.com"]
+cert_ttl_secs = 120
+cert_cache_capacity = 16
+
 [policy]
 dir = "/etc/firma/policies"
 authority_url = "https://authority.example.com"
@@ -640,6 +807,21 @@ signing_key_path = "/etc/firma/audit.pem"
             "127.0.0.1:9090".parse().unwrap_or_else(|e| panic!("{e}"))
         );
         assert_eq!(config.interceptor.drain_timeout_secs, 15);
+        assert!(config.interceptor.https_mitm.enabled);
+        assert_eq!(
+            config.interceptor.https_mitm.intercept_hosts,
+            vec!["api.openai.com".to_string()]
+        );
+        assert_eq!(
+            config.interceptor.https_mitm.bypass_hosts,
+            vec!["example.com".to_string()]
+        );
+        assert_eq!(
+            config.interceptor.https_mitm.strict_hosts,
+            vec!["api.openai.com".to_string()]
+        );
+        assert_eq!(config.interceptor.https_mitm.cert_ttl_secs, 120);
+        assert_eq!(config.interceptor.https_mitm.cert_cache_capacity, 16);
         assert_eq!(config.policy.dir, PathBuf::from("/etc/firma/policies"));
         assert_eq!(
             config.policy.authority_url.as_deref(),

@@ -59,6 +59,7 @@ prost = "0.14"
 prost-types = "0.14"
 proptest = "1"
 rand = { version = "0.9", default-features = false, features = ["small_rng"] }
+rcgen = { version = "0.13", features = ["x509-parser"] }
 reqwest = { version = "0.13", default-features = false, features = [
     "charset",
     "http2",
@@ -66,6 +67,8 @@ reqwest = { version = "0.13", default-features = false, features = [
     "rustls",
 ] }
 ctrlc = "3.5"
+rustls = "0.23"
+rustls-pemfile = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
@@ -78,6 +81,7 @@ tokio = { version = "1", default-features = false, features = [
     "macros",
 ] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-rustls = "0.26"
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "1"
 tonic = { version = "0.14", features = ["transport"] }
