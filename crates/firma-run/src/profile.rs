@@ -33,7 +33,8 @@ fn generic_profile() -> ProfilePatch {
         }],
         allowed_domains: Vec::new(),
         network: Some(NetworkPolicyPatch {
-            enforce_network_namespace: Some(true),
+            // Structural confinement default is backend-aware and resolved later.
+            enforce_network_namespace: None,
             fail_closed: Some(true),
         }),
         identity_mode: None,
