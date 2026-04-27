@@ -21,6 +21,8 @@ use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::sync::Mutex;
 use tokio_rustls::TlsAcceptor;
+use x509_parser::parse_x509_certificate;
+use x509_parser::pem::parse_x509_pem;
 
 use crate::config::HttpsMitmConfig;
 
@@ -242,7 +244,18 @@ impl CaMaterial {
             })?;
         }
 
-        let key_pem = if key_path.exists() {
+        let cert_exists = cert_path.exists();
+        let key_exists = key_path.exists();
+
+        if cert_exists && !key_exists {
+            return Err(format!(
+                "MITM CA certificate {} exists but private key {} is missing",
+                cert_path.display(),
+                key_path.display()
+            ));
+        }
+
+        let key_pem = if key_exists {
             ensure_private_key_permissions(&key_path)?;
             fs::read_to_string(&key_path)
                 .map_err(|e| format!("failed to read MITM CA key {}: {e}", key_path.display()))?
@@ -255,31 +268,46 @@ impl CaMaterial {
         let ca_key =
             KeyPair::from_pem(&key_pem).map_err(|e| format!("invalid MITM CA key PEM: {e}"))?;
 
-        let params = if cert_path.exists() {
+        let (params, cert_der) = if cert_exists {
             let cert_pem = fs::read_to_string(&cert_path).map_err(|e| {
                 format!(
                     "failed to read existing MITM CA cert {}: {e}",
                     cert_path.display()
                 )
             })?;
-            CertificateParams::from_ca_cert_pem(&cert_pem).map_err(|e| {
+            let cert_der = parse_cert_der_from_pem(&cert_pem, &cert_path)?;
+            let cert_spki = parse_cert_spki_from_pem(&cert_pem, &cert_path)?;
+            let key_spki = ca_key.public_key_der();
+            if cert_spki != key_spki {
+                return Err(format!(
+                    "MITM CA cert {} does not match private key {}",
+                    cert_path.display(),
+                    key_path.display()
+                ));
+            }
+
+            let params = CertificateParams::from_ca_cert_pem(&cert_pem).map_err(|e| {
                 format!(
                     "failed to parse existing MITM CA cert {}: {e}",
                     cert_path.display()
                 )
-            })?
+            })?;
+            (params, cert_der)
         } else {
-            ca_certificate_params()
+            (ca_certificate_params(), Vec::new())
         };
 
         let cert = params
             .self_signed(&ca_key)
             .map_err(|e| format!("failed to build MITM CA certificate: {e}"))?;
-        let cert_der = cert.der().to_vec();
 
-        if !cert_path.exists() {
+        let cert_der = if cert_exists {
+            cert_der
+        } else {
+            let cert_der = cert.der().to_vec();
             write_public_cert_pem(&cert_path, &cert.pem())?;
-        }
+            cert_der
+        };
 
         Ok(Self {
             cert,
@@ -332,6 +360,34 @@ fn write_public_cert_pem(path: &Path, pem: &str) -> Result<(), String> {
             path.display()
         )
     })
+}
+
+fn parse_cert_der_from_pem(cert_pem: &str, cert_path: &Path) -> Result<Vec<u8>, String> {
+    let (_, pem) = parse_x509_pem(cert_pem.as_bytes()).map_err(|e| {
+        format!(
+            "failed to parse existing MITM CA cert {} as PEM: {e}",
+            cert_path.display()
+        )
+    })?;
+    if pem.label != "CERTIFICATE" {
+        return Err(format!(
+            "failed to parse existing MITM CA cert {}: PEM label '{}' is not CERTIFICATE",
+            cert_path.display(),
+            pem.label
+        ));
+    }
+    Ok(pem.contents)
+}
+
+fn parse_cert_spki_from_pem(cert_pem: &str, cert_path: &Path) -> Result<Vec<u8>, String> {
+    let cert_der = parse_cert_der_from_pem(cert_pem, cert_path)?;
+    let (_, cert) = parse_x509_certificate(&cert_der).map_err(|e| {
+        format!(
+            "failed to parse existing MITM CA cert {} as X.509: {e}",
+            cert_path.display()
+        )
+    })?;
+    Ok(cert.tbs_certificate.subject_pki.raw.to_vec())
 }
 
 fn ensure_private_key_permissions(path: &Path) -> Result<(), String> {
@@ -419,33 +475,26 @@ fn wildcard_match(pattern: &str, value: &str) -> bool {
     if pattern == "*" {
         return true;
     }
+
+    if let Some(suffix) = pattern.strip_prefix("*.") {
+        if suffix.is_empty() || suffix.contains('*') {
+            return false;
+        }
+        if value == suffix || !value.ends_with(suffix) {
+            return false;
+        }
+        let prefix = &value[..value.len() - suffix.len()];
+        return prefix.ends_with('.') && prefix.len() > 1;
+    }
+
+    if pattern.contains('*') {
+        return false;
+    }
+
     if !pattern.contains('*') {
         return pattern == value;
     }
-
-    let parts: Vec<&str> = pattern.split('*').collect();
-    let mut pos = 0usize;
-    for (idx, part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            continue;
-        }
-        match value[pos..].find(part) {
-            Some(found) => {
-                if idx == 0 && found != 0 {
-                    return false;
-                }
-                pos += found + part.len();
-            }
-            None => return false,
-        }
-    }
-    if let Some(last) = parts.last()
-        && !last.is_empty()
-    {
-        return value.ends_with(last);
-    }
-
-    true
+    false
 }
 
 fn validate_dns_hostname(host: &str) -> Result<(), String> {
@@ -501,6 +550,13 @@ mod tests {
     fn wildcard_match_suffix() {
         assert!(wildcard_match("*.openai.com", "api.openai.com"));
         assert!(!wildcard_match("*.openai.com", "openai.com"));
+    }
+
+    #[test]
+    fn wildcard_match_rejects_non_label_wildcards() {
+        assert!(!wildcard_match("api.*.com", "api.openai.com"));
+        assert!(!wildcard_match("*openai.com", "api.openai.com"));
+        assert!(!wildcard_match("*.com", "openai.com"));
     }
 
     #[test]
@@ -581,6 +637,31 @@ mod tests {
 
         assert!(dir.path().join("firma-ca.crt").exists());
         assert!(dir.path().join("firma-ca.key").exists());
+    }
+
+    #[test]
+    fn ca_material_rejects_cert_key_mismatch() {
+        let dir = tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let cfg = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["api.openai.com".to_string()],
+            cert_ttl_secs: 60,
+            cert_cache_capacity: 8,
+            ..HttpsMitmConfig::default()
+        };
+        let _ = HttpsMitmRuntime::new(cfg.clone(), dir.path()).unwrap_or_else(|e| panic!("{e}"));
+
+        let key_path = dir.path().join("firma-ca.key");
+        let (_, replacement_key) = generate_ca_pair().unwrap_or_else(|e| panic!("{e}"));
+        write_private_key_pem(&key_path, &replacement_key).unwrap_or_else(|e| panic!("{e}"));
+
+        let err = HttpsMitmRuntime::new(cfg, dir.path())
+            .err()
+            .unwrap_or_else(|| panic!("expected cert/key mismatch error"));
+        assert!(
+            err.contains("does not match private key"),
+            "expected mismatch detail, got: {err}"
+        );
     }
 
     #[cfg(unix)]

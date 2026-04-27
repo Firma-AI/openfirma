@@ -27,7 +27,7 @@ pub use self::revocation::RevocationConfig;
 
 use std::collections::HashMap;
 use std::fmt;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -177,6 +177,9 @@ pub struct InterceptorConfig {
     /// Maximum request body size accepted by proxy interceptors.
     #[serde(default = "default_max_request_body_bytes")]
     pub max_request_body_bytes: usize,
+    /// CONNECT/MITM relay timeout controls.
+    #[serde(default)]
+    pub connect_relay: ConnectRelayConfig,
     /// HTTPS MITM settings used by the HTTP proxy interceptor.
     #[serde(default)]
     pub https_mitm: HttpsMitmConfig,
@@ -190,6 +193,7 @@ impl InterceptorConfig {
         if self.max_request_body_bytes == 0 {
             return Err("interceptor.max_request_body_bytes must be > 0".into());
         }
+        self.connect_relay.validate()?;
         self.https_mitm.validate()?;
         #[cfg(unix)]
         if self.mode == InterceptorMode::UnixSocket {
@@ -219,7 +223,40 @@ impl Default for InterceptorConfig {
             socket_path: None,
             drain_timeout_secs: default_drain_timeout(),
             max_request_body_bytes: default_max_request_body_bytes(),
+            connect_relay: ConnectRelayConfig::default(),
             https_mitm: HttpsMitmConfig::default(),
+        }
+    }
+}
+
+/// Timeout controls for CONNECT tunnel and MITM relay sessions.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConnectRelayConfig {
+    /// Timeout for CONNECT upgrade and upstream connect/TLS setup.
+    #[serde(default = "default_connect_setup_timeout_secs")]
+    pub setup_timeout_secs: u64,
+    /// Hard cap for the full tunnel/MITM session lifetime.
+    #[serde(default = "default_connect_session_max_secs")]
+    pub session_max_secs: u64,
+}
+
+impl ConnectRelayConfig {
+    fn validate(&self) -> Result<(), String> {
+        if self.setup_timeout_secs == 0 {
+            return Err("interceptor.connect_relay.setup_timeout_secs must be > 0".into());
+        }
+        if self.session_max_secs == 0 {
+            return Err("interceptor.connect_relay.session_max_secs must be > 0".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for ConnectRelayConfig {
+    fn default() -> Self {
+        Self {
+            setup_timeout_secs: default_connect_setup_timeout_secs(),
+            session_max_secs: default_connect_session_max_secs(),
         }
     }
 }
@@ -481,6 +518,14 @@ const fn default_max_request_body_bytes() -> usize {
     4 * 1024 * 1024
 }
 
+const fn default_connect_setup_timeout_secs() -> u64 {
+    10
+}
+
+const fn default_connect_session_max_secs() -> u64 {
+    600
+}
+
 const fn default_https_mitm_cert_ttl_secs() -> u64 {
     86_400
 }
@@ -536,10 +581,83 @@ fn default_log_level() -> String {
 
 fn validate_host_patterns(field: &str, patterns: &[String]) -> Result<(), String> {
     for (idx, pattern) in patterns.iter().enumerate() {
-        if pattern.trim().is_empty() {
+        let normalized = pattern.trim().trim_end_matches('.').to_ascii_lowercase();
+        if normalized.is_empty() {
             return Err(format!("{field}[{idx}] must not be empty"));
         }
+        if normalized == "*" {
+            continue;
+        }
+        if let Some(suffix) = normalized.strip_prefix("*.") {
+            if suffix.is_empty() {
+                return Err(format!(
+                    "{field}[{idx}] wildcard pattern must include a suffix after '*.'"
+                ));
+            }
+            if suffix.contains('*') {
+                return Err(format!(
+                    "{field}[{idx}] wildcard pattern supports only a single leading '*.'"
+                ));
+            }
+            if suffix.parse::<IpAddr>().is_ok() {
+                return Err(format!(
+                    "{field}[{idx}] wildcard patterns do not support IP literals"
+                ));
+            }
+            if suffix.split('.').count() < 2 {
+                return Err(format!(
+                    "{field}[{idx}] wildcard suffix must contain at least two DNS labels"
+                ));
+            }
+            validate_dns_hostname(&normalized, suffix)?;
+            continue;
+        }
+        if normalized.contains('*') {
+            return Err(format!(
+                "{field}[{idx}] wildcard patterns must use only a leading '*.'"
+            ));
+        }
+        if normalized.parse::<IpAddr>().is_ok() {
+            continue;
+        }
+        validate_dns_hostname(&normalized, &normalized)?;
     }
+    Ok(())
+}
+
+fn validate_dns_hostname(full: &str, host: &str) -> Result<(), String> {
+    if host.is_empty() {
+        return Err(format!("invalid DNS hostname '{full}': empty value"));
+    }
+    if host.len() > 253 {
+        return Err(format!(
+            "invalid DNS hostname '{full}': exceeds 253-character limit"
+        ));
+    }
+
+    for label in host.split('.') {
+        if label.is_empty() {
+            return Err(format!(
+                "invalid DNS hostname '{full}': contains empty label"
+            ));
+        }
+        if label.len() > 63 {
+            return Err(format!(
+                "invalid DNS hostname '{full}': label '{label}' exceeds 63-character limit"
+            ));
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return Err(format!(
+                "invalid DNS hostname '{full}': label '{label}' starts/ends with '-'"
+            ));
+        }
+        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err(format!(
+                "invalid DNS hostname '{full}': label '{label}' contains non-DNS characters"
+            ));
+        }
+    }
+
     Ok(())
 }
 
@@ -691,6 +809,44 @@ mod tests {
     }
 
     #[test]
+    fn test_sidecar_config_zero_connect_setup_timeout_rejected() {
+        let config = SidecarConfig {
+            interceptor: InterceptorConfig {
+                connect_relay: ConnectRelayConfig {
+                    setup_timeout_secs: 0,
+                    ..ConnectRelayConfig::default()
+                },
+                ..InterceptorConfig::default()
+            },
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("connect_relay.setup_timeout_secs"),
+            "error should mention connect relay setup timeout: {err}"
+        );
+    }
+
+    #[test]
+    fn test_sidecar_config_zero_connect_session_max_rejected() {
+        let config = SidecarConfig {
+            interceptor: InterceptorConfig {
+                connect_relay: ConnectRelayConfig {
+                    session_max_secs: 0,
+                    ..ConnectRelayConfig::default()
+                },
+                ..InterceptorConfig::default()
+            },
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("connect_relay.session_max_secs"),
+            "error should mention connect relay session timeout: {err}"
+        );
+    }
+
+    #[test]
     fn test_https_mitm_enabled_requires_intercept_hosts() {
         let config = SidecarConfig {
             interceptor: InterceptorConfig {
@@ -727,6 +883,46 @@ mod tests {
         assert!(
             err.contains("interceptor.https_mitm.intercept_hosts"),
             "error should mention MITM host pattern list: {err}"
+        );
+    }
+
+    #[test]
+    fn test_https_mitm_rejects_non_leading_wildcard_pattern() {
+        let config = SidecarConfig {
+            interceptor: InterceptorConfig {
+                https_mitm: HttpsMitmConfig {
+                    enabled: true,
+                    intercept_hosts: vec!["api.*.openai.com".to_string()],
+                    ..HttpsMitmConfig::default()
+                },
+                ..InterceptorConfig::default()
+            },
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("leading '*.'"),
+            "error should mention wildcard format: {err}"
+        );
+    }
+
+    #[test]
+    fn test_https_mitm_rejects_top_level_wildcard_suffix() {
+        let config = SidecarConfig {
+            interceptor: InterceptorConfig {
+                https_mitm: HttpsMitmConfig {
+                    enabled: true,
+                    intercept_hosts: vec!["*.com".to_string()],
+                    ..HttpsMitmConfig::default()
+                },
+                ..InterceptorConfig::default()
+            },
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("at least two DNS labels"),
+            "error should mention wildcard suffix labels: {err}"
         );
     }
 
@@ -821,6 +1017,10 @@ listen_addr = "127.0.0.1:9090"
 drain_timeout_secs = 15
 max_request_body_bytes = 2097152
 
+[interceptor.connect_relay]
+setup_timeout_secs = 12
+session_max_secs = 900
+
 [interceptor.https_mitm]
 enabled = true
 intercept_hosts = ["api.openai.com"]
@@ -878,6 +1078,8 @@ signing_key_path = "/etc/firma/audit.pem"
         );
         assert_eq!(config.interceptor.drain_timeout_secs, 15);
         assert_eq!(config.interceptor.max_request_body_bytes, 2_097_152);
+        assert_eq!(config.interceptor.connect_relay.setup_timeout_secs, 12);
+        assert_eq!(config.interceptor.connect_relay.session_max_secs, 900);
         assert!(config.interceptor.https_mitm.enabled);
         assert_eq!(
             config.interceptor.https_mitm.intercept_hosts,

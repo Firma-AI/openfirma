@@ -29,6 +29,10 @@ drain_timeout_secs = 15
 max_request_body_bytes = 4194304
 # socket_path = "/tmp/firma.sock"
 
+[interceptor.connect_relay]
+setup_timeout_secs = 10
+session_max_secs = 600
+
 [interceptor.https_mitm]
 enabled = true
 intercept_hosts = ["api.openai.com", "api.supabase.com", "*.resend.com"]
@@ -122,6 +126,20 @@ Validation:
 - `max_request_body_bytes` must be greater than `0`.
 - On Unix, `socket_path` must be set and non-empty when mode is `unix_socket`.
 
+### `[interceptor.connect_relay]`
+
+Timeout controls for CONNECT tunnel and HTTPS MITM relay sessions.
+
+| Field                | Type | Default | Description                                              |
+| -------------------- | ---- | ------- | -------------------------------------------------------- |
+| `setup_timeout_secs` | u64  | `10`    | Timeout for CONNECT upgrade and upstream setup/handshake |
+| `session_max_secs`   | u64  | `600`   | Hard cap for an individual CONNECT/MITM session lifetime |
+
+Validation:
+
+- `setup_timeout_secs` must be greater than `0`.
+- `session_max_secs` must be greater than `0`.
+
 ### `[interceptor.https_mitm]`
 
 Optional TLS MITM controls for HTTPS `CONNECT` traffic in `http_proxy` mode.
@@ -134,7 +152,7 @@ enforcement only).
 | `enabled`             | bool        | `true`   | Enables MITM for hosts matched by `intercept_hosts` |
 | `ca_cert_path`        | path        | none     | Optional explicit CA certificate path              |
 | `ca_key_path`         | path        | none     | Optional explicit CA private key path              |
-| `intercept_hosts`     | list<string>| curated common API hosts | Host patterns to intercept (`*` wildcard supported) |
+| `intercept_hosts`     | list<string>| curated common API hosts | Host patterns to intercept (`*` or `*.example.com`) |
 | `bypass_hosts`        | list<string>| `[]`     | Host patterns to force CONNECT tunnel mode         |
 | `strict_hosts`        | list<string>| `[]`     | Host patterns that must be intercepted             |
 | `cert_ttl_secs`       | u64         | `86400`  | Leaf certificate cache TTL in seconds              |
@@ -144,6 +162,12 @@ Validation:
 
 - Host lists (`intercept_hosts`, `bypass_hosts`, `strict_hosts`) cannot contain
   empty patterns.
+- Wildcard patterns are DNS-label-aware and only support:
+  - `*` (match any host)
+  - `*.example.com` (match subdomains only, not apex `example.com`)
+- Wildcards inside labels (for example `api.*.com`) are rejected.
+- Wildcard suffixes must contain at least two DNS labels (for example
+  `*.com` is rejected).
 - If `enabled = true`, `intercept_hosts` must be non-empty.
 - If `enabled = true`, `cert_ttl_secs` and `cert_cache_capacity` must be
   greater than `0`.
