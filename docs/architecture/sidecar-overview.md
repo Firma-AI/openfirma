@@ -541,7 +541,9 @@ Pingora-specific note:
 Follow-up boundary:
 
 - Payload-level HTTPS path/method policy requires TLS interception
-  (MITM) and trusted CA propagation, tracked as a separate card.
+  (MITM) and trusted CA propagation, tracked as FIR-63. See
+  `docs/architecture/fir-63-https-mitm-deep-dive.md` for the
+  implementation plan and rollout phases.
 
 ### 7.2 Denial contexts and response shapes
 
