@@ -73,7 +73,7 @@ Primary objective:
 
 Add explicit MITM section under `[interceptor.https_mitm]`:
 
-- `enabled` (bool, default `false`)
+- `enabled` (bool, default `true`)
 - `ca_cert_path` (optional; default under `ca.dir`)
 - `ca_key_path` (optional; default under `ca.dir`)
 - `intercept_hosts` (list, explicit allowlist)

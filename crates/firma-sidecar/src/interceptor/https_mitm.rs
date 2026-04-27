@@ -7,6 +7,7 @@
 
 use std::collections::VecDeque;
 use std::fs;
+use std::io::Write;
 use std::net::IpAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -237,12 +238,12 @@ impl CaMaterial {
         }
 
         let key_pem = if key_path.exists() {
+            ensure_private_key_permissions(&key_path)?;
             fs::read_to_string(&key_path)
                 .map_err(|e| format!("failed to read MITM CA key {}: {e}", key_path.display()))?
         } else {
             let (_, key_pem) = generate_ca_pair()?;
-            fs::write(&key_path, &key_pem)
-                .map_err(|e| format!("failed to write MITM CA key {}: {e}", key_path.display()))?;
+            write_private_key_pem(&key_path, &key_pem)?;
             key_pem
         };
 
@@ -272,12 +273,7 @@ impl CaMaterial {
         let cert_der = cert.der().to_vec();
 
         if !cert_path.exists() {
-            fs::write(&cert_path, cert.pem()).map_err(|e| {
-                format!(
-                    "failed to write MITM CA certificate {}: {e}",
-                    cert_path.display()
-                )
-            })?;
+            write_public_cert_pem(&cert_path, &cert.pem())?;
         }
 
         Ok(Self {
@@ -297,6 +293,66 @@ fn generate_ca_pair() -> Result<(String, String), String> {
     let cert_pem = ca_cert.pem();
     let key_pem = ca_key.serialize_pem();
     Ok((cert_pem, key_pem))
+}
+
+fn write_private_key_pem(path: &Path, pem: &str) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|e| format!("failed to write MITM CA key {}: {e}", path.display()))?;
+        file.write_all(pem.as_bytes())
+            .map_err(|e| format!("failed to write MITM CA key {}: {e}", path.display()))?;
+        ensure_private_key_permissions(path)?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::write(path, pem)
+            .map_err(|e| format!("failed to write MITM CA key {}: {e}", path.display()))
+    }
+}
+
+fn write_public_cert_pem(path: &Path, pem: &str) -> Result<(), String> {
+    fs::write(path, pem).map_err(|e| {
+        format!(
+            "failed to write MITM CA certificate {}: {e}",
+            path.display()
+        )
+    })
+}
+
+fn ensure_private_key_permissions(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(path)
+            .map_err(|e| format!("failed to inspect MITM CA key {}: {e}", path.display()))?
+            .permissions()
+            .mode()
+            & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(format!(
+                "MITM CA key {} permissions too open: {:o} (expected owner-only access)",
+                path.display(),
+                mode
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 
 fn ca_certificate_params() -> CertificateParams {
@@ -321,6 +377,7 @@ fn leaf_certificate_params(host: &str) -> Result<CertificateParams, String> {
     if let Ok(ip) = normalized.parse::<IpAddr>() {
         params.subject_alt_names.push(SanType::IpAddress(ip));
     } else {
+        validate_dns_hostname(&normalized)?;
         let dns_name = normalized
             .clone()
             .try_into()
@@ -379,6 +436,42 @@ fn wildcard_match(pattern: &str, value: &str) -> bool {
     true
 }
 
+fn validate_dns_hostname(host: &str) -> Result<(), String> {
+    if host.is_empty() {
+        return Err("invalid DNS hostname: empty value".to_string());
+    }
+    if host.len() > 253 {
+        return Err(format!(
+            "invalid DNS hostname '{host}': exceeds 253-character limit"
+        ));
+    }
+
+    for label in host.split('.') {
+        if label.is_empty() {
+            return Err(format!(
+                "invalid DNS hostname '{host}': contains empty label"
+            ));
+        }
+        if label.len() > 63 {
+            return Err(format!(
+                "invalid DNS hostname '{host}': label '{label}' exceeds 63-character limit"
+            ));
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return Err(format!(
+                "invalid DNS hostname '{host}': label '{label}' starts/ends with '-'"
+            ));
+        }
+        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err(format!(
+                "invalid DNS hostname '{host}': label '{label}' contains non-DNS characters"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -396,6 +489,29 @@ mod tests {
     fn wildcard_match_suffix() {
         assert!(wildcard_match("*.openai.com", "api.openai.com"));
         assert!(!wildcard_match("*.openai.com", "openai.com"));
+    }
+
+    #[test]
+    fn validate_dns_hostname_accepts_standard_host() {
+        assert!(validate_dns_hostname("api.openai.com").is_ok());
+        assert!(validate_dns_hostname("xn--bcher-kva.example").is_ok());
+    }
+
+    #[test]
+    fn validate_dns_hostname_rejects_underscore() {
+        let err = validate_dns_hostname("exa_mple.com")
+            .err()
+            .unwrap_or_else(|| panic!("expected invalid DNS hostname"));
+        assert!(err.contains("non-DNS characters"));
+    }
+
+    #[test]
+    fn validate_dns_hostname_rejects_oversized_label() {
+        let host = format!("{}.com", "a".repeat(64));
+        let err = validate_dns_hostname(&host)
+            .err()
+            .unwrap_or_else(|| panic!("expected oversized-label error"));
+        assert!(err.contains("exceeds 63-character limit"));
     }
 
     #[test]
@@ -453,6 +569,62 @@ mod tests {
 
         assert!(dir.path().join("firma-ca.crt").exists());
         assert!(dir.path().join("firma-ca.key").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generated_ca_private_key_has_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let cfg = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["api.openai.com".to_string()],
+            cert_ttl_secs: 60,
+            cert_cache_capacity: 8,
+            ..HttpsMitmConfig::default()
+        };
+        let _ = HttpsMitmRuntime::new(cfg, dir.path()).unwrap_or_else(|e| panic!("{e}"));
+
+        let mode = fs::metadata(dir.path().join("firma-ca.key"))
+            .unwrap_or_else(|e| panic!("{e}"))
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "expected 0600 key mode, got {:o}", mode);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_existing_ca_key_with_open_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let key_path = dir.path().join("firma-ca.key");
+        fs::write(
+            &key_path,
+            "-----BEGIN PRIVATE KEY-----\ninvalid\n-----END PRIVATE KEY-----\n",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o644))
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        let cfg = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["api.openai.com".to_string()],
+            ca_key_path: Some(key_path),
+            cert_ttl_secs: 60,
+            cert_cache_capacity: 8,
+            ..HttpsMitmConfig::default()
+        };
+
+        let err = HttpsMitmRuntime::new(cfg, dir.path())
+            .err()
+            .unwrap_or_else(|| panic!("expected err"));
+        assert!(
+            err.contains("permissions too open"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]

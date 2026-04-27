@@ -225,7 +225,7 @@ impl Default for InterceptorConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct HttpsMitmConfig {
     /// Enables TLS MITM interception for selected hosts.
-    #[serde(default)]
+    #[serde(default = "default_https_mitm_enabled")]
     pub enabled: bool,
     /// Optional explicit CA certificate path. Defaults under `ca.dir`.
     #[serde(default)]
@@ -234,7 +234,7 @@ pub struct HttpsMitmConfig {
     #[serde(default)]
     pub ca_key_path: Option<PathBuf>,
     /// Host patterns that should be intercepted (supports `*` wildcard).
-    #[serde(default)]
+    #[serde(default = "default_https_mitm_intercept_hosts")]
     pub intercept_hosts: Vec<String>,
     /// Host patterns that should bypass interception and use CONNECT tunnel.
     #[serde(default)]
@@ -283,10 +283,10 @@ impl HttpsMitmConfig {
 impl Default for HttpsMitmConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: default_https_mitm_enabled(),
             ca_cert_path: None,
             ca_key_path: None,
-            intercept_hosts: Vec::new(),
+            intercept_hosts: default_https_mitm_intercept_hosts(),
             bypass_hosts: Vec::new(),
             cert_ttl_secs: default_https_mitm_cert_ttl_secs(),
             cert_cache_capacity: default_https_mitm_cert_cache_capacity(),
@@ -478,6 +478,39 @@ const fn default_https_mitm_cert_cache_capacity() -> usize {
     1_024
 }
 
+const fn default_https_mitm_enabled() -> bool {
+    true
+}
+
+fn default_https_mitm_intercept_hosts() -> Vec<String> {
+    vec![
+        "api.openai.com".to_string(),
+        "api.anthropic.com".to_string(),
+        "openrouter.ai".to_string(),
+        "api.groq.com".to_string(),
+        "api.mistral.ai".to_string(),
+        "api.cohere.com".to_string(),
+        "generativelanguage.googleapis.com".to_string(),
+        "aiplatform.googleapis.com".to_string(),
+        "api.deepseek.com".to_string(),
+        "api.together.xyz".to_string(),
+        "api.fireworks.ai".to_string(),
+        "api.replicate.com".to_string(),
+        "api.perplexity.ai".to_string(),
+        "api.x.ai".to_string(),
+        "api.supabase.com".to_string(),
+        "*.supabase.co".to_string(),
+        "api.resend.com".to_string(),
+        "api.twilio.com".to_string(),
+        "api.sendgrid.com".to_string(),
+        "api.stripe.com".to_string(),
+        "api.slack.com".to_string(),
+        "hooks.slack.com".to_string(),
+        "api.github.com".to_string(),
+        "uploads.github.com".to_string(),
+    ]
+}
+
 fn default_policy_dir() -> PathBuf {
     PathBuf::from("./policies/")
 }
@@ -514,6 +547,14 @@ mod tests {
     fn test_sidecar_config_defaults_valid() {
         let config = SidecarConfig::default();
         assert!(config.validate().is_ok());
+        assert!(
+            config.interceptor.https_mitm.enabled,
+            "MITM should be enabled by default"
+        );
+        assert!(
+            !config.interceptor.https_mitm.intercept_hosts.is_empty(),
+            "default MITM intercept list should not be empty"
+        );
     }
 
     #[test]
@@ -628,6 +669,7 @@ mod tests {
             interceptor: InterceptorConfig {
                 https_mitm: HttpsMitmConfig {
                     enabled: true,
+                    intercept_hosts: Vec::new(),
                     ..HttpsMitmConfig::default()
                 },
                 ..InterceptorConfig::default()
