@@ -191,7 +191,6 @@ impl fmt::Display for HttpMethod {
         f.write_str((*self).as_str())
     }
 }
-
 /// Parameters for an outbound HTTP request.
 ///
 /// The target URL lives on `ExecutionIntent.resource`, not here —
