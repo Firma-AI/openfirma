@@ -12,7 +12,7 @@ listen_addr       = "127.0.0.1:8080"
 drain_timeout_secs = 30
 
 [policy]
-dir           = "examples/e2e/policies"
+dir           = "examples/policies"
 authority_url = "http://127.0.0.1:50051"
 
 [ca]

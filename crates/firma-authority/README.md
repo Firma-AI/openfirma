@@ -49,7 +49,7 @@ instance so it can verify tokens.
 ```toml
 # authority.toml
 listen_addr        = "[::1]:50051"
-policy_dir         = "crates/firma-authority/policies"
+policy_dir         = "examples/policies"   # must contain schema.cedarschema + *.cedar files
 revocation_file    = "revocations.txt"
 key_file           = "firma-authority.key"
 max_ttl_seconds    = 3600
@@ -57,7 +57,11 @@ bundle_ttl_seconds = 30
 log_level          = "info"
 ```
 
-All fields are optional — defaults are shown above.
+`policy_dir` must contain `schema.cedarschema` and at least one `*.cedar` policy file.
+The canonical schema lives in `crates/firma-authority/policies/schema.cedarschema` — copy it
+into your policy directory before starting the server. Example policies are in `examples/policies/`.
+
+All other fields are optional — defaults are shown above.
 
 ### 4. Start the server
 
