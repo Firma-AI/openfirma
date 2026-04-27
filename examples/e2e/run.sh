@@ -42,9 +42,10 @@ fi
 mkdir -p "$CA_DIR"
 touch "$REVOCATIONS_FILE"
 
-# Ensure schema is present alongside demo policy (required for bundle parsing)
+# Ensure schema is present in the shared policy dir (required for bundle parsing).
+# schema.cedarschema is canonical to the crate; the example dir holds only .cedar files.
 SCHEMA_SRC="crates/firma-authority/policies/schema.cedarschema"
-SCHEMA_DST="$E2E_DIR/policies/schema.cedarschema"
+SCHEMA_DST="examples/policies/schema.cedarschema"
 if [[ ! -f "$SCHEMA_DST" ]]; then
     echo "      Copying schema → $SCHEMA_DST"
     cp "$SCHEMA_SRC" "$SCHEMA_DST"

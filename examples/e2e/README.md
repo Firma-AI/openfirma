@@ -42,7 +42,7 @@ to bring all agent traffic under full Cedar enforcement (Stage 1 + Stage 2).
 
 ### Stage 2 Cedar policy (takes over once task 007 lands)
 
-`examples/e2e/policies/demo.cedar` is loaded by the Authority and streamed to
+`examples/policies/demo.cedar` is loaded by the Authority and streamed to
 the Sidecar. It:
 - Permits `example-agent` to use `communication.external.send` (weather, IP,
   LLM, email, Supabase) when `risk_score < 80`
@@ -114,11 +114,17 @@ make install && make run
 
 | File | Purpose |
 |------|---------|
-| `authority.toml` | Authority config — listens on `:50051`, loads `policies/` |
+| `authority.toml` | Authority config — listens on `:50051`, loads `examples/policies/` |
 | `sidecar.toml` | Sidecar config — proxy on `:8080`, connects to authority |
 | `mapping-rules.toml` | Host → action class mapping for example agent endpoints |
-| `policies/demo.cedar` | Cedar policy loaded by authority, streamed to sidecar |
 | `run.sh` | Build + start both processes |
+
+Shared across examples (see `examples/policies/README.md`):
+
+| File | Purpose |
+|------|---------|
+| `../policies/demo.cedar` | Cedar policy loaded by authority, streamed to sidecar |
+| `../policies/schema.cedarschema` | Canonical Firma schema — copied by `run.sh` from `crates/firma-authority/policies/` |
 
 Generated at runtime (not committed):
 
