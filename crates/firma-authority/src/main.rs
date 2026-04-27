@@ -69,7 +69,6 @@ async fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&config.log_level)),
         )
-        .json()
         .init();
 
     match cli.command {

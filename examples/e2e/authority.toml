@@ -1,0 +1,12 @@
+# Mini Authority — E2E example configuration.
+# Run from repo root: ./target/debug/firma-authority --config examples/e2e/authority.toml
+#
+# NOT FOR PRODUCTION USE. Local dev/testing only.
+
+listen_addr        = "127.0.0.1:50051"
+policy_dir         = "examples/e2e/policies"
+revocation_file    = "examples/e2e/revocations.txt"
+key_file           = "examples/e2e/authority.key"
+max_ttl_seconds    = 3600
+bundle_ttl_seconds = 30
+log_level          = "info"
