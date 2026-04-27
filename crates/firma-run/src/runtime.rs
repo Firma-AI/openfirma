@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -133,6 +134,11 @@ fn build_execution_env(
             );
         }
     }
+
+    if let Some(ca_cert_path) = resolve_sidecar_ca_cert_path() {
+        inject_sidecar_ca_trust_env(&mut env, &ca_cert_path);
+    }
+
     env.extend(network_overrides.clone());
 
     env.insert(
@@ -152,6 +158,53 @@ fn build_execution_env(
     }
 
     env
+}
+
+fn inject_sidecar_ca_trust_env(env: &mut BTreeMap<String, String>, ca_cert_path: &Path) {
+    let path = ca_cert_path.display().to_string();
+    env.insert("FIRMA_SIDECAR_CA_CERT_PATH".to_string(), path.clone());
+    // Python / OpenSSL ecosystem.
+    env.insert("REQUESTS_CA_BUNDLE".to_string(), path.clone());
+    env.insert("SSL_CERT_FILE".to_string(), path.clone());
+    env.insert("CURL_CA_BUNDLE".to_string(), path.clone());
+    // Node.js ecosystem.
+    env.insert("NODE_EXTRA_CA_CERTS".to_string(), path.clone());
+    // Git/libcurl callers.
+    env.insert("GIT_SSL_CAINFO".to_string(), path);
+}
+
+fn resolve_sidecar_ca_cert_path() -> Option<PathBuf> {
+    if let Ok(explicit) = std::env::var("FIRMA_SIDECAR_CA_CERT_PATH")
+        && !explicit.trim().is_empty()
+    {
+        let path = PathBuf::from(explicit);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    if let Ok(ca_dir) = std::env::var("FIRMA_SIDECAR_CA_DIR")
+        && !ca_dir.trim().is_empty()
+    {
+        let path = PathBuf::from(ca_dir).join("firma-ca.crt");
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    let cwd_candidate = std::env::current_dir()
+        .ok()
+        .map(|cwd| cwd.join("firma-ca").join("firma-ca.crt"));
+    let default_candidates = [
+        cwd_candidate,
+        Some(PathBuf::from("/etc/firma/ca/firma-ca.crt")),
+        Some(PathBuf::from("/var/lib/firma/ca/firma-ca.crt")),
+    ];
+
+    default_candidates
+        .into_iter()
+        .flatten()
+        .find(|candidate| candidate.is_file())
 }
 
 fn print_effective_config(profile: &ResolvedProfile) -> Result<(), RunError> {
@@ -178,7 +231,9 @@ fn print_effective_config(profile: &ResolvedProfile) -> Result<(), RunError> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
+    use std::path::PathBuf;
 
     use crate::config::{
         CapabilityLeaseConfig, CapabilitySource, MountSpec, NetworkPolicy, ResolvedProfile,
@@ -263,5 +318,20 @@ mod tests {
             env.get("FIRMA_CAPABILITY_TOKEN"),
             Some(&"token".to_string())
         );
+    }
+
+    #[test]
+    fn injects_sidecar_ca_trust_env_vars() {
+        let mut env = BTreeMap::new();
+        let cert_path = PathBuf::from("/tmp/firma-ca/firma-ca.crt");
+        super::inject_sidecar_ca_trust_env(&mut env, &cert_path);
+
+        let expected = cert_path.display().to_string();
+        assert_eq!(env.get("FIRMA_SIDECAR_CA_CERT_PATH"), Some(&expected));
+        assert_eq!(env.get("REQUESTS_CA_BUNDLE"), Some(&expected));
+        assert_eq!(env.get("SSL_CERT_FILE"), Some(&expected));
+        assert_eq!(env.get("CURL_CA_BUNDLE"), Some(&expected));
+        assert_eq!(env.get("NODE_EXTRA_CA_CERTS"), Some(&expected));
+        assert_eq!(env.get("GIT_SSL_CAINFO"), Some(&expected));
     }
 }
