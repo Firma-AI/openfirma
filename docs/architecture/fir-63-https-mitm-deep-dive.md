@@ -17,39 +17,37 @@ Primary objective:
 - sandbox wrapper + proxy wiring in `crates/firma-run/src/runtime.rs` and `crates/firma-run/src/routing.rs`
 - Linux `bwrap` confinement and resolver override in `crates/firma-run/src/backend/linux_bwrap.rs`
 
-2. Sidecar HTTP interception + CONNECT tunnel support (no decryption):
+2. Sidecar HTTP interception + CONNECT support:
 - `CONNECT` handling path in `crates/firma-sidecar/src/interceptor/http.rs`
 - CONNECT authorization/audit surface in `crates/firma-sidecar/src/handler.rs` (`handle_connect`)
 - CONNECT integration tests in `crates/firma-sidecar/src/interceptor/http.rs` (allow/deny + byte relay)
+- HTTPS MITM runtime in `crates/firma-sidecar/src/interceptor/https_mitm.rs`
+- MITM config + validation in `crates/firma-sidecar/src/config.rs` (`interceptor.https_mitm`)
+- startup wiring in `crates/firma-sidecar/src/startup/interceptor.rs`
+- HTTPS L7 integration test (`test_proxy_connect_mitm_intercepts_and_applies_l7_deny`)
 
 3. E2E harness already validates HTTPS CONNECT path at destination level:
 - `scripts/e2e-firma-run.sh --https-check`
 
 ### What is not implemented yet
 
-1. No TLS MITM termination in sidecar:
-- Current interceptor explicitly states CONNECT is transparent tunnel only.
+1. `firma-run` trust bootstrap for managed sandbox clients:
+- profile/env/mount system exists, but no profile-level CA propagation contract has been finalized for Python/Node/curl/Java/Go runtimes.
 
-2. No CA lifecycle for MITM cert issuance in runtime path:
-- `ca.dir` exists in config (`crates/firma-sidecar/src/config.rs`, `docs/configuration.md`) but no CA material loading/generation/signing pipeline is wired.
+2. Expanded HTTPS parity coverage in E2E harness:
+- sidecar has MITM unit/integration coverage, but `scripts/e2e-firma-run.sh` still needs explicit HTTPS L7 assertions across representative agent profiles.
 
-3. No per-host dynamic certificate issuance/cache:
-- no `rustls`/`tokio-rustls`/`rcgen` MITM module in sidecar code.
-
-4. No `firma-run` trust bootstrap for managed sandbox clients:
-- profile/env/mount system exists, but no CA propagation contract for Python/Node/curl/other runtimes.
-
-5. No HTTPS L7 policy parity tests:
-- current HTTPS coverage verifies CONNECT mediation, not decrypted method/path policy decisions.
+3. Performance and observability hardening:
+- MITM hot path is functional, but dedicated perf benchmarks and handshake/cert-cache metrics are a follow-up.
 
 ## Gap Summary Against FIR-63 Goals
 
 - Destination-level HTTPS control: available now.
-- Request-level HTTPS control: missing.
-- HTTPS L7 audit events: missing.
-- Credential injection on HTTPS decrypted path: missing.
-- Operator-controlled interception scope: missing.
-- Trust bootstrap failure fail-closed guarantees: missing.
+- Request-level HTTPS control: available for intercepted hosts.
+- HTTPS L7 audit events: available for intercepted hosts.
+- Credential injection on HTTPS decrypted path: available for intercepted hosts (via existing handler pipeline).
+- Operator-controlled interception scope: available via `intercept_hosts` / `bypass_hosts` / `strict_hosts`.
+- Trust bootstrap failure fail-closed guarantees: still partially open until firma-run profile bootstrap is completed.
 
 ## Architecture Target
 
@@ -71,7 +69,7 @@ Primary objective:
 - MITM must be explicitly scoped by configuration.
 - Audit records must indicate HTTPS-intercepted vs CONNECT-only flows.
 
-## Configuration Model (Proposed)
+## Configuration Model (Implemented)
 
 Add explicit MITM section under `[interceptor.https_mitm]`:
 
