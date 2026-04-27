@@ -51,4 +51,3 @@ ENV FIRMA_AUTHORITY_KEY_FILE=/app/data/firma-authority.key
 EXPOSE 50051
 
 ENTRYPOINT ["firma-authority"]
-CMD ["serve"]
