@@ -135,9 +135,9 @@ traffic is not blocked.
 
 Certificate authority directory.
 
-| Field | Type | Default       | Description                       |
-| ----- | ---- | ------------- | --------------------------------- |
-| `dir` | path | `./firma-ca/` | Directory containing CA material  |
+| Field | Type | Default       | Description                      |
+| ----- | ---- | ------------- | -------------------------------- |
+| `dir` | path | `./firma-ca/` | Directory containing CA material |
 
 Validation:
 
@@ -148,9 +148,9 @@ Validation:
 Log settings from the configuration file. CLI logging flags override these
 settings.
 
-| Field   | Type   | Default | Description                                |
-| ------- | ------ | ------- | ------------------------------------------ |
-| `level` | string | `info`  | `trace`, `debug`, `info`, `warn`, `error`  |
+| Field   | Type   | Default | Description                               |
+| ------- | ------ | ------- | ----------------------------------------- |
+| `level` | string | `info`  | `trace`, `debug`, `info`, `warn`, `error` |
 
 Validation:
 
@@ -170,14 +170,14 @@ When credentials _are_ configured for a host but cannot be resolved (e.g. a
 Vault-rendered secret file is missing), the request is denied with
 `CREDENTIAL_INJECTION_FAILED` (fail-closed).
 
-| Field            | Type   | Default | Description                                       |
-| ---------------- | ------ | ------- | ------------------------------------------------- |
-| `mode`           | string | `basic` | `basic` (env var at startup) or `vault` (file)    |
-| `target_host`    | string |         | Host this credential applies to                   |
-| `header`         | string |         | HTTP header name to inject                        |
-| `prefix`         | string | none    | Prefix prepended to the resolved value            |
-| `value_from_env` | string | none    | Environment variable to read (basic mode)         |
-| `secret_path`    | path   | none    | Vault Agent secret file path (vault mode)         |
+| Field            | Type   | Default | Description                                    |
+| ---------------- | ------ | ------- | ---------------------------------------------- |
+| `mode`           | string | `basic` | `basic` (env var at startup) or `vault` (file) |
+| `target_host`    | string |         | Host this credential applies to                |
+| `header`         | string |         | HTTP header name to inject                     |
+| `prefix`         | string | none    | Prefix prepended to the resolved value         |
+| `value_from_env` | string | none    | Environment variable to read (basic mode)      |
+| `secret_path`    | path   | none    | Vault Agent secret file path (vault mode)      |
 
 #### Basic mode
 
@@ -218,10 +218,10 @@ Validation:
 
 Intent normalization and mapping rules configuration.
 
-| Field               | Type   | Default              | Description                               |
-| ------------------- | ------ | -------------------- | ----------------------------------------- |
-| `rules_path`        | string | `mapping-rules.toml` | Path to the mapping rules TOML file       |
-| `default_protected` | bool   | `true`               | Whether unlisted hosts are protected      |
+| Field               | Type   | Default              | Description                          |
+| ------------------- | ------ | -------------------- | ------------------------------------ |
+| `rules_path`        | string | `mapping-rules.toml` | Path to the mapping rules TOML file  |
+| `default_protected` | bool   | `true`               | Whether unlisted hosts are protected |
 
 Validation:
 
@@ -252,20 +252,20 @@ first push arrives.
 
 Outbound dispatch defaults and per-host overrides.
 
-| Field                | Type | Default | Description                                  |
-| -------------------- | ---- | ------- | -------------------------------------------- |
-| `default_timeout_ms` | u64  | `30000` | Fallback dispatch timeout in milliseconds    |
-| `hosts`              | list | empty   | Per-host overrides, see table below          |
+| Field                | Type | Default | Description                               |
+| -------------------- | ---- | ------- | ----------------------------------------- |
+| `default_timeout_ms` | u64  | `30000` | Fallback dispatch timeout in milliseconds |
+| `hosts`              | list | empty   | Per-host overrides, see table below       |
 
 Each `[[connector.hosts]]` entry is required to state every field
 explicitly — inheriting silent global defaults is not allowed.
 
-| Field        | Type   | Required | Description                                 |
-| ------------ | ------ | -------- | ------------------------------------------- |
-| `host`       | string | yes      | Target host (exact match)                   |
-| `rps`        | u32    | yes      | Sustained token-bucket refill rate (req/s)  |
-| `burst`      | u32    | yes      | Token-bucket burst capacity                 |
-| `timeout_ms` | u64    | yes      | Dispatch timeout in milliseconds            |
+| Field        | Type   | Required | Description                                |
+| ------------ | ------ | -------- | ------------------------------------------ |
+| `host`       | string | yes      | Target host (exact match)                  |
+| `rps`        | u32    | yes      | Sustained token-bucket refill rate (req/s) |
+| `burst`      | u32    | yes      | Token-bucket burst capacity                |
+| `timeout_ms` | u64    | yes      | Dispatch timeout in milliseconds           |
 
 Validation:
 
@@ -281,13 +281,13 @@ Tuning for the background Authority stream clients
 `policy.authority_url` is set; when unset the sidecar runs in dev
 mode and this section is ignored.
 
-| Field                                    | Type | Default | Description                                                    |
-| ---------------------------------------- | ---- | ------- | -------------------------------------------------------------- |
-| `connect_timeout_secs`                   | u64  | `10`    | Connection timeout for the tonic channel                       |
-| `reconnect_min_backoff_ms`               | u64  | `250`   | Minimum reconnect backoff                                      |
-| `reconnect_max_backoff_secs`             | u64  | `30`    | Maximum reconnect backoff                                      |
-| `revocation_readiness_grace_ms`          | u64  | `500`   | Grace period after revocation stream opens before readiness    |
-| `revocation_fail_closed_on_disconnect`   | bool | `false` | Flip revocation readiness back to false when the stream drops  |
+| Field                                  | Type | Default | Description                                                   |
+| -------------------------------------- | ---- | ------- | ------------------------------------------------------------- |
+| `connect_timeout_secs`                 | u64  | `10`    | Connection timeout for the tonic channel                      |
+| `reconnect_min_backoff_ms`             | u64  | `250`   | Minimum reconnect backoff                                     |
+| `reconnect_max_backoff_secs`           | u64  | `30`    | Maximum reconnect backoff                                     |
+| `revocation_readiness_grace_ms`        | u64  | `500`   | Grace period after revocation stream opens before readiness   |
+| `revocation_fail_closed_on_disconnect` | bool | `false` | Flip revocation readiness back to false when the stream drops |
 
 Validation:
 
@@ -315,11 +315,11 @@ Behavior notes:
 Two-layer revocation cache sizing. Bloom filter for O(1) negative
 checks; LRU for confirmed positives.
 
-| Field          | Type   | Default     | Description                                          |
-| -------------- | ------ | ----------- | ---------------------------------------------------- |
-| `capacity`     | usize  | `1000000`   | Expected distinct revoked tokens the bloom is sized  |
-| `fpr`          | f64    | `0.0001`    | Target bloom false positive rate                     |
-| `lru_capacity` | usize  | `100000`    | LRU capacity for confirmed-positive revocations      |
+| Field          | Type  | Default   | Description                                         |
+| -------------- | ----- | --------- | --------------------------------------------------- |
+| `capacity`     | usize | `1000000` | Expected distinct revoked tokens the bloom is sized |
+| `fpr`          | f64   | `0.0001`  | Target bloom false positive rate                    |
+| `lru_capacity` | usize | `100000`  | LRU capacity for confirmed-positive revocations     |
 
 Validation:
 
