@@ -170,7 +170,7 @@ pub enum HttpMethod {
 }
 
 impl HttpMethod {
-    /// Returns the canonical uppercase HTTP method token.
+    /// Stable static label used by structured logs and metrics.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
