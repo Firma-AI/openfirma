@@ -1432,6 +1432,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wiremock",
+ "x509-parser",
  "xxhash-rust",
 ]
 

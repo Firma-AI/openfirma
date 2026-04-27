@@ -68,6 +68,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 xxhash-rust = { workspace = true }
+x509-parser = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

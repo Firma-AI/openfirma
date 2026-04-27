@@ -31,7 +31,8 @@ pub fn spawn_interceptor(
         InterceptorMode::HttpProxy => {
             let interceptor = interceptor::http::HttpInterceptor::new(ic.listen_addr)
                 .with_https_mitm(ic.https_mitm.clone(), config.ca.dir.clone())
-                .with_max_request_body_bytes(ic.max_request_body_bytes);
+                .with_max_request_body_bytes(ic.max_request_body_bytes)
+                .with_connect_relay(ic.connect_relay.clone());
             tracing::info!(listen_addr = %ic.listen_addr, "HTTP proxy interceptor configured");
             Ok(tokio::spawn(async move {
                 if let Err(e) = interceptor.run(handler, cancel).await {

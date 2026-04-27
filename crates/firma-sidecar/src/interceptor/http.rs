@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use firma_core::DenyReason;
 use http_body::Body as _;
@@ -33,7 +34,7 @@ use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 
 use super::https_mitm::HttpsMitmRuntime;
-use crate::config::HttpsMitmConfig;
+use crate::config::{ConnectRelayConfig, HttpsMitmConfig};
 use crate::handler::{ConnectDecision, DispatchedResponse, HandledResponse, RequestHandler};
 use crate::interceptor::{Interceptor, InterceptorError};
 use crate::pipeline::RawRequest;
@@ -57,6 +58,7 @@ pub struct HttpInterceptor {
     https_mitm_config: HttpsMitmConfig,
     ca_dir: PathBuf,
     max_request_body_bytes: usize,
+    connect_relay: ConnectRelayConfig,
 }
 
 impl HttpInterceptor {
@@ -76,6 +78,7 @@ impl HttpInterceptor {
             https_mitm_config,
             ca_dir: PathBuf::from("./firma-ca/"),
             max_request_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
+            connect_relay: ConnectRelayConfig::default(),
         }
     }
 
@@ -91,6 +94,13 @@ impl HttpInterceptor {
     #[must_use]
     pub fn with_max_request_body_bytes(mut self, max_request_body_bytes: usize) -> Self {
         self.max_request_body_bytes = max_request_body_bytes;
+        self
+    }
+
+    /// Set CONNECT tunnel/MITM relay timeout controls.
+    #[must_use]
+    pub fn with_connect_relay(mut self, connect_relay: ConnectRelayConfig) -> Self {
+        self.connect_relay = connect_relay;
         self
     }
 }
@@ -132,12 +142,14 @@ impl Interceptor for HttpInterceptor {
                         let handler = Arc::clone(&handler);
                         let mitm_runtime = mitm_runtime.clone();
                         let max_request_body_bytes = self.max_request_body_bytes;
+                        let connect_relay = self.connect_relay.clone();
                         tokio::spawn(async move {
                             if let Err(e) = serve_connection(
                                 stream,
                                 handler,
                                 mitm_runtime,
                                 max_request_body_bytes,
+                                connect_relay,
                             ).await {
                                 tracing::warn!("http proxy connection error: {e}");
                             }
@@ -157,6 +169,7 @@ async fn serve_connection(
     handler: Arc<RequestHandler>,
     mitm_runtime: Option<Arc<HttpsMitmRuntime>>,
     max_request_body_bytes: usize,
+    connect_relay: ConnectRelayConfig,
 ) -> Result<(), InterceptorError> {
     let io = TokioIo::new(socket);
     http1::Builder::new()
@@ -165,8 +178,16 @@ async fn serve_connection(
             service_fn(move |req: Request<Incoming>| {
                 let handler = Arc::clone(&handler);
                 let mitm_runtime = mitm_runtime.clone();
+                let connect_relay = connect_relay.clone();
                 async move {
-                    handle_request(req, handler, mitm_runtime, max_request_body_bytes).await
+                    handle_request(
+                        req,
+                        handler,
+                        mitm_runtime,
+                        max_request_body_bytes,
+                        connect_relay,
+                    )
+                    .await
                 }
             }),
         )
@@ -180,10 +201,17 @@ async fn handle_request(
     handler: Arc<RequestHandler>,
     mitm_runtime: Option<Arc<HttpsMitmRuntime>>,
     max_request_body_bytes: usize,
+    connect_relay: ConnectRelayConfig,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     if req.method() == Method::CONNECT {
-        return handle_connect_request(&mut req, handler, mitm_runtime, max_request_body_bytes)
-            .await;
+        return handle_connect_request(
+            &mut req,
+            handler,
+            mitm_runtime,
+            max_request_body_bytes,
+            connect_relay,
+        )
+        .await;
     }
 
     let raw = match build_raw_request(req, max_request_body_bytes).await {
@@ -222,6 +250,7 @@ async fn handle_connect_request(
     handler: Arc<RequestHandler>,
     mitm_runtime: Option<Arc<HttpsMitmRuntime>>,
     max_request_body_bytes: usize,
+    connect_relay: ConnectRelayConfig,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let raw = match build_raw_request_head(req, true) {
         Ok(raw) => raw,
@@ -265,6 +294,7 @@ async fn handle_connect_request(
             crate::handler::deny_body_json(reason, &detail),
         )),
         ConnectDecision::Allow => {
+            let limits = connect_relay_limits(&connect_relay);
             let target = connect_target(&target_info.authority);
             let on_upgrade = hyper::upgrade::on(req);
             if let Some(mitm_runtime) = mitm_candidate {
@@ -279,8 +309,11 @@ async fn handle_connect_request(
                                 host = %target_info.host,
                                 "MITM preflight failed, falling back to CONNECT tunnel: {detail}"
                             );
+                            let limits = limits.clone();
                             tokio::spawn(async move {
-                                if let Err(err) = relay_connect_tunnel(on_upgrade, &target).await {
+                                if let Err(err) =
+                                    relay_connect_tunnel(on_upgrade, &target, limits).await
+                                {
                                     tracing::warn!(
                                         "CONNECT tunnel failed after MITM fallback: {err}"
                                     );
@@ -302,6 +335,7 @@ async fn handle_connect_request(
                         connect_session_id,
                         acceptor,
                         max_request_body_bytes,
+                        limits,
                     )
                     .await
                     {
@@ -309,8 +343,9 @@ async fn handle_connect_request(
                     }
                 });
             } else {
+                let limits = limits.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = relay_connect_tunnel(on_upgrade, &target).await {
+                    if let Err(e) = relay_connect_tunnel(on_upgrade, &target, limits).await {
                         tracing::warn!("CONNECT tunnel failed: {e}");
                     }
                 });
@@ -357,17 +392,39 @@ fn connect_target_info(host: &str) -> ConnectTargetInfo {
 async fn relay_connect_tunnel(
     on_upgrade: hyper::upgrade::OnUpgrade,
     target: &str,
+    limits: ConnectRelayLimits,
 ) -> Result<(), String> {
-    let upgraded = on_upgrade
+    let upgraded = tokio::time::timeout(limits.setup_timeout, on_upgrade)
         .await
+        .map_err(|_| {
+            format!(
+                "upgrade timed out after {} seconds",
+                limits.setup_timeout.as_secs()
+            )
+        })?
         .map_err(|e| format!("upgrade failed: {e}"))?;
     let mut downstream = TokioIo::new(upgraded);
-    let mut upstream = TcpStream::connect(target)
+    let mut upstream = tokio::time::timeout(limits.setup_timeout, TcpStream::connect(target))
         .await
+        .map_err(|_| {
+            format!(
+                "upstream connect timed out after {} seconds for {target}",
+                limits.setup_timeout.as_secs()
+            )
+        })?
         .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
-    let _ = copy_bidirectional(&mut downstream, &mut upstream)
-        .await
-        .map_err(|e| format!("tunnel relay failed: {e}"))?;
+    let _ = tokio::time::timeout(
+        limits.session_max,
+        copy_bidirectional(&mut downstream, &mut upstream),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "CONNECT tunnel exceeded {} seconds session cap",
+            limits.session_max.as_secs()
+        )
+    })?
+    .map_err(|e| format!("tunnel relay failed: {e}"))?;
     Ok(())
 }
 
@@ -378,39 +435,73 @@ async fn relay_connect_mitm(
     connect_session_id: String,
     acceptor: TlsAcceptor,
     max_request_body_bytes: usize,
+    limits: ConnectRelayLimits,
 ) -> Result<(), String> {
-    let upgraded = on_upgrade
+    let upgraded = tokio::time::timeout(limits.setup_timeout, on_upgrade)
         .await
+        .map_err(|_| {
+            format!(
+                "upgrade timed out after {} seconds",
+                limits.setup_timeout.as_secs()
+            )
+        })?
         .map_err(|e| format!("upgrade failed: {e}"))?;
     let downstream = TokioIo::new(upgraded);
-    let tls_stream = acceptor
-        .accept(downstream)
+    let tls_stream = tokio::time::timeout(limits.setup_timeout, acceptor.accept(downstream))
         .await
+        .map_err(|_| {
+            format!(
+                "downstream TLS handshake timed out after {} seconds for {}",
+                limits.setup_timeout.as_secs(),
+                target.host
+            )
+        })?
         .map_err(|e| format!("downstream TLS handshake failed for {}: {e}", target.host))?;
 
+    let target_host = target.host.clone();
     let io = TokioIo::new(tls_stream);
-    http1::Builder::new()
-        .serve_connection(
-            io,
-            service_fn(move |req: Request<Incoming>| {
-                let handler = Arc::clone(&handler);
-                let target = target.clone();
-                let connect_session_id = connect_session_id.clone();
-                async move {
-                    handle_mitm_https_request(
-                        req,
-                        handler,
-                        target,
-                        &connect_session_id,
-                        max_request_body_bytes,
-                    )
-                    .await
-                }
-            }),
-        )
+    let serve = http1::Builder::new().serve_connection(
+        io,
+        service_fn(move |req: Request<Incoming>| {
+            let handler = Arc::clone(&handler);
+            let target = target.clone();
+            let connect_session_id = connect_session_id.clone();
+            async move {
+                handle_mitm_https_request(
+                    req,
+                    handler,
+                    target,
+                    &connect_session_id,
+                    max_request_body_bytes,
+                )
+                .await
+            }
+        }),
+    );
+    tokio::time::timeout(limits.session_max, serve)
         .await
+        .map_err(|_| {
+            format!(
+                "HTTPS MITM relay exceeded {} seconds session cap for {}",
+                limits.session_max.as_secs(),
+                target_host
+            )
+        })?
         .map_err(|e| format!("HTTPS MITM connection failed: {e}"))?;
     Ok(())
+}
+
+#[derive(Clone)]
+struct ConnectRelayLimits {
+    setup_timeout: Duration,
+    session_max: Duration,
+}
+
+fn connect_relay_limits(config: &ConnectRelayConfig) -> ConnectRelayLimits {
+    ConnectRelayLimits {
+        setup_timeout: Duration::from_secs(config.setup_timeout_secs),
+        session_max: Duration::from_secs(config.session_max_secs),
+    }
 }
 
 fn connect_established_response() -> Response<Full<Bytes>> {
