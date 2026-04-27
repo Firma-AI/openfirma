@@ -480,6 +480,11 @@ fn wildcard_match(pattern: &str, value: &str) -> bool {
         if suffix.is_empty() || suffix.contains('*') {
             return false;
         }
+        if !suffix.contains('.') {
+            // Keep runtime matching aligned with config validation and avoid
+            // top-level wildcard scopes like "*.com".
+            return false;
+        }
         if value == suffix || !value.ends_with(suffix) {
             return false;
         }
