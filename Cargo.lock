@@ -1399,6 +1399,7 @@ dependencies = [
  "firma-grpc-interceptor-proto",
  "firma-proto",
  "governor",
+ "http-body",
  "http-body-util",
  "hyper",
  "hyper-util",

@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use firma_core::DenyReason;
+use http_body::Body as _;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
@@ -37,6 +38,8 @@ use crate::handler::{ConnectDecision, DispatchedResponse, HandledResponse, Reque
 use crate::interceptor::{Interceptor, InterceptorError};
 use crate::pipeline::RawRequest;
 
+const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
+
 /// HTTP forward proxy interceptor.
 ///
 /// Listens on a configurable TCP port (default 8080) and captures every
@@ -53,17 +56,26 @@ pub struct HttpInterceptor {
     handler: Option<Arc<RequestHandler>>,
     https_mitm_config: HttpsMitmConfig,
     ca_dir: PathBuf,
+    max_request_body_bytes: usize,
 }
 
 impl HttpInterceptor {
     /// Create a new [`HttpInterceptor`] that listens on the specified address.
     #[must_use]
     pub fn new(address: SocketAddr) -> Self {
+        // Startup always injects explicit config via `with_https_mitm`; keep
+        // the raw constructor conservative to avoid surprising side effects in
+        // tests and local helper usage.
+        let https_mitm_config = HttpsMitmConfig {
+            enabled: false,
+            ..HttpsMitmConfig::default()
+        };
         Self {
             address,
             handler: None,
-            https_mitm_config: HttpsMitmConfig::default(),
+            https_mitm_config,
             ca_dir: PathBuf::from("./firma-ca/"),
+            max_request_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
         }
     }
 
@@ -72,6 +84,13 @@ impl HttpInterceptor {
     pub fn with_https_mitm(mut self, config: HttpsMitmConfig, ca_dir: PathBuf) -> Self {
         self.https_mitm_config = config;
         self.ca_dir = ca_dir;
+        self
+    }
+
+    /// Set the maximum request body size accepted by the interceptor.
+    #[must_use]
+    pub fn with_max_request_body_bytes(mut self, max_request_body_bytes: usize) -> Self {
+        self.max_request_body_bytes = max_request_body_bytes;
         self
     }
 }
@@ -112,8 +131,14 @@ impl Interceptor for HttpInterceptor {
                     if let Ok((stream, _)) = accepted {
                         let handler = Arc::clone(&handler);
                         let mitm_runtime = mitm_runtime.clone();
+                        let max_request_body_bytes = self.max_request_body_bytes;
                         tokio::spawn(async move {
-                            if let Err(e) = serve_connection(stream, handler, mitm_runtime).await {
+                            if let Err(e) = serve_connection(
+                                stream,
+                                handler,
+                                mitm_runtime,
+                                max_request_body_bytes,
+                            ).await {
                                 tracing::warn!("http proxy connection error: {e}");
                             }
                         });
@@ -131,6 +156,7 @@ async fn serve_connection(
     socket: TcpStream,
     handler: Arc<RequestHandler>,
     mitm_runtime: Option<Arc<HttpsMitmRuntime>>,
+    max_request_body_bytes: usize,
 ) -> Result<(), InterceptorError> {
     let io = TokioIo::new(socket);
     http1::Builder::new()
@@ -139,7 +165,9 @@ async fn serve_connection(
             service_fn(move |req: Request<Incoming>| {
                 let handler = Arc::clone(&handler);
                 let mitm_runtime = mitm_runtime.clone();
-                async move { handle_request(req, handler, mitm_runtime).await }
+                async move {
+                    handle_request(req, handler, mitm_runtime, max_request_body_bytes).await
+                }
             }),
         )
         .with_upgrades()
@@ -151,12 +179,14 @@ async fn handle_request(
     mut req: Request<Incoming>,
     handler: Arc<RequestHandler>,
     mitm_runtime: Option<Arc<HttpsMitmRuntime>>,
+    max_request_body_bytes: usize,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     if req.method() == Method::CONNECT {
-        return handle_connect_request(&mut req, handler, mitm_runtime).await;
+        return handle_connect_request(&mut req, handler, mitm_runtime, max_request_body_bytes)
+            .await;
     }
 
-    let raw = match build_raw_request(req).await {
+    let raw = match build_raw_request(req, max_request_body_bytes).await {
         Ok(raw) => raw,
         Err(detail) => return Ok(deny_response(StatusCode::FORBIDDEN, &detail)),
     };
@@ -191,6 +221,7 @@ async fn handle_connect_request(
     req: &mut Request<Incoming>,
     handler: Arc<RequestHandler>,
     mitm_runtime: Option<Arc<HttpsMitmRuntime>>,
+    max_request_body_bytes: usize,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let raw = match build_raw_request_head(req, true) {
         Ok(raw) => raw,
@@ -270,6 +301,7 @@ async fn handle_connect_request(
                         handler,
                         connect_session_id,
                         acceptor,
+                        max_request_body_bytes,
                     )
                     .await
                     {
@@ -345,6 +377,7 @@ async fn relay_connect_mitm(
     handler: Arc<RequestHandler>,
     connect_session_id: String,
     acceptor: TlsAcceptor,
+    max_request_body_bytes: usize,
 ) -> Result<(), String> {
     let upgraded = on_upgrade
         .await
@@ -364,7 +397,14 @@ async fn relay_connect_mitm(
                 let target = target.clone();
                 let connect_session_id = connect_session_id.clone();
                 async move {
-                    handle_mitm_https_request(req, handler, target, &connect_session_id).await
+                    handle_mitm_https_request(
+                        req,
+                        handler,
+                        target,
+                        &connect_session_id,
+                        max_request_body_bytes,
+                    )
+                    .await
                 }
             }),
         )
@@ -385,6 +425,7 @@ async fn handle_mitm_https_request(
     handler: Arc<RequestHandler>,
     target: ConnectTargetInfo,
     connect_session_id: &str,
+    max_request_body_bytes: usize,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     if req.method() == Method::CONNECT {
         return Ok(deny_response(
@@ -393,7 +434,7 @@ async fn handle_mitm_https_request(
         ));
     }
 
-    let raw = match build_raw_https_request(req, &target).await {
+    let raw = match build_raw_https_request(req, &target, max_request_body_bytes).await {
         Ok(raw) => raw,
         Err(detail) => return Ok(deny_response(StatusCode::FORBIDDEN, &detail)),
     };
@@ -428,19 +469,10 @@ async fn handle_mitm_https_request(
 async fn build_raw_https_request(
     req: Request<Incoming>,
     target: &ConnectTargetInfo,
+    max_request_body_bytes: usize,
 ) -> Result<RawRequest, String> {
     let mut raw = build_raw_https_request_head(&req, target)?;
-    let body_bytes = req
-        .into_body()
-        .collect()
-        .await
-        .map_err(|e| format!("MALFORMED_REQUEST: failed to read body: {e}"))?
-        .to_bytes();
-    raw.body = if body_bytes.is_empty() {
-        None
-    } else {
-        Some(body_bytes.to_vec())
-    };
+    raw.body = read_body_with_limit(req.into_body(), max_request_body_bytes).await?;
     Ok(raw)
 }
 
@@ -483,20 +515,45 @@ fn host_matches_connect_target(requested: &ConnectTargetInfo, connect: &ConnectT
     requested.host.eq_ignore_ascii_case(&connect.host) && requested.port == connect.port
 }
 
-async fn build_raw_request(req: Request<Incoming>) -> Result<RawRequest, String> {
+async fn build_raw_request(
+    req: Request<Incoming>,
+    max_request_body_bytes: usize,
+) -> Result<RawRequest, String> {
     let mut raw = build_raw_request_head(&req, false)?;
-    let body_bytes = req
-        .into_body()
-        .collect()
-        .await
-        .map_err(|e| format!("MALFORMED_REQUEST: failed to read body: {e}"))?
-        .to_bytes();
-    raw.body = if body_bytes.is_empty() {
-        None
-    } else {
-        Some(body_bytes.to_vec())
-    };
+    raw.body = read_body_with_limit(req.into_body(), max_request_body_bytes).await?;
     Ok(raw)
+}
+
+async fn read_body_with_limit(
+    mut body: Incoming,
+    max_request_body_bytes: usize,
+) -> Result<Option<Vec<u8>>, String> {
+    if let Some(upper) = body.size_hint().upper()
+        && upper > max_request_body_bytes as u64
+    {
+        return Err(format!(
+            "MALFORMED_REQUEST: request body exceeds {max_request_body_bytes} bytes limit"
+        ));
+    }
+
+    let mut out = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|e| format!("MALFORMED_REQUEST: failed to read body: {e}"))?;
+        if let Ok(data) = frame.into_data() {
+            let new_len = out
+                .len()
+                .checked_add(data.len())
+                .ok_or_else(|| "MALFORMED_REQUEST: request body size overflow".to_string())?;
+            if new_len > max_request_body_bytes {
+                return Err(format!(
+                    "MALFORMED_REQUEST: request body exceeds {max_request_body_bytes} bytes limit"
+                ));
+            }
+            out.extend_from_slice(data.as_ref());
+        }
+    }
+
+    Ok(if out.is_empty() { None } else { Some(out) })
 }
 
 fn build_raw_request_head(req: &Request<Incoming>, is_connect: bool) -> Result<RawRequest, String> {
@@ -1007,6 +1064,26 @@ mod tests {
         panic!("proxy did not become ready within 2.5 seconds");
     }
 
+    async fn start_proxy_with_body_limit(
+        addr: SocketAddr,
+        handler: Arc<RequestHandler>,
+        cancel: CancellationToken,
+        max_request_body_bytes: usize,
+    ) -> tokio::task::JoinHandle<Result<(), super::super::InterceptorError>> {
+        let interceptor =
+            HttpInterceptor::new(addr).with_max_request_body_bytes(max_request_body_bytes);
+        let cancel_clone = cancel.clone();
+        let handle = tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
+
+        for _ in 0..50 {
+            if TcpStream::connect(addr).await.is_ok() {
+                return handle;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("proxy did not become ready within 2.5 seconds");
+    }
+
     async fn start_proxy_with_mitm(
         addr: SocketAddr,
         handler: Arc<RequestHandler>,
@@ -1015,6 +1092,29 @@ mod tests {
         ca_dir: std::path::PathBuf,
     ) -> tokio::task::JoinHandle<Result<(), super::super::InterceptorError>> {
         let interceptor = HttpInterceptor::new(addr).with_https_mitm(mitm_config, ca_dir);
+        let cancel_clone = cancel.clone();
+        let handle = tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
+
+        for _ in 0..50 {
+            if TcpStream::connect(addr).await.is_ok() {
+                return handle;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("proxy did not become ready within 2.5 seconds");
+    }
+
+    async fn start_proxy_with_mitm_and_body_limit(
+        addr: SocketAddr,
+        handler: Arc<RequestHandler>,
+        cancel: CancellationToken,
+        mitm_config: HttpsMitmConfig,
+        ca_dir: std::path::PathBuf,
+        max_request_body_bytes: usize,
+    ) -> tokio::task::JoinHandle<Result<(), super::super::InterceptorError>> {
+        let interceptor = HttpInterceptor::new(addr)
+            .with_https_mitm(mitm_config, ca_dir)
+            .with_max_request_body_bytes(max_request_body_bytes);
         let cancel_clone = cancel.clone();
         let handle = tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
 
@@ -1159,6 +1259,43 @@ mod tests {
 
         let status = proxy_request(proxy_addr, &request).await;
         assert_eq!(status, 200, "expected 200 OK for allowed request");
+
+        cancel.cancel();
+        upstream_cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_proxy_rejects_request_body_over_limit() {
+        let (upstream_addr, upstream_cancel) = mock_upstream().await;
+        let proxy_addr = free_addr();
+        let host = format!("127.0.0.1:{}", upstream_addr.port());
+        let handler = test_handler(test_pipeline_allow("/v1/chat/completions"));
+        let cancel = CancellationToken::new();
+
+        let server_handle =
+            start_proxy_with_body_limit(proxy_addr, handler, cancel.clone(), 4).await;
+
+        let request = format!(
+            "POST http://{host}/v1/chat/completions HTTP/1.1\r\n\
+             Host: {host}\r\n\
+             Content-Length: 10\r\n\
+             \r\n\
+             0123456789"
+        );
+
+        let response = proxy_response(proxy_addr, &request).await;
+        let status = response
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse::<u16>().ok())
+            .unwrap_or(0);
+        assert_eq!(status, 403, "expected 403 for oversized body");
+        assert!(
+            response.contains("request body exceeds 4 bytes limit"),
+            "expected body-size limit message, got: {response}"
+        );
 
         cancel.cancel();
         upstream_cancel.cancel();
@@ -1362,6 +1499,88 @@ Content-Length: 2\r\n\
         assert_eq!(
             status, 403,
             "expected L7 deny over MITM path, got: {response}"
+        );
+
+        cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_proxy_connect_mitm_rejects_oversized_tunneled_body() {
+        let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let proxy_addr = free_addr();
+        let handler = test_handler(test_pipeline_allow_connect());
+        let cancel = CancellationToken::new();
+
+        let mitm_config = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["localhost".to_string()],
+            strict_hosts: vec!["localhost".to_string()],
+            cert_ttl_secs: 300,
+            cert_cache_capacity: 16,
+            ..HttpsMitmConfig::default()
+        };
+
+        let server_handle = start_proxy_with_mitm_and_body_limit(
+            proxy_addr,
+            handler,
+            cancel.clone(),
+            mitm_config,
+            ca_tempdir.path().to_path_buf(),
+            4,
+        )
+        .await;
+
+        let mut stream = TcpStream::connect(proxy_addr)
+            .await
+            .unwrap_or_else(|e| panic!("failed to connect to proxy: {e}"));
+        let connect_req = "CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\n\r\n";
+        stream
+            .write_all(connect_req.as_bytes())
+            .await
+            .unwrap_or_else(|e| panic!("failed to write CONNECT request: {e}"));
+        let connect_response = read_connect_response(&mut stream).await;
+        assert!(
+            connect_response.starts_with("HTTP/1.1 200"),
+            "expected CONNECT 200, got: {connect_response:?}"
+        );
+
+        let ca_cert_path = ca_tempdir.path().join("firma-ca.crt");
+        for _ in 0..20 {
+            if ca_cert_path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(ca_cert_path.exists(), "expected CA cert to be generated");
+
+        let mut tls_stream = connect_tls_with_ca(stream, &ca_cert_path, "localhost").await;
+        let tunneled_request = "POST /v1/chat/completions HTTP/1.1\r\n\
+Host: localhost:443\r\n\
+Content-Length: 10\r\n\
+\r\n\
+0123456789";
+        tls_stream
+            .write_all(tunneled_request.as_bytes())
+            .await
+            .unwrap_or_else(|e| panic!("failed to write tunneled HTTPS request: {e}"));
+
+        let mut buf = [0u8; 2048];
+        let n = tokio::time::timeout(Duration::from_secs(3), tls_stream.read(&mut buf))
+            .await
+            .unwrap_or_else(|_| panic!("timed out reading tunneled HTTPS response"))
+            .unwrap_or_else(|e| panic!("failed reading tunneled HTTPS response: {e}"));
+        let response = String::from_utf8_lossy(&buf[..n]).to_string();
+        let status = response
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse::<u16>().ok())
+            .unwrap_or(0);
+        assert_eq!(status, 403, "expected 403 for oversized tunneled body");
+        assert!(
+            response.contains("request body exceeds 4 bytes limit"),
+            "expected body-size limit message, got: {response}"
         );
 
         cancel.cancel();

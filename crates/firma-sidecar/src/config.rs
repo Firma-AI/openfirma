@@ -174,6 +174,9 @@ pub struct InterceptorConfig {
     /// Seconds to wait for in-flight requests to drain on shutdown.
     #[serde(default = "default_drain_timeout")]
     pub drain_timeout_secs: u64,
+    /// Maximum request body size accepted by proxy interceptors.
+    #[serde(default = "default_max_request_body_bytes")]
+    pub max_request_body_bytes: usize,
     /// HTTPS MITM settings used by the HTTP proxy interceptor.
     #[serde(default)]
     pub https_mitm: HttpsMitmConfig,
@@ -183,6 +186,9 @@ impl InterceptorConfig {
     fn validate(&self) -> Result<(), String> {
         if self.drain_timeout_secs == 0 {
             return Err("interceptor.drain_timeout_secs must be > 0".into());
+        }
+        if self.max_request_body_bytes == 0 {
+            return Err("interceptor.max_request_body_bytes must be > 0".into());
         }
         self.https_mitm.validate()?;
         #[cfg(unix)]
@@ -212,6 +218,7 @@ impl Default for InterceptorConfig {
             listen_addr: default_listen_addr(),
             socket_path: None,
             drain_timeout_secs: default_drain_timeout(),
+            max_request_body_bytes: default_max_request_body_bytes(),
             https_mitm: HttpsMitmConfig::default(),
         }
     }
@@ -470,6 +477,10 @@ const fn default_drain_timeout() -> u64 {
     30
 }
 
+const fn default_max_request_body_bytes() -> usize {
+    4 * 1024 * 1024
+}
+
 const fn default_https_mitm_cert_ttl_secs() -> u64 {
     86_400
 }
@@ -664,6 +675,22 @@ mod tests {
     }
 
     #[test]
+    fn test_sidecar_config_zero_max_request_body_rejected() {
+        let config = SidecarConfig {
+            interceptor: InterceptorConfig {
+                max_request_body_bytes: 0,
+                ..InterceptorConfig::default()
+            },
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("max_request_body_bytes"),
+            "error should mention max_request_body_bytes: {err}"
+        );
+    }
+
+    #[test]
     fn test_https_mitm_enabled_requires_intercept_hosts() {
         let config = SidecarConfig {
             interceptor: InterceptorConfig {
@@ -792,6 +819,7 @@ mod tests {
 mode = "http_proxy"
 listen_addr = "127.0.0.1:9090"
 drain_timeout_secs = 15
+max_request_body_bytes = 2097152
 
 [interceptor.https_mitm]
 enabled = true
@@ -849,6 +877,7 @@ signing_key_path = "/etc/firma/audit.pem"
             "127.0.0.1:9090".parse().unwrap_or_else(|e| panic!("{e}"))
         );
         assert_eq!(config.interceptor.drain_timeout_secs, 15);
+        assert_eq!(config.interceptor.max_request_body_bytes, 2_097_152);
         assert!(config.interceptor.https_mitm.enabled);
         assert_eq!(
             config.interceptor.https_mitm.intercept_hosts,

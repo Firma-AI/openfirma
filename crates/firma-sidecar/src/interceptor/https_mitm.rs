@@ -27,6 +27,9 @@ use crate::config::HttpsMitmConfig;
 /// Runtime state for HTTPS MITM interception.
 pub struct HttpsMitmRuntime {
     config: HttpsMitmConfig,
+    intercept_hosts: Vec<String>,
+    bypass_hosts: Vec<String>,
+    strict_hosts: Vec<String>,
     ca: Arc<CaMaterial>,
     cache: Mutex<LeafCertCache>,
 }
@@ -41,8 +44,14 @@ impl HttpsMitmRuntime {
     pub fn new(config: HttpsMitmConfig, ca_dir: &Path) -> Result<Self, String> {
         let ca = CaMaterial::load_or_generate(&config, ca_dir)?;
         let cache = LeafCertCache::new(config.cert_cache_capacity)?;
+        let intercept_hosts = normalize_patterns(&config.intercept_hosts);
+        let bypass_hosts = normalize_patterns(&config.bypass_hosts);
+        let strict_hosts = normalize_patterns(&config.strict_hosts);
         Ok(Self {
             config,
+            intercept_hosts,
+            bypass_hosts,
+            strict_hosts,
             ca: Arc::new(ca),
             cache: Mutex::new(cache),
         })
@@ -55,17 +64,17 @@ impl HttpsMitmRuntime {
             return false;
         }
 
-        if host_matches_any(host, &self.config.bypass_hosts) {
+        if host_matches_any(host, &self.bypass_hosts) {
             return false;
         }
 
-        host_matches_any(host, &self.config.intercept_hosts)
+        host_matches_any(host, &self.intercept_hosts)
     }
 
     /// Returns whether this host is configured as strict-intercept.
     #[must_use]
     pub fn is_strict_host(&self, host: &str) -> bool {
-        host_matches_any(host, &self.config.strict_hosts)
+        host_matches_any(host, &self.strict_hosts)
     }
 
     /// Build a TLS acceptor using a cached or newly-issued leaf certificate.
@@ -87,16 +96,7 @@ impl HttpsMitmRuntime {
             }
         };
 
-        let certs = vec![
-            CertificateDer::from(leaf.cert_der.clone()),
-            CertificateDer::from(self.ca.cert_der.clone()),
-        ];
-        let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(leaf.key_der));
-        let server_config = ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(certs, key)
-            .map_err(|e| format!("failed to build rustls server config: {e}"))?;
-        Ok(TlsAcceptor::from(Arc::new(server_config)))
+        Ok(leaf.acceptor)
     }
 
     fn issue_leaf_cert(&self, host: &str) -> Result<CachedLeafCert, String> {
@@ -106,13 +106,19 @@ impl HttpsMitmRuntime {
         let leaf_cert = params
             .signed_by(&leaf_key, &self.ca.cert, &self.ca.key)
             .map_err(|e| format!("failed to sign leaf certificate for {host}: {e}"))?;
-        let cert_der = leaf_cert.der().to_vec();
-        let key_der = leaf_key.serialize_der();
+        let certs = vec![
+            CertificateDer::from(leaf_cert.der().to_vec()),
+            CertificateDer::from(self.ca.cert_der.clone()),
+        ];
+        let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));
+        let server_config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .map_err(|e| format!("failed to build rustls server config: {e}"))?;
         let expires_at = Instant::now() + Duration::from_secs(self.config.cert_ttl_secs);
 
         Ok(CachedLeafCert {
-            cert_der,
-            key_der,
+            acceptor: TlsAcceptor::from(Arc::new(server_config)),
             expires_at,
         })
     }
@@ -125,8 +131,7 @@ impl HttpsMitmRuntime {
 
 #[derive(Clone)]
 struct CachedLeafCert {
-    cert_der: Vec<u8>,
-    key_der: Vec<u8>,
+    acceptor: TlsAcceptor,
     expires_at: Instant,
 }
 
@@ -396,7 +401,14 @@ fn host_matches_any(host: &str, patterns: &[String]) -> bool {
     let normalized = normalize_host(host);
     patterns
         .iter()
-        .any(|pattern| wildcard_match(&normalize_host(pattern), &normalized))
+        .any(|pattern| wildcard_match(pattern, &normalized))
+}
+
+fn normalize_patterns(patterns: &[String]) -> Vec<String> {
+    patterns
+        .iter()
+        .map(|pattern| normalize_host(pattern))
+        .collect()
 }
 
 fn normalize_host(host: &str) -> String {

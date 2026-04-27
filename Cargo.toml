@@ -45,6 +45,7 @@ firma-proto = { path = "crates/firma-proto" }
 governor = "0.10"
 hex = "0.4"
 http-body-util = "0.1"
+http-body = "1"
 hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 lru = "0.17"
