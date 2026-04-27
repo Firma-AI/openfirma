@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use firma_core::{
-    ActionParams, Connector, ConnectorError, ConnectorResponse, HttpMethod, TransportView,
+    ActionParams, Connector, ConnectorError, ConnectorResponse, ExecutionIntent, HttpMethod,
+    HttpParams, TransportView,
 };
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
@@ -120,36 +121,20 @@ impl GenericHttpConnector {
         })
     }
 
-    /// Runs the rate limiter wait, bounded by the dispatch timeout.
-    async fn acquire_permit(&self, deadline: Instant) -> Result<(), ConnectorError> {
-        let Some(limiter) = self.rate_limiter.as_ref() else {
-            return Ok(());
-        };
-        let now = Instant::now();
-        let remaining = deadline.saturating_duration_since(now);
-        if remaining.is_zero() {
-            return Err(ConnectorError::Timeout(self.timeout));
-        }
-        match tokio::time::timeout(remaining, limiter.until_ready()).await {
-            Ok(()) => Ok(()),
-            Err(_) => Err(ConnectorError::Timeout(self.timeout)),
+    /// Waits for the next rate-limit permit when configured.
+    async fn acquire_permit(&self) {
+        if let Some(limiter) = self.rate_limiter.as_ref() {
+            limiter.until_ready().await;
         }
     }
-}
 
-#[async_trait]
-impl Connector for GenericHttpConnector {
-    async fn dispatch(&self, view: &TransportView) -> Result<ConnectorResponse, ConnectorError> {
-        let envelope = view.envelope();
-        let intent = envelope.intent();
-        let ActionParams::Http(http) = &intent.params else {
-            return Err(ConnectorError::InvalidRequest(
-                "non-HTTP params cannot be dispatched by GenericHttpConnector".to_string(),
-            ));
-        };
-
-        let deadline = Instant::now() + self.timeout;
-        self.acquire_permit(deadline).await?;
+    async fn dispatch_inner(
+        &self,
+        view: &TransportView,
+        intent: &ExecutionIntent,
+        http: &HttpParams,
+    ) -> Result<ConnectorResponse, ConnectorError> {
+        self.acquire_permit().await;
 
         let method = to_reqwest_method(http.method);
         let scheme = if intent.raw_transport == "https" {
@@ -182,45 +167,89 @@ impl Connector for GenericHttpConnector {
 
         let request = builder
             .build()
-            .map_err(|e| ConnectorError::InvalidRequest(e.to_string()))?;
+            .map_err(|err| map_reqwest_error(&err, self.timeout))?;
 
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(ConnectorError::Timeout(self.timeout));
-        }
-
-        let started = Instant::now();
-        let response = match tokio::time::timeout(remaining, self.client.execute(request)).await {
-            Ok(Ok(response)) => response,
-            Ok(Err(err)) => {
-                if err.is_timeout() {
-                    return Err(ConnectorError::Timeout(self.timeout));
-                }
-                return Err(ConnectorError::Network(err.to_string()));
-            }
-            Err(_) => return Err(ConnectorError::Timeout(self.timeout)),
-        };
+        let response = self
+            .client
+            .execute(request)
+            .await
+            .map_err(|err| map_reqwest_error(&err, self.timeout))?;
 
         let status = response.status().as_u16();
         let headers = extract_headers(response.headers());
-
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let body_fut = response.bytes();
-        let body = match tokio::time::timeout(remaining, body_fut).await {
-            Ok(Ok(bytes)) => bytes.to_vec(),
-            Ok(Err(err)) => return Err(ConnectorError::Network(err.to_string())),
-            Err(_) => return Err(ConnectorError::Timeout(self.timeout)),
-        };
-
-        let dispatch_latency = started.elapsed();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|err| map_reqwest_error(&err, self.timeout))?
+            .to_vec();
         let response_size = body.len();
+
         Ok(ConnectorResponse {
             status,
             headers,
             body,
-            dispatch_latency,
+            dispatch_latency: Duration::ZERO,
             response_size,
         })
+    }
+}
+
+#[async_trait]
+impl Connector for GenericHttpConnector {
+    async fn dispatch(&self, view: &TransportView) -> Result<ConnectorResponse, ConnectorError> {
+        let envelope = view.envelope();
+        let intent = envelope.intent();
+        let ActionParams::Http(http) = &intent.params else {
+            return Err(ConnectorError::InvalidRequest(
+                "non-HTTP params cannot be dispatched by GenericHttpConnector".to_string(),
+            ));
+        };
+
+        let host = intent.resource.get("host").map_or("", String::as_str);
+        let path = intent.resource.get("path").map_or("", String::as_str);
+        let method_label = http.method.as_str();
+
+        tracing::debug!(
+            target_host = %host,
+            method = method_label,
+            path = %path,
+            "dispatching",
+        );
+
+        let started = Instant::now();
+        let inner = self.dispatch_inner(view, intent, http);
+        let result = match tokio::time::timeout(self.timeout, inner).await {
+            Ok(inner_result) => inner_result,
+            Err(_) => Err(ConnectorError::Timeout(self.timeout)),
+        };
+        let elapsed = started.elapsed();
+        let elapsed_micros = duration_to_u64_micros(elapsed);
+
+        match result {
+            Ok(mut response) => {
+                response.dispatch_latency = elapsed;
+                tracing::debug!(
+                    target_host = %host,
+                    method = method_label,
+                    path = %path,
+                    status = response.status,
+                    latency_us = elapsed_micros,
+                    "dispatched",
+                );
+                Ok(response)
+            }
+            Err(err) => {
+                tracing::error!(
+                    target_host = %host,
+                    method = method_label,
+                    path = %path,
+                    kind = ?err,
+                    elapsed_us = elapsed_micros,
+                    "dispatch failed",
+                );
+                Err(err)
+            }
+        }
     }
 }
 
@@ -248,19 +277,177 @@ fn extract_headers(headers: &reqwest::header::HeaderMap) -> HashMap<String, Stri
         .collect()
 }
 
+/// Flag projection of a [`reqwest::Error`] sufficient to choose a
+/// [`ConnectorError`] variant.
+///
+/// Kept as a pure data struct so the mapping decision is unit-testable
+/// without synthesizing opaque `reqwest::Error` values. Populated by
+/// [`reqwest_error_flags`] from a real error in the dispatch path.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "This mirrors reqwest's classifier surface for pure unit testing."
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReqwestErrorFlags {
+    is_timeout: bool,
+    is_connect: bool,
+    is_request: bool,
+    is_body: bool,
+    is_decode: bool,
+    is_builder: bool,
+}
+
+/// Classified outcome carrying just the [`ConnectorError`] variant kind.
+///
+/// Returned by [`classify_reqwest_error`]; the dispatch site rehydrates
+/// it into a full [`ConnectorError`] with the configured timeout and a
+/// short stable message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectorErrorKind {
+    Timeout,
+    Network,
+    InvalidRequest,
+}
+
+fn reqwest_error_flags(err: &reqwest::Error) -> ReqwestErrorFlags {
+    ReqwestErrorFlags {
+        is_timeout: err.is_timeout(),
+        is_connect: err.is_connect(),
+        is_request: err.is_request(),
+        is_body: err.is_body(),
+        is_decode: err.is_decode(),
+        is_builder: err.is_builder(),
+    }
+}
+
+/// Maps a [`ReqwestErrorFlags`] projection onto the
+/// [`ConnectorError`] variant the dispatch path should surface.
+///
+/// Order matters: `is_timeout` and `is_builder` are checked before the
+/// transport family so that a builder error masquerading as a request
+/// error does not get smeared into `Network`.
+///
+/// Unknown / all-false combinations fall through to [`Network`] since
+/// the runtime maps `Network` to DENY.
+fn classify_reqwest_error(flags: ReqwestErrorFlags) -> ConnectorErrorKind {
+    if flags.is_timeout {
+        ConnectorErrorKind::Timeout
+    } else if flags.is_builder {
+        ConnectorErrorKind::InvalidRequest
+    } else {
+        ConnectorErrorKind::Network
+    }
+}
+
+/// Translates a [`reqwest::Error`] into a [`ConnectorError`].
+///
+/// Logs any unknown / all-false flag combination so an operator sees a
+/// fail-closed `Network` mapping that did not match a known reqwest
+/// classifier.
+fn map_reqwest_error(err: &reqwest::Error, configured: Duration) -> ConnectorError {
+    let flags = reqwest_error_flags(err);
+    let kind = classify_reqwest_error(flags);
+    if !flags.is_timeout
+        && !flags.is_builder
+        && !flags.is_connect
+        && !flags.is_request
+        && !flags.is_body
+        && !flags.is_decode
+    {
+        tracing::warn!(
+            error = %err,
+            "reqwest error matched no known classifier; mapping to Network",
+        );
+    }
+
+    match kind {
+        ConnectorErrorKind::Timeout => ConnectorError::Timeout(configured),
+        ConnectorErrorKind::Network => ConnectorError::Network(reqwest_error_message(err, flags)),
+        ConnectorErrorKind::InvalidRequest => ConnectorError::InvalidRequest(err.to_string()),
+    }
+}
+
+fn reqwest_error_message(err: &reqwest::Error, flags: ReqwestErrorFlags) -> String {
+    let prefix = if flags.is_connect {
+        "connect"
+    } else if flags.is_body {
+        "body"
+    } else if flags.is_decode {
+        "decode"
+    } else if flags.is_request {
+        "request"
+    } else {
+        "transport"
+    };
+    format!("{prefix}: {err}")
+}
+
+fn duration_to_u64_micros(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use std::collections::HashMap;
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex, MutexGuard};
 
     use firma_core::{
         ActionParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod,
         HttpParams, InjectedCredentials,
     };
+    use tracing_subscriber::fmt::MakeWriter;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+
+    #[derive(Clone, Default)]
+    struct CapturingWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl CapturingWriter {
+        fn snapshot(&self) -> String {
+            let guard: MutexGuard<'_, Vec<u8>> = self
+                .buf
+                .lock()
+                .expect("capture mutex must not be poisoned in tests");
+            String::from_utf8_lossy(&guard).into_owned()
+        }
+    }
+
+    impl Write for CapturingWriter {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            let mut guard = self
+                .buf
+                .lock()
+                .expect("capture mutex must not be poisoned in tests");
+            guard.extend_from_slice(data);
+            Ok(data.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for CapturingWriter {
+        type Writer = CapturingWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn capture_subscriber(writer: CapturingWriter) -> impl tracing::Subscriber + Send + Sync {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .finish()
+    }
 
     fn view_for(intent: ExecutionIntent, creds: InjectedCredentials) -> TransportView {
         let envelope = ExecutionEnvelope::new(
@@ -292,6 +479,107 @@ mod tests {
             raw_transport: "http".to_string(),
             raw_action_ref: "GET /".to_string(),
         }
+    }
+
+    #[test]
+    fn classify_timeout_flag_yields_timeout() {
+        let flags = ReqwestErrorFlags {
+            is_timeout: true,
+            is_connect: false,
+            is_request: false,
+            is_body: false,
+            is_decode: false,
+            is_builder: false,
+        };
+
+        assert_eq!(classify_reqwest_error(flags), ConnectorErrorKind::Timeout);
+    }
+
+    #[test]
+    fn classify_connect_flag_yields_network() {
+        let flags = ReqwestErrorFlags {
+            is_timeout: false,
+            is_connect: true,
+            is_request: false,
+            is_body: false,
+            is_decode: false,
+            is_builder: false,
+        };
+
+        assert_eq!(classify_reqwest_error(flags), ConnectorErrorKind::Network);
+    }
+
+    #[test]
+    fn classify_builder_flag_yields_invalid_request() {
+        let flags = ReqwestErrorFlags {
+            is_timeout: false,
+            is_connect: false,
+            is_request: false,
+            is_body: false,
+            is_decode: false,
+            is_builder: true,
+        };
+
+        assert_eq!(
+            classify_reqwest_error(flags),
+            ConnectorErrorKind::InvalidRequest
+        );
+    }
+
+    #[test]
+    fn classify_body_flag_yields_network() {
+        let flags = ReqwestErrorFlags {
+            is_timeout: false,
+            is_connect: false,
+            is_request: false,
+            is_body: true,
+            is_decode: false,
+            is_builder: false,
+        };
+
+        assert_eq!(classify_reqwest_error(flags), ConnectorErrorKind::Network);
+    }
+
+    #[test]
+    fn classify_decode_flag_yields_network() {
+        let flags = ReqwestErrorFlags {
+            is_timeout: false,
+            is_connect: false,
+            is_request: false,
+            is_body: false,
+            is_decode: true,
+            is_builder: false,
+        };
+
+        assert_eq!(classify_reqwest_error(flags), ConnectorErrorKind::Network);
+    }
+
+    #[test]
+    fn classify_no_flags_falls_back_to_network() {
+        let flags = ReqwestErrorFlags {
+            is_timeout: false,
+            is_connect: false,
+            is_request: false,
+            is_body: false,
+            is_decode: false,
+            is_builder: false,
+        };
+
+        assert_eq!(classify_reqwest_error(flags), ConnectorErrorKind::Network);
+    }
+
+    #[test]
+    fn classify_timeout_dominates_connect() {
+        let flags = ReqwestErrorFlags {
+            is_timeout: true,
+            is_connect: true,
+            is_request: true,
+            is_body: false,
+            is_decode: false,
+            is_builder: false,
+        };
+
+        assert_eq!(classify_reqwest_error(flags), ConnectorErrorKind::Timeout);
     }
 
     #[tokio::test]
@@ -516,5 +804,161 @@ mod tests {
             .await
             .expect("dispatch should succeed");
         assert_eq!(response.status, 200);
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_rate_limit_wait_exhausts_timeout_budget() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/quick"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let connector = GenericHttpConnector::new(&HttpConnectorConfig {
+            timeout: Duration::from_millis(100),
+            rate_limit: Some(RateLimitConfig {
+                rps: NonZeroU32::new(1).expect("rps must be non-zero"),
+                burst: NonZeroU32::new(1).expect("burst must be non-zero"),
+            }),
+        })
+        .expect("connector build should succeed");
+        let url = format!("{}/quick", server.address());
+
+        let view_a = view_for(get_intent(&url), InjectedCredentials::empty());
+        let _first = connector.dispatch(&view_a).await;
+
+        let view_b = view_for(get_intent(&url), InjectedCredentials::empty());
+        let _second = connector.dispatch(&view_b).await;
+
+        let view_c = view_for(get_intent(&url), InjectedCredentials::empty());
+        let err = connector
+            .dispatch(&view_c)
+            .await
+            .expect_err("trailing call must time out on rate-limit wait alone");
+        match err {
+            ConnectorError::Timeout(duration) => {
+                assert_eq!(duration, Duration::from_millis(100));
+            }
+            other => panic!("expected Timeout, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_dispatch_logs_entry_and_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/log-ok"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .mount(&server)
+            .await;
+
+        let writer = CapturingWriter::default();
+        let snapshot = {
+            let subscriber = capture_subscriber(writer.clone());
+            let _guard = tracing::subscriber::set_default(subscriber);
+
+            let connector = GenericHttpConnector::default_for_unconfigured()
+                .expect("connector build should succeed");
+            let view = view_for(
+                get_intent(&format!("{}/log-ok", server.address())),
+                InjectedCredentials::empty(),
+            );
+            connector
+                .dispatch(&view)
+                .await
+                .expect("dispatch should succeed");
+            writer.snapshot()
+        };
+
+        assert!(
+            snapshot.contains("dispatching"),
+            "expected entry log; got: {snapshot}",
+        );
+        assert!(
+            snapshot.contains("dispatched"),
+            "expected success log; got: {snapshot}",
+        );
+        assert!(
+            snapshot.contains("status=200"),
+            "expected status field; got: {snapshot}",
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_dispatch_logs_error_on_failure() {
+        let writer = CapturingWriter::default();
+        let snapshot = {
+            let subscriber = capture_subscriber(writer.clone());
+            let _guard = tracing::subscriber::set_default(subscriber);
+
+            let connector = GenericHttpConnector::default_for_unconfigured()
+                .expect("connector build should succeed");
+            let view = view_for(
+                get_intent("http://127.0.0.1:1/"),
+                InjectedCredentials::empty(),
+            );
+            let err = connector
+                .dispatch(&view)
+                .await
+                .expect_err("connect refused must fail");
+            assert!(matches!(
+                err,
+                ConnectorError::Network(_) | ConnectorError::Timeout(_)
+            ));
+            writer.snapshot()
+        };
+
+        assert!(
+            snapshot.contains("dispatching"),
+            "expected entry log; got: {snapshot}",
+        );
+        assert!(
+            snapshot.contains("dispatch failed"),
+            "expected error log; got: {snapshot}",
+        );
+        assert!(
+            snapshot.contains("kind="),
+            "expected kind= field; got: {snapshot}",
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_dispatch_does_not_log_credential_values() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/secret"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let secret_value = "Bearer hunter2-must-not-leak";
+        let writer = CapturingWriter::default();
+        let snapshot = {
+            let subscriber = capture_subscriber(writer.clone());
+            let _guard = tracing::subscriber::set_default(subscriber);
+
+            let connector = GenericHttpConnector::default_for_unconfigured()
+                .expect("connector build should succeed");
+            let creds = InjectedCredentials::new(HashMap::from([(
+                "Authorization".to_string(),
+                secret_value.to_string(),
+            )]));
+            let view = view_for(get_intent(&format!("{}/secret", server.address())), creds);
+            connector
+                .dispatch(&view)
+                .await
+                .expect("dispatch should succeed");
+            writer.snapshot()
+        };
+
+        assert!(
+            !snapshot.contains("hunter2-must-not-leak"),
+            "credential value must not appear in logs; got: {snapshot}",
+        );
+        assert!(
+            !snapshot.contains("Bearer hunter2"),
+            "credential prefix must not appear in logs; got: {snapshot}",
+        );
     }
 }
