@@ -5,19 +5,32 @@
 #
 # Stage 1 note: CapabilityMap is unpopulated until task 007 (IssueCapability →
 # CapabilityMap population). Until then, every mapped host is denied by Stage 1
-# with "no matching capability token". Map only the hosts you want blocked now.
+# with "no matching capability token".
 #
 # DEMO behavior:
-#   paste.rs  → mapped → Stage 1 DENY  (exfiltration blocked)
+#   httpbin.org/get → mapped → Cedar permit fires → ALLOW
+#   ifconfig.me/    → mapped → Cedar forbid fires → DENY
 #   all other agent hosts → PASSTHROUGH (tools work)
 #
 # When task 007 lands, uncomment the additional rules below to bring all
 # agent traffic under Cedar enforcement.
 
-# ── Exfiltration: always block ───────────────────────────────────────────────
+# ── HTTP demo: allowed ────────────────────────────────────────────────────────
+# curl -x http://127.0.0.1:8080 http://httpbin.org/get
+# Cedar permit fires (risk_score < 80) → ALLOW
 [[rules]]
-method       = "POST"
-host         = "paste.rs"
+method       = "GET"
+host         = "httpbin.org"
+path         = "/get"
+action_class = "communication.external.send"
+
+# ── HTTP demo: blocked ────────────────────────────────────────────────────────
+# curl -x http://127.0.0.1:8080 http://httpbin.org/ip
+# Cedar forbid fires (resource == httpbin.org/ip) → DENY
+[[rules]]
+method       = "GET"
+host         = "httpbin.org"
+path         = "/ip"
 action_class = "communication.external.send"
 
 # ── Uncomment below once task 007 wires IssueCapability → CapabilityMap ──────
