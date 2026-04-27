@@ -522,13 +522,13 @@ through `firma run`.
 
 Implementation model:
 
-- CONNECT-only mode (default):
+- CONNECT-only mode:
   - The sidecar evaluates policy at CONNECT handshake time on `host:port`.
   - On allow, the sidecar returns `200` and relays raw TCP bytes
     bidirectionally.
   - On deny, the sidecar returns structured `403` deny JSON.
   - CONNECT allow/deny outcomes emit audit events.
-- MITM mode (opt-in via `interceptor.https_mitm`):
+- MITM mode (default for configured `intercept_hosts`):
   - The sidecar terminates downstream TLS with a dynamically issued per-host
     certificate signed by the local sidecar CA.
   - Decrypted HTTPS requests are routed through the normalizer + handler

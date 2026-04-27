@@ -122,16 +122,16 @@ Validation:
 ### `[interceptor.https_mitm]`
 
 Optional TLS MITM controls for HTTPS `CONNECT` traffic in `http_proxy` mode.
-When disabled, CONNECT flows stay in transparent tunnel mode (destination-level
-enforcement only). When enabled, matched hosts are decrypted, normalized, and
-enforced at L7 (method/path/action class).
+Defaults are MITM-enabled with a curated common API host list. Hosts not matched
+by `intercept_hosts` stay in transparent CONNECT tunnel mode (destination-level
+enforcement only).
 
 | Field                 | Type        | Default  | Description                                        |
 | --------------------- | ----------- | -------- | -------------------------------------------------- |
-| `enabled`             | bool        | `false`  | Enables MITM for hosts matched by `intercept_hosts` |
+| `enabled`             | bool        | `true`   | Enables MITM for hosts matched by `intercept_hosts` |
 | `ca_cert_path`        | path        | none     | Optional explicit CA certificate path              |
 | `ca_key_path`         | path        | none     | Optional explicit CA private key path              |
-| `intercept_hosts`     | list<string>| `[]`     | Host patterns to intercept (`*` wildcard supported) |
+| `intercept_hosts`     | list<string>| curated common API hosts | Host patterns to intercept (`*` wildcard supported) |
 | `bypass_hosts`        | list<string>| `[]`     | Host patterns to force CONNECT tunnel mode         |
 | `strict_hosts`        | list<string>| `[]`     | Host patterns that must be intercepted             |
 | `cert_ttl_secs`       | u64         | `86400`  | Leaf certificate cache TTL in seconds              |
@@ -146,6 +146,19 @@ Validation:
   greater than `0`.
 - If `ca_cert_path` / `ca_key_path` are omitted, files are created under
   [`[ca].dir`](#ca) as `firma-ca.crt` and `firma-ca.key`.
+- On Unix, the CA private key is enforced as owner-only (`0600`); overly-open
+  key permissions are rejected at startup.
+- Intercepted DNS hostnames are validated with strict DNS label rules before
+  leaf cert issuance.
+- For hosts in `strict_hosts`, MITM preflight failures are returned as
+  deterministic `403` fail-closed denies.
+- For non-strict intercepted hosts, MITM preflight failures fall back to
+  CONNECT tunnel mode.
+
+Default `intercept_hosts` includes common providers/services such as OpenAI,
+Anthropic, OpenRouter, Groq, Mistral, Cohere, Google GenAI/Vertex, DeepSeek,
+Together, Fireworks, Replicate, Perplexity, xAI, Supabase, Resend, Twilio,
+SendGrid, Stripe, Slack, and GitHub APIs.
 
 ### `[policy]`
 

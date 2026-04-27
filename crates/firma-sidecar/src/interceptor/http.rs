@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use firma_core::DenyReason;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
@@ -27,6 +28,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
+use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 
 use super::https_mitm::HttpsMitmRuntime;
@@ -200,6 +202,31 @@ async fn handle_connect_request(
         .cloned()
         .unwrap_or_default();
     let target_info = connect_target_info(&host_with_default_port(req, true));
+    let mitm_candidate = mitm_runtime
+        .as_ref()
+        .filter(|runtime| runtime.should_intercept_host(&target_info.host))
+        .cloned();
+    let strict_mitm = mitm_candidate
+        .as_ref()
+        .is_some_and(|runtime| runtime.is_strict_host(&target_info.host));
+
+    let mut prepared_acceptor: Option<TlsAcceptor> = None;
+    if strict_mitm && let Some(runtime) = mitm_candidate.as_ref() {
+        match runtime.tls_acceptor_for_host(&target_info.host).await {
+            Ok(acceptor) => prepared_acceptor = Some(acceptor),
+            Err(e) => {
+                let detail = format!("HTTPS_MITM_SETUP_FAILED: {e}");
+                tracing::error!(
+                    host = %target_info.host,
+                    "strict MITM preflight failed: {detail}"
+                );
+                return Ok(deny_json_response(
+                    StatusCode::FORBIDDEN,
+                    crate::handler::deny_body_json(DenyReason::FailClosed, &detail),
+                ));
+            }
+        }
+    }
 
     match handler.handle_connect(raw, &session_id).await {
         ConnectDecision::Deny { reason, detail } => Ok(deny_json_response(
@@ -209,10 +236,30 @@ async fn handle_connect_request(
         ConnectDecision::Allow => {
             let target = connect_target(&target_info.authority);
             let on_upgrade = hyper::upgrade::on(req);
-            if let Some(mitm_runtime) = mitm_runtime
-                && mitm_runtime.should_intercept_host(&target_info.host)
-            {
-                let strict = mitm_runtime.is_strict_host(&target_info.host);
+            if let Some(mitm_runtime) = mitm_candidate {
+                let acceptor = if let Some(acceptor) = prepared_acceptor {
+                    acceptor
+                } else {
+                    match mitm_runtime.tls_acceptor_for_host(&target_info.host).await {
+                        Ok(acceptor) => acceptor,
+                        Err(e) => {
+                            let detail = format!("HTTPS_MITM_SETUP_FAILED: {e}");
+                            tracing::warn!(
+                                host = %target_info.host,
+                                "MITM preflight failed, falling back to CONNECT tunnel: {detail}"
+                            );
+                            tokio::spawn(async move {
+                                if let Err(err) = relay_connect_tunnel(on_upgrade, &target).await {
+                                    tracing::warn!(
+                                        "CONNECT tunnel failed after MITM fallback: {err}"
+                                    );
+                                }
+                            });
+                            return Ok(connect_established_response());
+                        }
+                    }
+                };
+
                 let handler = Arc::clone(&handler);
                 let connect_target = target_info;
                 let connect_session_id = session_id;
@@ -222,15 +269,11 @@ async fn handle_connect_request(
                         connect_target,
                         handler,
                         connect_session_id,
-                        mitm_runtime,
+                        acceptor,
                     )
                     .await
                     {
-                        if strict {
-                            tracing::error!("strict MITM CONNECT flow failed: {e}");
-                        } else {
-                            tracing::warn!("MITM CONNECT flow failed: {e}");
-                        }
+                        tracing::warn!("MITM CONNECT flow failed: {e}");
                     }
                 });
             } else {
@@ -240,12 +283,7 @@ async fn handle_connect_request(
                     }
                 });
             }
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .body(Full::new(Bytes::new()))
-                .unwrap_or_else(|_| {
-                    Response::new(Full::new(Bytes::from_static(b"internal error")))
-                }))
+            Ok(connect_established_response())
         }
     }
 }
@@ -306,16 +344,12 @@ async fn relay_connect_mitm(
     target: ConnectTargetInfo,
     handler: Arc<RequestHandler>,
     connect_session_id: String,
-    mitm_runtime: Arc<HttpsMitmRuntime>,
+    acceptor: TlsAcceptor,
 ) -> Result<(), String> {
     let upgraded = on_upgrade
         .await
         .map_err(|e| format!("upgrade failed: {e}"))?;
     let downstream = TokioIo::new(upgraded);
-    let acceptor = mitm_runtime
-        .tls_acceptor_for_host(&target.host)
-        .await
-        .map_err(|e| format!("failed to prepare TLS acceptor for {}: {e}", target.host))?;
     let tls_stream = acceptor
         .accept(downstream)
         .await
@@ -337,6 +371,13 @@ async fn relay_connect_mitm(
         .await
         .map_err(|e| format!("HTTPS MITM connection failed: {e}"))?;
     Ok(())
+}
+
+fn connect_established_response() -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .body(Full::new(Bytes::new()))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b"internal error"))))
 }
 
 async fn handle_mitm_https_request(
@@ -897,22 +938,7 @@ mod tests {
     /// Sends a raw HTTP/1.1 request through the proxy and returns the response
     /// status code.
     async fn proxy_request(proxy_addr: SocketAddr, request: &str) -> u16 {
-        let mut stream = TcpStream::connect(proxy_addr).await.ok();
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
-        let stream = stream.as_mut().unwrap();
-
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
-        stream.write_all(request.as_bytes()).await.unwrap();
-
-        // Read the response (with a timeout so the test does not hang).
-        let mut buf = vec![0u8; 4096];
-        let read_result = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf)).await;
-
-        let n = match read_result {
-            Ok(Ok(n)) => n,
-            _ => 0,
-        };
-        let response = String::from_utf8_lossy(&buf[..n]);
+        let response = proxy_response(proxy_addr, request).await;
 
         // Parse the status code from the first line: "HTTP/1.1 <code> ..."
         response
@@ -921,6 +947,26 @@ mod tests {
             .and_then(|line| line.split_whitespace().nth(1))
             .and_then(|code| code.parse::<u16>().ok())
             .unwrap_or(0)
+    }
+
+    async fn proxy_response(proxy_addr: SocketAddr, request: &str) -> String {
+        let mut stream = TcpStream::connect(proxy_addr).await.ok();
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
+        let stream = stream.as_mut().unwrap();
+
+        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
+        stream.write_all(request.as_bytes()).await.unwrap();
+
+        let mut out = Vec::new();
+        let mut chunk = [0u8; 1024];
+        for _ in 0..16 {
+            match tokio::time::timeout(Duration::from_millis(250), stream.read(&mut chunk)).await {
+                Ok(Ok(0)) => break,
+                Ok(Ok(n)) => out.extend_from_slice(&chunk[..n]),
+                Ok(Err(_)) | Err(_) => break,
+            }
+        }
+        String::from_utf8_lossy(&out).to_string()
     }
 
     async fn read_connect_response(stream: &mut TcpStream) -> String {
@@ -1316,6 +1362,59 @@ Content-Length: 2\r\n\
         assert_eq!(
             status, 403,
             "expected L7 deny over MITM path, got: {response}"
+        );
+
+        cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_proxy_connect_strict_mitm_preflight_failure_denies_fail_closed() {
+        let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let proxy_addr = free_addr();
+        let handler = test_handler(test_pipeline_allow_connect());
+        let cancel = CancellationToken::new();
+        let invalid_dns_host = "exa_mple.com".to_string();
+        let connect_authority = format!("{invalid_dns_host}:443");
+
+        let mitm_config = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec![invalid_dns_host.clone()],
+            strict_hosts: vec![invalid_dns_host.clone()],
+            cert_ttl_secs: 300,
+            cert_cache_capacity: 16,
+            ..HttpsMitmConfig::default()
+        };
+
+        let server_handle = start_proxy_with_mitm(
+            proxy_addr,
+            handler,
+            cancel.clone(),
+            mitm_config,
+            ca_tempdir.path().to_path_buf(),
+        )
+        .await;
+
+        let request =
+            format!("CONNECT {connect_authority} HTTP/1.1\r\nHost: {connect_authority}\r\n\r\n");
+        let response = proxy_response(proxy_addr, &request).await;
+        let status = response
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse::<u16>().ok())
+            .unwrap_or(0);
+        assert_eq!(
+            status, 403,
+            "expected 403 for strict MITM preflight failure"
+        );
+        assert!(
+            response.contains(r#""reason":"FailClosed""#),
+            "expected fail-closed reason body, got: {response}"
+        );
+        assert!(
+            response.contains("HTTPS_MITM_SETUP_FAILED"),
+            "expected MITM setup failure detail, got: {response}"
         );
 
         cancel.cancel();
