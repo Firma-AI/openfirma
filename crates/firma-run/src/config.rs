@@ -10,6 +10,10 @@ use crate::backend::BackendKind;
 use crate::error::RunError;
 use crate::profile::built_in_profile;
 
+fn backend_supports_structural_network(backend: BackendKind) -> bool {
+    matches!(backend, BackendKind::Bwrap)
+}
+
 /// Resolved runtime profile after combining built-in defaults, optional file
 /// config, and CLI overrides.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -324,13 +328,19 @@ pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
             .network
             .as_ref()
             .and_then(|cfg| cfg.enforce_network_namespace)
-            .unwrap_or(false),
+            .unwrap_or_else(|| backend_supports_structural_network(backend)),
         fail_closed: patch
             .network
             .as_ref()
             .and_then(|cfg| cfg.fail_closed)
             .unwrap_or(true),
     };
+
+    if network.enforce_network_namespace && !backend_supports_structural_network(backend) {
+        return Err(RunError::ConfigValidation(format!(
+            "network.enforce_network_namespace=true is unsupported for backend '{backend}'; use backend 'bwrap' or set enforce_network_namespace=false"
+        )));
+    }
 
     let capability = patch
         .capability
@@ -503,5 +513,51 @@ profiles:
 
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::HostUser);
+    }
+
+    #[test]
+    fn structural_network_defaults_to_true_for_bwrap_backend() {
+        let mut run_args = args("generic");
+        run_args.backend = Some(crate::args::BackendOverride::Bwrap);
+
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        assert!(resolved.network.enforce_network_namespace);
+        assert!(resolved.network.fail_closed);
+    }
+
+    #[test]
+    fn structural_network_defaults_to_false_for_non_bwrap_backends() {
+        let mut run_args = args("generic");
+        run_args.backend = Some(crate::args::BackendOverride::Vz);
+
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!resolved.network.enforce_network_namespace);
+        assert!(resolved.network.fail_closed);
+    }
+
+    #[test]
+    fn structural_network_true_on_non_bwrap_backend_is_rejected() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = r#"
+[profiles.generic]
+backend = "vz"
+
+[profiles.generic.network]
+enforce_network_namespace = true
+fail_closed = true
+"#;
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+
+        let error = resolve_profile(&run_args).expect_err("expected validation error");
+        assert!(
+            error
+                .to_string()
+                .contains("enforce_network_namespace=true is unsupported"),
+            "unexpected error: {error}"
+        );
     }
 }

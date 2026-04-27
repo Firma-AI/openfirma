@@ -101,6 +101,14 @@ Backend defaults by host OS:
 - macOS: `vz`
 - Windows: `wsl2`
 
+Network-confinement defaults are backend-aware:
+
+- `bwrap`: `enforce_network_namespace=true` (structural confinement path)
+- `vz`/`wsl2`: `enforce_network_namespace=false` (proxy-mediated path)
+
+If you explicitly set `enforce_network_namespace=true` with a non-`bwrap`
+backend, `firma run` now fails at config validation with a clear error.
+
 Manual backend override example:
 
 ```bash

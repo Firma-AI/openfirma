@@ -18,6 +18,12 @@ Implementation stance:
 2. Ship Linux `bwrap`, macOS `vz`, and Windows `wsl2` runtime paths.
 3. Keep enterprise profile seam additive (no rewrites).
 
+Default network behavior on this implementation:
+
+1. `bwrap` defaults to structural network confinement (`enforce_network_namespace=true`).
+2. `vz` and `wsl2` default to proxy-mediated mode (`enforce_network_namespace=false`).
+3. Explicitly forcing structural confinement on non-`bwrap` backends is rejected during config validation.
+
 ## Architecture Blueprint
 
 ### Runtime topology (cross-OS)
