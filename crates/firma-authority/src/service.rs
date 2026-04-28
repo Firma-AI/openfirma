@@ -87,7 +87,7 @@ impl AuthorityService for AuthorityServiceImpl {
         let schema = self.policy_store.schema().await;
         let decision = evaluate_cedar_policy(
             &policy_set,
-            schema.as_deref(),
+            &schema,
             &agent_id,
             &session_id,
             &req.requested_actions,
@@ -321,10 +321,6 @@ impl CedarDecision {
 
 /// Evaluate Cedar policies for a capability issuance request.
 ///
-/// Uses Cedar's unspecified principal/action/resource when the schema is
-/// not loaded, falling back to a simple "any policy allows" evaluation.
-/// Evaluate Cedar policies for a capability issuance request.
-///
 /// Evaluates every requested action independently — all must be allowed for
 /// the request to succeed (fail-closed across the full action set).
 ///
@@ -335,7 +331,7 @@ impl CedarDecision {
 /// at pre-flight, but all fields required by `EnforcementContext` must be present.
 fn evaluate_cedar_policy(
     policy_set: &PolicySet,
-    schema: Option<&Schema>,
+    schema: &Schema,
     agent_id: &AgentId,
     session_id: &SessionId,
     actions: &[String],
@@ -389,20 +385,20 @@ fn evaluate_cedar_policy(
             "same_payee_count_30m": 0i64,
             "session_transfer_count": 0i64,
         });
-        let schema_with_action = schema.map(|s| (s, &action_entity));
-        let cedar_context = match Context::from_json_value(context_json, schema_with_action) {
-            Ok(c) => c,
-            Err(err) => {
-                return CedarDecision::context_build(action, &err.to_string());
-            }
-        };
+        let cedar_context =
+            match Context::from_json_value(context_json, Some((schema, &action_entity))) {
+                Ok(c) => c,
+                Err(err) => {
+                    return CedarDecision::context_build(action, &err.to_string());
+                }
+            };
 
         let request = match Request::new(
             Some(principal.clone()),
             Some(action_entity),
             Some(resource_entity.clone()),
             cedar_context,
-            schema,
+            Some(schema),
         ) {
             Ok(r) => r,
             Err(e) => {
@@ -531,6 +527,12 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e:?}"))
     }
 
+    fn base_schema() -> Schema {
+        let (schema, _) =
+            Schema::from_cedarschema_str(crate::cedar_loader::DEFAULT_SCHEMA).unwrap();
+        schema
+    }
+
     const FIRMA_SCHEMA: &str = crate::cedar_loader::DEFAULT_SCHEMA;
 
     fn firma_schema() -> Schema {
@@ -543,7 +545,7 @@ mod tests {
     fn evaluate_no_policies_denies() {
         let result = evaluate_cedar_policy(
             &PolicySet::new(),
-            None,
+            &base_schema(),
             &agent("agent_1"),
             &session("sess_1"),
             &["filesystem.read".to_string()],
@@ -556,7 +558,7 @@ mod tests {
     fn evaluate_no_actions_denies() {
         let result = evaluate_cedar_policy(
             &permit_all(),
-            None,
+            &base_schema(),
             &agent("agent_1"),
             &session("sess_1"),
             &[],
@@ -569,7 +571,7 @@ mod tests {
     fn evaluate_permit_all_allows() {
         let result = evaluate_cedar_policy(
             &permit_all(),
-            None,
+            &base_schema(),
             &agent("agent_1"),
             &session("sess_1"),
             &["filesystem.read".to_string()],
@@ -582,7 +584,7 @@ mod tests {
     fn evaluate_forbid_all_denies() {
         let result = evaluate_cedar_policy(
             &forbid_all(),
-            None,
+            &base_schema(),
             &agent("agent_1"),
             &session("sess_1"),
             &["filesystem.read".to_string()],
@@ -595,7 +597,7 @@ mod tests {
     fn evaluate_multi_action_all_allowed() {
         let result = evaluate_cedar_policy(
             &permit_all(),
-            None,
+            &base_schema(),
             &agent("agent_1"),
             &session("sess_1"),
             &[
@@ -612,7 +614,7 @@ mod tests {
         // forbid-all → every action in the set is denied; first one short-circuits
         let result = evaluate_cedar_policy(
             &forbid_all(),
-            None,
+            &base_schema(),
             &agent("agent_1"),
             &session("sess_1"),
             &[
@@ -629,7 +631,7 @@ mod tests {
         let schema = firma_schema();
         let result = evaluate_cedar_policy(
             &permit_all(),
-            Some(&schema),
+            &schema,
             &agent("agent_1"),
             &session("sess_1"),
             &["communication.external.send".to_string()],
@@ -644,7 +646,7 @@ mod tests {
         let schema = firma_schema();
         let result = evaluate_cedar_policy(
             &permit_all(),
-            Some(&schema),
+            &schema,
             &agent("agent_1"),
             &session("sess_1"),
             &["unknown.action".to_string()],
@@ -679,7 +681,7 @@ mod tests {
 
         let result = evaluate_cedar_policy(
             &permit_all(),
-            Some(&schema),
+            &schema,
             &agent("agent_1"),
             &session("sess_1"),
             &actions,
