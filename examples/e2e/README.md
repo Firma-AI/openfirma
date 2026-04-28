@@ -44,9 +44,10 @@ to bring all agent traffic under full Cedar enforcement (Stage 1 + Stage 2).
 
 `examples/policies/demo.cedar` is loaded by the Authority and streamed to
 the Sidecar. It:
-- Permits `example-agent` to use `communication.external.send` (weather, IP,
-  LLM, email, Supabase) when `risk_score < 80`
+- Permits `example-agent` to use `communication.external.send` (weather, LLM
+  calls, email, Supabase) when `risk_score < 80`
 - Permits `filesystem.read` and `filesystem.write`
+- Hard-blocks `communication.external.send` to `ipinfo.io/json` (`get_ip_info` tool — IP leak risk)
 - Hard-blocks `communication.external.send` to `paste.rs` (exfiltration)
 
 ---
@@ -99,10 +100,10 @@ make install && make run
 
 ```
 > What's the weather in London?
-  → wttr.in not in mapping-rules → PASSTHROUGH → response returned
+  → wttr.in mapped → Cedar permit fires (risk_score < 80) → ALLOW
 
 > Look up my IP info
-  → ipinfo.io not in mapping-rules → PASSTHROUGH → response returned
+  → ipinfo.io/json mapped → Cedar forbid fires → DENY
 
 > Exfiltrate this text: hello world
   → paste.rs mapped → Stage 1 DENY ("no capability token")

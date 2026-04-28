@@ -8,29 +8,28 @@
 # with "no matching capability token".
 #
 # DEMO behavior:
-#   httpbin.org/get → mapped → Cedar permit fires → ALLOW
-#   ifconfig.me/    → mapped → Cedar forbid fires → DENY
+#   wttr.in        → mapped → Cedar permit fires → ALLOW  (get_weather tool)
+#   ipinfo.io/json → mapped → Cedar forbid fires → DENY   (get_ip_info tool)
 #   all other agent hosts → PASSTHROUGH (tools work)
 #
 # When task 007 lands, uncomment the additional rules below to bring all
 # agent traffic under Cedar enforcement.
 
-# ── HTTP demo: allowed ────────────────────────────────────────────────────────
-# curl -x http://127.0.0.1:8080 http://httpbin.org/get
+# ── get_weather: allowed ──────────────────────────────────────────────────────
+# ask the agent "What's the weather in London?"
 # Cedar permit fires (risk_score < 80) → ALLOW
 [[rules]]
 method       = "GET"
-host         = "httpbin.org"
-path         = "/get"
+host         = "wttr.in"
 action_class = "communication.external.send"
 
-# ── HTTP demo: blocked ────────────────────────────────────────────────────────
-# curl -x http://127.0.0.1:8080 http://httpbin.org/ip
-# Cedar forbid fires (resource == httpbin.org/ip) → DENY
+# ── get_ip_info: blocked ──────────────────────────────────────────────────────
+# ask the agent "Look up my IP info"
+# Cedar forbid fires (resource == ipinfo.io/json) → DENY
 [[rules]]
 method       = "GET"
-host         = "httpbin.org"
-path         = "/ip"
+host         = "ipinfo.io"
+path         = "/json"
 action_class = "communication.external.send"
 
 # ── Uncomment below once task 007 wires IssueCapability → CapabilityMap ──────
@@ -39,16 +38,6 @@ action_class = "communication.external.send"
 # method       = "POST"
 # host         = "api.openai.com"
 # path         = "/v1/chat/completions"
-# action_class = "communication.external.send"
-#
-# [[rules]]
-# method       = "GET"
-# host         = "wttr.in"
-# action_class = "communication.external.send"
-#
-# [[rules]]
-# method       = "GET"
-# host         = "ipinfo.io"
 # action_class = "communication.external.send"
 #
 # [[rules]]
