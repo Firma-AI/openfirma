@@ -56,7 +56,7 @@ impl CedarPolicyStore {
         schema_path: Option<PathBuf>,
         bundle_ttl_seconds: u32,
     ) -> Result<Self> {
-        let (policies_src, policy_set) = read_policy_files(policy_dir)?;
+        let (policies_src, policy_set) = read_policies(policy_dir)?;
         let (schema_src, schema) = read_schema(schema_path.as_deref())?;
 
         let version = compute_version_hash(&policies_src, &schema_src);
@@ -91,7 +91,7 @@ impl CedarPolicyStore {
     /// acquisition. If the new policy set is invalid, keeps the previous set
     /// (FR-2). No-ops if the version hash has not changed.
     async fn reload(&self) -> Result<()> {
-        let (policies_src, new_policy_set) = read_policy_files(&self.policy_dir)?;
+        let (policies_src, new_policy_set) = read_policies(&self.policy_dir)?;
         let (schema_src, new_schema) = read_schema(self.schema_path.as_deref())?;
         let new_version = compute_version_hash(&policies_src, &schema_src);
 
@@ -230,7 +230,7 @@ impl CedarPolicyStoreWatcher {
 }
 
 /// Read all `.cedar` files from a directory and concatenate their contents.
-fn read_policy_files(policy_dir: &Path) -> Result<(String, PolicySet)> {
+fn read_policies(policy_dir: &Path) -> Result<(String, PolicySet)> {
     if !policy_dir.is_dir() {
         bail!("policy directory does not exist: {}", policy_dir.display());
     }
