@@ -1,6 +1,6 @@
 # Firma Example Cedar Policies
 
-Cedar policies and schema for the Firma examples. Loaded by `firma-authority`
+Cedar policies for the Firma examples. Loaded by `firma-authority`
 and streamed to `firma-sidecar` as a policy bundle.
 
 > **NOT FOR PRODUCTION USE.** Starting points and demo policies only.
@@ -11,18 +11,23 @@ and streamed to `firma-sidecar` as a policy bundle.
 
 | File | Purpose |
 |------|---------|
-| `schema.cedarschema` | Canonical Firma schema — 15 FEP v0.1 action classes, shared by Authority and Sidecar |
 | `demo.cedar` | E2E demo policy — permits normal agent traffic, hard-blocks `paste.rs` (exfiltration demo) |
 | `communication.cedar` | Reference policy for `communication.internal.send` / `communication.external.send` |
 | `credential.cedar` | Reference policy for `credential.read` / `credential.write` |
 | `filesystem.cedar` | Reference policy for `filesystem.read` / `filesystem.write` / `filesystem.delete` |
 | `payment.cedar` | Reference policy for `payment.purchase` / `payment.transfer` with Layer 2 counter constraints |
 
+The canonical schema (`EnforcementContext`, 15 action classes) lives at
+`crates/firma-authority/schema.cedarschema` and is embedded in the
+`firma-authority` binary. Place a `schema.cedarschema` beside your `.cedar`
+files to override it, or set `schema_path` in the authority config.
+
 ---
 
 ## Schema
 
-`schema.cedarschema` declares three entity types and 15 action classes:
+`crates/firma-authority/schema.cedarschema` declares three entity types and
+15 action classes:
 
 ```
 namespace Firma {
@@ -121,8 +126,7 @@ Layer 2 context fields (`risk_score`, `budget_remaining`, `transfer_amount`,
 `daily_cumulative_amount`, etc.). Do not reference `raw_transport` or
 `raw_action_ref` in policy conditions — those are transport-layer facts.
 
-Place `.cedar` files alongside `schema.cedarschema`. The authority loads all
-`*.cedar` files in the directory alphabetically.
+The authority loads all `*.cedar` files in `policy_dir` alphabetically.
 
 ---
 
@@ -154,10 +158,9 @@ No provenance or LLM reasoning is required — only deterministic Layer 2 counte
 
 ## Testing locally
 
-**Rust unit tests** (fastest; tests run against the actual policy files):
+**Rust unit tests** (fastest; tests use inlined policy fixtures):
 
 ```bash
-# Payment-splitting scenario + counter constraints
 cargo test -p firma-sidecar payment_splitting_blocked_at_daily_limit
 cargo test -p firma-sidecar payment_single_transfer_ceiling_enforced
 cargo test -p firma-sidecar payment_payee_concentration_enforced
@@ -174,7 +177,7 @@ cd examples/e2e && bash run.sh
 ```bash
 cedar authorize \
   --policies examples/policies/payment.cedar \
-  --schema  examples/policies/schema.cedarschema \
+  --schema  crates/firma-authority/schema.cedarschema \
   --entities '[]' \
   --principal 'Firma::Agent::"example-agent"' \
   --action    'Firma::Action::"payment.transfer"' \

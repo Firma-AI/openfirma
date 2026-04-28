@@ -263,7 +263,7 @@ Defaults: `capacity = 1_000_000`, `fpr = 0.0001`, and
 Stage 2 builds the Cedar `EnforcementContext` from the immutable request
 envelope, validated capability claims, and per-session runtime signals.
 The canonical schema lives in
-`crates/firma-authority/policies/schema.cedarschema`; the sidecar test
+`crates/firma-authority/schema.cedarschema` (embedded in the binary); the sidecar test
 schema in `cedar_evaluator.rs` must match it exactly.
 
 | Attribute            | Cedar type | Source |

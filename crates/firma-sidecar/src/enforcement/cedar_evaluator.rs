@@ -720,7 +720,10 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
                 &ctx,
             )
             .unwrap();
-        assert!(!allowed, "transfer exceeding single-transfer ceiling must be denied");
+        assert!(
+            !allowed,
+            "transfer exceeding single-transfer ceiling must be denied"
+        );
     }
 
     #[test]

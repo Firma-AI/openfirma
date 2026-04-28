@@ -263,9 +263,9 @@ Components that bind to the registry:
   `mapping.rules_path` in the Sidecar config) — rule authors MUST review
   new entries against §2.3.2 naming rules and the authoring guidance in
   this document.
-- `crates/firma-authority/policies/schema.cedarschema` — declares the 15
-  actions for Cedar type-checking. Identifiers MUST be byte-identical to
-  the Sidecar registry.
+- `crates/firma-authority/schema.cedarschema` — canonical schema embedded in
+  the binary; declares the 15 actions for Cedar type-checking. Identifiers
+  MUST be byte-identical to the Sidecar registry.
 - `crates/firma-authority/src/cedar_loader.rs` — hardcoded action
   allow-list used during policy validation MUST stay in sync with the
   registry.
