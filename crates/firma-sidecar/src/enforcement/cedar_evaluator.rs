@@ -614,30 +614,41 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
     when { context.transfers_last_10m >= 10 };
 "#;
 
-    fn payment_context(
+    #[derive(serde::Serialize)]
+    struct PaymentCtx {
+        session_id: &'static str,
+        timestamp_ms: i64,
+        params: &'static str,
         risk_score: i64,
         budget_remaining: i64,
+        session_duration_s: i64,
+        action_count: i64,
+        raw_transport: &'static str,
         transfer_amount: i64,
         daily_cumulative_amount: i64,
         transfers_last_10m: i64,
         same_payee_count_30m: i64,
         session_transfer_count: i64,
-    ) -> serde_json::Value {
-        json!({
-            "session_id": "sess-payment-split",
-            "timestamp_ms": 1_700_000_000_000i64,
-            "params": "{}",
-            "risk_score": risk_score,
-            "budget_remaining": budget_remaining,
-            "session_duration_s": 0i64,
-            "action_count": 1i64,
-            "raw_transport": "https",
-            "transfer_amount": transfer_amount,
-            "daily_cumulative_amount": daily_cumulative_amount,
-            "transfers_last_10m": transfers_last_10m,
-            "same_payee_count_30m": same_payee_count_30m,
-            "session_transfer_count": session_transfer_count,
-        })
+    }
+
+    impl Default for PaymentCtx {
+        fn default() -> Self {
+            Self {
+                session_id: "sess-payment-split",
+                timestamp_ms: 1_700_000_000_000,
+                params: "{}",
+                risk_score: 10,
+                budget_remaining: 5_000_000,
+                session_duration_s: 0,
+                action_count: 1,
+                raw_transport: "https",
+                transfer_amount: 0,
+                daily_cumulative_amount: 0,
+                transfers_last_10m: 0,
+                same_payee_count_30m: 0,
+                session_transfer_count: 0,
+            }
+        }
     }
 
     fn payment_bundle() -> PolicyBundle {
@@ -660,7 +671,12 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
 
         for i in 0..5i64 {
             let cumulative = i * 200_000;
-            let ctx = payment_context(10, 5_000_000, 200_000, cumulative, 0, 0, i);
+            let ctx = serde_json::to_value(PaymentCtx {
+                transfer_amount: 200_000,
+                daily_cumulative_amount: cumulative,
+                ..PaymentCtx::default()
+            })
+            .unwrap();
             let allowed = evaluator
                 .evaluate(&subject, "payment.transfer", resource, &ctx)
                 .unwrap();
@@ -672,7 +688,12 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
         }
 
         // Transfer 6: daily_cumulative_amount already at cap.
-        let ctx = payment_context(10, 5_000_000, 200_000, 1_000_000, 0, 0, 5);
+        let ctx = serde_json::to_value(PaymentCtx {
+            transfer_amount: 200_000,
+            daily_cumulative_amount: 1_000_000,
+            ..PaymentCtx::default()
+        })
+        .unwrap();
         let allowed = evaluator
             .evaluate(&subject, "payment.transfer", resource, &ctx)
             .unwrap();
@@ -684,9 +705,13 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
 
     #[test]
     fn payment_single_transfer_ceiling_enforced() {
-        // A single transfer of $6,000 (600_000 cents) exceeds the $5,000 ceiling.
+        // A single $6,000 transfer (600_000 cents) exceeds the $5,000 ceiling.
         let evaluator = CedarPolicyEvaluator::from_bundle(&payment_bundle()).unwrap();
-        let ctx = payment_context(10, 5_000_000, 600_000, 0, 0, 0, 0);
+        let ctx = serde_json::to_value(PaymentCtx {
+            transfer_amount: 600_000,
+            ..PaymentCtx::default()
+        })
+        .unwrap();
         let allowed = evaluator
             .evaluate(
                 &agent("example-agent"),
@@ -695,17 +720,19 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
                 &ctx,
             )
             .unwrap();
-        assert!(
-            !allowed,
-            "transfer exceeding single-transfer ceiling must be denied"
-        );
+        assert!(!allowed, "transfer exceeding single-transfer ceiling must be denied");
     }
 
     #[test]
     fn payment_payee_concentration_enforced() {
-        // 3 prior transfers to the same payee in 30 minutes triggers the concentration forbid.
+        // 3 prior transfers to same payee in 30 minutes triggers the concentration forbid.
         let evaluator = CedarPolicyEvaluator::from_bundle(&payment_bundle()).unwrap();
-        let ctx = payment_context(10, 5_000_000, 100_000, 0, 0, 3, 3);
+        let ctx = serde_json::to_value(PaymentCtx {
+            transfer_amount: 100_000,
+            same_payee_count_30m: 3,
+            ..PaymentCtx::default()
+        })
+        .unwrap();
         let allowed = evaluator
             .evaluate(
                 &agent("example-agent"),
@@ -721,7 +748,11 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
     fn payment_transfer_permitted_within_all_limits() {
         // Clean state: $1,000 transfer, no prior activity. Should be permitted.
         let evaluator = CedarPolicyEvaluator::from_bundle(&payment_bundle()).unwrap();
-        let ctx = payment_context(10, 5_000_000, 100_000, 0, 0, 0, 0);
+        let ctx = serde_json::to_value(PaymentCtx {
+            transfer_amount: 100_000,
+            ..PaymentCtx::default()
+        })
+        .unwrap();
         let allowed = evaluator
             .evaluate(
                 &agent("example-agent"),

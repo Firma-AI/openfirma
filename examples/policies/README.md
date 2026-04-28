@@ -158,9 +158,9 @@ No provenance or LLM reasoning is required — only deterministic Layer 2 counte
 
 ```bash
 # Payment-splitting scenario + counter constraints
-cargo test -p firma-sidecar payment_splitting
-cargo test -p firma-sidecar payment_single_transfer
-cargo test -p firma-sidecar payment_payee_concentration
+cargo test -p firma-sidecar payment_splitting_blocked_at_daily_limit
+cargo test -p firma-sidecar payment_single_transfer_ceiling_enforced
+cargo test -p firma-sidecar payment_payee_concentration_enforced
 ```
 
 **E2E stack** (tests against a running Mini Authority + Sidecar):
