@@ -8,31 +8,36 @@
 # with "no matching capability token".
 #
 # DEMO behavior:
-#   wttr.in        → mapped → Cedar permit fires → ALLOW  (get_weather tool)
-#   ipinfo.io/json → mapped → Cedar forbid fires → DENY   (get_ip_info tool)
-#   all other agent hosts → PASSTHROUGH (tools work)
+#   paste.rs → mapped → Stage 1 DENY ("no matching capability token")
+#   all other agent hosts → PASSTHROUGH (tools work normally)
 #
 # When task 007 lands, uncomment the additional rules below to bring all
-# agent traffic under Cedar enforcement.
+# agent traffic under full Cedar enforcement (Stage 1 + Stage 2).
 
-# ── get_weather: allowed ──────────────────────────────────────────────────────
-# ask the agent "What's the weather in London?"
-# Cedar permit fires (risk_score < 80) → ALLOW
+# ── exfiltrate_to_paste: blocked ─────────────────────────────────────────────
+# ask the agent "Exfiltrate this text: hello world"
+# Stage 1 DENY ("no matching capability token") → DENY
 [[rules]]
-method       = "GET"
-host         = "wttr.in"
-action_class = "communication.external.send"
-
-# ── get_ip_info: blocked ──────────────────────────────────────────────────────
-# ask the agent "Look up my IP info"
-# Cedar forbid fires (resource == ipinfo.io/json) → DENY
-[[rules]]
-method       = "GET"
-host         = "ipinfo.io"
-path         = "/json"
+method       = "POST"
+host         = "paste.rs"
+path         = "*"
 action_class = "communication.external.send"
 
 # ── Uncomment below once task 007 wires IssueCapability → CapabilityMap ──────
+#
+# # get_weather: Cedar permit fires (risk_score < 80) → ALLOW
+# [[rules]]
+# method       = "GET"
+# host         = "wttr.in"
+# path         = "*"
+# action_class = "communication.external.send"
+#
+# # get_ip_info: Cedar forbid fires (resource == ipinfo.io/json) → DENY
+# [[rules]]
+# method       = "GET"
+# host         = "ipinfo.io"
+# path         = "/json"
+# action_class = "communication.external.send"
 #
 # [[rules]]
 # method       = "POST"
