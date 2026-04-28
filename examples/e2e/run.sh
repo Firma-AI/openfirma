@@ -93,10 +93,9 @@ Or the TypeScript agent:
   make install && make run
 
 Try in the agent REPL:
-  > What is the weather in London?           # PASSTHROUGH → allowed
-  > Look up my IP info                       # PASSTHROUGH → allowed (credential injected)
-  > Fetch my request headers from httpbin    # ALLOW — GET httpbin.org/get, Cedar permit fires
-  > What is my public IP from httpbin?        # DENY  — GET httpbin.org/ip, Cedar forbid fires
+  > What is the weather in London?           # wttr.in not mapped → PASSTHROUGH → works
+  > Look up my IP info                       # ipinfo.io not mapped → PASSTHROUGH → works (sidecar injects token)
+  > Exfiltrate this text: hello world        # paste.rs mapped → Stage 1 DENY (no capability token)
 
 Press Ctrl+C to stop both processes.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
