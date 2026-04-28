@@ -557,4 +557,179 @@ namespace Firma {
 
         assert!(!allowed, "expected DENY when risk_score > threshold");
     }
+
+    // ── Payment-splitting scenario (Layer 2 counter enforcement) ─────────────
+    //
+    // Scenario from Enforcement Memory Model §2:
+    //   An agent attempts 6 × $2,000 transfers against a $10,000 daily limit.
+    //   Transfers 1–5 are permitted (cumulative: $2k→$4k→$6k→$8k→$10k).
+    //   Transfer 6 is denied: daily_cumulative_amount ($10,000) + transfer_amount
+    //   ($2,000) = $12,000 exceeds the $10,000 daily cap.
+    //
+    // Run with: cargo test -p firma-sidecar payment_splitting
+
+    const PAYMENT_SCHEMA: &str = r#"namespace Firma {
+    entity Agent;
+    entity Resource;
+    type PaymentContext = {
+        session_id: String,
+        timestamp_ms: Long,
+        params: String,
+        risk_score: Long,
+        budget_remaining: Long,
+        session_duration_s: Long,
+        action_count: Long,
+        raw_transport: String,
+        transfer_amount: Long,
+        daily_cumulative_amount: Long,
+        transfers_last_10m: Long,
+        same_payee_count_30m: Long,
+        session_transfer_count: Long
+    };
+    action "payment.transfer" appliesTo { principal: [Agent], resource: [Resource], context: PaymentContext };
+    action "payment.purchase" appliesTo { principal: [Agent], resource: [Resource], context: PaymentContext };
+}"#;
+
+    // Daily cap: $10,000 (1_000_000 cents). Single-transfer ceiling: $5,000 (500_000 cents).
+    // Payee concentration: < 3 per 30-minute window. Velocity: < 10 per 10-minute window.
+    const PAYMENT_POLICY: &str = r#"
+permit (
+    principal == Firma::Agent::"example-agent",
+    action == Firma::Action::"payment.transfer",
+    resource
+) when {
+    context.budget_remaining > 0 &&
+    context.risk_score < 30 &&
+    context.transfer_amount <= 500000 &&
+    context.daily_cumulative_amount + context.transfer_amount <= 1000000 &&
+    context.same_payee_count_30m < 3
+};
+forbid (principal, action == Firma::Action::"payment.transfer", resource)
+    when { context.daily_cumulative_amount + context.transfer_amount > 1000000 };
+forbid (principal, action == Firma::Action::"payment.transfer", resource)
+    when { context.transfer_amount > 500000 };
+forbid (principal, action == Firma::Action::"payment.transfer", resource)
+    when { context.same_payee_count_30m >= 3 };
+forbid (principal, action == Firma::Action::"payment.transfer", resource)
+    when { context.transfers_last_10m >= 10 };
+"#;
+
+    fn payment_context(
+        risk_score: i64,
+        budget_remaining: i64,
+        transfer_amount: i64,
+        daily_cumulative_amount: i64,
+        transfers_last_10m: i64,
+        same_payee_count_30m: i64,
+        session_transfer_count: i64,
+    ) -> serde_json::Value {
+        json!({
+            "session_id": "sess-payment-split",
+            "timestamp_ms": 1_700_000_000_000i64,
+            "params": "{}",
+            "risk_score": risk_score,
+            "budget_remaining": budget_remaining,
+            "session_duration_s": 0i64,
+            "action_count": 1i64,
+            "raw_transport": "https",
+            "transfer_amount": transfer_amount,
+            "daily_cumulative_amount": daily_cumulative_amount,
+            "transfers_last_10m": transfers_last_10m,
+            "same_payee_count_30m": same_payee_count_30m,
+            "session_transfer_count": session_transfer_count,
+        })
+    }
+
+    fn payment_bundle() -> PolicyBundle {
+        PolicyBundle::new(
+            "payment-v1".to_string(),
+            PAYMENT_POLICY.as_bytes().to_vec(),
+            PAYMENT_SCHEMA.as_bytes().to_vec(),
+            30,
+        )
+    }
+
+    #[test]
+    fn payment_splitting_blocked_at_daily_limit() {
+        // Transfers 1–5: each $2,000 (200_000 cents); cumulative goes
+        // 0 → 200_000 → 400_000 → 600_000 → 800_000 → 1_000_000. All permitted.
+        // Transfer 6: cumulative 1_000_000 + 200_000 = 1_200_000 > daily cap → denied.
+        let evaluator = CedarPolicyEvaluator::from_bundle(&payment_bundle()).unwrap();
+        let subject = agent("example-agent");
+        let resource = "payments.example.com";
+
+        for i in 0..5i64 {
+            let cumulative = i * 200_000;
+            let ctx = payment_context(10, 5_000_000, 200_000, cumulative, 0, 0, i);
+            let allowed = evaluator
+                .evaluate(&subject, "payment.transfer", resource, &ctx)
+                .unwrap();
+            assert!(
+                allowed,
+                "transfer {} (cumulative_before={cumulative} cents) should be permitted",
+                i + 1
+            );
+        }
+
+        // Transfer 6: daily_cumulative_amount already at cap.
+        let ctx = payment_context(10, 5_000_000, 200_000, 1_000_000, 0, 0, 5);
+        let allowed = evaluator
+            .evaluate(&subject, "payment.transfer", resource, &ctx)
+            .unwrap();
+        assert!(
+            !allowed,
+            "transfer 6 must be denied: daily_cumulative_amount + transfer_amount > 1_000_000"
+        );
+    }
+
+    #[test]
+    fn payment_single_transfer_ceiling_enforced() {
+        // A single transfer of $6,000 (600_000 cents) exceeds the $5,000 ceiling.
+        let evaluator = CedarPolicyEvaluator::from_bundle(&payment_bundle()).unwrap();
+        let ctx = payment_context(10, 5_000_000, 600_000, 0, 0, 0, 0);
+        let allowed = evaluator
+            .evaluate(
+                &agent("example-agent"),
+                "payment.transfer",
+                "payments.example.com",
+                &ctx,
+            )
+            .unwrap();
+        assert!(
+            !allowed,
+            "transfer exceeding single-transfer ceiling must be denied"
+        );
+    }
+
+    #[test]
+    fn payment_payee_concentration_enforced() {
+        // 3 prior transfers to the same payee in 30 minutes triggers the concentration forbid.
+        let evaluator = CedarPolicyEvaluator::from_bundle(&payment_bundle()).unwrap();
+        let ctx = payment_context(10, 5_000_000, 100_000, 0, 0, 3, 3);
+        let allowed = evaluator
+            .evaluate(
+                &agent("example-agent"),
+                "payment.transfer",
+                "payments.example.com",
+                &ctx,
+            )
+            .unwrap();
+        assert!(!allowed, "same-payee concentration >= 3 must be denied");
+    }
+
+    #[test]
+    fn payment_transfer_permitted_within_all_limits() {
+        // Clean state: $1,000 transfer, no prior activity. Should be permitted.
+        let evaluator = CedarPolicyEvaluator::from_bundle(&payment_bundle()).unwrap();
+        let ctx = payment_context(10, 5_000_000, 100_000, 0, 0, 0, 0);
+        let allowed = evaluator
+            .evaluate(
+                &agent("example-agent"),
+                "payment.transfer",
+                "payments.example.com",
+                &ctx,
+            )
+            .unwrap();
+        assert!(allowed, "transfer within all limits must be permitted");
+    }
 }

@@ -1,4 +1,4 @@
-// Communication capability policies — copy-paste starting point.
+// Communication capability policies — reference implementation.
 //
 // Principals: Firma::Agent::"<your-agent-id>"
 // Actions:    communication.internal.send | communication.external.send
@@ -6,6 +6,8 @@
 //
 // Internal messages are low-risk. External messages are gated on risk score
 // to prevent data exfiltration by a compromised or mis-prompted agent.
+// HTTP vs HTTPS enforcement is handled at the transport layer (normalizer),
+// not in Cedar policies.
 
 // Internal sends are always permitted — low blast radius.
 permit (
@@ -33,12 +35,3 @@ forbid (
     context.risk_score >= 80
 };
 
-// Block plain-HTTP external sends — HTTPS only.
-// HTTP is unencrypted; intercepted traffic could leak credentials or PII.
-forbid (
-    principal,
-    action == Firma::Action::"communication.external.send",
-    resource
-) when {
-    context.raw_transport == "http"
-};

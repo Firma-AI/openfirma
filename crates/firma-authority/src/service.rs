@@ -330,11 +330,9 @@ impl CedarDecision {
 ///
 /// Context at issuance time carries `session_id`, `timestamp_ms`, and
 /// `risk_score` (V1 placeholder = 0). `params` is empty (`"{}"`) because no
-/// specific intent exists yet at issuance. The runtime-signal fields
-/// (`budget_remaining`, `session_duration_s`, `action_count`) are populated
-/// with schema-compatible placeholders (`i64::MAX`, `0`, `0`) — the Authority
-/// has no session history at pre-flight, but all 7 fields are required by
-/// the canonical `EnforcementContext` schema.
+/// specific intent exists yet at issuance. Runtime-signal fields are populated
+/// with schema-compatible placeholders — the Authority has no session history
+/// at pre-flight, but all fields required by `EnforcementContext` must be present.
 fn evaluate_cedar_policy(
     policy_set: &PolicySet,
     schema: Option<&Schema>,
@@ -384,6 +382,12 @@ fn evaluate_cedar_policy(
             "budget_remaining": i64::MAX,
             "session_duration_s": 0i64,
             "action_count": 0i64,
+            "raw_transport": "https",
+            "transfer_amount": 0i64,
+            "daily_cumulative_amount": 0i64,
+            "transfers_last_10m": 0i64,
+            "same_payee_count_30m": 0i64,
+            "session_transfer_count": 0i64,
         });
         let schema_with_action = schema.map(|s| (s, &action_entity));
         let cedar_context = match Context::from_json_value(context_json, schema_with_action) {
