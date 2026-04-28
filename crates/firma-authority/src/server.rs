@@ -57,6 +57,7 @@ impl Server {
         // Load Cedar policies
         let policy_store = Arc::new(CedarPolicyStore::load(
             &config.policy_dir,
+            config.schema_path.clone(),
             config.bundle_ttl_seconds,
         )?);
 

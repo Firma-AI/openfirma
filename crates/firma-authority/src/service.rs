@@ -531,7 +531,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e:?}"))
     }
 
-    const FIRMA_SCHEMA: &str = include_str!("../../firma-authority/policies/schema.cedarschema");
+    const FIRMA_SCHEMA: &str = crate::cedar_loader::DEFAULT_SCHEMA;
 
     fn firma_schema() -> Schema {
         let (schema, _) = Schema::from_cedarschema_str(FIRMA_SCHEMA)
