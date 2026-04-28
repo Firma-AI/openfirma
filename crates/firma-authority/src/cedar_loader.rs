@@ -376,7 +376,7 @@ mod tests {
     #[tokio::test]
     async fn reload_no_changes() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
-        let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap_or_else(|e| panic!("{e}"));
+        let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap();
         let result = store.reload().await;
         assert!(result.is_ok());
     }
@@ -384,7 +384,7 @@ mod tests {
     #[tokio::test]
     async fn reload_detects_changes() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
-        let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap_or_else(|e| panic!("{e}"));
+        let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap();
         let v1 = store.bundle().version.clone();
 
         // Add a new policy file
@@ -392,7 +392,7 @@ mod tests {
             dir.path().join("deny.cedar"),
             "forbid(principal, action, resource);",
         )
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap();
 
         let result = store.reload().await;
         assert!(result.is_ok());
@@ -403,10 +403,10 @@ mod tests {
     #[tokio::test]
     async fn watch_reloads_on_policy_change() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
-        let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap_or_else(|e| panic!("{e}"));
+        let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap();
         let v1 = store.bundle().version.clone();
 
-        let watcher = store.watch().unwrap_or_else(|e| panic!("{e}"));
+        let watcher = store.watch().unwrap();
         let mut rx = watcher.subscribe();
         let _ = rx.borrow_and_update().clone(); // mark initial value as seen
         tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
@@ -415,21 +415,12 @@ mod tests {
             dir.path().join("deny.cedar"),
             "forbid(principal, action, resource);",
         )
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap();
 
-        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
-        loop {
-            if store.bundle().version != v1 {
-                break;
-            }
-            let now = tokio::time::Instant::now();
-            assert!(now < deadline, "timed out waiting for policy reload");
-            let remaining = deadline.saturating_duration_since(now);
-            tokio::time::timeout(remaining, rx.changed())
-                .await
-                .unwrap_or_else(|_| panic!("timed out waiting for policy reload"))
-                .unwrap_or_else(|e| panic!("{e}"));
-        }
+        tokio::time::timeout(tokio::time::Duration::from_secs(5), rx.changed())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for policy reload"))
+            .unwrap();
 
         assert_ne!(store.bundle().version, v1);
     }
@@ -437,37 +428,56 @@ mod tests {
     #[tokio::test]
     async fn watch_subscribe_receives_bundle_update() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
-        let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap_or_else(|e| panic!("{e}"));
-        let watcher = store.watch().unwrap_or_else(|e| panic!("{e}"));
+        let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap();
+        let watcher = store.watch().unwrap();
         let mut rx = watcher.subscribe();
-        let _ = rx.borrow_and_update().clone(); // mark initial value as seen
+        let initial_bundle = rx.borrow_and_update().clone();
         tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
 
         std::fs::write(
             dir.path().join("deny.cedar"),
             "forbid(principal, action, resource);",
         )
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap();
 
-        let initial_bundle = rx.borrow().clone();
-        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
-        loop {
-            let bundle = rx.borrow().clone();
-            if bundle.version != initial_bundle.version {
-                break;
-            }
-            let now = tokio::time::Instant::now();
-            assert!(now < deadline, "timed out waiting for bundle update");
-            let remaining = deadline.saturating_duration_since(now);
-            tokio::time::timeout(remaining, rx.changed())
-                .await
-                .unwrap_or_else(|_| panic!("timed out waiting for bundle update"))
-                .unwrap_or_else(|e| panic!("{e}"));
-        }
+        tokio::time::timeout(tokio::time::Duration::from_secs(5), rx.changed())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for bundle update"))
+            .unwrap();
 
-        let bundle = rx.borrow_and_update().clone();
+        let bundle = rx.borrow().clone();
         assert!(!bundle.version.is_empty());
         assert_ne!(bundle.version, initial_bundle.version);
+    }
+
+    #[tokio::test]
+    async fn watch_reloads_on_schema_change() {
+        // Start with a local schema.cedarschema in policy_dir (step 2 of resolution order).
+        // Modifying it must trigger a reload and change the bundle version.
+        let dir = setup_policy_dir(&[
+            ("basic.cedar", "permit(principal, action, resource);"),
+            ("schema.cedarschema", DEFAULT_SCHEMA),
+        ]);
+        let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap();
+        let v1 = store.bundle().version.clone();
+
+        let watcher = store.watch().unwrap();
+        let mut rx = watcher.subscribe();
+        let _ = rx.borrow_and_update().clone();
+        tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+
+        // Append a comment — schema bytes change, version hash must change.
+        let schema_path = dir.path().join("schema.cedarschema");
+        let mut schema_src = fs::read_to_string(&schema_path).unwrap();
+        schema_src.push_str("\n// updated");
+        fs::write(&schema_path, &schema_src).unwrap();
+
+        tokio::time::timeout(tokio::time::Duration::from_secs(5), rx.changed())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for schema reload"))
+            .unwrap();
+
+        assert_ne!(store.bundle().version, v1);
     }
 
     #[test]
