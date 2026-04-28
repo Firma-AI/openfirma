@@ -377,7 +377,6 @@ impl ConstraintEnforcer {
             "budget_remaining": signals.budget_remaining_long(claims.budget_ceiling),
             "session_duration_s": session_duration_s,
             "action_count": i64::try_from(signals.action_count).unwrap_or(i64::MAX),
-            "raw_transport": envelope.intent.raw_transport,
         })
     }
 }
@@ -675,7 +674,7 @@ mod tests {
 
         let context = evaluator.build_context(&envelope, &claims, &signals);
 
-        // Canonical schema fields (8 total):
+        // Canonical schema fields (7 total):
         assert_eq!(context["session_id"], "sess_001");
         assert!(context["timestamp_ms"].is_i64());
         assert!(context["params"].is_string());
@@ -683,7 +682,6 @@ mod tests {
         assert_eq!(context["budget_remaining"], serde_json::json!(87));
         assert_eq!(context["session_duration_s"], serde_json::json!(42));
         assert_eq!(context["action_count"], serde_json::json!(7));
-        assert_eq!(context["raw_transport"], "https");
 
         // Schema does not declare action_class / resource / agent_id /
         // timestamp — they are passed as Cedar principal/action/resource
