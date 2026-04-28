@@ -9,7 +9,7 @@
 // Actions:   the 15 canonical Firma action classes from FEP v0.1 §2.3.5
 // Resource:  Firma::Resource::"<host/path>"
 
-// Allow external communication (weather, IP info, LLM calls, email, Supabase).
+// Allow external communication (weather, LLM calls, email, Supabase).
 permit (
     principal == Firma::Agent::"example-agent",
     action == Firma::Action::"communication.external.send",
@@ -34,10 +34,10 @@ permit (
     context.risk_score < 70
 };
 
-// Block httpbin.org/ip — exposes the agent's egress IP, data-leak risk.
-// Demo: curl -x http://127.0.0.1:8080 http://httpbin.org/ip → DENY
+// Block ipinfo.io/json — exposes the agent's egress IP, data-leak risk.
+// get_ip_info tool: GET https://ipinfo.io/json → DENY
 forbid (
     principal,
     action == Firma::Action::"communication.external.send",
-    resource == Firma::Resource::"httpbin.org/ip"
+    resource == Firma::Resource::"ipinfo.io/json"
 );
