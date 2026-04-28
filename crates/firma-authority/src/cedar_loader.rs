@@ -11,16 +11,16 @@ use firma_core::policy::PolicyBundle;
 
 /// Canonical Firma enforcement schema, embedded at compile time.
 ///
-/// Used when no `schema.cedarschema` is found in `policy_dir` and no
-/// explicit `schema_path` is configured. Overriding is intentional —
-/// operators who extend the action registry can drop a `schema.cedarschema`
-/// beside their policy files or set `schema_path` in the authority config.
+/// Used as the default schema when no explicit `schema_path` is configured.
+/// Overriding is intentional — operators who extend the action registry
+/// can set `schema_path` in the authority config to point to their custom
+/// `.cedarschema` or `.json` file.
 pub(crate) const DEFAULT_SCHEMA: &str = include_str!("../schema.cedarschema");
 
 /// All mutable policy state kept under a single lock for atomic swaps.
 struct PolicyState {
     policy_set: Arc<PolicySet>,
-    schema: Option<Arc<Schema>>,
+    schema: Arc<Schema>,
 }
 
 /// Thread-safe Cedar policy store with hot-reload support.
@@ -36,8 +36,7 @@ pub struct CedarPolicyStore {
     bundle_tx: watch::Sender<PolicyBundle>,
     /// Policy directory path (`.cedar` files).
     policy_dir: PathBuf,
-    /// Explicit schema path override. `None` → fall back to `policy_dir/schema.cedarschema`,
-    /// then to [`DEFAULT_SCHEMA`].
+    /// Explicit schema path override. When `None`, falls back to [`DEFAULT_SCHEMA`].
     schema_path: Option<PathBuf>,
     /// Bundle TTL in seconds.
     bundle_ttl_seconds: u32,
@@ -58,7 +57,7 @@ impl CedarPolicyStore {
         bundle_ttl_seconds: u32,
     ) -> Result<Self> {
         let (policies_src, policy_set) = read_policy_files(policy_dir)?;
-        let (schema_src, schema) = read_schema(policy_dir, schema_path.as_deref())?;
+        let (schema_src, schema) = read_schema(schema_path.as_deref())?;
 
         let version = compute_version_hash(&policies_src, &schema_src);
         let bundle = PolicyBundle::new(
@@ -79,7 +78,7 @@ impl CedarPolicyStore {
         Ok(Self {
             state: Arc::new(RwLock::new(PolicyState {
                 policy_set: Arc::new(policy_set),
-                schema: schema.map(Arc::new),
+                schema: Arc::new(schema),
             })),
             bundle_tx,
             policy_dir: policy_dir.to_path_buf(),
@@ -93,7 +92,7 @@ impl CedarPolicyStore {
     /// (FR-2). No-ops if the version hash has not changed.
     async fn reload(&self) -> Result<()> {
         let (policies_src, new_policy_set) = read_policy_files(&self.policy_dir)?;
-        let (schema_src, new_schema) = read_schema(&self.policy_dir, self.schema_path.as_deref())?;
+        let (schema_src, new_schema) = read_schema(self.schema_path.as_deref())?;
         let new_version = compute_version_hash(&policies_src, &schema_src);
 
         let new_bundle = {
@@ -111,7 +110,7 @@ impl CedarPolicyStore {
             );
 
             state.policy_set = Arc::new(new_policy_set);
-            state.schema = new_schema.map(Arc::new);
+            state.schema = Arc::new(new_schema);
             bundle
         };
 
@@ -127,8 +126,8 @@ impl CedarPolicyStore {
         self.state.read().await.policy_set.clone()
     }
 
-    /// Get the current schema, if one was loaded.
-    pub async fn schema(&self) -> Option<Arc<Schema>> {
+    /// Get the current schema snapshot for evaluation.
+    pub async fn schema(&self) -> Arc<Schema> {
         self.state.read().await.schema.clone()
     }
 
@@ -183,9 +182,8 @@ impl CedarPolicyStore {
             .with_context(|| format!("failed to watch policy directory {}", path.display()))?;
 
         if let Some(ref sp) = schema_path {
-            // Only watch the schema file explicitly if it is outside the policy directory
-            // (or if we can't be sure it's inside). notify handles double-watching
-            // on some platforms but not all.
+            // Watch the schema file explicitly. If it is inside the policy directory,
+            // notify handles the overlap on most platforms; if outside, this is required.
             if !sp.starts_with(&path) {
                 watcher
                     .watch(sp, notify::RecursiveMode::NonRecursive)
@@ -272,19 +270,14 @@ fn read_policy_files(policy_dir: &Path) -> Result<(String, PolicySet)> {
 
 /// Read Cedar schema using the resolution order:
 ///   1. `schema_path` if explicitly provided
-///   2. `policy_dir/schema.cedarschema` or `policy_dir/schema.json` if present
-///   3. [`DEFAULT_SCHEMA`] (embedded canonical schema)
-fn read_schema(policy_dir: &Path, schema_path: Option<&Path>) -> Result<(String, Option<Schema>)> {
+///   2. [`DEFAULT_SCHEMA`] (embedded canonical schema)
+fn read_schema(schema_path: Option<&Path>) -> Result<(String, Schema)> {
     let schema_src = if let Some(path) = schema_path {
         std::fs::read_to_string(path)
             .with_context(|| format!("cannot read schema {}", path.display()))?
     } else {
-        try_read_schema(policy_dir).unwrap_or_else(|_| DEFAULT_SCHEMA.to_string())
+        DEFAULT_SCHEMA.to_string()
     };
-
-    if schema_src.is_empty() {
-        return Ok((schema_src, None));
-    }
 
     let (schema, warnings) = Schema::from_cedarschema_str(&schema_src)
         .map_err(anyhow::Error::from)
@@ -293,29 +286,7 @@ fn read_schema(policy_dir: &Path, schema_path: Option<&Path>) -> Result<(String,
         tracing::warn!(%w, "cedar schema warning");
     }
 
-    Ok((schema_src, Some(schema)))
-}
-
-/// Try to read Cedar schema from the policy directory.
-///
-/// Returns the schema contents if a `schema.cedarschema` or `schema.json`
-/// file is found. Returns an `io::Error` otherwise.
-fn try_read_schema(policy_dir: &Path) -> std::io::Result<String> {
-    // Try `.cedarschema` first (human-readable format), then `.json`
-    let schema_path = policy_dir.join("schema.cedarschema");
-    if schema_path.is_file() {
-        return std::fs::read_to_string(&schema_path);
-    }
-
-    let schema_json_path = policy_dir.join("schema.json");
-    if schema_json_path.is_file() {
-        return std::fs::read_to_string(&schema_json_path);
-    }
-
-    Err(std::io::Error::new(
-        std::io::ErrorKind::NotFound,
-        "no schema file found",
-    ))
+    Ok((schema_src, schema))
 }
 
 /// Compute SHA-256 version hash from policy + schema source.
@@ -461,13 +432,13 @@ mod tests {
 
     #[tokio::test]
     async fn watch_reloads_on_schema_change() {
-        // Start with a local schema.cedarschema in policy_dir (step 2 of resolution order).
-        // Modifying it must trigger a reload and change the bundle version.
+        // Now requires explicit schema_path to use a local file.
         let dir = setup_policy_dir(&[
             ("basic.cedar", "permit(principal, action, resource);"),
             ("schema.cedarschema", DEFAULT_SCHEMA),
         ]);
-        let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap();
+        let schema_path = dir.path().join("schema.cedarschema");
+        let store = CedarPolicyStore::load(dir.path(), Some(schema_path.clone()), 30).unwrap();
         let v1 = store.bundle().version.clone();
 
         let watcher = store.watch().unwrap();
@@ -476,7 +447,6 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
 
         // Append a comment — schema bytes change, version hash must change.
-        let schema_path = dir.path().join("schema.cedarschema");
         let mut schema_src = fs::read_to_string(&schema_path).unwrap();
         schema_src.push_str("\n// updated");
         fs::write(&schema_path, &schema_src).unwrap();
