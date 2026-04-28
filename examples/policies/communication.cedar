@@ -34,4 +34,3 @@ forbid (
 ) when {
     context.risk_score >= 80
 };
-
