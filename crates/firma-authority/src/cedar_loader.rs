@@ -9,6 +9,14 @@ use tokio::task::JoinHandle;
 
 use firma_core::policy::PolicyBundle;
 
+/// Canonical Firma enforcement schema, embedded at compile time.
+///
+/// Used when no `schema.cedarschema` is found in `policy_dir` and no
+/// explicit `schema_path` is configured. Overriding is intentional —
+/// operators who extend the action registry can drop a `schema.cedarschema`
+/// beside their policy files or set `schema_path` in the authority config.
+pub(crate) const DEFAULT_SCHEMA: &str = include_str!("../schema.cedarschema");
+
 /// All mutable policy state kept under a single lock for atomic swaps.
 struct PolicyState {
     policy_set: Arc<PolicySet>,
@@ -26,8 +34,11 @@ pub struct CedarPolicyStore {
     state: Arc<RwLock<PolicyState>>,
     /// Watch channel for policy bundle updates (push to sidecars).
     bundle_tx: watch::Sender<PolicyBundle>,
-    /// Policy directory path.
+    /// Policy directory path (`.cedar` files).
     policy_dir: PathBuf,
+    /// Explicit schema path override. `None` → fall back to `policy_dir/schema.cedarschema`,
+    /// then to [`DEFAULT_SCHEMA`].
+    schema_path: Option<PathBuf>,
     /// Bundle TTL in seconds.
     bundle_ttl_seconds: u32,
 }
@@ -41,8 +52,12 @@ impl CedarPolicyStore {
     ///
     /// Returns an error if the policy directory cannot be read or
     /// any `.cedar` file contains invalid syntax.
-    pub fn load(policy_dir: &Path, bundle_ttl_seconds: u32) -> Result<Self> {
-        let (policies_src, schema_src) = read_policy_files(policy_dir)?;
+    pub fn load(
+        policy_dir: &Path,
+        schema_path: Option<PathBuf>,
+        bundle_ttl_seconds: u32,
+    ) -> Result<Self> {
+        let (policies_src, schema_src) = read_policy_files(policy_dir, schema_path.as_deref())?;
         let policy_set = parse_policies(&policies_src)?;
         let schema = parse_schema(&schema_src)?;
 
@@ -69,6 +84,7 @@ impl CedarPolicyStore {
             })),
             bundle_tx,
             policy_dir: policy_dir.to_path_buf(),
+            schema_path,
             bundle_ttl_seconds,
         })
     }
@@ -77,7 +93,8 @@ impl CedarPolicyStore {
     /// acquisition. If the new policy set is invalid, keeps the previous set
     /// (FR-2). No-ops if the version hash has not changed.
     async fn reload(&self) -> Result<()> {
-        let (policies_src, schema_src) = read_policy_files(&self.policy_dir)?;
+        let (policies_src, schema_src) =
+            read_policy_files(&self.policy_dir, self.schema_path.as_deref())?;
         let new_policy_set = parse_policies(&policies_src)?;
         let new_schema = parse_schema(&schema_src)?;
         let new_version = compute_version_hash(&policies_src, &schema_src);
@@ -204,8 +221,12 @@ impl CedarPolicyStoreWatcher {
 }
 
 /// Read all `.cedar` files from a directory and concatenate their contents.
-/// Also reads `schema.cedarschema` or `schema.json` if present.
-fn read_policy_files(policy_dir: &Path) -> Result<(String, String)> {
+///
+/// Schema resolution order:
+///   1. `schema_path` if explicitly provided
+///   2. `policy_dir/schema.cedarschema` or `policy_dir/schema.json` if present
+///   3. [`DEFAULT_SCHEMA`] (embedded canonical schema)
+fn read_policy_files(policy_dir: &Path, schema_path: Option<&Path>) -> Result<(String, String)> {
     if !policy_dir.is_dir() {
         bail!("policy directory does not exist: {}", policy_dir.display());
     }
@@ -231,8 +252,12 @@ fn read_policy_files(policy_dir: &Path) -> Result<(String, String)> {
         }
     }
 
-    // Try to load schema
-    let schema_src = try_read_schema(policy_dir).unwrap_or_default();
+    let schema_src = if let Some(path) = schema_path {
+        std::fs::read_to_string(path)
+            .with_context(|| format!("cannot read schema {}", path.display()))?
+    } else {
+        try_read_schema(policy_dir).unwrap_or_else(|_| DEFAULT_SCHEMA.to_string())
+    };
 
     Ok((policies, schema_src))
 }
@@ -310,27 +335,27 @@ mod tests {
     #[test]
     fn load_empty_policy_dir() {
         let dir = setup_policy_dir(&[]);
-        let store = CedarPolicyStore::load(dir.path(), 30);
+        let store = CedarPolicyStore::load(dir.path(), None, 30);
         assert!(store.is_ok());
     }
 
     #[test]
     fn load_valid_policy() {
         let dir = setup_policy_dir(&[("allow-all.cedar", "permit(principal, action, resource);")]);
-        let store = CedarPolicyStore::load(dir.path(), 30);
+        let store = CedarPolicyStore::load(dir.path(), None, 30);
         assert!(store.is_ok());
     }
 
     #[test]
     fn load_invalid_policy_fails_fast() {
         let dir = setup_policy_dir(&[("bad.cedar", "this is not valid cedar syntax {{{")]);
-        let store = CedarPolicyStore::load(dir.path(), 30);
+        let store = CedarPolicyStore::load(dir.path(), None, 30);
         assert!(store.is_err());
     }
 
     #[test]
     fn nonexistent_dir_fails() {
-        let store = CedarPolicyStore::load(Path::new("/nonexistent/path"), 30);
+        let store = CedarPolicyStore::load(Path::new("/nonexistent/path"), None, 30);
         assert!(store.is_err());
     }
 
@@ -351,7 +376,7 @@ mod tests {
     #[tokio::test]
     async fn reload_no_changes() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
-        let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
+        let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap_or_else(|e| panic!("{e}"));
         let result = store.reload().await;
         assert!(result.is_ok());
     }
@@ -359,7 +384,7 @@ mod tests {
     #[tokio::test]
     async fn reload_detects_changes() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
-        let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
+        let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap_or_else(|e| panic!("{e}"));
         let v1 = store.bundle().version.clone();
 
         // Add a new policy file
@@ -378,7 +403,7 @@ mod tests {
     #[tokio::test]
     async fn watch_reloads_on_policy_change() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
-        let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
+        let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap_or_else(|e| panic!("{e}"));
         let v1 = store.bundle().version.clone();
 
         let watcher = store.watch().unwrap_or_else(|e| panic!("{e}"));
@@ -412,7 +437,7 @@ mod tests {
     #[tokio::test]
     async fn watch_subscribe_receives_bundle_update() {
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
-        let store = CedarPolicyStore::load(dir.path(), 30).unwrap_or_else(|e| panic!("{e}"));
+        let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap_or_else(|e| panic!("{e}"));
         let watcher = store.watch().unwrap_or_else(|e| panic!("{e}"));
         let mut rx = watcher.subscribe();
         let _ = rx.borrow_and_update().clone(); // mark initial value as seen
@@ -449,7 +474,7 @@ mod tests {
     fn extended_enforcement_context_parses() {
         use cedar_policy::{Context, EntityUid, Schema};
 
-        const SCHEMA_SRC: &str = include_str!("../policies/schema.cedarschema");
+        const SCHEMA_SRC: &str = DEFAULT_SCHEMA;
         let (schema, _) = Schema::from_cedarschema_str(SCHEMA_SRC)
             .unwrap_or_else(|e| panic!("schema parse failed: {e}"));
         let action_uid: EntityUid = "Firma::Action::\"communication.external.send\""
@@ -480,7 +505,7 @@ mod tests {
             Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request, Schema,
         };
 
-        const SCHEMA_SRC: &str = include_str!("../policies/schema.cedarschema");
+        const SCHEMA_SRC: &str = DEFAULT_SCHEMA;
         const ACTIONS: &[&str] = &[
             "account.permission.change",
             "browser.purchase",
