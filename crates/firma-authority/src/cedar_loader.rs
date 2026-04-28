@@ -57,9 +57,8 @@ impl CedarPolicyStore {
         schema_path: Option<PathBuf>,
         bundle_ttl_seconds: u32,
     ) -> Result<Self> {
-        let (policies_src, schema_src) = read_policy_files(policy_dir, schema_path.as_deref())?;
-        let policy_set = parse_policies(&policies_src)?;
-        let schema = parse_schema(&schema_src)?;
+        let (policies_src, policy_set) = read_policy_files(policy_dir)?;
+        let (schema_src, schema) = read_schema(policy_dir, schema_path.as_deref())?;
 
         let version = compute_version_hash(&policies_src, &schema_src);
         let bundle = PolicyBundle::new(
@@ -93,10 +92,8 @@ impl CedarPolicyStore {
     /// acquisition. If the new policy set is invalid, keeps the previous set
     /// (FR-2). No-ops if the version hash has not changed.
     async fn reload(&self) -> Result<()> {
-        let (policies_src, schema_src) =
-            read_policy_files(&self.policy_dir, self.schema_path.as_deref())?;
-        let new_policy_set = parse_policies(&policies_src)?;
-        let new_schema = parse_schema(&schema_src)?;
+        let (policies_src, new_policy_set) = read_policy_files(&self.policy_dir)?;
+        let (schema_src, new_schema) = read_schema(&self.policy_dir, self.schema_path.as_deref())?;
         let new_version = compute_version_hash(&policies_src, &schema_src);
 
         let new_bundle = {
@@ -155,10 +152,10 @@ impl CedarPolicyStore {
         use notify::Watcher as _;
 
         let path = self.policy_dir.clone();
+        let schema_path = self.schema_path.clone();
         let this = self.clone();
         let (tx_signal, mut rx_signal) = tokio::sync::mpsc::channel::<()>(16);
 
-        let watch_path = path.clone();
         let event_handler = move |res: notify::Result<notify::Event>| match res {
             Ok(event)
                 if matches!(
@@ -168,19 +165,33 @@ impl CedarPolicyStore {
                         | notify::event::EventKind::Remove(_)
                 ) =>
             {
-                tracing::info!(path = %watch_path.display(), "policy directory changed; reloading");
+                if let Some(p) = event.paths.first() {
+                    tracing::info!(path = %p.display(), "hot-reload triggered by file change");
+                } else {
+                    tracing::info!("hot-reload triggered");
+                }
                 let _ = tx_signal.try_send(());
             }
-            Err(error) => tracing::error!(?error, "policy directory watch error"),
+            Err(error) => tracing::error!(?error, "policy watch error"),
             _ => {}
         };
 
-        let watcher = notify::recommended_watcher(event_handler)
-            .context("failed to create policy directory watcher")?;
-        let mut watcher = watcher;
+        let mut watcher = notify::recommended_watcher(event_handler)
+            .context("failed to create policy watcher")?;
         watcher
             .watch(&path, notify::RecursiveMode::Recursive)
             .with_context(|| format!("failed to watch policy directory {}", path.display()))?;
+
+        if let Some(ref sp) = schema_path {
+            // Only watch the schema file explicitly if it is outside the policy directory
+            // (or if we can't be sure it's inside). notify handles double-watching
+            // on some platforms but not all.
+            if !sp.starts_with(&path) {
+                watcher
+                    .watch(sp, notify::RecursiveMode::NonRecursive)
+                    .with_context(|| format!("failed to watch schema file {}", sp.display()))?;
+            }
+        }
 
         let task = tokio::spawn(async move {
             while rx_signal.recv().await.is_some() {
@@ -221,12 +232,7 @@ impl CedarPolicyStoreWatcher {
 }
 
 /// Read all `.cedar` files from a directory and concatenate their contents.
-///
-/// Schema resolution order:
-///   1. `schema_path` if explicitly provided
-///   2. `policy_dir/schema.cedarschema` or `policy_dir/schema.json` if present
-///   3. [`DEFAULT_SCHEMA`] (embedded canonical schema)
-fn read_policy_files(policy_dir: &Path, schema_path: Option<&Path>) -> Result<(String, String)> {
+fn read_policy_files(policy_dir: &Path) -> Result<(String, PolicySet)> {
     if !policy_dir.is_dir() {
         bail!("policy directory does not exist: {}", policy_dir.display());
     }
@@ -252,6 +258,23 @@ fn read_policy_files(policy_dir: &Path, schema_path: Option<&Path>) -> Result<(S
         }
     }
 
+    let parsed = if policies.is_empty() {
+        PolicySet::new()
+    } else {
+        policies
+            .parse::<PolicySet>()
+            .map_err(anyhow::Error::from)
+            .context("cedar policy parse error")?
+    };
+
+    Ok((policies, parsed))
+}
+
+/// Read Cedar schema using the resolution order:
+///   1. `schema_path` if explicitly provided
+///   2. `policy_dir/schema.cedarschema` or `policy_dir/schema.json` if present
+///   3. [`DEFAULT_SCHEMA`] (embedded canonical schema)
+fn read_schema(policy_dir: &Path, schema_path: Option<&Path>) -> Result<(String, Option<Schema>)> {
     let schema_src = if let Some(path) = schema_path {
         std::fs::read_to_string(path)
             .with_context(|| format!("cannot read schema {}", path.display()))?
@@ -259,7 +282,18 @@ fn read_policy_files(policy_dir: &Path, schema_path: Option<&Path>) -> Result<(S
         try_read_schema(policy_dir).unwrap_or_else(|_| DEFAULT_SCHEMA.to_string())
     };
 
-    Ok((policies, schema_src))
+    if schema_src.is_empty() {
+        return Ok((schema_src, None));
+    }
+
+    let (schema, warnings) = Schema::from_cedarschema_str(&schema_src)
+        .map_err(anyhow::Error::from)
+        .context("cedar schema parse error")?;
+    for w in warnings {
+        tracing::warn!(%w, "cedar schema warning");
+    }
+
+    Ok((schema_src, Some(schema)))
 }
 
 /// Try to read Cedar schema from the policy directory.
@@ -282,31 +316,6 @@ fn try_read_schema(policy_dir: &Path) -> std::io::Result<String> {
         std::io::ErrorKind::NotFound,
         "no schema file found",
     ))
-}
-
-/// Parse Cedar policy source into a `PolicySet`.
-fn parse_policies(source: &str) -> Result<PolicySet> {
-    if source.is_empty() {
-        return Ok(PolicySet::new());
-    }
-    source
-        .parse::<PolicySet>()
-        .map_err(anyhow::Error::from)
-        .context("cedar policy parse error")
-}
-
-/// Parse Cedar schema source into a `Schema`.
-fn parse_schema(source: &str) -> Result<Option<Schema>> {
-    if source.is_empty() {
-        return Ok(None);
-    }
-    let (schema, warnings) = Schema::from_cedarschema_str(source)
-        .map_err(anyhow::Error::from)
-        .context("cedar schema parse error")?;
-    for w in warnings {
-        tracing::warn!(%w, "cedar schema warning");
-    }
-    Ok(Some(schema))
 }
 
 /// Compute SHA-256 version hash from policy + schema source.
@@ -475,6 +484,34 @@ mod tests {
         tokio::time::timeout(tokio::time::Duration::from_secs(5), rx.changed())
             .await
             .unwrap_or_else(|_| panic!("timed out waiting for schema reload"))
+            .unwrap();
+
+        assert_ne!(store.bundle().version, v1);
+    }
+
+    #[tokio::test]
+    async fn watch_reloads_on_external_schema_change() {
+        let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
+        let schema_dir = tempfile::tempdir().unwrap();
+        let schema_path = schema_dir.path().join("external.cedarschema");
+        fs::write(&schema_path, DEFAULT_SCHEMA).unwrap();
+
+        let store = CedarPolicyStore::load(dir.path(), Some(schema_path.clone()), 30).unwrap();
+        let v1 = store.bundle().version.clone();
+
+        let watcher = store.watch().unwrap();
+        let mut rx = watcher.subscribe();
+        let _ = rx.borrow_and_update().clone();
+        tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+
+        // Modify external schema
+        let mut schema_src = fs::read_to_string(&schema_path).unwrap();
+        schema_src.push_str("\n// external update");
+        fs::write(&schema_path, &schema_src).unwrap();
+
+        tokio::time::timeout(tokio::time::Duration::from_secs(5), rx.changed())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for external schema reload"))
             .unwrap();
 
         assert_ne!(store.bundle().version, v1);
