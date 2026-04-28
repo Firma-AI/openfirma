@@ -463,6 +463,12 @@ mod tests {
             "budget_remaining": 1000i64,
             "session_duration_s": 42i64,
             "action_count": 3i64,
+            "raw_transport": "https",
+            "transfer_amount": 0i64,
+            "daily_cumulative_amount": 0i64,
+            "transfers_last_10m": 0i64,
+            "same_payee_count_30m": 0i64,
+            "session_transfer_count": 0i64,
         });
         Context::from_json_value(context_json, Some((&schema, &action_uid)))
             .unwrap_or_else(|e| panic!("context validation failed: {e}"));
@@ -506,6 +512,12 @@ mod tests {
             "budget_remaining": i64::MAX,
             "session_duration_s": 0i64,
             "action_count": 0i64,
+            "raw_transport": "https",
+            "transfer_amount": 0i64,
+            "daily_cumulative_amount": 0i64,
+            "transfers_last_10m": 0i64,
+            "same_payee_count_30m": 0i64,
+            "session_transfer_count": 0i64,
         });
 
         for action in ACTIONS {

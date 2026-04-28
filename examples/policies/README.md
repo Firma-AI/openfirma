@@ -14,8 +14,9 @@ and streamed to `firma-sidecar` as a policy bundle.
 | `schema.cedarschema` | Canonical Firma schema — 15 FEP v0.1 action classes, shared by Authority and Sidecar |
 | `demo.cedar` | E2E demo policy — permits normal agent traffic, hard-blocks `paste.rs` (exfiltration demo) |
 | `communication.cedar` | Reference policy for `communication.internal.send` / `communication.external.send` |
+| `credential.cedar` | Reference policy for `credential.read` / `credential.write` |
 | `filesystem.cedar` | Reference policy for `filesystem.read` / `filesystem.write` / `filesystem.delete` |
-| `payment.cedar` | Reference policy for `payment.purchase` / `payment.transfer` |
+| `payment.cedar` | Reference policy for `payment.purchase` / `payment.transfer` with Layer 2 counter constraints |
 
 ---
 
@@ -55,6 +56,17 @@ namespace Firma {
 | `budget_remaining` | Long | Ceiling minus consumed; `i64::MAX` when unbounded |
 | `session_duration_s` | Long | Seconds since `claims.issued_at` |
 | `action_count` | Long | Monotonic per-session counter, 1-based |
+| `raw_transport` | String | `"http"` or `"https"`; set by normalizer — use sparingly in policies |
+| `transfer_amount` | Long | Current transfer amount in cents; `0` for non-payment actions |
+| `daily_cumulative_amount` | Long | Rolling 24-hour committed amount in cents |
+| `transfers_last_10m` | Long | Transfer count in the last 10-minute window |
+| `same_payee_count_30m` | Long | Transfers to same payee in the last 30 minutes |
+| `session_transfer_count` | Long | Total transfers in this session |
+
+The last five fields are **Layer 2 counter fields** populated by the Sidecar's
+runtime enforcement context builder. Policies should condition on the semantic
+fields (`transfer_amount`, `daily_cumulative_amount`, etc.) rather than
+`raw_transport` or `raw_action_ref`.
 
 ---
 
@@ -66,13 +78,13 @@ Full registry: `docs/markdown/firma_action_class_registry.md`.
 |---|---|
 | `communication.external.send` | Outbound HTTP to external hosts |
 | `communication.internal.send` | Inbound / internal service calls |
+| `credential.read` | Reading secrets or tokens |
+| `credential.write` | Writing secrets or tokens |
 | `filesystem.read` | GET on storage endpoints |
 | `filesystem.write` | POST / PUT on storage endpoints |
 | `filesystem.delete` | DELETE on storage endpoints |
 | `payment.purchase` | Browser purchase flows |
 | `payment.transfer` | Transfer / wire operations |
-| `credential.read` | Reading secrets or tokens |
-| `credential.write` | Writing secrets or tokens |
 | `memory.cross_namespace.read` | Cross-agent memory read |
 | `memory.cross_namespace.write` | Cross-agent memory write |
 | `system.execute` | Shell / process execution |
@@ -104,14 +116,79 @@ forbid (
 );
 ```
 
+All policies bind to `action_class` and `resource`. Conditions reference
+Layer 2 context fields (`risk_score`, `budget_remaining`, `transfer_amount`,
+`daily_cumulative_amount`, etc.). Do not reference `raw_transport` or
+`raw_action_ref` in policy conditions — those are transport-layer facts.
+
 Place `.cedar` files alongside `schema.cedarschema`. The authority loads all
 `*.cedar` files in the directory alphabetically.
 
 ---
 
-## Using with the E2E example
+## Payment-splitting scenario (Layer 2 counter enforcement)
 
-`examples/e2e/authority.toml` points `policy_dir = "examples/policies"`.
-The E2E demo uses `demo.cedar` only. Reference policies (`communication.cedar`,
-`filesystem.cedar`, `payment.cedar`) are copy-paste starting points — they are
-not loaded unless placed in the configured `policy_dir`.
+`payment.cedar` demonstrates how the daily cumulative limit blocks quota
+circumvention. An agent attempting 6 × $2,000 transfers against a $10,000
+daily cap:
+
+| # | `transfer_amount` | `daily_cumulative_amount` | Cumulative total | Decision |
+|---|---|---|---|---|
+| 1 | $2,000 | $0 | $2,000 | **PERMIT** |
+| 2 | $2,000 | $2,000 | $4,000 | **PERMIT** |
+| 3 | $2,000 | $4,000 | $6,000 | **PERMIT** |
+| 4 | $2,000 | $6,000 | $8,000 | **PERMIT** |
+| 5 | $2,000 | $8,000 | $10,000 | **PERMIT** |
+| 6 | $2,000 | $10,000 | $12,000 | **DENY** ← daily limit forbid fires |
+
+Transfer 6 is blocked by the Cedar forbid:
+
+```cedar
+forbid (principal, action == Firma::Action::"payment.transfer", resource)
+when { context.daily_cumulative_amount + context.transfer_amount > 1000000 };
+```
+
+No provenance or LLM reasoning is required — only deterministic Layer 2 counters.
+
+---
+
+## Testing locally
+
+**Rust unit tests** (fastest; tests run against the actual policy files):
+
+```bash
+# Payment-splitting scenario + counter constraints
+cargo test -p firma-sidecar payment_splitting
+cargo test -p firma-sidecar payment_single_transfer
+cargo test -p firma-sidecar payment_payee_concentration
+```
+
+**E2E stack** (tests against a running Mini Authority + Sidecar):
+
+```bash
+cd examples/e2e && bash run.sh
+```
+
+**Cedar CLI** (requires `cedar` CLI: `brew install cedar-policy/tap/cedar`):
+
+```bash
+cedar authorize \
+  --policies examples/policies/payment.cedar \
+  --schema  examples/policies/schema.cedarschema \
+  --entities '[]' \
+  --principal 'Firma::Agent::"example-agent"' \
+  --action    'Firma::Action::"payment.transfer"' \
+  --resource  'Firma::Resource::"payments.example.com"' \
+  --context '{
+    "session_id":"s1", "timestamp_ms":0, "params":"{}",
+    "risk_score":10, "budget_remaining":5000000,
+    "session_duration_s":0, "action_count":1,
+    "raw_transport":"https",
+    "transfer_amount":200000,
+    "daily_cumulative_amount":1000000,
+    "transfers_last_10m":0,
+    "same_payee_count_30m":0,
+    "session_transfer_count":5
+  }'
+# Expected output: DENY  (daily limit exceeded on transfer 6)
+```
