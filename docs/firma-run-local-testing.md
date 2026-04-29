@@ -187,9 +187,10 @@ sed -n '1,200p' /tmp/firma-run/<sandbox_id>/dns-stub.log
 ```
 
 In structural `bwrap` mode, `/etc/resolv.conf` points at `127.0.0.1`.
-The V1 DNS stub intentionally refuses direct resolver queries so host ambient
-DNS cannot become a bypass path; proxied HTTP/HTTPS traffic still carries
-hostnames through the sidecar path.
+The V1 DNS path intentionally refuses direct resolver queries when the stub can
+bind port 53. In unprivileged bwrap mode, low-port bind may fail; the wrapper
+continues with the same localhost resolver fail-closed behavior. Proxied
+HTTP/HTTPS traffic still carries hostnames through the sidecar path.
 
 ## CONNECT implementation note
 

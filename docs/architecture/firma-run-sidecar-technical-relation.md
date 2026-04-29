@@ -78,9 +78,11 @@ Linux structural mode:
 - sandbox `/etc/resolv.conf` is generated and mounted by `firma-run`.
 - the resolver points at the sandbox-local DNS stub (`127.0.0.1:53`), not the
   host resolver.
-- the current DNS stub refuses lookups deterministically; HTTP proxy traffic
-  continues to carry hostnames to the sidecar, and direct resolver use fails
-  closed instead of using ambient host DNS.
+- the DNS stub refuses lookups deterministically when the sandbox can bind
+  port 53; in unprivileged bwrap mode where low-port bind is unavailable, the
+  localhost resolver path still fails closed.
+- HTTP proxy traffic continues to carry hostnames to the sidecar, and direct
+  resolver use fails closed instead of using ambient host DNS.
 
 ### 4.2 HTTP request path
 

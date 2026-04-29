@@ -65,8 +65,10 @@ DNS confinement was required but initially lacked concrete implementation. With 
 
 1. `firma-run` generates sandbox-specific `resolv.conf`.
 2. `resolv.conf` points to sandbox-local DNS stub (`127.0.0.1`).
-3. Current V1 DNS stub refuses lookups deterministically, so direct resolver use
-   fails closed instead of falling back to host ambient DNS.
+3. Current V1 DNS path refuses lookups deterministically when the DNS stub can
+   bind port 53. In unprivileged bwrap mode where low-port bind is unavailable,
+   the localhost resolver path still fails closed instead of falling back to host
+   ambient DNS.
 4. HTTP proxy traffic continues to carry hostnames through the sandbox-local
    proxy bridge to the sidecar mediation endpoint.
 5. Direct resolver traffic outside the controlled path is blocked by sandbox confinement.

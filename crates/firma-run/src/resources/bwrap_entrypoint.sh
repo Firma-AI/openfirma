@@ -30,13 +30,11 @@ if [ -n "${FIRMA_RUN_DNS_STUB_LISTEN_ADDR:-}" ]; then
   sleep 0.2
   if ! kill -0 "$dns_pid" 2>/dev/null; then
     echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] dns stub startup failed pid=${dns_pid}" >>"${dns_log}"
-    echo "error: DNS stub failed to start (see ${dns_log})" >&2
-    if [ -f "$dns_log" ]; then
-      sed -n '1,120p' "$dns_log" >&2 || true
-    fi
-    exit 1
+    echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] continuing with localhost resolver fail-closed path" >>"${dns_log}"
+    dns_pid=""
+  else
+    echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] dns stub ready pid=${dns_pid}" >>"${dns_log}"
   fi
-  echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] dns stub ready pid=${dns_pid}" >>"${dns_log}"
 fi
 
 if [ -n "${FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS:-}" ]; then
