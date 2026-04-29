@@ -25,6 +25,8 @@ clap = { workspace = true, features = [
     "usage",
 ] }
 crossterm = "0.28"
-ratatui = "0.29"
+ratatui = "0.30"
+tui-markdown = "0.3.7"
+ansi-to-tui = "8"
 tracing.workspace = true
 tracing-subscriber.workspace = true

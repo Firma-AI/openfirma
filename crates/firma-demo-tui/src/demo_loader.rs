@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, ensure};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub struct DemoEntry {
@@ -14,6 +15,67 @@ pub struct DemoManifest {
     pub sidecar_config: PathBuf,
     pub agent_script: PathBuf,
     pub agent_prompt: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConfigItem {
+    pub key: String,
+    pub value: String,
+    pub description: String,
+}
+
+/// Load the .env.sample as a template for dynamic configuration.
+/// Populates with values from .env if it exists.
+pub fn load_config_template(dir: &Path) -> Vec<ConfigItem> {
+    let sample_path = dir.join(".env.sample");
+    let env_path = dir.join(".env");
+
+    let sample_content = match std::fs::read_to_string(&sample_path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    // Load actual .env values if they exist
+    let mut env_values = HashMap::new();
+    if let Ok(env_content) = std::fs::read_to_string(&env_path) {
+        for line in env_content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((key, value)) = line.split_once('=') {
+                env_values.insert(key.trim().to_string(), value.trim().to_string());
+            }
+        }
+    }
+
+    let mut items = Vec::new();
+    let mut current_description = Vec::new();
+
+    for line in sample_content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if line.starts_with('#') {
+            current_description.push(line.trim_start_matches('#').trim().to_string());
+            continue;
+        }
+
+        if let Some((key, _)) = line.split_once('=') {
+            let key = key.trim().to_string();
+            let value = env_values.get(&key).cloned().unwrap_or_default();
+            items.push(ConfigItem {
+                key,
+                value,
+                description: current_description.join(" "),
+            });
+            current_description.clear();
+        }
+    }
+
+    items
 }
 
 /// Scan a directory for demo subdirectories (any dir containing description.md).
