@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 
@@ -11,7 +11,6 @@ use super::{App, Phase};
 pub fn render(f: &mut Frame, app: &App) {
     match app.phase {
         Phase::Menu => render_menu(f, app),
-        Phase::Description => render_description(f, app),
         Phase::Running => render_running(f, app),
     }
 }
@@ -24,28 +23,25 @@ fn render_menu(f: &mut Frame, app: &App) {
         .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(area);
 
-    let block = Block::default()
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+        .split(outer[0]);
+
+    // --- Left: demo list ---
+    let list_block = Block::default()
         .title(" Firma Demo System ")
         .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
-    let inner = block.inner(outer[0]);
-    f.render_widget(block, outer[0]);
+    let list_inner = list_block.inner(columns[0]);
+    f.render_widget(list_block, columns[0]);
 
-    let layout = Layout::default()
+    let list_layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-
-    let subtitle = Paragraph::new("Select a demo to run")
-        .alignment(Alignment::Center)
-        .style(Style::default().fg(Color::DarkGray));
-    f.render_widget(subtitle, layout[0]);
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(list_inner);
 
     let items: Vec<ListItem> = app
         .menu_entries
@@ -61,64 +57,39 @@ fn render_menu(f: &mut Frame, app: &App) {
             } else {
                 Style::default().fg(Color::White)
             };
-            let tagline_style = Style::default().fg(Color::DarkGray);
-
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("{prefix}{}", entry.name), name_style),
-                Span::raw("  "),
-                Span::styled(entry.tagline.as_str(), tagline_style),
-            ]))
+            ListItem::new(Span::styled(format!("{prefix}{}", entry.name), name_style))
         })
         .collect();
 
     let mut state = ListState::default();
     state.select(Some(app.menu_selected));
-    f.render_stateful_widget(List::new(items), layout[1], &mut state);
+    f.render_stateful_widget(List::new(items), list_layout[0], &mut state);
 
-    let hint = Paragraph::new("↑↓ / j k  navigate    Enter  select    q  quit")
+    let hint = Paragraph::new("↑↓/jk navigate  Enter select  q quit")
         .alignment(Alignment::Center)
         .style(Style::default().fg(Color::DarkGray));
-    f.render_widget(hint, layout[2]);
+    f.render_widget(hint, list_layout[1]);
+
+    // --- Right: description of selected demo ---
+    let selected_entry = app.menu_entries.get(app.menu_selected);
+    let desc_title = selected_entry
+        .map(|e| format!(" {} ", e.tagline))
+        .unwrap_or_else(|| " Description ".to_owned());
+
+    let desc_block = Block::default()
+        .title(desc_title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let desc_inner = desc_block.inner(columns[1]);
+    f.render_widget(desc_block, columns[1]);
+
+    let desc_text = selected_entry.map_or("", |e| e.description.as_str());
+    let desc = Paragraph::new(md_to_text(desc_text)).wrap(Wrap { trim: false });
+    f.render_widget(desc, desc_inner);
 
     let status = Paragraph::new("↑↓ navigate   Enter select   q quit")
         .style(Style::default().fg(Color::DarkGray));
-    f.render_widget(status, outer[1]);
-}
-
-fn render_description(f: &mut Frame, app: &App) {
-    let area = f.area();
-
-    let outer = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
-        .split(area);
-
-    let block = Block::default()
-        .title(" Firma Demo ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-
-    let inner = block.inner(outer[0]);
-    f.render_widget(block, outer[0]);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
-        .split(inner);
-
-    let description = app
-        .manifest
-        .as_ref()
-        .map_or("", |m| m.description.as_str());
-    let text = Paragraph::new(description).wrap(Wrap { trim: false });
-    f.render_widget(text, chunks[0]);
-
-    let hint = Paragraph::new("Press any key to start — q to quit")
-        .style(Style::default().fg(Color::DarkGray));
-    f.render_widget(hint, chunks[1]);
-
-    let status =
-        Paragraph::new("[any key] start   [q] quit").style(Style::default().fg(Color::DarkGray));
     f.render_widget(status, outer[1]);
 }
 
@@ -222,4 +193,71 @@ fn render_agent_pane(f: &mut Frame, area: Rect, app: &App) {
     let input_line = format!("> {}", app.input);
     let input = Paragraph::new(input_line.as_str()).style(Style::default().fg(Color::White));
     f.render_widget(input, chunks[1]);
+}
+
+/// Minimal Markdown → ratatui Text converter.
+/// Handles headings, bold, bullet lists, code fences, and plain text.
+fn md_to_text(md: &str) -> Text<'static> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut in_code_block = false;
+
+    for raw in md.lines() {
+        if raw.starts_with("```") {
+            in_code_block = !in_code_block;
+            if in_code_block {
+                lines.push(Line::from(Span::styled(
+                    raw.to_owned(),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            continue;
+        }
+
+        if in_code_block {
+            lines.push(Line::from(Span::styled(
+                raw.to_owned(),
+                Style::default().fg(Color::DarkGray),
+            )));
+            continue;
+        }
+
+        let line = if let Some(rest) = raw.strip_prefix("### ") {
+            Line::from(Span::styled(
+                rest.to_owned(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ))
+        } else if let Some(rest) = raw.strip_prefix("## ") {
+            Line::from(Span::styled(
+                rest.to_owned(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ))
+        } else if let Some(rest) = raw.strip_prefix("# ") {
+            Line::from(Span::styled(
+                rest.to_owned(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            ))
+        } else if let Some(rest) = raw.strip_prefix("- ").or_else(|| raw.strip_prefix("* ")) {
+            Line::from(Span::styled(
+                format!("• {rest}"),
+                Style::default().fg(Color::Gray),
+            ))
+        } else if raw.is_empty() {
+            Line::from("")
+        } else {
+            Line::from(Span::styled(
+                raw.to_owned(),
+                Style::default().fg(Color::Gray),
+            ))
+        };
+
+        lines.push(line);
+    }
+
+    Text::from(lines)
 }
