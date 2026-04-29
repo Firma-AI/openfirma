@@ -30,6 +30,32 @@ use firma_core::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
 /// Exact match, not glob — typo-squat hostnames must not be tagged.
 const GITHUB_HOSTS: &[&str] = &["api.github.com", "github.com"];
 
+/// Hosts whose traffic earns the `provider = "stripe"` resource tag.
+/// Exact match, not glob.
+const STRIPE_HOSTS: &[&str] = &["api.stripe.com"];
+
+/// Hosts whose traffic earns the `provider = "gmail"` resource tag.
+/// Only `gmail.googleapis.com` qualifies — the legacy `www.googleapis.com`
+/// host serves many non-Gmail Google APIs (Drive, Calendar, ...) and would
+/// mis-tag traffic if added here.
+const GMAIL_HOSTS: &[&str] = &["gmail.googleapis.com"];
+
+/// Resolve a request host to a logical provider tag, if any. Used to populate
+/// `intent.resource["provider"]`. Returns `None` for hosts outside the known
+/// allowlist; downstream Cedar policies can still discriminate on
+/// `host`/`path` directly.
+fn provider_for_host(host: &str) -> Option<&'static str> {
+    if GITHUB_HOSTS.contains(&host) {
+        Some("github")
+    } else if STRIPE_HOSTS.contains(&host) {
+        Some("stripe")
+    } else if GMAIL_HOSTS.contains(&host) {
+        Some("gmail")
+    } else {
+        None
+    }
+}
+
 pub use self::mapping::{MappingTable, MatchResult};
 pub use crate::enforcement::decision::{EnforcementDecision, EnforcementStage};
 use crate::enforcement::error::EnforcementError;
@@ -151,8 +177,8 @@ impl IntentNormalizer {
                 let mut resource = BTreeMap::new();
                 resource.insert("host".to_string(), request.host.clone());
                 resource.insert("path".to_string(), request.path.clone());
-                if GITHUB_HOSTS.contains(&request.host.as_str()) {
-                    resource.insert("provider".to_string(), "github".to_string());
+                if let Some(provider) = provider_for_host(&request.host) {
+                    resource.insert("provider".to_string(), provider.to_string());
                 }
 
                 let Some(http_method) = parse_http_method(&request.method) else {
@@ -266,16 +292,37 @@ mod tests {
         }
     }
 
-    fn github_normalizer() -> IntentNormalizer {
-        let registry = ActionClassRegistry::v0_1();
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/config/mappings/github.toml");
-        let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read github.toml: {e}"));
+    fn load_mapping_file(filename: &str) -> MappingRulesFile {
+        let path = format!(
+            "{}/config/mappings/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            filename
+        );
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {filename}: {e}"));
         let file: MappingRulesFile =
-            toml::from_str(&src).unwrap_or_else(|e| panic!("parse github.toml: {e}"));
+            toml::from_str(&src).unwrap_or_else(|e| panic!("parse {filename}: {e}"));
         file.validate().unwrap_or_else(|e| panic!("validate: {e}"));
+        file
+    }
+
+    fn normalizer_from_file(filename: &str) -> IntentNormalizer {
+        let registry = ActionClassRegistry::v0_1();
+        let file = load_mapping_file(filename);
         let table = MappingTable::from_config(&file, &registry, true)
             .unwrap_or_else(|e| panic!("from_config: {e}"));
         IntentNormalizer::new(table)
+    }
+
+    fn github_normalizer() -> IntentNormalizer {
+        normalizer_from_file("github.toml")
+    }
+
+    fn stripe_normalizer() -> IntentNormalizer {
+        normalizer_from_file("stripe.toml")
+    }
+
+    fn gmail_normalizer() -> IntentNormalizer {
+        normalizer_from_file("gmail.toml")
     }
 
     #[test]
@@ -655,6 +702,218 @@ mod tests {
             ))
             .unwrap_or_else(|_| panic!("ok"));
         assert_eq!(env.intent.action_class, "repo.admin");
+    }
+
+    // --- Stripe mapping coverage --------------------------------------------
+
+    #[test]
+    fn test_stripe_mapping_file_loads_and_has_88_rules() {
+        let file = load_mapping_file("stripe.toml");
+        assert_eq!(file.rules.len(), 88);
+        let registry = ActionClassRegistry::v0_1();
+        let _table = MappingTable::from_config(&file, &registry, true)
+            .unwrap_or_else(|e| panic!("from_config: {e}"));
+    }
+
+    #[test]
+    fn test_normalize_stripe_tags_provider() {
+        let normalizer = stripe_normalizer();
+        let envelope = normalizer
+            .normalize(&make_request("GET", "api.stripe.com", "/v1/balance"))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(envelope.intent.action_class, "payment.read");
+        assert_eq!(
+            envelope.intent.resource.get("provider"),
+            Some(&"stripe".to_string())
+        );
+    }
+
+    #[test]
+    fn test_stripe_post_payment_intent_is_payment_transfer() {
+        let normalizer = stripe_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                "POST",
+                "api.stripe.com",
+                "/v1/payment_intents",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "payment.transfer");
+    }
+
+    #[test]
+    fn test_stripe_post_payment_intent_cancel_is_payment_cancel() {
+        let normalizer = stripe_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                "POST",
+                "api.stripe.com",
+                "/v1/payment_intents/pi_123/cancel",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "payment.cancel");
+    }
+
+    #[test]
+    fn test_stripe_post_refund_is_payment_refund() {
+        let normalizer = stripe_normalizer();
+        let env = normalizer
+            .normalize(&make_request("POST", "api.stripe.com", "/v1/refunds"))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "payment.refund");
+    }
+
+    #[test]
+    fn test_stripe_post_payout_is_payment_payout() {
+        let normalizer = stripe_normalizer();
+        let env = normalizer
+            .normalize(&make_request("POST", "api.stripe.com", "/v1/payouts"))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "payment.payout");
+    }
+
+    #[test]
+    fn test_stripe_get_customers_search_is_customer_read() {
+        let normalizer = stripe_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                "GET",
+                "api.stripe.com",
+                "/v1/customers/search",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "customer.read");
+    }
+
+    #[test]
+    fn test_stripe_post_webhook_endpoint_is_account_permission_change() {
+        let normalizer = stripe_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                "POST",
+                "api.stripe.com",
+                "/v1/webhook_endpoints",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "account.permission.change");
+    }
+
+    // --- Gmail mapping coverage ---------------------------------------------
+
+    #[test]
+    fn test_gmail_mapping_file_loads_and_has_41_rules() {
+        let file = load_mapping_file("gmail.toml");
+        assert_eq!(file.rules.len(), 41);
+        let registry = ActionClassRegistry::v0_1();
+        let _table = MappingTable::from_config(&file, &registry, true)
+            .unwrap_or_else(|e| panic!("from_config: {e}"));
+    }
+
+    #[test]
+    fn test_normalize_gmail_tags_provider() {
+        let normalizer = gmail_normalizer();
+        let envelope = normalizer
+            .normalize(&make_request(
+                "GET",
+                "gmail.googleapis.com",
+                "/gmail/v1/users/me/profile",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(envelope.intent.action_class, "communication.external.read");
+        assert_eq!(
+            envelope.intent.resource.get("provider"),
+            Some(&"gmail".to_string())
+        );
+    }
+
+    #[test]
+    fn test_gmail_messages_send_is_communication_send() {
+        let normalizer = gmail_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                "POST",
+                "gmail.googleapis.com",
+                "/gmail/v1/users/me/messages/send",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "communication.external.send");
+    }
+
+    #[test]
+    fn test_gmail_post_drafts_is_communication_draft() {
+        let normalizer = gmail_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                "POST",
+                "gmail.googleapis.com",
+                "/gmail/v1/users/me/drafts",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "communication.external.draft");
+    }
+
+    #[test]
+    fn test_gmail_messages_modify_is_communication_manage() {
+        let normalizer = gmail_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                "POST",
+                "gmail.googleapis.com",
+                "/gmail/v1/users/me/messages/abc123/modify",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "communication.external.manage");
+    }
+
+    #[test]
+    fn test_gmail_delete_message_is_communication_delete() {
+        let normalizer = gmail_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                "DELETE",
+                "gmail.googleapis.com",
+                "/gmail/v1/users/me/messages/abc123",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "communication.external.delete");
+    }
+
+    #[test]
+    fn test_gmail_settings_filters_post_is_communication_filter() {
+        let normalizer = gmail_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                "POST",
+                "gmail.googleapis.com",
+                "/gmail/v1/users/me/settings/filters",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "communication.external.filter");
+    }
+
+    #[test]
+    fn test_gmail_delegates_post_is_account_permission_change() {
+        let normalizer = gmail_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                "POST",
+                "gmail.googleapis.com",
+                "/gmail/v1/users/me/settings/delegates",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "account.permission.change");
+    }
+
+    #[test]
+    fn test_gmail_typosquat_no_provider() {
+        let normalizer = test_normalizer();
+        if let Ok(envelope) = normalizer.normalize(&make_request(
+            "GET",
+            "gmail.googleapis.com.evil.example",
+            "/gmail/v1/users/me/profile",
+        )) {
+            assert!(!envelope.intent.resource.contains_key("provider"));
+        }
     }
 
     #[test]
