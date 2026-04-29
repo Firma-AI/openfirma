@@ -106,10 +106,16 @@ If allowed:
 Sidecar uses local CA material to sign per-host leaf certificates for intercepted TLS sessions.
 
 Current behavior:
-- if CA cert/key are absent, sidecar generates them locally,
+- if CA cert/key are both absent, sidecar performs first-run local generation,
+- if any CA artifact exists, sidecar must load that exact CA state or fail startup,
 - if CA cert exists but key is missing, startup fails,
-- if CA cert and key do not match, startup fails,
+- if CA key exists but cert is missing, startup fails,
+- if CA cert/key are malformed, unreadable, or do not match, startup fails,
 - on Unix, key permissions are enforced as owner-only (`0600`).
+
+Sidecar must never regenerate or repair CA material after initialization has
+observed existing CA state. Partial or malformed state is treated as a hard
+startup error to avoid implicit trust reset.
 
 No external certificate service dependency is required.
 
