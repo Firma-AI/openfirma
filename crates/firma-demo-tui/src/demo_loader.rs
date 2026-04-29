@@ -30,9 +30,8 @@ pub fn load_config_template(dir: &Path) -> Vec<ConfigItem> {
     let sample_path = dir.join(".env.sample");
     let env_path = dir.join(".env");
 
-    let sample_content = match std::fs::read_to_string(&sample_path) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
+    let Ok(sample_content) = std::fs::read_to_string(&sample_path) else {
+        return Vec::new();
     };
 
     // Load actual .env values if they exist

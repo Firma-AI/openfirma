@@ -86,6 +86,13 @@ pub struct SidecarConfig {
     /// Audit event emitter settings.
     #[serde(default)]
     pub audit: AuditConfig,
+    /// Optional pre-flight capability token provisioning.
+    ///
+    /// When set, the sidecar contacts the Authority at startup to issue
+    /// a capability token for the configured agent. This populates Stage 1
+    /// with a real token and verifier instead of the stub defaults.
+    #[serde(default)]
+    pub preflight: Option<PreflightConfig>,
 }
 
 impl SidecarConfig {
@@ -125,6 +132,9 @@ impl SidecarConfig {
             );
         }
         self.audit.validate().map_err(|e| format!("audit: {e}"))?;
+        if let Some(ref pf) = self.preflight {
+            pf.validate().map_err(|e| format!("preflight: {e}"))?;
+        }
         Ok(())
     }
 }
@@ -389,6 +399,62 @@ impl Default for PolicyConfig {
             authority_url: None,
         }
     }
+}
+
+/// Pre-flight capability token provisioning settings.
+///
+/// When present, the sidecar calls `IssueCapability` on the Authority at
+/// startup to obtain a real PASETO v4 token and build a live `CapabilityMap`.
+/// Requires `policy.authority_url` to also be set.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PreflightConfig {
+    /// Agent identity string (e.g. `"demo0-agent"`).
+    pub agent_id: String,
+    /// Session identifier for the pre-flight token.
+    #[serde(default = "default_preflight_session_id")]
+    pub session_id: String,
+    /// Action classes the agent is requesting authorization for.
+    pub requested_actions: Vec<String>,
+    /// Resource scope requested (e.g. `"*"` for any resource).
+    #[serde(default = "default_resource_scope")]
+    pub resource_scope: String,
+    /// Path to the Authority's Ed25519 public key file (32 raw bytes).
+    pub authority_pub_key_path: PathBuf,
+    /// Requested token TTL in seconds.
+    #[serde(default = "default_preflight_ttl_seconds")]
+    pub ttl_seconds: i32,
+}
+
+impl PreflightConfig {
+    /// Validate preflight config fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if required fields are empty.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.agent_id.trim().is_empty() {
+            return Err("preflight.agent_id must not be empty".into());
+        }
+        if self.requested_actions.is_empty() {
+            return Err("preflight.requested_actions must not be empty".into());
+        }
+        if self.authority_pub_key_path.as_os_str().is_empty() {
+            return Err("preflight.authority_pub_key_path must not be empty".into());
+        }
+        Ok(())
+    }
+}
+
+fn default_preflight_session_id() -> String {
+    "preflight-session".to_string()
+}
+
+fn default_resource_scope() -> String {
+    "*".to_string()
+}
+
+const fn default_preflight_ttl_seconds() -> i32 {
+    3600
 }
 
 /// Certificate authority directory settings.

@@ -40,3 +40,11 @@ reconnect_min_backoff_ms             = 250
 reconnect_max_backoff_secs           = 30
 revocation_readiness_grace_ms        = 500
 revocation_fail_closed_on_disconnect = false
+
+[preflight]
+agent_id              = "demo0-agent"
+session_id            = "demo0-session-001"
+requested_actions     = ["code.review.read", "filesystem.read"]
+resource_scope        = "*"
+authority_pub_key_path = "examples/demos/demo0/.runtime/authority.pub"
+ttl_seconds           = 3600

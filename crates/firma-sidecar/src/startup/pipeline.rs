@@ -4,10 +4,11 @@
 //! enforcement stages, and the credential injector, and wraps them in
 //! an [`EnforcementPipeline`](crate::pipeline::EnforcementPipeline).
 //!
-//! Authority-backed token verification and Cedar policy evaluation are
-//! stubbed until the corresponding integration tasks land (task 007+).
-//! The revocation cache is real (task 006) but stays empty until the
-//! `WatchRevocations` writer is wired up in task 007.
+//! When `[preflight]` is configured, the caller must call
+//! [`startup::run_preflight`](crate::startup::preflight::run_preflight)
+//! first and pass the result to
+//! [`build_pipeline_runtime`] via the `preflight` argument.
+//! Without it, Stage 1 falls back to the stub verifier (always deny).
 
 use std::sync::Arc;
 
@@ -19,6 +20,7 @@ use crate::config;
 use crate::enforcement::revocation::BloomLruRevocationStore;
 use crate::pipeline;
 use crate::startup::credential::build_credential_injector;
+use crate::startup::preflight::PreflightResult;
 
 /// Runtime state produced while building the enforcement pipeline.
 pub struct PipelineRuntime {
@@ -37,10 +39,16 @@ pub struct PipelineRuntime {
 
 /// Build the enforcement pipeline plus stream-client shared state.
 ///
+/// Pass a [`PreflightResult`] to populate Stage 1 with a real token and
+/// verifier. Without it, Stage 1 uses the stub verifier (always deny).
+///
 /// # Errors
 ///
 /// Returns an error when pipeline component construction fails.
-pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<PipelineRuntime> {
+pub fn build_pipeline_runtime(
+    config: &config::SidecarConfig,
+    preflight: Option<PreflightResult>,
+) -> anyhow::Result<PipelineRuntime> {
     let mut all_rules: Vec<config::MappingRuleConfig> = Vec::new();
 
     let primary_path = &config.enforcement.mapping.rules_path;
@@ -78,20 +86,31 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
 
     let normalizer = pipeline::IntentNormalizer::new(table);
 
-    // The capability map is seeded from `[capability_seed]` and the
-    // verifier is built from `[authority] public_key_path`. The full
-    // gRPC `IssueCapability` client will replace this seed-file pre-
-    // provisioning in a follow-up task.
     let revocation_store = Arc::new(BloomLruRevocationStore::new(config.revocation.into()));
     tracing::debug!(
         initial_metrics = ?revocation_store.metrics(),
         "revocation cache initialized"
     );
     let revocation_store_dyn: Arc<dyn RevocationStore + Send + Sync> = revocation_store;
-    let capability_map = crate::startup::capability::load_capability_map(&config.capability_seed)?;
-    let token_verifier = crate::startup::capability::build_token_verifier(
-        config.authority.public_key_path.as_deref(),
-    )?;
+
+    let (capability_map, token_verifier) = match preflight {
+        Some(pf) => {
+            tracing::info!("Stage 1 using pre-flight capability token and PasetoV4Verifier");
+            (pf.capability_map, pf.token_verifier)
+        }
+        None => {
+            tracing::debug!(
+                "Stage 1 using configured capability seed and authority public key"
+            );
+            (
+                crate::startup::capability::load_capability_map(&config.capability_seed)?,
+                crate::startup::capability::build_token_verifier(
+                    config.authority.public_key_path.as_deref(),
+                )?,
+            )
+        }
+    };
+
     let capability_validator = pipeline::CapabilityValidator::new(
         capability_map,
         token_verifier,
