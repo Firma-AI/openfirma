@@ -1,0 +1,17 @@
+# Demo 1 mapping rules.
+# Same host (httpbin.org), different paths → different action classes.
+# Policy permits filesystem.read, has no permit for data.query → /billing path denied.
+
+# /get → usage metrics (allowed by policy)
+[[rules]]
+method       = "GET"
+host         = "httpbin.org"
+path         = "/get"
+action_class = "filesystem.read"
+
+# /anything/billing → billing data (no permit → default deny)
+[[rules]]
+method       = "GET"
+host         = "httpbin.org"
+path         = "/anything/billing"
+action_class = "data.query"

@@ -1,0 +1,42 @@
+# Demo 2 — sidecar config.
+# Runtime enforcement under compromise.
+
+[interceptor]
+mode               = "http_proxy"
+listen_addr        = "127.0.0.1:8080"
+drain_timeout_secs = 30
+
+[policy]
+dir           = "examples/demos/demo2"
+authority_url = "http://127.0.0.1:50051"
+
+[ca]
+dir = "examples/demos/demo2/.runtime/firma-ca"
+
+[log]
+level = "info"
+
+[mapping]
+rules_path        = "examples/demos/demo2/mapping-rules.toml"
+default_protected = true
+
+[capability_validation]
+clock_skew_tolerance_seconds = 0
+
+[constraint_enforcement]
+bundle_ttl_seconds     = 30
+enforcement_timeout_ms = 50
+
+[connector]
+default_timeout_ms = 10000
+
+[audit]
+sink             = "stdout"
+signing_key_path = "examples/demos/demo2/.runtime/audit.key"
+
+[authority]
+connect_timeout_secs                 = 10
+reconnect_min_backoff_ms             = 250
+reconnect_max_backoff_secs           = 30
+revocation_readiness_grace_ms        = 500
+revocation_fail_closed_on_disconnect = false
