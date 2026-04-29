@@ -642,7 +642,7 @@ mod tests {
             body: Some(b"{}".to_vec()),
             is_https: false,
         };
-        let (decision, _payload) = pipeline.enforce(&raw, "").await;
+        let (decision, _payload) = pipeline.enforce(&raw, "_test_").await;
         assert!(decision.is_allow(), "expected allow, got: {decision:?}");
     }
 
@@ -661,6 +661,7 @@ mod tests {
         let request = format!(
             "POST http://{host}/v1/chat/completions HTTP/1.1\r\n\
              Host: {host}\r\n\
+             X-Firma-Session-Id: _test_\r\n\
              Content-Length: 2\r\n\
              \r\n\
              {{}}"

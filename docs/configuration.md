@@ -288,6 +288,7 @@ mode and this section is ignored.
 | `reconnect_max_backoff_secs`           | u64  | `30`    | Maximum reconnect backoff                                     |
 | `revocation_readiness_grace_ms`        | u64  | `500`   | Grace period after revocation stream opens before readiness   |
 | `revocation_fail_closed_on_disconnect` | bool | `false` | Flip revocation readiness back to false when the stream drops |
+| `public_key_path`                      | path | none    | Authority Ed25519 public key. Required when `[capability_seed].paths` is non-empty so the sidecar can verify seeded tokens. |
 
 Validation:
 
@@ -351,6 +352,37 @@ Validation:
 - `wal_path` must be set and non-empty when sink is `wal`.
 - `wal_max_bytes` must be greater than `0`.
 - `signing_key_path` and `signing_key_env` are mutually exclusive.
+
+### `[capability_seed]`
+
+Static capability provisioning. Each path entry is a TOML file
+produced by `firma-authority issue` (see `docs/cli.md`). The sidecar
+loads every seed at startup, parses it, and pre-populates the
+`CapabilityMap` so Stage 1 has tokens to select against.
+
+```toml
+[capability_seed]
+paths = ["./capability-demo-agent.toml"]
+```
+
+| Field   | Type       | Default | Description                                     |
+| ------- | ---------- | ------- | ----------------------------------------------- |
+| `paths` | `[string]` | `[]`    | Seed TOML files. Empty disables static seeding. |
+
+Validation:
+
+- Each entry in `paths` must be non-empty.
+
+Behavior notes:
+
+- Empty list means Stage 1 will deny every protected request that
+  needs a token, since the `CapabilityMap` will be empty.
+- `[authority].public_key_path` must be set when `paths` is
+  non-empty; otherwise the verifier rejects every seeded token with
+  `signature invalid: no authority public key configured`.
+- This section is a stop-gap until the sidecar wires the gRPC
+  `IssueCapability` client. Production deployments should not rely
+  on it.
 
 ## Mapping Rules File
 

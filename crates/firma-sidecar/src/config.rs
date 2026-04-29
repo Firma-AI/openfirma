@@ -14,12 +14,14 @@
 
 mod audit;
 mod authority;
+mod capability_seed;
 mod connector;
 mod enforcement;
 mod revocation;
 
 pub use self::audit::{AuditConfig, AuditSink};
 pub use self::authority::AuthorityConfig;
+pub use self::capability_seed::{CapabilitySeedConfig, SeedFile};
 pub use self::connector::ConnectorConfig;
 
 pub use self::enforcement::{EnforcementConfig, MappingRuleConfig, MappingRulesFile};
@@ -75,6 +77,12 @@ pub struct SidecarConfig {
     /// Revocation cache settings (bloom filter + LRU sizing).
     #[serde(default)]
     pub revocation: RevocationConfig,
+    /// Static capability provisioning for the demo path. Until the
+    /// sidecar wires the gRPC `IssueCapability` client, operators can
+    /// pre-issue tokens via `firma-authority issue` and list the
+    /// resulting TOML files here.
+    #[serde(default)]
+    pub capability_seed: CapabilitySeedConfig,
     /// Audit event emitter settings.
     #[serde(default)]
     pub audit: AuditConfig,
@@ -107,6 +115,15 @@ impl SidecarConfig {
             .map_err(|e| format!("authority: {e}"))?;
         self.enforcement.validate()?;
         self.revocation.validate()?;
+        self.capability_seed
+            .validate()
+            .map_err(|e| format!("capability_seed: {e}"))?;
+        if !self.capability_seed.paths.is_empty() && self.authority.public_key_path.is_none() {
+            return Err(
+                "authority.public_key_path must be set when capability_seed.paths is non-empty"
+                    .to_string(),
+            );
+        }
         self.audit.validate().map_err(|e| format!("audit: {e}"))?;
         Ok(())
     }
@@ -413,6 +430,33 @@ mod tests {
     #[test]
     fn test_sidecar_config_defaults_valid() {
         let config = SidecarConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_sidecar_config_seeds_require_public_key() {
+        let config = SidecarConfig {
+            capability_seed: CapabilitySeedConfig {
+                paths: vec![std::path::PathBuf::from("./capability.toml")],
+            },
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("authority.public_key_path"),
+            "error should mention authority.public_key_path: {err}"
+        );
+    }
+
+    #[test]
+    fn test_sidecar_config_seeds_with_public_key_valid() {
+        let mut config = SidecarConfig {
+            capability_seed: CapabilitySeedConfig {
+                paths: vec![std::path::PathBuf::from("./capability.toml")],
+            },
+            ..SidecarConfig::default()
+        };
+        config.authority.public_key_path = Some(std::path::PathBuf::from("./authority.pub"));
         assert!(config.validate().is_ok());
     }
 

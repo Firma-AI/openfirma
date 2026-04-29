@@ -1,5 +1,7 @@
 //! Authority stream client configuration.
 
+use std::path::PathBuf;
+
 use serde::Deserialize;
 
 /// Tuning for background Authority stream clients.
@@ -20,6 +22,12 @@ pub struct AuthorityConfig {
     /// Flip revocation readiness back to false on disconnect.
     #[serde(default)]
     pub revocation_fail_closed_on_disconnect: bool,
+    /// Path to the Authority's PASETO v4 Ed25519 public key (32 raw
+    /// bytes, as written by `firma-authority generate-key`). Required
+    /// when `[capability_seed].paths` is non-empty so the sidecar can
+    /// verify the seed signatures.
+    #[serde(default)]
+    pub public_key_path: Option<PathBuf>,
 }
 
 impl AuthorityConfig {
@@ -44,6 +52,11 @@ impl AuthorityConfig {
                 "reconnect_max_backoff_secs must be >= reconnect_min_backoff_ms".to_string(),
             );
         }
+        if let Some(ref p) = self.public_key_path
+            && p.as_os_str().is_empty()
+        {
+            return Err("public_key_path must not be empty when set".to_string());
+        }
         Ok(())
     }
 }
@@ -56,6 +69,7 @@ impl Default for AuthorityConfig {
             reconnect_max_backoff_secs: default_max_backoff_secs(),
             revocation_readiness_grace_ms: default_readiness_grace_ms(),
             revocation_fail_closed_on_disconnect: false,
+            public_key_path: None,
         }
     }
 }
