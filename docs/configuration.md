@@ -171,8 +171,12 @@ Validation:
 - If `enabled = true`, `intercept_hosts` must be non-empty.
 - If `enabled = true`, `cert_ttl_secs` and `cert_cache_capacity` must be
   greater than `0`.
-- If `ca_cert_path` / `ca_key_path` are omitted, files are created under
-  [`[ca].dir`](#ca) as `firma-ca.crt` and `firma-ca.key`.
+- If `ca_cert_path` / `ca_key_path` are omitted, first-run CA files are created
+  under [`[ca].dir`](#ca) as `firma-ca.crt` and `firma-ca.key`.
+- CA generation is first-run only. If either CA file already exists, the
+  sidecar must load the existing cert/key pair exactly as-is or fail startup;
+  it never regenerates, repairs, or replaces CA material from partial,
+  malformed, unreadable, or mismatched state.
 - On Unix, the CA private key is enforced as owner-only (`0600`); overly-open
   key permissions are rejected at startup.
 - Intercepted DNS hostnames are validated with strict DNS label rules before

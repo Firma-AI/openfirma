@@ -105,7 +105,11 @@ Gate:
 ### Phase 1: Sidecar CA and Certificate Authority Runtime
 
 Scope:
-- Implement CA load-or-generate path under `ca.dir`.
+- Implement CA first-run bootstrap under `ca.dir`, then load the existing CA on
+  subsequent startups.
+- Never regenerate or repair existing CA material in place; partial,
+  malformed, unreadable, or mismatched CA state must fail startup to
+  avoid implicit trust reset.
 - Harden file permissions for private key material.
 - Separate audit signing key and MITM CA key responsibilities.
 
@@ -196,7 +200,8 @@ Gate:
 
 ### Unit tests
 
-- CA load/generate/persist and invalid-key failure paths.
+- CA first-run generation/persist, existing-state load, partial-state rejection,
+  and invalid-key failure paths.
 - Cert issuance for DNS and IP SAN.
 - Host matching precedence: intercept vs bypass vs strict.
 - Cache TTL/capacity eviction.

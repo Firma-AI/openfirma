@@ -2,7 +2,7 @@
 //!
 //! This module owns:
 //! - MITM host matching (`intercept_hosts`, `bypass_hosts`, `strict_hosts`)
-//! - Sidecar CA load/generate lifecycle
+//! - Sidecar CA first-run generation and existing-state load lifecycle
 //! - Per-host leaf certificate issuance and bounded cache
 
 use std::collections::VecDeque;
@@ -252,6 +252,13 @@ impl CaMaterial {
                 "MITM CA certificate {} exists but private key {} is missing",
                 cert_path.display(),
                 key_path.display()
+            ));
+        }
+        if key_exists && !cert_exists {
+            return Err(format!(
+                "MITM CA private key {} exists but certificate {} is missing",
+                key_path.display(),
+                cert_path.display()
             ));
         }
 
@@ -669,6 +676,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ca_material_rejects_partial_key_without_cert() {
+        let dir = tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let key_path = dir.path().join("firma-ca.key");
+        let (_, key_pem) = generate_ca_pair().unwrap_or_else(|e| panic!("{e}"));
+        write_private_key_pem(&key_path, &key_pem).unwrap_or_else(|e| panic!("{e}"));
+
+        let cfg = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["api.openai.com".to_string()],
+            cert_ttl_secs: 60,
+            cert_cache_capacity: 8,
+            ..HttpsMitmConfig::default()
+        };
+
+        let err = HttpsMitmRuntime::new(cfg, dir.path())
+            .err()
+            .unwrap_or_else(|| panic!("expected partial CA state error"));
+        assert!(
+            err.contains("private key") && err.contains("certificate") && err.contains("missing"),
+            "expected partial state detail, got: {err}"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn generated_ca_private_key_has_owner_only_permissions() {
@@ -698,18 +729,18 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let cert_path = dir.path().join("firma-ca.crt");
         let key_path = dir.path().join("firma-ca.key");
-        fs::write(
-            &key_path,
-            "-----BEGIN PRIVATE KEY-----\ninvalid\n-----END PRIVATE KEY-----\n",
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
+        let (cert_pem, key_pem) = generate_ca_pair().unwrap_or_else(|e| panic!("{e}"));
+        write_public_cert_pem(&cert_path, &cert_pem).unwrap_or_else(|e| panic!("{e}"));
+        write_private_key_pem(&key_path, &key_pem).unwrap_or_else(|e| panic!("{e}"));
         fs::set_permissions(&key_path, fs::Permissions::from_mode(0o644))
             .unwrap_or_else(|e| panic!("{e}"));
 
         let cfg = HttpsMitmConfig {
             enabled: true,
             intercept_hosts: vec!["api.openai.com".to_string()],
+            ca_cert_path: Some(cert_path),
             ca_key_path: Some(key_path),
             cert_ttl_secs: 60,
             cert_cache_capacity: 8,
