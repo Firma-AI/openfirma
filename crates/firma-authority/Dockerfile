@@ -39,7 +39,9 @@ COPY --from=builder /usr/src/firma/target/release/firma-authority /usr/local/bin
 
 RUN mkdir -p /app/policies /app/data && chown -R firma:firma /app
 
-COPY --from=builder /usr/src/firma/crates/firma-authority/policies /app/policies
+# /app/policies is the default policy_dir — mount or COPY your .cedar files here.
+# The schema is embedded in the binary; no schema.cedarschema is required unless
+# you want to override it via FIRMA_AUTHORITY_SCHEMA_PATH.
 
 USER firma
 

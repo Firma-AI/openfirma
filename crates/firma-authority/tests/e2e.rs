@@ -42,6 +42,7 @@ impl TestServer {
         let config = AuthorityConfig {
             listen_addr: "127.0.0.1:0".to_string(),
             policy_dir: policy_dir.clone(),
+            schema_path: None,
             revocation_file: revocation_file.clone(),
             key_file,
             max_ttl_seconds: 3600,
@@ -89,7 +90,7 @@ async fn issue_capability_e2e() {
 
     let request = IssueCapabilityRequest {
         agent_id: "test_agent".to_string(),
-        requested_actions: vec!["http.get".to_string()],
+        requested_actions: vec!["filesystem.read".to_string()],
         resource_scope: "*".to_string(),
         session_id: "test_session".to_string(),
         requested_ttl_seconds: 300,
