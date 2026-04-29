@@ -65,12 +65,15 @@ DNS confinement was required but initially lacked concrete implementation. With 
 
 1. `firma-run` generates sandbox-specific `resolv.conf`.
 2. `resolv.conf` points to sandbox-local DNS stub (`127.0.0.1`).
-3. DNS stub forwards through a Firma-controlled path tied to sidecar mediation endpoint.
-4. Direct resolver traffic outside the controlled path is blocked by sandbox confinement.
+3. Current V1 DNS stub refuses lookups deterministically, so direct resolver use
+   fails closed instead of falling back to host ambient DNS.
+4. HTTP proxy traffic continues to carry hostnames through the sandbox-local
+   proxy bridge to the sidecar mediation endpoint.
+5. Direct resolver traffic outside the controlled path is blocked by sandbox confinement.
 
 ### Security invariant
 
-DNS resolution from inside sandbox is sidecar-controlled or fails; host ambient resolver is never a successful bypass path.
+DNS resolution from inside sandbox is Firma-controlled or fails; host ambient resolver is never a successful bypass path.
 
 ## Decision: Long-Running Agent Capability Lifecycle (Comment 2)
 

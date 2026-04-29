@@ -20,6 +20,9 @@ pub struct Cli {
 pub enum Command {
     /// Run an agent command through the Firma runtime wrapper.
     Run(RunArgs),
+    /// Internal sandbox-local DNS stub for deterministic DNS confinement.
+    #[command(name = "__dns-stub", hide = true)]
+    DnsStub(DnsStubArgs),
     /// Internal process-local bridge from sandbox TCP proxy to host-side UDS.
     #[command(name = "__proxy-bridge", hide = true)]
     ProxyBridge(ProxyBridgeArgs),
@@ -77,6 +80,14 @@ pub struct ProxyBridgeArgs {
     /// Upstream host-side Unix socket path exposed by `firma run`.
     #[arg(long)]
     pub upstream_uds: PathBuf,
+}
+
+/// Internal helper args for DNS stub process.
+#[derive(Debug, Args)]
+pub struct DnsStubArgs {
+    /// UDP/TCP DNS listen address reachable by the sandboxed agent process.
+    #[arg(long, default_value = "127.0.0.1:53")]
+    pub listen: SocketAddr,
 }
 
 /// User-facing backend override values.
