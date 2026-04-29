@@ -146,6 +146,7 @@ impl MappingTable {
     #[must_use]
     pub fn find_match<'a>(&'a self, method: &str, host: &str, path: &str) -> MatchResult<'a> {
         for rule in &self.rules {
+            tracing::info!(?rule, %host, %method, %path, "evaluating rule");
             if Self::rule_matches(rule, method, host, path) {
                 return MatchResult::Matched(rule);
             }

@@ -46,18 +46,11 @@ pub struct App {
     pub input: String,
     pub should_quit: bool,
     // Stored for lazy boot on menu selection
-    authority_bin: PathBuf,
-    sidecar_bin: PathBuf,
     demos_dir: PathBuf,
 }
 
 impl App {
-    fn new(
-        menu_entries: Vec<DemoEntry>,
-        authority_bin: PathBuf,
-        sidecar_bin: PathBuf,
-        demos_dir: &Path,
-    ) -> Self {
+    fn new(menu_entries: Vec<DemoEntry>, demos_dir: &Path) -> Self {
         let config_items = load_config_template(demos_dir);
         Self {
             phase: Phase::Menu,
@@ -75,8 +68,6 @@ impl App {
             agent_logs: Vec::new(),
             input: String::new(),
             should_quit: false,
-            authority_bin,
-            sidecar_bin,
             demos_dir: demos_dir.to_path_buf(),
         }
     }
@@ -94,12 +85,7 @@ impl App {
     }
 }
 
-pub fn run(
-    demos_dir: &Path,
-    initial_demo: Option<&Path>,
-    authority_bin: PathBuf,
-    sidecar_bin: PathBuf,
-) -> Result<()> {
+pub fn run(demos_dir: &Path, initial_demo: Option<&Path>) -> Result<()> {
     let menu_entries = discover(demos_dir)?;
 
     enable_raw_mode()?;
@@ -109,7 +95,7 @@ pub fn run(
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(menu_entries, authority_bin, sidecar_bin, demos_dir);
+    let mut app = App::new(menu_entries, demos_dir);
 
     // If .env is missing in demos_dir, start in Config phase
     if !demos_dir.join(".env").exists() {
@@ -118,7 +104,7 @@ pub fn run(
 
     if let Some(demo_path) = initial_demo {
         let manifest = load(demo_path)?;
-        let rt = boot(&manifest, &app.authority_bin, &app.sidecar_bin)?;
+        let rt = boot(&manifest)?;
 
         let mut extra_env = HashMap::new();
         for item in &app.config_items {
@@ -306,7 +292,7 @@ fn handle_menu_key(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Enter => {
             let path = app.menu_entries[app.menu_selected].path.clone();
             let manifest = load(&path)?;
-            let rt = boot(&manifest, &app.authority_bin, &app.sidecar_bin)?;
+            let rt = boot(&manifest)?;
 
             let mut extra_env = HashMap::new();
             for item in &app.config_items {
