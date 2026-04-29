@@ -54,8 +54,7 @@ pub fn boot(
         std::fs::write(&revocations, "").context("failed to create revocations.txt")?;
     }
 
-    std::fs::create_dir_all(runtime_dir.join("firma-ca"))
-        .context("failed to create firma-ca directory")?;
+    repair_demo_ca_pair(&runtime_dir.join("generated-firma-ca"))?;
 
     let authority = spawn_with_output(
         Command::new(authority_bin)
@@ -101,22 +100,30 @@ fn provision_keys(authority_bin: &Path, runtime_dir: &Path) -> Result<()> {
 
     let audit_key = runtime_dir.join("audit.key");
     if !audit_key.exists() {
-        let status = Command::new("openssl")
-            .args([
-                "genpkey",
-                "-algorithm",
-                "EC",
-                "-pkeyopt",
-                "ec_paramgen_curve:P-256",
-                "-out",
-            ])
-            .arg(&audit_key)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .context("failed to run openssl genpkey (is openssl installed?)")?;
-        ensure!(status.success(), "openssl genpkey failed");
+        std::fs::write(&audit_key, DEMO_AUDIT_KEY_PEM)
+            .context("failed to write demo audit signing key")?;
     }
 
     Ok(())
 }
+
+fn repair_demo_ca_pair(ca_dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(ca_dir).context("failed to create firma-ca directory")?;
+
+    let cert = ca_dir.join("firma-ca.crt");
+    let key = ca_dir.join("firma-ca.key");
+    if cert.exists() != key.exists() {
+        let _ = std::fs::remove_file(&cert);
+        let _ = std::fs::remove_file(&key);
+    }
+
+    Ok(())
+}
+
+const DEMO_AUDIT_KEY_PEM: &str = "\
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgS+9b9zHd22EAeg9M
+bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
+3wlh7RZmOnI0E3wNCaMKd3B7Sd/fXknJ0WmI6BsrvfidxQEAYvsndbvx
+-----END PRIVATE KEY-----
+";

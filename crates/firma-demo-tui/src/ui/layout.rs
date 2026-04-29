@@ -186,7 +186,7 @@ fn render_log_pane(f: &mut Frame, area: Rect, title: &str, logs: &[String], colo
     let height = inner.height as usize;
     let start = logs.len().saturating_sub(height.saturating_mul(4));
     let text = ansi_lines_to_text(&logs[start..]);
-    let scroll = text.lines.len().saturating_sub(height) as u16;
+    let scroll = scroll_offset(text.lines.len(), height);
     let pane = Paragraph::new(text)
         .scroll((scroll, 0))
         .wrap(Wrap { trim: false });
@@ -205,9 +205,12 @@ fn render_sidecar_pane(f: &mut Frame, area: Rect, logs: &[String]) {
 
     let height = inner.height as usize;
     let start = logs.len().saturating_sub(height.saturating_mul(4));
-    let lines: Vec<Line<'_>> = logs[start..].iter().flat_map(sidecar_log_lines).collect();
+    let lines: Vec<Line<'_>> = logs[start..]
+        .iter()
+        .flat_map(|line| sidecar_log_lines(line))
+        .collect();
     let text = Text::from(lines);
-    let scroll = text.lines.len().saturating_sub(height) as u16;
+    let scroll = scroll_offset(text.lines.len(), height);
     let pane = Paragraph::new(text)
         .scroll((scroll, 0))
         .wrap(Wrap { trim: false });
@@ -226,9 +229,12 @@ fn render_audit_pane(f: &mut Frame, area: Rect, logs: &[String]) {
 
     let height = inner.height as usize;
     let start = logs.len().saturating_sub(height.saturating_mul(3));
-    let lines = logs[start..].iter().map(audit_log_line).collect::<Vec<_>>();
+    let lines = logs[start..]
+        .iter()
+        .map(|line| audit_log_line(line))
+        .collect::<Vec<_>>();
     let text = Text::from(lines);
-    let scroll = text.lines.len().saturating_sub(height) as u16;
+    let scroll = scroll_offset(text.lines.len(), height);
     let pane = Paragraph::new(text)
         .scroll((scroll, 0))
         .wrap(Wrap { trim: false });
@@ -251,9 +257,12 @@ fn render_agent_pane(f: &mut Frame, area: Rect, app: &App) {
         .split(inner);
 
     let height = chunks[0].height as usize;
-    let start = app.agent_logs.len().saturating_sub(height.saturating_mul(4));
+    let start = app
+        .agent_logs
+        .len()
+        .saturating_sub(height.saturating_mul(4));
     let text = ansi_lines_to_text(&app.agent_logs[start..]);
-    let scroll = text.lines.len().saturating_sub(height) as u16;
+    let scroll = scroll_offset(text.lines.len(), height);
     let output = Paragraph::new(text)
         .scroll((scroll, 0))
         .wrap(Wrap { trim: false });
@@ -273,18 +282,17 @@ fn ansi_lines_to_text(logs: &[String]) -> Text<'_> {
             .as_bytes()
             .into_text()
             .unwrap_or_else(|_| log.as_str().into());
-        lines.extend(text.lines.into_iter().map(Line::from));
+        lines.extend(text.lines);
     }
     Text::from(lines)
 }
 
-fn sidecar_log_lines(log: &String) -> Vec<Line<'_>> {
+fn sidecar_log_lines(log: &str) -> Vec<Line<'_>> {
     if log.contains('\x1b') {
         return log
             .as_bytes()
             .into_text()
-            .map(|text| text.lines.into_iter().map(Line::from).collect())
-            .unwrap_or_else(|_| vec![Line::from(log.clone())]);
+            .map_or_else(|_| vec![Line::from(log.to_owned())], |text| text.lines);
     }
 
     let style = if log.contains("ALLOW") {
@@ -296,12 +304,12 @@ fn sidecar_log_lines(log: &String) -> Vec<Line<'_>> {
     } else {
         Style::default()
     };
-    vec![Line::from(Span::styled(log.clone(), style))]
+    vec![Line::from(Span::styled(log.to_owned(), style))]
 }
 
-fn audit_log_line(log: &String) -> Line<'static> {
+fn audit_log_line(log: &str) -> Line<'static> {
     let Ok(value) = serde_json::from_str::<Value>(log) else {
-        return Line::from(log.clone());
+        return Line::from(log.to_owned());
     };
 
     let decision = value
@@ -337,8 +345,15 @@ fn audit_log_line(log: &String) -> Line<'static> {
 
     if !reason.is_empty() {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(reason.to_owned(), Style::default().fg(Color::White)));
+        spans.push(Span::styled(
+            reason.to_owned(),
+            Style::default().fg(Color::White),
+        ));
     }
 
     Line::from(spans)
+}
+
+fn scroll_offset(line_count: usize, height: usize) -> u16 {
+    u16::try_from(line_count.saturating_sub(height)).unwrap_or(u16::MAX)
 }
