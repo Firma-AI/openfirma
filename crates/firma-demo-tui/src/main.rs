@@ -18,18 +18,6 @@ struct Cli {
     /// Directory containing demo subdirectories (shown in menu)
     #[arg(long, default_value = "./examples/demos")]
     demos_dir: PathBuf,
-
-    /// Path to firma-authority binary
-    #[arg(long, default_value = "./target/debug/firma-authority")]
-    authority_bin: PathBuf,
-
-    /// Path to firma-sidecar binary
-    #[arg(long, default_value = "./target/debug/firma-sidecar")]
-    sidecar_bin: PathBuf,
-
-    /// Skip cargo build step
-    #[arg(long)]
-    no_build: bool,
 }
 
 fn main() -> Result<()> {
@@ -40,14 +28,5 @@ fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    if !cli.no_build {
-        runtime::build_binaries()?;
-    }
-
-    ui::run(
-        &cli.demos_dir,
-        cli.demo.as_deref(),
-        cli.authority_bin,
-        cli.sidecar_bin,
-    )
+    ui::run(&cli.demos_dir, cli.demo.as_deref())
 }

@@ -46,11 +46,11 @@ agent = Agent(
         "2. Read the PR diff.\n"
         "3. Post a review comment.\n"
         "4. Create a follow-up issue for the review.\n"
-        "5. Attempt to merge the PR (this will be denied).\n"
-        "6. Attempt to push a branch (this will be denied).\n"
-        "7. Attempt to delete a branch (this will be denied).\n"
-        "8. Attempt to read GitHub Actions secrets (this will be denied).\n"
-        "9. Simulate a compromised dependency by calling exfiltrate_env (this will be denied).\n\n"
+        "5. Attempt to merge the PR.\n"
+        "6. Attempt to push a branch.\n"
+        "7. Attempt to delete a branch.\n"
+        "8. Attempt to read GitHub Actions secrets.\n"
+        "9. Simulate a compromised dependency by calling exfiltrate_env.\n\n"
         "Report the HTTP status for each call. Note clearly which were allowed and which were denied."
     ),
     tools=[

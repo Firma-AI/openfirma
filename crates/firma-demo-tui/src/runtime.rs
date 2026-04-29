@@ -19,35 +19,11 @@ impl DemoRuntime {
     }
 }
 
-pub fn build_binaries() -> Result<()> {
-    let status = Command::new("cargo")
-        .args(["build", "-p", "firma-authority", "-p", "firma-sidecar"])
-        .status()
-        .context("failed to run cargo build")?;
-    ensure!(status.success(), "cargo build failed");
-    Ok(())
-}
-
-pub fn boot(
-    manifest: &DemoManifest,
-    authority_bin: &Path,
-    sidecar_bin: &Path,
-) -> Result<DemoRuntime> {
-    ensure!(
-        authority_bin.exists(),
-        "firma-authority binary not found at '{}' — run without --no-build, or: cargo build -p firma-authority",
-        authority_bin.display()
-    );
-    ensure!(
-        sidecar_bin.exists(),
-        "firma-sidecar binary not found at '{}' — run without --no-build, or: cargo build -p firma-sidecar",
-        sidecar_bin.display()
-    );
-
+pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
     let runtime_dir = manifest.root.join(".runtime");
     std::fs::create_dir_all(&runtime_dir).context("failed to create .runtime directory")?;
 
-    provision_keys(authority_bin, &runtime_dir)?;
+    provision_keys(&runtime_dir)?;
 
     let revocations = runtime_dir.join("revocations.txt");
     if !revocations.exists() {
@@ -57,8 +33,8 @@ pub fn boot(
     repair_demo_ca_pair(&runtime_dir.join("generated-firma-ca"))?;
 
     let authority = spawn_with_output(
-        Command::new(authority_bin)
-            .arg("--config")
+        Command::new("cargo")
+            .args(["run", "--bin", "firma-authority", "--", "--config"])
             .arg(&manifest.authority_config),
     )
     .context("failed to start firma-authority")?;
@@ -69,8 +45,8 @@ pub fn boot(
     std::fs::write(&audit_log_path, "").context("failed to reset audit.jsonl")?;
 
     let sidecar = spawn_with_output(
-        Command::new(sidecar_bin)
-            .arg("--config-file")
+        Command::new("cargo")
+            .args(["run", "--bin", "firma-sidecar", "--", "--config-file"])
             .arg(&manifest.sidecar_config),
     )
     .context("failed to start firma-sidecar")?;
@@ -84,12 +60,19 @@ pub fn boot(
     })
 }
 
-fn provision_keys(authority_bin: &Path, runtime_dir: &Path) -> Result<()> {
+fn provision_keys(runtime_dir: &Path) -> Result<()> {
     let key_file = runtime_dir.join("authority.key");
     if !key_file.exists() {
         // Suppress output — we are inside the TUI alternate screen.
-        let status = Command::new(authority_bin)
-            .args(["generate-key", "--output"])
+        let status = Command::new("cargo")
+            .args([
+                "run",
+                "--bin",
+                "firma-autority",
+                "--",
+                "generate-key",
+                "--output",
+            ])
             .arg(&key_file)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
