@@ -1,73 +1,58 @@
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["requests", "urllib3"]
-# ///
-"""Demo 1 agent — The Path That Doesn't Exist.
+"""Demo 1 — The Path That Doesn't Exist.
 
-Two endpoints on the same host. One allowed, one forbidden.
-Enforcement happens at the path level before the upstream is reached.
+Same host. Same protocol. Different path.
+The allowed path executes; the forbidden path is never reached.
 
-Run via firma-demo-tui or directly:
-    uv run examples/demos/demo1/agent.py
+Run via firma-demo-tui, or directly:
+    cd examples/demos
+    uv run demo1/agent.py
 """
+import asyncio
 import os
 import sys
-import time
 
-import urllib3
-import requests
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+import dotenv
+from agents import Agent, Runner
+from agents.repl import run_demo_loop
 
-PROXY = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or "http://127.0.0.1:8080"
-PROXIES = {"http": PROXY, "https": PROXY}
-TIMEOUT = 8
+from agent.tools.enforcement import fetch_billing, fetch_usage
+
+dotenv.load_dotenv()
+
+agent = Agent(
+    name="demo1-agent",
+    model="gpt-4.1",
+    instructions=(
+        "You are a customer data agent. Your task is to fetch customer data.\n\n"
+        "When asked, do the following in order:\n"
+        "1. Fetch usage data for user 'user-123' using the fetch_usage tool.\n"
+        "2. Fetch billing data for the same user using the fetch_billing tool.\n\n"
+        "Report the HTTP status and result for each call. "
+        "Note if a call was blocked before reaching the server."
+    ),
+    tools=[fetch_usage, fetch_billing],
+)
 
 
-def fetch(label: str, url: str) -> None:
-    print(f"\n[AGENT] {label}", flush=True)
-    print(f"        GET {url}", flush=True)
-    try:
-        r = requests.get(url, proxies=PROXIES, verify=False, timeout=TIMEOUT)
-        if r.status_code < 400:
-            print(f"        -> ALLOWED  (HTTP {r.status_code}) — response received", flush=True)
-        else:
-            print(f"        -> DENIED   (HTTP {r.status_code}) — upstream not reached", flush=True)
-    except requests.exceptions.ProxyError as exc:
-        print(f"        -> DENIED   (proxy blocked: {exc})", flush=True)
-    except requests.exceptions.ConnectionError as exc:
-        print(f"        -> DENIED   (connection error: {exc})", flush=True)
-    except requests.exceptions.Timeout:
-        print(f"        -> TIMEOUT", flush=True)
+async def _run(prompt: str) -> None:
+    print("=" * 60, flush=True)
+    print("  Demo 1: The Path That Doesn't Exist", flush=True)
+    print("  Same host. Same service. Different path.", flush=True)
+    print("=" * 60, flush=True)
+    print(flush=True)
+    result = await Runner.run(agent, prompt)
+    print(result.final_output, flush=True)
 
 
 def main() -> None:
-    print("=" * 60, flush=True)
-    print("  Demo 1: The Path That Doesn't Exist", flush=True)
-    print("  Same host. Same protocol. Different path.", flush=True)
-    print("=" * 60, flush=True)
-    time.sleep(0.5)
-
-    # Step 1: Usage endpoint — filesystem.read — ALLOWED
-    fetch(
-        "Fetch usage data (filesystem.read — permitted)",
-        "https://httpbin.org/get",
-    )
-    time.sleep(0.8)
-
-    # Step 2: Billing endpoint — data.query — DENIED (no Cedar permit)
-    fetch(
-        "Fetch billing data (data.query — no permit → deny)",
-        "https://httpbin.org/anything/billing",
-    )
-
-    print("\n" + "=" * 60, flush=True)
-    print("  Demo complete.", flush=True)
-    print("  The billing path was never reached.", flush=True)
-    print("  Enforcement happened before execution, outside the app.", flush=True)
-    print("=" * 60, flush=True)
+    prompt = os.environ.get("FIRMA_DEMO_PROMPT", "").strip()
+    if prompt:
+        asyncio.run(_run(prompt))
+    else:
+        asyncio.run(run_demo_loop(agent))
 
 
 if __name__ == "__main__":
     main()
-    sys.exit(0)

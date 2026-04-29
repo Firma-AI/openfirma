@@ -17,7 +17,6 @@ use crate::runtime::{DemoRuntime, boot};
 
 pub enum Phase {
     Menu,
-    Description,
     Running,
 }
 
@@ -78,13 +77,18 @@ pub fn run(
 
     let mut app = App::new(menu_entries, authority_bin, sidecar_bin);
 
-    // If a specific demo was given on CLI, skip the menu.
     if let Some(demo_path) = initial_demo {
         let manifest = load(demo_path)?;
         let rt = boot(&manifest, &app.authority_bin, &app.sidecar_bin)?;
+        let ag = spawn_agent(
+            &manifest.agent_script,
+            "http://127.0.0.1:8080",
+            &manifest.agent_prompt,
+        )?;
         app.manifest = Some(manifest);
         app.runtime = Some(rt);
-        app.phase = Phase::Description;
+        app.agent = Some(ag);
+        app.phase = Phase::Running;
     }
 
     let result = event_loop(&mut terminal, &mut app);
@@ -143,7 +147,6 @@ fn drain_channels(app: &mut App) {
 fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
     match app.phase {
         Phase::Menu => handle_menu_key(app, key)?,
-        Phase::Description => handle_description_key(app, key)?,
         Phase::Running => handle_running_key(app, key),
     }
     Ok(())
@@ -157,39 +160,24 @@ fn handle_menu_key(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Up | KeyCode::Char('k') => {
             app.menu_selected = app.menu_selected.saturating_sub(1);
         }
-        KeyCode::Down | KeyCode::Char('j')
-            if app.menu_selected + 1 < app.menu_entries.len() => {
-                app.menu_selected += 1;
-            }
+        KeyCode::Down | KeyCode::Char('j') if app.menu_selected + 1 < app.menu_entries.len() => {
+            app.menu_selected += 1;
+        }
         KeyCode::Enter => {
             let path = app.menu_entries[app.menu_selected].path.clone();
             let manifest = load(&path)?;
             let rt = boot(&manifest, &app.authority_bin, &app.sidecar_bin)?;
+            let ag = spawn_agent(
+                &manifest.agent_script,
+                "http://127.0.0.1:8080",
+                &manifest.agent_prompt,
+            )?;
             app.manifest = Some(manifest);
             app.runtime = Some(rt);
-            app.phase = Phase::Description;
+            app.agent = Some(ag);
+            app.phase = Phase::Running;
         }
         _ => {}
-    }
-    Ok(())
-}
-
-fn handle_description_key(app: &mut App, key: KeyEvent) -> Result<()> {
-    match key.code {
-        KeyCode::Char('q') | KeyCode::Esc => {
-            app.should_quit = true;
-        }
-        _ => {
-            if let Some(manifest) = app.manifest.as_ref() {
-                let ag = spawn_agent(
-                    &manifest.agent_script,
-                    "http://127.0.0.1:8080",
-                    &manifest.agent_prompt,
-                )?;
-                app.agent = Some(ag);
-                app.phase = Phase::Running;
-            }
-        }
     }
     Ok(())
 }

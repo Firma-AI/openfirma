@@ -11,12 +11,27 @@ pub struct ManagedProcess {
 
 impl ManagedProcess {
     pub fn shutdown(&mut self) {
+        kill_tree(self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
 
+impl Drop for ManagedProcess {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
 pub fn spawn_with_output(cmd: &mut Command) -> Result<ManagedProcess> {
+    // Put each child in its own process group so kill_tree can reach
+    // any sub-children (e.g. the Python process spawned by uv).
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -59,4 +74,27 @@ pub fn spawn_with_output(cmd: &mut Command) -> Result<ManagedProcess> {
         child,
         output_rx: rx,
     })
+}
+
+pub(crate) fn kill_tree_pub(pid: u32) {
+    kill_tree(pid);
+}
+
+/// Kill the entire process group rooted at `pid`.
+/// On Unix this sends SIGKILL to every process in the group.
+/// On non-Unix platforms this is a no-op (the individual child.kill() suffices).
+fn kill_tree(pid: u32) {
+    #[cfg(unix)]
+    {
+        // Negative pgid → kill every process in the group.
+        let _ = Command::new("kill")
+            .args(["-9", &format!("-{pid}")])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+    }
 }

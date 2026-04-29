@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::demo_loader::DemoManifest;
@@ -32,6 +32,17 @@ pub fn boot(
     authority_bin: &Path,
     sidecar_bin: &Path,
 ) -> Result<DemoRuntime> {
+    ensure!(
+        authority_bin.exists(),
+        "firma-authority binary not found at '{}' — run without --no-build, or: cargo build -p firma-authority",
+        authority_bin.display()
+    );
+    ensure!(
+        sidecar_bin.exists(),
+        "firma-sidecar binary not found at '{}' — run without --no-build, or: cargo build -p firma-sidecar",
+        sidecar_bin.display()
+    );
+
     let runtime_dir = manifest.root.join(".runtime");
     std::fs::create_dir_all(&runtime_dir).context("failed to create .runtime directory")?;
 
@@ -69,9 +80,12 @@ pub fn boot(
 fn provision_keys(authority_bin: &Path, runtime_dir: &Path) -> Result<()> {
     let key_file = runtime_dir.join("authority.key");
     if !key_file.exists() {
+        // Suppress output — we are inside the TUI alternate screen.
         let status = Command::new(authority_bin)
             .args(["generate-key", "--output"])
             .arg(&key_file)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .context("failed to run firma-authority generate-key")?;
         ensure!(status.success(), "generate-key failed");
@@ -89,6 +103,8 @@ fn provision_keys(authority_bin: &Path, runtime_dir: &Path) -> Result<()> {
                 "-out",
             ])
             .arg(&audit_key)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .context("failed to run openssl genpkey (is openssl installed?)")?;
         ensure!(status.success(), "openssl genpkey failed");

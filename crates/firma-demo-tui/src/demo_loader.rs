@@ -5,11 +5,11 @@ pub struct DemoEntry {
     pub name: String,
     pub path: PathBuf,
     pub tagline: String,
+    pub description: String,
 }
 
 pub struct DemoManifest {
     pub root: PathBuf,
-    pub description: String,
     pub authority_config: PathBuf,
     pub sidecar_config: PathBuf,
     pub agent_script: PathBuf,
@@ -31,15 +31,19 @@ pub fn discover(dir: &Path) -> Result<Vec<DemoEntry>> {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
 
-            let tagline = std::fs::read_to_string(path.join("description.md"))
-                .unwrap_or_default()
+            let description =
+                std::fs::read_to_string(path.join("description.md")).unwrap_or_default();
+
+            let tagline = description
                 .lines()
-                .find(|l| l.starts_with("# ")).map_or_else(|| name.clone(), |l| l.trim_start_matches("# ").to_owned());
+                .find(|l| l.starts_with("# "))
+                .map_or_else(|| name.clone(), |l| l.trim_start_matches("# ").to_owned());
 
             DemoEntry {
                 name,
                 path,
                 tagline,
+                description,
             }
         })
         .collect();
@@ -57,7 +61,6 @@ pub fn load(dir: &Path) -> Result<DemoManifest> {
         .canonicalize()
         .with_context(|| format!("demo directory not found: {}", dir.display()))?;
 
-    let description = read_required(&root, "description.md")?;
     let authority_config = required_path(&root, "authority.toml")?;
     let sidecar_config = required_path(&root, "sidecar.toml")?;
     let agent_script = required_path(&root, "agent.py")?;
@@ -65,7 +68,6 @@ pub fn load(dir: &Path) -> Result<DemoManifest> {
 
     Ok(DemoManifest {
         root,
-        description,
         authority_config,
         sidecar_config,
         agent_script,

@@ -17,15 +17,29 @@ impl AgentBridge {
     }
 
     pub fn shutdown(&mut self) {
+        crate::process_manager::kill_tree_pub(self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
 
+impl Drop for AgentBridge {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
 pub fn spawn_agent(script: &Path, proxy_addr: &str, prompt: &str) -> Result<AgentBridge> {
+    // Run uv from the demos directory so it finds examples/demos/pyproject.toml.
+    let demos_dir = script
+        .parent()
+        .and_then(Path::parent)
+        .context("cannot determine demos directory from agent script path")?;
+
     let mut child = Command::new("uv")
         .arg("run")
         .arg(script)
+        .current_dir(demos_dir)
         .env("HTTP_PROXY", proxy_addr)
         .env("HTTPS_PROXY", proxy_addr)
         .env("FIRMA_DEMO_PROMPT", prompt)
