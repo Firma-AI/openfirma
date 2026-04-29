@@ -27,7 +27,7 @@ L7 policy enforcement sidecar for AI agents. Every outbound agent call passes th
 - **firma-proto** — gRPC wire contract via protobuf. `build.rs` compiles `.proto` files with `tonic-build`. Generated code has relaxed clippy lints.
 - **firma-sidecar** — The enforcement proxy binary. Four top-level modules:
   - `interceptor` — Captures outbound agent traffic (placeholder).
-  - `normalizer` — Maps raw HTTP requests to canonical `ExecutionEnvelope` with normalized `intent.action_class` from a 27-class registry (15 FEP v0.1 + 12 GitHub additions). `intent.resource` is a `BTreeMap<String, String>` with conventional keys `host`, `path`, and optionally `provider` (attached only when the request host exact-matches a known allowlist — currently `api.github.com` / `github.com` → `provider="github"`). Fail-closed: unclassifiable protected actions → DENY.
+  - `normalizer` — Maps raw HTTP requests to canonical `ExecutionEnvelope` with normalized `intent.action_class` from a 44-class registry (15 FEP v0.1 + 12 GitHub + 12 Stripe + 5 Gmail additions). `intent.resource` is a `BTreeMap<String, String>` with conventional keys `host`, `path`, and optionally `provider` (attached only when the request host exact-matches a known allowlist: `api.github.com` / `github.com` → `provider="github"`; `api.stripe.com` → `provider="stripe"`; `gmail.googleapis.com` → `provider="gmail"`). Fail-closed: unclassifiable protected actions → DENY.
   - `enforcement` — Two-stage engine, both fully local with no network calls:
     - Stage 1 (`capability_validation`): Token selection from `CapabilityMap`, then parse/verify/expiry/revocation. Target < 1ms p95.
     - Stage 2 (`constraint_enforcement`): Scope check, bundle freshness, Cedar policy eval. Target < 200µs p95.
@@ -59,16 +59,22 @@ Shipped mapping files live under `crates/firma-sidecar/config/mappings/`:
 | File          | Covers                                                        |
 |---------------|---------------------------------------------------------------|
 | `github.toml` | 44 GitHub REST endpoints → 12 action classes                  |
+| `stripe.toml` | 88 Stripe REST endpoints → 14 action classes                  |
+| `gmail.toml`  | 41 Gmail REST endpoints → 7 action classes                    |
 
 Example operator config:
 
 ```toml
 [enforcement.mapping]
 rules_path = "config/mappings/default.toml"
-rules_paths = ["crates/firma-sidecar/config/mappings/github.toml"]
+rules_paths = [
+  "crates/firma-sidecar/config/mappings/github.toml",
+  "crates/firma-sidecar/config/mappings/stripe.toml",
+  "crates/firma-sidecar/config/mappings/gmail.toml",
+]
 ```
 
-See `docs/markdown/firma_action_class_registry.md` for the full 27-class
+See `docs/markdown/firma_action_class_registry.md` for the full 44-class
 registry and `intent.resource` shape conventions.
 
 ## Linting Rules

@@ -167,6 +167,22 @@ pub enum HttpMethod {
     OPTIONS,
 }
 
+impl HttpMethod {
+    /// Stable static label used by structured logs and metrics.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::GET => "GET",
+            Self::POST => "POST",
+            Self::PUT => "PUT",
+            Self::DELETE => "DELETE",
+            Self::PATCH => "PATCH",
+            Self::HEAD => "HEAD",
+            Self::OPTIONS => "OPTIONS",
+        }
+    }
+}
+
 /// Parameters for an outbound HTTP request.
 ///
 /// The target URL lives on `ExecutionIntent.resource`, not here —

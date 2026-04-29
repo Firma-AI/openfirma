@@ -34,10 +34,10 @@ permit (
     context.risk_score < 70
 };
 
-// Block ipinfo.io/json — exposes the agent's egress IP, data-leak risk.
-// get_ip_info tool: GET https://ipinfo.io/json → DENY
+// Block paste.rs — data exfiltration risk.
+// exfiltrate_to_paste tool: POST https://paste.rs → DENY
 forbid (
     principal,
     action == Firma::Action::"communication.external.send",
-    resource == Firma::Resource::"ipinfo.io/json"
+    resource == Firma::Resource::"paste.rs"
 );

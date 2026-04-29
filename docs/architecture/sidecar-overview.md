@@ -42,13 +42,13 @@ graph LR
     authority --> proto
 ```
 
-| Crate                           | Role                                                                             |
-| ------------------------------- | -------------------------------------------------------------------------------- |
-| `firma-core`                    | Domain types (`ExecutionEnvelope`, `CapabilityClaims`, `Decision`) and traits.   |
-| `firma-proto`                   | Protobuf-generated gRPC contract used by audit sink and Authority streams.       |
-| `firma-grpc-interceptor-proto`  | Contract for the in-process gRPC hook interceptor.                               |
-| `firma-sidecar`                 | The enforcement binary — interceptors, pipeline, connector, audit, startup.      |
-| `firma-authority`               | Reference Authority for local dev. Issues PASETO tokens, streams policy bundles. |
+| Crate                          | Role                                                                             |
+| ------------------------------ | -------------------------------------------------------------------------------- |
+| `firma-core`                   | Domain types (`ExecutionEnvelope`, `CapabilityClaims`, `Decision`) and traits.   |
+| `firma-proto`                  | Protobuf-generated gRPC contract used by audit sink and Authority streams.       |
+| `firma-grpc-interceptor-proto` | Contract for the in-process gRPC hook interceptor.                               |
+| `firma-sidecar`                | The enforcement binary — interceptors, pipeline, connector, audit, startup.      |
+| `firma-authority`              | Reference Authority for local dev. Issues PASETO tokens, streams policy bundles. |
 
 ## 3. Top-level runtime
 
@@ -266,15 +266,15 @@ The canonical schema lives in
 `crates/firma-authority/schema.cedarschema` (embedded in the binary); the sidecar test
 schema in `cedar_evaluator.rs` must match it exactly.
 
-| Attribute            | Cedar type | Source |
-| -------------------- | ---------- | ------ |
-| `session_id`         | `String`   | `CapabilityClaims.session_id` from Stage 1 validation |
-| `timestamp_ms`       | `Long`     | `NormalizedEnvelope.timestamp` converted to epoch milliseconds |
-| `params`             | `String`   | JSON-serialized `ActionParams` from the normalized request |
-| `risk_score`         | `Long`     | `RuntimeSignals.risk_score_long()` from `SessionStateStore` |
-| `budget_remaining`   | `Long`     | `RuntimeSignals.budget_remaining_long(claims.budget_ceiling)` |
+| Attribute            | Cedar type | Source                                                                  |
+| -------------------- | ---------- | ----------------------------------------------------------------------- |
+| `session_id`         | `String`   | `CapabilityClaims.session_id` from Stage 1 validation                   |
+| `timestamp_ms`       | `Long`     | `NormalizedEnvelope.timestamp` converted to epoch milliseconds          |
+| `params`             | `String`   | JSON-serialized `ActionParams` from the normalized request              |
+| `risk_score`         | `Long`     | `RuntimeSignals.risk_score_long()` from `SessionStateStore`             |
+| `budget_remaining`   | `Long`     | `RuntimeSignals.budget_remaining_long(claims.budget_ceiling)`           |
 | `session_duration_s` | `Long`     | `(envelope.timestamp - claims.issued_at).num_seconds()` clamped at zero |
-| `action_count`       | `Long`     | `RuntimeSignals.action_count`, including the current admitted call |
+| `action_count`       | `Long`     | `RuntimeSignals.action_count`, including the current admitted call      |
 
 ### 5.4 Per-session state
 
@@ -444,14 +444,49 @@ stateDiagram-v2
 
 Three proto-wire decision codes are emitted in audit events:
 
-| Code | Meaning     | Source                                                                              |
-| ---- | ----------- | ----------------------------------------------------------------------------------- |
-| `1`  | ALLOW       | Pipeline allowed and connector returned a response (any status). Also PASSTHROUGH.  |
-| `2`  | DENY        | Pipeline denied, or connector reported `Network` / `InvalidRequest`.                |
-| `3`  | ABORT       | Approved call aborted mid-flight (`ConnectorError::Timeout`).                       |
+| Code | Meaning | Source                                                                             |
+| ---- | ------- | ---------------------------------------------------------------------------------- |
+| `1`  | ALLOW   | Pipeline allowed and connector returned a response (any status). Also PASSTHROUGH. |
+| `2`  | DENY    | Pipeline denied, or connector reported `Network` / `InvalidRequest`.               |
+| `3`  | ABORT   | Approved call aborted mid-flight (`ConnectorError::Timeout`).                      |
 
 ABORT is distinct from DENY because the pipeline did approve the call;
 the token stays ACTIVE and the agent sees a gateway-timeout-class error.
+
+### 6.1 Error mapping
+
+The generic HTTP connector classifies every `reqwest::Error` before it
+crosses the connector boundary. Mapping order is timeout, then builder,
+then the transport family. Unknown or all-false flag combinations
+fail closed to `Network` and emit a WARN log for operator visibility.
+
+| reqwest signal                                | `ConnectorError`            | Runtime decision                   |
+| --------------------------------------------- | --------------------------- | ---------------------------------- |
+| `is_timeout()`                                | `Timeout(configured)`       | ABORT (`CONNECTOR_TIMEOUT`)        |
+| outer `tokio::time::timeout` elapsed          | `Timeout(configured)`       | ABORT (`CONNECTOR_TIMEOUT`)        |
+| `is_builder()` on `RequestBuilder::build()`   | `InvalidRequest(detail)`    | DENY (`CONNECTOR_INVALID_REQUEST`) |
+| `is_connect()`                                | `Network("connect: ...")`   | DENY (`CONNECTOR_NETWORK_ERROR`)   |
+| `is_request()` with no stronger matching flag | `Network("request: ...")`   | DENY (`CONNECTOR_NETWORK_ERROR`)   |
+| `is_body()`                                   | `Network("body: ...")`      | DENY (`CONNECTOR_NETWORK_ERROR`)   |
+| `is_decode()`                                 | `Network("decode: ...")`    | DENY (`CONNECTOR_NETWORK_ERROR`)   |
+| no flag set (forward-compat fallback)         | `Network("transport: ...")` | DENY (`CONNECTOR_NETWORK_ERROR`)   |
+
+### 6.2 Dispatch log contract
+
+`dispatch()` emits structured `tracing` events around every outbound
+call. The outer `tokio::time::timeout` covers rate-limit wait,
+request execution, and response body drain, so the success and failure
+latency fields reflect the whole dispatch budget.
+
+| Event level | Message           | Fields                                                  |
+| ----------- | ----------------- | ------------------------------------------------------- |
+| DEBUG       | `dispatching`     | `target_host`, `method`, `path`                         |
+| DEBUG       | `dispatched`      | `target_host`, `method`, `path`, `status`, `latency_us` |
+| ERROR       | `dispatch failed` | `target_host`, `method`, `path`, `kind`, `elapsed_us`   |
+
+Never logged: header values, `Authorization` credentials, credential
+maps, or body bytes. Header names may appear in surrounding request
+construction code paths, but header values do not.
 
 ## 7. Interceptors
 
@@ -501,12 +536,12 @@ Interceptors select the transport response from
 
 Context derivation (`denial_context_of`):
 
-| Envelope state                              | Context                  |
-| ------------------------------------------- | ------------------------ |
-| `intent.params == ActionParams::ToolUse`    | `Tool`                   |
-| `intent.params == ActionParams::Http`       | `Api`                    |
-| `intent.params == ActionParams::DbQuery`    | `Api`                    |
-| `envelope == None` (pre-normalization deny) | `Api` (fail-closed)      |
+| Envelope state                              | Context             |
+| ------------------------------------------- | ------------------- |
+| `intent.params == ActionParams::ToolUse`    | `Tool`              |
+| `intent.params == ActionParams::Http`       | `Api`               |
+| `intent.params == ActionParams::DbQuery`    | `Api`               |
+| `envelope == None` (pre-normalization deny) | `Api` (fail-closed) |
 
 Fail-closed rationale: when the sidecar cannot prove the call is a
 tool call, it defaults to the hard-block shape. A tool denial on a
