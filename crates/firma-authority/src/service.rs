@@ -7,8 +7,8 @@ use firma_core::FirmaEntityUid;
 use firma_core::agent::AgentId;
 use firma_core::policy::PolicyBundle;
 use firma_core::session::SessionId;
+use firma_core::token::CapabilityClaims;
 use firma_core::token::paseto::PasetoV4Signer;
-use firma_core::token::{CapabilityClaims, TokenId, TokenSigner};
 use firma_proto::RevocationEvent;
 use firma_proto::firma::v1::authority_service_server::AuthorityService;
 use firma_proto::firma::v1::{
@@ -82,78 +82,29 @@ impl AuthorityService for AuthorityServiceImpl {
             .parse()
             .map_err(|e| Status::invalid_argument(format!("invalid session_id: {e}")))?;
 
-        // Build Cedar evaluation context
-        let policy_set = self.policy_store.policy_set().await;
-        let schema = self.policy_store.schema().await;
-        let decision = evaluate_cedar_policy(
-            &policy_set,
-            &schema,
-            &agent_id,
-            &session_id,
-            &req.requested_actions,
-            &req.resource_scope,
-        );
+        let issuance_req = crate::issuance::IssuanceRequest {
+            agent_id: &agent_id,
+            session_id: &session_id,
+            requested_actions: &req.requested_actions,
+            resource_scope: &req.resource_scope,
+            requested_ttl_seconds: req.requested_ttl_seconds,
+        };
 
-        match decision {
-            CedarDecision::Allow => {
-                // FR-4: Clamp TTL
-                let ttl = clamp_ttl(req.requested_ttl_seconds, self.max_ttl_seconds);
-                let now = Utc::now();
-                let expires_at = now + Duration::seconds(i64::from(ttl));
-                let token_id = TokenId::new();
-
-                // Build context hash: SHA-256 of (agent_id | sorted_actions | resource | bundle_version).
-                // This binds the token to both the identity being granted and the policy state at issuance.
-                let bundle_version = self.policy_store.bundle().version.clone();
-                let context_hash = compute_context_hash(
-                    agent_id.as_ref(),
-                    &req.requested_actions,
-                    &req.resource_scope,
-                    &bundle_version,
-                );
-
-                let claims = CapabilityClaims {
-                    token_id,
-                    agent_id,
-                    session_id,
-                    action_set: req.requested_actions.clone(),
-                    resource_scope: req.resource_scope.clone(),
-                    issued_at: now,
-                    expiry: expires_at,
-                    context_hash: context_hash.clone(),
-                    budget_ceiling: None,
-                };
-
-                // Sign the token
-                let signed_token = self.signer.sign(&claims).map_err(|e| {
-                    tracing::error!(error = %e, "token signing failed");
-                    Status::internal("token signing failed")
-                })?;
-
-                let issued_at_ts = to_proto_timestamp(now);
-                let expiry_ts = to_proto_timestamp(expires_at);
-
-                let token = CapabilityToken {
-                    token_id: token_id.to_string(),
-                    agent_id: req.agent_id.clone(),
-                    session_id: req.session_id.clone(),
-                    action_set: req.requested_actions,
-                    resource_scope: req.resource_scope,
-                    issued_at: Some(issued_at_ts),
-                    expiry: Some(expiry_ts),
-                    context_hash,
-                    signature: signed_token.into_bytes(),
-                    format: TokenFormat::PasetoV4.into(),
-                    budget_ceiling: None,
-                };
-
+        match crate::issuance::issue_capability(
+            &self.policy_store,
+            &self.signer,
+            self.max_ttl_seconds,
+            &issuance_req,
+        )
+        .await
+        {
+            Ok(out) => {
+                let token = build_proto_token(&out.claims, out.raw_token.into_bytes());
                 tracing::info!(
                     agent_id = %token.agent_id,
                     token_id = %token.token_id,
-                    ttl = ttl,
                     "capability granted"
                 );
-
                 Ok(Response::new(IssueCapabilityResponse {
                     granted: true,
                     token: Some(token),
@@ -161,19 +112,22 @@ impl AuthorityService for AuthorityServiceImpl {
                     deny_message: String::new(),
                 }))
             }
-            CedarDecision::Deny { reason, message } => {
+            Err(crate::issuance::IssuanceError::Denied { reason, message }) => {
                 tracing::info!(
                     agent_id = %req.agent_id,
                     deny_reason = %reason,
                     "capability denied"
                 );
-
                 Ok(Response::new(IssueCapabilityResponse {
                     granted: false,
                     token: None,
                     deny_reason: reason,
                     deny_message: message,
                 }))
+            }
+            Err(crate::issuance::IssuanceError::Sign(e)) => {
+                tracing::error!(error = %e, "token signing failed");
+                Err(Status::internal("token signing failed"))
             }
         }
     }
@@ -261,7 +215,7 @@ impl AuthorityService for AuthorityServiceImpl {
 
 // --- Cedar evaluation helpers ---
 
-enum CedarDecision {
+pub(crate) enum CedarDecision {
     Allow,
     Deny { reason: String, message: String },
 }
@@ -321,6 +275,10 @@ impl CedarDecision {
 
 /// Evaluate Cedar policies for a capability issuance request.
 ///
+/// Uses Cedar's unspecified principal/action/resource when the schema is
+/// not loaded, falling back to a simple "any policy allows" evaluation.
+/// Evaluate Cedar policies for a capability issuance request.
+///
 /// Evaluates every requested action independently — all must be allowed for
 /// the request to succeed (fail-closed across the full action set).
 ///
@@ -329,7 +287,7 @@ impl CedarDecision {
 /// specific intent exists yet at issuance. Runtime-signal fields are populated
 /// with schema-compatible placeholders — the Authority has no session history
 /// at pre-flight, but all fields required by `EnforcementContext` must be present.
-fn evaluate_cedar_policy(
+pub(crate) fn evaluate_cedar_policy(
     policy_set: &PolicySet,
     schema: &Schema,
     agent_id: &AgentId,
@@ -425,6 +383,25 @@ fn to_proto_timestamp(dt: chrono::DateTime<Utc>) -> prost_types::Timestamp {
     }
 }
 
+/// Build the proto `CapabilityToken` from the issuance result. Centralised so
+/// both the gRPC handler here and any future caller (e.g. an HTTP shim) share
+/// a single mapping from `CapabilityClaims` → wire format.
+fn build_proto_token(claims: &CapabilityClaims, signature: Vec<u8>) -> CapabilityToken {
+    CapabilityToken {
+        token_id: claims.token_id.to_string(),
+        agent_id: claims.agent_id.to_string(),
+        session_id: claims.session_id.to_string(),
+        action_set: claims.action_set.clone(),
+        resource_scope: claims.resource_scope.clone(),
+        issued_at: Some(to_proto_timestamp(claims.issued_at)),
+        expiry: Some(to_proto_timestamp(claims.expiry)),
+        context_hash: claims.context_hash.clone(),
+        signature,
+        format: TokenFormat::PasetoV4.into(),
+        budget_ceiling: claims.budget_ceiling,
+    }
+}
+
 fn bundle_to_update(bundle: &PolicyBundle) -> PolicyBundleUpdate {
     PolicyBundleUpdate {
         bundle: Some(firma_proto::PolicyBundle {
@@ -450,7 +427,7 @@ fn entry_to_proto(entry: &crate::revocation::RevocationEntry) -> RevocationEvent
 /// SHA-256 of `agent_id | sorted_actions | resource | bundle_version`.
 /// Binds the issued token to both the principal's identity and the policy
 /// state that governed the evaluation.
-fn compute_context_hash(
+pub(crate) fn compute_context_hash(
     agent_id: &str,
     actions: &[String],
     resource: &str,
@@ -474,7 +451,7 @@ fn compute_context_hash(
 }
 
 /// FR-4: Clamp requested TTL to the configured maximum.
-fn clamp_ttl(requested: i32, max: i32) -> i32 {
+pub(crate) fn clamp_ttl(requested: i32, max: i32) -> i32 {
     if requested <= 0 {
         max
     } else {
@@ -527,13 +504,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e:?}"))
     }
 
-    fn base_schema() -> Schema {
-        let (schema, _) =
-            Schema::from_cedarschema_str(crate::cedar_loader::DEFAULT_SCHEMA).unwrap();
-        schema
-    }
-
-    const FIRMA_SCHEMA: &str = crate::cedar_loader::DEFAULT_SCHEMA;
+    const FIRMA_SCHEMA: &str = include_str!("../../firma-authority/schema.cedarschema");
 
     fn firma_schema() -> Schema {
         let (schema, _) = Schema::from_cedarschema_str(FIRMA_SCHEMA)
@@ -545,7 +516,7 @@ mod tests {
     fn evaluate_no_policies_denies() {
         let result = evaluate_cedar_policy(
             &PolicySet::new(),
-            &base_schema(),
+            &firma_schema(),
             &agent("agent_1"),
             &session("sess_1"),
             &["filesystem.read".to_string()],
@@ -558,7 +529,7 @@ mod tests {
     fn evaluate_no_actions_denies() {
         let result = evaluate_cedar_policy(
             &permit_all(),
-            &base_schema(),
+            &firma_schema(),
             &agent("agent_1"),
             &session("sess_1"),
             &[],
@@ -571,7 +542,7 @@ mod tests {
     fn evaluate_permit_all_allows() {
         let result = evaluate_cedar_policy(
             &permit_all(),
-            &base_schema(),
+            &firma_schema(),
             &agent("agent_1"),
             &session("sess_1"),
             &["filesystem.read".to_string()],
@@ -584,7 +555,7 @@ mod tests {
     fn evaluate_forbid_all_denies() {
         let result = evaluate_cedar_policy(
             &forbid_all(),
-            &base_schema(),
+            &firma_schema(),
             &agent("agent_1"),
             &session("sess_1"),
             &["filesystem.read".to_string()],
@@ -597,7 +568,7 @@ mod tests {
     fn evaluate_multi_action_all_allowed() {
         let result = evaluate_cedar_policy(
             &permit_all(),
-            &base_schema(),
+            &firma_schema(),
             &agent("agent_1"),
             &session("sess_1"),
             &[
@@ -614,7 +585,7 @@ mod tests {
         // forbid-all → every action in the set is denied; first one short-circuits
         let result = evaluate_cedar_policy(
             &forbid_all(),
-            &base_schema(),
+            &firma_schema(),
             &agent("agent_1"),
             &session("sess_1"),
             &[
