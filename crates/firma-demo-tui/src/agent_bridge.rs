@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -29,20 +30,40 @@ impl Drop for AgentBridge {
     }
 }
 
-pub fn spawn_agent(script: &Path, proxy_addr: &str, prompt: &str) -> Result<AgentBridge> {
+pub fn spawn_agent(
+    script: &Path,
+    proxy_addr: &str,
+    prompt: &str,
+    extra_env: &HashMap<String, String>,
+) -> Result<AgentBridge> {
     // Run uv from the demos directory so it finds examples/demos/pyproject.toml.
     let demos_dir = script
         .parent()
         .and_then(Path::parent)
         .context("cannot determine demos directory from agent script path")?;
 
-    let mut child = Command::new("uv")
-        .arg("run")
+    // Pre-install dependencies outside the proxy/sandbox to avoid tunnel errors.
+    let _ = Command::new("uv")
+        .arg("sync")
+        .current_dir(demos_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    let mut cmd = Command::new("uv");
+    cmd.arg("run")
         .arg(script)
         .current_dir(demos_dir)
         .env("HTTP_PROXY", proxy_addr)
         .env("HTTPS_PROXY", proxy_addr)
-        .env("FIRMA_DEMO_PROMPT", prompt)
+        .env("NO_PROXY", "localhost,127.0.0.1")
+        .env("FIRMA_DEMO_PROMPT", prompt);
+
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+
+    let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::piped())

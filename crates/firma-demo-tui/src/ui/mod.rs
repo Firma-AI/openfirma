@@ -7,21 +7,28 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::agent_bridge::{AgentBridge, spawn_agent};
-use crate::demo_loader::{DemoEntry, DemoManifest, discover, load};
+use crate::demo_loader::{
+    ConfigItem, DemoEntry, DemoManifest, discover, load, load_config_template,
+};
 use crate::runtime::{DemoRuntime, boot};
 
 pub enum Phase {
+    Config,
     Menu,
     Running,
 }
 
 pub struct App {
     pub phase: Phase,
+    // Config
+    pub config_items: Vec<ConfigItem>,
+    pub config_selected: usize,
     // Menu
     pub menu_entries: Vec<DemoEntry>,
     pub menu_selected: usize,
@@ -38,12 +45,21 @@ pub struct App {
     // Stored for lazy boot on menu selection
     authority_bin: PathBuf,
     sidecar_bin: PathBuf,
+    demos_dir: PathBuf,
 }
 
 impl App {
-    fn new(menu_entries: Vec<DemoEntry>, authority_bin: PathBuf, sidecar_bin: PathBuf) -> Self {
+    fn new(
+        menu_entries: Vec<DemoEntry>,
+        authority_bin: PathBuf,
+        sidecar_bin: PathBuf,
+        demos_dir: &Path,
+    ) -> Self {
+        let config_items = load_config_template(demos_dir);
         Self {
             phase: Phase::Menu,
+            config_items,
+            config_selected: 0,
             menu_entries,
             menu_selected: 0,
             manifest: None,
@@ -56,7 +72,20 @@ impl App {
             should_quit: false,
             authority_bin,
             sidecar_bin,
+            demos_dir: demos_dir.to_path_buf(),
         }
+    }
+
+    fn save_config(&self) -> Result<()> {
+        let mut content = String::new();
+        for item in &self.config_items {
+            if !item.description.is_empty() {
+                content.push_str(&format!("# {}\n", item.description));
+            }
+            content.push_str(&format!("{}={}\n\n", item.key, item.value));
+        }
+        std::fs::write(self.demos_dir.join(".env"), content)?;
+        Ok(())
     }
 }
 
@@ -75,15 +104,29 @@ pub fn run(
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(menu_entries, authority_bin, sidecar_bin);
+    let mut app = App::new(menu_entries, authority_bin, sidecar_bin, demos_dir);
+
+    // If .env is missing in demos_dir, start in Config phase
+    if !demos_dir.join(".env").exists() {
+        app.phase = Phase::Config;
+    }
 
     if let Some(demo_path) = initial_demo {
         let manifest = load(demo_path)?;
         let rt = boot(&manifest, &app.authority_bin, &app.sidecar_bin)?;
+
+        let mut extra_env = HashMap::new();
+        for item in &app.config_items {
+            if !item.value.is_empty() {
+                extra_env.insert(item.key.clone(), item.value.clone());
+            }
+        }
+
         let ag = spawn_agent(
             &manifest.agent_script,
             "http://127.0.0.1:8080",
             &manifest.agent_prompt,
+            &extra_env,
         )?;
         app.manifest = Some(manifest);
         app.runtime = Some(rt);
@@ -146,16 +189,55 @@ fn drain_channels(app: &mut App) {
 
 fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
     match app.phase {
+        Phase::Config => handle_config_key(app, key),
         Phase::Menu => handle_menu_key(app, key)?,
         Phase::Running => handle_running_key(app, key),
     }
     Ok(())
 }
 
+fn handle_config_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => {
+            app.should_quit = true;
+        }
+        KeyCode::Up | KeyCode::BackTab => {
+            app.config_selected = app.config_selected.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Tab => {
+            if app.config_selected + 1 < app.config_items.len() {
+                app.config_selected += 1;
+            }
+        }
+        KeyCode::Char(c) => {
+            if let Some(item) = app.config_items.get_mut(app.config_selected) {
+                item.value.push(c);
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(item) = app.config_items.get_mut(app.config_selected) {
+                item.value.pop();
+            }
+        }
+        KeyCode::Enter => {
+            if app.config_selected + 1 < app.config_items.len() {
+                app.config_selected += 1;
+            } else {
+                let _ = app.save_config();
+                app.phase = Phase::Menu;
+            }
+        }
+        _ => {}
+    }
+}
+
 fn handle_menu_key(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Char('q') | KeyCode::Esc => {
             app.should_quit = true;
+        }
+        KeyCode::Char('c') => {
+            app.phase = Phase::Config;
         }
         KeyCode::Up | KeyCode::Char('k') => {
             app.menu_selected = app.menu_selected.saturating_sub(1);
@@ -167,10 +249,19 @@ fn handle_menu_key(app: &mut App, key: KeyEvent) -> Result<()> {
             let path = app.menu_entries[app.menu_selected].path.clone();
             let manifest = load(&path)?;
             let rt = boot(&manifest, &app.authority_bin, &app.sidecar_bin)?;
+
+            let mut extra_env = HashMap::new();
+            for item in &app.config_items {
+                if !item.value.is_empty() {
+                    extra_env.insert(item.key.clone(), item.value.clone());
+                }
+            }
+
             let ag = spawn_agent(
                 &manifest.agent_script,
                 "http://127.0.0.1:8080",
                 &manifest.agent_prompt,
+                &extra_env,
             )?;
             app.manifest = Some(manifest);
             app.runtime = Some(rt);
@@ -184,7 +275,7 @@ fn handle_menu_key(app: &mut App, key: KeyEvent) -> Result<()> {
 
 fn handle_running_key(app: &mut App, key: KeyEvent) {
     match key.code {
-        KeyCode::Char('q') | KeyCode::Esc => {
+        KeyCode::Esc => {
             app.should_quit = true;
         }
         KeyCode::Char(c) => {

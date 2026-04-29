@@ -82,7 +82,7 @@ pub(crate) fn kill_tree_pub(pid: u32) {
 
 /// Kill the entire process group rooted at `pid`.
 /// On Unix this sends SIGKILL to every process in the group.
-/// On non-Unix platforms this is a no-op (the individual child.kill() suffices).
+/// On non-Unix platforms this is a no-op (the individual `child.kill()` suffices).
 fn kill_tree(pid: u32) {
     #[cfg(unix)]
     {
