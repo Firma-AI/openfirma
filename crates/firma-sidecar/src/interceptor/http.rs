@@ -1174,7 +1174,7 @@ mod tests {
         let mut chunk = [0u8; 512];
         for _ in 0..32 {
             match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut chunk)).await {
-                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                Ok(Ok(0) | Err(_)) | Err(_) => break,
                 Ok(Ok(n)) => {
                     buf.extend_from_slice(&chunk[..n]);
                     if buf.windows(4).any(|w| w == b"\r\n\r\n") {

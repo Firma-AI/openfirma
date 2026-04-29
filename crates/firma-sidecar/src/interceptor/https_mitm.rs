@@ -733,7 +733,7 @@ mod tests {
             .permissions()
             .mode()
             & 0o777;
-        assert_eq!(mode, 0o600, "expected 0600 key mode, got {:o}", mode);
+        assert_eq!(mode, 0o600, "expected 0600 key mode, got {mode:o}");
     }
 
     #[cfg(unix)]

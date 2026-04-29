@@ -1,0 +1,30 @@
+[package]
+name = "firma-demo-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "firma-demo-tui"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = [
+    "color",
+    "derive",
+    "error-context",
+    "help",
+    "std",
+    "suggestions",
+    "usage",
+] }
+crossterm = "0.28"
+ratatui = "0.29"
+tracing.workspace = true
+tracing-subscriber.workspace = true
