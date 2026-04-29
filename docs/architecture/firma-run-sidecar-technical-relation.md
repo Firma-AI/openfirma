@@ -45,6 +45,7 @@ Key files:
 - `crates/firma-run/src/profile.rs`
 - `crates/firma-run/src/config.rs`
 - `crates/firma-run/src/backend/linux_bwrap.rs`
+- `crates/firma-run/src/dns_stub.rs`
 
 ### 3.2 Enforcement sidecar (`firma-sidecar`)
 
@@ -74,6 +75,12 @@ Key files:
 
 Linux structural mode:
 - sandbox-local bridge path is used to route proxy traffic through controlled endpoint.
+- sandbox `/etc/resolv.conf` is generated and mounted by `firma-run`.
+- the resolver points at the sandbox-local DNS stub (`127.0.0.1:53`), not the
+  host resolver.
+- the current DNS stub refuses lookups deterministically; HTTP proxy traffic
+  continues to carry hostnames to the sidecar, and direct resolver use fails
+  closed instead of using ambient host DNS.
 
 ### 4.2 HTTP request path
 
@@ -98,6 +105,8 @@ If allowed:
 
 - Fail-closed by default on invalid/unsafe conditions.
 - No silent direct egress fallback from sidecar startup failure in fail-closed mode.
+- In Linux structural mode, DNS resolution is sandbox-local and cannot fall
+  back to the host resolver.
 - HTTPS interception is explicit and host-scoped.
 - Strict hosts deny when MITM setup fails.
 

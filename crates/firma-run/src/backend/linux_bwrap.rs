@@ -130,7 +130,8 @@ impl SandboxBackend for BwrapBackend {
     ) -> Result<EnforcementProof, RunError> {
         let structural = policy.enforce_network_namespace;
         let detail = if structural {
-            "network namespace isolation enabled with sandbox-local proxy bridge path".to_string()
+            "network namespace isolation enabled with sandbox-local proxy bridge and DNS stub paths"
+                .to_string()
         } else {
             "network namespace isolation disabled; cooperative routing mode".to_string()
         };

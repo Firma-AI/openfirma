@@ -7,6 +7,7 @@ pub mod args;
 pub mod backend;
 pub mod capability;
 pub mod config;
+pub mod dns_stub;
 pub mod error;
 pub mod identity;
 pub mod profile;

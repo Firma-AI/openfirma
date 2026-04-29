@@ -23,6 +23,13 @@ fn structural_proxy_listen_addr() -> &'static str {
     })
 }
 
+fn structural_dns_stub_listen_addr() -> &'static str {
+    static ADDR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ADDR.get_or_init(|| {
+        std::env::var("FIRMA_DNS_STUB_LISTEN_ADDR").unwrap_or("127.0.0.1:53".to_string())
+    })
+}
+
 /// Runtime-side network artifacts that must live while the wrapped process runs.
 pub struct NetworkRuntime {
     env_overrides: BTreeMap<String, String>,
@@ -80,6 +87,7 @@ pub fn prepare_network_runtime(
         })?;
 
         let proxy_addr = structural_proxy_listen_addr();
+        let dns_addr = structural_dns_stub_listen_addr();
         let mut env_overrides = BTreeMap::new();
         env_overrides.insert("HTTP_PROXY".to_string(), format!("http://{proxy_addr}"));
         env_overrides.insert("HTTPS_PROXY".to_string(), format!("http://{proxy_addr}"));
@@ -90,6 +98,10 @@ pub fn prepare_network_runtime(
         env_overrides.insert(
             "FIRMA_RUN_PROXY_LISTEN_ADDR".to_string(),
             proxy_addr.to_string(),
+        );
+        env_overrides.insert(
+            "FIRMA_RUN_DNS_STUB_LISTEN_ADDR".to_string(),
+            dns_addr.to_string(),
         );
         env_overrides.insert(
             "FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS".to_string(),

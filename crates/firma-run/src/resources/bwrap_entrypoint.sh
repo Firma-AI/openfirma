@@ -3,14 +3,41 @@ set -eu
 
 bridge_pid=""
 bridge_log=""
+dns_pid=""
+dns_log=""
 
 cleanup() {
+  if [ -n "$dns_pid" ]; then
+    kill "$dns_pid" || true
+  fi
   if [ -n "$bridge_pid" ]; then
     kill "$bridge_pid" || true
   fi
 }
 
 trap cleanup EXIT INT TERM
+
+if [ -n "${FIRMA_RUN_DNS_STUB_LISTEN_ADDR:-}" ]; then
+  runtime_dir="${FIRMA_RUN_RUNTIME_DIR:-/tmp}"
+  dns_log="${runtime_dir}/dns-stub.log"
+  : >"${dns_log}"
+  echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] dns stub starting listen=${FIRMA_RUN_DNS_STUB_LISTEN_ADDR}" >>"${dns_log}"
+  "${FIRMA_RUN_SELF_EXE}" __dns-stub \
+    --listen "${FIRMA_RUN_DNS_STUB_LISTEN_ADDR}" >>"${dns_log}" 2>&1 &
+  dns_pid="$!"
+  echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] dns stub process spawned pid=${dns_pid}" >>"${dns_log}"
+  # Give the stub a brief window to bind before the wrapped command starts.
+  sleep 0.2
+  if ! kill -0 "$dns_pid" 2>/dev/null; then
+    echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] dns stub startup failed pid=${dns_pid}" >>"${dns_log}"
+    echo "error: DNS stub failed to start (see ${dns_log})" >&2
+    if [ -f "$dns_log" ]; then
+      sed -n '1,120p' "$dns_log" >&2 || true
+    fi
+    exit 1
+  fi
+  echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] dns stub ready pid=${dns_pid}" >>"${dns_log}"
+fi
 
 if [ -n "${FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS:-}" ]; then
   runtime_dir="${FIRMA_RUN_RUNTIME_DIR:-/tmp}"

@@ -2,6 +2,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use firma_run::args::{Cli, Command};
+use firma_run::dns_stub::execute_dns_stub;
 use firma_run::proxy_bridge::execute_proxy_bridge;
 use firma_run::runtime::execute_run;
 
@@ -20,6 +21,20 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::DnsStub(args) => match execute_dns_stub(&args) {
+            Ok(code) => {
+                if code == 0 {
+                    ExitCode::SUCCESS
+                } else {
+                    let exit = u8::try_from(code).unwrap_or(1);
+                    ExitCode::from(exit)
+                }
+            }
+            Err(error) => {
+                eprintln!("error: {error}");
+                ExitCode::from(1)
+            }
+        },
         Command::Run(args) => match execute_run(&args) {
             Ok(code) => {
                 if code == 0 {

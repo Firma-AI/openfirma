@@ -180,6 +180,17 @@ ls -la /tmp/firma-run/<sandbox_id>/
 sed -n '1,200p' /tmp/firma-run/<sandbox_id>/proxy-bridge.log
 ```
 
+If DNS confinement behaves unexpectedly, inspect the sandbox-local DNS stub:
+
+```bash
+sed -n '1,200p' /tmp/firma-run/<sandbox_id>/dns-stub.log
+```
+
+In structural `bwrap` mode, `/etc/resolv.conf` points at `127.0.0.1`.
+The V1 DNS stub intentionally refuses direct resolver queries so host ambient
+DNS cannot become a bypass path; proxied HTTP/HTTPS traffic still carries
+hostnames through the sidecar path.
+
 ## CONNECT implementation note
 
 Why this exists:
