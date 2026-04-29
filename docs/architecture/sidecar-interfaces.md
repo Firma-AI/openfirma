@@ -206,10 +206,10 @@ pub enum EnforcementDecision {
 
 ## Data Flow Summary
 
-| Stage       | Input                             | Output                   | On failure          |
-| ----------- | --------------------------------- | ------------------------ | ------------------- |
-| Interceptor | Transport data                    | `RawRequest`             | Deny                |
-| Normalizer  | `&RawRequest`                     | `NormalizedEnvelope`     | Deny or passthrough |
-| Stage 1     | `&NormalizedEnvelope`             | `ValidatedCapability`    | Deny                |
-| Stage 2     | `&NormalizedEnvelope` and claims  | `Ok(())`                 | Deny                |
-| Assembly    | Normalized envelope and token     | `Box<ExecutionEnvelope>` | N/A                 |
+| Stage       | Input                            | Output                   | On failure          |
+| ----------- | -------------------------------- | ------------------------ | ------------------- |
+| Interceptor | Transport data                   | `RawRequest`             | Deny                |
+| Normalizer  | `&RawRequest`                    | `NormalizedEnvelope`     | Deny or passthrough |
+| Stage 1     | `&NormalizedEnvelope`            | `ValidatedCapability`    | Deny                |
+| Stage 2     | `&NormalizedEnvelope` and claims | `Ok(())`                 | Deny                |
+| Assembly    | Normalized envelope and token    | `Box<ExecutionEnvelope>` | N/A                 |
