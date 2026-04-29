@@ -79,6 +79,47 @@ revision should absorb these or mark them optional.
 | `repo.lifecycle`      | Repo         | Medium   | Create / fork repositories                   |
 | `repo.admin`          | Repo         | Critical | Mutate repo settings / branch protection     |
 
+### Stripe coverage — extended in-place
+
+The registry appends 12 payment/customer-domain classes so the OSS Sidecar
+can classify the Stripe REST surface deterministically. `payment.transfer`
+(FEP §2.3.5, Critical) is reused for value-transfer endpoints; cancellation
+of a transfer is a separate class because policy thresholds typically differ.
+Charge-update (`POST /v1/charges/:id`) is intentionally not mapped to
+`payment.cancel` — Stripe charges are not cancelable post-creation; money
+return goes through `payment.refund`.
+
+| Action class            | Domain   | Risk     | Notes                                                    |
+| ----------------------- | -------- | -------- | -------------------------------------------------------- |
+| `payment.read`          | Payment  | Low      | Read balance / charge / payout / dispute / event objects |
+| `payment.cancel`        | Payment  | High     | Cancel a PaymentIntent before capture                    |
+| `payment.refund`        | Payment  | High     | Issue or cancel a refund on a captured charge            |
+| `payment.payout`        | Payment  | Critical | Move funds out via Stripe payout or transfer reversal    |
+| `payment.dispute`       | Payment  | High     | Update or close a dispute                                |
+| `payment.subscription`  | Payment  | High     | Mutate subscriptions or invoices                         |
+| `payment.method.setup`  | Payment  | Medium   | Create / confirm SetupIntents (off-session method save)  |
+| `payment.method.manage` | Payment  | Medium   | Create / attach / detach payment methods                 |
+| `payment.catalog.write` | Payment  | Medium   | Mutate products, prices, coupons, payment links          |
+| `payment.tax`           | Payment  | Medium   | Tax calculations, transactions, and rate management      |
+| `customer.read`         | Customer | Low      | Read customer records and saved methods                  |
+| `customer.write`        | Customer | Medium   | Create / mutate / delete customer records                |
+
+### Gmail coverage — extended in-place
+
+The registry appends 5 communication-domain classes so the OSS Sidecar can
+distinguish read / draft / manage / delete / filter operations on the Gmail
+REST surface. `communication.external.send` (FEP §2.3.5, High) is reused
+for the actual send verbs; settings that change deliverability boundaries
+(delegates, forwarding, watch/stop) map to `account.permission.change`.
+
+| Action class                    | Domain        | Risk     | Notes                                                |
+| ------------------------------- | ------------- | -------- | ---------------------------------------------------- |
+| `communication.external.read`   | Communication | Low      | Read messages, threads, drafts, labels, history      |
+| `communication.external.draft`  | Communication | Medium   | Create / mutate / delete drafts (no send)            |
+| `communication.external.manage` | Communication | Medium   | Modify / move / label messages and threads           |
+| `communication.external.delete` | Communication | High     | Permanently delete messages or threads               |
+| `communication.external.filter` | Communication | Critical | Create / delete server-side mail filters             |
+
 Reserved for a future minor revision (MUST NOT appear in v0.1 policies):
 `memory.read`, `memory.write`, `browser.navigate`.
 
@@ -93,10 +134,15 @@ Conventional keys:
 - `host` — request host (always present for HTTP intents).
 - `path` — request path (always present for HTTP intents).
 - `provider` — logical provider when detectable. Currently attached only when
-  the request host exact-matches a known allowlist. For v0.1 the allowlist is
-  `{"api.github.com", "github.com"}` → `provider = "github"`. Exact match is
-  deliberate: typo-squat hostnames (e.g. `api.github.com.evil.example`) MUST
-  NOT earn the tag.
+  the request host exact-matches a known allowlist. For v0.1 the allowlist is:
+  - `{"api.github.com", "github.com"}` → `provider = "github"`;
+  - `{"api.stripe.com"}` → `provider = "stripe"`;
+  - `{"gmail.googleapis.com"}` → `provider = "gmail"`.
+
+  Exact match is deliberate: typo-squat hostnames (e.g.
+  `api.github.com.evil.example`) MUST NOT earn the tag. The shared
+  `www.googleapis.com` host is intentionally excluded from the Gmail
+  allowlist — it serves many non-Gmail Google APIs and would mis-tag traffic.
 
 Implementations MAY add free-form keys without protocol churn. No other keys
 are reserved.
@@ -115,6 +161,8 @@ Operator-facing mapping files ship under
 | File          | Covers                                       |
 | ------------- | -------------------------------------------- |
 | `github.toml` | 44 GitHub REST endpoints → 12 action classes |
+| `stripe.toml` | 88 Stripe REST endpoints → 14 action classes |
+| `gmail.toml`  | 41 Gmail REST endpoints → 7 action classes   |
 
 Enable a shipped file via the sidecar `[enforcement.mapping]` config:
 
@@ -123,10 +171,14 @@ Enable a shipped file via the sidecar `[enforcement.mapping]` config:
 [enforcement.mapping]
 rules_path = "crates/firma-sidecar/config/mappings/github.toml"
 
-# Option 2 — merge the shipped file on top of a local default.
+# Option 2 — merge multiple shipped files on top of a local default.
 [enforcement.mapping]
 rules_path = "config/mappings/default.toml"
-rules_paths = ["crates/firma-sidecar/config/mappings/github.toml"]
+rules_paths = [
+  "crates/firma-sidecar/config/mappings/github.toml",
+  "crates/firma-sidecar/config/mappings/stripe.toml",
+  "crates/firma-sidecar/config/mappings/gmail.toml",
+]
 ```
 
 `rules_paths` is additive. Rule lists from `rules_path` and each `rules_paths`
@@ -253,9 +305,9 @@ be classified more specifically (FEP §2.3.6 anti-convenience rule).
 Components that bind to the registry:
 
 - `crates/firma-sidecar/src/enforcement/registry.rs` —
-  `ActionClassRegistry::v0_1()` defines the exact set of 15 names plus
-  their domain and risk level. Construction MUST fail if the set drifts
-  from the FEP registry.
+  `ActionClassRegistry::v0_1()` defines the exact set of 44 names (15 FEP
+  v0.1 + 12 GitHub + 12 Stripe + 5 Gmail) plus their domain and risk level.
+  Construction MUST fail if the set drifts from this document.
 - `crates/firma-sidecar/src/normalizer.rs` +
   `crates/firma-sidecar/src/normalizer/mapping.rs` — mapping rules validated
   against the registry at load time.
@@ -264,8 +316,10 @@ Components that bind to the registry:
   new entries against §2.3.2 naming rules and the authoring guidance in
   this document.
 - `crates/firma-authority/policies/schema.cedarschema` — declares the 15
-  actions for Cedar type-checking. Identifiers MUST be byte-identical to
-  the Sidecar registry.
+  FEP v0.1 actions for Cedar type-checking. The 29 in-place additions
+  (GitHub / Stripe / Gmail) are not yet declared in the schema; policies
+  that reference them are accepted via the dynamic identifier path used
+  by `cedar_loader.rs`.
 - `crates/firma-authority/src/cedar_loader.rs` — hardcoded action
   allow-list used during policy validation MUST stay in sync with the
   registry.
@@ -273,8 +327,8 @@ Components that bind to the registry:
   capability `action_set` values MUST draw only from the registry.
 
 A conformance test in the Sidecar crate asserts that
-`ActionClassRegistry::v0_1()` returns exactly the 15 FEP identifiers
-listed above, in any order. Any drift fails CI.
+`ActionClassRegistry::v0_1()` returns exactly the 44 identifiers listed
+above, in any order. Any drift fails CI.
 
 ## Extending the registry
 

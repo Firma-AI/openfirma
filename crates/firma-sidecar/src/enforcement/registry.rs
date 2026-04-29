@@ -46,9 +46,9 @@ pub struct ActionClassRegistry {
 }
 
 impl ActionClassRegistry {
-    /// Build the v0.1 registry: 15 canonical FEP §2.3.5 classes plus 12
-    /// in-place GitHub-coverage additions (code/issue/repo/notification/
-    /// security).
+    /// Build the v0.1 registry: 15 canonical FEP §2.3.5 classes plus 29
+    /// in-place additions covering the GitHub (12), Stripe (12), and
+    /// Gmail (5) REST surfaces.
     #[must_use]
     #[allow(clippy::too_many_lines)]
     pub fn v0_1() -> Self {
@@ -191,6 +191,93 @@ impl ActionClassRegistry {
                 domain: "repo",
                 risk_level: Critical,
             },
+            // ----- Stripe coverage additions -----
+            ActionClassDefinition {
+                name: "payment.read",
+                domain: "payment",
+                risk_level: Low,
+            },
+            ActionClassDefinition {
+                name: "payment.cancel",
+                domain: "payment",
+                risk_level: High,
+            },
+            ActionClassDefinition {
+                name: "payment.refund",
+                domain: "payment",
+                risk_level: High,
+            },
+            ActionClassDefinition {
+                name: "payment.payout",
+                domain: "payment",
+                risk_level: Critical,
+            },
+            ActionClassDefinition {
+                name: "payment.dispute",
+                domain: "payment",
+                risk_level: High,
+            },
+            ActionClassDefinition {
+                name: "payment.subscription",
+                domain: "payment",
+                risk_level: High,
+            },
+            ActionClassDefinition {
+                name: "payment.method.setup",
+                domain: "payment",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "payment.method.manage",
+                domain: "payment",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "payment.catalog.write",
+                domain: "payment",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "payment.tax",
+                domain: "payment",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "customer.read",
+                domain: "customer",
+                risk_level: Low,
+            },
+            ActionClassDefinition {
+                name: "customer.write",
+                domain: "customer",
+                risk_level: Medium,
+            },
+            // ----- Gmail coverage additions -----
+            ActionClassDefinition {
+                name: "communication.external.read",
+                domain: "communication",
+                risk_level: Low,
+            },
+            ActionClassDefinition {
+                name: "communication.external.draft",
+                domain: "communication",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "communication.external.manage",
+                domain: "communication",
+                risk_level: Medium,
+            },
+            ActionClassDefinition {
+                name: "communication.external.delete",
+                domain: "communication",
+                risk_level: High,
+            },
+            ActionClassDefinition {
+                name: "communication.external.filter",
+                domain: "communication",
+                risk_level: Critical,
+            },
         ];
 
         let mut classes = HashMap::with_capacity(entries.len());
@@ -233,9 +320,9 @@ mod tests {
 
     /// Registry identifiers.
     ///
-    /// The first 15 are FEP v0.1 §2.3.5 canonical classes. The following 12
-    /// cover GitHub REST and are appended in-place without a registry
-    /// version bump.
+    /// The first 15 are FEP v0.1 §2.3.5 canonical classes. The remaining 29
+    /// cover the GitHub (12), Stripe (12), and Gmail (5) REST surfaces and
+    /// are appended in-place without a registry version bump.
     const FEP_V0_1_CLASSES: &[&str] = &[
         "account.permission.change",
         "browser.purchase",
@@ -265,12 +352,31 @@ mod tests {
         "security.alert.read",
         "repo.lifecycle",
         "repo.admin",
+        // Stripe coverage additions.
+        "payment.read",
+        "payment.cancel",
+        "payment.refund",
+        "payment.payout",
+        "payment.dispute",
+        "payment.subscription",
+        "payment.method.setup",
+        "payment.method.manage",
+        "payment.catalog.write",
+        "payment.tax",
+        "customer.read",
+        "customer.write",
+        // Gmail coverage additions.
+        "communication.external.read",
+        "communication.external.draft",
+        "communication.external.manage",
+        "communication.external.delete",
+        "communication.external.filter",
     ];
 
     #[test]
-    fn test_v0_1_registry_has_27_classes() {
+    fn test_v0_1_registry_has_44_classes() {
         let registry = ActionClassRegistry::v0_1();
-        assert_eq!(registry.len(), 27);
+        assert_eq!(registry.len(), 44);
     }
 
     #[test]
@@ -282,6 +388,41 @@ mod tests {
                 "FEP v0.1 class missing from registry: {class}"
             );
         }
+    }
+
+    #[test]
+    fn test_payment_payout_is_critical() {
+        let registry = ActionClassRegistry::v0_1();
+        let def = registry.get("payment.payout");
+        assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::Critical));
+    }
+
+    #[test]
+    fn test_payment_refund_is_high() {
+        let registry = ActionClassRegistry::v0_1();
+        let def = registry.get("payment.refund");
+        assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::High));
+    }
+
+    #[test]
+    fn test_payment_read_is_low() {
+        let registry = ActionClassRegistry::v0_1();
+        let def = registry.get("payment.read");
+        assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::Low));
+    }
+
+    #[test]
+    fn test_communication_external_filter_is_critical() {
+        let registry = ActionClassRegistry::v0_1();
+        let def = registry.get("communication.external.filter");
+        assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::Critical));
+    }
+
+    #[test]
+    fn test_communication_external_delete_is_high() {
+        let registry = ActionClassRegistry::v0_1();
+        let def = registry.get("communication.external.delete");
+        assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::High));
     }
 
     #[test]
