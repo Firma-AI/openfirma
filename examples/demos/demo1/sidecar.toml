@@ -31,7 +31,8 @@ enforcement_timeout_ms = 50
 default_timeout_ms = 10000
 
 [audit]
-sink             = "stdout"
+sink             = "file"
+file_path        = "examples/demos/demo1/.runtime/audit.jsonl"
 signing_key_path = "examples/demos/demo1/.runtime/audit.key"
 
 [authority]

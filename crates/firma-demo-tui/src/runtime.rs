@@ -9,6 +9,7 @@ use crate::process_manager::{ManagedProcess, spawn_with_output};
 pub struct DemoRuntime {
     pub authority: ManagedProcess,
     pub sidecar: ManagedProcess,
+    pub audit_log_path: std::path::PathBuf,
 }
 
 impl DemoRuntime {
@@ -65,6 +66,9 @@ pub fn boot(
 
     std::thread::sleep(Duration::from_millis(800));
 
+    let audit_log_path = runtime_dir.join("audit.jsonl");
+    std::fs::write(&audit_log_path, "").context("failed to reset audit.jsonl")?;
+
     let sidecar = spawn_with_output(
         Command::new(sidecar_bin)
             .arg("--config-file")
@@ -74,7 +78,11 @@ pub fn boot(
 
     std::thread::sleep(Duration::from_millis(800));
 
-    Ok(DemoRuntime { authority, sidecar })
+    Ok(DemoRuntime {
+        authority,
+        sidecar,
+        audit_log_path,
+    })
 }
 
 fn provision_keys(authority_bin: &Path, runtime_dir: &Path) -> Result<()> {

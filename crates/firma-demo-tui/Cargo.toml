@@ -28,5 +28,6 @@ crossterm = "0.28"
 ratatui = "0.30"
 tui-markdown = "0.3.7"
 ansi-to-tui = "8"
+serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
