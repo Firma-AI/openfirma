@@ -150,4 +150,77 @@ namespace Firma {
         resource: [Resource],
         context: EnforcementContext
     };
+
+    // GitHub additions (12 action classes added in the v0.1 registry extension).
+    action "code.read" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "code.review.read" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "code.review.submit" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "code.write" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "code.destructive" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "code.merge" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "issue.read" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "issue.write" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "notification.manage" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "security.alert.read" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "repo.lifecycle" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "repo.admin" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
 }

@@ -44,3 +44,21 @@ method       = "DELETE"
 host         = "httpbin.org"
 path         = "/delete"
 action_class = "account.permission.change"
+
+# HTTPS CONNECT tunnel to GitHub — allows establishing the TLS tunnel;
+# inner GET requests are then matched by the rules above.
+[[rules]]
+method       = "CONNECT"
+host         = "api.github.com:443"
+action_class = "code.review.read"
+
+# Local LLM / LM-Studio access (no method = any method)
+[[rules]]
+host         = "localhost:*"
+path         = "*"
+action_class = "filesystem.read"
+
+[[rules]]
+host         = "127.0.0.1:*"
+path         = "*"
+action_class = "filesystem.read"

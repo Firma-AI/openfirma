@@ -8,14 +8,13 @@ use crossterm::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::agent_bridge::{AgentBridge, spawn_agent};
-use crate::demo_loader::{
-    ConfigItem, DemoEntry, DemoManifest, discover, load, load_config_template,
-};
+use crate::demo_loader::{ConfigItem, DemoEntry, DemoManifest, discover, load, load_config_template};
 use crate::runtime::{DemoRuntime, boot};
 
 pub enum Phase {
@@ -49,12 +48,7 @@ pub struct App {
 }
 
 impl App {
-    fn new(
-        menu_entries: Vec<DemoEntry>,
-        authority_bin: PathBuf,
-        sidecar_bin: PathBuf,
-        demos_dir: &Path,
-    ) -> Self {
+    fn new(menu_entries: Vec<DemoEntry>, authority_bin: PathBuf, sidecar_bin: PathBuf, demos_dir: &Path) -> Self {
         let config_items = load_config_template(demos_dir);
         Self {
             phase: Phase::Menu,
@@ -80,9 +74,9 @@ impl App {
         let mut content = String::new();
         for item in &self.config_items {
             if !item.description.is_empty() {
-                content.push_str(&format!("# {}\n", item.description));
+                let _ = writeln!(content, "# {}", item.description);
             }
-            content.push_str(&format!("{}={}\n\n", item.key, item.value));
+            let _ = write!(content, "{}={}\n\n", item.key, item.value);
         }
         std::fs::write(self.demos_dir.join(".env"), content)?;
         Ok(())
@@ -125,9 +119,16 @@ pub fn run(
         let ag = spawn_agent(
             &manifest.agent_script,
             "http://127.0.0.1:8080",
-            &manifest.agent_prompt,
+            "", // Empty prompt so it doesn't auto-run
             &extra_env,
         )?;
+        app.agent_logs.push("Suggested Prompt:".to_string());
+        for line in manifest.agent_prompt.lines() {
+            app.agent_logs.push(format!("  {line}"));
+        }
+        app.agent_logs.push("---".to_string());
+        app.agent_logs.push("Type a prompt and press Enter to start.".to_string());
+        app.agent_logs.push("".to_string());
         app.manifest = Some(manifest);
         app.runtime = Some(rt);
         app.agent = Some(ag);
@@ -204,10 +205,8 @@ fn handle_config_key(app: &mut App, key: KeyEvent) {
         KeyCode::Up | KeyCode::BackTab => {
             app.config_selected = app.config_selected.saturating_sub(1);
         }
-        KeyCode::Down | KeyCode::Tab => {
-            if app.config_selected + 1 < app.config_items.len() {
-                app.config_selected += 1;
-            }
+        KeyCode::Down | KeyCode::Tab if app.config_selected + 1 < app.config_items.len() => {
+            app.config_selected += 1;
         }
         KeyCode::Char(c) => {
             if let Some(item) = app.config_items.get_mut(app.config_selected) {
@@ -249,7 +248,7 @@ fn handle_menu_key(app: &mut App, key: KeyEvent) -> Result<()> {
             let path = app.menu_entries[app.menu_selected].path.clone();
             let manifest = load(&path)?;
             let rt = boot(&manifest, &app.authority_bin, &app.sidecar_bin)?;
-
+            
             let mut extra_env = HashMap::new();
             for item in &app.config_items {
                 if !item.value.is_empty() {
@@ -260,9 +259,16 @@ fn handle_menu_key(app: &mut App, key: KeyEvent) -> Result<()> {
             let ag = spawn_agent(
                 &manifest.agent_script,
                 "http://127.0.0.1:8080",
-                &manifest.agent_prompt,
+                "", // Empty prompt so it doesn't auto-run
                 &extra_env,
             )?;
+            app.agent_logs.push("Suggested Prompt:".to_string());
+            for line in manifest.agent_prompt.lines() {
+                app.agent_logs.push(format!("  {line}"));
+            }
+            app.agent_logs.push("---".to_string());
+            app.agent_logs.push("Type a prompt and press Enter to start.".to_string());
+            app.agent_logs.push("".to_string());
             app.manifest = Some(manifest);
             app.runtime = Some(rt);
             app.agent = Some(ag);

@@ -56,7 +56,7 @@ pub fn spawn_agent(
         .current_dir(demos_dir)
         .env("HTTP_PROXY", proxy_addr)
         .env("HTTPS_PROXY", proxy_addr)
-        .env("NO_PROXY", "localhost,127.0.0.1")
+        .env("NO_PROXY", "localhost,127.0.0.1,0.0.0.0,::1")
         .env("FIRMA_DEMO_PROMPT", prompt);
 
     for (k, v) in extra_env {
