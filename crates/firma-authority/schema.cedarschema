@@ -23,6 +23,7 @@
 //   budget_remaining   : Long    - ceiling minus consumed, floored; i64::MAX when unbounded
 //   session_duration_s : Long    - seconds since claims.issued_at (non-negative)
 //   action_count       : Long    - monotonic per-session call counter, 1-based
+//   raw_transport      : String  - "http" or "https"; set by the normalizer
 namespace Firma {
     entity Agent;
     entity Resource;
@@ -31,13 +32,19 @@ namespace Firma {
     // Must match the JSON object produced by ConstraintEnforcer::build_context().
     //
     // Fields:
-    //   session_id         : String  — enclosing session identity
-    //   timestamp_ms       : Long    — Unix epoch milliseconds at evaluation time
-    //   params             : String  — JSON-serialized intent.params (ActionParams)
-    //   risk_score         : Long    — static or pre-computed risk attribute (V1 = 0)
-    //   budget_remaining   : Long    — ceiling minus consumed, floored; i64::MAX when unbounded
-    //   session_duration_s : Long    — seconds since claims.issued_at (non-negative)
-    //   action_count       : Long    — monotonic per-session call counter, 1-based
+    //   session_id              : String — enclosing session identity
+    //   timestamp_ms            : Long   — Unix epoch milliseconds at evaluation time
+    //   params                  : String — JSON-serialized intent.params (ActionParams)
+    //   risk_score              : Long   — static or pre-computed risk attribute (V1 = 0)
+    //   budget_remaining        : Long   — ceiling minus consumed, floored; i64::MAX when unbounded
+    //   session_duration_s      : Long   — seconds since claims.issued_at (non-negative)
+    //   action_count            : Long   — monotonic per-session call counter, 1-based
+    //   raw_transport           : String — "http" or "https"; set by the normalizer
+    //   transfer_amount         : Long   — amount of this transfer in cents; 0 for non-payment actions
+    //   daily_cumulative_amount : Long   — rolling 24-hour committed amount in cents
+    //   transfers_last_10m      : Long   — transfer count in the last 10-minute window
+    //   same_payee_count_30m    : Long   — transfers to the same payee in the last 30 minutes
+    //   session_transfer_count  : Long   — count of transfers in this session
     type EnforcementContext = {
         session_id: String,
         timestamp_ms: Long,
@@ -45,7 +52,13 @@ namespace Firma {
         risk_score: Long,
         budget_remaining: Long,
         session_duration_s: Long,
-        action_count: Long
+        action_count: Long,
+        raw_transport: String,
+        transfer_amount: Long,
+        daily_cumulative_amount: Long,
+        transfers_last_10m: Long,
+        same_payee_count_30m: Long,
+        session_transfer_count: Long
     };
 
     action "account.permission.change" appliesTo {

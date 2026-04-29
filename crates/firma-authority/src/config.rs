@@ -12,6 +12,10 @@ pub struct AuthorityConfig {
     pub listen_addr: String,
     /// Directory containing `.cedar` policy files.
     pub policy_dir: PathBuf,
+    /// Optional path to the Cedar schema file.
+    /// Overrides `policy_dir/schema.cedarschema`. When unset, falls back to
+    /// the schema found in `policy_dir`, then to the embedded canonical schema.
+    pub schema_path: Option<PathBuf>,
     /// Path to the revocation file (one token ID per line).
     pub revocation_file: PathBuf,
     /// Maximum token TTL in seconds (default: 3600).
@@ -51,6 +55,9 @@ impl AuthorityConfig {
         if let Ok(v) = std::env::var("FIRMA_AUTHORITY_POLICY_DIR") {
             config.policy_dir = PathBuf::from(v);
         }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_SCHEMA_PATH") {
+            config.schema_path = Some(PathBuf::from(v));
+        }
         if let Ok(v) = std::env::var("FIRMA_AUTHORITY_REVOCATION_FILE") {
             config.revocation_file = PathBuf::from(v);
         }
@@ -80,6 +87,7 @@ impl Default for AuthorityConfig {
         Self {
             listen_addr: "[::1]:50051".to_string(),
             policy_dir: PathBuf::from("policies"),
+            schema_path: None,
             revocation_file: PathBuf::from("revocations.txt"),
             max_ttl_seconds: 3600,
             key_file: PathBuf::from("firma-authority.key"),

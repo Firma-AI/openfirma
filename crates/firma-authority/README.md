@@ -57,9 +57,9 @@ bundle_ttl_seconds = 30
 log_level          = "info"
 ```
 
-`policy_dir` must contain `schema.cedarschema` and at least one `*.cedar` policy file.
-The canonical schema lives in `crates/firma-authority/policies/schema.cedarschema` — copy it
-into your policy directory before starting the server. Example policies are in `examples/policies/`.
+`policy_dir` must contain at least one `*.cedar` policy file. The schema is embedded in the
+binary — no `schema.cedarschema` is required unless you want to override it (place one in
+`policy_dir` or set `schema_path` in the config). Example policies are in `examples/policies/`.
 
 All other fields are optional — defaults are shown above.
 

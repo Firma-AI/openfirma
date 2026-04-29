@@ -125,7 +125,7 @@ Shared across examples (see `examples/policies/README.md`):
 | File | Purpose |
 |------|---------|
 | `../policies/demo.cedar` | Cedar policy loaded by authority, streamed to sidecar |
-| `../policies/schema.cedarschema` | Canonical Firma schema — copied by `run.sh` from `crates/firma-authority/policies/` |
+| `../policies/schema.cedarschema` | Optional schema override — omit to use the schema embedded in `firma-authority` |
 
 Generated at runtime (not committed):
 

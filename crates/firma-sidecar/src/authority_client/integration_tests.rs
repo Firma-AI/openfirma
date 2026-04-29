@@ -268,7 +268,7 @@ impl PolicyEvaluation for DenyAllEvaluation {
 const VALID_CEDAR_POLICY: &str = "permit(principal, action, resource);";
 
 /// Cedar schema scoped to the test suite; the production schema is wider
-/// and lives under `firma-authority/policies/schema.cedarschema`.
+/// and lives at `crates/firma-authority/schema.cedarschema` (embedded in the binary).
 const TEST_CEDAR_SCHEMA: &str = "\
 namespace Firma {
     entity Agent;

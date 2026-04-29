@@ -315,11 +315,10 @@ Components that bind to the registry:
   `mapping.rules_path` in the Sidecar config) — rule authors MUST review
   new entries against §2.3.2 naming rules and the authoring guidance in
   this document.
-- `crates/firma-authority/policies/schema.cedarschema` — declares the 15
-  FEP v0.1 actions for Cedar type-checking. The 29 in-place additions
-  (GitHub / Stripe / Gmail) are not yet declared in the schema; policies
-  that reference them are accepted via the dynamic identifier path used
-  by `cedar_loader.rs`.
+- `crates/firma-authority/schema.cedarschema` — canonical schema embedded in
+  the binary; declares the 15 actions for Cedar type-checking. Identifiers
+  MUST be byte-identical to the Sidecar registry.
+
 - `crates/firma-authority/src/cedar_loader.rs` — hardcoded action
   allow-list used during policy validation MUST stay in sync with the
   registry.
