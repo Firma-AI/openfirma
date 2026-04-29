@@ -14,6 +14,7 @@
 
 pub mod grpc;
 pub mod http;
+mod https_mitm;
 #[cfg(unix)]
 #[cfg_attr(docsrs, doc(cfg(unix)))]
 pub mod unix_socket;

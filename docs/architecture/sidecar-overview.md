@@ -514,19 +514,28 @@ Contract highlights:
   drains in-flight work before returning `Ok(())`.
 - eBPF kernel-level capture is on the roadmap; not in V1.
 
-### 7.1 HTTPS CONNECT behavior
+### 7.1 HTTPS CONNECT and MITM behavior
 
 The sidecar now provides explicit HTTPS `CONNECT` support in the HTTP interceptor to
 unblock real-world HTTPS agent traffic (OpenAI, Supabase, Resend, etc.)
 through `firma run`.
 
-Implementation model (no MITM):
+Implementation model:
 
-- The sidecar evaluates policy at CONNECT handshake time on `host:port`.
-- On allow, the sidecar returns `200` and relays raw TCP bytes
-  bidirectionally.
-- On deny, the sidecar returns structured `403` deny JSON.
-- CONNECT allow/deny outcomes emit audit events.
+- CONNECT-only mode:
+  - The sidecar evaluates policy at CONNECT handshake time on `host:port`.
+  - On allow, the sidecar returns `200` and relays raw TCP bytes
+    bidirectionally.
+  - On deny, the sidecar returns structured `403` deny JSON.
+  - CONNECT allow/deny outcomes emit audit events.
+- MITM mode (default for configured `intercept_hosts`):
+  - The sidecar terminates downstream TLS with a dynamically issued per-host
+    certificate signed by the local sidecar CA.
+  - Decrypted HTTPS requests are routed through the normalizer + handler
+    pipeline, so policy/audit are L7-consistent with plain HTTP.
+  - Upstream calls are re-encrypted through the existing connector/provider path.
+  - Interception scope is controlled by `intercept_hosts` / `bypass_hosts`
+    and can be hardened with `strict_hosts`.
 
 Pingora-specific note:
 
@@ -535,13 +544,8 @@ Pingora-specific note:
 - Even after enabling that flag, our forward-proxy path still produced
   `502` for real HTTPS CONNECT targets in E2E.
 - The sidecar resolves this by handling CONNECT tunnel lifecycle explicitly in
-  the sidecar HTTP interceptor runtime, preserving fail-closed semantics
-  without TLS MITM.
-
-Follow-up boundary:
-
-- Payload-level HTTPS path/method policy requires TLS interception
-  (MITM) and trusted CA propagation, tracked as a separate card.
+  the sidecar HTTP interceptor runtime, with optional TLS MITM interception
+  for configured hosts.
 
 ### 7.2 Denial contexts and response shapes
 
