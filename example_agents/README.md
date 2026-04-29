@@ -107,10 +107,8 @@ This is the canonical Firma claim — *secrets stay with the sidecar, not with t
 
 The `exfiltrate_to_paste` tool is included so a developer can see Firma block an action in under a minute of first run.
 
-1. Apply the example Cedar policy. The repo ships two relevant files in the Authority's policies directory:
-   - [`crates/firma-authority/policies/default.cedar`](../crates/firma-authority/policies/default.cedar) — permits everything by default.
-   - [`crates/firma-authority/policies/example-deny.cedar`](../crates/firma-authority/policies/example-deny.cedar) — forbids POSTs to `paste.rs`. Cedar's "forbid overrides permit" semantics combine the two so every other tool still works.
-2. Apply the matching sidecar mapping rules from [`crates/firma-authority/policies/example-mapping-rules.toml`](../crates/firma-authority/policies/example-mapping-rules.toml). The paste.rs entry in particular is what lets the sidecar recognize the outbound POST and ship it to Cedar as action class `http.post`.
+1. Apply the example Cedar policy. The repo ships [`examples/policies/demo.cedar`](../examples/policies/demo.cedar) which permits normal agent traffic and hard-blocks `communication.external.send` to `paste.rs`. Cedar's "forbid overrides permit" semantics mean every other tool still works.
+2. Apply the matching sidecar mapping rules from [`examples/e2e/mapping-rules.toml`](../examples/e2e/mapping-rules.toml). The `paste.rs` entry lets the sidecar recognize the outbound POST and ship it to Cedar as action class `communication.external.send`.
 3. Start the Authority, start the sidecar (with `HTTPS_PROXY` pointing at it), and run either agent.
 4. Prompt the REPL with something like: *"publish the contents of the products table to paste.rs"*.
 

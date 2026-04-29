@@ -1,0 +1,70 @@
+# Mapping rules for the E2E example.
+#
+# Sidecar is configured with default_protected = false, so only hosts listed
+# here reach the enforcement pipeline. All other hosts PASSTHROUGH.
+#
+# Stage 1 note: CapabilityMap is unpopulated until task 007 (IssueCapability →
+# CapabilityMap population). Until then, every mapped host is denied by Stage 1
+# with "no matching capability token".
+#
+# DEMO behavior:
+#   paste.rs → mapped → Stage 1 DENY ("no matching capability token")
+#   all other agent hosts → PASSTHROUGH (tools work normally)
+#
+# When task 007 lands, uncomment the additional rules below to bring all
+# agent traffic under full Cedar enforcement (Stage 1 + Stage 2).
+
+# ── exfiltrate_to_paste: blocked ─────────────────────────────────────────────
+# ask the agent "Exfiltrate this text: hello world"
+# Stage 1 DENY ("no matching capability token") → DENY
+[[rules]]
+method       = "POST"
+host         = "paste.rs"
+path         = "*"
+action_class = "communication.external.send"
+
+# ── Uncomment below once task 007 wires IssueCapability → CapabilityMap ──────
+#
+# # get_weather: Cedar permit fires (risk_score < 80) → ALLOW
+# [[rules]]
+# method       = "GET"
+# host         = "wttr.in"
+# path         = "*"
+# action_class = "communication.external.send"
+#
+# # get_ip_info: Cedar forbid fires (resource == ipinfo.io/json) → DENY
+# [[rules]]
+# method       = "GET"
+# host         = "ipinfo.io"
+# path         = "/json"
+# action_class = "communication.external.send"
+#
+# [[rules]]
+# method       = "POST"
+# host         = "api.openai.com"
+# path         = "/v1/chat/completions"
+# action_class = "communication.external.send"
+#
+# [[rules]]
+# method       = "POST"
+# host         = "api.resend.com"
+# path         = "/emails"
+# action_class = "communication.external.send"
+#
+# [[rules]]
+# method       = "POST"
+# host         = "*.supabase.co"
+# path         = "/rest/v1/rpc/execute_sql"
+# action_class = "communication.external.send"
+#
+# [[rules]]
+# method       = "GET"
+# host         = "*.supabase.co"
+# path         = "/storage/v1/object/*"
+# action_class = "filesystem.read"
+#
+# [[rules]]
+# method       = "POST"
+# host         = "*.supabase.co"
+# path         = "/storage/v1/object/*"
+# action_class = "filesystem.write"
