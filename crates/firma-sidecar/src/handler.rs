@@ -572,13 +572,13 @@ pub(crate) mod tests {
         }
     }
 
-    fn test_claims() -> CapabilityClaims {
+    fn test_claims_for_session(session_id: &str) -> CapabilityClaims {
         CapabilityClaims {
             token_id: "3713c5fc-b569-650c-c780-c64051473370"
                 .parse()
                 .expect("literal token id"),
             agent_id: "agent_test".parse().expect("literal agent id"),
-            session_id: "sess_001".parse().expect("literal session id"),
+            session_id: session_id.parse().expect("literal session id"),
             action_set: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),
             issued_at: Utc::now(),
@@ -593,7 +593,16 @@ pub(crate) mod tests {
         default_protected: bool,
         has_capability: bool,
     ) -> Arc<EnforcementPipeline> {
-        let claims = test_claims();
+        test_pipeline_for_session(rules, default_protected, has_capability, "sess_001")
+    }
+
+    fn test_pipeline_for_session(
+        rules: Vec<MappingRuleConfig>,
+        default_protected: bool,
+        has_capability: bool,
+        session_id: &str,
+    ) -> Arc<EnforcementPipeline> {
+        let claims = test_claims_for_session(session_id);
         let registry = ActionClassRegistry::v0_1();
         let file = MappingRulesFile { rules };
         let table = MappingTable::from_config(&file, &registry, default_protected)
@@ -677,7 +686,7 @@ pub(crate) mod tests {
         let (upstream_addr, upstream_cancel) = mock_upstream().await;
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline(vec![allow_rule()], true, true),
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_allow"),
             test_connector_registry(),
             tx,
         );
@@ -749,7 +758,7 @@ pub(crate) mod tests {
         let (upstream_addr, upstream_cancel) = mock_upstream().await;
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline(vec![allow_rule()], true, true),
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_audit"),
             test_connector_registry(),
             tx,
         );
@@ -801,7 +810,7 @@ pub(crate) mod tests {
     async fn test_handle_connector_network_error_denies() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline(vec![allow_rule()], true, true),
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_net"),
             test_connector_registry(),
             tx,
         );
@@ -857,8 +866,11 @@ pub(crate) mod tests {
         let host = format!("127.0.0.1:{}", addr.port());
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
-        let handler =
-            RequestHandler::new(test_pipeline(vec![allow_rule()], true, true), registry, tx);
+        let handler = RequestHandler::new(
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_timeout"),
+            registry,
+            tx,
+        );
 
         let response = handler
             .handle(raw_request(host, "POST"), "sess_timeout")
@@ -895,7 +907,7 @@ pub(crate) mod tests {
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
-            test_pipeline(vec![allow_rule()], true, true),
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_5xx"),
             test_connector_registry(),
             tx,
         );

@@ -86,12 +86,11 @@ impl CapabilityMap {
     ///
     /// # Note on `session_id`
     ///
-    /// `session_id` is part of the selection key per ADR-002 to support future
-    /// multi-agent-per-sidecar deployments, where a single map may hold tokens
-    /// from multiple sessions. Currently the map is always provisioned for a
-    /// single pre-flight session, so this parameter is not yet used for
-    /// filtering. When multi-agent support is added, this will filter entries by
-    /// `claims.session_id`.
+    /// `session_id` is part of the selection key per ADR-002 to support
+    /// multi-agent-per-sidecar deployments where a single map may hold tokens
+    /// from multiple sessions. Entries whose `claims.session_id` does not match
+    /// the request session are skipped, so a request from session B cannot
+    /// select a token minted for session A.
     ///
     /// # Errors
     ///
@@ -103,7 +102,7 @@ impl CapabilityMap {
     )]
     pub fn select(
         &self,
-        _session_id: &str,
+        session_id: &str,
         action_class: &str,
         resource: &str,
     ) -> Result<&CapabilityEntry, EnforcementDecision> {
@@ -114,6 +113,9 @@ impl CapabilityMap {
         if let Some(indices) = exact_indices {
             for &idx in indices {
                 let entry = &self.entries[idx];
+                if entry.claims.session_id.as_ref() != session_id {
+                    continue;
+                }
                 let score = Self::match_score(&entry.claims, action_class, resource);
                 if Self::should_replace(score, entry, best_match.as_ref()) {
                     best_match = Some((score, entry));
@@ -123,6 +125,9 @@ impl CapabilityMap {
 
         for &idx in &self.wildcard_indices {
             let entry = &self.entries[idx];
+            if entry.claims.session_id.as_ref() != session_id {
+                continue;
+            }
             let score = Self::match_score(&entry.claims, action_class, resource);
             if Self::should_replace(score, entry, best_match.as_ref()) {
                 best_match = Some((score, entry));

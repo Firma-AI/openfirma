@@ -307,6 +307,7 @@ fn test_config() -> AuthorityConfig {
         reconnect_max_backoff_secs: 1,
         revocation_readiness_grace_ms: 100,
         revocation_fail_closed_on_disconnect: false,
+        public_key_path: None,
     }
 }
 

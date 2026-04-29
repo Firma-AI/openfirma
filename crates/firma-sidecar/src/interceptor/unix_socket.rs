@@ -616,6 +616,7 @@ mod tests {
         let request = format!(
             "POST /v1/chat/completions HTTP/1.1\r\n\
                         Host: 127.0.0.1:{}\r\n\
+                        X-Firma-Session-Id: _test_\r\n\
                         Content-Length: 2\r\n\
                         \r\n\
                         {{}}",
@@ -734,6 +735,7 @@ mod tests {
         let request = format!(
             "POST /v1/chat/completions HTTP/1.1\r\n\
              Host: 127.0.0.1:{}\r\n\
+             X-Firma-Session-Id: _test_\r\n\
              Content-Type: application/json\r\n\
              Content-Length: {}\r\n\
              \r\n\
@@ -762,6 +764,7 @@ mod tests {
         let request = format!(
             "POST /v1/chat/completions HTTP/1.1\r\n\
                         Host: 127.0.0.1:{}\r\n\
+                        X-Firma-Session-Id: _test_\r\n\
                         Content-Length: 2\r\n\
                         \r\n\
                         {{}}",
@@ -830,6 +833,7 @@ mod tests {
         let request = format!(
             "POST /v1/chat/completions HTTP/1.1\r\n\
                         Host: 127.0.0.1:{}\r\n\
+                        X-Firma-Session-Id: _test_\r\n\
                         Content-Length: 2\r\n\
                         \r\n\
                         {{}}",

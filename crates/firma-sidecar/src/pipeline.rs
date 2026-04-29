@@ -1246,7 +1246,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_enforce_allow_emits_audit_event() {
-        let claims = test_claims();
+        let mut claims = test_claims();
+        claims.session_id = "sess_audit".parse().expect("literal sid");
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
         let capability_validator = CapabilityValidator::new(
@@ -1425,7 +1426,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_enforce_credential_injection_success() {
-        let claims = test_claims();
+        let mut claims = test_claims();
+        claims.session_id = "sess_cred".parse().expect("literal sid");
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
         let capability_validator = CapabilityValidator::new(
@@ -1474,7 +1476,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_enforce_credential_injection_unknown_connector_allows() {
-        let claims = test_claims();
+        let mut claims = test_claims();
+        claims.session_id = "sess_cred".parse().expect("literal sid");
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
         let capability_validator = CapabilityValidator::new(
@@ -1520,7 +1523,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_enforce_credential_injection_fetch_failed_denies() {
-        let claims = test_claims();
+        let mut claims = test_claims();
+        claims.session_id = "sess_fail".parse().expect("literal sid");
 
         let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
         let capability_validator = CapabilityValidator::new(

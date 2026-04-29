@@ -74,18 +74,23 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
 
     let normalizer = pipeline::IntentNormalizer::new(table);
 
-    // Capability map and token verifier are populated from the Authority
-    // at pre-flight; for now use empty defaults so the binary starts.
-    // Authority integration (task 007+) will populate these.
+    // The capability map is seeded from `[capability_seed]` and the
+    // verifier is built from `[authority] public_key_path`. The full
+    // gRPC `IssueCapability` client will replace this seed-file pre-
+    // provisioning in a follow-up task.
     let revocation_store = Arc::new(BloomLruRevocationStore::new(config.revocation.into()));
     tracing::debug!(
         initial_metrics = ?revocation_store.metrics(),
         "revocation cache initialized"
     );
     let revocation_store_dyn: Arc<dyn RevocationStore + Send + Sync> = revocation_store;
+    let capability_map = crate::startup::capability::load_capability_map(&config.capability_seed)?;
+    let token_verifier = crate::startup::capability::build_token_verifier(
+        config.authority.public_key_path.as_deref(),
+    )?;
     let capability_validator = pipeline::CapabilityValidator::new(
-        pipeline::CapabilityMap::new(vec![]),
-        Box::new(StubTokenVerifier),
+        capability_map,
+        token_verifier,
         Arc::clone(&revocation_store_dyn),
         std::time::Duration::from_secs(
             config
@@ -134,19 +139,4 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
         swappable_policy,
         readiness,
     })
-}
-
-/// Stub token verifier that always rejects. Replaced once Authority
-/// integration is wired in.
-struct StubTokenVerifier;
-
-impl firma_core::TokenVerifier for StubTokenVerifier {
-    fn verify(
-        &self,
-        _raw_token: &str,
-    ) -> Result<firma_core::CapabilityClaims, firma_core::TokenError> {
-        Err(firma_core::TokenError::SignatureInvalid {
-            reason: "stub verifier: no Authority configured".to_string(),
-        })
-    }
 }

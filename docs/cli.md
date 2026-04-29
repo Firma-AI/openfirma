@@ -1,12 +1,14 @@
 # CLI Reference
 
-## Usage
+## `firma-sidecar`
+
+### Usage
 
 ```text
 firma-sidecar [OPTIONS]
 ```
 
-## Options
+### Options
 
 | Flag                 | Short | Env var                          | Default              | Description               |
 | -------------------- | ----- | -------------------------------- | -------------------- | ------------------------- |
@@ -21,7 +23,7 @@ over environment variables.
 
 Valid log levels are `trace`, `debug`, `info`, `warn`, and `error`.
 
-## Examples
+### Examples
 
 Start with defaults:
 
@@ -49,15 +51,57 @@ export FIRMA_SIDECAR_LOG_LEVEL=debug
 firma-sidecar
 ```
 
-## Health Check
+### Health Check
 
 The sidecar exposes an HTTP health check server on the address specified by
 `--health-bind-addr`. The default is `127.0.0.1:9000`.
 
-## Shutdown
+### Shutdown
 
 The sidecar handles `SIGTERM` and `SIGINT` for graceful shutdown:
 
 1. Stop accepting new connections.
 2. Drain in-flight requests up to `interceptor.drain_timeout_secs`.
 3. Exit with code `0`.
+
+## `firma-authority`
+
+Reference Authority binary used for local development. Issues
+PASETO v4 capability tokens, streams policy bundles and
+revocations. Pre-flight only, never on the hot path.
+
+### `firma-authority issue`
+
+Issues a signed capability token directly from the loaded Cedar
+bundle and writes it to a TOML seed file consumable by the
+sidecar `[capability_seed]` section. Stop-gap until the sidecar
+wires the gRPC `IssueCapability` client; not intended for
+production traffic.
+
+```bash
+firma-authority --config authority.toml issue \
+  --agent-id demo-agent \
+  --session-id demo-session \
+  --action communication.external.send \
+  --resource-scope '*' \
+  --ttl-seconds 3600 \
+  --output capability-demo-agent.toml
+```
+
+| Flag               | Required | Default | Description                                              |
+| ------------------ | -------- | ------- | -------------------------------------------------------- |
+| `--agent-id`       | yes      |         | Token agent identity.                                    |
+| `--session-id`     | yes      |         | Token session identity.                                  |
+| `--action`         | yes      |         | Action class. Repeat the flag for multiple.              |
+| `--resource-scope` | no       | `*`     | Resource scope pattern.                                  |
+| `--ttl-seconds`    | no       | `3600`  | Requested TTL. Clamped by `max_ttl_seconds` in config.   |
+| `--output`/`-o`    | yes      |         | Path to write the seed TOML.                             |
+
+The subcommand evaluates the loaded Cedar bundle exactly like
+the gRPC `IssueCapability` handler — a Cedar deny exits non-zero
+with `issuance failed: cedar denied issuance (...): ...`.
+
+The output TOML carries the raw `v4.public....` token plus the
+matching claims; the sidecar consumes it via
+`[capability_seed].paths` and verifies the signature with
+`[authority].public_key_path`.
