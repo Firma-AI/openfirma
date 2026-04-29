@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::agent_bridge::{AgentBridge, spawn_agent};
-use crate::demo_loader::{ConfigItem, DemoEntry, DemoManifest, discover, load, load_config_template};
+use crate::demo_loader::{
+    ConfigItem, DemoEntry, DemoManifest, discover, load, load_config_template,
+};
 use crate::runtime::{DemoRuntime, boot};
 
 pub enum Phase {
@@ -48,7 +50,12 @@ pub struct App {
 }
 
 impl App {
-    fn new(menu_entries: Vec<DemoEntry>, authority_bin: PathBuf, sidecar_bin: PathBuf, demos_dir: &Path) -> Self {
+    fn new(
+        menu_entries: Vec<DemoEntry>,
+        authority_bin: PathBuf,
+        sidecar_bin: PathBuf,
+        demos_dir: &Path,
+    ) -> Self {
         let config_items = load_config_template(demos_dir);
         Self {
             phase: Phase::Menu,
@@ -127,7 +134,8 @@ pub fn run(
             app.agent_logs.push(format!("  {line}"));
         }
         app.agent_logs.push("---".to_string());
-        app.agent_logs.push("Type a prompt and press Enter to start.".to_string());
+        app.agent_logs
+            .push("Type a prompt and press Enter to start.".to_string());
         app.agent_logs.push("".to_string());
         app.manifest = Some(manifest);
         app.runtime = Some(rt);
@@ -248,7 +256,7 @@ fn handle_menu_key(app: &mut App, key: KeyEvent) -> Result<()> {
             let path = app.menu_entries[app.menu_selected].path.clone();
             let manifest = load(&path)?;
             let rt = boot(&manifest, &app.authority_bin, &app.sidecar_bin)?;
-            
+
             let mut extra_env = HashMap::new();
             for item in &app.config_items {
                 if !item.value.is_empty() {
@@ -267,7 +275,8 @@ fn handle_menu_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.agent_logs.push(format!("  {line}"));
             }
             app.agent_logs.push("---".to_string());
-            app.agent_logs.push("Type a prompt and press Enter to start.".to_string());
+            app.agent_logs
+                .push("Type a prompt and press Enter to start.".to_string());
             app.agent_logs.push("".to_string());
             app.manifest = Some(manifest);
             app.runtime = Some(rt);

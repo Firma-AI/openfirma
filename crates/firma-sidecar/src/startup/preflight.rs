@@ -7,8 +7,8 @@
 //! deny) and an empty map — useful for unit-testing but not for demos.
 
 use anyhow::{Context, Result};
-use firma_core::token::paseto::PasetoV4Verifier;
 use firma_core::TokenVerifier;
+use firma_core::token::paseto::PasetoV4Verifier;
 use firma_proto::authority_service_client::AuthorityServiceClient;
 use firma_proto::firma::v1::IssueCapabilityRequest;
 
@@ -44,13 +44,12 @@ pub async fn run_preflight(
         )
     })?;
 
-    let verifier = PasetoV4Verifier::try_new(&pub_key_bytes)
-        .context("invalid authority public key")?;
+    let verifier =
+        PasetoV4Verifier::try_new(&pub_key_bytes).context("invalid authority public key")?;
 
     // Connect to authority gRPC endpoint.
-    let channel =
-        build_channel(authority_url, std::time::Duration::from_secs(10))
-            .context("failed to build authority gRPC channel")?;
+    let channel = build_channel(authority_url, std::time::Duration::from_secs(10))
+        .context("failed to build authority gRPC channel")?;
     let mut client = AuthorityServiceClient::new(channel);
 
     tracing::info!(

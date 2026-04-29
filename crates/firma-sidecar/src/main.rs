@@ -53,9 +53,7 @@ async fn main() -> anyhow::Result<()> {
             Some(startup::run_preflight(pf_config, authority_url).await?)
         }
         (Some(_), None) => {
-            anyhow::bail!(
-                "[preflight] is configured but policy.authority_url is not set"
-            );
+            anyhow::bail!("[preflight] is configured but policy.authority_url is not set");
         }
         (None, _) => None,
     };
