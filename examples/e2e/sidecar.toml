@@ -1,0 +1,53 @@
+# Firma Sidecar — E2E example configuration.
+# Run from repo root: ./target/debug/firma-sidecar --config-file examples/e2e/sidecar.toml
+#
+# Interceptor: HTTP forward proxy on :8080
+# Enforcement: policy bundle streamed from Authority on :50051
+# Default: unlisted hosts PASSTHROUGH (default_protected = false)
+
+[interceptor]
+mode              = "http_proxy"
+listen_addr       = "127.0.0.1:8080"
+drain_timeout_secs = 30
+
+[policy]
+dir           = "examples/policies"
+authority_url = "http://127.0.0.1:50051"
+
+[ca]
+dir = "examples/e2e/firma-ca"
+
+[log]
+level = "info"
+
+[mapping]
+rules_path        = "examples/e2e/mapping-rules.toml"
+default_protected = false
+
+[capability_validation]
+clock_skew_tolerance_seconds = 0
+
+[constraint_enforcement]
+bundle_ttl_seconds    = 30
+enforcement_timeout_ms = 50
+
+[connector]
+default_timeout_ms = 120000
+
+# Local agent configuration (lm-studio)
+[[connector.hosts]]
+host       = "localhost:1234"
+rps        = 10
+burst      = 5
+timeout_ms = 300000
+
+[audit]
+sink             = "stdout"
+signing_key_path = "examples/e2e/audit.key"
+
+[authority]
+connect_timeout_secs           = 10
+reconnect_min_backoff_ms       = 250
+reconnect_max_backoff_secs     = 30
+revocation_readiness_grace_ms  = 500
+revocation_fail_closed_on_disconnect = false
