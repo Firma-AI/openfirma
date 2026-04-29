@@ -3,9 +3,10 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
+use serde_json::Value;
 
 use super::{App, Phase};
 
@@ -46,12 +47,14 @@ fn render_config(f: &mut Frame, app: &App) {
         };
 
         let title = format!(" {} — {} ", item.key, item.description);
-        let input = Paragraph::new(item.value.as_str()).block(
-            Block::default()
-                .title(title)
-                .borders(Borders::ALL)
-                .border_style(style),
-        );
+        let input = Paragraph::new(item.value.as_str())
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .title(title)
+                    .borders(Borders::ALL)
+                    .border_style(style),
+            );
 
         if i < chunks.len() - 2 {
             f.render_widget(input, chunks[i]);
@@ -149,7 +152,8 @@ fn render_running(f: &mut Frame, app: &App) {
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(45),
+            Constraint::Percentage(30),
+            Constraint::Percentage(25),
             Constraint::Min(0),
             Constraint::Length(1),
         ])
@@ -162,11 +166,12 @@ fn render_running(f: &mut Frame, app: &App) {
 
     render_log_pane(f, top[0], " Authority ", &app.authority_logs, Color::Blue);
     render_sidecar_pane(f, top[1], &app.sidecar_logs);
-    render_agent_pane(f, outer[1], app);
+    render_audit_pane(f, outer[1], &app.audit_logs);
+    render_agent_pane(f, outer[2], app);
 
     let status = Paragraph::new("[Enter] send to agent   [ESC] quit")
         .style(Style::default().fg(Color::DarkGray));
-    f.render_widget(status, outer[2]);
+    f.render_widget(status, outer[3]);
 }
 
 fn render_log_pane(f: &mut Frame, area: Rect, title: &str, logs: &[String], color: Color) {
@@ -179,19 +184,14 @@ fn render_log_pane(f: &mut Frame, area: Rect, title: &str, logs: &[String], colo
     f.render_widget(block, area);
 
     let height = inner.height as usize;
-    let start = logs.len().saturating_sub(height);
-    let items: Vec<ListItem> = logs[start..]
-        .iter()
-        .map(|l| {
-            let text = l
-                .as_bytes()
-                .into_text()
-                .unwrap_or_else(|_| l.as_str().into());
-            ListItem::new(text)
-        })
-        .collect();
+    let start = logs.len().saturating_sub(height.saturating_mul(4));
+    let text = ansi_lines_to_text(&logs[start..]);
+    let scroll = text.lines.len().saturating_sub(height) as u16;
+    let pane = Paragraph::new(text)
+        .scroll((scroll, 0))
+        .wrap(Wrap { trim: false });
 
-    f.render_widget(List::new(items), inner);
+    f.render_widget(pane, inner);
 }
 
 fn render_sidecar_pane(f: &mut Frame, area: Rect, logs: &[String]) {
@@ -204,33 +204,36 @@ fn render_sidecar_pane(f: &mut Frame, area: Rect, logs: &[String]) {
     f.render_widget(block, area);
 
     let height = inner.height as usize;
-    let start = logs.len().saturating_sub(height);
-    let items: Vec<ListItem> = logs[start..]
-        .iter()
-        .map(|l| {
-            // If it has ANSI, use that, otherwise fall back to manual styling
-            if l.contains('\x1b') {
-                let text = l
-                    .as_bytes()
-                    .into_text()
-                    .unwrap_or_else(|_| l.as_str().into());
-                ListItem::new(text)
-            } else {
-                let style = if l.contains("ALLOW") {
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD)
-                } else if l.contains("DENY") {
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
-                ListItem::new(Line::from(Span::styled(l.as_str(), style)))
-            }
-        })
-        .collect();
+    let start = logs.len().saturating_sub(height.saturating_mul(4));
+    let lines: Vec<Line<'_>> = logs[start..].iter().flat_map(sidecar_log_lines).collect();
+    let text = Text::from(lines);
+    let scroll = text.lines.len().saturating_sub(height) as u16;
+    let pane = Paragraph::new(text)
+        .scroll((scroll, 0))
+        .wrap(Wrap { trim: false });
 
-    f.render_widget(List::new(items), inner);
+    f.render_widget(pane, inner);
+}
+
+fn render_audit_pane(f: &mut Frame, area: Rect, logs: &[String]) {
+    let block = Block::default()
+        .title(" Audit Logs ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let height = inner.height as usize;
+    let start = logs.len().saturating_sub(height.saturating_mul(3));
+    let lines = logs[start..].iter().map(audit_log_line).collect::<Vec<_>>();
+    let text = Text::from(lines);
+    let scroll = text.lines.len().saturating_sub(height) as u16;
+    let pane = Paragraph::new(text)
+        .scroll((scroll, 0))
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(pane, inner);
 }
 
 fn render_agent_pane(f: &mut Frame, area: Rect, app: &App) {
@@ -248,20 +251,94 @@ fn render_agent_pane(f: &mut Frame, area: Rect, app: &App) {
         .split(inner);
 
     let height = chunks[0].height as usize;
-    let start = app.agent_logs.len().saturating_sub(height);
-    let items: Vec<ListItem> = app.agent_logs[start..]
-        .iter()
-        .map(|l| {
-            let text = l
-                .as_bytes()
-                .into_text()
-                .unwrap_or_else(|_| l.as_str().into());
-            ListItem::new(text)
-        })
-        .collect();
-    f.render_widget(List::new(items), chunks[0]);
+    let start = app.agent_logs.len().saturating_sub(height.saturating_mul(4));
+    let text = ansi_lines_to_text(&app.agent_logs[start..]);
+    let scroll = text.lines.len().saturating_sub(height) as u16;
+    let output = Paragraph::new(text)
+        .scroll((scroll, 0))
+        .wrap(Wrap { trim: false });
+    f.render_widget(output, chunks[0]);
 
     let input_line = format!("> {}", app.input);
-    let input = Paragraph::new(input_line.as_str()).style(Style::default().fg(Color::White));
+    let input = Paragraph::new(input_line)
+        .style(Style::default().fg(Color::White))
+        .wrap(Wrap { trim: false });
     f.render_widget(input, chunks[1]);
+}
+
+fn ansi_lines_to_text(logs: &[String]) -> Text<'_> {
+    let mut lines = Vec::new();
+    for log in logs {
+        let text = log
+            .as_bytes()
+            .into_text()
+            .unwrap_or_else(|_| log.as_str().into());
+        lines.extend(text.lines.into_iter().map(Line::from));
+    }
+    Text::from(lines)
+}
+
+fn sidecar_log_lines(log: &String) -> Vec<Line<'_>> {
+    if log.contains('\x1b') {
+        return log
+            .as_bytes()
+            .into_text()
+            .map(|text| text.lines.into_iter().map(Line::from).collect())
+            .unwrap_or_else(|_| vec![Line::from(log.clone())]);
+    }
+
+    let style = if log.contains("ALLOW") {
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
+    } else if log.contains("DENY") {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+    vec![Line::from(Span::styled(log.clone(), style))]
+}
+
+fn audit_log_line(log: &String) -> Line<'static> {
+    let Ok(value) = serde_json::from_str::<Value>(log) else {
+        return Line::from(log.clone());
+    };
+
+    let decision = value
+        .get("decision")
+        .and_then(Value::as_i64)
+        .map_or("UNKNOWN", |decision| match decision {
+            1 => "ALLOW",
+            2 => "DENY",
+            3 => "ABORT",
+            _ => "UNKNOWN",
+        });
+    let decision_style = match decision {
+        "ALLOW" => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        "DENY" | "ABORT" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        _ => Style::default().fg(Color::DarkGray),
+    };
+    let action = value.get("action").and_then(Value::as_str).unwrap_or("-");
+    let resource = value.get("resource").and_then(Value::as_str).unwrap_or("-");
+    let reason = value
+        .get("deny_reason")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+
+    let mut spans = vec![
+        Span::styled(format!("{decision:<5}"), decision_style),
+        Span::raw("  "),
+        Span::styled(format!("{action:<32}"), Style::default().fg(Color::White)),
+        Span::raw("  "),
+        Span::styled(resource.to_owned(), Style::default().fg(Color::White)),
+    ];
+
+    if !reason.is_empty() {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(reason.to_owned(), Style::default().fg(Color::White)));
+    }
+
+    Line::from(spans)
 }

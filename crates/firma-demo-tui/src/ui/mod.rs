@@ -9,7 +9,7 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::io;
+use std::io::{self, BufRead as _, Seek as _};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -40,6 +40,8 @@ pub struct App {
     // Log panes
     pub authority_logs: Vec<String>,
     pub sidecar_logs: Vec<String>,
+    pub audit_logs: Vec<String>,
+    pub audit_log_offset: u64,
     pub agent_logs: Vec<String>,
     pub input: String,
     pub should_quit: bool,
@@ -68,6 +70,8 @@ impl App {
             agent: None,
             authority_logs: Vec::new(),
             sidecar_logs: Vec::new(),
+            audit_logs: Vec::new(),
+            audit_log_offset: 0,
             agent_logs: Vec::new(),
             input: String::new(),
             should_quit: false,
@@ -188,11 +192,55 @@ fn drain_channels(app: &mut App) {
         while let Ok(line) = rt.sidecar.output_rx.try_recv() {
             app.sidecar_logs.push(line);
         }
+        drain_audit_log(app);
     }
     if let Some(ag) = app.agent.as_ref() {
         while let Ok(line) = ag.output_rx.try_recv() {
             app.agent_logs.push(line);
         }
+    }
+}
+
+fn drain_audit_log(app: &mut App) {
+    let Some(rt) = app.runtime.as_ref() else {
+        return;
+    };
+
+    let Ok(mut file) = std::fs::File::open(&rt.audit_log_path) else {
+        return;
+    };
+
+    let Ok(metadata) = file.metadata() else {
+        return;
+    };
+    if metadata.len() < app.audit_log_offset {
+        app.audit_log_offset = 0;
+    }
+
+    if file.seek(std::io::SeekFrom::Start(app.audit_log_offset)).is_err() {
+        return;
+    }
+
+    let mut reader = std::io::BufReader::new(file);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let Ok(bytes) = reader.read_line(&mut line) else {
+            break;
+        };
+        if bytes == 0 {
+            break;
+        }
+        while line.ends_with(['\n', '\r']) {
+            line.pop();
+        }
+        if !line.is_empty() {
+            app.audit_logs.push(line.clone());
+        }
+    }
+
+    if let Ok(pos) = reader.stream_position() {
+        app.audit_log_offset = pos;
     }
 }
 
