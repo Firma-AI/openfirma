@@ -1,9 +1,11 @@
 # Demo 0 — Same Rule, Four Systems, One Failure
 
+Fragmentation of enforcement across tools and layers.
+
 ## The point
 
 A developer defines a simple rule for an agent, but enforcement is split across
-four systems — resulting in inconsistent behavior and a guaranteed gap.
+multiple systems. The result is inconsistent behavior and a guaranteed gap.
 
 ## The rule
 
@@ -11,34 +13,43 @@ four systems — resulting in inconsistent behavior and a guaranteed gap.
 
 ## The system
 
-The agent interacts with four external services over HTTP:
+The agent interacts with four external services over HTTP. Every call leaves the
+agent process:
 
-| Service | How the rule is enforced today |
+| Service | Today’s enforcement model |
 |---|---|
-| GitHub API | OAuth scope (provider-enforced) |
-| Gmail API | OAuth scope (provider-enforced) |
-| Stripe API | Backend check (app-enforced) |
-| Internal backend | Code path (app-enforced) |
+| GitHub API | Provider permissions |
+| Gmail API | OAuth scope |
+| Stripe API | Backend check |
+| Internal backend API | Application code paths |
 
-## What you will see
+Two systems enforce globally. Two systems rely on your code.
 
-| Action | Canonical class | Expected outcome |
+## The problem today
+
+| Action | Canonical action class | Outcome without a single enforcement point |
+|---|---|---|
+| Read GitHub PR | `code.review.read` | Allowed |
+| Send email | `communication.external.send` | Blocked by OAuth scope |
+| Create Stripe refund | `payment.transfer` | Blocked by backend check |
+| Delete user via backend API | `account.permission.change` | Executed if the backend missed the check |
+
+The rule is consistent. The systems are not.
+
+## The Firma shift
+
+A single Cedar policy is evaluated by the Sidecar on every outbound call.
+Every call to GitHub, Gmail, Stripe, or the backend goes through the same
+policy, the same evaluation, and the same enforcement point.
+
+| Action | Canonical action class | Outcome with Firma |
 |---|---|---|
 | Read GitHub PR | `code.review.read` | ALLOW |
-| Send email via Gmail | `communication.external.send` | DENY |
+| Send email | `communication.external.send` | DENY |
 | Create Stripe refund | `payment.transfer` | DENY |
-| DELETE user via backend | `account.permission.change` | DENY |
+| Delete user via backend API | `account.permission.change` | DENY |
 
-With Firma: a single Cedar policy evaluated at every outbound call.
-All four calls enforced uniformly — one rule, one enforcement point.
+## Closing line
 
-## Key insight
-
-Without Firma: enforcement is distributed across four different models,
-four configurations, four potential failure points.
-
-With Firma: define the rule once. Apply it everywhere. At every call.
-
----
-
-Press any key to start the demo.
+Today, enforcement is fragmented across systems. Firma enforces your rule once,
+everywhere, at every call.

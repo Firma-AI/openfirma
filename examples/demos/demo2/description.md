@@ -34,12 +34,15 @@ The agent never holds the token directly.
 | Read PR #41 | ALLOW |
 | Read PR diff | ALLOW |
 | Comment on PR | ALLOW |
+| Create issue | ALLOW |
 
 **Phase 2 — overreach**
 
 | Action | Outcome |
 |---|---|
 | Merge PR #41 | DENY |
+| Push code | DENY |
+| Delete branch | DENY |
 
 **Phase 3 — compromise (malicious dependency)**
 
@@ -47,13 +50,8 @@ The agent never holds the token directly.
 |---|---|
 | POST env vars to external host | DENY |
 | Read GitHub secrets | DENY |
-| Push to repository | DENY |
 
 ## Key insight
 
 Even if the agent is compromised and the credentials allow everything —
 nothing happens outside policy, because every call is enforced before execution.
-
----
-
-Press any key to start the demo.

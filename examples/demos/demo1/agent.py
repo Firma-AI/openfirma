@@ -3,9 +3,8 @@
 Same host. Same protocol. Different path.
 The allowed path executes; the forbidden path is never reached.
 
-Run via firma-demo-tui, or directly:
-    cd examples/demos
-    uv run demo1/agent.py
+Run via firma-demo-tui, or directly from the repo root:
+    ./examples/demos/run.sh demo1
 """
 import asyncio
 import os

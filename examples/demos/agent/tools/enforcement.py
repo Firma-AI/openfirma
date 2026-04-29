@@ -6,9 +6,11 @@ Each tool maps to a specific URL intercepted by the sidecar:
   create_stripe_refund  POST api.stripe.com         /v1/refunds                       payment.transfer      DENY
   delete_backend_user   DEL  httpbin.org            /delete                           account.permission.change DENY
 
-And for demo1 — same host, different path:
-  fetch_usage           GET  httpbin.org /get                filesystem.read   ALLOW
-  fetch_billing         GET  httpbin.org /anything/billing   credential.read   DENY
+And for demo1 — same internal service, different path:
+  fetch_usage           GET  api.internal /usage             filesystem.read   ALLOW
+  fetch_billing         GET  api.internal /billing           credential.read   DENY
+
+The demo uses httpbin.org as the public stand-in for api.internal.
 """
 import os
 
@@ -81,7 +83,7 @@ async def delete_backend_user(user_id: int) -> str:
 
 @function_tool
 async def fetch_usage(user_id: str) -> str:
-    """Fetch customer usage metrics. Allowed (filesystem.read)."""
+    """Fetch customer usage metrics from api.internal/usage. Allowed (filesystem.read)."""
     async with _client() as client:
         response = await client.get(
             "https://httpbin.org/get",
@@ -92,7 +94,7 @@ async def fetch_usage(user_id: str) -> str:
 
 @function_tool
 async def fetch_billing(user_id: str) -> str:
-    """Fetch customer billing data. DENIED by policy (credential.read not permitted)."""
+    """Fetch billing data from api.internal/billing. DENIED by policy."""
     async with _client() as client:
         response = await client.get(
             "https://httpbin.org/anything/billing",

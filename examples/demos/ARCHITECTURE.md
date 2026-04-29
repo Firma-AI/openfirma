@@ -6,13 +6,10 @@ Self-contained execution environment for agent policy demos. Visualizes how tool
 
 ---
 
-## Legacy Removed
+## Entrypoints
 
-```text
-examples/e2e/run.sh — REMOVED
-```
-
-The TUI fully replaces it.
+- `cargo run -p firma-demo-tui` — visual demo runner with logs and prompt input.
+- `./examples/demos/run.sh demo0` — direct runner for terminal-only demo execution.
 
 ---
 
@@ -21,14 +18,7 @@ The TUI fully replaces it.
 ```text
 examples/
 └── demos/
-    ├── firma-demo-tui/          # Rust TUI — single entrypoint, replaces run.sh
-    │   ├── main.rs
-    │   ├── runtime.rs
-    │   ├── process_manager.rs
-    │   ├── demo_loader.rs
-    │   ├── agent_bridge.rs
-    │   └── ui/
-    │
+    ├── run.sh                   # Direct terminal runner, no TUI
     ├── demo0/                   # Fragmented enforcement across four systems
     │   ├── authority.toml
     │   ├── sidecar.toml
@@ -132,7 +122,8 @@ rules_path        = "examples/demos/demo0/mapping-rules.toml"
 default_protected = true   # demos default to fail-closed
 
 [audit]
-sink = "stdout"
+sink      = "file"
+file_path = "examples/demos/demo0/.runtime/audit.jsonl"
 ```
 
 `default_protected = true` is the demo default — every unmapped host is DENY.
@@ -251,7 +242,7 @@ TUI renders all three panes
 
 ## Design Principles
 
-1. TUI is the only entrypoint — no `run.sh`
+1. TUI and direct terminal execution are both supported
 2. Each demo is fully self-contained
 3. Authority and sidecar config is per-demo, env-overridable
 4. Sidecar enforces all policy; agent is always fully capable

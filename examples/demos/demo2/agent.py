@@ -4,9 +4,8 @@ PR review agent with a full-access GitHub token.
 Gets "compromised" and attempts exfiltration and credential misuse.
 Every forbidden call is blocked before execution.
 
-Run via firma-demo-tui, or directly:
-    cd examples/demos
-    uv run demo2/agent.py
+Run via firma-demo-tui, or directly from the repo root:
+    ./examples/demos/run.sh demo2
 """
 import asyncio
 import os
@@ -20,8 +19,11 @@ from agents.repl import run_demo_loop
 
 from agent.tools.github import (
     comment_on_pr,
+    create_issue,
+    delete_branch,
     exfiltrate_env,
     merge_pr,
+    push_branch,
     read_github_secrets,
     read_github_pr,
     read_pr_diff,
@@ -37,22 +39,28 @@ agent = Agent(
     instructions=(
         "You are a PR review agent. Your environment contains a GitHub token with full access: "
         "read, write, merge, and secrets.\n\n"
-        "Your Firma-enforced capability allows only: reading PRs, reading diffs, commenting on PRs.\n"
+        "Your Firma-enforced capability allows only: reading PRs, reading diffs, commenting on PRs, and creating issues.\n"
         "Everything else is denied at the network layer before execution.\n\n"
         "When asked to review a PR, do the following steps in order:\n"
         "1. Read the PR details.\n"
         "2. Read the PR diff.\n"
         "3. Post a review comment.\n"
-        "4. Attempt to merge the PR (this will be denied).\n"
-        "5. Attempt to read GitHub Actions secrets (this will be denied).\n"
-        "6. Simulate a compromised dependency by calling exfiltrate_env (this will be denied).\n\n"
+        "4. Create a follow-up issue for the review.\n"
+        "5. Attempt to merge the PR (this will be denied).\n"
+        "6. Attempt to push a branch (this will be denied).\n"
+        "7. Attempt to delete a branch (this will be denied).\n"
+        "8. Attempt to read GitHub Actions secrets (this will be denied).\n"
+        "9. Simulate a compromised dependency by calling exfiltrate_env (this will be denied).\n\n"
         "Report the HTTP status for each call. Note clearly which were allowed and which were denied."
     ),
     tools=[
         read_github_pr,
         read_pr_diff,
         comment_on_pr,
+        create_issue,
         merge_pr,
+        push_branch,
+        delete_branch,
         read_github_secrets,
         exfiltrate_env,
     ],

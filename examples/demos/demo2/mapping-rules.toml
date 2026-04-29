@@ -24,6 +24,13 @@ host         = "api.github.com"
 path         = "/repos/*/*/issues/*/comments"
 action_class = "issue.write"
 
+# Allowed: create issues
+[[rules]]
+method       = "POST"
+host         = "api.github.com"
+path         = "/repos/*/*/issues"
+action_class = "issue.write"
+
 # Denied: merge PR
 [[rules]]
 method       = "PUT"
@@ -36,6 +43,13 @@ action_class = "code.merge"
 method       = "POST"
 host         = "api.github.com"
 path         = "/repos/*/*/git/refs"
+action_class = "code.write"
+
+# Denied: delete branch
+[[rules]]
+method       = "DELETE"
+host         = "api.github.com"
+path         = "/repos/*/*/git/refs/heads/*"
 action_class = "code.write"
 
 # Denied: read secrets

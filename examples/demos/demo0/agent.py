@@ -3,9 +3,8 @@
 Demonstrates how policy enforcement fragmented across four providers
 produces a guaranteed gap. Firma enforces once, at every call.
 
-Run via firma-demo-tui, or directly:
-    cd examples/demos
-    uv run demo0/agent.py
+Run via firma-demo-tui, or directly from the repo root:
+    ./examples/demos/run.sh demo0
 """
 import asyncio
 import os

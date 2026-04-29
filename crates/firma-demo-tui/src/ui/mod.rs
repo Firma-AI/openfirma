@@ -140,7 +140,7 @@ pub fn run(
         app.agent_logs.push("---".to_string());
         app.agent_logs
             .push("Type a prompt and press Enter to start.".to_string());
-        app.agent_logs.push("".to_string());
+        app.agent_logs.push(String::new());
         app.manifest = Some(manifest);
         app.runtime = Some(rt);
         app.agent = Some(ag);
@@ -217,7 +217,10 @@ fn drain_audit_log(app: &mut App) {
         app.audit_log_offset = 0;
     }
 
-    if file.seek(std::io::SeekFrom::Start(app.audit_log_offset)).is_err() {
+    if file
+        .seek(std::io::SeekFrom::Start(app.audit_log_offset))
+        .is_err()
+    {
         return;
     }
 
@@ -325,7 +328,7 @@ fn handle_menu_key(app: &mut App, key: KeyEvent) -> Result<()> {
             app.agent_logs.push("---".to_string());
             app.agent_logs
                 .push("Type a prompt and press Enter to start.".to_string());
-            app.agent_logs.push("".to_string());
+            app.agent_logs.push(String::new());
             app.manifest = Some(manifest);
             app.runtime = Some(rt);
             app.agent = Some(ag);

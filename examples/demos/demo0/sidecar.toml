@@ -11,7 +11,7 @@ dir           = "examples/demos/demo0"
 authority_url = "http://127.0.0.1:50051"
 
 [ca]
-dir = "examples/demos/demo0/.runtime/firma-ca"
+dir = "examples/demos/demo0/.runtime/generated-firma-ca"
 
 [log]
 level = "info"
@@ -24,7 +24,7 @@ default_protected = true
 clock_skew_tolerance_seconds = 0
 
 [constraint_enforcement]
-bundle_ttl_seconds     = 30
+bundle_ttl_seconds     = 3600
 enforcement_timeout_ms = 50
 
 [connector]

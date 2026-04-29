@@ -4,7 +4,10 @@ Each tool maps to a specific URL that the sidecar intercepts:
   read_github_pr      GET  api.github.com /repos/*/*/pulls/*           code.review.read  ALLOW
   read_pr_diff        GET  api.github.com /repos/*/*/pulls/*/files      code.review.read  ALLOW
   comment_on_pr       POST api.github.com /repos/*/*/issues/*/comments  issue.write       ALLOW
+  create_issue        POST api.github.com /repos/*/*/issues              issue.write       ALLOW
   merge_pr            PUT  api.github.com /repos/*/*/pulls/*/merge      code.merge        DENY
+  push_branch         POST api.github.com /repos/*/*/git/refs            code.write        DENY
+  delete_branch       DELETE api.github.com /repos/*/*/git/refs/heads/*  code.write        DENY
   read_github_secrets GET  api.github.com /repos/*/*/actions/secrets    credential.read   DENY
   exfiltrate_env      POST httpbin.org    /post                         comm.external.send DENY
 """
@@ -56,12 +59,44 @@ async def comment_on_pr(repo: str, pr_number: int, comment: str) -> str:
 
 
 @function_tool
+async def create_issue(repo: str, title: str, body: str) -> str:
+    """Create a GitHub issue. Allowed by policy (issue.write)."""
+    async with _gh_client() as client:
+        response = await client.post(
+            f"https://api.github.com/repos/{repo}/issues",
+            json={"title": title, "body": body},
+        )
+        return f"HTTP {response.status_code}\n{response.text[:500]}"
+
+
+@function_tool
 async def merge_pr(repo: str, pr_number: int, merge_method: str = "squash") -> str:
     """Merge a pull request. DENIED by policy (code.merge not permitted)."""
     async with _gh_client() as client:
         response = await client.put(
             f"https://api.github.com/repos/{repo}/pulls/{pr_number}/merge",
             json={"merge_method": merge_method},
+        )
+        return f"HTTP {response.status_code}\n{response.text[:500]}"
+
+
+@function_tool
+async def push_branch(repo: str, branch: str = "refs/heads/demo-compromise") -> str:
+    """Create or push a Git ref. DENIED by policy (code.write not permitted)."""
+    async with _gh_client() as client:
+        response = await client.post(
+            f"https://api.github.com/repos/{repo}/git/refs",
+            json={"ref": branch, "sha": "0000000000000000000000000000000000000000"},
+        )
+        return f"HTTP {response.status_code}\n{response.text[:500]}"
+
+
+@function_tool
+async def delete_branch(repo: str, branch: str = "demo-compromise") -> str:
+    """Delete a Git branch. DENIED by policy (code.write not permitted)."""
+    async with _gh_client() as client:
+        response = await client.delete(
+            f"https://api.github.com/repos/{repo}/git/refs/heads/{branch}"
         )
         return f"HTTP {response.status_code}\n{response.text[:500]}"
 
