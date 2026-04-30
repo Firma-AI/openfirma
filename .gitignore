@@ -45,6 +45,8 @@ revocations.txt
 /.local/
 /openauthority-ca/
 /crates/openauthority-sidecar/openauthority-ca/
+/examples/demo/openauthority-ca/
+/examples/demo/firma-ca/
 audit.jsonl
 
 # Demo runtime artifacts
