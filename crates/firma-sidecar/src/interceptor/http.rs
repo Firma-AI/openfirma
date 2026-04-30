@@ -1464,6 +1464,7 @@ mod tests {
         let connect_req = format!(
             "CONNECT {host} HTTP/1.1\r\n\
              Host: {host}\r\n\
+             x-firma-session-id: _test_\r\n\
              \r\n"
         );
         stream
@@ -1544,7 +1545,7 @@ mod tests {
         let mut stream = TcpStream::connect(proxy_addr)
             .await
             .unwrap_or_else(|e| panic!("failed to connect to proxy: {e}"));
-        let connect_req = "CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\n\r\n";
+        let connect_req = "CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\nx-firma-session-id: _test_\r\n\r\n";
         stream
             .write_all(connect_req.as_bytes())
             .await

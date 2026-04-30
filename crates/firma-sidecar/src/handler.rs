@@ -1185,7 +1185,7 @@ pub(crate) mod tests {
                     body: None,
                     is_https: true,
                 },
-                "sess_connect_allow",
+                "sess_001",
             )
             .await;
 
@@ -1193,7 +1193,7 @@ pub(crate) mod tests {
         let payload = rx
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
-        assert_eq!(payload.session_id, "sess_connect_allow");
+        assert_eq!(payload.session_id, "sess_001");
         assert_eq!(payload.decision, 1);
         assert_eq!(payload.dispatch_status, 200);
     }
@@ -1226,7 +1226,7 @@ pub(crate) mod tests {
                     body: None,
                     is_https: true,
                 },
-                "sess_connect_deny",
+                "sess_001",
             )
             .await;
 
@@ -1240,7 +1240,7 @@ pub(crate) mod tests {
         let payload = rx
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
-        assert_eq!(payload.session_id, "sess_connect_deny");
+        assert_eq!(payload.session_id, "sess_001");
         assert_eq!(payload.decision, 2);
     }
 }
