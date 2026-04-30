@@ -14,8 +14,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair,
-    PKCS_ECDSA_P256_SHA256, SanType,
+    BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
+    ExtendedKeyUsagePurpose, IsCa, KeyIdMethod, KeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256,
+    SanType,
 };
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -426,6 +427,11 @@ fn ensure_private_key_permissions(path: &Path) -> Result<(), String> {
 fn ca_certificate_params() -> CertificateParams {
     let mut params = CertificateParams::default();
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    // Populate Subject Key Identifier + KeyCertSign/CRLSign Key Usage
+    // so strict clients (OpenSSL) accept the CA chain. Leaves derive
+    // their Authority Key Identifier from this CA's SKI.
+    params.key_identifier_method = KeyIdMethod::Sha256;
+    params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
     let mut dn = DistinguishedName::new();
     dn.push(DnType::CommonName, "Firma Sidecar Local CA");
     dn.push(DnType::OrganizationName, "Firma");
@@ -438,6 +444,13 @@ fn leaf_certificate_params(host: &str) -> Result<CertificateParams, String> {
     let mut params = CertificateParams::new(Vec::<String>::new())
         .map_err(|e| format!("failed to initialize leaf certificate params: {e}"))?;
     params.is_ca = IsCa::NoCa;
+    params.key_identifier_method = KeyIdMethod::Sha256;
+    params.use_authority_key_identifier_extension = true;
+    params.key_usages = vec![
+        KeyUsagePurpose::DigitalSignature,
+        KeyUsagePurpose::KeyEncipherment,
+    ];
+    params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
     let mut dn = DistinguishedName::new();
     dn.push(DnType::CommonName, normalized.clone());
     params.distinguished_name = dn;
