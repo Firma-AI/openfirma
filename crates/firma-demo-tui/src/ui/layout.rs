@@ -437,7 +437,9 @@ fn render_table_block(lines: &[&str]) -> Vec<Line<'static>> {
     }
 
     let border = Style::default().fg(Color::DarkGray);
-    let header_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let header_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
     let body_style = Style::default().fg(Color::White);
 
     let make_sep = |left: &str, mid: &str, right: &str| -> Line<'static> {
@@ -471,7 +473,11 @@ fn render_table_block(lines: &[&str]) -> Vec<Line<'static>> {
         while cells.len() < n_cols {
             cells.push(String::new());
         }
-        let style = if row_idx == 0 { header_style } else { body_style };
+        let style = if row_idx == 0 {
+            header_style
+        } else {
+            body_style
+        };
         result.push(make_row(&cells, style));
         if row_idx == 0 && rows.len() > 1 {
             result.push(make_sep("├", "┼", "┤"));
