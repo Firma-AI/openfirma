@@ -288,7 +288,16 @@ async fn handle_connect_request(
         }
     }
 
-    match handler.handle_connect(raw, &session_id).await {
+    // MITM-intercepted hosts: skip CONNECT-level enforcement.
+    // Each decrypted inner request is enforced individually at L7.
+    // Blind-tunnel hosts: CONNECT is the only enforcement point, so enforce it.
+    let connect_decision = if mitm_candidate.is_some() {
+        ConnectDecision::Allow
+    } else {
+        handler.handle_connect(raw, &session_id).await
+    };
+
+    match connect_decision {
         ConnectDecision::Deny { reason, detail } => Ok(deny_json_response(
             StatusCode::FORBIDDEN,
             crate::handler::deny_body_json(reason, &detail),
