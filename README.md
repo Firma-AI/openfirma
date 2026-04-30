@@ -1,7 +1,7 @@
 # OpenAuthority
 
 <p align="center">
-  <img src="assets/primary-white.svg" alt="OpenAuthority" width="720">
+  <img src="assets/primary-white.png" alt="OpenAuthority" width="720">
 </p>
 
 <p align="center">
