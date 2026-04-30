@@ -183,7 +183,6 @@ mod tests {
             .ok()
             .and_then(|l| l.local_addr().ok());
         // SAFETY: this is test-only code; binding port 0 always succeeds
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         listener.unwrap()
     }
 
@@ -289,9 +288,7 @@ mod tests {
 
     async fn mock_upstream() -> (SocketAddr, CancellationToken) {
         let listener = TcpListener::bind("127.0.0.1:0").await.ok();
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let listener = listener.unwrap();
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let addr = listener.local_addr().unwrap();
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
@@ -368,7 +365,6 @@ mod tests {
         let mut client = InterceptorHookClient::connect(format!("http://{addr}"))
             .await
             .map_err(|e| format!("connect failed: {e}"));
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let client = client.as_mut().unwrap();
 
         let mut headers = HashMap::new();
@@ -385,7 +381,6 @@ mod tests {
                 session_id: "_test_".parse().expect("literal session id"),
             })
             .await;
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let response = response.unwrap().into_inner();
 
         assert!(response.allowed);
@@ -393,7 +388,6 @@ mod tests {
 
         cancel.cancel();
         upstream_cancel.cancel();
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         server_handle.await.unwrap().unwrap();
     }
 
@@ -413,7 +407,6 @@ mod tests {
         let mut client = InterceptorHookClient::connect(format!("http://{addr}"))
             .await
             .map_err(|e| format!("connect failed: {e}"));
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let client = client.as_mut().unwrap();
 
         let response = client
@@ -427,14 +420,12 @@ mod tests {
                 session_id: "_test_".parse().expect("literal session id"),
             })
             .await;
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let response = response.unwrap().into_inner();
 
         assert!(!response.allowed);
         assert!(!response.reason.is_empty());
 
         cancel.cancel();
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         server_handle.await.unwrap().unwrap();
     }
 
@@ -455,7 +446,6 @@ mod tests {
         let mut client = InterceptorHookClient::connect(format!("http://{addr}"))
             .await
             .map_err(|e| format!("connect failed: {e}"));
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let client = client.as_mut().unwrap();
 
         // POST to a mapped endpoint with empty body — should still allow
@@ -470,14 +460,12 @@ mod tests {
                 session_id: "_test_".parse().expect("literal session id"),
             })
             .await;
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let response = response.unwrap().into_inner();
 
         assert!(response.allowed);
 
         cancel.cancel();
         upstream_cancel.cancel();
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         server_handle.await.unwrap().unwrap();
     }
 
@@ -497,7 +485,6 @@ mod tests {
         let mut client = InterceptorHookClient::connect(format!("http://{addr}"))
             .await
             .map_err(|e| format!("connect failed: {e}"));
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let client = client.as_mut().unwrap();
 
         let response = client
@@ -511,14 +498,12 @@ mod tests {
                 session_id: "_test_".parse().expect("literal session id"),
             })
             .await;
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let response = response.unwrap().into_inner();
 
         assert!(!response.allowed);
         assert!(response.reason.contains("MALFORMED_REQUEST"));
 
         cancel.cancel();
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         server_handle.await.unwrap().unwrap();
     }
 }

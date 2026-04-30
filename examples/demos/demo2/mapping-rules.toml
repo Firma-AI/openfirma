@@ -1,0 +1,67 @@
+# Demo 2 mapping rules.
+# GitHub PR review agent that gets "compromised".
+# Only code.review.read and issue.write are in the Cedar permit.
+# Merge, push, secret read, and exfiltration attempts all denied.
+
+# Allowed: read PRs
+[[rules]]
+method       = "GET"
+host         = "api.github.com"
+path         = "/repos/*/*/pulls/*"
+action_class = "code.review.read"
+
+# Allowed: read diffs
+[[rules]]
+method       = "GET"
+host         = "api.github.com"
+path         = "/repos/*/*/pulls/*/files"
+action_class = "code.review.read"
+
+# Allowed: create issue comments
+[[rules]]
+method       = "POST"
+host         = "api.github.com"
+path         = "/repos/*/*/issues/*/comments"
+action_class = "issue.write"
+
+# Allowed: create issues
+[[rules]]
+method       = "POST"
+host         = "api.github.com"
+path         = "/repos/*/*/issues"
+action_class = "issue.write"
+
+# Denied: merge PR
+[[rules]]
+method       = "PUT"
+host         = "api.github.com"
+path         = "/repos/*/*/pulls/*/merge"
+action_class = "code.merge"
+
+# Denied: push / update refs
+[[rules]]
+method       = "POST"
+host         = "api.github.com"
+path         = "/repos/*/*/git/refs"
+action_class = "code.write"
+
+# Denied: delete branch
+[[rules]]
+method       = "DELETE"
+host         = "api.github.com"
+path         = "/repos/*/*/git/refs/heads/*"
+action_class = "code.write"
+
+# Denied: read secrets
+[[rules]]
+method       = "GET"
+host         = "api.github.com"
+path         = "/repos/*/*/actions/secrets"
+action_class = "credential.read"
+
+# Denied: exfiltration to external host (httpbin stands in for attacker.com)
+[[rules]]
+method       = "POST"
+host         = "httpbin.org"
+path         = "/post"
+action_class = "communication.external.send"

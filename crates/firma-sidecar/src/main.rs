@@ -47,7 +47,18 @@ async fn main() -> anyhow::Result<()> {
         exit.clone(),
     )?;
 
-    let pipeline_runtime = startup::build_pipeline_runtime(&config)?;
+    // Optional pre-flight: call IssueCapability to provision Stage 1 tokens.
+    let preflight = match (&config.preflight, config.policy.authority_url.as_deref()) {
+        (Some(pf_config), Some(authority_url)) => {
+            Some(startup::run_preflight(pf_config, authority_url).await?)
+        }
+        (Some(_), None) => {
+            anyhow::bail!("[preflight] is configured but policy.authority_url is not set");
+        }
+        (None, _) => None,
+    };
+
+    let pipeline_runtime = startup::build_pipeline_runtime(&config, preflight)?;
     let authority_handle =
         startup::spawn_authority_client(&config, &pipeline_runtime, exit.clone())?;
     let connector_registry = startup::build_connector_registry(&config.connector)?;
