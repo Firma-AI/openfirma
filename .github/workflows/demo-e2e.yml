@@ -45,8 +45,12 @@ jobs:
           allow=$(grep -c '"decision":1' "$log" || true)
           deny=$(grep -c '"decision":2' "$log" || true)
           echo "allow_events=$allow deny_events=$deny"
-          test "$allow" -ge 1 || (echo "expected >= 1 ALLOW audit event" >&2; exit 1)
-          test "$deny"  -ge 1 || (echo "expected >= 1 DENY audit event" >&2; exit 1)
+          # firma-demo-fixture-client fires exactly one /allow + one /deny;
+          # any other count means the demo deviated from its contract
+          # (extra requests, retries, or a regression that lets a request
+          # through with a different decision) — fail closed.
+          test "$allow" -eq 1 || (echo "expected exactly 1 ALLOW audit event, got $allow" >&2; exit 1)
+          test "$deny"  -eq 1 || (echo "expected exactly 1 DENY audit event, got $deny" >&2; exit 1)
 
       - name: Upload demo logs
         if: always()

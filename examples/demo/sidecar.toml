@@ -9,6 +9,20 @@ mode               = "http_proxy"
 listen_addr        = "127.0.0.1:7474"
 drain_timeout_secs = 30
 
+# The hero demo's two turns hit wttr.in (ALLOW) and paste.rs (DENY)
+# over HTTPS, and the Python agents SDK reaches api.openai.com over
+# HTTPS to drive the model. The Python agent trusts only the demo CA
+# (SSL_CERT_FILE in scripts/demo.sh), so any HTTPS host the agent
+# touches must be MITM'd to receive demo-CA-signed leaf certs AND
+# (for wttr.in/paste.rs) to surface a Stage 2 decision in the audit
+# log that scripted.py asserts on.
+#
+# Setting `intercept_hosts` here replaces the built-in default list
+# (see HttpsMitmConfig::default_https_mitm_intercept_hosts), so we
+# enumerate every host the demo actually contacts.
+[interceptor.https_mitm]
+intercept_hosts = ["wttr.in", "paste.rs", "api.openai.com"]
+
 [policy]
 dir           = "examples/demo/policies"
 authority_url = "http://[::1]:50051"
