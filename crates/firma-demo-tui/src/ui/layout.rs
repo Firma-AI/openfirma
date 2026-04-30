@@ -138,7 +138,7 @@ fn render_menu(f: &mut Frame, app: &App) {
 
     let desc_text = selected_entry.map_or("", |e| e.description.as_str());
 
-    let desc = Paragraph::new(tui_markdown::from_str(desc_text)).wrap(Wrap { trim: false });
+    let desc = Paragraph::new(description_to_text(desc_text)).wrap(Wrap { trim: false });
     f.render_widget(desc, desc_inner);
 
     let status = Paragraph::new("↑↓ navigate   Enter select   c config   ESC quit")
@@ -352,6 +352,134 @@ fn audit_log_line(log: &str) -> Line<'static> {
     }
 
     Line::from(spans)
+}
+
+fn description_to_text(md: &str) -> Text<'static> {
+    let md_lines: Vec<&str> = md.lines().collect();
+    let mut result: Vec<Line<'static>> = Vec::new();
+    let mut i = 0;
+
+    while i < md_lines.len() {
+        if is_table_row(md_lines[i]) {
+            let start = i;
+            while i < md_lines.len() && is_table_row(md_lines[i]) {
+                i += 1;
+            }
+            result.extend(render_table_block(&md_lines[start..i]));
+            result.push(Line::default());
+        } else {
+            let block_start = i;
+            while i < md_lines.len() && !is_table_row(md_lines[i]) {
+                i += 1;
+            }
+            let chunk = md_lines[block_start..i].join("\n");
+            let text = tui_markdown::from_str(&chunk);
+            for line in text.lines {
+                let spans = line
+                    .spans
+                    .into_iter()
+                    .map(|s| Span::styled(s.content.into_owned(), s.style))
+                    .collect::<Vec<_>>();
+                result.push(Line::from(spans).style(line.style));
+            }
+        }
+    }
+
+    Text::from(result)
+}
+
+fn is_table_row(line: &str) -> bool {
+    let t = line.trim();
+    t.starts_with('|') && t.ends_with('|') && t.len() > 1
+}
+
+fn is_separator_row(line: &str) -> bool {
+    if !is_table_row(line) {
+        return false;
+    }
+    line.trim()
+        .chars()
+        .all(|c| matches!(c, '|' | '-' | ':' | ' '))
+}
+
+fn parse_table_cells(line: &str) -> Vec<String> {
+    line.trim()
+        .trim_start_matches('|')
+        .trim_end_matches('|')
+        .split('|')
+        .map(|s| s.trim().to_owned())
+        .collect()
+}
+
+fn render_table_block(lines: &[&str]) -> Vec<Line<'static>> {
+    let rows: Vec<Vec<String>> = lines
+        .iter()
+        .filter(|&&l| !is_separator_row(l))
+        .map(|&l| parse_table_cells(l))
+        .collect();
+
+    if rows.is_empty() {
+        return vec![];
+    }
+
+    let n_cols = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if n_cols == 0 {
+        return vec![];
+    }
+
+    let mut col_widths = vec![1usize; n_cols];
+    for row in &rows {
+        for (j, cell) in row.iter().enumerate() {
+            if j < n_cols {
+                col_widths[j] = col_widths[j].max(cell.len());
+            }
+        }
+    }
+
+    let border = Style::default().fg(Color::DarkGray);
+    let header_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let body_style = Style::default().fg(Color::White);
+
+    let make_sep = |left: &str, mid: &str, right: &str| -> Line<'static> {
+        let mut spans = vec![Span::styled(left.to_owned(), border)];
+        for (j, &w) in col_widths.iter().enumerate() {
+            spans.push(Span::styled("─".repeat(w + 2), border));
+            if j < n_cols - 1 {
+                spans.push(Span::styled(mid.to_owned(), border));
+            }
+        }
+        spans.push(Span::styled(right.to_owned(), border));
+        Line::from(spans)
+    };
+
+    let make_row = |cells: &[String], style: Style| -> Line<'static> {
+        let mut spans = vec![Span::styled("│".to_owned(), border)];
+        for (j, cell) in cells.iter().enumerate() {
+            if j < n_cols {
+                let padded = format!(" {:<width$} ", cell, width = col_widths[j]);
+                spans.push(Span::styled(padded, style));
+                spans.push(Span::styled("│".to_owned(), border));
+            }
+        }
+        Line::from(spans)
+    };
+
+    let mut result = vec![make_sep("┌", "┬", "┐")];
+
+    for (row_idx, row) in rows.iter().enumerate() {
+        let mut cells = row.clone();
+        while cells.len() < n_cols {
+            cells.push(String::new());
+        }
+        let style = if row_idx == 0 { header_style } else { body_style };
+        result.push(make_row(&cells, style));
+        if row_idx == 0 && rows.len() > 1 {
+            result.push(make_sep("├", "┼", "┤"));
+        }
+    }
+
+    result.push(make_sep("└", "┴", "┘"));
+    result
 }
 
 fn scroll_offset(line_count: usize, height: usize) -> u16 {
