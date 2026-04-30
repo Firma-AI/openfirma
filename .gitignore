@@ -45,3 +45,6 @@ revocations.txt
 /.local/
 /firma-ca/
 /crates/firma-sidecar/firma-ca/
+
+# mdbook build output
+docs/book/

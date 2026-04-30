@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="OpenAuthority icon">
+  <title>OpenAuthority — icon, white bg</title>
+  <rect width="128" height="128" fill="#FFFFFF" rx="16" stroke="#E5E7EB" stroke-width="1"/>
+  <text x="22" y="90" font-family="'JetBrains Mono','IBM Plex Mono',Consolas,monospace" font-size="72" font-weight="700" fill="#0A2818" letter-spacing="-2">&gt;</text>
+  <rect x="72" y="50" width="34" height="46" fill="#00C76A"/>
+</svg>

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 260" role="img" aria-label="OpenAuthority">
+  <title>OpenAuthority — primary, white bg</title>
+  <rect width="720" height="260" fill="#FFFFFF"/>
+  <text x="40" y="50" font-family="'JetBrains Mono','IBM Plex Mono',Consolas,monospace" font-size="11" fill="#7FA893" letter-spacing="3">PROTOCOL · V1 · TRUST LAYER</text>
+  <text x="40" y="132" font-family="'JetBrains Mono','IBM Plex Mono',Consolas,monospace" font-size="56" font-weight="700" fill="#0A2818" letter-spacing="-1"><tspan fill="#7FA893">&gt; </tspan>openauthority</text>
+  <rect x="640" y="90" width="26" height="52" fill="#00C76A"/>
+  <text x="40" y="180" font-family="'JetBrains Mono','IBM Plex Mono',Consolas,monospace" font-size="18" fill="#0A2818" opacity="0.9" letter-spacing="2" font-weight="500">[ SIGNED · OPEN · VERIFIABLE ]</text>
+  <text x="40" y="220" font-family="'JetBrains Mono','IBM Plex Mono',Consolas,monospace" font-size="12" fill="#7FA893" letter-spacing="2">// trust protocol for open-source ai · est 2026</text>
+</svg>

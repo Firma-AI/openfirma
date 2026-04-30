@@ -1,0 +1,19 @@
+[book]
+title = "OpenAuthority"
+description = "Trust protocol for open-source AI — L7 policy enforcement sidecar for AI agents."
+authors = ["Christian Visintin"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/<org>/firma-oss"
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[output.html.fold]
+enable = true
+level = 0

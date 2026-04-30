@@ -74,8 +74,9 @@ rules_paths = [
 ]
 ```
 
-See `docs/markdown/firma_action_class_registry.md` for the full 44-class
-registry and `intent.resource` shape conventions.
+See `docs/src/reference/action-class-registry.md` for the full 44-class
+registry and `intent.resource` shape conventions, and
+`docs/src/architecture/action-class-registry.md` for the conceptual overview.
 
 ## Linting Rules
 
@@ -85,3 +86,19 @@ Workspace lints are strict — these are enforced in CI:
 - `unsafe_code` deny
 
 This means: no `.unwrap()`, no `.expect()`, no `panic!()`, no `unsafe`. Use `Result<T, E>` with `thiserror` for all error handling.
+
+## Documentation Architecture
+
+Public docs live in `docs/src/` and ship as an mdbook to GitHub Pages via `.github/workflows/pages.yml`. Source of truth for layout: `docs/src/SUMMARY.md`.
+
+Top-level sections (in order): Introduction, Getting Started, Usage Guides, Operations, Architecture, Security, Reference, ADRs.
+
+Rules when adding or modifying docs:
+
+- **Always update `docs/src/SUMMARY.md`** when adding a relevant page. Pages not listed in SUMMARY are not built.
+- **Place new pages under the matching top-level section.** Tutorial-style content → `getting-started/` or `guides/`. Operator runbooks → `operations/`. System internals → `architecture/`. Threat models → `security/`. Flag/option dumps → `reference/`. Decision records → `adrs/`.
+- **Mermaid for diagrams.** `mdbook-mermaid` is wired in. Use ` ```mermaid ` fenced blocks. No SVG imports for architecture diagrams.
+- **Reference vs Guide split:** CLI, Configuration, and Action Class Registry have both a tutorial page (under `getting-started/` or `architecture/`) and a full reference page (under `reference/`). Keep them in sync.
+- **Memory-bank stays internal.** `memory-bank/` is never exposed in mdbook or referenced from `docs/src/`.
+- **Excluded artifacts:** verification reports, local-testing notes, and `tasks/` are internal-only and do not ship in mdbook.
+- **Local preview:** `mdbook serve docs --open`.
