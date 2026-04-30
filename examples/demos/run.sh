@@ -75,6 +75,7 @@ echo "[2/4] Preparing runtime files..."
 mkdir -p "$RUNTIME_DIR" "$CA_DIR"
 touch "$REVOCATIONS"
 : > "$AUDIT_LOG"
+rm -f "$CA_DIR/firma-ca.crt" "$CA_DIR/firma-ca.key"
 
 if [[ ! -f "$AUTHORITY_KEY" ]]; then
     "$AUTHORITY_BIN" generate-key --output "$AUTHORITY_KEY"
@@ -110,7 +111,16 @@ sleep 1
 echo "[4/4] Starting firma-sidecar..."
 "$SIDECAR_BIN" --config-file "$DEMO_DIR/sidecar.toml" &
 SIDECAR_PID=$!
-sleep 1
+
+CA_CERT="$REPO_ROOT/$CA_DIR/firma-ca.crt"
+for _ in $(seq 1 20); do
+    [[ -f "$CA_CERT" ]] && break
+    sleep 0.5
+done
+if [[ ! -f "$CA_CERT" ]]; then
+    echo "ERROR: CA cert not generated at $CA_CERT after 10s" >&2
+    exit 1
+fi
 
 cat <<EOF
 
@@ -130,6 +140,8 @@ if [[ "$RUN_AGENT" -eq 1 ]]; then
         export HTTP_PROXY="http://127.0.0.1:8080"
         export HTTPS_PROXY="http://127.0.0.1:8080"
         export NO_PROXY="localhost,127.0.0.1,0.0.0.0,::1"
+        export SSL_CERT_FILE="$CA_CERT"
+        export REQUESTS_CA_BUNDLE="$CA_CERT"
         export FIRMA_DEMO_PROMPT="$PROMPT"
         uv run "$DEMO/agent.py"
     ) &
