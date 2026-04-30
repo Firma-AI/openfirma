@@ -682,9 +682,7 @@ pub(crate) mod tests {
 
     async fn mock_upstream() -> (SocketAddr, CancellationToken) {
         let listener = TcpListener::bind("127.0.0.1:0").await.ok();
-        #[expect(clippy::unwrap_used, reason = "test helper requires bound listener")]
         let listener = listener.unwrap();
-        #[expect(clippy::unwrap_used, reason = "test helper requires bound address")]
         let addr = listener.local_addr().unwrap();
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
@@ -1246,7 +1244,7 @@ pub(crate) mod tests {
             ConnectDecision::Deny { reason, .. } => {
                 assert_eq!(reason, DenyReason::TokenInvalid);
             }
-            other => panic!("expected connect deny, got {other:?}"),
+            other @ ConnectDecision::Allow => panic!("expected connect deny, got {other:?}"),
         }
 
         let payload = rx
