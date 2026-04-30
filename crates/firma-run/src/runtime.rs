@@ -231,7 +231,7 @@ fn print_effective_config(profile: &ResolvedProfile) -> Result<(), RunError> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::path::PathBuf;
 
@@ -250,8 +250,8 @@ mod tests {
             sidecar_endpoint: SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
             },
-            env_passthrough: Default::default(),
-            env_set: Default::default(),
+            env_passthrough: BTreeSet::default(),
+            env_set: BTreeMap::default(),
             mounts: Vec::<MountSpec>::new(),
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
@@ -270,7 +270,7 @@ mod tests {
         let lease = crate::capability::CapabilityLeaseManager::new(&profile.capability)
             .unwrap_or_else(|e| panic!("{e}"));
 
-        let env = build_execution_env(&profile, &identity, &lease, &Default::default());
+        let env = build_execution_env(&profile, &identity, &lease, &BTreeMap::default());
         assert!(env.contains_key("HTTP_PROXY"));
         assert_eq!(env.get("FIRMA_RUN_PROFILE"), Some(&"generic".to_string()));
     }
@@ -287,8 +287,8 @@ mod tests {
             sidecar_endpoint: SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
             },
-            env_passthrough: Default::default(),
-            env_set: Default::default(),
+            env_passthrough: BTreeSet::default(),
+            env_set: BTreeMap::default(),
             mounts: Vec::new(),
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
@@ -309,7 +309,7 @@ mod tests {
         let lease = crate::capability::CapabilityLeaseManager::new(&profile.capability)
             .unwrap_or_else(|e| panic!("{e}"));
 
-        let env = build_execution_env(&profile, &identity, &lease, &Default::default());
+        let env = build_execution_env(&profile, &identity, &lease, &BTreeMap::default());
         assert_eq!(
             env.get("FIRMA_CAPABILITY_FILE"),
             Some(&token_path.display().to_string())

@@ -431,6 +431,7 @@ fn ca_certificate_params() -> CertificateParams {
     // so strict clients (OpenSSL) accept the CA chain. Leaves derive
     // their Authority Key Identifier from this CA's SKI.
     params.key_identifier_method = KeyIdMethod::Sha256;
+    params.use_authority_key_identifier_extension = true;
     params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
     let mut dn = DistinguishedName::new();
     dn.push(DnType::CommonName, "Firma Sidecar Local CA");
@@ -733,7 +734,7 @@ mod tests {
             .permissions()
             .mode()
             & 0o777;
-        assert_eq!(mode, 0o600, "expected 0600 key mode, got {:o}", mode);
+        assert_eq!(mode, 0o600, "expected 0600 key mode, got {mode:o}");
     }
 
     #[cfg(unix)]

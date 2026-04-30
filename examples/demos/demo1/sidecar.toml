@@ -1,0 +1,51 @@
+# Demo 1 — sidecar config.
+# Path-level enforcement on the same host.
+
+[interceptor]
+mode               = "http_proxy"
+listen_addr        = "127.0.0.1:8080"
+drain_timeout_secs = 30
+
+[policy]
+dir           = "examples/demos/demo1"
+authority_url = "http://127.0.0.1:50051"
+
+[ca]
+dir = "examples/demos/demo1/.runtime/generated-firma-ca"
+
+[log]
+level = "info"
+
+[mapping]
+rules_path        = "examples/demos/demo1/mapping-rules.toml"
+default_protected = true
+
+[capability_validation]
+clock_skew_tolerance_seconds = 0
+
+[constraint_enforcement]
+bundle_ttl_seconds     = 3600
+enforcement_timeout_ms = 50
+
+[connector]
+default_timeout_ms = 10000
+
+[audit]
+sink             = "file"
+file_path        = "examples/demos/demo1/.runtime/audit.jsonl"
+signing_key_path = "examples/demos/demo1/.runtime/audit.key"
+
+[authority]
+connect_timeout_secs                 = 10
+reconnect_min_backoff_ms             = 250
+reconnect_max_backoff_secs           = 30
+revocation_readiness_grace_ms        = 500
+revocation_fail_closed_on_disconnect = false
+
+[preflight]
+agent_id              = "demo1-agent"
+session_id            = "demo1-session-001"
+requested_actions     = ["filesystem.read"]
+resource_scope        = "*"
+authority_pub_key_path = "examples/demos/demo1/.runtime/authority.pub"
+ttl_seconds           = 3600

@@ -45,3 +45,7 @@ revocations.txt
 /.local/
 /firma-ca/
 /crates/firma-sidecar/firma-ca/
+audit.jsonl
+
+# Demo runtime artifacts
+/examples/demos/*/.runtime/*

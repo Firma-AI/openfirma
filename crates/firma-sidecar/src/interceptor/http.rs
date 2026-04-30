@@ -812,10 +812,10 @@ fn extract_path(raw_path: &[u8]) -> String {
     }
 }
 
-/// Resolves the upstream [`HttpPeer`] from a [`RawRequest`].
-///
-/// Parses `host` into address and port, defaulting to 443 for HTTPS
-/// and 80 for HTTP.
+// Resolves the upstream [`HttpPeer`] from a [`RawRequest`].
+//
+// Parses `host` into address and port, defaulting to 443 for HTTPS
+// and 80 for HTTP.
 // Note: CONNECT routing is handled explicitly in `handle_connect_request`.
 
 #[cfg(test)]
@@ -853,7 +853,6 @@ mod tests {
             .ok()
             .and_then(|l| l.local_addr().ok());
         // SAFETY: this is test-only code; binding port 0 always succeeds
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         listener.unwrap()
     }
 
@@ -1073,9 +1072,7 @@ mod tests {
     /// Returns the address it is listening on.
     async fn mock_upstream() -> (SocketAddr, CancellationToken) {
         let listener = TcpListener::bind("127.0.0.1:0").await.ok();
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let listener = listener.unwrap();
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let addr = listener.local_addr().unwrap();
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
@@ -1108,9 +1105,7 @@ mod tests {
     /// After receiving bytes through the tunnel it replies with `pong`.
     async fn mock_connect_target() -> (SocketAddr, CancellationToken) {
         let listener = TcpListener::bind("127.0.0.1:0").await.ok();
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let listener = listener.unwrap();
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let addr = listener.local_addr().unwrap();
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
@@ -1151,19 +1146,16 @@ mod tests {
 
     async fn proxy_response(proxy_addr: SocketAddr, request: &str) -> String {
         let mut stream = TcpStream::connect(proxy_addr).await.ok();
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let stream = stream.as_mut().unwrap();
 
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         stream.write_all(request.as_bytes()).await.unwrap();
 
         let mut out = Vec::new();
         let mut chunk = [0u8; 1024];
         for _ in 0..16 {
             match tokio::time::timeout(Duration::from_millis(250), stream.read(&mut chunk)).await {
-                Ok(Ok(0)) => break,
+                Ok(Ok(0) | Err(_)) | Err(_) => break,
                 Ok(Ok(n)) => out.extend_from_slice(&chunk[..n]),
-                Ok(Err(_)) | Err(_) => break,
             }
         }
         String::from_utf8_lossy(&out).to_string()
@@ -1174,7 +1166,7 @@ mod tests {
         let mut chunk = [0u8; 512];
         for _ in 0..32 {
             match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut chunk)).await {
-                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                Ok(Ok(0) | Err(_)) | Err(_) => break,
                 Ok(Ok(n)) => {
                     buf.extend_from_slice(&chunk[..n]);
                     if buf.windows(4).any(|w| w == b"\r\n\r\n") {

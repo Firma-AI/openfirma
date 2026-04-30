@@ -1,0 +1,18 @@
+# Demo 1 mapping rules.
+# Same internal service, different paths → different action classes.
+# Policy permits filesystem.read only. credential.read (billing) is denied.
+# httpbin.org is the public stand-in for api.internal in this OSS demo.
+
+# api.internal/usage?user=123 → usage metrics (allowed by policy)
+[[rules]]
+method       = "GET"
+host         = "httpbin.org"
+path         = "/get*"
+action_class = "filesystem.read"
+
+# api.internal/billing?user=123 → sensitive billing data (no permit → default deny)
+[[rules]]
+method       = "GET"
+host         = "httpbin.org"
+path         = "/anything/billing*"
+action_class = "credential.read"

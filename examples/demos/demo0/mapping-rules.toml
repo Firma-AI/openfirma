@@ -1,0 +1,64 @@
+# Demo 0 mapping rules.
+# Four systems, one rule: "agent may read, not write or destroy."
+# Each system enforces differently today — Firma enforces once, everywhere.
+
+# GitHub — read PR (allowed by policy)
+[[rules]]
+method       = "GET"
+host         = "api.github.com"
+path         = "/repos/*/*/pulls/*"
+action_class = "code.review.read"
+
+# GitHub — merge PR (denied by policy)
+[[rules]]
+method       = "PUT"
+host         = "api.github.com"
+path         = "/repos/*/*/pulls/*/merge"
+action_class = "code.merge"
+
+# Gmail — send message (denied by policy)
+[[rules]]
+method       = "POST"
+host         = "gmail.googleapis.com"
+path         = "/gmail/v1/users/*/messages/send"
+action_class = "communication.external.send"
+
+# Stripe — create refund (denied by policy)
+[[rules]]
+method       = "POST"
+host         = "api.stripe.com"
+path         = "/v1/refunds"
+action_class = "payment.transfer"
+
+# Internal backend — read user (allowed by policy)
+[[rules]]
+method       = "GET"
+host         = "httpbin.org"
+path         = "/get"
+action_class = "filesystem.read"
+
+# Internal backend — delete user (denied by policy)
+# httpbin.org/delete stands in for api.internal/users/:id
+[[rules]]
+method       = "DELETE"
+host         = "httpbin.org"
+path         = "/delete"
+action_class = "account.permission.change"
+
+# HTTPS CONNECT tunnel to GitHub — allows establishing the TLS tunnel;
+# inner GET requests are then matched by the rules above.
+[[rules]]
+method       = "CONNECT"
+host         = "api.github.com:443"
+action_class = "code.review.read"
+
+# Local LLM / LM-Studio access (no method = any method)
+[[rules]]
+host         = "localhost:*"
+path         = "*"
+action_class = "filesystem.read"
+
+[[rules]]
+host         = "127.0.0.1:*"
+path         = "*"
+action_class = "filesystem.read"

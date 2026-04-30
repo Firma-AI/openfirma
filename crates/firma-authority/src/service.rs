@@ -157,10 +157,29 @@ impl AuthorityService for AuthorityServiceImpl {
                 yield bundle_to_update(&initial);
             }
 
-            // Stream updates as they arrive
-            while rx.changed().await.is_ok() {
-                let bundle = rx.borrow_and_update().clone();
-                yield bundle_to_update(&bundle);
+            // Periodic refresh keeps the sidecar bundle fresh between policy changes.
+            // Interval = half of bundle TTL, floored at 5 s.
+            let refresh_secs = (u64::from(initial.ttl_seconds) / 2).max(5);
+            let mut ticker = tokio::time::interval(
+                std::time::Duration::from_secs(refresh_secs)
+            );
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            ticker.tick().await; // skip the immediate first tick
+
+            loop {
+                tokio::select! {
+                    result = rx.changed() => {
+                        if result.is_err() { break; }
+                        let bundle = rx.borrow_and_update().clone();
+                        yield bundle_to_update(&bundle);
+                        // reset ticker so refresh fires relative to this send
+                        ticker.reset();
+                    }
+                    _ = ticker.tick() => {
+                        let bundle = rx.borrow().clone();
+                        yield bundle_to_update(&bundle);
+                    }
+                }
             }
         };
 
