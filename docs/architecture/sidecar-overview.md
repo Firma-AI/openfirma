@@ -640,7 +640,27 @@ crates/firma-sidecar/src/
 └── log.rs                  — tracing init.
 ```
 
-## 10. Where to go next
+## 10. Standalone startup sequence
+
+`firma-sidecar --config-file <path>` (and `scripts/demo.sh`) emit
+exactly seven INFO lines on every successful start, in order:
+
+```text
+config loaded             path="…"
+mapping table loaded      rules=N
+policy bundle loaded      version="…" policies=N
+authority stream connected endpoint="…"
+connector registry built  hosts=N default_timeout_ms=T
+interceptor listening     addr="…"
+ready
+```
+
+The contract is locked by
+`crates/firma-sidecar/tests/startup_contract.rs` and consumed by
+`examples/demo/` plus the `demo-e2e` CI gate. Operators automating
+the binary should wait for `ready` before sending traffic.
+
+## 11. Where to go next
 
 - Stage contracts and input/output shapes →
   [sidecar-interfaces.md](./sidecar-interfaces.md).
@@ -649,3 +669,4 @@ crates/firma-sidecar/src/
 - CLI flags and exit codes → `docs/cli.md`.
 - Configuration reference (TOML sections, defaults) →
   `docs/configuration.md`.
+- End-to-end demo runbook → `examples/demo/README.md`.

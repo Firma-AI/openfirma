@@ -4,7 +4,7 @@ Firma OSS is the open-source release of the Firma security architecture for AI a
 
 ## Architecture
 
-```
+```txt
                     ┌──────────────────────────────────────────────┐
                     │  Agent Host / Container                      │
                     │                                              │
@@ -65,6 +65,24 @@ The gRPC contract between Sidecar and Authority:
 - **CapabilityToken** — PASETO v4 (preferred) or JWT RS256
 - **PolicyBundle** — Cedar policies distributed from Authority to Sidecar
 - **EnforcementDecision** — ALLOW, DENY, ABORT
+
+## Run the demo
+
+```bash
+make demo-ci   # deterministic Rust client; ALLOW + DENY round-trip
+make demo      # LLM-driven Python agent (best-effort); needs OPENAI_API_KEY
+make demo-repl # interactive Python REPL behind the same sidecar
+```
+
+The orchestrator (`scripts/demo.sh`) builds release binaries, boots
+the Mini Authority, pre-issues a capability seed for `demo-agent`,
+boots the sidecar, and dispatches the chosen driver. All artifacts
+(`firma-authority.key`, `audit.key`, `capability-demo-agent.toml`,
+logs) live under `examples/demo/` and are gitignored.
+
+The `demo-e2e` GitHub Actions workflow gates merges on
+`make demo-ci`. See `examples/demo/README.md` for the full runbook
+and `docs/cli.md` for the seven-line standalone startup contract.
 
 ## License
 

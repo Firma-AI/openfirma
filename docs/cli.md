@@ -64,6 +64,36 @@ The sidecar handles `SIGTERM` and `SIGINT` for graceful shutdown:
 2. Drain in-flight requests up to `interceptor.drain_timeout_secs`.
 3. Exit with code `0`.
 
+### Standalone startup log contract
+
+On every successful start the sidecar emits exactly seven INFO lines
+in order. Operators automating the binary should wait for the final
+`ready` line before sending traffic; the `examples/demo/` runbook
+reproduces the contract and the `demo-e2e` CI gate scrapes it.
+
+```text
+config loaded             path="…"
+mapping table loaded      rules=N
+policy bundle loaded      version="…" policies=N
+authority stream connected endpoint="…"
+connector registry built  hosts=N default_timeout_ms=T
+interceptor listening     addr="…"
+ready
+```
+
+`policy bundle loaded version` is the eight-character hex prefix of
+the SHA-256 of the concatenated `.cedar` files in `policy.dir`. Line 4
+fires unconditionally; when `policy.authority_url` is unset the
+endpoint is reported as `(disabled)`.
+
+### Exit codes
+
+| Code | When                                                              |
+| ---- | ----------------------------------------------------------------- |
+| `0`  | Graceful shutdown after `SIGINT` / `SIGTERM`.                     |
+| `1`  | Configuration parse error, validation error, or startup failure. |
+
+
 ## `firma-authority`
 
 Reference Authority binary used for local development. Issues

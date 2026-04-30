@@ -1,0 +1,51 @@
+name: demo-e2e
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  demo-ci:
+    name: make demo-ci
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler jq netcat-openbsd
+
+      - name: Build release binaries
+        run: cargo build --release -p firma-authority -p firma-sidecar -p
+          firma-demo-fixture
+
+      - name: Run demo CI driver
+        run: timeout 90 make demo-ci
+
+      - name: Assert audit ALLOW + DENY events
+        run: |
+          set -euo pipefail
+          log="examples/demo/logs/sidecar.log"
+          test -s "$log" || (echo "missing $log" >&2; exit 1)
+          # Audit events are JSON-lines on stdout; decision field is
+          # 1 = Allow, 2 = Deny (see audit/sink/stdout.rs).
+          allow=$(grep -c '"decision":1' "$log" || true)
+          deny=$(grep -c '"decision":2' "$log" || true)
+          echo "allow_events=$allow deny_events=$deny"
+          test "$allow" -ge 1 || (echo "expected >= 1 ALLOW audit event" >&2; exit 1)
+          test "$deny"  -ge 1 || (echo "expected >= 1 DENY audit event" >&2; exit 1)
+
+      - name: Upload demo logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-logs
+          path: examples/demo/logs/

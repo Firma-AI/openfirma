@@ -30,6 +30,9 @@ pub struct PipelineRuntime {
     pub swappable_policy: Arc<SwappablePolicyEvaluation>,
     /// Writable readiness flag for Authority tasks.
     pub readiness: Arc<ReadinessFlag>,
+    /// Total mapping rule count loaded across primary + extra files.
+    /// Surfaced for the standalone-startup log contract (line 2).
+    pub mapping_rules_loaded: usize,
 }
 
 /// Build the enforcement pipeline plus stream-client shared state.
@@ -63,6 +66,7 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
     }
 
     let merged_file = config::MappingRulesFile { rules: all_rules };
+    let mapping_rules_loaded = merged_file.rules.len();
 
     let registry = pipeline::ActionClassRegistry::v0_1();
     let table = pipeline::MappingTable::from_config(
@@ -131,12 +135,13 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
         session_state_store,
     })
     .with_readiness(readiness_view);
-    tracing::info!("enforcement pipeline initialized");
+    tracing::debug!("enforcement pipeline initialized");
 
     Ok(PipelineRuntime {
         pipeline: Arc::new(pipeline),
         revocation_store: revocation_store_dyn,
         swappable_policy,
         readiness,
+        mapping_rules_loaded,
     })
 }

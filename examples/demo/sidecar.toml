@@ -1,0 +1,67 @@
+# Firma Sidecar — release demo configuration.
+#
+# Run from the repo root via `make demo` / `make demo-ci`. The
+# orchestrator (`scripts/demo.sh`) bootstraps the keys, the audit key,
+# and the capability seed before launching the binary.
+
+[interceptor]
+mode               = "http_proxy"
+listen_addr        = "127.0.0.1:7474"
+drain_timeout_secs = 30
+
+[policy]
+dir           = "examples/demo/policies"
+authority_url = "http://[::1]:50051"
+
+[ca]
+dir = "examples/demo/firma-ca"
+
+[log]
+level = "info"
+
+[mapping]
+rules_path        = "examples/demo/mapping-rules.toml"
+default_protected = false
+
+[capability_validation]
+clock_skew_tolerance_seconds = 5
+
+[constraint_enforcement]
+bundle_ttl_seconds     = 60
+enforcement_timeout_ms = 50
+
+[revocation]
+capacity     = 100000
+fpr          = 0.001
+lru_capacity = 10000
+
+[connector]
+default_timeout_ms = 30000
+
+[[connector.hosts]]
+host       = "wttr.in"
+rps        = 60
+burst      = 10
+timeout_ms = 30000
+
+[[connector.hosts]]
+host       = "paste.rs"
+rps        = 60
+burst      = 10
+timeout_ms = 30000
+
+[[connector.hosts]]
+host       = "127.0.0.1:9100"
+rps        = 200
+burst      = 50
+timeout_ms = 30000
+
+[authority]
+public_key_path = "examples/demo/firma-authority.pub"
+
+[capability_seed]
+paths = ["examples/demo/capability-demo-agent.toml"]
+
+[audit]
+sink             = "stdout"
+signing_key_path = "examples/demo/audit.key"

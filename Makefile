@@ -1,4 +1,4 @@
-.PHONY: fmt lint test build check bench
+.PHONY: fmt lint test build check bench demo demo-repl demo-ci
 
 fmt:
 	cargo fmt --check
@@ -16,3 +16,12 @@ check: fmt lint test build
 
 bench:
 	cargo bench --workspace --no-fail-fast
+
+demo:
+	./scripts/demo.sh hero
+
+demo-repl:
+	./scripts/demo.sh repl
+
+demo-ci:
+	./scripts/demo.sh ci
