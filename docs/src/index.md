@@ -28,6 +28,6 @@ flowchart LR
 
 ## Project links
 
-- Repo: <https://github.com/<org>/firma-oss>
+- Repo: <https://github.com/Firma-AI/firma-oss>
 - License: Apache 2.0 ([LICENSE](LICENSE))
-- GitHub Discussions: <https://github.com/<org>/firma-oss/discussions>
+- GitHub Discussions: <https://github.com/Firma-AI/firma-oss/discussions>

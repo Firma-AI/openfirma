@@ -14,13 +14,13 @@ The five identified bypass risks fall into three categories:
 
 ## Per-risk treatment
 
-| Risk                                                              | Severity | Mitigation                                                                                               | Residual exposure                                                    |
-| ----------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Risk                                                              | Severity | Mitigation                                                                                               | Residual exposure                                                                                    |
+| ----------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | Interceptor bypass (direct TCP / native protocol / child process) | Critical | Host egress forcing (iptables / NetworkPolicy); `firma-run` structural confinement                       | Without host-level controls, an agent that does not honor `HTTP_PROXY` bypasses enforcement entirely |
-| Stage 1 skipped                                                   | High     | `EnforcementPipeline::enforce()` single entry point; sequential chaining; short-circuit on Stage 1 error | Code changes that bypass the pipeline entry point                    |
-| Stage 2 skipped                                                   | High     | Sequential chaining; fail-closed on stale bundle; no early-allow path                                    | Same — requires intentional pipeline modification                    |
-| Stale policy bundle                                               | Medium   | Stage 2 freshness check; configurable TTL (`bundle_ttl_seconds`, default 30 s)                           | Brief window during Authority reconnect                              |
-| Token reuse after revocation                                      | Medium   | Local `RevocationStore::is_revoked()` check; short TTLs; disconnect handling                             | Propagation lag between Authority revocation and local cache update  |
+| Stage 1 skipped                                                   | High     | `EnforcementPipeline::enforce()` single entry point; sequential chaining; short-circuit on Stage 1 error | Code changes that bypass the pipeline entry point                                                    |
+| Stage 2 skipped                                                   | High     | Sequential chaining; fail-closed on stale bundle; no early-allow path                                    | Same — requires intentional pipeline modification                                                    |
+| Stale policy bundle                                               | Medium   | Stage 2 freshness check; configurable TTL (`bundle_ttl_seconds`, default 30 s)                           | Brief window during Authority reconnect                                                              |
+| Token reuse after revocation                                      | Medium   | Local `RevocationStore::is_revoked()` check; short TTLs; disconnect handling                             | Propagation lag between Authority revocation and local cache update                                  |
 
 ## Compensating controls
 

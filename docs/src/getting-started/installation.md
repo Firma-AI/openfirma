@@ -14,7 +14,7 @@
 ## From source (recommended for v0)
 
 ```bash
-git clone https://github.com/<org>/firma-oss
+git clone https://github.com/Firma-AI/firma-oss
 cd firma-oss
 make build
 ```

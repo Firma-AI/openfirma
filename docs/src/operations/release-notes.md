@@ -11,7 +11,7 @@ present.
 
 ## Where to find release notes
 
-- **GitHub Releases**: `https://github.com/<org>/firma-oss/releases` — each
+- **GitHub Releases**: `https://github.com/Firma-AI/firma-oss/releases` — each
   release includes a changelog summary, pre-built binary assets, and
   checksums.
 - **Top-level CHANGELOG**: `CHANGELOG.md` at the repository root records
