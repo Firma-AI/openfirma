@@ -13,6 +13,7 @@ pub struct DemoRuntime {
     pub audit_log_path: std::path::PathBuf,
     pub authority_log_path: std::path::PathBuf,
     pub sidecar_log_path: std::path::PathBuf,
+    pub ca_cert_path: std::path::PathBuf,
 }
 
 impl DemoRuntime {
@@ -59,7 +60,8 @@ pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
     )
     .context("failed to start firma-sidecar")?;
 
-    wait_for_demo_ca_material(&runtime_dir.join("generated-firma-ca"))?;
+    let ca_dir = runtime_dir.join("generated-firma-ca");
+    wait_for_demo_ca_material(&ca_dir)?;
 
     Ok(DemoRuntime {
         authority,
@@ -67,6 +69,7 @@ pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
         audit_log_path,
         authority_log_path,
         sidecar_log_path,
+        ca_cert_path: ca_dir.join("firma-ca.crt"),
     })
 }
 
@@ -178,6 +181,14 @@ fn provision_keys(runtime_dir: &Path) -> Result<()> {
 
 fn ensure_demo_ca_dir(ca_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(ca_dir).context("failed to create firma-ca directory")?;
+    // Always regenerate CA material on demo boot so the cert reflects current code.
+    for name in ["firma-ca.crt", "firma-ca.key"] {
+        let p = ca_dir.join(name);
+        if p.exists() {
+            std::fs::remove_file(&p)
+                .with_context(|| format!("failed to remove stale {}", p.display()))?;
+        }
+    }
     Ok(())
 }
 

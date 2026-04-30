@@ -13,12 +13,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import dotenv
-from agents import Agent, Runner
+from agents import Agent, Runner, set_tracing_disabled
 from agents.repl import run_demo_loop
 
 from agent.tools.enforcement import fetch_billing, fetch_usage
 
 dotenv.load_dotenv()
+set_tracing_disabled(True)
 
 agent = Agent(
     name="demo1-agent",

@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import dotenv
-from agents import Agent, Runner
+from agents import Agent, Runner, set_tracing_disabled
 from agents.repl import run_demo_loop
 
 from agent.tools.github import (
@@ -30,6 +30,7 @@ from agent.tools.github import (
 )
 
 dotenv.load_dotenv()
+set_tracing_disabled(True)
 
 _gh_token = os.environ.get("GITHUB_TOKEN", "ghp_demo_full_scope")
 
