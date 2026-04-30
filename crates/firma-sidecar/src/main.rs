@@ -12,11 +12,11 @@ use crate::args::Args;
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     log::init_log(args.log_level, args.log_file.as_deref(), args.log_filter)?;
-    tracing::info!("firma-sidecar starting");
+    tracing::debug!("firma-sidecar starting");
 
-    tracing::info!("loading configuration from {}", args.config_file.display());
+    tracing::debug!("loading configuration from {}", args.config_file.display());
     let config = read_config(&args.config_file).await?;
-    tracing::info!("configuration loaded successfully");
+    tracing::debug!("configuration loaded successfully");
 
     let exit = CancellationToken::new();
 
@@ -27,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
     let health_server =
         health::HealthcheckServer::bind(args.health_bind_addr, exit.clone()).await?;
     let health_server = tokio::spawn(health_server.serve());
-    tracing::info!("health check server listening at {}", args.health_bind_addr);
+    tracing::debug!("health check server listening at {}", args.health_bind_addr);
 
     tracing::debug!("registering signal handlers for graceful shutdown");
     let sigterm_handler = {
@@ -57,13 +57,15 @@ async fn main() -> anyhow::Result<()> {
         audit_payload_tx,
     ));
 
-    tracing::info!(
-        mode = %config.interceptor.mode,
-        "starting interceptor"
-    );
+    tracing::debug!(mode = %config.interceptor.mode, "starting interceptor");
     let interceptor_handle = startup::spawn_interceptor(&config, handler, exit.clone())?;
 
-    tracing::info!("all components initialized; entering main loop");
+    emit_ready_sequence(
+        &args.config_file,
+        &config,
+        pipeline_runtime.mapping_rules_loaded,
+    );
+
     let authority_stream_tasks = async {
         if let Some(handle) = authority_handle {
             let _ = tokio::join!(handle.policy_task, handle.revocation_task);
@@ -76,9 +78,49 @@ async fn main() -> anyhow::Result<()> {
         sigterm_handler,
         authority_stream_tasks
     );
-    tracing::info!("firma-sidecar exiting");
+    tracing::debug!("firma-sidecar exiting");
 
     Ok(())
+}
+
+/// Build the [`startup::StartupReport`] from runtime state and emit
+/// the seven-line contract.
+fn emit_ready_sequence(config_path: &Path, config: &config::SidecarConfig, mapping_rules: usize) {
+    let (policy_bundle_version, policy_count) =
+        startup::compute_policy_bundle_version(&config.policy.dir)
+            .unwrap_or_else(|_| ("00000000".to_string(), 0));
+    let interceptor_addr = interceptor_addr_display(&config.interceptor);
+    let authority_endpoint = config
+        .policy
+        .authority_url
+        .clone()
+        .unwrap_or_else(|| "(disabled)".to_string());
+
+    startup::log_ready_sequence(&startup::StartupReport {
+        config_path,
+        mapping_rules,
+        policy_bundle_version,
+        policy_count,
+        authority_endpoint,
+        connector_hosts: config.connector.hosts.len(),
+        connector_default_timeout_ms: config.connector.default_timeout_ms,
+        interceptor_addr,
+    });
+}
+
+/// Format the interceptor address used in the contract's "interceptor
+/// listening" line according to the active mode.
+fn interceptor_addr_display(ic: &config::InterceptorConfig) -> String {
+    match ic.mode {
+        config::InterceptorMode::HttpProxy | config::InterceptorMode::Grpc => {
+            ic.listen_addr.to_string()
+        }
+        #[cfg(unix)]
+        config::InterceptorMode::UnixSocket => ic
+            .socket_path
+            .as_ref()
+            .map_or_else(String::new, |p| p.display().to_string()),
+    }
 }
 
 /// Handler worker for catching sigterm signals.

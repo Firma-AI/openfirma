@@ -369,6 +369,10 @@ impl ConstraintEnforcer {
         let session_duration_s = (envelope.timestamp - claims.issued_at).num_seconds().max(0);
         let timestamp_ms = envelope.timestamp.timestamp_millis();
         let params = serde_json::to_string(&envelope.intent.params).unwrap_or_else(|_| "{}".into());
+        // Payment-context fields are declared in the canonical schema but
+        // sourced by future tasks. V1 supplies fixed placeholders so
+        // `Context::from_json_value` does not reject the record under
+        // schema-strict mode.
         serde_json::json!({
             "session_id": claims.session_id,
             "timestamp_ms": timestamp_ms,

@@ -47,7 +47,7 @@ pub fn build_connector_registry(
         })
         .map_err(|e| anyhow::anyhow!("failed to build connector for {}: {e}", host_cfg.host))?;
         registry.register_host(host_cfg.host.clone(), Arc::new(http));
-        tracing::info!(
+        tracing::debug!(
             host = host_cfg.host.as_str(),
             rps = host_cfg.rps,
             burst = host_cfg.burst,

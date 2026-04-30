@@ -6,6 +6,7 @@ members = [
     "crates/firma-sidecar",
     "crates/firma-authority",
     "crates/firma-run",
+    "crates/firma-demo-fixture",
 ]
 resolver = "3"
 
