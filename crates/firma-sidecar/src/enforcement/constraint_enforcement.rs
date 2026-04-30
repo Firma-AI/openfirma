@@ -370,9 +370,8 @@ impl ConstraintEnforcer {
         let timestamp_ms = envelope.timestamp.timestamp_millis();
         let params = serde_json::to_string(&envelope.intent.params).unwrap_or_else(|_| "{}".into());
         // Payment-context fields are declared in the canonical schema but
-        // sourced by future tasks. V1 supplies fixed placeholders so
-        // `Context::from_json_value` does not reject the record under
-        // schema-strict mode.
+        // sourced by future tasks. V1 supplies fixed placeholders so the
+        // schema-strict `Context::from_json_value` accepts the record.
         serde_json::json!({
             "session_id": claims.session_id,
             "timestamp_ms": timestamp_ms,
@@ -381,6 +380,12 @@ impl ConstraintEnforcer {
             "budget_remaining": signals.budget_remaining_long(claims.budget_ceiling),
             "session_duration_s": session_duration_s,
             "action_count": i64::try_from(signals.action_count).unwrap_or(i64::MAX),
+            "raw_transport": envelope.intent.raw_transport,
+            "transfer_amount": 0i64,
+            "daily_cumulative_amount": 0i64,
+            "transfers_last_10m": 0i64,
+            "same_payee_count_30m": 0i64,
+            "session_transfer_count": 0i64,
         })
     }
 }
