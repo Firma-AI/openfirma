@@ -1,4 +1,4 @@
-"""Non-interactive Firma demo driver.
+"""Non-interactive OpenAuthority demo driver.
 
 Two canned turns through the same Agent + tool registry the REPL uses:
 
@@ -44,13 +44,13 @@ PROMPTS = [
     ),
 ]
 
-# Decision codes per crates/firma-sidecar/src/audit/sink/stdout.rs.
+# Decision codes per crates/opensidecar/src/audit/sink/stdout.rs.
 _DECISION_ALLOW = 1
 _DECISION_DENY = 2
 
 
 def _audit_log_path() -> Path | None:
-    raw = os.environ.get("FIRMA_SIDECAR_AUDIT_LOG")
+    raw = os.environ.get("OPENAUTHORITY_SIDECAR_AUDIT_LOG")
     if not raw:
         return None
     return Path(raw)
@@ -109,7 +109,7 @@ async def _run_turn(
         # No audit log wired in: fall back to "no exception = success"
         # for ad-hoc local runs. CI / `make demo` always sets the env.
         print(
-            f"[turn {label}] WARN: FIRMA_SIDECAR_AUDIT_LOG not set; "
+            f"[turn {label}] WARN: OPENAUTHORITY_SIDECAR_AUDIT_LOG not set; "
             f"falling back to runtime-error check"
         )
         return runtime_error is None, start_offset

@@ -3,7 +3,7 @@
 Same host. Same protocol. Different path.
 The allowed path executes; the forbidden path is never reached.
 
-Run via firma-demo-tui, or directly from the repo root:
+Run via openauthority-demo-tui, or directly from the repo root:
     ./examples/demos/run.sh demo1
 """
 import asyncio
@@ -47,7 +47,7 @@ async def _run(prompt: str) -> None:
 
 
 def main() -> None:
-    prompt = os.environ.get("FIRMA_DEMO_PROMPT", "").strip()
+    prompt = os.environ.get("OPENAUTHORITY_DEMO_PROMPT", "").strip()
     if prompt:
         asyncio.run(_run(prompt))
     else:

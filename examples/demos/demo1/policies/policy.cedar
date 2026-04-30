@@ -8,7 +8,7 @@
 // enforced at execution time.
 
 permit (
-    principal == Firma::Agent::"demo1-agent",
-    action == Firma::Action::"filesystem.read",
+    principal == OpenAuthority::Agent::"demo1-agent",
+    action == OpenAuthority::Action::"filesystem.read",
     resource
 );

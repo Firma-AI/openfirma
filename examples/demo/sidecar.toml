@@ -1,4 +1,4 @@
-# Firma Sidecar — release demo configuration.
+# OpenAuthority Sidecar — release demo configuration.
 #
 # Run from the repo root via `make demo` / `make demo-ci`. The
 # orchestrator (`scripts/demo.sh`) bootstraps the keys, the audit key,
@@ -28,7 +28,7 @@ dir           = "examples/demo/policies"
 authority_url = "http://[::1]:50051"
 
 [ca]
-dir = "examples/demo/firma-ca"
+dir = "examples/demo/openauthority-ca"
 
 [log]
 level = "info"
@@ -71,7 +71,7 @@ burst      = 50
 timeout_ms = 30000
 
 [authority]
-public_key_path = "examples/demo/firma-authority.pub"
+public_key_path = "examples/demo/openauthority-authority.pub"
 
 [capability_seed]
 paths = ["examples/demo/capability-demo-agent.toml"]

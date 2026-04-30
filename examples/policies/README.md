@@ -1,7 +1,7 @@
-# Firma Example Cedar Policies
+# OpenAuthority Example Cedar Policies
 
-Cedar policies for the Firma examples. Loaded by `firma-authority`
-and streamed to `firma-sidecar` as a policy bundle.
+Cedar policies for the OpenAuthority examples. Loaded by `openauthority-authority`
+and streamed to `opensidecar` as a policy bundle.
 
 > **NOT FOR PRODUCTION USE.** Starting points and demo policies only.
 
@@ -18,19 +18,19 @@ and streamed to `firma-sidecar` as a policy bundle.
 | `payment.cedar` | Reference policy for `payment.purchase` / `payment.transfer` with Layer 2 counter constraints |
 
 The canonical schema (`EnforcementContext`, 15 action classes) lives at
-`crates/firma-authority/schema.cedarschema` and is embedded in the
-`firma-authority` binary. Place a `schema.cedarschema` beside your `.cedar`
+`crates/openauthority-authority/schema.cedarschema` and is embedded in the
+`openauthority-authority` binary. Place a `schema.cedarschema` beside your `.cedar`
 files to override it, or set `schema_path` in the authority config.
 
 ---
 
 ## Schema
 
-`crates/firma-authority/schema.cedarschema` declares three entity types and
+`crates/openauthority-authority/schema.cedarschema` declares three entity types and
 15 action classes:
 
 ```
-namespace Firma {
+namespace OpenAuthority {
     entity Agent;
     entity Resource;
 
@@ -46,9 +46,9 @@ namespace Firma {
 
 | Role | Pattern |
 |------|---------|
-| Principal | `Firma::Agent::"<agent_id>"` |
-| Action | `Firma::Action::"<action_class>"` (e.g. `"communication.external.send"`) |
-| Resource | `Firma::Resource::"<host>"` |
+| Principal | `OpenAuthority::Agent::"<agent_id>"` |
+| Action | `OpenAuthority::Action::"<action_class>"` (e.g. `"communication.external.send"`) |
+| Resource | `OpenAuthority::Resource::"<host>"` |
 
 **Context** (`EnforcementContext`) fields populated per request:
 
@@ -77,7 +77,7 @@ fields (`transfer_amount`, `daily_cumulative_amount`, etc.) rather than
 
 ## Action classes
 
-Full registry: `docs/markdown/firma_action_class_registry.md`.
+Full registry: `docs/markdown/openauthority_action_class_registry.md`.
 
 | Action class | Typical trigger |
 |---|---|
@@ -106,8 +106,8 @@ Cedar evaluation: **forbid beats permit**. No permit = implicit deny.
 ```cedar
 // Permit with context guard
 permit (
-    principal == Firma::Agent::"my-agent",
-    action == Firma::Action::"communication.external.send",
+    principal == OpenAuthority::Agent::"my-agent",
+    action == OpenAuthority::Action::"communication.external.send",
     resource
 ) when {
     context.risk_score < 60
@@ -116,8 +116,8 @@ permit (
 // Hard-block — overrides any permit
 forbid (
     principal,
-    action == Firma::Action::"communication.external.send",
-    resource == Firma::Resource::"paste.rs"
+    action == OpenAuthority::Action::"communication.external.send",
+    resource == OpenAuthority::Resource::"paste.rs"
 );
 ```
 
@@ -148,7 +148,7 @@ daily cap:
 Transfer 6 is blocked by the Cedar forbid:
 
 ```cedar
-forbid (principal, action == Firma::Action::"payment.transfer", resource)
+forbid (principal, action == OpenAuthority::Action::"payment.transfer", resource)
 when { context.daily_cumulative_amount + context.transfer_amount > 1000000 };
 ```
 
@@ -161,9 +161,9 @@ No provenance or LLM reasoning is required — only deterministic Layer 2 counte
 **Rust unit tests** (fastest; tests use inlined policy fixtures):
 
 ```bash
-cargo test -p firma-sidecar payment_splitting_blocked_at_daily_limit
-cargo test -p firma-sidecar payment_single_transfer_ceiling_enforced
-cargo test -p firma-sidecar payment_payee_concentration_enforced
+cargo test -p opensidecar payment_splitting_blocked_at_daily_limit
+cargo test -p opensidecar payment_single_transfer_ceiling_enforced
+cargo test -p opensidecar payment_payee_concentration_enforced
 ```
 
 **E2E stack** (tests against a running Mini Authority + Sidecar):
@@ -177,11 +177,11 @@ cd examples/e2e && bash run.sh
 ```bash
 cedar authorize \
   --policies examples/policies/payment.cedar \
-  --schema  crates/firma-authority/schema.cedarschema \
+  --schema  crates/openauthority-authority/schema.cedarschema \
   --entities '[]' \
-  --principal 'Firma::Agent::"example-agent"' \
-  --action    'Firma::Action::"payment.transfer"' \
-  --resource  'Firma::Resource::"payments.example.com"' \
+  --principal 'OpenAuthority::Agent::"example-agent"' \
+  --action    'OpenAuthority::Action::"payment.transfer"' \
+  --resource  'OpenAuthority::Resource::"payments.example.com"' \
   --context '{
     "session_id":"s1", "timestamp_ms":0, "params":"{}",
     "risk_score":10, "budget_remaining":5000000,

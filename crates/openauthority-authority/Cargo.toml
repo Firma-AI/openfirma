@@ -1,0 +1,53 @@
+[package]
+name = "openauthority-authority"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Mini Authority — policy loading, capability issuance, and gRPC streams for OpenAuthority OSS"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-stream = { workspace = true }
+cedar-policy = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true, features = [
+    "color",
+    "derive",
+    "error-context",
+    "help",
+    "std",
+    "suggestions",
+    "usage",
+] }
+openauthority-core = { workspace = true }
+openauthority-proto = { workspace = true }
+hex = { workspace = true }
+notify = { workspace = true }
+pasetors = { workspace = true }
+prost-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = [
+    "rt-multi-thread",
+    "macros",
+    "sync",
+    "signal",
+    "fs",
+    "time",
+] }
+tokio-stream = { workspace = true }
+toml = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

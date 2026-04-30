@@ -1,13 +1,13 @@
 [workspace]
 members = [
-    "crates/firma-core",
-    "crates/firma-grpc-interceptor-proto",
-    "crates/firma-proto",
-    "crates/firma-sidecar",
-    "crates/firma-authority",
-    "crates/firma-run",
-    "crates/firma-demo-fixture",
-    "crates/firma-demo-tui",
+    "crates/openauthority-core",
+    "crates/openauthority-grpc-interceptor-proto",
+    "crates/openauthority-proto",
+    "crates/openauthority-sidecar",
+    "crates/openauthority-authority",
+    "crates/openauthority-run",
+    "crates/openauthority-demo-fixture",
+    "crates/openauthority-demo-tui",
 ]
 resolver = "3"
 
@@ -41,9 +41,9 @@ criterion = { version = "0.8", default-features = false, features = [
 ] }
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
 elliptic-curve = { version = "0.13", features = ["pem"] }
-firma-core = { path = "crates/firma-core" }
-firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto" }
-firma-proto = { path = "crates/firma-proto" }
+openauthority-core = { path = "crates/openauthority-core" }
+openauthority-grpc-interceptor-proto = { path = "crates/openauthority-grpc-interceptor-proto" }
+openauthority-proto = { path = "crates/openauthority-proto" }
 governor = "0.10"
 hex = "0.4"
 http-body-util = "0.1"

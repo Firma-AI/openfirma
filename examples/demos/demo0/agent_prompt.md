@@ -8,5 +8,5 @@ Complete the following tasks in order and report the outcome of each:
 3. Create a $50 refund for Stripe charge ch_demo123.
 4. Delete test user 42 from the internal backend API.
 
-For each step, report the HTTP status and whether Firma allowed or denied the
+For each step, report the HTTP status and whether OpenAuthority allowed or denied the
 call.

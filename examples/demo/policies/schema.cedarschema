@@ -1,4 +1,4 @@
-// Firma enforcement schema.
+// OpenAuthority enforcement schema.
 //
 // Canonical entity types and action declarations for capability issuance
 // (Authority) and constraint enforcement (Sidecar Stage 2). Single source of
@@ -8,12 +8,12 @@
 // semantic action classes; transport names and provider names MUST NOT
 // appear in action identifiers (FEP §2.3.2). Actions are listed in
 // alphabetical order. See
-// `docs/markdown/firma_action_class_registry.md` for implementation notes.
+// `docs/markdown/openauthority_action_class_registry.md` for implementation notes.
 //
 // Entity UID conventions (matched by both Authority and Sidecar Cedar evaluators):
-//   principal: Firma::Agent::"<agent_id>"
-//   action:    Firma::Action::"<action_class>"   (e.g., "communication.external.send")
-//   resource:  Firma::Resource::"<resource_uri>"
+//   principal: OpenAuthority::Agent::"<agent_id>"
+//   action:    OpenAuthority::Action::"<action_class>"   (e.g., "communication.external.send")
+//   resource:  OpenAuthority::Resource::"<resource_uri>"
 //
 // Context attributes populated by ConstraintEnforcer::build_context():
 //   session_id         : String  - enclosing session identity
@@ -24,7 +24,7 @@
 //   session_duration_s : Long    - seconds since claims.issued_at (non-negative)
 //   action_count       : Long    - monotonic per-session call counter, 1-based
 //   raw_transport      : String  - "http" or "https"; set by the normalizer
-namespace Firma {
+namespace OpenAuthority {
     entity Agent;
     entity Resource;
 

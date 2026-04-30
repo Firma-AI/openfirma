@@ -1485,181 +1485,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9844ddc3a6e533d62bba727eb6c28b5d360921d5175e9ff0f1e621a5c590a4d5"
 
 [[package]]
-name = "firma-authority"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-stream",
- "cedar-policy",
- "chrono",
- "clap",
- "firma-core",
- "firma-proto",
- "hex",
- "notify",
- "pasetors",
- "prost-types",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "toml",
- "tonic",
- "tonic-health",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "firma-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "cedar-policy",
- "chrono",
- "criterion",
- "pasetors",
- "pretty_assertions",
- "serde",
- "serde_json",
- "strum 0.28.0",
- "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
-name = "firma-demo-fixture"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "http-body-util",
- "hyper",
- "hyper-util",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "firma-demo-tui"
-version = "0.1.0"
-dependencies = [
- "ansi-to-tui",
- "anyhow",
- "clap",
- "crossterm 0.28.1",
- "ratatui",
- "serde",
- "serde_json",
- "toml",
- "tracing",
- "tracing-subscriber",
- "tui-markdown",
-]
-
-[[package]]
-name = "firma-grpc-interceptor-proto"
-version = "0.1.0"
-dependencies = [
- "prost",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
-]
-
-[[package]]
-name = "firma-proto"
-version = "0.1.0"
-dependencies = [
- "prost",
- "prost-types",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
-]
-
-[[package]]
-name = "firma-run"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "ctrlc",
- "pretty_assertions",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror 2.0.18",
- "toml",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "firma-sidecar"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arc-swap",
- "async-trait",
- "cedar-policy",
- "chrono",
- "clap",
- "criterion",
- "ecdsa",
- "elliptic-curve",
- "firma-core",
- "firma-grpc-interceptor-proto",
- "firma-proto",
- "governor",
- "http-body",
- "http-body-util",
- "hyper",
- "hyper-util",
- "loom",
- "lru 0.17.0",
- "p256",
- "pasetors",
- "pingora-core",
- "pingora-http",
- "pingora-proxy",
- "proptest",
- "prost-types",
- "rand 0.9.4",
- "rcgen",
- "reqwest",
- "rustls",
- "rustls-pemfile",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-rustls",
- "tokio-stream",
- "tokio-util",
- "toml",
- "tonic",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "wiremock",
- "x509-parser",
- "xxhash-rust",
-]
-
-[[package]]
 name = "fixedbitset"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3129,6 +2954,181 @@ name = "oorandom"
 version = "11.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
+
+[[package]]
+name = "openauthority-authority"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "cedar-policy",
+ "chrono",
+ "clap",
+ "hex",
+ "notify",
+ "openauthority-core",
+ "openauthority-proto",
+ "pasetors",
+ "prost-types",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "toml",
+ "tonic",
+ "tonic-health",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "openauthority-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cedar-policy",
+ "chrono",
+ "criterion",
+ "pasetors",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "strum 0.28.0",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "openauthority-demo-fixture"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "openauthority-demo-tui"
+version = "0.1.0"
+dependencies = [
+ "ansi-to-tui",
+ "anyhow",
+ "clap",
+ "crossterm 0.28.1",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "tui-markdown",
+]
+
+[[package]]
+name = "openauthority-grpc-interceptor-proto"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+]
+
+[[package]]
+name = "openauthority-proto"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "prost-types",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+]
+
+[[package]]
+name = "openauthority-run"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "ctrlc",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "openauthority-sidecar"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "cedar-policy",
+ "chrono",
+ "clap",
+ "criterion",
+ "ecdsa",
+ "elliptic-curve",
+ "governor",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "loom",
+ "lru 0.17.0",
+ "openauthority-core",
+ "openauthority-grpc-interceptor-proto",
+ "openauthority-proto",
+ "p256",
+ "pasetors",
+ "pingora-core",
+ "pingora-http",
+ "pingora-proxy",
+ "proptest",
+ "prost-types",
+ "rand 0.9.4",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-rustls",
+ "tokio-stream",
+ "tokio-util",
+ "toml",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "wiremock",
+ "x509-parser",
+ "xxhash-rust",
+]
 
 [[package]]
 name = "openssl-probe"

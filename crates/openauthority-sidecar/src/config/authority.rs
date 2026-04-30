@@ -1,0 +1,91 @@
+//! Authority stream client configuration.
+
+use std::path::PathBuf;
+
+use serde::Deserialize;
+
+/// Tuning for background Authority stream clients.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthorityConfig {
+    /// Connection timeout in seconds.
+    #[serde(default = "default_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
+    /// Minimum reconnect backoff in milliseconds.
+    #[serde(default = "default_min_backoff_ms")]
+    pub reconnect_min_backoff_ms: u64,
+    /// Maximum reconnect backoff in seconds.
+    #[serde(default = "default_max_backoff_secs")]
+    pub reconnect_max_backoff_secs: u64,
+    /// Grace period before the revocation stream is considered ready.
+    #[serde(default = "default_readiness_grace_ms")]
+    pub revocation_readiness_grace_ms: u64,
+    /// Flip revocation readiness back to false on disconnect.
+    #[serde(default)]
+    pub revocation_fail_closed_on_disconnect: bool,
+    /// Path to the Authority's PASETO v4 Ed25519 public key (32 raw
+    /// bytes, as written by `openauthority-authority generate-key`). Required
+    /// when `[capability_seed].paths` is non-empty so the sidecar can
+    /// verify the seed signatures.
+    #[serde(default)]
+    pub public_key_path: Option<PathBuf>,
+}
+
+impl AuthorityConfig {
+    /// Validate authority client tuning.
+    ///
+    /// # Errors
+    ///
+    /// Returns a human-readable field error for invalid values.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.connect_timeout_secs == 0 {
+            return Err("connect_timeout_secs must be > 0".to_string());
+        }
+        if self.reconnect_min_backoff_ms == 0 {
+            return Err("reconnect_min_backoff_ms must be > 0".to_string());
+        }
+        if self.reconnect_max_backoff_secs == 0 {
+            return Err("reconnect_max_backoff_secs must be > 0".to_string());
+        }
+        let max_backoff_ms = self.reconnect_max_backoff_secs.saturating_mul(1000);
+        if max_backoff_ms < self.reconnect_min_backoff_ms {
+            return Err(
+                "reconnect_max_backoff_secs must be >= reconnect_min_backoff_ms".to_string(),
+            );
+        }
+        if let Some(ref p) = self.public_key_path
+            && p.as_os_str().is_empty()
+        {
+            return Err("public_key_path must not be empty when set".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl Default for AuthorityConfig {
+    fn default() -> Self {
+        Self {
+            connect_timeout_secs: default_connect_timeout_secs(),
+            reconnect_min_backoff_ms: default_min_backoff_ms(),
+            reconnect_max_backoff_secs: default_max_backoff_secs(),
+            revocation_readiness_grace_ms: default_readiness_grace_ms(),
+            revocation_fail_closed_on_disconnect: false,
+            public_key_path: None,
+        }
+    }
+}
+
+const fn default_connect_timeout_secs() -> u64 {
+    10
+}
+
+const fn default_min_backoff_ms() -> u64 {
+    250
+}
+
+const fn default_max_backoff_secs() -> u64 {
+    30
+}
+
+const fn default_readiness_grace_ms() -> u64 {
+    500
+}

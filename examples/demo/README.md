@@ -1,6 +1,6 @@
-# Firma OSS — Release Demo
+# OpenAuthority OSS — Release Demo
 
-Single-command end-to-end demo of the Firma sidecar plus the Mini
+Single-command end-to-end demo of the OpenAuthority sidecar plus the Mini
 Authority. `make demo` boots both binaries, pre-issues a capability
 seed, and drives ALLOW + DENY round-trips against either the LLM-backed
 Python agent or the deterministic Rust CI client.
@@ -8,7 +8,7 @@ Python agent or the deterministic Rust CI client.
 ## Prerequisites
 
 - Rust toolchain matching `rust-toolchain.toml`.
-- `protoc` (for `firma-proto`).
+- `protoc` (for `openauthority-proto`).
 - For the hero (`make demo`) and repl (`make demo-repl`) modes: a
   working `uv`/Python and `OPENAI_API_KEY`. CI mode needs neither.
 
@@ -27,8 +27,8 @@ examples/demo/
 ├── .env.sample                   # OPENAI_API_KEY etc. (hero only)
 ├── .gitignore                    # bootstrapped artifacts (keys, seed, logs)
 ├── audit.key                     # generated: ECDSA P-256 audit signing key
-├── firma-authority.key           # generated: PASETO v4 signing key (private)
-├── firma-authority.pub           # generated: PASETO v4 public key
+├── openauthority-authority.key           # generated: PASETO v4 signing key (private)
+├── openauthority-authority.pub           # generated: PASETO v4 public key
 ├── revocations.txt               # generated: empty by default
 ├── capability-demo-agent.toml    # generated: pre-issued capability seed
 └── logs/                         # generated: authority.log, sidecar.log, fixture.log
@@ -41,7 +41,7 @@ The seven `generated:` artifacts are produced on first run by
 
 The orchestrator dispatches three modes that share the same authority
 + sidecar boot path. Both LLM modes pre-issue a single capability via
-`firma-authority issue` on first run; the resulting seed is written to
+`openauthority-authority issue` on first run; the resulting seed is written to
 `capability-demo-agent.toml` and consumed by the sidecar's
 `[capability_seed]` section.
 
@@ -49,7 +49,7 @@ The orchestrator dispatches three modes that share the same authority
 |------|------------------|---------------------------------------|-----|----------|---------|
 | Hero | `make demo`      | `agents_sdk_py/agent/scripted.py`     | yes | yes      | no      |
 | Repl | `make demo-repl` | `agents_sdk_py/agent/main.py` (REPL)  | yes | yes      | no      |
-| CI   | `make demo-ci`   | `firma-demo-fixture-client`           | no  | no       | yes     |
+| CI   | `make demo-ci`   | `openauthority-demo-fixture-client`           | no  | no       | yes     |
 
 ### `make demo-ci` expected output
 
@@ -79,9 +79,9 @@ documented as best-effort and is never gated by CI.
 
 - **ALLOW returns 403** — the sidecar's `[capability_seed].paths` does
   not match the seed file the orchestrator just produced, or the
-  request was missing the `x-firma-session-id: demo-session` header.
+  request was missing the `x-openauthority-session-id: demo-session` header.
   Check `examples/demo/logs/sidecar.log` for the exact denial reason.
-- **Authority refuses to start** — delete `firma-authority.key` and
+- **Authority refuses to start** — delete `openauthority-authority.key` and
   re-run; the orchestrator regenerates it with the correct format.
 - **Stale Cedar bundle** — increase `[constraint_enforcement]
   bundle_ttl_seconds` if the demo is paused at a breakpoint long
@@ -102,5 +102,5 @@ interceptor listening     addr="…"
 ready
 ```
 
-Operators automating Firma should wait for `ready` before sending
+Operators automating OpenAuthority should wait for `ready` before sending
 traffic.

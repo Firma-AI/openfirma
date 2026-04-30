@@ -1,6 +1,6 @@
-# Firma E2E Example
+# OpenAuthority E2E Example
 
-Wires `firma-authority` + `firma-sidecar` + an example agent end-to-end.
+Wires `openauthority-authority` + `opensidecar` + an example agent end-to-end.
 
 > **NOT FOR PRODUCTION USE.** Local development and demo only.
 
@@ -12,11 +12,11 @@ Wires `firma-authority` + `firma-sidecar` + an example agent end-to-end.
 example-agent
     │  HTTP_PROXY=http://127.0.0.1:8080
     ▼
-firma-sidecar :8080          ← intercepts every outbound call
+opensidecar :8080          ← intercepts every outbound call
     │  WatchPolicyBundle
     │  WatchRevocations
     ▼
-firma-authority :50051       ← streams Cedar policy bundle to sidecar
+openauthority-authority :50051       ← streams Cedar policy bundle to sidecar
 
 Enforcement per request:
   normalizer → Stage 1 (token) → Stage 2 (Cedar) → ALLOW / DENY
@@ -55,7 +55,7 @@ the Sidecar. It:
 ## Prerequisites
 
 - Rust toolchain (`cargo build` must work)
-- `protoc` installed (for `firma-proto` build)
+- `protoc` installed (for `openauthority-proto` build)
 - Run from **repo root**
 
 ---
@@ -68,7 +68,7 @@ the Sidecar. It:
 ```
 
 The script:
-1. Builds `firma-authority` and `firma-sidecar`
+1. Builds `openauthority-authority` and `opensidecar`
 2. Generates `examples/e2e/authority.key` (Ed25519, on first run)
 3. Starts authority on `127.0.0.1:50051`
 4. Starts sidecar on `127.0.0.1:8080` (connects to authority)
@@ -125,7 +125,7 @@ Shared across examples (see `examples/policies/README.md`):
 | File | Purpose |
 |------|---------|
 | `../policies/demo.cedar` | Cedar policy loaded by authority, streamed to sidecar |
-| `../policies/schema.cedarschema` | Optional schema override — omit to use the schema embedded in `firma-authority` |
+| `../policies/schema.cedarschema` | Optional schema override — omit to use the schema embedded in `openauthority-authority` |
 
 Generated at runtime (not committed):
 
@@ -134,7 +134,7 @@ Generated at runtime (not committed):
 | `authority.key` | `run.sh` on first run via `generate-key` |
 | `authority.pub` | Same |
 | `revocations.txt` | `run.sh` (`touch`) |
-| `firma-ca/` | `run.sh` (`mkdir -p`) |
+| `openauthority-ca/` | `run.sh` (`mkdir -p`) |
 
 ---
 
@@ -142,11 +142,11 @@ Generated at runtime (not committed):
 
 ```bash
 # Terminal 1 — Authority
-./target/debug/firma-authority generate-key --output examples/e2e/authority.key
-./target/debug/firma-authority --config examples/e2e/authority.toml
+./target/debug/openauthority-authority generate-key --output examples/e2e/authority.key
+./target/debug/openauthority-authority --config examples/e2e/authority.toml
 
 # Terminal 2 — Sidecar
-./target/debug/firma-sidecar --config-file examples/e2e/sidecar.toml
+./target/debug/opensidecar --config-file examples/e2e/sidecar.toml
 
 # Terminal 3 — Agent
 cd example_agents/agents_sdk_py
@@ -159,7 +159,7 @@ make run
 ## Revoking a token (once task 007 lands)
 
 ```bash
-./target/debug/firma-authority \
+./target/debug/openauthority-authority \
   --config examples/e2e/authority.toml \
   revocations add <token-id> --reason "demo-revocation"
 ```

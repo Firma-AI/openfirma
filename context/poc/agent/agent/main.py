@@ -5,10 +5,10 @@ from agents import Agent, Runner
 
 
 agent = Agent(
-    name="firma-demo-agent",
+    name="openauthority-demo-agent",
     model="gpt-4.1",
     instructions=(
-        "You are the Firma Demo Agent. You have access to tools for checking weather, "
+        "You are the OpenAuthority Demo Agent. You have access to tools for checking weather, "
         "looking up IP information, querying a product database, reading and writing files, "
         "and sending emails. Use your tools when appropriate to answer user requests. "
         "Be concise and helpful."
@@ -32,7 +32,7 @@ def _register_tools() -> None:
 
 async def run_interactive() -> None:
     print("=" * 60)
-    print("  Firma Demo Agent")
+    print("  OpenAuthority Demo Agent")
     print("  Type your message and press Enter. Type 'exit' to quit.")
     print("=" * 60)
     print()
@@ -41,20 +41,20 @@ async def run_interactive() -> None:
         try:
             user_input = input("> ").strip()
         except (KeyboardInterrupt, EOFError):
-            print("\nfirma-agent: Goodbye!")
+            print("\nopenauthority-agent: Goodbye!")
             break
 
         if not user_input:
             continue
         if user_input.lower() in ("exit", "quit"):
-            print("firma-agent: Goodbye!")
+            print("openauthority-agent: Goodbye!")
             break
 
         try:
             result = await Runner.run(agent, user_input)
             print(f"\n{result.final_output}\n")
         except Exception as e:
-            print(f"\nfirma-agent: Error: {e}\n")
+            print(f"\nopenauthority-agent: Error: {e}\n")
 
 
 def main() -> None:

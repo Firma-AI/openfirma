@@ -7,7 +7,7 @@ export const sendEmail = new FunctionTool({
   name: 'send_email',
   description:
     'Send an email via the Resend HTTP API. Traffic: HTTPS POST to api.resend.com/emails ' +
-    'with a Bearer token. In a Firma-managed environment the agent process need not hold ' +
+    'with a Bearer token. In a OpenAuthority-managed environment the agent process need not hold ' +
     'the real key — the sidecar can inject it.',
   parameters: z.object({
     email_address: z.string().describe('Recipient email address'),

@@ -36,13 +36,13 @@ Two systems enforce globally. Two systems rely on your code.
 
 The rule is consistent. The systems are not.
 
-## The Firma shift
+## The OpenAuthority shift
 
 A single Cedar policy is evaluated by the Sidecar on every outbound call.
 Every call to GitHub, Gmail, Stripe, or the backend goes through the same
 policy, the same evaluation, and the same enforcement point.
 
-| Action | Canonical action class | Outcome with Firma |
+| Action | Canonical action class | Outcome with OpenAuthority |
 |---|---|---|
 | Read GitHub PR | `code.review.read` | ALLOW |
 | Send email | `communication.external.send` | DENY |
@@ -51,5 +51,5 @@ policy, the same evaluation, and the same enforcement point.
 
 ## Closing line
 
-Today, enforcement is fragmented across systems. Firma enforces your rule once,
+Today, enforcement is fragmented across systems. OpenAuthority enforces your rule once,
 everywhere, at every call.

@@ -43,8 +43,8 @@ revocations.txt
 
 # Local runtime/testing artifacts
 /.local/
-/firma-ca/
-/crates/firma-sidecar/firma-ca/
+/openauthority-ca/
+/crates/openauthority-sidecar/openauthority-ca/
 audit.jsonl
 
 # Demo runtime artifacts

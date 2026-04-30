@@ -18,7 +18,7 @@ from agents import function_tool
 
 _CA_BUNDLE = os.environ.get("SSL_CERT_FILE", True)
 _GH_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-_FIRMA_SESSION_ID = os.environ.get("FIRMA_SESSION_ID", "")
+_FIRMA_SESSION_ID = os.environ.get("OPENAUTHORITY_SESSION_ID", "")
 
 
 def _gh_client() -> httpx.AsyncClient:
@@ -26,7 +26,7 @@ def _gh_client() -> httpx.AsyncClient:
     if _GH_TOKEN:
         headers["Authorization"] = f"Bearer {_GH_TOKEN}"
     if _FIRMA_SESSION_ID:
-        headers["x-firma-session-id"] = _FIRMA_SESSION_ID
+        headers["x-openauthority-session-id"] = _FIRMA_SESSION_ID
     return httpx.AsyncClient(verify=_CA_BUNDLE, timeout=15.0, headers=headers)
 
 

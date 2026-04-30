@@ -1,5 +1,5 @@
-# Firma Sidecar — E2E example configuration.
-# Run from repo root: ./target/debug/firma-sidecar --config-file examples/e2e/sidecar.toml
+# OpenAuthority Sidecar — E2E example configuration.
+# Run from repo root: ./target/debug/opensidecar --config-file examples/e2e/sidecar.toml
 #
 # Interceptor: HTTP forward proxy on :8080
 # Enforcement: policy bundle streamed from Authority on :50051
@@ -15,7 +15,7 @@ dir           = "examples/policies"
 authority_url = "http://127.0.0.1:50051"
 
 [ca]
-dir = "examples/e2e/firma-ca"
+dir = "examples/e2e/openauthority-ca"
 
 [log]
 level = "info"

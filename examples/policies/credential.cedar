@@ -1,6 +1,6 @@
 // Credential capability policies — reference implementation.
 //
-// Principals: Firma::Agent::"<your-agent-id>"
+// Principals: OpenAuthority::Agent::"<your-agent-id>"
 // Actions:    credential.read | credential.write
 // Context:    risk_score (0–100), session_duration_s, action_count
 //
@@ -11,8 +11,8 @@
 
 // Allow credential reads at acceptable risk.
 permit (
-    principal == Firma::Agent::"example-agent",
-    action == Firma::Action::"credential.read",
+    principal == OpenAuthority::Agent::"example-agent",
+    action == OpenAuthority::Action::"credential.read",
     resource
 ) when {
     context.risk_score < 50
@@ -23,8 +23,8 @@ permit (
 // secrets (e.g., a dedicated secrets-rotation agent with a low risk budget).
 //
 // permit (
-//     principal == Firma::Agent::"provisioner-agent",
-//     action == Firma::Action::"credential.write",
+//     principal == OpenAuthority::Agent::"provisioner-agent",
+//     action == OpenAuthority::Action::"credential.write",
 //     resource
 // ) when {
 //     context.risk_score < 20
@@ -36,8 +36,8 @@ permit (
 forbid (
     principal,
     action in [
-        Firma::Action::"credential.read",
-        Firma::Action::"credential.write"
+        OpenAuthority::Action::"credential.read",
+        OpenAuthority::Action::"credential.write"
     ],
     resource
 ) when {

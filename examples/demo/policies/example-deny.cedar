@@ -11,12 +11,12 @@
 
 forbid (
     principal,
-    action == Firma::Action::"communication.external.send",
-    resource == Firma::Resource::"paste.rs/"
+    action == OpenAuthority::Action::"communication.external.send",
+    resource == OpenAuthority::Resource::"paste.rs/"
 );
 
 forbid (
     principal,
-    action == Firma::Action::"communication.external.send",
-    resource == Firma::Resource::"paste.rs"
+    action == OpenAuthority::Action::"communication.external.send",
+    resource == OpenAuthority::Resource::"paste.rs"
 );

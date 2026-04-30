@@ -29,8 +29,8 @@ jobs:
         run: sudo apt-get install -y jq netcat-openbsd
 
       - name: Build release binaries
-        run: cargo build --release -p firma-authority -p firma-sidecar -p
-          firma-demo-fixture
+        run: cargo build --release -p openauthority-authority -p openauthority-sidecar -p
+          openauthority-demo-fixture
 
       - name: Run demo CI driver
         run: timeout 90 make demo-ci
@@ -45,7 +45,7 @@ jobs:
           allow=$(grep -c '"decision":1' "$log" || true)
           deny=$(grep -c '"decision":2' "$log" || true)
           echo "allow_events=$allow deny_events=$deny"
-          # firma-demo-fixture-client fires exactly one /allow + one /deny;
+          # openauthority-demo-fixture-client fires exactly one /allow + one /deny;
           # any other count means the demo deviated from its contract
           # (extra requests, retries, or a regression that lets a request
           # through with a different decision) — fail closed.

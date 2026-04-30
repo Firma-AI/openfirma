@@ -5,14 +5,14 @@
 // Until then, Stage 1 (empty CapabilityMap) enforces: mapped hosts DENY, all
 // others PASSTHROUGH (because default_protected = false in sidecar.toml).
 //
-// Principal: Firma::Agent::"example-agent"
-// Actions:   the 15 canonical Firma action classes from FEP v0.1 §2.3.5
-// Resource:  Firma::Resource::"<host/path>"
+// Principal: OpenAuthority::Agent::"example-agent"
+// Actions:   the 15 canonical OpenAuthority action classes from FEP v0.1 §2.3.5
+// Resource:  OpenAuthority::Resource::"<host/path>"
 
 // Allow external communication (weather, LLM calls, email, Supabase).
 permit (
-    principal == Firma::Agent::"example-agent",
-    action == Firma::Action::"communication.external.send",
+    principal == OpenAuthority::Agent::"example-agent",
+    action == OpenAuthority::Action::"communication.external.send",
     resource
 ) when {
     context.risk_score < 80
@@ -20,15 +20,15 @@ permit (
 
 // Allow filesystem reads (Supabase Storage GET).
 permit (
-    principal == Firma::Agent::"example-agent",
-    action == Firma::Action::"filesystem.read",
+    principal == OpenAuthority::Agent::"example-agent",
+    action == OpenAuthority::Action::"filesystem.read",
     resource
 );
 
 // Allow filesystem writes (Supabase Storage POST/PUT).
 permit (
-    principal == Firma::Agent::"example-agent",
-    action == Firma::Action::"filesystem.write",
+    principal == OpenAuthority::Agent::"example-agent",
+    action == OpenAuthority::Action::"filesystem.write",
     resource
 ) when {
     context.risk_score < 70
@@ -38,6 +38,6 @@ permit (
 // exfiltrate_to_paste tool: POST https://paste.rs → DENY
 forbid (
     principal,
-    action == Firma::Action::"communication.external.send",
-    resource == Firma::Resource::"paste.rs"
+    action == OpenAuthority::Action::"communication.external.send",
+    resource == OpenAuthority::Resource::"paste.rs"
 );

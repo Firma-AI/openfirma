@@ -256,7 +256,7 @@ wheels = [
 ]
 
 [[package]]
-name = "firma-demos"
+name = "openauthority-demos"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

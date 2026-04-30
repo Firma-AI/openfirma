@@ -1,0 +1,798 @@
+//! HTTPS MITM runtime primitives for the HTTP proxy interceptor.
+//!
+//! This module owns:
+//! - MITM host matching (`intercept_hosts`, `bypass_hosts`, `strict_hosts`)
+//! - Sidecar CA first-run generation and existing-state load lifecycle
+//! - Per-host leaf certificate issuance and bounded cache
+
+use std::collections::VecDeque;
+use std::fs;
+use std::io::Write;
+use std::net::IpAddr;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use rcgen::{
+    BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
+    ExtendedKeyUsagePurpose, IsCa, KeyIdMethod, KeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256,
+    SanType,
+};
+use rustls::ServerConfig;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use tokio::sync::Mutex;
+use tokio_rustls::TlsAcceptor;
+use x509_parser::parse_x509_certificate;
+use x509_parser::pem::parse_x509_pem;
+
+use crate::config::HttpsMitmConfig;
+
+/// Runtime state for HTTPS MITM interception.
+pub struct HttpsMitmRuntime {
+    config: HttpsMitmConfig,
+    intercept_hosts: Vec<String>,
+    bypass_hosts: Vec<String>,
+    strict_hosts: Vec<String>,
+    ca: Arc<CaMaterial>,
+    cache: Mutex<LeafCertCache>,
+}
+
+impl HttpsMitmRuntime {
+    /// Build MITM runtime from validated config and CA directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when CA key/cert generation, loading, or cache
+    /// initialization fails.
+    pub fn new(config: HttpsMitmConfig, ca_dir: &Path) -> Result<Self, String> {
+        let ca = CaMaterial::load_or_generate(&config, ca_dir)?;
+        let cache = LeafCertCache::new(config.cert_cache_capacity)?;
+        let intercept_hosts = normalize_patterns(&config.intercept_hosts);
+        let bypass_hosts = normalize_patterns(&config.bypass_hosts);
+        let strict_hosts = normalize_patterns(&config.strict_hosts);
+        Ok(Self {
+            config,
+            intercept_hosts,
+            bypass_hosts,
+            strict_hosts,
+            ca: Arc::new(ca),
+            cache: Mutex::new(cache),
+        })
+    }
+
+    /// Returns whether this host should use MITM interception.
+    #[must_use]
+    pub fn should_intercept_host(&self, host: &str) -> bool {
+        if !self.config.enabled {
+            return false;
+        }
+
+        if host_matches_any(host, &self.bypass_hosts) {
+            return false;
+        }
+
+        host_matches_any(host, &self.intercept_hosts)
+    }
+
+    /// Returns whether this host is configured as strict-intercept.
+    #[must_use]
+    pub fn is_strict_host(&self, host: &str) -> bool {
+        host_matches_any(host, &self.strict_hosts)
+    }
+
+    /// Build a TLS acceptor using a cached or newly-issued leaf certificate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when certificate issuance or rustls server config
+    /// construction fails.
+    pub async fn tls_acceptor_for_host(&self, host: &str) -> Result<TlsAcceptor, String> {
+        let normalized = normalize_host(host);
+        let leaf = {
+            let mut cache = self.cache.lock().await;
+            if let Some(cached) = cache.get(&normalized) {
+                cached
+            } else {
+                let created = self.issue_leaf_cert(&normalized)?;
+                cache.put(normalized.clone(), created.clone());
+                created
+            }
+        };
+
+        Ok(leaf.acceptor)
+    }
+
+    fn issue_leaf_cert(&self, host: &str) -> Result<CachedLeafCert, String> {
+        let params = leaf_certificate_params(host)?;
+        let leaf_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+            .map_err(|e| format!("failed to generate leaf key for {host}: {e}"))?;
+        let leaf_cert = params
+            .signed_by(&leaf_key, &self.ca.cert, &self.ca.key)
+            .map_err(|e| format!("failed to sign leaf certificate for {host}: {e}"))?;
+        let certs = vec![
+            CertificateDer::from(leaf_cert.der().to_vec()),
+            CertificateDer::from(self.ca.cert_der.clone()),
+        ];
+        let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));
+        let server_config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .map_err(|e| format!("failed to build rustls server config: {e}"))?;
+        let expires_at = Instant::now() + Duration::from_secs(self.config.cert_ttl_secs);
+
+        Ok(CachedLeafCert {
+            acceptor: TlsAcceptor::from(Arc::new(server_config)),
+            expires_at,
+        })
+    }
+
+    #[cfg(test)]
+    async fn cache_len_for_tests(&self) -> usize {
+        self.cache.lock().await.len()
+    }
+}
+
+#[derive(Clone)]
+struct CachedLeafCert {
+    acceptor: TlsAcceptor,
+    expires_at: Instant,
+}
+
+struct LeafCertCache {
+    capacity: usize,
+    order: VecDeque<String>,
+    entries: std::collections::HashMap<String, CachedLeafCert>,
+}
+
+impl LeafCertCache {
+    fn new(capacity: usize) -> Result<Self, String> {
+        if capacity == 0 {
+            return Err("MITM certificate cache capacity must be > 0".to_string());
+        }
+        Ok(Self {
+            capacity,
+            order: VecDeque::new(),
+            entries: std::collections::HashMap::new(),
+        })
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn get(&mut self, host: &str) -> Option<CachedLeafCert> {
+        let now = Instant::now();
+        if let Some(entry) = self.entries.get(host).cloned() {
+            if entry.expires_at > now {
+                self.touch(host);
+                return Some(entry);
+            }
+        }
+        self.remove(host);
+        None
+    }
+
+    fn put(&mut self, host: String, cert: CachedLeafCert) {
+        if self.entries.contains_key(&host) {
+            self.entries.insert(host.clone(), cert);
+            self.touch(&host);
+            return;
+        }
+
+        self.entries.insert(host.clone(), cert);
+        self.order.push_back(host);
+        self.evict_if_needed();
+    }
+
+    fn touch(&mut self, host: &str) {
+        if let Some(pos) = self.order.iter().position(|h| h == host)
+            && let Some(existing) = self.order.remove(pos)
+        {
+            self.order.push_back(existing);
+        }
+    }
+
+    fn evict_if_needed(&mut self) {
+        while self.entries.len() > self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn remove(&mut self, host: &str) {
+        self.entries.remove(host);
+        if let Some(pos) = self.order.iter().position(|h| h == host) {
+            let _ = self.order.remove(pos);
+        }
+    }
+}
+
+struct CaMaterial {
+    cert: Certificate,
+    key: KeyPair,
+    cert_der: Vec<u8>,
+}
+
+impl CaMaterial {
+    fn load_or_generate(config: &HttpsMitmConfig, ca_dir: &Path) -> Result<Self, String> {
+        let cert_path = config
+            .ca_cert_path
+            .clone()
+            .unwrap_or_else(|| ca_dir.join("openauthority-ca.crt"));
+        let key_path = config
+            .ca_key_path
+            .clone()
+            .unwrap_or_else(|| ca_dir.join("openauthority-ca.key"));
+
+        if let Some(parent) = cert_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "failed to create MITM cert directory {}: {e}",
+                    parent.display()
+                )
+            })?;
+        }
+        if let Some(parent) = key_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "failed to create MITM key directory {}: {e}",
+                    parent.display()
+                )
+            })?;
+        }
+
+        let cert_exists = cert_path.exists();
+        let key_exists = key_path.exists();
+
+        if cert_exists && !key_exists {
+            return Err(format!(
+                "MITM CA certificate {} exists but private key {} is missing",
+                cert_path.display(),
+                key_path.display()
+            ));
+        }
+        if key_exists && !cert_exists {
+            return Err(format!(
+                "MITM CA private key {} exists but certificate {} is missing",
+                key_path.display(),
+                cert_path.display()
+            ));
+        }
+
+        let key_pem = if key_exists {
+            ensure_private_key_permissions(&key_path)?;
+            fs::read_to_string(&key_path)
+                .map_err(|e| format!("failed to read MITM CA key {}: {e}", key_path.display()))?
+        } else {
+            let (_, key_pem) = generate_ca_pair()?;
+            write_private_key_pem(&key_path, &key_pem)?;
+            key_pem
+        };
+
+        let ca_key =
+            KeyPair::from_pem(&key_pem).map_err(|e| format!("invalid MITM CA key PEM: {e}"))?;
+
+        let (params, cert_der) = if cert_exists {
+            let cert_pem = fs::read_to_string(&cert_path).map_err(|e| {
+                format!(
+                    "failed to read existing MITM CA cert {}: {e}",
+                    cert_path.display()
+                )
+            })?;
+            let cert_der = parse_cert_der_from_pem(&cert_pem, &cert_path)?;
+            let cert_spki = parse_cert_spki_from_pem(&cert_pem, &cert_path)?;
+            let key_spki = ca_key.public_key_der();
+            if cert_spki != key_spki {
+                return Err(format!(
+                    "MITM CA cert {} does not match private key {}",
+                    cert_path.display(),
+                    key_path.display()
+                ));
+            }
+
+            let params = CertificateParams::from_ca_cert_pem(&cert_pem).map_err(|e| {
+                format!(
+                    "failed to parse existing MITM CA cert {}: {e}",
+                    cert_path.display()
+                )
+            })?;
+            (params, cert_der)
+        } else {
+            (ca_certificate_params(), Vec::new())
+        };
+
+        let cert = params
+            .self_signed(&ca_key)
+            .map_err(|e| format!("failed to build MITM CA certificate: {e}"))?;
+
+        let cert_der = if cert_exists {
+            cert_der
+        } else {
+            let cert_der = cert.der().to_vec();
+            write_public_cert_pem(&cert_path, &cert.pem())?;
+            cert_der
+        };
+
+        Ok(Self {
+            cert,
+            key: ca_key,
+            cert_der,
+        })
+    }
+}
+
+fn generate_ca_pair() -> Result<(String, String), String> {
+    let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+        .map_err(|e| format!("failed to generate CA key pair: {e}"))?;
+    let ca_cert = ca_certificate_params()
+        .self_signed(&ca_key)
+        .map_err(|e| format!("failed to generate self-signed CA cert: {e}"))?;
+    let cert_pem = ca_cert.pem();
+    let key_pem = ca_key.serialize_pem();
+    Ok((cert_pem, key_pem))
+}
+
+fn write_private_key_pem(path: &Path, pem: &str) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|e| format!("failed to write MITM CA key {}: {e}", path.display()))?;
+        file.write_all(pem.as_bytes())
+            .map_err(|e| format!("failed to write MITM CA key {}: {e}", path.display()))?;
+        ensure_private_key_permissions(path)?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::write(path, pem)
+            .map_err(|e| format!("failed to write MITM CA key {}: {e}", path.display()))
+    }
+}
+
+fn write_public_cert_pem(path: &Path, pem: &str) -> Result<(), String> {
+    fs::write(path, pem).map_err(|e| {
+        format!(
+            "failed to write MITM CA certificate {}: {e}",
+            path.display()
+        )
+    })
+}
+
+fn parse_cert_der_from_pem(cert_pem: &str, cert_path: &Path) -> Result<Vec<u8>, String> {
+    let (_, pem) = parse_x509_pem(cert_pem.as_bytes()).map_err(|e| {
+        format!(
+            "failed to parse existing MITM CA cert {} as PEM: {e}",
+            cert_path.display()
+        )
+    })?;
+    if pem.label != "CERTIFICATE" {
+        return Err(format!(
+            "failed to parse existing MITM CA cert {}: PEM label '{}' is not CERTIFICATE",
+            cert_path.display(),
+            pem.label
+        ));
+    }
+    Ok(pem.contents)
+}
+
+fn parse_cert_spki_from_pem(cert_pem: &str, cert_path: &Path) -> Result<Vec<u8>, String> {
+    let cert_der = parse_cert_der_from_pem(cert_pem, cert_path)?;
+    let (_, cert) = parse_x509_certificate(&cert_der).map_err(|e| {
+        format!(
+            "failed to parse existing MITM CA cert {} as X.509: {e}",
+            cert_path.display()
+        )
+    })?;
+    Ok(cert.tbs_certificate.subject_pki.raw.to_vec())
+}
+
+fn ensure_private_key_permissions(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(path)
+            .map_err(|e| format!("failed to inspect MITM CA key {}: {e}", path.display()))?
+            .permissions()
+            .mode()
+            & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(format!(
+                "MITM CA key {} permissions too open: {:o} (expected owner-only access)",
+                path.display(),
+                mode
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
+fn ca_certificate_params() -> CertificateParams {
+    let mut params = CertificateParams::default();
+    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    // Populate Subject Key Identifier + KeyCertSign/CRLSign Key Usage
+    // so strict clients (OpenSSL) accept the CA chain. Leaves derive
+    // their Authority Key Identifier from this CA's SKI.
+    params.key_identifier_method = KeyIdMethod::Sha256;
+    params.use_authority_key_identifier_extension = true;
+    params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, "OpenAuthority Sidecar Local CA");
+    dn.push(DnType::OrganizationName, "OpenAuthority");
+    params.distinguished_name = dn;
+    params
+}
+
+fn leaf_certificate_params(host: &str) -> Result<CertificateParams, String> {
+    let normalized = normalize_host(host);
+    let mut params = CertificateParams::new(Vec::<String>::new())
+        .map_err(|e| format!("failed to initialize leaf certificate params: {e}"))?;
+    params.is_ca = IsCa::NoCa;
+    params.key_identifier_method = KeyIdMethod::Sha256;
+    params.use_authority_key_identifier_extension = true;
+    params.key_usages = vec![
+        KeyUsagePurpose::DigitalSignature,
+        KeyUsagePurpose::KeyEncipherment,
+    ];
+    params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, normalized.clone());
+    params.distinguished_name = dn;
+
+    if let Ok(ip) = normalized.parse::<IpAddr>() {
+        params.subject_alt_names.push(SanType::IpAddress(ip));
+    } else {
+        validate_dns_hostname(&normalized)?;
+        let dns_name = normalized
+            .clone()
+            .try_into()
+            .map_err(|e| format!("invalid DNS SAN '{normalized}': {e}"))?;
+        params.subject_alt_names.push(SanType::DnsName(dns_name));
+    }
+
+    if params.subject_alt_names.is_empty() {
+        return Err("leaf certificate requires at least one SAN".to_string());
+    }
+
+    Ok(params)
+}
+
+fn host_matches_any(host: &str, patterns: &[String]) -> bool {
+    let normalized = normalize_host(host);
+    patterns
+        .iter()
+        .any(|pattern| wildcard_match(pattern, &normalized))
+}
+
+fn normalize_patterns(patterns: &[String]) -> Vec<String> {
+    patterns
+        .iter()
+        .map(|pattern| normalize_host(pattern))
+        .collect()
+}
+
+fn normalize_host(host: &str) -> String {
+    host.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn wildcard_match(pattern: &str, value: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+
+    if let Some(suffix) = pattern.strip_prefix("*.") {
+        if suffix.is_empty() || suffix.contains('*') {
+            return false;
+        }
+        if !suffix.contains('.') {
+            // Keep runtime matching aligned with config validation and avoid
+            // top-level wildcard scopes like "*.com".
+            return false;
+        }
+        if value == suffix || !value.ends_with(suffix) {
+            return false;
+        }
+        let prefix = &value[..value.len() - suffix.len()];
+        return prefix.ends_with('.') && prefix.len() > 1;
+    }
+
+    if pattern.contains('*') {
+        return false;
+    }
+
+    if !pattern.contains('*') {
+        return pattern == value;
+    }
+    false
+}
+
+fn validate_dns_hostname(host: &str) -> Result<(), String> {
+    if host.is_empty() {
+        return Err("invalid DNS hostname: empty value".to_string());
+    }
+    if host.len() > 253 {
+        return Err(format!(
+            "invalid DNS hostname '{host}': exceeds 253-character limit"
+        ));
+    }
+
+    for label in host.split('.') {
+        if label.is_empty() {
+            return Err(format!(
+                "invalid DNS hostname '{host}': contains empty label"
+            ));
+        }
+        if label.len() > 63 {
+            return Err(format!(
+                "invalid DNS hostname '{host}': label '{label}' exceeds 63-character limit"
+            ));
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return Err(format!(
+                "invalid DNS hostname '{host}': label '{label}' starts/ends with '-'"
+            ));
+        }
+        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err(format!(
+                "invalid DNS hostname '{host}': label '{label}' contains non-DNS characters"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn wildcard_match_exact() {
+        assert!(wildcard_match("api.openai.com", "api.openai.com"));
+        assert!(!wildcard_match("api.openai.com", "x.openai.com"));
+    }
+
+    #[test]
+    fn wildcard_match_suffix() {
+        assert!(wildcard_match("*.openai.com", "api.openai.com"));
+        assert!(!wildcard_match("*.openai.com", "openai.com"));
+    }
+
+    #[test]
+    fn wildcard_match_rejects_non_label_wildcards() {
+        assert!(!wildcard_match("api.*.com", "api.openai.com"));
+        assert!(!wildcard_match("*openai.com", "api.openai.com"));
+        assert!(!wildcard_match("*.com", "openai.com"));
+    }
+
+    #[test]
+    fn validate_dns_hostname_accepts_standard_host() {
+        assert!(validate_dns_hostname("api.openai.com").is_ok());
+        assert!(validate_dns_hostname("xn--bcher-kva.example").is_ok());
+    }
+
+    #[test]
+    fn validate_dns_hostname_rejects_underscore() {
+        let err = validate_dns_hostname("exa_mple.com")
+            .err()
+            .unwrap_or_else(|| panic!("expected invalid DNS hostname"));
+        assert!(err.contains("non-DNS characters"));
+    }
+
+    #[test]
+    fn validate_dns_hostname_rejects_oversized_label() {
+        let host = format!("{}.com", "a".repeat(64));
+        let err = validate_dns_hostname(&host)
+            .err()
+            .unwrap_or_else(|| panic!("expected oversized-label error"));
+        assert!(err.contains("exceeds 63-character limit"));
+    }
+
+    #[test]
+    fn host_lists_apply_bypass_before_intercept() {
+        let dir = tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let runtime = HttpsMitmRuntime::new(
+            HttpsMitmConfig {
+                enabled: true,
+                intercept_hosts: vec!["*.openai.com".to_string()],
+                bypass_hosts: vec!["api.openai.com".to_string()],
+                cert_ttl_secs: 60,
+                cert_cache_capacity: 8,
+                ..HttpsMitmConfig::default()
+            },
+            dir.path(),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        assert!(!runtime.should_intercept_host("api.openai.com"));
+        assert!(runtime.should_intercept_host("chat.openai.com"));
+    }
+
+    #[test]
+    fn strict_host_match_works() {
+        let dir = tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let runtime = HttpsMitmRuntime::new(
+            HttpsMitmConfig {
+                enabled: true,
+                intercept_hosts: vec!["api.openai.com".to_string()],
+                strict_hosts: vec!["api.openai.com".to_string()],
+                cert_ttl_secs: 60,
+                cert_cache_capacity: 8,
+                ..HttpsMitmConfig::default()
+            },
+            dir.path(),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        assert!(runtime.is_strict_host("api.openai.com"));
+        assert!(!runtime.is_strict_host("example.com"));
+    }
+
+    #[test]
+    fn ca_material_creates_key_and_cert_files() {
+        let dir = tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let cfg = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["api.openai.com".to_string()],
+            cert_ttl_secs: 60,
+            cert_cache_capacity: 8,
+            ..HttpsMitmConfig::default()
+        };
+
+        let _ = HttpsMitmRuntime::new(cfg, dir.path()).unwrap_or_else(|e| panic!("{e}"));
+
+        assert!(dir.path().join("openauthority-ca.crt").exists());
+        assert!(dir.path().join("openauthority-ca.key").exists());
+    }
+
+    #[test]
+    fn ca_material_rejects_cert_key_mismatch() {
+        let dir = tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let cfg = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["api.openai.com".to_string()],
+            cert_ttl_secs: 60,
+            cert_cache_capacity: 8,
+            ..HttpsMitmConfig::default()
+        };
+        let _ = HttpsMitmRuntime::new(cfg.clone(), dir.path()).unwrap_or_else(|e| panic!("{e}"));
+
+        let key_path = dir.path().join("openauthority-ca.key");
+        let (_, replacement_key) = generate_ca_pair().unwrap_or_else(|e| panic!("{e}"));
+        write_private_key_pem(&key_path, &replacement_key).unwrap_or_else(|e| panic!("{e}"));
+
+        let err = HttpsMitmRuntime::new(cfg, dir.path())
+            .err()
+            .unwrap_or_else(|| panic!("expected cert/key mismatch error"));
+        assert!(
+            err.contains("does not match private key"),
+            "expected mismatch detail, got: {err}"
+        );
+    }
+
+    #[test]
+    fn ca_material_rejects_partial_key_without_cert() {
+        let dir = tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let key_path = dir.path().join("openauthority-ca.key");
+        let (_, key_pem) = generate_ca_pair().unwrap_or_else(|e| panic!("{e}"));
+        write_private_key_pem(&key_path, &key_pem).unwrap_or_else(|e| panic!("{e}"));
+
+        let cfg = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["api.openai.com".to_string()],
+            cert_ttl_secs: 60,
+            cert_cache_capacity: 8,
+            ..HttpsMitmConfig::default()
+        };
+
+        let err = HttpsMitmRuntime::new(cfg, dir.path())
+            .err()
+            .unwrap_or_else(|| panic!("expected partial CA state error"));
+        assert!(
+            err.contains("private key") && err.contains("certificate") && err.contains("missing"),
+            "expected partial state detail, got: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generated_ca_private_key_has_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let cfg = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["api.openai.com".to_string()],
+            cert_ttl_secs: 60,
+            cert_cache_capacity: 8,
+            ..HttpsMitmConfig::default()
+        };
+        let _ = HttpsMitmRuntime::new(cfg, dir.path()).unwrap_or_else(|e| panic!("{e}"));
+
+        let mode = fs::metadata(dir.path().join("openauthority-ca.key"))
+            .unwrap_or_else(|e| panic!("{e}"))
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "expected 0600 key mode, got {mode:o}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_existing_ca_key_with_open_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let cert_path = dir.path().join("openauthority-ca.crt");
+        let key_path = dir.path().join("openauthority-ca.key");
+        let (cert_pem, key_pem) = generate_ca_pair().unwrap_or_else(|e| panic!("{e}"));
+        write_public_cert_pem(&cert_path, &cert_pem).unwrap_or_else(|e| panic!("{e}"));
+        write_private_key_pem(&key_path, &key_pem).unwrap_or_else(|e| panic!("{e}"));
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o644))
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        let cfg = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["api.openai.com".to_string()],
+            ca_cert_path: Some(cert_path),
+            ca_key_path: Some(key_path),
+            cert_ttl_secs: 60,
+            cert_cache_capacity: 8,
+            ..HttpsMitmConfig::default()
+        };
+
+        let err = HttpsMitmRuntime::new(cfg, dir.path())
+            .err()
+            .unwrap_or_else(|| panic!("expected err"));
+        assert!(
+            err.contains("permissions too open"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cert_cache_reuses_issued_leafs() {
+        let dir = tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let runtime = HttpsMitmRuntime::new(
+            HttpsMitmConfig {
+                enabled: true,
+                intercept_hosts: vec!["api.openai.com".to_string()],
+                cert_ttl_secs: 300,
+                cert_cache_capacity: 8,
+                ..HttpsMitmConfig::default()
+            },
+            dir.path(),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        let _ = runtime
+            .tls_acceptor_for_host("api.openai.com")
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        let _ = runtime
+            .tls_acceptor_for_host("api.openai.com")
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(runtime.cache_len_for_tests().await, 1);
+    }
+}

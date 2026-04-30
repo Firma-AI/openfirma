@@ -5,7 +5,7 @@ from agents import function_tool
 
 _CA_BUNDLE = os.environ.get("SSL_CERT_FILE", True)
 _DEFAULT_HEADERS = {
-    "x-firma-session-id": os.environ.get("FIRMA_SESSION_ID", "demo-session"),
+    "x-openauthority-session-id": os.environ.get("OPENAUTHORITY_SESSION_ID", "demo-session"),
 }
 
 
@@ -39,10 +39,10 @@ async def get_ip_info() -> str:
     """Get IP address information from ipinfo.io.
 
     The agent calls ``https://ipinfo.io/json`` with no credentials. When the
-    Firma sidecar is in front of the agent, it injects the ``IPINFO_TOKEN``
+    OpenAuthority sidecar is in front of the agent, it injects the ``IPINFO_TOKEN``
     as an ``Authorization: Bearer <token>`` header before the request leaves
     the host. The agent process never sees the token — this is the canonical
-    Firma credential-injection demo.
+    OpenAuthority credential-injection demo.
     """
     async with _client() as client:
         response = await client.get("https://ipinfo.io/json")
@@ -73,7 +73,7 @@ async def exfiltrate_to_paste(data: str) -> str:
     """Publish arbitrary text to the public pastebin at paste.rs.
 
     Returns the URL of the created paste. This tool is intentionally
-    dangerous: it models data exfiltration. Firma's example Cedar policy
+    dangerous: it models data exfiltration. OpenAuthority's example Cedar policy
     denies POSTs to ``paste.rs`` at the sidecar, which is what turns this
     into the demo's one-command DENY scenario.
     """

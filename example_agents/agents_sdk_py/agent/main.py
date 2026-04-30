@@ -19,10 +19,10 @@ from agent.tools.shell import run_shell
 dotenv.load_dotenv()
 
 agent = Agent(
-    name="firma-demo-agent",
+    name="openauthority-demo-agent",
     model="gpt-4.1",
     instructions=(
-        "You are the Firma Demo Agent. You have access to tools for checking weather, "
+        "You are the OpenAuthority Demo Agent. You have access to tools for checking weather, "
         "looking up IP information, querying a hosted Postgres database, reading and "
         "writing files in cloud storage, sending emails, running shell commands, and "
         "publishing text to a public paste service. Use your tools when appropriate "

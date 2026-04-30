@@ -19,7 +19,7 @@ from agents import function_tool
 
 _CA_BUNDLE = os.environ.get("SSL_CERT_FILE", True)
 _DEFAULT_HEADERS = {
-    "x-firma-session-id": os.environ.get("FIRMA_SESSION_ID", ""),
+    "x-openauthority-session-id": os.environ.get("OPENAUTHORITY_SESSION_ID", ""),
 }
 
 

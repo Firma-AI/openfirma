@@ -1,0 +1,20 @@
+[package]
+name = "openauthority-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Protobuf/gRPC service definitions and generated code for OpenAuthority OSS"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+prost = { workspace = true }
+prost-types = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }
+
+[lints]
+workspace = true

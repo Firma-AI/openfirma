@@ -12,10 +12,10 @@ make test           # cargo test --workspace
 make build          # cargo build --workspace
 ```
 
-Single crate: `cargo test -p firma-sidecar`
-Single test: `cargo test -p firma-sidecar pipeline::tests::test_enforce_happy_path`
+Single crate: `cargo test -p openauthority-sidecar`
+Single test: `cargo test -p openauthority-sidecar pipeline::tests::test_enforce_happy_path`
 
-Requires `protoc` installed for `firma-proto` protobuf compilation.
+Requires `protoc` installed for `openauthority-proto` protobuf compilation.
 
 ## Architecture
 
@@ -23,16 +23,16 @@ L7 policy enforcement sidecar for AI agents. Every outbound agent call passes th
 
 ### Crates
 
-- **firma-core** — Shared types and trait contracts (`Decision`, `ExecutionEnvelope`, `CapabilityClaims`, `TokenVerifier`, `TokenSigner`, `PolicyEvaluator`, `RevocationStore`). No dependencies on other crates.
-- **firma-proto** — gRPC wire contract via protobuf. `build.rs` compiles `.proto` files with `tonic-build`. Generated code has relaxed clippy lints.
-- **firma-sidecar** — The enforcement proxy binary. Four top-level modules:
+- **openauthority-core** — Shared types and trait contracts (`Decision`, `ExecutionEnvelope`, `CapabilityClaims`, `TokenVerifier`, `TokenSigner`, `PolicyEvaluator`, `RevocationStore`). No dependencies on other crates.
+- **openauthority-proto** — gRPC wire contract via protobuf. `build.rs` compiles `.proto` files with `tonic-build`. Generated code has relaxed clippy lints.
+- **openauthority-sidecar** — The enforcement proxy binary. Four top-level modules:
   - `interceptor` — Captures outbound agent traffic (placeholder).
   - `normalizer` — Maps raw HTTP requests to canonical `ExecutionEnvelope` with normalized `intent.action_class` from a 44-class registry (15 FEP v0.1 + 12 GitHub + 12 Stripe + 5 Gmail additions). `intent.resource` is a `BTreeMap<String, String>` with conventional keys `host`, `path`, and optionally `provider` (attached only when the request host exact-matches a known allowlist: `api.github.com` / `github.com` → `provider="github"`; `api.stripe.com` → `provider="stripe"`; `gmail.googleapis.com` → `provider="gmail"`). Fail-closed: unclassifiable protected actions → DENY.
   - `enforcement` — Two-stage engine, both fully local with no network calls:
     - Stage 1 (`capability_validation`): Token selection from `CapabilityMap`, then parse/verify/expiry/revocation. Target < 1ms p95.
     - Stage 2 (`constraint_enforcement`): Scope check, bundle freshness, Cedar policy eval. Target < 200µs p95.
   - `pipeline` — Orchestrates normalizer → Stage 1 → Stage 2. Single `enforce()` entry point. Re-exports all public API types; `enforcement` and `normalizer` are `pub(crate)`.
-- **firma-authority** — Mini Authority reference implementation for local dev. Issues PASETO v4 tokens, streams policy bundles and revocations. Pre-flight only, never on the hot path.
+- **openauthority-authority** — Mini Authority reference implementation for local dev. Issues PASETO v4 tokens, streams policy bundles and revocations. Pre-flight only, never on the hot path.
 
 ### Key Invariants
 
@@ -45,7 +45,7 @@ L7 policy enforcement sidecar for AI agents. Every outbound agent call passes th
 
 The normalizer's host/method/path → action_class mapping is loaded from TOML at
 startup by `startup::pipeline::build_pipeline_runtime`. Two config knobs on
-`[enforcement.mapping]` (see `crates/firma-sidecar/src/config/enforcement.rs`):
+`[enforcement.mapping]` (see `crates/openauthority-sidecar/src/config/enforcement.rs`):
 
 - `rules_path: String` — primary mapping file (defaults to `mapping-rules.toml`).
 - `rules_paths: Vec<String>` — additional mapping files merged on top.
@@ -54,7 +54,7 @@ Rules from `rules_path` and each entry of `rules_paths` are concatenated and
 passed to `MappingTable::from_config`. Duplicate `(method, host, path)` tuples
 across merged files fail at startup (fail-closed).
 
-Shipped mapping files live under `crates/firma-sidecar/config/mappings/`:
+Shipped mapping files live under `crates/openauthority-sidecar/config/mappings/`:
 
 | File          | Covers                                                        |
 |---------------|---------------------------------------------------------------|
@@ -68,9 +68,9 @@ Example operator config:
 [enforcement.mapping]
 rules_path = "config/mappings/default.toml"
 rules_paths = [
-  "crates/firma-sidecar/config/mappings/github.toml",
-  "crates/firma-sidecar/config/mappings/stripe.toml",
-  "crates/firma-sidecar/config/mappings/gmail.toml",
+  "crates/openauthority-sidecar/config/mappings/github.toml",
+  "crates/openauthority-sidecar/config/mappings/stripe.toml",
+  "crates/openauthority-sidecar/config/mappings/gmail.toml",
 ]
 ```
 

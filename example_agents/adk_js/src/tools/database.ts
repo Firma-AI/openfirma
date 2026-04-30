@@ -6,7 +6,7 @@ export const dbQuery = new FunctionTool({
   name: 'db_query',
   description:
     'Execute a SQL query against the hosted Postgres database and return results. ' +
-    'Forwarded to the execute_sql RPC via HTTPS; Firma sees the full request ' +
+    'Forwarded to the execute_sql RPC via HTTPS; OpenAuthority sees the full request ' +
     'when HTTPS_PROXY is set.',
   parameters: z.object({
     query: z.string().describe('SQL query to execute'),

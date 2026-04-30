@@ -37,7 +37,7 @@ The LLM response contains a `function_call` for `get_weather`. The Sidecar inter
 ```mermaid
 sequenceDiagram
     participant A as Agent (LangChain)
-    participant SC as Firma Sidecar
+    participant SC as OpenAuthority Sidecar
     participant MA as Mini Authority
     participant LLM as OpenAI gpt-5 (Responses API)
 
@@ -86,7 +86,7 @@ The LLM response contains a `function_call` for `read_user_contacts` (not in the
 ```mermaid
 sequenceDiagram
     participant A as Agent (LangChain)
-    participant SC as Firma Sidecar
+    participant SC as OpenAuthority Sidecar
     participant MA as Mini Authority
     participant LLM as OpenAI gpt-5 (Responses API)
 
@@ -115,7 +115,7 @@ sequenceDiagram
 
     Note right of SC: Response rewriting: Strip denied function_call from output. Inject function_call_output with denial reason so LLM can self-correct on next turn.
 
-    SC-->>A: 200 OK — modified response output: [{type: function_call_output, call_id: call_xyz789, output: "FIRMA_DENY: tool read_user_contacts not permitted. Allowed: [get_weather, send_slack_message]"}]
+    SC-->>A: 200 OK — modified response output: [{type: function_call_output, call_id: call_xyz789, output: "OPENAUTHORITY_DENY: tool read_user_contacts not permitted. Allowed: [get_weather, send_slack_message]"}]
 
     Note over A: Agent never sees the original function_call. Receives denial as if it were a tool result. Passes it to LLM on next turn.
     end
@@ -134,7 +134,7 @@ sequenceDiagram
 
 **Key points:**
 - The agent **never sees the denied `function_call`**. The Sidecar strips it from the response before forwarding.
-- The Sidecar rewrites the response to include a `function_call_output` with a `FIRMA_DENY` marker and the denial reason. From the agent's perspective, it looks like the tool was called and returned an error — no special Firma-aware code needed.
+- The Sidecar rewrites the response to include a `function_call_output` with a `OPENAUTHORITY_DENY` marker and the denial reason. From the agent's perspective, it looks like the tool was called and returned an error — no special OpenAuthority-aware code needed.
 - On the next turn, the agent naturally passes the denial output back to the LLM as part of conversation history. The LLM sees the denial, understands the constraint, and self-corrects by calling an allowed tool.
 - This design means **zero agent-side integration** for tool-call enforcement. The agent just uses `HTTP_PROXY` and everything works transparently.
 
@@ -147,7 +147,7 @@ The `get_weather` tool call was approved on the response path (Diagram 1). The a
 ```mermaid
 sequenceDiagram
     participant A as Agent (LangChain)
-    participant SC as Firma Sidecar
+    participant SC as OpenAuthority Sidecar
     participant MA as Mini Authority
     participant LLM as OpenAI gpt-5 (Responses API)
     participant W as Weather API (api.weatherapi.com)
@@ -212,7 +212,7 @@ The `send_slack_message` tool call was approved at the response-path level (the 
 ```mermaid
 sequenceDiagram
     participant A as Agent (LangChain)
-    participant SC as Firma Sidecar
+    participant SC as OpenAuthority Sidecar
     participant MA as Mini Authority
     participant LLM as OpenAI gpt-5 (Responses API)
     participant S as Slack API (slack.com)

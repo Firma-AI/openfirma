@@ -10,7 +10,7 @@ def _require_env(name: str) -> str:
     if not value:
         raise RuntimeError(
             f"{name} is required. Set it in .env (see .env.sample). "
-            "The Firma demo agents rely on Supabase for db_query and file tools."
+            "The OpenAuthority demo agents rely on Supabase for db_query and file tools."
         )
     return value
 
@@ -19,7 +19,7 @@ def get_client() -> Client:
     """Return a singleton Supabase client.
 
     All traffic goes to ``<SUPABASE_URL>/rest/v1/...`` or ``/storage/v1/...``
-    over HTTPS. When ``HTTPS_PROXY`` points at the Firma sidecar, every call
+    over HTTPS. When ``HTTPS_PROXY`` points at the OpenAuthority sidecar, every call
     is visible to enforcement.
     """
     global _client
@@ -31,4 +31,4 @@ def get_client() -> Client:
 
 
 def storage_bucket() -> str:
-    return os.environ.get("SUPABASE_STORAGE_BUCKET", "firma-demo")
+    return os.environ.get("SUPABASE_STORAGE_BUCKET", "openauthority-demo")

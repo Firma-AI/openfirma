@@ -7,7 +7,7 @@ function requireEnv(name: string): string {
   if (!value) {
     throw new Error(
       `${name} is required. Set it in .env (see .env.sample). ` +
-        'The Firma demo agents rely on Supabase for db_query and file tools.',
+        'The OpenAuthority demo agents rely on Supabase for db_query and file tools.',
     );
   }
   return value;
@@ -23,5 +23,5 @@ export function getSupabase(): SupabaseClient {
 }
 
 export function storageBucket(): string {
-  return process.env.SUPABASE_STORAGE_BUCKET ?? 'firma-demo';
+  return process.env.SUPABASE_STORAGE_BUCKET ?? 'openauthority-demo';
 }

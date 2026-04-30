@@ -161,7 +161,7 @@ ISSUED → ACTIVE → IN USE → ACTIVE (reuse) → EXPIRED
 
 ### Health & Readiness
 
-Both `firma-sidecar` and `firma-authority` (Mini Authority) expose health and readiness endpoints:
+Both `opensidecar` and `openauthority-authority` (Mini Authority) expose health and readiness endpoints:
 
 - **Liveness** (`/healthz`): Process is alive and responding
 - **Readiness** (`/readyz`): Ready to serve traffic — policy bundle loaded, Authority connection established (Sidecar), policy files parsed (Mini Authority)
@@ -225,16 +225,16 @@ service AuthorityService {
 | Scenario | HTTP Status | Body Format |
 |----------|-------------|-------------|
 | ALLOW | Original upstream response | Passthrough (unchanged) |
-| DENY (Stage 1) | 403 Forbidden | `{"firma_decision": "DENY", "reason": "TOKEN_EXPIRED", "detail": "..."}` |
-| DENY (Stage 2) | 403 Forbidden | `{"firma_decision": "DENY", "reason": "POLICY_DENIED", "detail": "...", "action": "...", "resource": "..."}` |
-| DENY (malformed) | 400 Bad Request | `{"firma_decision": "DENY", "reason": "MALFORMED_REQUEST", "detail": "..."}` |
-| ABORT / Internal failure | 503 Service Unavailable | `{"firma_decision": "ABORT", "reason": "...", "detail": "..."}` |
+| DENY (Stage 1) | 403 Forbidden | `{"openauthority_decision": "DENY", "reason": "TOKEN_EXPIRED", "detail": "..."}` |
+| DENY (Stage 2) | 403 Forbidden | `{"openauthority_decision": "DENY", "reason": "POLICY_DENIED", "detail": "...", "action": "...", "resource": "..."}` |
+| DENY (malformed) | 400 Bad Request | `{"openauthority_decision": "DENY", "reason": "MALFORMED_REQUEST", "detail": "..."}` |
+| ABORT / Internal failure | 503 Service Unavailable | `{"openauthority_decision": "ABORT", "reason": "...", "detail": "..."}` |
 
 ### Error Response Structure
 
 ```json
 {
-  "firma_decision": "DENY | ABORT",
+  "openauthority_decision": "DENY | ABORT",
   "reason": "REASON_CODE",
   "detail": "Human-readable explanation",
   "request_id": "uuid-v7",
@@ -267,8 +267,8 @@ service AuthorityService {
 When the Sidecar denies a tool call detected in an LLM response:
 
 - The denied tool call is stripped from the response
-- A denial marker (`FIRMA_DENY`) is injected in the provider-appropriate format
-- Agent sees a normal-looking response (no Firma-specific handling needed)
+- A denial marker (`OPENAUTHORITY_DENY`) is injected in the provider-appropriate format
+- Agent sees a normal-looking response (no OpenAuthority-specific handling needed)
 - LLM self-corrects on the next turn
 
 The rewriting logic is provider-agnostic: a pluggable LLM Response Parser normalizes provider-specific formats (e.g., OpenAI `function_call`, Anthropic `tool_use`) before enforcement, and re-serializes after.
@@ -301,7 +301,7 @@ The rewriting logic is provider-agnostic: a pluggable LLM Response Parser normal
 
 **Not in OSS V1**: Trust graph, dynamic risk engine, multi-tenant control plane, compliance-grade audit backend, enterprise memory governance, Cedar policy compiler/UI, escalation engine, provenance chain verification.
 
-**Enterprise upgrade path**: Replace Mini Authority with Firma Authority (config-only swap: `firma.authority: FA_URL`). Sidecar binary is identical.
+**Enterprise upgrade path**: Replace Mini Authority with OpenAuthority Authority (config-only swap: `openauthority.authority: FA_URL`). Sidecar binary is identical.
 
 ---
 
@@ -319,7 +319,7 @@ Why Pingora over Axum/Hyper: The sidecar's critical path is LLM response inspect
 - rustls + rcgen enables transparent HTTPS interception without OpenSSL dependency, simplifying static binary distribution
 - Cedar policy engine is the same engine used by AWS Verified Permissions — strong formal verification properties for security-critical eval
 - Tower middleware ecosystem is shared across all framework components, enabling consistent request/response interception patterns
-- Protobuf definitions in `firma-proto` are the single source of truth for all inter-component contracts
+- Protobuf definitions in `openauthority-proto` are the single source of truth for all inter-component contracts
 - Same `.proto` files generate Rust server/client code (via Tonic) and can generate Go/Python/TypeScript client SDKs for the Capability Library
-- HTTP proxy error responses use a Firma-specific JSON format (not gRPC) because agents interact via standard HTTP — they don't know they're talking to Firma
+- HTTP proxy error responses use a OpenAuthority-specific JSON format (not gRPC) because agents interact via standard HTTP — they don't know they're talking to OpenAuthority
 - Audit event format is designed for append-only sinks (stdout JSON lines or file in OSS V1) — no query API in V1

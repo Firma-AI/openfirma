@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E2E demo runner — starts firma-authority and firma-sidecar, then prints
+# E2E demo runner — starts openauthority-authority and opensidecar, then prints
 # instructions for running the example agent.
 #
 # Usage: ./examples/e2e/run.sh
@@ -13,13 +13,13 @@ E2E_DIR="examples/e2e"
 KEY_FILE="$E2E_DIR/authority.key"
 AUDIT_KEY_FILE="$E2E_DIR/audit.key"
 REVOCATIONS_FILE="$E2E_DIR/revocations.txt"
-CA_DIR="$E2E_DIR/firma-ca"
-AUTHORITY_BIN="./target/debug/firma-authority"
-SIDECAR_BIN="./target/debug/firma-sidecar"
+CA_DIR="$E2E_DIR/openauthority-ca"
+AUTHORITY_BIN="./target/debug/openauthority-authority"
+SIDECAR_BIN="./target/debug/opensidecar"
 
 # ── Build ────────────────────────────────────────────────────────────────────
 echo "[1/4] Building binaries..."
-cargo build -p firma-authority -p firma-sidecar
+cargo build -p openauthority-authority -p opensidecar
 echo "      Done."
 
 # ── Setup ────────────────────────────────────────────────────────────────────
@@ -45,14 +45,14 @@ touch "$REVOCATIONS_FILE"
 echo "      Done."
 
 # ── Start Authority ──────────────────────────────────────────────────────────
-echo "[3/4] Starting firma-authority on 127.0.0.1:50051..."
+echo "[3/4] Starting openauthority-authority on 127.0.0.1:50051..."
 "$AUTHORITY_BIN" --config "$E2E_DIR/authority.toml" &
 AUTHORITY_PID=$!
 echo "      PID: $AUTHORITY_PID"
 sleep 1
 
 # ── Start Sidecar ────────────────────────────────────────────────────────────
-echo "[4/4] Starting firma-sidecar on 127.0.0.1:8080..."
+echo "[4/4] Starting opensidecar on 127.0.0.1:8080..."
 "$SIDECAR_BIN" --config-file "$E2E_DIR/sidecar.toml" &
 SIDECAR_PID=$!
 echo "      PID: $SIDECAR_PID"
@@ -62,7 +62,7 @@ sleep 1
 cat <<'EOF'
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Firma E2E demo running
+  OpenAuthority E2E demo running
   Authority  : http://127.0.0.1:50051 (gRPC)
   Sidecar    : http://127.0.0.1:8080  (HTTP proxy)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

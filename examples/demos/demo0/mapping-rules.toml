@@ -1,6 +1,6 @@
 # Demo 0 mapping rules.
 # Four systems, one rule: "agent may read, not write or destroy."
-# Each system enforces differently today — Firma enforces once, everywhere.
+# Each system enforces differently today — OpenAuthority enforces once, everywhere.
 
 # GitHub — read PR (allowed by policy)
 [[rules]]

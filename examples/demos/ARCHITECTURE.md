@@ -1,4 +1,4 @@
-# Firma Demo System — Architecture
+# OpenAuthority Demo System — Architecture
 
 ## Overview
 
@@ -8,7 +8,7 @@ Self-contained execution environment for agent policy demos. Visualizes how tool
 
 ## Entrypoints
 
-- `cargo run -p firma-demo-tui` — visual demo runner with logs and prompt input.
+- `cargo run -p openauthority-demo-tui` — visual demo runner with logs and prompt input.
 - `./examples/demos/run.sh demo0` — direct runner for terminal-only demo execution.
 
 ---
@@ -17,7 +17,7 @@ Self-contained execution environment for agent policy demos. Visualizes how tool
 
 ```text
 crates/
-└── firma-demo-tui/src/
+└── openauthority-demo-tui/src/
     ├── main.rs              # CLI entry point (--demo <dir>, --demos-dir)
     ├── demo_loader.rs       # Demo discovery + DemoManifest validation
     ├── runtime.rs           # Authority + sidecar boot, key provisioning
@@ -53,9 +53,9 @@ examples/
     │       ├── authority.log / sidecar.log
     │       ├── audit.jsonl
     │       ├── revocations.txt
-    │       └── generated-firma-ca/
-    │           ├── firma-ca.crt
-    │           └── firma-ca.key
+    │       └── generated-openauthority-ca/
+    │           ├── openauthority-ca.crt
+    │           └── openauthority-ca.key
     ├── demo1/               # Path-level enforcement on the same host
     └── demo2/               # Runtime enforcement under compromise
 ```
@@ -75,7 +75,7 @@ If `examples/demos/.env.sample` exists, the TUI presents each key as an editable
 ### Phase 3 — Running
 
 1. `runtime::boot` executes the startup sequence (see below).
-2. `agent_bridge::spawn_agent` launches the Python agent via `uv run`, injecting `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and `FIRMA_DEMO_PROMPT`.
+2. `agent_bridge::spawn_agent` launches the Python agent via `uv run`, injecting `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and `OPENAUTHORITY_DEMO_PROMPT`.
 3. The event loop tails four log streams simultaneously: authority, sidecar, audit (`audit.jsonl`), and agent stdout/stderr.
 
 **Layout:**
@@ -99,18 +99,18 @@ If `examples/demos/.env.sample` exists, the TUI presents each key as an editable
 1. mkdir .runtime/
 
 2. provision_keys
-   - cargo run --bin firma-authority -- generate-key → .runtime/authority.key
+   - cargo run --bin openauthority-authority -- generate-key → .runtime/authority.key
    - write embedded demo audit.key PEM → .runtime/audit.key
 
-3. remove stale .runtime/generated-firma-ca/{firma-ca.crt,firma-ca.key}
+3. remove stale .runtime/generated-openauthority-ca/{openauthority-ca.crt,openauthority-ca.key}
 
-4. cargo run --bin firma-authority -- --config authority.toml
+4. cargo run --bin openauthority-authority -- --config authority.toml
    wait: TCP connect to authority listen_addr (timeout 60 s)
 
 5. truncate .runtime/audit.jsonl
 
-6. cargo run --bin firma-sidecar -- --config-file sidecar.toml
-   wait: .runtime/generated-firma-ca/firma-ca.crt + firma-ca.key exist (timeout 60 s)
+6. cargo run --bin opensidecar -- --config-file sidecar.toml
+   wait: .runtime/generated-openauthority-ca/openauthority-ca.crt + openauthority-ca.key exist (timeout 60 s)
    (sidecar generates MITM CA material on first startup)
 ```
 
@@ -135,7 +135,7 @@ log_level          = "info"
 
 Config resolution order (highest to lowest priority):
 
-1. Environment variables (`FIRMA_AUTHORITY_POLICY_DIR`, `FIRMA_AUTHORITY_SCHEMA_PATH`, `FIRMA_AUTHORITY_KEY_FILE`)
+1. Environment variables (`OPENAUTHORITY_AUTHORITY_POLICY_DIR`, `OPENAUTHORITY_AUTHORITY_SCHEMA_PATH`, `OPENAUTHORITY_AUTHORITY_KEY_FILE`)
 2. `demoX/authority.toml`
 3. `AuthorityConfig` defaults
 
@@ -158,7 +158,7 @@ dir           = "examples/demos/demo0"
 authority_url = "http://127.0.0.1:50051"
 
 [ca]
-dir = "examples/demos/demo0/.runtime/generated-firma-ca"
+dir = "examples/demos/demo0/.runtime/generated-openauthority-ca"
 
 [log]
 level = "info"
@@ -245,14 +245,14 @@ All tools collapse into a single policy space regardless of provider. Public ser
 // Only code.review.read and filesystem.read are permitted.
 
 permit (
-    principal == Firma::Agent::"demo0-agent",
-    action == Firma::Action::"code.review.read",
+    principal == OpenAuthority::Agent::"demo0-agent",
+    action == OpenAuthority::Action::"code.review.read",
     resource
 );
 
 permit (
-    principal == Firma::Agent::"demo0-agent",
-    action == Firma::Action::"filesystem.read",
+    principal == OpenAuthority::Agent::"demo0-agent",
+    action == OpenAuthority::Action::"filesystem.read",
     resource
 );
 // Everything else: default deny.
@@ -294,21 +294,21 @@ Fragmentation of enforcement across tools and layers.
 ```text
 ./examples/demos/run.sh demo0 [--prompt TEXT] [--no-agent] [--no-build]
   ↓
-cargo build -p firma-authority -p firma-sidecar  (skipped with --no-build)
+cargo build -p openauthority-authority -p opensidecar  (skipped with --no-build)
   ↓
 mkdir .runtime/  •  generate authority.key if absent  •  write audit.key
   ↓
-start firma-authority --config authority.toml
+start openauthority-authority --config authority.toml
   ↓
-start firma-sidecar --config-file sidecar.toml
+start opensidecar --config-file sidecar.toml
   ↓
-wait for .runtime/generated-firma-ca/firma-ca.crt
+wait for .runtime/generated-openauthority-ca/openauthority-ca.crt
   ↓
 uv run demo0/agent.py                    (skipped with --no-agent)
   HTTP_PROXY=http://127.0.0.1:8080
   HTTPS_PROXY=http://127.0.0.1:8080
-  SSL_CERT_FILE=.runtime/generated-firma-ca/firma-ca.crt
-  FIRMA_DEMO_PROMPT="<prompt>"
+  SSL_CERT_FILE=.runtime/generated-openauthority-ca/openauthority-ca.crt
+  OPENAUTHORITY_DEMO_PROMPT="<prompt>"
 ```
 
 ## Runtime Loop
@@ -380,20 +380,20 @@ The rule: _"This agent can read data, but cannot perform write or destructive ac
 
 The backend has no enforcement layer. The HTTP DELETE goes through.
 
-**With Firma:**
+**With OpenAuthority:**
 
 Single Cedar policy evaluated by the sidecar on every outbound call:
 
 ```cedar
 permit (
-    principal == Firma::Agent::"demo0-agent",
-    action == Firma::Action::"code.review.read",
+    principal == OpenAuthority::Agent::"demo0-agent",
+    action == OpenAuthority::Action::"code.review.read",
     resource
 );
 
 permit (
-    principal == Firma::Agent::"demo0-agent",
-    action == Firma::Action::"filesystem.read",
+    principal == OpenAuthority::Agent::"demo0-agent",
+    action == OpenAuthority::Action::"filesystem.read",
     resource
 );
 // Everything else: default deny.
@@ -401,7 +401,7 @@ permit (
 
 Every call to GitHub, Gmail, Stripe, or the backend passes through the sidecar. Same policy, same evaluation, same enforcement point.
 
-**Closing line:** Enforcement is fragmented across systems. Firma enforces your rule — once, everywhere, at every call.
+**Closing line:** Enforcement is fragmented across systems. OpenAuthority enforces your rule — once, everywhere, at every call.
 
 ---
 
@@ -438,7 +438,7 @@ fetch("https://httpbin.org/anything/billing?user=123")
 |---|---|
 | API gateway / backend | Request reaches application; enforcement depends on code |
 | Network allowlisting (host-level) | Can't distinguish `/get` from `/anything/billing` |
-| Firma | Intercepted before execution; path-level policy; uniform across all calls |
+| OpenAuthority | Intercepted before execution; path-level policy; uniform across all calls |
 
 **Closing line:** Same host. Same service. Different path. The allowed path executes; the forbidden path is never reached.
 
@@ -502,7 +502,7 @@ Phase 4 — Exfiltration and credential misuse:
 | Push code | DENY (`code.write`) |
 | Delete branch | DENY (`code.write`) |
 
-**Firma model:**
+**OpenAuthority model:**
 
 ```text
 Agent → Sidecar → ALLOW → inject credentials → forward

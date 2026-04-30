@@ -1,25 +1,25 @@
 #!/bin/bash
 set -e
 
-echo "firma-agent: Waiting for CA certificate..."
+echo "openauthority-agent: Waiting for CA certificate..."
 
 TIMEOUT=30
-while [ ! -f /certs/firma-ca.pem ] || [ ! -s /certs/firma-ca.pem ]; do
+while [ ! -f /certs/openauthority-ca.pem ] || [ ! -s /certs/openauthority-ca.pem ]; do
     if [ "$TIMEOUT" -le 0 ]; then
-        echo "firma-agent: ERROR - Timed out waiting for CA certificate"
+        echo "openauthority-agent: ERROR - Timed out waiting for CA certificate"
         exit 1
     fi
     sleep 1
     ((TIMEOUT--))
 done
 
-echo "firma-agent: CA certificate found, building combined bundle..."
+echo "openauthority-agent: CA certificate found, building combined bundle..."
 
-cat /etc/ssl/certs/ca-certificates.crt /certs/firma-ca.pem > /tmp/combined-ca.pem
+cat /etc/ssl/certs/ca-certificates.crt /certs/openauthority-ca.pem > /tmp/combined-ca.pem
 chmod 0644 /tmp/combined-ca.pem
 
 export SSL_CERT_FILE=/tmp/combined-ca.pem
-echo "firma-agent: SSL_CERT_FILE set to $SSL_CERT_FILE"
+echo "openauthority-agent: SSL_CERT_FILE set to $SSL_CERT_FILE"
 
 mkdir -p /data/database /data/emails
 chown -R agent:agent /data/database /data/emails

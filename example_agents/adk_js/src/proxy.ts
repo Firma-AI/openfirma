@@ -2,7 +2,7 @@
  * Make Node's global fetch honor HTTPS_PROXY / HTTP_PROXY.
  *
  * Node's undici-backed fetch does not read these env vars by default, so
- * without this shim the TypeScript agent's tool calls bypass the Firma
+ * without this shim the TypeScript agent's tool calls bypass the OpenAuthority
  * sidecar even when HTTPS_PROXY is set. Python's httpx honors them by
  * default; this file is the Node-side equivalent.
  *
@@ -20,5 +20,5 @@ const proxyUrl =
 
 if (proxyUrl) {
   setGlobalDispatcher(new ProxyAgent(proxyUrl));
-  console.log(`firma-agent: routing global fetch through ${proxyUrl}`);
+  console.log(`openauthority-agent: routing global fetch through ${proxyUrl}`);
 }

@@ -1,6 +1,6 @@
 // Filesystem capability policies — copy-paste starting point.
 //
-// Principals: Firma::Agent::"<your-agent-id>"
+// Principals: OpenAuthority::Agent::"<your-agent-id>"
 // Actions:    filesystem.read | filesystem.write | filesystem.delete
 // Context:    risk_score (0–100), action_count
 //
@@ -9,15 +9,15 @@
 
 // Reads are always permitted.
 permit (
-    principal == Firma::Agent::"example-agent",
-    action == Firma::Action::"filesystem.read",
+    principal == OpenAuthority::Agent::"example-agent",
+    action == OpenAuthority::Action::"filesystem.read",
     resource
 );
 
 // Writes are permitted at low risk.
 permit (
-    principal == Firma::Agent::"example-agent",
-    action == Firma::Action::"filesystem.write",
+    principal == OpenAuthority::Agent::"example-agent",
+    action == OpenAuthority::Action::"filesystem.write",
     resource
 ) when {
     context.risk_score < 70
@@ -28,6 +28,6 @@ permit (
 // and remove or tighten this forbid.
 forbid (
     principal,
-    action == Firma::Action::"filesystem.delete",
+    action == OpenAuthority::Action::"filesystem.delete",
     resource
 );

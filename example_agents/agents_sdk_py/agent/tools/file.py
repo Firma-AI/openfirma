@@ -8,7 +8,7 @@ def read_file(path: str) -> str:
     """Read and return the contents of a file from Supabase Storage.
 
     Traffic: HTTPS GET to ``<SUPABASE_URL>/storage/v1/object/<bucket>/<path>``.
-    Firma sees the full request when ``HTTPS_PROXY`` is set.
+    OpenAuthority sees the full request when ``HTTPS_PROXY`` is set.
     """
     try:
         data = get_client().storage.from_(storage_bucket()).download(path)

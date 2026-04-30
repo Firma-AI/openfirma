@@ -16,7 +16,7 @@ async def send_email(email_address: str, subject: str, body: str) -> str:
     """Send an email via the Resend HTTP API.
 
     Traffic: HTTPS POST to ``api.resend.com/emails`` with a Bearer token.
-    The token is read from ``RESEND_API_KEY``; in a Firma-managed environment
+    The token is read from ``RESEND_API_KEY``; in a OpenAuthority-managed environment
     the agent process need not hold the real key — the sidecar can inject it.
     """
     api_key = os.environ.get("RESEND_API_KEY")

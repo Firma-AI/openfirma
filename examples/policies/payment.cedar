@@ -1,6 +1,6 @@
 // Payment capability policies — reference implementation.
 //
-// Principals: Firma::Agent::"<your-agent-id>"
+// Principals: OpenAuthority::Agent::"<your-agent-id>"
 // Actions:    payment.purchase | payment.transfer
 // Context (all monetary amounts in cents):
 //   risk_score              — pre-computed risk (0–100)
@@ -19,8 +19,8 @@
 
 // Allow purchases when budget is available and risk is acceptable.
 permit (
-    principal == Firma::Agent::"example-agent",
-    action == Firma::Action::"payment.purchase",
+    principal == OpenAuthority::Agent::"example-agent",
+    action == OpenAuthority::Action::"payment.purchase",
     resource
 ) when {
     context.budget_remaining > 0 &&
@@ -30,8 +30,8 @@ permit (
 // Allow transfers subject to all Layer 2 counter constraints.
 // Each forbid below also fires independently — forbid beats permit.
 permit (
-    principal == Firma::Agent::"example-agent",
-    action == Firma::Action::"payment.transfer",
+    principal == OpenAuthority::Agent::"example-agent",
+    action == OpenAuthority::Action::"payment.transfer",
     resource
 ) when {
     context.budget_remaining > 0 &&
@@ -45,7 +45,7 @@ permit (
 // Example: after 5 × $2,000 = $10,000 committed, a 6th $2,000 attempt fails here.
 forbid (
     principal,
-    action == Firma::Action::"payment.transfer",
+    action == OpenAuthority::Action::"payment.transfer",
     resource
 ) when {
     context.daily_cumulative_amount + context.transfer_amount > 1000000
@@ -54,7 +54,7 @@ forbid (
 // Circuit-breaker: single-transfer ceiling — no single transfer may exceed $5,000.
 forbid (
     principal,
-    action == Firma::Action::"payment.transfer",
+    action == OpenAuthority::Action::"payment.transfer",
     resource
 ) when {
     context.transfer_amount > 500000
@@ -63,7 +63,7 @@ forbid (
 // Circuit-breaker: payee concentration — repeated small transfers to one payee.
 forbid (
     principal,
-    action == Firma::Action::"payment.transfer",
+    action == OpenAuthority::Action::"payment.transfer",
     resource
 ) when {
     context.same_payee_count_30m >= 3
@@ -72,7 +72,7 @@ forbid (
 // Circuit-breaker: transfer velocity in a 10-minute window.
 forbid (
     principal,
-    action == Firma::Action::"payment.transfer",
+    action == OpenAuthority::Action::"payment.transfer",
     resource
 ) when {
     context.transfers_last_10m >= 10
@@ -82,8 +82,8 @@ forbid (
 forbid (
     principal,
     action in [
-        Firma::Action::"payment.purchase",
-        Firma::Action::"payment.transfer"
+        OpenAuthority::Action::"payment.purchase",
+        OpenAuthority::Action::"payment.transfer"
     ],
     resource
 ) when {

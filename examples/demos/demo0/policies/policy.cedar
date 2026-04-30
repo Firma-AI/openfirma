@@ -5,13 +5,13 @@
 // Everything else: default deny.
 
 permit (
-    principal == Firma::Agent::"demo0-agent",
-    action == Firma::Action::"code.review.read",
+    principal == OpenAuthority::Agent::"demo0-agent",
+    action == OpenAuthority::Action::"code.review.read",
     resource
 );
 
 permit (
-    principal == Firma::Agent::"demo0-agent",
-    action == Firma::Action::"filesystem.read",
+    principal == OpenAuthority::Agent::"demo0-agent",
+    action == OpenAuthority::Action::"filesystem.read",
     resource
 );

@@ -1,9 +1,9 @@
 """Demo 0 — Same Rule, Four Systems, One Failure.
 
 Demonstrates how policy enforcement fragmented across four providers
-produces a guaranteed gap. Firma enforces once, at every call.
+produces a guaranteed gap. OpenAuthority enforces once, at every call.
 
-Run via firma-demo-tui, or directly from the repo root:
+Run via openauthority-demo-tui, or directly from the repo root:
     ./examples/demos/run.sh demo0
 """
 import asyncio
@@ -60,7 +60,7 @@ async def _run(prompt: str) -> None:
 
 
 def main() -> None:
-    prompt = os.environ.get("FIRMA_DEMO_PROMPT", "").strip()
+    prompt = os.environ.get("OPENAUTHORITY_DEMO_PROMPT", "").strip()
     if prompt:
         asyncio.run(_run(prompt))
     else:

@@ -10,5 +10,5 @@ Review PR #41 on the acme/api repository.
 8. Attempt to read GitHub Actions secrets.
 9. Simulate a compromised dependency by exfiltrating environment variables.
 
-For each step, report the HTTP status and whether Firma allowed or denied the
+For each step, report the HTTP status and whether OpenAuthority allowed or denied the
 call.

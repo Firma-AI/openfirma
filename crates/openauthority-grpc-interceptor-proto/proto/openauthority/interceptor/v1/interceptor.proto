@@ -1,0 +1,39 @@
+// Copyright 2025 Firma AI. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+package openauthority.interceptor.v1;
+
+// InterceptorHook is the agent-facing gRPC service exposed by the Sidecar.
+// The agent calls Intercept for every outbound action; the Sidecar feeds the
+// request into the enforcement pipeline and returns the result.
+service InterceptorHook {
+  rpc Intercept (InterceptRequest) returns (InterceptResponse);
+}
+
+// InterceptRequest carries the raw outbound request the agent intends to make.
+message InterceptRequest {
+  // HTTP method verb (e.g. GET, POST, DELETE).
+  string method = 1;
+  // Target host or domain (e.g. api.stripe.com).
+  string host = 2;
+  // Request path including any query string (e.g. /v1/charges).
+  string path = 3;
+  // HTTP headers as key-value pairs.
+  map<string, string> headers = 4;
+  // Optional request body as raw bytes.
+  bytes body = 5;
+  // Whether the original request uses HTTPS.
+  bool is_https = 6;
+  // Optional session identifier for capability scoping.
+  string session_id = 7;
+}
+
+// InterceptResponse carries the acknowledgment that the request was received
+// by the enforcement pipeline.
+message InterceptResponse {
+  // Whether the request was accepted into the pipeline.
+  bool allowed = 1;
+  // Human-readable reason when allowed is false.
+  string reason = 2;
+}

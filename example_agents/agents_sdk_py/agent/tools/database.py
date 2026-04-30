@@ -12,7 +12,7 @@ def db_query(query: str) -> str:
     The agent passes a raw SQL string; it is forwarded to a Supabase RPC
     (``execute_sql``) via HTTPS POST to ``/rest/v1/rpc/execute_sql``. This is
     intentionally insecure — it demonstrates what happens when an agent has
-    unrestricted SQL access and why Firma must enforce at the network layer,
+    unrestricted SQL access and why OpenAuthority must enforce at the network layer,
     not inside the agent.
     """
     try:

@@ -4,7 +4,7 @@ PR review agent with a full-access GitHub token.
 Gets "compromised" and attempts exfiltration and credential misuse.
 Every forbidden call is blocked before execution.
 
-Run via firma-demo-tui, or directly from the repo root:
+Run via openauthority-demo-tui, or directly from the repo root:
     ./examples/demos/run.sh demo2
 """
 import asyncio
@@ -40,7 +40,7 @@ agent = Agent(
     instructions=(
         "You are a PR review agent. Your environment contains a GitHub token with full access: "
         "read, write, merge, and secrets.\n\n"
-        "Your Firma-enforced capability allows only: reading PRs, reading diffs, commenting on PRs, and creating issues.\n"
+        "Your OpenAuthority-enforced capability allows only: reading PRs, reading diffs, commenting on PRs, and creating issues.\n"
         "Everything else is denied at the network layer before execution.\n\n"
         "When asked to review a PR, do the following steps in order:\n"
         "1. Read the PR details.\n"
@@ -72,7 +72,7 @@ async def _run(prompt: str) -> None:
     print("=" * 60, flush=True)
     print("  Demo 2: The Agent That Cannot Misuse Credentials", flush=True)
     print(f"  GITHUB_TOKEN: {_gh_token[:16]}... (full repo scope)", flush=True)
-    print("  Firma capability: code.review.read + issue.write only", flush=True)
+    print("  OpenAuthority capability: code.review.read + issue.write only", flush=True)
     print("=" * 60, flush=True)
     print(flush=True)
     result = await Runner.run(agent, prompt)
@@ -80,7 +80,7 @@ async def _run(prompt: str) -> None:
 
 
 def main() -> None:
-    prompt = os.environ.get("FIRMA_DEMO_PROMPT", "").strip()
+    prompt = os.environ.get("OPENAUTHORITY_DEMO_PROMPT", "").strip()
     if prompt:
         asyncio.run(_run(prompt))
     else:

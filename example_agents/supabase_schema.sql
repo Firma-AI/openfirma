@@ -1,4 +1,4 @@
--- Firma example agents — Supabase schema and seed data.
+-- OpenAuthority example agents — Supabase schema and seed data.
 --
 -- Apply once per Supabase project:
 --   - Paste into the Supabase SQL editor and run, or
@@ -6,7 +6,7 @@
 --
 -- This is deliberately insecure: `execute_sql` lets the agent (and therefore
 -- anyone who can prompt the agent) run arbitrary SQL. It exists to preserve
--- the "intentionally unsafe tool" narrative from the demo. With Firma in
+-- the "intentionally unsafe tool" narrative from the demo. With OpenAuthority in
 -- front, the sidecar enforces what queries are allowed over the wire; the
 -- in-database function is the same permissive surface as the original
 -- SQLite agent had.
@@ -78,7 +78,7 @@ GRANT EXECUTE ON FUNCTION public.execute_sql(text) TO anon, authenticated, servi
 -- SUPABASE_STORAGE_BUCKET env var.
 
 INSERT INTO storage.buckets (id, name, public)
-VALUES ('firma-demo', 'firma-demo', false)
+VALUES ('openauthority-demo', 'openauthority-demo', false)
 ON CONFLICT (id) DO NOTHING;
 
 -- Minimal permissive policies so the publishable key can read / write demo
@@ -87,17 +87,17 @@ ON CONFLICT (id) DO NOTHING;
 -- Postgres does not support `CREATE POLICY IF NOT EXISTS`, so we drop-then-
 -- create to keep this script idempotent.
 
-DROP POLICY IF EXISTS "firma-demo read" ON storage.objects;
-CREATE POLICY "firma-demo read"
+DROP POLICY IF EXISTS "openauthority-demo read" ON storage.objects;
+CREATE POLICY "openauthority-demo read"
     ON storage.objects FOR SELECT
-    USING (bucket_id = 'firma-demo');
+    USING (bucket_id = 'openauthority-demo');
 
-DROP POLICY IF EXISTS "firma-demo write" ON storage.objects;
-CREATE POLICY "firma-demo write"
+DROP POLICY IF EXISTS "openauthority-demo write" ON storage.objects;
+CREATE POLICY "openauthority-demo write"
     ON storage.objects FOR INSERT
-    WITH CHECK (bucket_id = 'firma-demo');
+    WITH CHECK (bucket_id = 'openauthority-demo');
 
-DROP POLICY IF EXISTS "firma-demo update" ON storage.objects;
-CREATE POLICY "firma-demo update"
+DROP POLICY IF EXISTS "openauthority-demo update" ON storage.objects;
+CREATE POLICY "openauthority-demo update"
     ON storage.objects FOR UPDATE
-    USING (bucket_id = 'firma-demo');
+    USING (bucket_id = 'openauthority-demo');

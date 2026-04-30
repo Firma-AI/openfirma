@@ -6,13 +6,13 @@
 // Credentials are injected by the sidecar only after ALLOW; agent never holds them.
 
 permit (
-    principal == Firma::Agent::"demo2-agent",
-    action == Firma::Action::"code.review.read",
+    principal == OpenAuthority::Agent::"demo2-agent",
+    action == OpenAuthority::Action::"code.review.read",
     resource
 );
 
 permit (
-    principal == Firma::Agent::"demo2-agent",
-    action == Firma::Action::"issue.write",
+    principal == OpenAuthority::Agent::"demo2-agent",
+    action == OpenAuthority::Action::"issue.write",
     resource
 );

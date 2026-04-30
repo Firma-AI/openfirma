@@ -1,5 +1,5 @@
 # Mini Authority — E2E example configuration.
-# Run from repo root: ./target/debug/firma-authority --config examples/e2e/authority.toml
+# Run from repo root: ./target/debug/openauthority-authority --config examples/e2e/authority.toml
 #
 # NOT FOR PRODUCTION USE. Local dev/testing only.
 

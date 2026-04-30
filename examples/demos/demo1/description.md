@@ -32,7 +32,7 @@ sensitive, and it is behaving normally — not compromised and not misconfigured
 |---|---|
 | API gateway / backend | Request reaches app — enforcement depends on code |
 | Network allowlisting (host-level) | Cannot distinguish `/usage` from `/billing` |
-| Firma | Path-level, before execution, uniform across all calls |
+| OpenAuthority | Path-level, before execution, uniform across all calls |
 
 ## Key insight
 

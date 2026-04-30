@@ -11,7 +11,7 @@ dir           = "examples/demos/demo1"
 authority_url = "http://127.0.0.1:50051"
 
 [ca]
-dir = "examples/demos/demo1/.runtime/generated-firma-ca"
+dir = "examples/demos/demo1/.runtime/generated-openauthority-ca"
 
 [log]
 level = "info"

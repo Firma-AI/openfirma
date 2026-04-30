@@ -1,0 +1,110 @@
+forbid(
+  principal,
+  action == OpenAuthority::Action::"bench.action.deny",
+  resource
+);
+
+permit(
+  principal,
+  action == OpenAuthority::Action::"bench.action.ctx",
+  resource
+) when { context.budget_remaining >= 0 && context.risk_score < 100 };
+
+permit(principal == OpenAuthority::Agent::"agent-000", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-001", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-002", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-003", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-004", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-005", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-006", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-007", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-008", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-009", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-010", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-011", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-012", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-013", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-014", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-015", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-016", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-017", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-018", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-019", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-020", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-021", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-022", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-023", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-024", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-025", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-026", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-027", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-028", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-029", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-030", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-031", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-032", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-033", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-034", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-035", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-036", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-037", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-038", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-039", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-040", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-041", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-042", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-043", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-044", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-045", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-046", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-047", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-048", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-049", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-050", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-051", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-052", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-053", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-054", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-055", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-056", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-057", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-058", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-059", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-060", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-061", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-062", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-063", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-064", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-065", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-066", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-067", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-068", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-069", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-070", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-071", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-072", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-073", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-074", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-075", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-076", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-077", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-078", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-079", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-080", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-081", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-082", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-083", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-084", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-085", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-086", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-087", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-088", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-089", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-090", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-091", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-092", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-093", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-094", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-095", action == OpenAuthority::Action::"bench.action.allow", resource);
+permit(principal == OpenAuthority::Agent::"agent-bench", action == OpenAuthority::Action::"communication.external.send", resource);
+permit(principal == OpenAuthority::Agent::"agent-bench", action == OpenAuthority::Action::"bench.action.allow", resource);

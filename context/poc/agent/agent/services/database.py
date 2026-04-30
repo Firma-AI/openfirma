@@ -2,7 +2,7 @@ import os
 
 from sqlalchemy import create_engine, text
 
-DB_PATH = "/data/database/firma.db"
+DB_PATH = "/data/database/openauthority.db"
 SEED_PATH = "/data/seed.sql"
 
 _engine = None
@@ -20,7 +20,7 @@ def initialize_database() -> None:
     engine = get_engine()
 
     if not os.path.exists(SEED_PATH):
-        print(f"firma-agent: Seed file not found at {SEED_PATH}, skipping initialization")
+        print(f"openauthority-agent: Seed file not found at {SEED_PATH}, skipping initialization")
         return
 
     seed_sql = open(SEED_PATH).read()
@@ -32,4 +32,4 @@ def initialize_database() -> None:
                 conn.execute(text(statement))
         conn.commit()
 
-    print("firma-agent: Database initialized with seed data")
+    print("openauthority-agent: Database initialized with seed data")

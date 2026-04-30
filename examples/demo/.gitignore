@@ -1,8 +1,8 @@
 # Bootstrapped at first run by `scripts/demo.sh`.
-firma-authority.key
-firma-authority.pub
+openauthority-authority.key
+openauthority-authority.pub
 audit.key
 revocations.txt
 capability-demo-agent.toml
-firma-ca/
+openauthority-ca/
 logs/
