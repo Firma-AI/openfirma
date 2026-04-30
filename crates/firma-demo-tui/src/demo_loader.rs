@@ -15,6 +15,7 @@ pub struct DemoManifest {
     pub sidecar_config: PathBuf,
     pub agent_script: PathBuf,
     pub agent_prompt: String,
+    pub session_id: String,
 }
 
 #[derive(Clone, Debug)]
@@ -126,6 +127,7 @@ pub fn load(dir: &Path) -> Result<DemoManifest> {
     let sidecar_config = required_path(&root, "sidecar.toml")?;
     let agent_script = required_path(&root, "agent.py")?;
     let agent_prompt = read_required(&root, "agent_prompt.md")?;
+    let session_id = parse_preflight_session_id(&sidecar_config);
 
     Ok(DemoManifest {
         root,
@@ -133,7 +135,29 @@ pub fn load(dir: &Path) -> Result<DemoManifest> {
         sidecar_config,
         agent_script,
         agent_prompt,
+        session_id,
     })
+}
+
+/// Extract `session_id` from `[preflight]` section of a sidecar TOML config.
+fn parse_preflight_session_id(sidecar_toml: &Path) -> String {
+    #[derive(serde::Deserialize)]
+    struct SidecarToml {
+        preflight: Option<PreflightSection>,
+    }
+    #[derive(serde::Deserialize)]
+    struct PreflightSection {
+        session_id: Option<String>,
+    }
+
+    let Ok(content) = std::fs::read_to_string(sidecar_toml) else {
+        return String::new();
+    };
+    toml::from_str::<SidecarToml>(&content)
+        .ok()
+        .and_then(|t| t.preflight)
+        .and_then(|p| p.session_id)
+        .unwrap_or_default()
 }
 
 fn required_path(root: &Path, file: &str) -> Result<PathBuf> {

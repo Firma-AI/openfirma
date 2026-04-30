@@ -18,10 +18,14 @@ import httpx
 from agents import function_tool
 
 _CA_BUNDLE = os.environ.get("SSL_CERT_FILE", True)
+_DEFAULT_HEADERS = {
+    "x-firma-session-id": os.environ.get("FIRMA_SESSION_ID", ""),
+}
 
 
 def _client(**kwargs) -> httpx.AsyncClient:
-    return httpx.AsyncClient(verify=_CA_BUNDLE, timeout=15.0, **kwargs)
+    headers = {**_DEFAULT_HEADERS, **kwargs.pop("headers", {})}
+    return httpx.AsyncClient(verify=_CA_BUNDLE, timeout=15.0, headers=headers, **kwargs)
 
 
 # ── Demo 0 tools ─────────────────────────────────────────────────────────────

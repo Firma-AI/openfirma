@@ -115,6 +115,9 @@ pub fn run(demos_dir: &Path, initial_demo: Option<&Path>) -> Result<()> {
         let ca_cert = rt.ca_cert_path.to_string_lossy().into_owned();
         extra_env.insert("SSL_CERT_FILE".to_string(), ca_cert.clone());
         extra_env.insert("REQUESTS_CA_BUNDLE".to_string(), ca_cert);
+        if !manifest.session_id.is_empty() {
+            extra_env.insert("FIRMA_SESSION_ID".to_string(), manifest.session_id.clone());
+        }
 
         let ag = spawn_agent(
             &manifest.agent_script,
@@ -307,6 +310,9 @@ fn handle_menu_key(app: &mut App, key: KeyEvent) -> Result<()> {
             let ca_cert = rt.ca_cert_path.to_string_lossy().into_owned();
             extra_env.insert("SSL_CERT_FILE".to_string(), ca_cert.clone());
             extra_env.insert("REQUESTS_CA_BUNDLE".to_string(), ca_cert);
+            if !manifest.session_id.is_empty() {
+                extra_env.insert("FIRMA_SESSION_ID".to_string(), manifest.session_id.clone());
+            }
 
             let ag = spawn_agent(
                 &manifest.agent_script,
