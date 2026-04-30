@@ -306,62 +306,79 @@ async fn handle_connect_request(
             let limits = connect_relay_limits(&connect_relay);
             let target = connect_target(&target_info.authority);
             let on_upgrade = hyper::upgrade::on(req);
-            if let Some(mitm_runtime) = mitm_candidate {
-                let acceptor = if let Some(acceptor) = prepared_acceptor {
-                    acceptor
-                } else {
-                    match mitm_runtime.tls_acceptor_for_host(&target_info.host).await {
-                        Ok(acceptor) => acceptor,
-                        Err(e) => {
-                            let detail = format!("HTTPS_MITM_SETUP_FAILED: {e}");
-                            tracing::warn!(
-                                host = %target_info.host,
-                                "MITM preflight failed, falling back to CONNECT tunnel: {detail}"
-                            );
-                            let limits = limits.clone();
-                            tokio::spawn(async move {
-                                if let Err(err) =
-                                    relay_connect_tunnel(on_upgrade, &target, limits).await
-                                {
-                                    tracing::warn!(
-                                        "CONNECT tunnel failed after MITM fallback: {err}"
-                                    );
-                                }
-                            });
-                            return Ok(connect_established_response());
-                        }
-                    }
-                };
-
-                let handler = Arc::clone(&handler);
-                let connect_target = target_info;
-                let connect_session_id = session_id;
-                tokio::spawn(async move {
-                    if let Err(e) = relay_connect_mitm(
-                        on_upgrade,
-                        connect_target,
-                        handler,
-                        connect_session_id,
-                        acceptor,
-                        max_request_body_bytes,
-                        limits,
-                    )
-                    .await
-                    {
-                        tracing::warn!("MITM CONNECT flow failed: {e}");
-                    }
-                });
-            } else {
-                let limits = limits.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = relay_connect_tunnel(on_upgrade, &target, limits).await {
-                        tracing::warn!("CONNECT tunnel failed: {e}");
-                    }
-                });
-            }
+            spawn_connect_relay(
+                on_upgrade,
+                target,
+                target_info,
+                session_id,
+                handler,
+                mitm_candidate,
+                prepared_acceptor,
+                max_request_body_bytes,
+                limits,
+            )
+            .await;
             Ok(connect_established_response())
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn spawn_connect_relay(
+    on_upgrade: hyper::upgrade::OnUpgrade,
+    target: String,
+    target_info: ConnectTargetInfo,
+    session_id: String,
+    handler: Arc<RequestHandler>,
+    mitm_candidate: Option<Arc<HttpsMitmRuntime>>,
+    prepared_acceptor: Option<TlsAcceptor>,
+    max_request_body_bytes: usize,
+    limits: ConnectRelayLimits,
+) {
+    let Some(mitm_runtime) = mitm_candidate else {
+        tokio::spawn(async move {
+            if let Err(e) = relay_connect_tunnel(on_upgrade, &target, limits).await {
+                tracing::warn!("CONNECT tunnel failed: {e}");
+            }
+        });
+        return;
+    };
+
+    let acceptor = match prepared_acceptor {
+        Some(acceptor) => acceptor,
+        None => match mitm_runtime.tls_acceptor_for_host(&target_info.host).await {
+            Ok(acceptor) => acceptor,
+            Err(e) => {
+                let detail = format!("HTTPS_MITM_SETUP_FAILED: {e}");
+                tracing::warn!(
+                    host = %target_info.host,
+                    "MITM preflight failed, falling back to CONNECT tunnel: {detail}"
+                );
+                tokio::spawn(async move {
+                    if let Err(err) = relay_connect_tunnel(on_upgrade, &target, limits).await {
+                        tracing::warn!("CONNECT tunnel failed after MITM fallback: {err}");
+                    }
+                });
+                return;
+            }
+        },
+    };
+
+    tokio::spawn(async move {
+        if let Err(e) = relay_connect_mitm(
+            on_upgrade,
+            target_info,
+            handler,
+            session_id,
+            acceptor,
+            max_request_body_bytes,
+            limits,
+        )
+        .await
+        {
+            tracing::warn!("MITM CONNECT flow failed: {e}");
+        }
+    });
 }
 
 #[derive(Clone)]
