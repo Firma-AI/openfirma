@@ -32,7 +32,7 @@ pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
         std::fs::write(&revocations, "").context("failed to create revocations.txt")?;
     }
 
-    reset_demo_ca_material(&runtime_dir.join("generated-firma-ca"))?;
+    ensure_demo_ca_dir(&runtime_dir.join("generated-firma-ca"))?;
 
     let authority_log_path = runtime_dir.join("authority.log");
     let sidecar_log_path = runtime_dir.join("sidecar.log");
@@ -72,7 +72,7 @@ pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
 fn wait_for_demo_ca_material(ca_dir: &Path) -> Result<()> {
     let cert = ca_dir.join("firma-ca.crt");
     let key = ca_dir.join("firma-ca.key");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(60);
 
     loop {
         if cert.exists() && key.exists() {
@@ -120,14 +120,8 @@ fn provision_keys(runtime_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn reset_demo_ca_material(ca_dir: &Path) -> Result<()> {
+fn ensure_demo_ca_dir(ca_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(ca_dir).context("failed to create firma-ca directory")?;
-
-    let cert = ca_dir.join("firma-ca.crt");
-    let key = ca_dir.join("firma-ca.key");
-    let _ = std::fs::remove_file(&cert);
-    let _ = std::fs::remove_file(&key);
-
     Ok(())
 }
 

@@ -49,5 +49,3 @@ audit.jsonl
 
 # Demo runtime artifacts
 /examples/demos/*/.runtime/*
-!/examples/demos/*/.runtime/firma-ca/
-!/examples/demos/*/.runtime/firma-ca/firma-ca.crt
