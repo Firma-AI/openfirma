@@ -30,7 +30,7 @@ pub fn spawn_authority_client(
     cancel: CancellationToken,
 ) -> anyhow::Result<Option<AuthorityClientHandle>> {
     let Some(authority_url) = config.policy.authority_url.as_deref() else {
-        tracing::info!("policy.authority_url not set; Authority stream clients disabled");
+        tracing::debug!("policy.authority_url not set; Authority stream clients disabled");
         return Ok(None);
     };
 
@@ -38,7 +38,7 @@ pub fn spawn_authority_client(
         authority_url,
         Duration::from_secs(config.authority.connect_timeout_secs),
     )?;
-    tracing::info!("Authority stream clients wired with Cedar bundle parser");
+    tracing::debug!("Authority stream clients wired with Cedar bundle parser");
 
     let handle = authority_client::spawn_authority_client(AuthorityDeps {
         channel,

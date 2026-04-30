@@ -1,4 +1,4 @@
-.PHONY: install run
+.PHONY: install run demo-scripted
 
 -include .env
 export
@@ -8,3 +8,6 @@ install:
 
 run:
 	uv run python -m agent.main
+
+demo-scripted:
+	uv run python -m agent.scripted

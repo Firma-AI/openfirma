@@ -21,6 +21,7 @@ pub mod capability;
 pub mod connector;
 pub mod credential;
 pub mod interceptor;
+pub mod log_contract;
 pub mod pipeline;
 
 pub use self::audit::{load_audit_event_builder, spawn_audit_sink};
@@ -28,4 +29,5 @@ pub use self::authority::spawn_authority_client;
 pub use self::capability::{build_token_verifier, load_capability_map};
 pub use self::connector::build_connector_registry;
 pub use self::interceptor::spawn_interceptor;
+pub use self::log_contract::{StartupReport, compute_policy_bundle_version, log_ready_sequence};
 pub use self::pipeline::build_pipeline_runtime;

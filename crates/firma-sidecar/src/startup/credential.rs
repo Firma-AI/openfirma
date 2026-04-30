@@ -27,7 +27,7 @@ pub fn build_credential_injector<S: std::hash::BuildHasher>(
     use config::CredentialMode;
 
     if creds.is_empty() {
-        tracing::info!("no credential entries configured; using null injector");
+        tracing::debug!("no credential entries configured; using null injector");
         return Ok(Box::new(credential::NullCredentialInjector));
     }
 
@@ -60,7 +60,7 @@ pub fn build_credential_injector<S: std::hash::BuildHasher>(
                     .or_default()
                     .insert(entry.header.clone(), value);
 
-                tracing::info!(
+                tracing::debug!(
                     label = label.as_str(),
                     mode = "basic",
                     target_host = entry.target_host.as_str(),
@@ -82,7 +82,7 @@ pub fn build_credential_injector<S: std::hash::BuildHasher>(
                         secret_path,
                     });
 
-                tracing::info!(
+                tracing::debug!(
                     label = label.as_str(),
                     mode = "vault",
                     target_host = entry.target_host.as_str(),

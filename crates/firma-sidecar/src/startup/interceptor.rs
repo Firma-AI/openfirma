@@ -33,7 +33,7 @@ pub fn spawn_interceptor(
                 .with_https_mitm(ic.https_mitm.clone(), config.ca.dir.clone())
                 .with_max_request_body_bytes(ic.max_request_body_bytes)
                 .with_connect_relay(ic.connect_relay.clone());
-            tracing::info!(listen_addr = %ic.listen_addr, "HTTP proxy interceptor configured");
+            tracing::debug!(listen_addr = %ic.listen_addr, "HTTP proxy interceptor configured");
             Ok(tokio::spawn(async move {
                 if let Err(e) = interceptor.run(handler, cancel).await {
                     tracing::error!(error = %e, "HTTP proxy interceptor failed");
@@ -42,7 +42,7 @@ pub fn spawn_interceptor(
         }
         InterceptorMode::Grpc => {
             let interceptor = interceptor::grpc::GrpcInterceptor::new(ic.listen_addr);
-            tracing::info!(listen_addr = %ic.listen_addr, "gRPC interceptor configured");
+            tracing::debug!(listen_addr = %ic.listen_addr, "gRPC interceptor configured");
             Ok(tokio::spawn(async move {
                 if let Err(e) = interceptor.run(handler, cancel).await {
                     tracing::error!(error = %e, "gRPC interceptor failed");
@@ -57,7 +57,7 @@ pub fn spawn_interceptor(
                 .ok_or_else(|| anyhow::anyhow!("unix_socket mode requires socket_path"))?;
             let interceptor =
                 interceptor::unix_socket::UnixSocketInterceptor::new(socket_path.clone());
-            tracing::info!(socket_path = %socket_path.display(), "Unix socket interceptor configured");
+            tracing::debug!(socket_path = %socket_path.display(), "Unix socket interceptor configured");
             Ok(tokio::spawn(async move {
                 if let Err(e) = interceptor.run(handler, cancel).await {
                     tracing::error!(error = %e, "Unix socket interceptor failed");

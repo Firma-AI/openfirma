@@ -6,6 +6,10 @@
 Configuration is validated at startup. Invalid fields cause the sidecar to exit
 before accepting requests.
 
+> **See also**: `examples/demo/sidecar.toml` is the canonical
+> end-to-end reference. `make demo-ci` boots the sidecar against it
+> and gates merges via the `demo-e2e` GitHub Actions workflow.
+
 ## Minimal Configuration
 
 An empty file is valid. Defaults are applied for every section:
