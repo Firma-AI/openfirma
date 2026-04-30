@@ -4,10 +4,11 @@
 // (Authority) and constraint enforcement (Sidecar Stage 2). Single source of
 // truth for entity type definitions shared across both components.
 //
-// The 15 action identifiers below are defined by FEP v0.1 §2.3.5. They are
-// semantic action classes; transport names and provider names MUST NOT
-// appear in action identifiers (FEP §2.3.2). Actions are listed in
-// alphabetical order. See
+// The action identifiers below are defined by FEP v0.1 §2.3.5 plus the
+// GitHub-focused registry extension used by the demos. They are semantic
+// action classes; transport names and provider names MUST NOT appear in
+// action identifiers (FEP §2.3.2). The base registry is listed first, followed
+// by the demo extension. See
 // `docs/markdown/firma_action_class_registry.md` for implementation notes.
 //
 // Entity UID conventions (matched by both Authority and Sidecar Cedar evaluators):
@@ -28,7 +29,7 @@ namespace Firma {
     entity Agent;
     entity Resource;
 
-    // Shared context shape for all 15 canonical enforcement actions.
+    // Shared context shape for all canonical enforcement actions.
     // Must match the JSON object produced by ConstraintEnforcer::build_context().
     //
     // Fields:
