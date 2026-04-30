@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -165,12 +166,13 @@ pub enum HttpMethod {
     PATCH,
     HEAD,
     OPTIONS,
+    CONNECT,
 }
 
 impl HttpMethod {
-    /// Stable static label used by structured logs and metrics.
+    /// Returns the canonical uppercase HTTP method token.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::GET => "GET",
             Self::POST => "POST",
@@ -179,10 +181,16 @@ impl HttpMethod {
             Self::PATCH => "PATCH",
             Self::HEAD => "HEAD",
             Self::OPTIONS => "OPTIONS",
+            Self::CONNECT => "CONNECT",
         }
     }
 }
 
+impl fmt::Display for HttpMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str((*self).as_str())
+    }
+}
 /// Parameters for an outbound HTTP request.
 ///
 /// The target URL lives on `ExecutionIntent.resource`, not here —
@@ -445,5 +453,11 @@ mod tests {
         });
 
         assert_eq!(params, expected);
+    }
+
+    #[test]
+    fn http_method_display_covers_connect() {
+        assert_eq!(HttpMethod::GET.to_string(), "GET");
+        assert_eq!(HttpMethod::CONNECT.to_string(), "CONNECT");
     }
 }

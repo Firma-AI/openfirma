@@ -254,6 +254,7 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "openai-agents" },
+    { name = "python-dotenv" },
     { name = "supabase" },
 ]
 
@@ -261,6 +262,7 @@ dependencies = [
 requires-dist = [
     { name = "httpx" },
     { name = "openai-agents" },
+    { name = "python-dotenv" },
     { name = "supabase", specifier = ">=2.28" },
 ]
 

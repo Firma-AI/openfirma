@@ -209,12 +209,21 @@ mod tests {
         let exit_clone = exit.clone();
         let handle = tokio::spawn(async move { sink.run(rx, exit_clone).await });
 
-        tx.send(sample_event("evt-append")).await.ok();
+        let send_result = tx.send(sample_event("evt-append")).await;
+        assert!(
+            send_result.is_ok(),
+            "failed to enqueue appended event: {send_result:?}"
+        );
 
         exit.cancel();
         drop(tx);
 
-        handle.await.ok();
+        let result = handle.await;
+        assert!(result.is_ok(), "task should not panic");
+        assert!(
+            result.ok().and_then(std::result::Result::ok).is_some(),
+            "sink should return Ok(())"
+        );
 
         let contents = tokio::fs::read_to_string(&path)
             .await

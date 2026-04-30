@@ -26,7 +26,20 @@ An empty file is valid. Defaults are applied for every section:
 mode = "http_proxy"
 listen_addr = "127.0.0.1:9090"
 drain_timeout_secs = 15
+max_request_body_bytes = 4194304
 # socket_path = "/tmp/firma.sock"
+
+[interceptor.connect_relay]
+setup_timeout_secs = 10
+session_max_secs = 600
+
+[interceptor.https_mitm]
+enabled = true
+intercept_hosts = ["api.openai.com", "api.supabase.com", "*.resend.com"]
+bypass_hosts = ["status.openai.com"]
+strict_hosts = ["api.openai.com"]
+cert_ttl_secs = 86400
+cert_cache_capacity = 1024
 
 [policy]
 dir = "/etc/firma/policies"
@@ -105,11 +118,78 @@ Selects the interception mode and transport-specific parameters.
 | `listen_addr`        | socket addr | `0.0.0.0:8080` | TCP address for HTTP proxy and gRPC |
 | `socket_path`        | path        | none           | Required when mode is `unix_socket` |
 | `drain_timeout_secs` | u64         | `30`           | Shutdown drain timeout in seconds   |
+| `max_request_body_bytes` | usize   | `4194304`      | Max inbound request body size (bytes) |
 
 Validation:
 
 - `drain_timeout_secs` must be greater than `0`.
+- `max_request_body_bytes` must be greater than `0`.
 - On Unix, `socket_path` must be set and non-empty when mode is `unix_socket`.
+
+### `[interceptor.connect_relay]`
+
+Timeout controls for CONNECT tunnel and HTTPS MITM relay sessions.
+
+| Field                | Type | Default | Description                                              |
+| -------------------- | ---- | ------- | -------------------------------------------------------- |
+| `setup_timeout_secs` | u64  | `10`    | Timeout for CONNECT upgrade and upstream setup/handshake |
+| `session_max_secs`   | u64  | `600`   | Hard cap for an individual CONNECT/MITM session lifetime |
+
+Validation:
+
+- `setup_timeout_secs` must be greater than `0`.
+- `session_max_secs` must be greater than `0`.
+
+### `[interceptor.https_mitm]`
+
+Optional TLS MITM controls for HTTPS `CONNECT` traffic in `http_proxy` mode.
+Defaults are MITM-enabled with a curated common API host list. Hosts not matched
+by `intercept_hosts` stay in transparent CONNECT tunnel mode (destination-level
+enforcement only).
+
+| Field                 | Type        | Default  | Description                                        |
+| --------------------- | ----------- | -------- | -------------------------------------------------- |
+| `enabled`             | bool        | `true`   | Enables MITM for hosts matched by `intercept_hosts` |
+| `ca_cert_path`        | path        | none     | Optional explicit CA certificate path              |
+| `ca_key_path`         | path        | none     | Optional explicit CA private key path              |
+| `intercept_hosts`     | list<string>| curated common API hosts | Host patterns to intercept (`*` or `*.example.com`) |
+| `bypass_hosts`        | list<string>| `[]`     | Host patterns to force CONNECT tunnel mode         |
+| `strict_hosts`        | list<string>| `[]`     | Host patterns that must be intercepted             |
+| `cert_ttl_secs`       | u64         | `86400`  | Leaf certificate cache TTL in seconds              |
+| `cert_cache_capacity` | usize       | `1024`   | Maximum number of cached leaf certificates         |
+
+Validation:
+
+- Host lists (`intercept_hosts`, `bypass_hosts`, `strict_hosts`) cannot contain
+  empty patterns.
+- Wildcard patterns are DNS-label-aware and only support:
+  - `*` (match any host)
+  - `*.example.com` (match subdomains only, not apex `example.com`)
+- Wildcards inside labels (for example `api.*.com`) are rejected.
+- Wildcard suffixes must contain at least two DNS labels (for example
+  `*.com` is rejected).
+- If `enabled = true`, `intercept_hosts` must be non-empty.
+- If `enabled = true`, `cert_ttl_secs` and `cert_cache_capacity` must be
+  greater than `0`.
+- If `ca_cert_path` / `ca_key_path` are omitted, first-run CA files are created
+  under [`[ca].dir`](#ca) as `firma-ca.crt` and `firma-ca.key`.
+- CA generation is first-run only. If either CA file already exists, the
+  sidecar must load the existing cert/key pair exactly as-is or fail startup;
+  it never regenerates, repairs, or replaces CA material from partial,
+  malformed, unreadable, or mismatched state.
+- On Unix, the CA private key is enforced as owner-only (`0600`); overly-open
+  key permissions are rejected at startup.
+- Intercepted DNS hostnames are validated with strict DNS label rules before
+  leaf cert issuance.
+- For hosts in `strict_hosts`, MITM preflight failures are returned as
+  deterministic `403` fail-closed denies.
+- For non-strict intercepted hosts, MITM preflight failures fall back to
+  CONNECT tunnel mode.
+
+Default `intercept_hosts` includes common providers/services such as OpenAI,
+Anthropic, OpenRouter, Groq, Mistral, Cohere, Google GenAI/Vertex, DeepSeek,
+Together, Fireworks, Replicate, Perplexity, xAI, Supabase, Resend, Twilio,
+SendGrid, Stripe, Slack, and GitHub APIs.
 
 ### `[policy]`
 
