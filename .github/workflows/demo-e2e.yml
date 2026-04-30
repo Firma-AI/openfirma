@@ -21,7 +21,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler jq netcat-openbsd
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install jq + netcat
+        run: sudo apt-get install -y jq netcat-openbsd
 
       - name: Build release binaries
         run: cargo build --release -p firma-authority -p firma-sidecar -p
