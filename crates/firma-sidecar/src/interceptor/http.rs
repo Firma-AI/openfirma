@@ -270,28 +270,41 @@ async fn handle_connect_request(
         .as_ref()
         .is_some_and(|runtime| runtime.is_strict_host(&target_info.host));
 
+    // Always preflight the TLS acceptor when MITM is a candidate so a fallback
+    // to a blind CONNECT tunnel cannot bypass enforcement. Strict hosts fail
+    // closed; non-strict hosts fall back to blind tunnel BUT only after the
+    // CONNECT-level decision is enforced below.
     let mut prepared_acceptor: Option<TlsAcceptor> = None;
-    if strict_mitm && let Some(runtime) = mitm_candidate.as_ref() {
+    let mut effective_mitm = mitm_candidate;
+    if let Some(runtime) = effective_mitm.as_ref() {
         match runtime.tls_acceptor_for_host(&target_info.host).await {
             Ok(acceptor) => prepared_acceptor = Some(acceptor),
             Err(e) => {
                 let detail = format!("HTTPS_MITM_SETUP_FAILED: {e}");
-                tracing::error!(
+                if strict_mitm {
+                    tracing::error!(
+                        host = %target_info.host,
+                        "strict MITM preflight failed: {detail}"
+                    );
+                    return Ok(deny_json_response(
+                        StatusCode::FORBIDDEN,
+                        crate::handler::deny_body_json(DenyReason::FailClosed, &detail),
+                    ));
+                }
+                tracing::warn!(
                     host = %target_info.host,
-                    "strict MITM preflight failed: {detail}"
+                    "non-strict MITM preflight failed; enforcing CONNECT and falling back to blind tunnel: {detail}"
                 );
-                return Ok(deny_json_response(
-                    StatusCode::FORBIDDEN,
-                    crate::handler::deny_body_json(DenyReason::FailClosed, &detail),
-                ));
+                effective_mitm = None;
             }
         }
     }
 
-    // MITM-intercepted hosts: skip CONNECT-level enforcement.
-    // Each decrypted inner request is enforced individually at L7.
-    // Blind-tunnel hosts: CONNECT is the only enforcement point, so enforce it.
-    let connect_decision = if mitm_candidate.is_some() {
+    // MITM-intercepted hosts (preflight succeeded): skip CONNECT-level
+    // enforcement; each decrypted inner request is enforced individually at L7.
+    // Blind-tunnel hosts AND non-strict MITM with failed preflight: CONNECT is
+    // the only enforcement point, so enforce it.
+    let connect_decision = if effective_mitm.is_some() {
         ConnectDecision::Allow
     } else {
         handler.handle_connect(raw, &session_id).await
@@ -312,19 +325,18 @@ async fn handle_connect_request(
                 target_info,
                 session_id,
                 handler,
-                mitm_candidate,
+                effective_mitm,
                 prepared_acceptor,
                 max_request_body_bytes,
                 limits,
-            )
-            .await;
+            );
             Ok(connect_established_response())
         }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn spawn_connect_relay(
+fn spawn_connect_relay(
     on_upgrade: hyper::upgrade::OnUpgrade,
     target: String,
     target_info: ConnectTargetInfo,
@@ -335,50 +347,43 @@ async fn spawn_connect_relay(
     max_request_body_bytes: usize,
     limits: ConnectRelayLimits,
 ) {
-    let Some(mitm_runtime) = mitm_candidate else {
-        tokio::spawn(async move {
-            if let Err(e) = relay_connect_tunnel(on_upgrade, &target, limits).await {
-                tracing::warn!("CONNECT tunnel failed: {e}");
-            }
-        });
-        return;
-    };
-
-    let acceptor = match prepared_acceptor {
-        Some(acceptor) => acceptor,
-        None => match mitm_runtime.tls_acceptor_for_host(&target_info.host).await {
-            Ok(acceptor) => acceptor,
-            Err(e) => {
-                let detail = format!("HTTPS_MITM_SETUP_FAILED: {e}");
-                tracing::warn!(
-                    host = %target_info.host,
-                    "MITM preflight failed, falling back to CONNECT tunnel: {detail}"
-                );
-                tokio::spawn(async move {
-                    if let Err(err) = relay_connect_tunnel(on_upgrade, &target, limits).await {
-                        tracing::warn!("CONNECT tunnel failed after MITM fallback: {err}");
-                    }
-                });
-                return;
-            }
-        },
-    };
-
-    tokio::spawn(async move {
-        if let Err(e) = relay_connect_mitm(
-            on_upgrade,
-            target_info,
-            handler,
-            session_id,
-            acceptor,
-            max_request_body_bytes,
-            limits,
-        )
-        .await
-        {
-            tracing::warn!("MITM CONNECT flow failed: {e}");
+    // Invariant enforced by handle_connect_request: when mitm_candidate is Some,
+    // prepared_acceptor is also Some (preflight runs synchronously and either
+    // succeeds, fails-closed for strict, or clears mitm_candidate for non-strict).
+    // No silent blind-tunnel fallback here — that would re-introduce the
+    // CONNECT enforcement bypass we close in the caller.
+    match (mitm_candidate, prepared_acceptor) {
+        (None, _) => {
+            tokio::spawn(async move {
+                if let Err(e) = relay_connect_tunnel(on_upgrade, &target, limits).await {
+                    tracing::warn!("CONNECT tunnel failed: {e}");
+                }
+            });
         }
-    });
+        (Some(_), Some(acceptor)) => {
+            tokio::spawn(async move {
+                if let Err(e) = relay_connect_mitm(
+                    on_upgrade,
+                    target_info,
+                    handler,
+                    session_id,
+                    acceptor,
+                    max_request_body_bytes,
+                    limits,
+                )
+                .await
+                {
+                    tracing::warn!("MITM CONNECT flow failed: {e}");
+                }
+            });
+        }
+        (Some(_), None) => {
+            tracing::error!(
+                host = %target_info.host,
+                "spawn_connect_relay invariant violated: MITM runtime present without prepared acceptor; dropping connection fail-closed"
+            );
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -620,7 +625,11 @@ fn build_raw_https_request_head(
 
     Ok(RawRequest {
         method,
-        host: host_info.authority,
+        // Strip the default :443 so MITM-decrypted HTTPS requests
+        // expose the same bare hostname to the mapping table that
+        // bypass-tunnel HTTP requests do — see the rationale in
+        // `build_raw_request_head`.
+        host: strip_default_port(&host_info.authority, true),
         headers,
         path,
         body: None,
@@ -675,8 +684,8 @@ async fn read_body_with_limit(
 
 fn build_raw_request_head(req: &Request<Incoming>, is_connect: bool) -> Result<RawRequest, String> {
     let method = req.method().to_string();
-    let host = host_with_default_port(req, is_connect);
-    if host.is_empty() {
+    let host_with_port = host_with_default_port(req, is_connect);
+    if host_with_port.is_empty() {
         return Err("MALFORMED_REQUEST: missing host".to_string());
     }
     let path = if is_connect {
@@ -695,6 +704,13 @@ fn build_raw_request_head(req: &Request<Incoming>, is_connect: bool) -> Result<R
             .scheme_str()
             .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https"));
 
+    // Strip the default scheme port so mapping rules and resource UIDs
+    // can be written as bare hostnames ("paste.rs", not "paste.rs:443").
+    // After MITM decryption clients commonly send `Host: paste.rs:443`,
+    // and without this normalization the request would miss every
+    // mapping rule and silently passthrough enforcement.
+    let host = strip_default_port(&host_with_port, is_https);
+
     Ok(RawRequest {
         method,
         host,
@@ -703,6 +719,16 @@ fn build_raw_request_head(req: &Request<Incoming>, is_connect: bool) -> Result<R
         body: None,
         is_https,
     })
+}
+
+fn strip_default_port(host: &str, is_https: bool) -> String {
+    let default_port = if is_https { ":443" } else { ":80" };
+    // Leave IPv6 bracketed authorities and non-default ports alone.
+    if host.starts_with('[') {
+        return host.to_string();
+    }
+    host.strip_suffix(default_port)
+        .map_or_else(|| host.to_string(), ToString::to_string)
 }
 
 fn host_with_default_port(req: &Request<Incoming>, is_connect: bool) -> String {
@@ -1339,6 +1365,30 @@ mod tests {
 
     // ── pipeline sanity checks ─────────────────────────────────────────
 
+    #[test]
+    fn test_strip_default_port() {
+        // HTTPS default port stripped, non-default kept.
+        assert_eq!(strip_default_port("paste.rs:443", true), "paste.rs");
+        assert_eq!(strip_default_port("paste.rs:8443", true), "paste.rs:8443");
+        assert_eq!(
+            strip_default_port("api.openai.com:443", true),
+            "api.openai.com"
+        );
+
+        // HTTP default port stripped, HTTPS port left alone on http path.
+        assert_eq!(strip_default_port("example.com:80", false), "example.com");
+        assert_eq!(
+            strip_default_port("example.com:443", false),
+            "example.com:443"
+        );
+
+        // Bare host left alone.
+        assert_eq!(strip_default_port("example.com", true), "example.com");
+
+        // IPv6 bracketed authorities are left alone.
+        assert_eq!(strip_default_port("[::1]:443", true), "[::1]:443");
+    }
+
     #[tokio::test]
     async fn test_pipeline_allow_matches_with_port_in_host() {
         let pipeline = test_pipeline_allow("/v1/chat/completions");
@@ -1753,6 +1803,56 @@ Content-Length: 10\r\n\
         assert!(
             response.contains("HTTPS_MITM_SETUP_FAILED"),
             "expected MITM setup failure detail, got: {response}"
+        );
+
+        cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_proxy_connect_non_strict_mitm_preflight_failure_enforces_connect_decision() {
+        // Non-strict MITM eligible host whose TLS preflight fails must NOT
+        // silently fall back to a blind tunnel. The CONNECT-level policy must
+        // run; if it denies, the client must receive a 403 instead of a 200.
+        let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let proxy_addr = free_addr();
+        let invalid_dns_host = "exa_mple.com".to_string();
+        let connect_authority = format!("{invalid_dns_host}:443");
+
+        let handler = test_handler(test_pipeline_deny_connect_for_host("*"));
+        let cancel = CancellationToken::new();
+
+        // Intercept-eligible but NOT in strict_hosts → non-strict path.
+        let mitm_config = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec![invalid_dns_host.clone()],
+            strict_hosts: vec![],
+            cert_ttl_secs: 300,
+            cert_cache_capacity: 16,
+            ..HttpsMitmConfig::default()
+        };
+
+        let server_handle = start_proxy_with_mitm(
+            proxy_addr,
+            handler,
+            cancel.clone(),
+            mitm_config,
+            ca_tempdir.path().to_path_buf(),
+        )
+        .await;
+
+        let request =
+            format!("CONNECT {connect_authority} HTTP/1.1\r\nHost: {connect_authority}\r\n\r\n");
+        let response = proxy_response(proxy_addr, &request).await;
+        let status = response
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse::<u16>().ok())
+            .unwrap_or(0);
+        assert_eq!(
+            status, 403,
+            "non-strict MITM preflight failure must enforce CONNECT, not blind-tunnel-bypass: {response}"
         );
 
         cancel.cancel();

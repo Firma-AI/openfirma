@@ -101,9 +101,10 @@ ensure_audit_key() {
 
 ensure_capability_seed() {
   local seed="$DEMO/capability-demo-agent.toml"
-  if [[ -f "$seed" ]]; then
-    return
-  fi
+  # Always re-issue. The seed is a short-lived PASETO token and the
+  # file-exists check used to silently re-use an expired token from
+  # a previous demo run, surfacing as Stage 1 "token expired" denies
+  # on the next invocation.
   echo "[demo] issuing capability seed for demo-agent / demo-session"
   (cd "$ROOT" && "$TARGET_DIR/firma-authority" \
     --config "$DEMO/authority.toml" \
@@ -113,7 +114,7 @@ ensure_capability_seed() {
       --action communication.external.send \
       --resource-scope '*' \
       --ttl-seconds 3600 \
-      --output "$DEMO/capability-demo-agent.toml")
+      --output "$seed")
 }
 
 ensure_revocations_file() {
@@ -171,6 +172,7 @@ case "$MODE" in
         SSL_CERT_FILE="$CA_BUNDLE" \
         REQUESTS_CA_BUNDLE="$CA_BUNDLE" \
         FIRMA_SESSION_ID=demo-session \
+        FIRMA_SIDECAR_AUDIT_LOG="$LOG_DIR/sidecar.log" \
         make demo-scripted)
     ;;
   repl)
