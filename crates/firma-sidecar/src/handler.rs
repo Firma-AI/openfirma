@@ -60,6 +60,20 @@ pub enum HandledResponse {
     },
 }
 
+/// CONNECT-specific decision surface used by the HTTP proxy interceptor.
+#[derive(Debug)]
+pub enum ConnectDecision {
+    /// CONNECT target is allowed and tunneling may proceed.
+    Allow,
+    /// CONNECT target is denied before tunnel establishment.
+    Deny {
+        /// Denial reason selected by the enforcement pipeline.
+        reason: DenyReason,
+        /// Human-readable denial detail.
+        detail: String,
+    },
+}
+
 /// Reason an approved call was aborted before producing a target
 /// response.
 ///
@@ -344,6 +358,30 @@ impl RequestHandler {
         response
     }
 
+    /// Handles CONNECT authorization without performing connector HTTP dispatch.
+    ///
+    /// On [`ConnectDecision::Allow`], the HTTP proxy interceptor proceeds with
+    /// tunnel establishment and byte relay.
+    pub async fn handle_connect(&self, request: RawRequest, session_id: &str) -> ConnectDecision {
+        let (decision, mut audit_payload) = self.pipeline.enforce(&request, session_id).await;
+
+        let outcome = match decision {
+            EnforcementDecision::Allow { .. } | EnforcementDecision::Passthrough { .. } => {
+                audit_payload.dispatch_status = 200;
+                ConnectDecision::Allow
+            }
+            EnforcementDecision::Deny { reason, detail, .. } => {
+                ConnectDecision::Deny { reason, detail }
+            }
+        };
+
+        if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
+            tracing::error!("failed to send audit event: {err}");
+        }
+
+        outcome
+    }
+
     /// Dispatches an approved call through the connector registry.
     ///
     /// Returns the [`HandledResponse`] plus a [`DispatchOutcome`] that
@@ -497,6 +535,7 @@ fn parse_http_method(method: &str) -> HttpMethod {
         "PATCH" => HttpMethod::PATCH,
         "HEAD" => HttpMethod::HEAD,
         "OPTIONS" => HttpMethod::OPTIONS,
+        "CONNECT" => HttpMethod::CONNECT,
         _ => HttpMethod::GET,
     }
 }
@@ -1128,5 +1167,92 @@ pub(crate) mod tests {
         assert_eq!(payload.decision, 1);
         assert!(rx.try_recv().is_err());
         upstream_cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn test_handle_connect_allow_emits_audit() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline(
+                vec![MappingRuleConfig {
+                    method: Some("CONNECT".to_string()),
+                    host: "*".to_string(),
+                    path: Some("/".to_string()),
+                    action_class: "communication.external.send".to_string(),
+                }],
+                true,
+                true,
+            ),
+            test_connector_registry(),
+            tx,
+        );
+
+        let outcome = handler
+            .handle_connect(
+                RawRequest {
+                    method: "CONNECT".to_string(),
+                    host: "api.openai.com:443".to_string(),
+                    path: "/".to_string(),
+                    headers: HashMap::new(),
+                    body: None,
+                    is_https: true,
+                },
+                "sess_001",
+            )
+            .await;
+
+        assert!(matches!(outcome, ConnectDecision::Allow));
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
+        assert_eq!(payload.session_id, "sess_001");
+        assert_eq!(payload.decision, 1);
+        assert_eq!(payload.dispatch_status, 200);
+    }
+
+    #[tokio::test]
+    async fn test_handle_connect_deny_emits_audit() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline(
+                vec![MappingRuleConfig {
+                    method: Some("CONNECT".to_string()),
+                    host: "*".to_string(),
+                    path: Some("/".to_string()),
+                    action_class: "communication.external.send".to_string(),
+                }],
+                true,
+                false,
+            ),
+            test_connector_registry(),
+            tx,
+        );
+
+        let outcome = handler
+            .handle_connect(
+                RawRequest {
+                    method: "CONNECT".to_string(),
+                    host: "api.openai.com:443".to_string(),
+                    path: "/".to_string(),
+                    headers: HashMap::new(),
+                    body: None,
+                    is_https: true,
+                },
+                "sess_001",
+            )
+            .await;
+
+        match outcome {
+            ConnectDecision::Deny { reason, .. } => {
+                assert_eq!(reason, DenyReason::TokenInvalid);
+            }
+            other => panic!("expected connect deny, got {other:?}"),
+        }
+
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
+        assert_eq!(payload.session_id, "sess_001");
+        assert_eq!(payload.decision, 2);
     }
 }

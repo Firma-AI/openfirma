@@ -2,7 +2,9 @@
 
 use serde::Deserialize;
 
-const VALID_HTTP_METHODS: &[&str] = &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
+const VALID_HTTP_METHODS: &[&str] = &[
+    "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "CONNECT",
+];
 
 // ---------------------------------------------------------------------------
 // Enforcement configuration
@@ -244,6 +246,17 @@ mod tests {
             method: Some("POST".to_string()),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
+            action_class: "communication.external.send".to_string(),
+        };
+        assert!(rule.validate().is_ok());
+    }
+
+    #[test]
+    fn test_valid_connect_mapping_rule() {
+        let rule = MappingRuleConfig {
+            method: Some("CONNECT".to_string()),
+            host: "api.openai.com:443".to_string(),
+            path: Some("/".to_string()),
             action_class: "communication.external.send".to_string(),
         };
         assert!(rule.validate().is_ok());

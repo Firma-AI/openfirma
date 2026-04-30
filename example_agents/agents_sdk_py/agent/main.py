@@ -1,5 +1,6 @@
 import asyncio
 
+import dotenv
 from agents import Agent
 from agents.repl import run_demo_loop
 
@@ -14,6 +15,8 @@ from agent.tools.network import (
     post_data,
 )
 from agent.tools.shell import run_shell
+
+dotenv.load_dotenv()
 
 agent = Agent(
     name="firma-demo-agent",

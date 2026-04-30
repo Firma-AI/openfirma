@@ -2,11 +2,11 @@
 
 ## Overview
 
-- **Total stories**: 45
+- **Total stories**: 67
 - **Complete**: 17
 - **Generated**: 28
-- **Planned**: 0
-- **Last updated**: 2026-04-05
+- **Planned**: 22
+- **Last updated**: 2026-04-26
 
 ---
 
@@ -102,11 +102,53 @@
 - [ ] **003-audit-sinks** (006-audit-observability): stdout + file sinks, multi-sink, async non-blocking - Must - ✅ GENERATED
 - [ ] **004-prometheus-metrics** (006-audit-observability): /metrics endpoint, counters, histograms, gauges - Should - ✅ GENERATED
 
+### 007-firma-run-sandbox-launcher
+
+#### Unit: 001-cli-runtime-orchestrator
+
+- [ ] **001-cli-surface-and-arg-parsing** (001-cli-runtime-orchestrator): `firma run` command surface, parser, passthrough args - Must - PLANNED
+- [ ] **002-process-supervision-and-signal-forwarding** (001-cli-runtime-orchestrator): Child lifecycle supervision and signal propagation - Must - PLANNED
+- [ ] **003-tui-safe-stdio-passthrough** (001-cli-runtime-orchestrator): Interactive-safe TTY/stdin/stdout handling - Must - PLANNED
+- [ ] **004-fail-closed-startup-order** (001-cli-runtime-orchestrator): Startup gates enforcing fail-closed launch order - Must - PLANNED
+
+#### Unit: 002-bwrap-backend-contract
+
+- [ ] **001-backend-trait-and-proof-objects** (002-bwrap-backend-contract): Pluggable backend trait and invariant proof objects - Must - PLANNED
+- [ ] **002-bwrap-sandbox-launcher** (002-bwrap-backend-contract): Linux bubblewrap backend lifecycle implementation - Must - PLANNED
+- [ ] **003-enterprise-backend-extension-seam** (002-bwrap-backend-contract): Additive enterprise backend extension seam - Must - PLANNED
+
+#### Unit: 003-egress-routing-and-dns-confinement
+
+- [ ] **001-sidecar-uds-bridge** (003-egress-routing-and-dns-confinement): Sandbox-local sidecar bridge over UDS path - Must - PLANNED
+- [ ] **002-network-egress-lockdown** (003-egress-routing-and-dns-confinement): Structural no-bypass egress confinement - Must - PLANNED
+- [ ] **003-dns-stub-and-resolver-wiring** (003-egress-routing-and-dns-confinement): Explicit DNS stub + resolver confinement path - Must - PLANNED
+- [ ] **004-sidecar-unreachable-zero-egress** (003-egress-routing-and-dns-confinement): Sidecar outage fail-closed zero-egress invariants - Must - PLANNED
+
+#### Unit: 004-identity-and-capability-lifecycle
+
+- [ ] **001-deterministic-sandbox-id** (004-identity-and-capability-lifecycle): Deterministic per-run identity model - Must - PLANNED
+- [ ] **002-attribution-header-injection** (004-identity-and-capability-lifecycle): Sidecar attribution identity propagation - Must - PLANNED
+- [ ] **003-capability-rotation-contract** (004-identity-and-capability-lifecycle): Long-running capability renewal contract - Must - PLANNED
+
+#### Unit: 005-profiles-and-config
+
+- [ ] **001-config-schema-and-validation** (005-profiles-and-config): Config schema parsing and fail-fast validation - Must - PLANNED
+- [ ] **002-generic-profile-default** (005-profiles-and-config): Built-in default generic profile behavior - Must - PLANNED
+- [ ] **003-codex-profile-default** (005-profiles-and-config): Built-in codex profile behavior - Must - PLANNED
+- [ ] **004-mount-env-passthrough-rules** (005-profiles-and-config): Explicit env/path passthrough rules - Must - PLANNED
+
+#### Unit: 006-e2e-bench-and-docs
+
+- [ ] **001-generic-profile-e2e** (006-e2e-bench-and-docs): Generic profile end-to-end mediation and fail-closed tests - Must - PLANNED
+- [ ] **002-codex-profile-e2e** (006-e2e-bench-and-docs): Codex profile end-to-end mediation and UX tests - Must - PLANNED
+- [ ] **003-benchmark-harness-and-json-artifacts** (006-e2e-bench-and-docs): Startup/overhead benchmark harness and JSON output - Must - PLANNED
+- [ ] **004-readme-and-ops-guide** (006-e2e-bench-and-docs): FIR-61 docs and operator guidance - Must - PLANNED
+
 ---
 
 ## Stories by Status
 
-- **Planned**: 0
+- **Planned**: 22
 - **Generated**: 39
 - **In Progress**: 0
 - **Completed**: 6

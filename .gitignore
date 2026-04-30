@@ -40,3 +40,8 @@ build/
 
 # authority
 revocations.txt
+
+# Local runtime/testing artifacts
+/.local/
+/firma-ca/
+/crates/firma-sidecar/firma-ca/
