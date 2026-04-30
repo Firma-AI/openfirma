@@ -76,11 +76,6 @@ mkdir -p "$RUNTIME_DIR" "$CA_DIR"
 touch "$REVOCATIONS"
 : > "$AUDIT_LOG"
 
-if [[ -f "$CA_DIR/firma-ca.crt" && ! -f "$CA_DIR/firma-ca.key" ]] || \
-   [[ ! -f "$CA_DIR/firma-ca.crt" && -f "$CA_DIR/firma-ca.key" ]]; then
-    rm -f "$CA_DIR/firma-ca.crt" "$CA_DIR/firma-ca.key"
-fi
-
 if [[ ! -f "$AUTHORITY_KEY" ]]; then
     "$AUTHORITY_BIN" generate-key --output "$AUTHORITY_KEY"
 fi

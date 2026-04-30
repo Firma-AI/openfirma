@@ -127,6 +127,7 @@ pub fn run(demos_dir: &Path, initial_demo: Option<&Path>) -> Result<()> {
         app.agent_logs
             .push("Type a prompt and press Enter to start.".to_string());
         app.agent_logs.push(String::new());
+        note_process_log_paths(&mut app, &rt);
         app.manifest = Some(manifest);
         app.runtime = Some(rt);
         app.agent = Some(ag);
@@ -315,6 +316,7 @@ fn handle_menu_key(app: &mut App, key: KeyEvent) -> Result<()> {
             app.agent_logs
                 .push("Type a prompt and press Enter to start.".to_string());
             app.agent_logs.push(String::new());
+            note_process_log_paths(app, &rt);
             app.manifest = Some(manifest);
             app.runtime = Some(rt);
             app.agent = Some(ag);
@@ -323,6 +325,17 @@ fn handle_menu_key(app: &mut App, key: KeyEvent) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+fn note_process_log_paths(app: &mut App, rt: &DemoRuntime) {
+    app.authority_logs.push(format!(
+        "Writing authority process log to {}",
+        rt.authority_log_path.display()
+    ));
+    app.sidecar_logs.push(format!(
+        "Writing sidecar process log to {}",
+        rt.sidecar_log_path.display()
+    ));
 }
 
 fn handle_running_key(app: &mut App, key: KeyEvent) {
