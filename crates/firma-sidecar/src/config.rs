@@ -1119,6 +1119,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_full_toml_deserialization_http_proxy() {
         let toml_str = r#"
 [interceptor]

@@ -466,9 +466,7 @@ mod tests {
 
     async fn mock_upstream() -> (SocketAddr, CancellationToken) {
         let listener = TcpListener::bind("127.0.0.1:0").await.ok();
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let listener = listener.unwrap();
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let addr = listener.local_addr().unwrap();
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
@@ -524,10 +522,8 @@ mod tests {
         let mut stream = UnixStream::connect(path)
             .await
             .map_err(|e| format!("connect failed: {e}"));
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         let stream = stream.as_mut().unwrap();
 
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         stream.write_all(request.as_bytes()).await.unwrap();
 
         // Read the full response. The server writes the response after
@@ -793,7 +789,6 @@ mod tests {
         assert!(sock.exists(), "socket file should exist while running");
 
         cancel.cancel();
-        #[expect(clippy::unwrap_used, reason = "test code asserts setup succeeds")]
         handle.await.unwrap().unwrap();
 
         assert!(
