@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, ensure};
+use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -37,7 +38,7 @@ pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
     let authority_log_path = runtime_dir.join("authority.log");
     let sidecar_log_path = runtime_dir.join("sidecar.log");
 
-    let authority = spawn_with_output_to_file(
+    let mut authority = spawn_with_output_to_file(
         Command::new("cargo")
             .args(["run", "--bin", "firma-authority", "--", "--config"])
             .arg(&manifest.authority_config),
@@ -45,7 +46,7 @@ pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
     )
     .context("failed to start firma-authority")?;
 
-    std::thread::sleep(Duration::from_millis(800));
+    wait_for_authority_ready(&mut authority, &manifest.authority_config)?;
 
     let audit_log_path = runtime_dir.join("audit.jsonl");
     std::fs::write(&audit_log_path, "").context("failed to reset audit.jsonl")?;
@@ -67,6 +68,61 @@ pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
         authority_log_path,
         sidecar_log_path,
     })
+}
+
+fn wait_for_authority_ready(authority: &mut ManagedProcess, config_path: &Path) -> Result<()> {
+    let addr = read_authority_listen_addr(config_path)?;
+    let deadline = Instant::now() + Duration::from_secs(60);
+
+    loop {
+        if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+            return Ok(());
+        }
+
+        if let Some(status) = authority
+            .child
+            .try_wait()
+            .context("failed to check firma-authority process status")?
+        {
+            ensure!(
+                status.success(),
+                "firma-authority exited before listening on {addr}: {status}"
+            );
+        }
+
+        ensure!(
+            Instant::now() < deadline,
+            "firma-authority did not start listening on {addr}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn read_authority_listen_addr(config_path: &Path) -> Result<SocketAddr> {
+    let config = std::fs::read_to_string(config_path).with_context(|| {
+        format!(
+            "failed to read authority config '{}'",
+            config_path.display()
+        )
+    })?;
+
+    for line in config.lines() {
+        let line = line.split('#').next().unwrap_or_default().trim();
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() == "listen_addr" {
+            let value = value.trim().trim_matches('"');
+            return value
+                .parse()
+                .with_context(|| format!("invalid authority listen_addr '{value}'"));
+        }
+    }
+
+    anyhow::bail!(
+        "authority config '{}' does not define listen_addr",
+        config_path.display()
+    );
 }
 
 fn wait_for_demo_ca_material(ca_dir: &Path) -> Result<()> {
