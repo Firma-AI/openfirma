@@ -16,73 +16,105 @@ Self-contained execution environment for agent policy demos. Visualizes how tool
 ## Directory Structure
 
 ```text
+crates/
+└── firma-demo-tui/src/
+    ├── main.rs              # CLI entry point (--demo <dir>, --demos-dir)
+    ├── demo_loader.rs       # Demo discovery + DemoManifest validation
+    ├── runtime.rs           # Authority + sidecar boot, key provisioning
+    ├── process_manager.rs   # ManagedProcess: spawn, pipe, kill-tree
+    ├── agent_bridge.rs      # AgentBridge: uv run, HTTP_PROXY injection, stdin relay
+    └── ui/
+        ├── mod.rs           # App state machine, event loop, phase transitions
+        └── layout.rs        # ratatui pane layout and rendering
+
 examples/
 └── demos/
-    ├── run.sh                   # Direct terminal runner, no TUI
-    ├── agent/                   # Shared Python agent module
+    ├── run.sh               # Direct terminal runner, no TUI
+    ├── .env.sample          # Shared env template (OPENAI_API_KEY, GITHUB_TOKEN, …)
+    ├── pyproject.toml       # uv project for shared agent deps
+    ├── agent/               # Shared Python agent module
     │   ├── __init__.py
     │   └── tools/
-    ├── demo0/                   # Fragmented enforcement across four systems
+    │       ├── enforcement.py
+    │       ├── github.py
+    │       └── network.py
+    ├── demo0/               # Fragmented enforcement across four systems
     │   ├── authority.toml
     │   ├── sidecar.toml
     │   ├── mapping-rules.toml
     │   ├── description.md
     │   ├── agent.py
     │   ├── agent_prompt.md
-    │   └── policies/
-    │       └── policy.cedar
-    │
-    ├── demo1/                   # Path-level enforcement on the same host
-    └── demo2/                   # Runtime enforcement under compromise
+    │   ├── policies/
+    │   │   └── policy.cedar
+    │   └── .runtime/        # Generated at boot, gitignored
+    │       ├── authority.key / authority.pub
+    │       ├── audit.key
+    │       ├── authority.log / sidecar.log
+    │       ├── audit.jsonl
+    │       ├── revocations.txt
+    │       └── generated-firma-ca/
+    │           ├── firma-ca.crt
+    │           └── firma-ca.key
+    ├── demo1/               # Path-level enforcement on the same host
+    └── demo2/               # Runtime enforcement under compromise
 ```
-
-Each demo's runtime state (keys, CA cert, audit log) is written to `demoX/.runtime/` and is `.gitignore`d.
 
 ---
 
-## TUI Responsibilities
+## TUI Phases
 
-### 1. Boot runtime
+### Phase 1 — Menu
 
-- Build binaries (optional, skippable)
-- Start authority with demo-local config
-- Start sidecar with demo-local config
+`demo_loader::discover` scans `--demos-dir` for subdirectories that contain `description.md`. The first `# ` line of `description.md` is used as the tagline. Entries are sorted by name. The user selects a demo with arrow keys + Enter.
 
-### 2. Load demo
+### Phase 2 — Config (optional)
 
-From `examples/demos/demoX/`:
+If `examples/demos/.env.sample` exists, the TUI presents each key as an editable field. Values pre-populate from `.env` if it exists. On confirm the TUI writes `.env`.
 
-- `authority.toml`
-- `sidecar.toml`
-- `mapping-rules.toml`
-- `policies/policy.cedar`
-- `agent.py`
-- `agent_prompt.md`
-- `description.md`
+### Phase 3 — Running
 
-### 3. Run agent
+1. `runtime::boot` executes the startup sequence (see below).
+2. `agent_bridge::spawn_agent` launches the Python agent via `uv run`, injecting `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and `FIRMA_DEMO_PROMPT`.
+3. The event loop tails four log streams simultaneously: authority, sidecar, audit (`audit.jsonl`), and agent stdout/stderr.
 
-- Spawn Python subprocess
-- Inject prompt from `agent_prompt.md`
-- Stream tool calls back to TUI
-
-### 4. Enforce policy
-
-- Tool calls routed through sidecar HTTP proxy
-- Sidecar evaluates Cedar policy
-- Returns ALLOW / DENY with reason
-
-### 5. Display UI
+**Layout:**
 
 ```text
-+----------------------+----------------------+
-|      Authority       |       Sidecar        |
-|   audit logs         |   decisions          |
-+--------------------------------------------+
-|                  Agent                     |
-|  prompt + input + suggestions + output     |
-+--------------------------------------------+
+┌─────────────────────────────────────────────────────┐
+│  Authority logs          │  Sidecar logs             │
+│                          │                           │
+├──────────────────────────┴───────────────────────────┤
+│  Audit log (JSONL tail)                              │
+├──────────────────────────────────────────────────────┤
+│  Agent output  │  Prompt input                       │
+└──────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Boot Sequence (`runtime::boot`)
+
+```text
+1. mkdir .runtime/
+
+2. provision_keys
+   - cargo run --bin firma-authority -- generate-key → .runtime/authority.key
+   - write embedded demo audit.key PEM → .runtime/audit.key
+
+3. remove stale .runtime/generated-firma-ca/{firma-ca.crt,firma-ca.key}
+
+4. cargo run --bin firma-authority -- --config authority.toml
+   wait: TCP connect to authority listen_addr (timeout 60 s)
+
+5. truncate .runtime/audit.jsonl
+
+6. cargo run --bin firma-sidecar -- --config-file sidecar.toml
+   wait: .runtime/generated-firma-ca/firma-ca.crt + firma-ca.key exist (timeout 60 s)
+   (sidecar generates MITM CA material on first startup)
+```
+
+Each `cargo run` child is wrapped in `ManagedProcess`: stdout + stderr are piped to a log file and an `mpsc::Receiver<String>` polled by the TUI. On Unix, each child is placed in its own process group so `kill -9 -<pgid>` terminates the full subtree (including the Python subprocess spawned by uv).
 
 ---
 
@@ -260,21 +292,23 @@ Fragmentation of enforcement across tools and layers.
 ## Boot Flow (run.sh)
 
 ```text
-./examples/demos/run.sh demo0
+./examples/demos/run.sh demo0 [--prompt TEXT] [--no-agent] [--no-build]
   ↓
-build binaries (cargo build -p firma-authority -p firma-sidecar)
+cargo build -p firma-authority -p firma-sidecar  (skipped with --no-build)
   ↓
-prepare .runtime/ (mkdir, touch revocations, generate authority key if absent)
+mkdir .runtime/  •  generate authority.key if absent  •  write audit.key
   ↓
-start authority (demo0/authority.toml)
+start firma-authority --config authority.toml
   ↓
-start sidecar  (demo0/sidecar.toml)
+start firma-sidecar --config-file sidecar.toml
   ↓
-wait for CA cert at demo0/.runtime/generated-firma-ca/firma-ca.crt
+wait for .runtime/generated-firma-ca/firma-ca.crt
   ↓
-spawn Python agent (uv run demo0/agent.py)
+uv run demo0/agent.py                    (skipped with --no-agent)
   HTTP_PROXY=http://127.0.0.1:8080
+  HTTPS_PROXY=http://127.0.0.1:8080
   SSL_CERT_FILE=.runtime/generated-firma-ca/firma-ca.crt
+  FIRMA_DEMO_PROMPT="<prompt>"
 ```
 
 ## Runtime Loop
