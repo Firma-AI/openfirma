@@ -36,6 +36,12 @@ From repo root:
 scripts/firma-run-local-setup.sh
 ```
 
+PowerShell (Windows only):
+
+```powershell
+pwsh ./scripts/firma-run-local-setup.ps1
+```
+
 The script creates:
 
 - `.local/mapping-rules.toml`
@@ -89,6 +95,12 @@ Terminal B:
 cargo run -p firma-run -- run --profile codex -- codex
 ```
 
+PowerShell helper wrapper:
+
+```powershell
+pwsh ./scripts/firma-run-local.ps1 -- codex
+```
+
 Identity default:
 
 - `firma run` defaults to sandbox identity masking mode (`sandbox_user`).
@@ -134,6 +146,9 @@ cargo run -p firma-run -- run --backend vz --profile codex -- codex
 scripts/e2e-firma-run.sh
 ```
 
+Note: `scripts/e2e-firma-run.sh` is Linux-only by design because it validates
+the structural `bwrap` confinement path.
+
 HTTPS CONNECT scenario:
 
 ```bash
@@ -150,6 +165,21 @@ Keep artifacts:
 
 ```bash
 scripts/e2e-firma-run.sh --keep-artifacts
+```
+
+## Preflight checks
+
+Bash:
+
+```bash
+scripts/firma-run-preflight.sh
+```
+
+PowerShell (macOS/Linux/Windows):
+PowerShell (Windows only):
+
+```powershell
+pwsh ./scripts/firma-run-preflight.ps1
 ```
 
 ## Git safety rules
