@@ -23,6 +23,21 @@ Delivered capabilities:
   - `x-firma-profile=claude-code`
 - Unified E2E harness for generic + Claude acceptance flows.
 
+## 1.1 Platform posture (adoption transparency)
+
+Claude users are frequently macOS-first. To reduce adoption friction while
+keeping launch scope realistic:
+
+- Linux (`bwrap`): full structural confinement target for this launch slice.
+- macOS (`vz`): anticipated support now includes `sandbox-exec` deny rules for
+  common sensitive paths plus runtime-home isolation, with reduced guarantees
+  versus Linux structural mode.
+- Windows (`wsl2`): supported in compatibility mode for `claude-code` profile,
+  with reduced guarantees versus Linux structural mode.
+
+Compatibility mode still routes through Firma runtime + sidecar policy plane,
+but should not be represented as parity with Linux structural confinement.
+
 ## 2. Proxy routing model
 
 Current implementation mapping:
@@ -83,3 +98,11 @@ scripts/e2e-firma-run.sh --claude-acceptance
 - macOS seatbelt path not in this launch slice.
 - no eBPF/syscall interception in this scope.
 - no Claude source patching; integration is configuration/runtime wrapping.
+
+## 8. Fast-follow for macOS parity (v1.1)
+
+Planned fast-follow scope:
+- tighten macOS confinement backend guarantees for `claude-code`,
+- add macOS-specific acceptance matrix equivalent to Linux shell-governance
+  checks where technically feasible,
+- publish a capability matrix update once parity thresholds are met.

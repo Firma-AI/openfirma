@@ -37,6 +37,13 @@ pub fn execute_run(args: &RunArgs) -> Result<i32, RunError> {
         backend = %profile.backend,
         "starting firma run"
     );
+    if profile.id == "claude-code" && profile.backend != crate::backend::BackendKind::Bwrap {
+        tracing::warn!(
+            profile = %profile.id,
+            backend = %profile.backend,
+            "claude-code profile is running in compatibility mode; full Linux structural confinement guarantees require backend=bwrap"
+        );
+    }
 
     let lease = CapabilityLeaseManager::new(&profile.capability)?;
 

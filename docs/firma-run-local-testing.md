@@ -131,6 +131,14 @@ Network-confinement defaults are backend-aware:
 - `bwrap`: `enforce_network_namespace=true` (structural confinement path)
 - `vz`/`wsl2`: `enforce_network_namespace=false` (proxy-mediated path)
 
+`claude-code` profile platform posture:
+- Linux + `bwrap`: full structural confinement target.
+- macOS (`vz`): anticipated support path now includes `sandbox-exec` profile
+  deny rules for common sensitive paths and runtime-home isolation; guarantees
+  remain weaker than Linux `bwrap` structural confinement.
+- Windows (`wsl2`): compatibility mode (same policy/audit path, reduced
+  confinement guarantees compared to Linux `bwrap`).
+
 If you explicitly set `enforce_network_namespace=true` with a non-`bwrap`
 backend, `firma run` now fails at config validation with a clear error.
 

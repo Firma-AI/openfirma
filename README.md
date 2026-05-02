@@ -98,6 +98,11 @@ Key behavior:
 - injects Claude runtime setting `sandbox.autoAllowBashIfSandboxed=true`,
 - attaches deterministic attribution metadata (`agent`, `user`, `session`, `sandbox`).
 
+Platform note:
+- Linux `bwrap` is the full structural confinement target for this slice.
+- macOS/Windows can run the profile in compatibility mode (same policy/audit
+  plane, reduced confinement guarantees versus Linux structural mode).
+
 ### Coverage delta vs Claude Code standalone sandbox
 
 Architectural differences from a standalone Claude sandbox deployment:
