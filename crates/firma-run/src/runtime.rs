@@ -67,24 +67,24 @@ pub fn execute_run(args: &RunArgs) -> Result<i32, RunError> {
         );
 
         let network_runtime = prepare_network_runtime(handle_ref, &profile.sidecar_endpoint)?;
-        let mut env =
-            build_execution_env(&profile, &identity, &lease, network_runtime.env_overrides());
+        let env = build_execution_env(&profile, &identity, &lease, network_runtime.env_overrides());
 
         let executable = args
             .command
             .first()
             .cloned()
             .ok_or(RunError::MissingCommand)?;
+        let launch_args = maybe_apply_claude_settings(
+            handle_ref,
+            &profile,
+            &executable,
+            args.command.iter().skip(1).cloned().collect(),
+        )?;
         let launch = LaunchSpec {
             executable,
-            args: args.command.iter().skip(1).cloned().collect(),
+            args: launch_args,
             cwd: working_dir,
-            env: {
-                if profile.id == "claude-code" {
-                    inject_claude_settings_arg(handle_ref, &mut env, &args.command)?;
-                }
-                env
-            },
+            env,
             identity_mode: profile.identity_mode,
         };
 
@@ -183,26 +183,27 @@ fn build_attribution_headers(
     headers
 }
 
-fn inject_claude_settings_arg(
+fn maybe_apply_claude_settings(
     handle: &crate::backend::SandboxHandle,
-    env: &mut BTreeMap<String, String>,
-    command: &[String],
-) -> Result<(), RunError> {
-    if command.is_empty() {
-        return Ok(());
+    profile: &ResolvedProfile,
+    executable: &str,
+    args: Vec<String>,
+) -> Result<Vec<String>, RunError> {
+    if profile.id != "claude-code" {
+        return Ok(args);
     }
 
-    let executable = std::path::Path::new(&command[0])
+    let executable = std::path::Path::new(executable)
         .file_name()
         .and_then(std::ffi::OsStr::to_str)
         .unwrap_or_default();
     if executable != "claude" {
-        return Ok(());
+        return Ok(args);
     }
 
     // Respect user-provided settings path/JSON if already present.
-    if command.iter().skip(1).any(|arg| arg == "--settings") {
-        return Ok(());
+    if args.iter().any(|arg| arg == "--settings") {
+        return Ok(args);
     }
 
     let settings_path = handle.runtime_dir.join("claude-settings.json");
@@ -223,12 +224,11 @@ fn inject_claude_settings_arg(
         ))
     })?;
 
-    // Tell launcher glue to append --settings <path>.
-    env.insert(
-        "FIRMA_RUN_CLAUDE_SETTINGS_PATH".to_string(),
-        settings_path.display().to_string(),
-    );
-    Ok(())
+    let mut merged = Vec::with_capacity(args.len() + 2);
+    merged.push("--settings".to_string());
+    merged.push(settings_path.display().to_string());
+    merged.extend(args);
+    Ok(merged)
 }
 
 fn inject_sidecar_ca_trust_env(env: &mut BTreeMap<String, String>, ca_cert_path: &Path) {
