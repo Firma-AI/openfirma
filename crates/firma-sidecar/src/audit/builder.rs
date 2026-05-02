@@ -263,7 +263,15 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         session_id: &str,
         latency: Duration,
     ) -> AuditPayload {
-        crate::pipeline::audit_payload_from_decision(decision, session_id, latency, None)
+        let request = crate::normalizer::RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+        crate::pipeline::audit_payload_from_decision(decision, &request, session_id, latency, None)
     }
 
     #[test]
@@ -454,14 +462,8 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 
         assert_eq!(event.decision, DECISION_DENY);
         assert!(event.deny_reason.contains("unclassified intent"));
-        assert!(
-            event.action.is_empty(),
-            "action should be empty when no envelope is available"
-        );
-        assert!(
-            event.resource.is_empty(),
-            "resource should be empty when no envelope is available"
-        );
+        assert_eq!(event.action, "raw.http.POST");
+        assert_eq!(event.resource, "api.openai.com/v1/chat/completions");
         assert!(!event.signature.is_empty());
     }
 }

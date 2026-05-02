@@ -230,6 +230,35 @@ Behavior:
   audit.
 - `strict_hosts` fail closed if MITM setup cannot be established.
 
+Audit/log visibility note:
+
+- Hosts outside `intercept_hosts` are handled as CONNECT tunnel flows. They are
+  still governed, but without decrypted L7 request details.
+- For clearer counterpart observability (action/resource-rich audit + explicit
+  sidecar handling logs), include target hosts in `intercept_hosts` and keep
+  them out of `bypass_hosts`.
+
+#### Quick Troubleshooting
+
+- You see `curl` timeout / agent network timeout, but no obvious deny:
+  - Check logs for `CONNECT authorized and handled by sidecar` with
+    `relay_mode=tunnel`. This means destination-level governance happened, but
+    traffic was not MITM-decrypted.
+  - Add the host to `intercept_hosts` to get richer L7 policy/audit context.
+
+- You want clear “blocked by policy” signals:
+  - Look for:
+    - `HTTP request denied by guard policy`
+    - `MITM HTTPS request denied by guard policy`
+    - `CONNECT denied by guard policy`
+    - `websocket upgrade denied by guard policy`
+  - These include reason/detail and are the primary operators signals for
+    config/policy tuning.
+
+- You see `websocket MITM relay closed by peer (expected shutdown)`:
+  - This is normal when clients close without TLS `close_notify` (for example
+    interactive CLI shutdown). It is informational, not a policy failure.
+
 2. High-control / deny-by-default
 
 Use when compliance posture requires explicit allowlists for all relevant

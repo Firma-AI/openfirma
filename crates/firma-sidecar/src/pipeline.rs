@@ -151,6 +151,7 @@ impl EnforcementPipeline {
         let decision = self.enforce_inner(request, session_id).await;
         let payload = audit_payload_from_decision(
             &decision,
+            request,
             session_id,
             start.elapsed(),
             bundle_version.as_deref(),
@@ -313,6 +314,7 @@ impl EnforcementPipeline {
 #[must_use]
 pub fn audit_payload_from_decision(
     decision: &EnforcementDecision,
+    request: &RawRequest,
     session_id: &str,
     enforcement_latency: Duration,
     bundle_version: Option<&str>,
@@ -351,10 +353,15 @@ pub fn audit_payload_from_decision(
             envelope,
             ..
         } => {
-            let (action, resource) = envelope
-                .as_ref()
-                .map(|e| (e.intent.action_class.clone(), e.intent.resource_display()))
-                .unwrap_or_default();
+            let (action, resource) = envelope.as_ref().map_or_else(
+                || {
+                    (
+                        raw_request_action_label(request),
+                        raw_request_resource_display(request),
+                    )
+                },
+                |e| (e.intent.action_class.clone(), e.intent.resource_display()),
+            );
 
             (
                 String::new(),
@@ -370,8 +377,8 @@ pub fn audit_payload_from_decision(
         EnforcementDecision::Passthrough { .. } => (
             String::new(),
             String::new(),
-            String::new(),
-            String::new(),
+            raw_request_action_label(request),
+            raw_request_resource_display(request),
             DECISION_ALLOW,
             String::new(),
             String::new(),
@@ -394,6 +401,19 @@ pub fn audit_payload_from_decision(
         dispatch_latency_us: 0,
         response_size: 0,
     }
+}
+
+fn raw_request_action_label(request: &RawRequest) -> String {
+    let method = request.method.to_ascii_uppercase();
+    if method == "CONNECT" {
+        "network.connect".to_string()
+    } else {
+        format!("raw.http.{method}")
+    }
+}
+
+fn raw_request_resource_display(request: &RawRequest) -> String {
+    format!("{}{}", request.host, request.path)
 }
 
 /// Extracts the host portion from a resource string.
@@ -1330,6 +1350,8 @@ mod tests {
 
         assert_eq!(payload.session_id, "sess_deny");
         assert_eq!(payload.decision, 2); // DENY
+        assert_eq!(payload.action, "raw.http.POST");
+        assert_eq!(payload.resource, "api.openai.com/v1/chat/completions");
     }
 
     #[tokio::test]
@@ -1377,6 +1399,8 @@ mod tests {
 
         assert_eq!(payload.session_id, "sess_pt");
         assert_eq!(payload.decision, 1); // Passthrough maps to ALLOW
+        assert_eq!(payload.action, "raw.http.GET");
+        assert_eq!(payload.resource, "not-protected.example.com/any");
     }
 
     #[tokio::test]

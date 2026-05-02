@@ -239,10 +239,18 @@ async fn handle_request(
             reason,
             detail,
             context: _,
-        } => deny_json_response(
-            StatusCode::FORBIDDEN,
-            crate::handler::deny_body_json(reason, &detail),
-        ),
+        } => {
+            tracing::warn!(
+                session_id = %session_id,
+                reason = ?reason,
+                detail = %detail,
+                "HTTP request denied by guard policy"
+            );
+            deny_json_response(
+                StatusCode::FORBIDDEN,
+                crate::handler::deny_body_json(reason, &detail),
+            )
+        }
         HandledResponse::Aborted { reason, detail } => deny_json_response(
             StatusCode::GATEWAY_TIMEOUT,
             crate::handler::abort_body_json(reason, &detail),
@@ -339,6 +347,18 @@ async fn handle_connect_request(
             ))
         }
         ConnectDecision::Allow => {
+            let relay_mode = if effective_mitm.is_some() {
+                "mitm"
+            } else {
+                "tunnel"
+            };
+            tracing::info!(
+                host = %target_info.host,
+                port = target_info.port,
+                session_id = %session_id,
+                relay_mode = relay_mode,
+                "CONNECT authorized and handled by sidecar"
+            );
             let limits = connect_relay_limits(&connect_relay);
             let target = connect_target(&target_info.authority);
             let on_upgrade = hyper::upgrade::on(req);
@@ -829,10 +849,20 @@ async fn handle_mitm_https_request(
             reason,
             detail,
             context: _,
-        } => deny_json_response(
-            StatusCode::FORBIDDEN,
-            crate::handler::deny_body_json(reason, &detail),
-        ),
+        } => {
+            tracing::warn!(
+                host = %target.host,
+                port = target.port,
+                session_id = %session_id,
+                reason = ?reason,
+                detail = %detail,
+                "MITM HTTPS request denied by guard policy"
+            );
+            deny_json_response(
+                StatusCode::FORBIDDEN,
+                crate::handler::deny_body_json(reason, &detail),
+            )
+        }
         HandledResponse::Aborted { reason, detail } => deny_json_response(
             StatusCode::GATEWAY_TIMEOUT,
             crate::handler::abort_body_json(reason, &detail),
@@ -841,6 +871,7 @@ async fn handle_mitm_https_request(
     Ok(response)
 }
 
+#[allow(clippy::too_many_lines)]
 async fn handle_mitm_websocket_upgrade_request(
     req: &mut Request<Incoming>,
     handler: Arc<RequestHandler>,
@@ -863,7 +894,15 @@ async fn handle_mitm_websocket_upgrade_request(
         UpgradeAuthorization::Allow {
             credentials,
             audit_payload,
-        } => (credentials, *audit_payload),
+        } => {
+            tracing::info!(
+                host = %target.host,
+                port = target.port,
+                session_id = %session_id,
+                "websocket upgrade authorized by sidecar policy"
+            );
+            (credentials, *audit_payload)
+        }
         UpgradeAuthorization::Deny { reason, detail } => {
             tracing::warn!(
                 host = %target.host,
@@ -987,9 +1026,19 @@ async fn handle_mitm_websocket_upgrade_request(
             return;
         }
         if let Err(e) = copy_bidirectional(&mut downstream, &mut upstream).await {
-            tracing::warn!("websocket MITM relay failed: {e}");
+            if is_expected_tls_close_error(&e) {
+                tracing::info!("websocket MITM relay closed by peer (expected shutdown): {e}");
+            } else {
+                tracing::warn!("websocket MITM relay failed: {e}");
+            }
         }
     });
+    tracing::info!(
+        host = %target.host,
+        port = target.port,
+        session_id = %session_id,
+        "websocket upgrade handled by sidecar relay"
+    );
 
     Ok(build_websocket_switching_response(response_headers))
 }
@@ -1013,6 +1062,11 @@ fn header_contains_token(headers: &hyper::HeaderMap, name: &str, token: &str) ->
                 .split(',')
                 .any(|part| part.trim().eq_ignore_ascii_case(token))
         })
+}
+
+fn is_expected_tls_close_error(error: &std::io::Error) -> bool {
+    let msg = error.to_string();
+    msg.contains("close_notify") || msg.contains("unexpected-eof")
 }
 
 fn build_upstream_handshake_request(
