@@ -84,6 +84,35 @@ The `demo-e2e` GitHub Actions workflow gates merges on
 `make demo-ci`. See `examples/demo/README.md` for the full runbook
 and `docs/cli.md` for the seven-line standalone startup contract.
 
+## Firma Run: Claude Code (Linux-first)
+
+`firma run` now ships a built-in `claude-code` profile for Linux `bwrap`:
+
+```bash
+cargo run -p firma-run -- run --profile claude-code -- claude
+```
+
+Key behavior:
+- wraps the full Claude Code process in the sandbox boundary (not Bash-only),
+- routes sandbox egress through Firma sidecar mediation,
+- injects Claude runtime setting `sandbox.autoAllowBashIfSandboxed=true`,
+- attaches deterministic attribution metadata (`agent`, `user`, `session`, `sandbox`).
+
+### Coverage delta vs Claude Code standalone sandbox
+
+Architectural differences from a standalone Claude sandbox deployment:
+- **Whole-process coverage**: Firma wraps the full agent process, not only shell tool children.
+- **Central policy plane**: enforcement decisions live outside agent process logic.
+- **Cross-model parity**: same policy/audit surfaces can be used for Claude, Codex, and custom agents.
+- **Durable audit continuity**: attribution and event trails survive agent restarts.
+- **Structural mediation path**: network governance is enforced by the runtime+sidecar boundary, not by agent prompt/permission UX.
+
+This is an architectural coverage difference, not a claim of immunity to all bypass classes.
+
+For local validation and acceptance checks:
+- `scripts/e2e-firma-run.sh`
+- `scripts/e2e-firma-run.sh --claude-acceptance`
+
 ## License
 
 Apache 2.0
