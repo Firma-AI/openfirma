@@ -262,8 +262,9 @@ fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec) {
     ];
     for suffix in sensitive_suffixes {
         let path = format!("{home}/{suffix}");
-        command.arg("--dir").arg(&path);
-        command.arg("--tmpfs").arg(&path);
+        if std::path::Path::new(&path).exists() {
+            command.arg("--tmpfs").arg(&path);
+        }
     }
 }
 
@@ -279,8 +280,15 @@ mod tests {
     #[test]
     fn mask_sensitive_paths_adds_expected_mounts() {
         let mut cmd = Command::new("bwrap");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(home.join(".ssh")).expect("mkdir .ssh");
+        std::fs::create_dir_all(home.join(".aws")).expect("mkdir .aws");
+        std::fs::create_dir_all(home.join(".config").join("gcloud"))
+            .expect("mkdir .config/gcloud");
+
         let mut env = BTreeMap::new();
-        env.insert("HOME".to_string(), "/home/tester".to_string());
+        env.insert("HOME".to_string(), home.display().to_string());
         let launch = LaunchSpec {
             executable: "/bin/true".to_string(),
             args: vec![],
@@ -295,9 +303,9 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
 
-        assert!(rendered.contains("--tmpfs /home/tester/.ssh"));
-        assert!(rendered.contains("--tmpfs /home/tester/.aws"));
-        assert!(rendered.contains("--tmpfs /home/tester/.config/gcloud"));
+        assert!(rendered.contains(&format!("--tmpfs {}/.ssh", home.display())));
+        assert!(rendered.contains(&format!("--tmpfs {}/.aws", home.display())));
+        assert!(rendered.contains(&format!("--tmpfs {}/.config/gcloud", home.display())));
     }
 }
 

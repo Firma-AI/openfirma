@@ -13,6 +13,12 @@ cleanup() {
   if [ -n "$bridge_pid" ]; then
     kill "$bridge_pid" || true
   fi
+  if [ -n "$dns_pid" ]; then
+    wait "$dns_pid" 2>/dev/null || true
+  fi
+  if [ -n "$bridge_pid" ]; then
+    wait "$bridge_pid" 2>/dev/null || true
+  fi
 }
 
 trap cleanup EXIT INT TERM
@@ -60,4 +66,6 @@ if [ -n "${FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS:-}" ]; then
   echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] proxy bridge ready pid=${bridge_pid}" >>"${bridge_log}"
 fi
 
-exec "$@"
+"$@"
+status=$?
+exit "$status"

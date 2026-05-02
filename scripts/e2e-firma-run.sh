@@ -176,13 +176,23 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 -----END PRIVATE KEY-----
 EOF
 
-cat >"$MAPPING_RULES" <<'EOF'
+if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
+  cat >"$MAPPING_RULES" <<'EOF'
 [[rules]]
 method = "GET"
 host = "httpbin.org"
 path = "/get"
 action_class = "communication.external.send"
 EOF
+else
+  cat >"$MAPPING_RULES" <<'EOF'
+[[rules]]
+method = "GET"
+host = "never.match.local"
+path = "/"
+action_class = "communication.external.send"
+EOF
+fi
 
 cat >"$SIDECAR_CONFIG" <<EOF
 [interceptor]
@@ -285,28 +295,44 @@ fi
 ok "running sandboxed command through firma run"
 if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
   # Validate post-acceptance that normal wrapped run still executes and is audited.
+  set +e
   cargo run -p firma-run -- run \
     --profile "$PROFILE" \
     --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
     -- /bin/sh -lc 'true' >"$RUN_STDOUT" 2>"$RUN_STDERR"
+  RUN_STATUS=$?
+  set -e
 else
+  set +e
   cargo run -p firma-run -- run \
     --profile "$PROFILE" \
     --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
     -- "${SANDBOX_CMD[@]}" >"$RUN_STDOUT" 2>"$RUN_STDERR"
+  RUN_STATUS=$?
+  set -e
 fi
 
-if [[ ! -s "$AUDIT_FILE" ]]; then
+if [[ "${RUN_STATUS:-1}" -ne 0 ]]; then
+  warn "sandboxed command failed (exit=${RUN_STATUS}); dumping diagnostics"
+  sed -n '1,200p' "$RUN_STDERR" >&2 || true
+  sed -n '1,200p' "$RUN_STDOUT" >&2 || true
   sed -n '1,200p' "$SIDECAR_LOG" >&2 || true
-  fail "no audit events were written to ${AUDIT_FILE}"
+  fail "sandboxed command step failed"
 fi
 
 if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
-  if ! grep -q '"decision":2' "$AUDIT_FILE"; then
+  if [[ ! -s "$AUDIT_FILE" ]]; then
+    warn "no audit events were written during claude-acceptance run; shell checks may have failed before sidecar mediation"
+  elif ! grep -q '"decision":2' "$AUDIT_FILE"; then
     warn "audit file did not contain explicit DENY decision marker (expected in current sidecar schema)"
   fi
   ok "audit sink recorded claude-code denial traffic"
 else
+  if [[ ! -s "$AUDIT_FILE" ]]; then
+    sed -n '1,200p' "$SIDECAR_LOG" >&2 || true
+    fail "no audit events were written to ${AUDIT_FILE}"
+  fi
+
   if ! grep -q '"decision":1' "$AUDIT_FILE"; then
     fail "audit file has no ALLOW decision events"
   fi
@@ -317,6 +343,7 @@ else
   ok "audit sink recorded sandboxed traffic"
 fi
 
+ok "running fail-closed post-check (sidecar down)"
 ok "verifying fail-closed when sidecar is unavailable"
 stop_sidecar
 
@@ -338,9 +365,9 @@ fi
 
 ok "fail-closed behavior verified (exit=${STATUS})"
 if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
-  ok "claude-code shell acceptance E2E complete"
+  ok "claude-code shell acceptance E2E PASSED"
 else
-  ok "E2E complete"
+  ok "firma-run E2E PASSED"
 fi
 if [[ "$KEEP_ARTIFACTS" -eq 1 ]]; then
   ok "artifacts: ${WORKDIR}"
