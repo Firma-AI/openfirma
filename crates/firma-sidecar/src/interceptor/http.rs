@@ -590,6 +590,11 @@ async fn read_connect_preface(
                 continue;
             }
             seen_non_crlf = true;
+            // Fast-path: if the first payload byte cannot be a TLS record content
+            // type, we already know this is non-TLS and can fall back immediately.
+            if !matches!(byte, 20..=23) {
+                return Ok(idx + 1);
+            }
         }
         payload_bytes += 1;
         if seen_non_crlf && payload_bytes >= 5 {
