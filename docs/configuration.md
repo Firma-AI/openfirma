@@ -196,6 +196,75 @@ Anthropic/Claude (`api.anthropic.com`, `platform.claude.com`, `claude.ai`,
 GenAI/Vertex, DeepSeek, Together, Fireworks, Replicate, Perplexity, xAI,
 Supabase, Resend, Twilio, SendGrid, Stripe, Slack, and GitHub APIs.
 
+#### Practical operating modes
+
+The sidecar supports progressive rollout patterns. A useful mental model:
+
+- `intercept_hosts` controls where you get L7 visibility/enforcement via MITM.
+- `mapping.default_protected` controls whether unmapped traffic is blocked by
+  policy (`true`) or allowed by default (`false`).
+
+1. Open connectivity + targeted governance (recommended for onboarding)
+
+Use when you want agents to keep working broadly, but still inspect/enforce
+high-value destinations (for example model APIs, secrets-bearing backends, or
+billing endpoints).
+
+```toml
+[interceptor.https_mitm]
+enabled = true
+intercept_hosts = ["api.anthropic.com", "platform.claude.com", "api.openai.com"]
+strict_hosts = ["api.anthropic.com", "api.openai.com"]
+
+[mapping]
+default_protected = false
+```
+
+Behavior:
+
+- Unmapped hosts are allowed (lower friction rollout).
+- Intercepted hosts still flow through full intent normalization + policy +
+  audit.
+- `strict_hosts` fail closed if MITM setup cannot be established.
+
+2. High-control / deny-by-default
+
+Use when compliance posture requires explicit allowlists for all relevant
+traffic.
+
+```toml
+[interceptor.https_mitm]
+enabled = true
+intercept_hosts = ["api.anthropic.com", "platform.claude.com", "api.openai.com"]
+strict_hosts = ["api.anthropic.com", "platform.claude.com", "api.openai.com"]
+
+[mapping]
+default_protected = true
+```
+
+Behavior:
+
+- Unmapped traffic is protected/denied unless explicit mapping/policy allows it.
+- Intercepted strict hosts are fail-closed on MITM failures.
+
+3. Destination-level governance only (no HTTPS decryption)
+
+Use when you need host-level control but cannot run MITM for policy, legal, or
+certificate-distribution reasons.
+
+```toml
+[interceptor.https_mitm]
+enabled = false
+
+[mapping]
+default_protected = false
+```
+
+Behavior:
+
+- Sidecar enforces at CONNECT destination level for HTTPS.
+- No decrypted request path/body visibility for HTTPS.
+
 ### `[policy]`
 
 Policy source settings.
