@@ -623,6 +623,7 @@ const fn default_https_mitm_enabled() -> bool {
 
 fn default_https_mitm_intercept_hosts() -> Vec<String> {
     vec![
+        "chatgpt.com".to_string(),
         "api.openai.com".to_string(),
         "api.anthropic.com".to_string(),
         "platform.claude.com".to_string(),
