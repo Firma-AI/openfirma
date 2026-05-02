@@ -625,6 +625,9 @@ fn default_https_mitm_intercept_hosts() -> Vec<String> {
     vec![
         "api.openai.com".to_string(),
         "api.anthropic.com".to_string(),
+        "platform.claude.com".to_string(),
+        "claude.ai".to_string(),
+        "console.anthropic.com".to_string(),
         "openrouter.ai".to_string(),
         "api.groq.com".to_string(),
         "api.mistral.ai".to_string(),
@@ -766,6 +769,22 @@ mod tests {
         assert!(
             !config.interceptor.https_mitm.intercept_hosts.is_empty(),
             "default MITM intercept list should not be empty"
+        );
+        assert!(
+            config
+                .interceptor
+                .https_mitm
+                .intercept_hosts
+                .contains(&"platform.claude.com".to_string()),
+            "default MITM intercept list should include platform.claude.com"
+        );
+        assert!(
+            config
+                .interceptor
+                .https_mitm
+                .intercept_hosts
+                .contains(&"api.anthropic.com".to_string()),
+            "default MITM intercept list should include api.anthropic.com"
         );
     }
 

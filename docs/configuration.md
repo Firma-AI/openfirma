@@ -191,9 +191,10 @@ Validation:
   CONNECT tunnel mode.
 
 Default `intercept_hosts` includes common providers/services such as OpenAI,
-Anthropic, OpenRouter, Groq, Mistral, Cohere, Google GenAI/Vertex, DeepSeek,
-Together, Fireworks, Replicate, Perplexity, xAI, Supabase, Resend, Twilio,
-SendGrid, Stripe, Slack, and GitHub APIs.
+Anthropic/Claude (`api.anthropic.com`, `platform.claude.com`, `claude.ai`,
+`console.anthropic.com`), OpenRouter, Groq, Mistral, Cohere, Google
+GenAI/Vertex, DeepSeek, Together, Fireworks, Replicate, Perplexity, xAI,
+Supabase, Resend, Twilio, SendGrid, Stripe, Slack, and GitHub APIs.
 
 ### `[policy]`
 
