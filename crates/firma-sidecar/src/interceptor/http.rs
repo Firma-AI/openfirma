@@ -28,7 +28,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use tokio::io::copy_bidirectional;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
@@ -329,6 +329,7 @@ async fn handle_connect_request(
                 prepared_acceptor,
                 max_request_body_bytes,
                 limits,
+                strict_mitm,
             );
             Ok(connect_established_response())
         }
@@ -346,6 +347,7 @@ fn spawn_connect_relay(
     prepared_acceptor: Option<TlsAcceptor>,
     max_request_body_bytes: usize,
     limits: ConnectRelayLimits,
+    strict_mitm: bool,
 ) {
     // Invariant enforced by handle_connect_request: when mitm_candidate is Some,
     // prepared_acceptor is also Some (preflight runs synchronously and either
@@ -370,6 +372,7 @@ fn spawn_connect_relay(
                     acceptor,
                     max_request_body_bytes,
                     limits,
+                    strict_mitm,
                 )
                 .await
                 {
@@ -459,6 +462,7 @@ async fn relay_connect_tunnel(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn relay_connect_mitm(
     on_upgrade: hyper::upgrade::OnUpgrade,
     target: ConnectTargetInfo,
@@ -467,6 +471,7 @@ async fn relay_connect_mitm(
     acceptor: TlsAcceptor,
     max_request_body_bytes: usize,
     limits: ConnectRelayLimits,
+    strict_mitm: bool,
 ) -> Result<(), String> {
     let upgraded = tokio::time::timeout(limits.setup_timeout, on_upgrade)
         .await
@@ -477,7 +482,50 @@ async fn relay_connect_mitm(
             )
         })?
         .map_err(|e| format!("upgrade failed: {e}"))?;
-    let downstream = TokioIo::new(upgraded);
+    let mut downstream = TokioIo::new(upgraded);
+    let mut preface = [0_u8; 32];
+    let preface_len = tokio::time::timeout(
+        limits.setup_timeout,
+        read_connect_preface(&mut downstream, &mut preface),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "downstream preface read timed out after {} seconds for {}",
+            limits.setup_timeout.as_secs(),
+            target.host
+        )
+    })?
+    .map_err(|e| format!("downstream preface read failed for {}: {e}", target.host))?;
+    let tls_start = preface
+        .iter()
+        .position(|b| *b != b'\r' && *b != b'\n')
+        .unwrap_or(preface_len);
+    let first_non_crlf = preface.get(tls_start).copied().unwrap_or(0);
+    let tls_header_valid = is_likely_tls_record_header(&preface[..preface_len]);
+    if !tls_header_valid {
+        if strict_mitm {
+            return Err(format!(
+                "strict MITM requires TLS tunneled traffic; received non-TLS CONNECT preface (first_non_crlf=0x{:02x}) for {}",
+                first_non_crlf, target.host
+            ));
+        }
+        tracing::warn!(
+            host = %target.host,
+            first_byte = format_args!("0x{:02x}", first_non_crlf),
+            preface = %hex_preface(&preface[..preface_len]),
+            "non-strict MITM detected non-TLS CONNECT payload/header; falling back to blind tunnel"
+        );
+        return relay_connect_tunnel_from_stream_with_prefetch(
+            downstream,
+            &target.authority,
+            limits,
+            &preface[..preface_len],
+        )
+        .await;
+    }
+
+    let downstream = PrefetchedStream::new(downstream, &preface[tls_start..preface_len]);
     let tls_stream = tokio::time::timeout(limits.setup_timeout, acceptor.accept(downstream))
         .await
         .map_err(|_| {
@@ -519,6 +567,162 @@ async fn relay_connect_mitm(
             )
         })?
         .map_err(|e| format!("HTTPS MITM connection failed: {e}"))?;
+    Ok(())
+}
+
+async fn read_connect_preface(
+    downstream: &mut TokioIo<hyper::upgrade::Upgraded>,
+    out: &mut [u8; 32],
+) -> std::io::Result<usize> {
+    // Ignore leading CR/LF bytes before the tunneled protocol payload.
+    // Some client/proxy stacks emit an extra line break between CONNECT and TLS payload.
+    let mut seen_non_crlf = false;
+    let mut payload_bytes = 0usize;
+    for idx in 0..out.len() {
+        downstream.read_exact(&mut out[idx..=idx]).await?;
+        let byte = out[idx];
+        if !seen_non_crlf {
+            if byte == b'\r' || byte == b'\n' {
+                continue;
+            }
+            seen_non_crlf = true;
+        }
+        payload_bytes += 1;
+        if seen_non_crlf && payload_bytes >= 5 {
+            // Have at least 5 bytes from first non-CRLF onward to validate TLS record header.
+            return Ok(idx + 1);
+        }
+    }
+    Ok(out.len())
+}
+
+fn is_likely_tls_record_header(preface: &[u8]) -> bool {
+    let start = preface
+        .iter()
+        .position(|b| *b != b'\r' && *b != b'\n')
+        .unwrap_or(preface.len());
+    let rem = &preface[start..];
+    if rem.len() < 5 {
+        return false;
+    }
+    let content_type_ok = matches!(rem[0], 20..=23);
+    let major_ok = rem[1] == 0x03;
+    let minor_ok = rem[2] <= 0x04;
+    let record_len = u16::from_be_bytes([rem[3], rem[4]]);
+    let len_ok = record_len > 0;
+    content_type_ok && major_ok && minor_ok && len_ok
+}
+
+fn hex_preface(preface: &[u8]) -> String {
+    preface
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+struct PrefetchedStream<T> {
+    inner: T,
+    prefetched: [u8; 32],
+    prefetched_len: usize,
+    prefetched_pos: usize,
+}
+
+impl<T> PrefetchedStream<T> {
+    fn new(inner: T, prefetched: &[u8]) -> Self {
+        let mut local = [0_u8; 32];
+        let len = prefetched.len().min(local.len());
+        local[..len].copy_from_slice(&prefetched[..len]);
+        Self {
+            inner,
+            prefetched: local,
+            prefetched_len: len,
+            prefetched_pos: 0,
+        }
+    }
+}
+
+impl<T: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for PrefetchedStream<T> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if self.prefetched_pos < self.prefetched_len && buf.remaining() > 0 {
+            let remaining = self.prefetched_len - self.prefetched_pos;
+            let to_copy = remaining.min(buf.remaining());
+            let start = self.prefetched_pos;
+            let end = start + to_copy;
+            buf.put_slice(&self.prefetched[start..end]);
+            self.prefetched_pos = end;
+            return std::task::Poll::Ready(Ok(()));
+        }
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<T: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for PrefetchedStream<T> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+async fn relay_connect_tunnel_from_stream_with_prefetch(
+    mut downstream: TokioIo<hyper::upgrade::Upgraded>,
+    target: &str,
+    limits: ConnectRelayLimits,
+    prefetched: &[u8],
+) -> Result<(), String> {
+    let mut upstream = tokio::time::timeout(limits.setup_timeout, TcpStream::connect(target))
+        .await
+        .map_err(|_| {
+            format!(
+                "upstream connect timed out after {} seconds for {target}",
+                limits.setup_timeout.as_secs()
+            )
+        })?
+        .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
+    if !prefetched.is_empty() {
+        tokio::time::timeout(limits.setup_timeout, upstream.write_all(prefetched))
+            .await
+            .map_err(|_| {
+                format!(
+                    "upstream prefetch write timed out after {} seconds for {target}",
+                    limits.setup_timeout.as_secs()
+                )
+            })?
+            .map_err(|e| format!("upstream prefetch write failed for {target}: {e}"))?;
+    }
+    let _ = tokio::time::timeout(
+        limits.session_max,
+        copy_bidirectional(&mut downstream, &mut upstream),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "CONNECT tunnel exceeded {} seconds session cap",
+            limits.session_max.as_secs()
+        )
+    })?
+    .map_err(|e| format!("tunnel relay failed: {e}"))?;
     Ok(())
 }
 
@@ -1663,6 +1867,68 @@ Content-Length: 2\r\n\
         );
 
         cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_proxy_connect_mitm_non_strict_falls_back_for_non_tls_payload() {
+        let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let proxy_addr = free_addr();
+        let handler = test_handler(test_pipeline_allow_connect());
+        let cancel = CancellationToken::new();
+
+        let mitm_config = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["localhost".to_string()],
+            // Non-strict host should fail open to blind tunnel when payload is non-TLS.
+            strict_hosts: vec![],
+            cert_ttl_secs: 300,
+            cert_cache_capacity: 16,
+            ..HttpsMitmConfig::default()
+        };
+
+        let (target_addr, target_cancel) = mock_connect_target().await;
+        let server_handle = start_proxy_with_mitm(
+            proxy_addr,
+            handler,
+            cancel.clone(),
+            mitm_config,
+            ca_tempdir.path().to_path_buf(),
+        )
+        .await;
+
+        let mut stream = TcpStream::connect(proxy_addr)
+            .await
+            .unwrap_or_else(|e| panic!("failed to connect to proxy: {e}"));
+        let host = format!("localhost:{}", target_addr.port());
+        let connect_req = format!(
+            "CONNECT {host} HTTP/1.1\r\nHost: {host}\r\nx-firma-session-id: _test_\r\n\r\n"
+        );
+        stream
+            .write_all(connect_req.as_bytes())
+            .await
+            .unwrap_or_else(|e| panic!("failed to write CONNECT request: {e}"));
+        let connect_response = read_connect_response(&mut stream).await;
+        assert!(
+            connect_response.starts_with("HTTP/1.1 200"),
+            "expected CONNECT 200, got: {connect_response:?}"
+        );
+
+        // Send a non-TLS payload. MITM path should auto-fallback (non-strict host)
+        // and preserve raw CONNECT tunnel semantics.
+        stream
+            .write_all(b"ping")
+            .await
+            .unwrap_or_else(|e| panic!("failed to write tunnel payload: {e}"));
+        let mut reply = [0u8; 4];
+        stream
+            .read_exact(&mut reply)
+            .await
+            .unwrap_or_else(|e| panic!("failed to read tunnel reply: {e}"));
+        assert_eq!(&reply, b"pong");
+
+        cancel.cancel();
+        target_cancel.cancel();
         let _ = server_handle.await;
     }
 

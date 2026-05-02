@@ -212,6 +212,20 @@ impl SandboxBackend for BwrapBackend {
             .arg("FIRMA_RUN_RUNTIME_DIR")
             .arg(&handle.runtime_dir);
 
+        if claude_profile {
+            let runtime_home = handle.runtime_dir.display().to_string();
+            // Apply after launch.env so passthrough HOME/XDG values can't override it.
+            command.arg("--setenv").arg("HOME").arg(&runtime_home);
+            command
+                .arg("--setenv")
+                .arg("XDG_CONFIG_HOME")
+                .arg(&runtime_home);
+            command
+                .arg("--setenv")
+                .arg("XDG_CACHE_HOME")
+                .arg(&runtime_home);
+        }
+
         if launch.identity_mode == SandboxIdentityMode::SandboxUser {
             command.arg("--setenv").arg("USER").arg("firma-user");
             command.arg("--setenv").arg("LOGNAME").arg("firma-user");
@@ -284,8 +298,7 @@ mod tests {
         let home = temp.path().join("home");
         std::fs::create_dir_all(home.join(".ssh")).expect("mkdir .ssh");
         std::fs::create_dir_all(home.join(".aws")).expect("mkdir .aws");
-        std::fs::create_dir_all(home.join(".config").join("gcloud"))
-            .expect("mkdir .config/gcloud");
+        std::fs::create_dir_all(home.join(".config").join("gcloud")).expect("mkdir .config/gcloud");
 
         let mut env = BTreeMap::new();
         env.insert("HOME".to_string(), home.display().to_string());
