@@ -448,6 +448,34 @@ impl RequestHandler {
         }
     }
 
+    /// Emits a synthetic audit event when CONNECT was policy-allowed but
+    /// upstream tunnel establishment/relay failed after authorization.
+    pub async fn emit_connect_relay_failure_audit(
+        &self,
+        session_id: &str,
+        host: &str,
+        detail: &str,
+    ) {
+        let payload = AuditPayload {
+            session_id: session_id.to_string(),
+            token_id: String::new(),
+            agent_id: String::new(),
+            action: "network.connect".to_string(),
+            resource: format!("{host}/"),
+            decision: crate::pipeline::DECISION_ABORT,
+            deny_reason: format!("CONNECT_RELAY_FAILURE: {detail}"),
+            enforcement_latency_us: 0,
+            context_hash: String::new(),
+            bundle_version: String::new(),
+            dispatch_status: 0,
+            dispatch_latency_us: 0,
+            response_size: 0,
+        };
+        if let Err(err) = self.audit_sink_sender.send(payload).await {
+            tracing::error!("failed to send audit event: {err}");
+        }
+    }
+
     /// Dispatches an approved call through the connector registry.
     ///
     /// Returns the [`HandledResponse`] plus a [`DispatchOutcome`] that

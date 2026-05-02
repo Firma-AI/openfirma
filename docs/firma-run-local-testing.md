@@ -102,10 +102,52 @@ Terminal A:
 cargo run -p firma-sidecar -- -c .local/firma_sidecar.local.toml
 ```
 
+When sidecar starts in `http_proxy` mode, it now prints an explicit routing
+hint. If you run clients outside `firma run`, ensure proxy env vars point to
+the sidecar listener (`127.0.0.1:8080` by default).
+
 Terminal B:
 
 ```bash
 cargo run -p firma-run -- run --profile codex -- codex
+```
+
+Startup should include:
+- `applied executable wrapper defaults for governed execution`
+
+If that line is missing, the session may not be running with codex wrapper-default
+governance arguments.
+
+Codex wrapper-default policy (now default for `--profile codex`):
+- `--sandbox workspace-write`
+- `--ask-for-approval never`
+- `--config sandbox_workspace_write.network_access=true`
+
+This keeps tool-initiated commands inside the governed sandbox path by default
+instead of escalating outside.
+
+Override example (`firma-run.yaml`):
+
+```yaml
+profiles:
+  codex:
+    executable_policies:
+      codex:
+        enforce_wrapper_defaults: true
+        sandbox_mode: workspace-write
+        approval_policy: never
+        config_overrides:
+          sandbox_workspace_write.network_access: "true"
+```
+
+Disable wrapper argument injection for codex (if needed):
+
+```yaml
+profiles:
+  codex:
+    executable_policies:
+      codex:
+        enforce_wrapper_defaults: false
 ```
 
 PowerShell helper wrapper:
@@ -273,11 +315,27 @@ ls -la /tmp/firma-run/<sandbox_id>/
 sed -n '1,200p' /tmp/firma-run/<sandbox_id>/proxy-bridge.log
 ```
 
+Bridge liveness is now fail-closed during runtime:
+
+- if the sandbox-local proxy bridge exits unexpectedly after startup,
+  `firma run` terminates the wrapped agent process and prints a clear
+  fail-closed error instead of continuing with a degraded session.
+
 If DNS confinement behaves unexpectedly, inspect the sandbox-local DNS stub:
 
 ```bash
 sed -n '1,200p' /tmp/firma-run/<sandbox_id>/dns-stub.log
 ```
+
+If commands fail with `Failed to connect to 127.0.0.1:18080`:
+- inspect `/tmp/firma-run/<sandbox_id>/proxy-bridge.log`,
+- recent bridge diagnostics now include an explicit pre-sidecar mediation hint
+  when the bridge cannot reach the host-side sidecar adapter.
+
+If sidecar shows no request logs for a failed command:
+- failure likely happened before sidecar mediation (for example command executed
+  outside `firma run`, missing proxy env in that process, or local bridge path issue),
+- sidecar can only log traffic that actually reaches its listener.
 
 In structural `bwrap` mode, `/etc/resolv.conf` points at `127.0.0.1`.
 The V1 DNS path intentionally refuses direct resolver queries when the stub can

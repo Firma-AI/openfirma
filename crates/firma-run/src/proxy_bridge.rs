@@ -50,11 +50,15 @@ fn run_proxy_bridge_unix(args: &ProxyBridgeArgs) -> Result<(), RunError> {
             .map_err(|error| RunError::Spawn(format!("proxy bridge accept failed: {error}")))?;
         let upstream_path = args.upstream_uds.clone();
         let attribution_headers = attribution_headers.clone();
+        let bridge_listen_addr = args.listen.to_string();
 
         thread::spawn(move || {
-            if let Err(error) =
-                handle_connection(client_stream, &upstream_path, &attribution_headers)
-            {
+            if let Err(error) = handle_connection(
+                client_stream,
+                &upstream_path,
+                &attribution_headers,
+                &bridge_listen_addr,
+            ) {
                 tracing::warn!(
                     "proxy bridge connection from {client_addr} failed: {}",
                     error
@@ -69,9 +73,19 @@ fn handle_connection(
     mut client: TcpStream,
     upstream_path: &std::path::Path,
     attribution_headers: &BTreeMap<String, String>,
+    bridge_listen_addr: &str,
 ) -> io::Result<()> {
     client.set_nodelay(true)?;
-    let mut upstream = UnixStream::connect(upstream_path)?;
+    let mut upstream = UnixStream::connect(upstream_path).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "failed to reach host-side sidecar adapter at {}: {error}; \
+sandbox clients may report connection failures via http://{bridge_listen_addr} (pre-sidecar mediation)",
+                upstream_path.display()
+            ),
+        )
+    })?;
     if attribution_headers.is_empty() {
         return relay_tcp_to_unix(&mut client, &mut upstream);
     }

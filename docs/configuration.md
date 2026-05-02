@@ -226,6 +226,8 @@ default_protected = false
 Behavior:
 
 - Unmapped hosts are allowed (lower friction rollout).
+- This includes plain HTTP requests and HTTPS CONNECT destinations that are not
+  explicitly blocked by mapping/policy.
 - Intercepted hosts still flow through full intent normalization + policy +
   audit.
 - `strict_hosts` fail closed if MITM setup cannot be established.
@@ -240,11 +242,36 @@ Audit/log visibility note:
 
 #### Quick Troubleshooting
 
+- Sidecar is healthy, but you see no traffic logs/audit for a command:
+  - In `http_proxy` mode, sidecar only governs traffic that is actually routed
+    to its proxy listener.
+  - Verify client env:
+    - `HTTP_PROXY=http://<sidecar-listen-addr>`
+    - `HTTPS_PROXY=http://<sidecar-listen-addr>`
+    - `ALL_PROXY=http://<sidecar-listen-addr>`
+  - If you use `firma run`, use the wrapper path so bridge/proxy wiring is
+    injected automatically.
+  - If the client reports `Failed to connect to 127.0.0.1:18080`, that is a
+    local proxy-bridge reachability failure before sidecar mediation. In that
+    case, no sidecar deny/allow record is expected for that request.
+  - With interactive agent CLIs, this can also happen when a command is
+    explicitly executed outside the governed sandbox path; the command may
+    inherit proxy env pointing to `127.0.0.1:18080` even though the sandbox
+    bridge is not in that execution context.
+
 - You see `curl` timeout / agent network timeout, but no obvious deny:
-  - Check logs for `CONNECT authorized and handled by sidecar` with
-    `relay_mode=tunnel`. This means destination-level governance happened, but
-    traffic was not MITM-decrypted.
+  - Check audit for `action=network.connect` on the target host. This confirms
+  policy allowed the destination-level CONNECT.
+  - Check logs for `CONNECT relay failed after policy allow` or
+    `MITM CONNECT relay failed after policy allow`. These include
+    `failure_class` (`timeout`, `refused`, `reset`, `tls_handshake`, `dns`) so
+    operators can distinguish policy allow from upstream network failure.
   - Add the host to `intercept_hosts` to get richer L7 policy/audit context.
+  - For `firma run --profile codex`, wrapper defaults inject:
+    - `--sandbox workspace-write`
+    - `--ask-for-approval never`
+    This keeps tool commands on the governed path by default and avoids
+    out-of-sandbox runs that bypass sidecar mediation.
 
 - You want clear “blocked by policy” signals:
   - Look for:
@@ -254,6 +281,12 @@ Audit/log visibility note:
     - `websocket upgrade denied by guard policy`
   - These include reason/detail and are the primary operators signals for
     config/policy tuning.
+
+- You want explicit audit trace when CONNECT was allowed but failed later:
+  - Sidecar emits a follow-up ABORT audit record with:
+    - `action=network.connect`
+    - `resource=<host>/`
+    - `deny_reason` prefixed with `CONNECT_RELAY_FAILURE: ...`
 
 - You see `websocket MITM relay closed by peer (expected shutdown)`:
   - This is normal when clients close without TLS `close_notify` (for example
@@ -277,6 +310,7 @@ default_protected = true
 Behavior:
 
 - Unmapped traffic is protected/denied unless explicit mapping/policy allows it.
+- This applies to both plain HTTP requests and HTTPS CONNECT destinations.
 - Intercepted strict hosts are fail-closed on MITM failures.
 
 3. Destination-level governance only (no HTTPS decryption)

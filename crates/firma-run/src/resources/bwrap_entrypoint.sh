@@ -5,13 +5,21 @@ bridge_pid=""
 bridge_log=""
 dns_pid=""
 dns_log=""
+cmd_pid=""
+watchdog_pid=""
 
 cleanup() {
+  if [ -n "$watchdog_pid" ]; then
+    kill "$watchdog_pid" 2>/dev/null || true
+  fi
   if [ -n "$dns_pid" ]; then
     kill "$dns_pid" || true
   fi
   if [ -n "$bridge_pid" ]; then
     kill "$bridge_pid" || true
+  fi
+  if [ -n "$watchdog_pid" ]; then
+    wait "$watchdog_pid" 2>/dev/null || true
   fi
   if [ -n "$dns_pid" ]; then
     wait "$dns_pid" 2>/dev/null || true
@@ -66,6 +74,24 @@ if [ -n "${FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS:-}" ]; then
   echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] proxy bridge ready pid=${bridge_pid}" >>"${bridge_log}"
 fi
 
+watch_bridge_and_parent() {
+  while true; do
+    if [ -n "$bridge_pid" ] && ! kill -0 "$bridge_pid" 2>/dev/null; then
+      if [ -n "$bridge_log" ]; then
+        echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] proxy bridge exited unexpectedly pid=${bridge_pid}" >>"${bridge_log}"
+      fi
+      echo "error: proxy bridge exited unexpectedly; terminating wrapped command fail-closed" >&2
+      kill -TERM "$$" 2>/dev/null || true
+      exit 1
+    fi
+    sleep 1
+  done
+}
+
+watch_bridge_and_parent &
+watchdog_pid="$!"
+
+# Run wrapped command in the foreground so interactive CLIs keep terminal semantics.
 "$@"
 status=$?
 exit "$status"

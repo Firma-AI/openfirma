@@ -29,6 +29,7 @@ pub struct ResolvedProfile {
     pub network: NetworkPolicy,
     pub identity_mode: SandboxIdentityMode,
     pub capability: CapabilityLeaseConfig,
+    pub executable_policies: BTreeMap<String, ExecutableLaunchPolicy>,
 }
 
 impl ResolvedProfile {
@@ -172,6 +173,15 @@ pub struct CapabilityLeaseConfig {
     pub grace_seconds: u64,
 }
 
+/// Per-executable CLI argument policy injected by `firma run`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExecutableLaunchPolicy {
+    pub enforce_wrapper_defaults: bool,
+    pub sandbox_mode: Option<String>,
+    pub approval_policy: Option<String>,
+    pub config_overrides: BTreeMap<String, String>,
+}
+
 /// Source for capability material.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -207,6 +217,10 @@ pub(crate) struct ProfilePatch {
     pub(crate) network: Option<NetworkPolicyPatch>,
     pub(crate) identity_mode: Option<SandboxIdentityMode>,
     pub(crate) capability: Option<CapabilityLeasePatch>,
+    #[serde(default)]
+    pub(crate) executable_policies: BTreeMap<String, ExecutableLaunchPolicyPatch>,
+    #[serde(default)]
+    pub(crate) codex_cli: Option<ExecutableLaunchPolicyPatch>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -235,6 +249,15 @@ pub(crate) struct CapabilityLeasePatch {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ExecutableLaunchPolicyPatch {
+    pub(crate) enforce_wrapper_defaults: Option<bool>,
+    pub(crate) sandbox_mode: Option<String>,
+    pub(crate) approval_policy: Option<String>,
+    #[serde(default)]
+    pub(crate) config_overrides: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum CapabilitySourcePatch {
     Disabled,
@@ -248,6 +271,8 @@ impl ProfilePatch {
 
         let mut env_passthrough = self.env_passthrough;
         env_passthrough.extend(higher.env_passthrough);
+        let mut executable_policies = self.executable_policies;
+        executable_policies.extend(higher.executable_policies);
 
         let mounts = if higher.mounts.is_empty() {
             self.mounts
@@ -272,6 +297,8 @@ impl ProfilePatch {
             network: higher.network.or(self.network),
             identity_mode: higher.identity_mode.or(self.identity_mode),
             capability: higher.capability.or(self.capability),
+            executable_policies,
+            codex_cli: higher.codex_cli.or(self.codex_cli),
         }
     }
 }
@@ -290,31 +317,7 @@ pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
         patch = patch.merge(file_patch);
     }
 
-    let cli_patch = ProfilePatch {
-        backend: args.backend.map(Into::into),
-        sidecar_endpoint: args.sidecar_endpoint.clone(),
-        seccomp_bpf_path: None,
-        env_passthrough: Vec::new(),
-        env_set: BTreeMap::new(),
-        mounts: Vec::new(),
-        allowed_domains: Vec::new(),
-        network: None,
-        identity_mode: if args.preserve_host_user {
-            Some(SandboxIdentityMode::HostUser)
-        } else {
-            args.identity_mode.map(Into::into)
-        },
-        capability: args
-            .capability_file
-            .as_ref()
-            .map(|path| CapabilityLeasePatch {
-                source: Some(CapabilitySourcePatch::File { path: path.clone() }),
-                kind: None,
-                path: None,
-                refresh_ratio: None,
-                grace_seconds: None,
-            }),
-    };
+    let cli_patch = cli_profile_patch(args);
     patch = patch.merge(cli_patch);
 
     let backend = patch
@@ -375,6 +378,9 @@ pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
         .identity_mode
         .unwrap_or(SandboxIdentityMode::SandboxUser);
 
+    let executable_policies =
+        resolve_executable_policies(patch.executable_policies, patch.codex_cli);
+
     let resolved = ResolvedProfile {
         id: args.profile.clone(),
         backend,
@@ -387,10 +393,68 @@ pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
         network,
         identity_mode,
         capability,
+        executable_policies,
     };
 
     resolved.validate()?;
     Ok(resolved)
+}
+
+fn cli_profile_patch(args: &RunArgs) -> ProfilePatch {
+    ProfilePatch {
+        backend: args.backend.map(Into::into),
+        sidecar_endpoint: args.sidecar_endpoint.clone(),
+        seccomp_bpf_path: None,
+        env_passthrough: Vec::new(),
+        env_set: BTreeMap::new(),
+        mounts: Vec::new(),
+        allowed_domains: Vec::new(),
+        network: None,
+        identity_mode: if args.preserve_host_user {
+            Some(SandboxIdentityMode::HostUser)
+        } else {
+            args.identity_mode.map(Into::into)
+        },
+        capability: args
+            .capability_file
+            .as_ref()
+            .map(|path| CapabilityLeasePatch {
+                source: Some(CapabilitySourcePatch::File { path: path.clone() }),
+                kind: None,
+                path: None,
+                refresh_ratio: None,
+                grace_seconds: None,
+            }),
+        executable_policies: BTreeMap::new(),
+        codex_cli: None,
+    }
+}
+
+fn resolve_executable_policies(
+    patch: BTreeMap<String, ExecutableLaunchPolicyPatch>,
+    legacy_codex: Option<ExecutableLaunchPolicyPatch>,
+) -> BTreeMap<String, ExecutableLaunchPolicy> {
+    let mut resolved = patch
+        .into_iter()
+        .map(|(executable, policy)| (executable, resolve_executable_policy(policy)))
+        .collect::<BTreeMap<_, _>>();
+
+    if let Some(codex_policy) = legacy_codex {
+        resolved
+            .entry("codex".to_string())
+            .or_insert_with(|| resolve_executable_policy(codex_policy));
+    }
+
+    resolved
+}
+
+fn resolve_executable_policy(policy: ExecutableLaunchPolicyPatch) -> ExecutableLaunchPolicy {
+    ExecutableLaunchPolicy {
+        enforce_wrapper_defaults: policy.enforce_wrapper_defaults.unwrap_or(true),
+        sandbox_mode: policy.sandbox_mode,
+        approval_policy: policy.approval_policy,
+        config_overrides: policy.config_overrides,
+    }
 }
 
 fn capability_from_patch(patch: CapabilityLeasePatch) -> CapabilityLeaseConfig {
@@ -537,6 +601,31 @@ profiles:
                 path: PathBuf::from("/tmp/capability.token")
             }
         );
+    }
+
+    #[test]
+    fn legacy_codex_cli_config_maps_to_executable_policy() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = r#"
+[profiles.codex.codex_cli]
+enforce_wrapper_defaults = true
+sandbox_mode = "workspace-write"
+approval_policy = "never"
+"#;
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+
+        let policy = resolved
+            .executable_policies
+            .get("codex")
+            .unwrap_or_else(|| panic!("missing codex executable policy"));
+        assert!(policy.enforce_wrapper_defaults);
+        assert_eq!(policy.sandbox_mode.as_deref(), Some("workspace-write"));
+        assert_eq!(policy.approval_policy.as_deref(), Some("never"));
     }
 
     #[test]

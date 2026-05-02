@@ -81,12 +81,13 @@ pub fn execute_run(args: &RunArgs) -> Result<i32, RunError> {
             .first()
             .cloned()
             .ok_or(RunError::MissingCommand)?;
-        let launch_args = maybe_apply_claude_settings(
-            handle_ref,
+        let launch_args = maybe_apply_executable_policy(
             &profile,
             &executable,
             args.command.iter().skip(1).cloned().collect(),
-        )?;
+        );
+        let launch_args =
+            maybe_apply_claude_settings(handle_ref, &profile, &executable, launch_args)?;
         let launch = LaunchSpec {
             executable,
             args: launch_args,
@@ -112,6 +113,89 @@ pub fn execute_run(args: &RunArgs) -> Result<i32, RunError> {
             "run failed: {run_error}; teardown failed: {teardown_error}"
         ))),
     }
+}
+
+fn maybe_apply_executable_policy(
+    profile: &ResolvedProfile,
+    executable: &str,
+    args: Vec<String>,
+) -> Vec<String> {
+    let executable = std::path::Path::new(executable)
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or_default()
+        .to_string();
+    let Some(policy) = profile.executable_policies.get(&executable) else {
+        return args;
+    };
+    if !policy.enforce_wrapper_defaults {
+        return args;
+    }
+
+    let has_sandbox = args.iter().any(|arg| arg == "--sandbox" || arg == "-s");
+    let has_approval = args
+        .iter()
+        .any(|arg| arg == "--ask-for-approval" || arg == "-a");
+
+    let mut merged = Vec::with_capacity(args.len() + 4);
+    let mut injected_sandbox_mode: Option<String> = None;
+    let mut injected_approval_policy: Option<String> = None;
+    let mut injected_config_overrides: Vec<String> = Vec::new();
+    if !has_sandbox && let Some(mode) = &policy.sandbox_mode {
+        merged.push("--sandbox".to_string());
+        merged.push(mode.clone());
+        injected_sandbox_mode = Some(mode.clone());
+    }
+    if !has_approval && let Some(mode) = &policy.approval_policy {
+        merged.push("--ask-for-approval".to_string());
+        merged.push(mode.clone());
+        injected_approval_policy = Some(mode.clone());
+    }
+    for (key, value) in &policy.config_overrides {
+        if !has_config_override(&args, key) {
+            merged.push("--config".to_string());
+            merged.push(format!("{key}={value}"));
+            injected_config_overrides.push(format!("{key}={value}"));
+        }
+    }
+    merged.extend(args);
+    if injected_sandbox_mode.is_some()
+        || injected_approval_policy.is_some()
+        || !injected_config_overrides.is_empty()
+    {
+        tracing::info!(
+            executable = %executable,
+            injected_sandbox_mode = ?injected_sandbox_mode,
+            injected_approval_policy = ?injected_approval_policy,
+            injected_config_overrides = ?injected_config_overrides,
+            "applied executable wrapper defaults for governed execution"
+        );
+    }
+    merged
+}
+
+fn has_config_override(args: &[String], key: &str) -> bool {
+    for i in 0..args.len() {
+        let arg = &args[i];
+        if arg == "--config" || arg == "-c" {
+            if let Some(next) = args.get(i + 1)
+                && config_item_matches_key(next, key)
+            {
+                return true;
+            }
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--config=")
+            && config_item_matches_key(value, key)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn config_item_matches_key(item: &str, key: &str) -> bool {
+    item.split_once('=').is_some_and(|(k, _)| k.trim() == key)
 }
 
 fn build_execution_env(
@@ -321,8 +405,8 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::config::{
-        CapabilityLeaseConfig, CapabilitySource, MountSpec, NetworkPolicy, ResolvedProfile,
-        SandboxIdentityMode, SidecarEndpoint,
+        CapabilityLeaseConfig, CapabilitySource, ExecutableLaunchPolicy, MountSpec, NetworkPolicy,
+        ResolvedProfile, SandboxIdentityMode, SidecarEndpoint,
     };
 
     use super::{RunIdentity, build_execution_env};
@@ -350,6 +434,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
+            executable_policies: BTreeMap::new(),
         };
 
         let identity = RunIdentity::new("generic");
@@ -397,6 +482,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
+            executable_policies: BTreeMap::new(),
         };
 
         let identity = RunIdentity::new("generic");
@@ -441,6 +527,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
+            executable_policies: BTreeMap::new(),
         };
 
         let identity = RunIdentity::new("generic");
@@ -467,5 +554,190 @@ mod tests {
         assert_eq!(env.get("CURL_CA_BUNDLE"), Some(&expected));
         assert_eq!(env.get("NODE_EXTRA_CA_CERTS"), Some(&expected));
         assert_eq!(env.get("GIT_SSL_CAINFO"), Some(&expected));
+    }
+
+    #[test]
+    fn codex_policy_injects_defaults_when_missing() {
+        let profile = ResolvedProfile {
+            id: "codex".to_string(),
+            backend: crate::backend::BackendKind::Bwrap,
+            sidecar_endpoint: SidecarEndpoint::Tcp {
+                addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
+            },
+            env_passthrough: BTreeSet::default(),
+            env_set: BTreeMap::default(),
+            mounts: Vec::new(),
+            seccomp_bpf_path: None,
+            allowed_domains: Vec::new(),
+            network: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+            identity_mode: SandboxIdentityMode::SandboxUser,
+            capability: CapabilityLeaseConfig {
+                source: CapabilitySource::Disabled,
+                refresh_ratio: 0.60,
+                grace_seconds: 30,
+            },
+            executable_policies: BTreeMap::from([(
+                "codex".to_string(),
+                ExecutableLaunchPolicy {
+                    enforce_wrapper_defaults: true,
+                    sandbox_mode: Some("workspace-write".to_string()),
+                    approval_policy: Some("never".to_string()),
+                    config_overrides: BTreeMap::from([(
+                        "sandbox_workspace_write.network_access".to_string(),
+                        "true".to_string(),
+                    )]),
+                },
+            )]),
+        };
+
+        let args = super::maybe_apply_executable_policy(
+            &profile,
+            "codex",
+            vec!["exec".to_string(), "hello".to_string()],
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--sandbox".to_string(),
+                "workspace-write".to_string(),
+                "--ask-for-approval".to_string(),
+                "never".to_string(),
+                "--config".to_string(),
+                "sandbox_workspace_write.network_access=true".to_string(),
+                "exec".to_string(),
+                "hello".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_policy_respects_explicit_cli_flags() {
+        let profile = ResolvedProfile {
+            id: "codex".to_string(),
+            backend: crate::backend::BackendKind::Bwrap,
+            sidecar_endpoint: SidecarEndpoint::Tcp {
+                addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
+            },
+            env_passthrough: BTreeSet::default(),
+            env_set: BTreeMap::default(),
+            mounts: Vec::new(),
+            seccomp_bpf_path: None,
+            allowed_domains: Vec::new(),
+            network: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+            identity_mode: SandboxIdentityMode::SandboxUser,
+            capability: CapabilityLeaseConfig {
+                source: CapabilitySource::Disabled,
+                refresh_ratio: 0.60,
+                grace_seconds: 30,
+            },
+            executable_policies: BTreeMap::from([(
+                "codex".to_string(),
+                ExecutableLaunchPolicy {
+                    enforce_wrapper_defaults: true,
+                    sandbox_mode: Some("workspace-write".to_string()),
+                    approval_policy: Some("never".to_string()),
+                    config_overrides: BTreeMap::from([(
+                        "sandbox_workspace_write.network_access".to_string(),
+                        "true".to_string(),
+                    )]),
+                },
+            )]),
+        };
+
+        let args = super::maybe_apply_executable_policy(
+            &profile,
+            "codex",
+            vec![
+                "--sandbox".to_string(),
+                "read-only".to_string(),
+                "--ask-for-approval".to_string(),
+                "on-request".to_string(),
+                "--config".to_string(),
+                "sandbox_workspace_write.network_access=true".to_string(),
+                "exec".to_string(),
+                "hi".to_string(),
+            ],
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--sandbox".to_string(),
+                "read-only".to_string(),
+                "--ask-for-approval".to_string(),
+                "on-request".to_string(),
+                "--config".to_string(),
+                "sandbox_workspace_write.network_access=true".to_string(),
+                "exec".to_string(),
+                "hi".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_policy_respects_explicit_config_override() {
+        let profile = ResolvedProfile {
+            id: "codex".to_string(),
+            backend: crate::backend::BackendKind::Bwrap,
+            sidecar_endpoint: SidecarEndpoint::Tcp {
+                addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
+            },
+            env_passthrough: BTreeSet::default(),
+            env_set: BTreeMap::default(),
+            mounts: Vec::new(),
+            seccomp_bpf_path: None,
+            allowed_domains: Vec::new(),
+            network: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+            identity_mode: SandboxIdentityMode::SandboxUser,
+            capability: CapabilityLeaseConfig {
+                source: CapabilitySource::Disabled,
+                refresh_ratio: 0.60,
+                grace_seconds: 30,
+            },
+            executable_policies: BTreeMap::from([(
+                "codex".to_string(),
+                ExecutableLaunchPolicy {
+                    enforce_wrapper_defaults: true,
+                    sandbox_mode: Some("workspace-write".to_string()),
+                    approval_policy: Some("never".to_string()),
+                    config_overrides: BTreeMap::from([(
+                        "sandbox_workspace_write.network_access".to_string(),
+                        "true".to_string(),
+                    )]),
+                },
+            )]),
+        };
+
+        let args = super::maybe_apply_executable_policy(
+            &profile,
+            "codex",
+            vec![
+                "--config".to_string(),
+                "sandbox_workspace_write.network_access=false".to_string(),
+                "exec".to_string(),
+                "hi".to_string(),
+            ],
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--sandbox".to_string(),
+                "workspace-write".to_string(),
+                "--ask-for-approval".to_string(),
+                "never".to_string(),
+                "--config".to_string(),
+                "sandbox_workspace_write.network_access=false".to_string(),
+                "exec".to_string(),
+                "hi".to_string(),
+            ]
+        );
     }
 }

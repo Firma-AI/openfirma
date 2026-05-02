@@ -352,7 +352,7 @@ async fn handle_connect_request(
             } else {
                 "tunnel"
             };
-            tracing::info!(
+            tracing::debug!(
                 host = %target_info.host,
                 port = target_info.port,
                 session_id = %session_id,
@@ -400,18 +400,50 @@ fn spawn_connect_relay(
     match (mitm_candidate, prepared_acceptor) {
         (None, _) => {
             tokio::spawn(async move {
-                if let Err(e) = relay_connect_tunnel(on_upgrade, &target, limits).await {
-                    tracing::warn!("CONNECT tunnel failed: {e}");
+                match relay_connect_tunnel(on_upgrade, &target, limits).await {
+                    Err(e) => {
+                        let failure_class = classify_connect_relay_failure(&e);
+                        tracing::warn!(
+                            host = %target_info.host,
+                            port = target_info.port,
+                            session_id = %session_id,
+                            policy_decision = "allow",
+                            failure_class,
+                            detail = %e,
+                            "CONNECT relay failed after policy allow"
+                        );
+                        handler
+                            .emit_connect_relay_failure_audit(&session_id, &target_info.host, &e)
+                            .await;
+                    }
+                    Ok(stats)
+                        if stats.downstream_to_upstream_bytes > 0
+                            && stats.upstream_to_downstream_bytes == 0 =>
+                    {
+                        tracing::warn!(
+                            host = %target_info.host,
+                            port = target_info.port,
+                            session_id = %session_id,
+                            policy_decision = "allow",
+                            downstream_to_upstream_bytes = stats.downstream_to_upstream_bytes,
+                            upstream_to_downstream_bytes = stats.upstream_to_downstream_bytes,
+                            "CONNECT tunnel closed without upstream response bytes"
+                        );
+                    }
+                    Ok(_) => {}
                 }
             });
         }
         (Some(_), Some(acceptor)) => {
             tokio::spawn(async move {
+                let relay_target_info = target_info.clone();
+                let relay_session_id = session_id.clone();
+                let relay_handler = Arc::clone(&handler);
                 if let Err(e) = relay_connect_mitm(
                     on_upgrade,
-                    target_info,
-                    handler,
-                    session_id,
+                    relay_target_info,
+                    relay_handler,
+                    relay_session_id,
                     acceptor,
                     max_request_body_bytes,
                     limits,
@@ -419,7 +451,20 @@ fn spawn_connect_relay(
                 )
                 .await
                 {
-                    tracing::warn!("MITM CONNECT flow failed: {e}");
+                    let failure_class = classify_connect_relay_failure(&e);
+                    tracing::warn!(
+                        host = %target_info.host,
+                        port = target_info.port,
+                        session_id = %session_id,
+                        policy_decision = "allow",
+                        relay_mode = "mitm",
+                        failure_class,
+                        detail = %e,
+                        "MITM CONNECT relay failed after policy allow"
+                    );
+                    handler
+                        .emit_connect_relay_failure_audit(&session_id, &target_info.host, &e)
+                        .await;
                 }
             });
         }
@@ -437,6 +482,12 @@ struct ConnectTargetInfo {
     host: String,
     port: u16,
     authority: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TunnelRelayStats {
+    downstream_to_upstream_bytes: u64,
+    upstream_to_downstream_bytes: u64,
 }
 
 fn connect_target_info(host: &str) -> ConnectTargetInfo {
@@ -470,7 +521,7 @@ async fn relay_connect_tunnel(
     on_upgrade: hyper::upgrade::OnUpgrade,
     target: &str,
     limits: ConnectRelayLimits,
-) -> Result<(), String> {
+) -> Result<TunnelRelayStats, String> {
     let upgraded = tokio::time::timeout(limits.setup_timeout, on_upgrade)
         .await
         .map_err(|_| {
@@ -490,7 +541,7 @@ async fn relay_connect_tunnel(
             )
         })?
         .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
-    let _ = tokio::time::timeout(
+    let (downstream_to_upstream_bytes, upstream_to_downstream_bytes) = tokio::time::timeout(
         limits.session_max,
         copy_bidirectional(&mut downstream, &mut upstream),
     )
@@ -502,7 +553,10 @@ async fn relay_connect_tunnel(
         )
     })?
     .map_err(|e| format!("tunnel relay failed: {e}"))?;
-    Ok(())
+    Ok(TunnelRelayStats {
+        downstream_to_upstream_bytes,
+        upstream_to_downstream_bytes,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -556,13 +610,14 @@ async fn relay_connect_mitm(
             preface = %hex_preface(&preface[..preface_len]),
             "non-strict MITM detected non-TLS CONNECT payload/header; falling back to blind tunnel"
         );
-        return relay_connect_tunnel_from_stream_with_prefetch(
+        let _ = relay_connect_tunnel_from_stream_with_prefetch(
             downstream,
             &target.authority,
             limits,
             &preface[..preface_len],
         )
-        .await;
+        .await?;
+        return Ok(());
     }
 
     let downstream = PrefetchedStream::new(downstream, &preface[tls_start..preface_len]);
@@ -749,7 +804,7 @@ async fn relay_connect_tunnel_from_stream_with_prefetch(
     target: &str,
     limits: ConnectRelayLimits,
     prefetched: &[u8],
-) -> Result<(), String> {
+) -> Result<TunnelRelayStats, String> {
     let mut upstream = tokio::time::timeout(limits.setup_timeout, TcpStream::connect(target))
         .await
         .map_err(|_| {
@@ -770,7 +825,7 @@ async fn relay_connect_tunnel_from_stream_with_prefetch(
             })?
             .map_err(|e| format!("upstream prefetch write failed for {target}: {e}"))?;
     }
-    let _ = tokio::time::timeout(
+    let (downstream_to_upstream_bytes, upstream_to_downstream_bytes) = tokio::time::timeout(
         limits.session_max,
         copy_bidirectional(&mut downstream, &mut upstream),
     )
@@ -782,7 +837,10 @@ async fn relay_connect_tunnel_from_stream_with_prefetch(
         )
     })?
     .map_err(|e| format!("tunnel relay failed: {e}"))?;
-    Ok(())
+    Ok(TunnelRelayStats {
+        downstream_to_upstream_bytes,
+        upstream_to_downstream_bytes,
+    })
 }
 
 #[derive(Clone)]
@@ -795,6 +853,23 @@ fn connect_relay_limits(config: &ConnectRelayConfig) -> ConnectRelayLimits {
     ConnectRelayLimits {
         setup_timeout: Duration::from_secs(config.setup_timeout_secs),
         session_max: Duration::from_secs(config.session_max_secs),
+    }
+}
+
+fn classify_connect_relay_failure(detail: &str) -> &'static str {
+    let lowered = detail.to_ascii_lowercase();
+    if lowered.contains("timed out") {
+        "timeout"
+    } else if lowered.contains("connection refused") {
+        "refused"
+    } else if lowered.contains("connection reset") {
+        "reset"
+    } else if lowered.contains("tls") || lowered.contains("handshake") {
+        "tls_handshake"
+    } else if lowered.contains("dns") || lowered.contains("name or service not known") {
+        "dns"
+    } else {
+        "other"
     }
 }
 
@@ -895,7 +970,7 @@ async fn handle_mitm_websocket_upgrade_request(
             credentials,
             audit_payload,
         } => {
-            tracing::info!(
+            tracing::debug!(
                 host = %target.host,
                 port = target.port,
                 session_id = %session_id,
@@ -1027,13 +1102,13 @@ async fn handle_mitm_websocket_upgrade_request(
         }
         if let Err(e) = copy_bidirectional(&mut downstream, &mut upstream).await {
             if is_expected_tls_close_error(&e) {
-                tracing::info!("websocket MITM relay closed by peer (expected shutdown): {e}");
+                tracing::debug!("websocket MITM relay closed by peer (expected shutdown): {e}");
             } else {
                 tracing::warn!("websocket MITM relay failed: {e}");
             }
         }
     });
-    tracing::info!(
+    tracing::debug!(
         host = %target.host,
         port = target.port,
         session_id = %session_id,
@@ -1990,6 +2065,30 @@ mod tests {
             &connect_target_info("chat.openai.com:443"),
             &connect
         ));
+    }
+
+    #[test]
+    fn test_classify_connect_relay_failure() {
+        assert_eq!(
+            classify_connect_relay_failure("upstream connect timed out after 10 seconds"),
+            "timeout"
+        );
+        assert_eq!(
+            classify_connect_relay_failure("upstream connect failed: Connection refused"),
+            "refused"
+        );
+        assert_eq!(
+            classify_connect_relay_failure("tunnel relay failed: Connection reset by peer"),
+            "reset"
+        );
+        assert_eq!(
+            classify_connect_relay_failure("downstream TLS handshake failed: bad cert"),
+            "tls_handshake"
+        );
+        assert_eq!(
+            classify_connect_relay_failure("dns resolution failed"),
+            "dns"
+        );
     }
 
     // ── pipeline sanity checks ─────────────────────────────────────────

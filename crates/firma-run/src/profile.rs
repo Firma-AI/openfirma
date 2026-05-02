@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::config::{
-    CapabilityLeasePatch, CapabilitySourcePatch, MountPatch, NetworkPolicyPatch, ProfilePatch,
+    CapabilityLeasePatch, CapabilitySourcePatch, ExecutableLaunchPolicyPatch, MountPatch,
+    NetworkPolicyPatch, ProfilePatch,
 };
 use crate::error::RunError;
 
@@ -47,6 +48,8 @@ fn generic_profile() -> ProfilePatch {
             refresh_ratio: Some(0.60),
             grace_seconds: Some(30),
         }),
+        executable_policies: BTreeMap::new(),
+        codex_cli: None,
     }
 }
 
@@ -59,6 +62,18 @@ fn codex_profile() -> ProfilePatch {
         "ANTHROPIC_API_KEY".to_string(),
         "CODEX_HOME".to_string(),
     ]);
+    base.executable_policies.insert(
+        "codex".to_string(),
+        ExecutableLaunchPolicyPatch {
+            enforce_wrapper_defaults: Some(true),
+            sandbox_mode: Some("workspace-write".to_string()),
+            approval_policy: Some("never".to_string()),
+            config_overrides: BTreeMap::from([(
+                "sandbox_workspace_write.network_access".to_string(),
+                "true".to_string(),
+            )]),
+        },
+    );
     base
 }
 
