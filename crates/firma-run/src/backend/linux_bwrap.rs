@@ -169,7 +169,23 @@ impl SandboxBackend for BwrapBackend {
         let mut command = Command::new("bwrap");
         command.arg("--die-with-parent");
         command.arg("--new-session");
-        command.arg("--bind").arg("/").arg("/");
+        let claude_profile = launch
+            .env
+            .get("FIRMA_RUN_PROFILE")
+            .is_some_and(|profile| profile == "claude-code");
+        if claude_profile {
+            command.arg("--ro-bind").arg("/").arg("/");
+            command.arg("--tmpfs").arg("/tmp");
+            command.arg("--tmpfs").arg("/var/tmp");
+            command.arg("--bind").arg(&launch.cwd).arg(&launch.cwd);
+            command
+                .arg("--bind")
+                .arg(&handle.runtime_dir)
+                .arg(&handle.runtime_dir);
+            mask_sensitive_paths(&mut command, launch);
+        } else {
+            command.arg("--bind").arg("/").arg("/");
+        }
         command.arg("--dev").arg("/dev");
         command.arg("--chdir").arg(&launch.cwd);
 
@@ -222,6 +238,66 @@ impl SandboxBackend for BwrapBackend {
     fn teardown(&self, handle: SandboxHandle) -> Result<(), RunError> {
         remove_runtime_dir(&handle.runtime_dir);
         Ok(())
+    }
+}
+
+fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec) {
+    let home = launch
+        .env
+        .get("HOME")
+        .cloned()
+        .or_else(|| std::env::var("HOME").ok())
+        .unwrap_or_default();
+    if home.is_empty() || !home.starts_with('/') {
+        return;
+    }
+
+    let sensitive_suffixes = [
+        ".ssh",
+        ".aws",
+        ".azure",
+        ".kube",
+        ".gnupg",
+        ".config/gcloud",
+    ];
+    for suffix in sensitive_suffixes {
+        let path = format!("{home}/{suffix}");
+        command.arg("--dir").arg(&path);
+        command.arg("--tmpfs").arg(&path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    use crate::backend::LaunchSpec;
+    use crate::config::SandboxIdentityMode;
+
+    #[test]
+    fn mask_sensitive_paths_adds_expected_mounts() {
+        let mut cmd = Command::new("bwrap");
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), "/home/tester".to_string());
+        let launch = LaunchSpec {
+            executable: "/bin/true".to_string(),
+            args: vec![],
+            cwd: PathBuf::from("/tmp"),
+            env,
+            identity_mode: SandboxIdentityMode::SandboxUser,
+        };
+        super::mask_sensitive_paths(&mut cmd, &launch);
+        let rendered = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(rendered.contains("--tmpfs /home/tester/.ssh"));
+        assert!(rendered.contains("--tmpfs /home/tester/.aws"));
+        assert!(rendered.contains("--tmpfs /home/tester/.config/gcloud"));
     }
 }
 

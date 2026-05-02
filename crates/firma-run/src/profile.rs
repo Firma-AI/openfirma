@@ -11,8 +11,9 @@ pub(crate) fn built_in_profile(profile: &str) -> Result<ProfilePatch, RunError> 
     match profile {
         "generic" => Ok(generic_profile()),
         "codex" => Ok(codex_profile()),
+        "claude-code" => Ok(claude_code_profile()),
         other => Err(RunError::ConfigValidation(format!(
-            "unknown profile '{other}'; supported profiles: generic, codex"
+            "unknown profile '{other}'; supported profiles: generic, codex, claude-code"
         ))),
     }
 }
@@ -56,6 +57,20 @@ fn codex_profile() -> ProfilePatch {
         "OPENAI_API_KEY".to_string(),
         "ANTHROPIC_API_KEY".to_string(),
         "CODEX_HOME".to_string(),
+    ]);
+    base
+}
+
+fn claude_code_profile() -> ProfilePatch {
+    let mut base = generic_profile();
+    base.env_set
+        .insert("FIRMA_RUN_PROFILE".to_string(), "claude-code".to_string());
+    base.env_passthrough.extend([
+        "ANTHROPIC_API_KEY".to_string(),
+        "ANTHROPIC_AUTH_TOKEN".to_string(),
+        "ANTHROPIC_BASE_URL".to_string(),
+        "CLAUDE_CODE_USE_VERTEX".to_string(),
+        "CLAUDE_CODE_USE_BEDROCK".to_string(),
     ]);
     base
 }

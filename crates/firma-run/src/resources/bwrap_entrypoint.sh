@@ -60,4 +60,13 @@ if [ -n "${FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS:-}" ]; then
   echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] proxy bridge ready pid=${bridge_pid}" >>"${bridge_log}"
 fi
 
+if [ -n "${FIRMA_RUN_CLAUDE_SETTINGS_PATH:-}" ] && [ "$#" -gt 0 ]; then
+  cmd_basename="$(basename "$1")"
+  if [ "$cmd_basename" = "claude" ]; then
+    cmd="$1"
+    shift
+    exec "$cmd" --settings "${FIRMA_RUN_CLAUDE_SETTINGS_PATH}" "$@"
+  fi
+fi
+
 exec "$@"

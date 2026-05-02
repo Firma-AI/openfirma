@@ -67,7 +67,8 @@ pub fn execute_run(args: &RunArgs) -> Result<i32, RunError> {
         );
 
         let network_runtime = prepare_network_runtime(handle_ref, &profile.sidecar_endpoint)?;
-        let env = build_execution_env(&profile, &identity, &lease, network_runtime.env_overrides());
+        let mut env =
+            build_execution_env(&profile, &identity, &lease, network_runtime.env_overrides());
 
         let executable = args
             .command
@@ -78,7 +79,12 @@ pub fn execute_run(args: &RunArgs) -> Result<i32, RunError> {
             executable,
             args: args.command.iter().skip(1).cloned().collect(),
             cwd: working_dir,
-            env,
+            env: {
+                if profile.id == "claude-code" {
+                    inject_claude_settings_arg(handle_ref, &mut env, &args.command)?;
+                }
+                env
+            },
             identity_mode: profile.identity_mode,
         };
 
@@ -141,9 +147,10 @@ fn build_execution_env(
 
     env.extend(network_overrides.clone());
 
+    let attr_headers = build_attribution_headers(profile, identity);
     env.insert(
         "FIRMA_RUN_ATTR_HEADERS_JSON".to_string(),
-        serde_json::to_string(&identity.attribution_headers()).unwrap_or_else(|_| "{}".to_string()),
+        serde_json::to_string(&attr_headers).unwrap_or_else(|_| "{}".to_string()),
     );
 
     if let Some(token) = lease.token() {
@@ -158,6 +165,70 @@ fn build_execution_env(
     }
 
     env
+}
+
+fn build_attribution_headers(
+    profile: &ResolvedProfile,
+    identity: &RunIdentity,
+) -> BTreeMap<String, String> {
+    let mut headers = identity.attribution_headers();
+    let runtime_user = std::env::var("USER")
+        .ok()
+        .or_else(|| std::env::var("USERNAME").ok())
+        .or_else(|| std::env::var("LOGNAME").ok())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    headers.insert("x-firma-agent".to_string(), profile.id.clone());
+    headers.insert("x-firma-user".to_string(), runtime_user);
+    headers
+}
+
+fn inject_claude_settings_arg(
+    handle: &crate::backend::SandboxHandle,
+    env: &mut BTreeMap<String, String>,
+    command: &[String],
+) -> Result<(), RunError> {
+    if command.is_empty() {
+        return Ok(());
+    }
+
+    let executable = std::path::Path::new(&command[0])
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or_default();
+    if executable != "claude" {
+        return Ok(());
+    }
+
+    // Respect user-provided settings path/JSON if already present.
+    if command.iter().skip(1).any(|arg| arg == "--settings") {
+        return Ok(());
+    }
+
+    let settings_path = handle.runtime_dir.join("claude-settings.json");
+    let settings_json = serde_json::json!({
+        "sandbox": {
+            "autoAllowBashIfSandboxed": true
+        }
+    });
+    let serialized = serde_json::to_vec_pretty(&settings_json).map_err(|error| {
+        RunError::Internal(format!(
+            "failed to serialize Claude settings payload: {error}"
+        ))
+    })?;
+    std::fs::write(&settings_path, serialized).map_err(|error| {
+        RunError::Internal(format!(
+            "failed to write Claude settings file {}: {error}",
+            settings_path.display()
+        ))
+    })?;
+
+    // Tell launcher glue to append --settings <path>.
+    env.insert(
+        "FIRMA_RUN_CLAUDE_SETTINGS_PATH".to_string(),
+        settings_path.display().to_string(),
+    );
+    Ok(())
 }
 
 fn inject_sidecar_ca_trust_env(env: &mut BTreeMap<String, String>, ca_cert_path: &Path) {
@@ -273,6 +344,13 @@ mod tests {
         let env = build_execution_env(&profile, &identity, &lease, &BTreeMap::default());
         assert!(env.contains_key("HTTP_PROXY"));
         assert_eq!(env.get("FIRMA_RUN_PROFILE"), Some(&"generic".to_string()));
+        let headers_json = env
+            .get("FIRMA_RUN_ATTR_HEADERS_JSON")
+            .unwrap_or_else(|| panic!("missing FIRMA_RUN_ATTR_HEADERS_JSON"));
+        let headers: BTreeMap<String, String> =
+            serde_json::from_str(headers_json).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(headers.get("x-firma-agent"), Some(&"generic".to_string()));
+        assert!(headers.contains_key("x-firma-session-id"));
     }
 
     #[test]

@@ -134,6 +134,12 @@ Network-confinement defaults are backend-aware:
 If you explicitly set `enforce_network_namespace=true` with a non-`bwrap`
 backend, `firma run` now fails at config validation with a clear error.
 
+Built-in runtime profiles:
+
+- `generic` (default)
+- `codex`
+- `claude-code`
+
 Manual backend override example:
 
 ```bash
@@ -154,6 +160,24 @@ HTTPS CONNECT scenario:
 ```bash
 scripts/e2e-firma-run.sh --https-check
 ```
+
+Claude-code profile smoke:
+
+```bash
+scripts/e2e-firma-run.sh --profile claude-code
+```
+
+Claude-code shell acceptance suite (Linux-only, unified harness):
+
+```bash
+scripts/e2e-firma-run.sh --claude-acceptance
+```
+
+This suite currently validates:
+- shell-originated network attempts are intercepted and denied when policy is protected-by-default,
+- child-process shellouts (`wget`) are intercepted under the same path,
+- `claude-code` profile filesystem hardening blocks writes outside the working directory,
+- masked sensitive paths (for example `~/.ssh`) are not readable inside sandbox.
 
 Custom command example:
 

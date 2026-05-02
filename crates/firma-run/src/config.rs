@@ -516,6 +516,13 @@ profiles:
     }
 
     #[test]
+    fn resolves_claude_code_profile() {
+        let resolved = resolve_profile(&args("claude-code")).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(resolved.id, "claude-code");
+        assert!(resolved.env_passthrough.contains("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
     fn structural_network_defaults_to_true_for_bwrap_backend() {
         let mut run_args = args("generic");
         run_args.backend = Some(crate::args::BackendOverride::Bwrap);
