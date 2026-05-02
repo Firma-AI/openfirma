@@ -136,14 +136,15 @@ fn forward_requests_with_header_injection(
             return Ok(());
         };
 
-        let mut head = buffer[..header_end].to_vec();
-        let mut remaining = buffer[header_end + 4..].to_vec();
-        buffer.clear();
+        // Reuse allocation and avoid per-request copies.
+        let mut request = std::mem::take(&mut buffer);
+        let mut remaining = request.split_off(header_end + 4);
+        request.truncate(header_end);
 
-        let meta = parse_request_metadata(&head)?;
-        append_missing_headers(&mut head, attribution_headers)?;
+        let meta = parse_request_metadata(&request)?;
+        append_missing_headers(&mut request, attribution_headers)?;
 
-        upstream.write_all(&head)?;
+        upstream.write_all(&request)?;
         upstream.write_all(b"\r\n\r\n")?;
 
         match meta.body {
@@ -346,15 +347,16 @@ fn forward_chunked_body(
 ) -> io::Result<()> {
     loop {
         let line_end = read_until_crlf(client, buffer)?;
-        let line = buffer[..line_end].to_vec();
-        let line_with_crlf = buffer[..line_end + 2].to_vec();
-        upstream.write_all(&line_with_crlf)?;
-        buffer.drain(..line_end + 2);
-
-        let line_str = String::from_utf8_lossy(&line);
-        let size_hex = line_str.split(';').next().unwrap_or_default().trim();
+        let line = &buffer[..line_end];
+        let size_hex = std::str::from_utf8(line)
+            .ok()
+            .and_then(|s| s.split(';').next())
+            .map(str::trim)
+            .unwrap_or_default();
         let chunk_size = usize::from_str_radix(size_hex, 16)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid chunk size line"))?;
+        upstream.write_all(&buffer[..line_end + 2])?;
+        buffer.drain(..line_end + 2);
 
         let needed = chunk_size + 2;
         ensure_buffered(client, buffer, needed)?;
@@ -365,8 +367,7 @@ fn forward_chunked_body(
             // Forward trailing headers until CRLF CRLF.
             loop {
                 let tail_end = read_until_crlf(client, buffer)?;
-                let trailer_line = buffer[..tail_end + 2].to_vec();
-                upstream.write_all(&trailer_line)?;
+                upstream.write_all(&buffer[..tail_end + 2])?;
                 let is_blank = tail_end == 0;
                 buffer.drain(..tail_end + 2);
                 if is_blank {

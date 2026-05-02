@@ -40,6 +40,7 @@ use crate::interceptor::{Interceptor, InterceptorError};
 use crate::pipeline::RawRequest;
 
 const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
+const CONNECT_PREFACE_MAX_BYTES: usize = 32;
 
 /// HTTP forward proxy interceptor.
 ///
@@ -300,11 +301,17 @@ async fn handle_connect_request(
         }
     }
 
-    // MITM-intercepted hosts (preflight succeeded): skip CONNECT-level
-    // enforcement; each decrypted inner request is enforced individually at L7.
+    // MITM-intercepted hosts (preflight succeeded): by default skip CONNECT-level
+    // enforcement because each decrypted inner request is enforced at L7.
+    //
+    // Safety hardening: for non-strict MITM candidates we still evaluate
+    // CONNECT once up-front. If this session later needs to fall back to a
+    // blind tunnel (e.g. non-TLS tunneled payload), destination-level policy
+    // has already been enforced and no bypass is introduced.
+    //
     // Blind-tunnel hosts AND non-strict MITM with failed preflight: CONNECT is
     // the only enforcement point, so enforce it.
-    let connect_decision = if effective_mitm.is_some() {
+    let connect_decision = if effective_mitm.is_some() && strict_mitm {
         ConnectDecision::Allow
     } else {
         handler.handle_connect(raw, &session_id).await
@@ -483,7 +490,7 @@ async fn relay_connect_mitm(
         })?
         .map_err(|e| format!("upgrade failed: {e}"))?;
     let mut downstream = TokioIo::new(upgraded);
-    let mut preface = [0_u8; 32];
+    let mut preface = [0_u8; CONNECT_PREFACE_MAX_BYTES];
     let preface_len = tokio::time::timeout(
         limits.setup_timeout,
         read_connect_preface(&mut downstream, &mut preface),
@@ -497,12 +504,9 @@ async fn relay_connect_mitm(
         )
     })?
     .map_err(|e| format!("downstream preface read failed for {}: {e}", target.host))?;
-    let tls_start = preface
-        .iter()
-        .position(|b| *b != b'\r' && *b != b'\n')
-        .unwrap_or(preface_len);
+    let tls_start = first_non_crlf_index(&preface[..preface_len]);
     let first_non_crlf = preface.get(tls_start).copied().unwrap_or(0);
-    let tls_header_valid = is_likely_tls_record_header(&preface[..preface_len]);
+    let tls_header_valid = is_likely_tls_record_header(&preface[..preface_len], tls_start);
     if !tls_header_valid {
         if strict_mitm {
             return Err(format!(
@@ -572,7 +576,7 @@ async fn relay_connect_mitm(
 
 async fn read_connect_preface(
     downstream: &mut TokioIo<hyper::upgrade::Upgraded>,
-    out: &mut [u8; 32],
+    out: &mut [u8; CONNECT_PREFACE_MAX_BYTES],
 ) -> std::io::Result<usize> {
     // Ignore leading CR/LF bytes before the tunneled protocol payload.
     // Some client/proxy stacks emit an extra line break between CONNECT and TLS payload.
@@ -596,11 +600,17 @@ async fn read_connect_preface(
     Ok(out.len())
 }
 
-fn is_likely_tls_record_header(preface: &[u8]) -> bool {
-    let start = preface
+fn first_non_crlf_index(preface: &[u8]) -> usize {
+    preface
         .iter()
         .position(|b| *b != b'\r' && *b != b'\n')
-        .unwrap_or(preface.len());
+        .unwrap_or(preface.len())
+}
+
+fn is_likely_tls_record_header(preface: &[u8], start: usize) -> bool {
+    if start >= preface.len() {
+        return false;
+    }
     let rem = &preface[start..];
     if rem.len() < 5 {
         return false;
@@ -614,23 +624,29 @@ fn is_likely_tls_record_header(preface: &[u8]) -> bool {
 }
 
 fn hex_preface(preface: &[u8]) -> String {
-    preface
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join(" ")
+    use std::fmt::Write as _;
+    preface.iter().enumerate().fold(
+        String::with_capacity(preface.len().saturating_mul(3)),
+        |mut out, (idx, byte)| {
+            if idx > 0 {
+                out.push(' ');
+            }
+            let _ = write!(&mut out, "{byte:02x}");
+            out
+        },
+    )
 }
 
 struct PrefetchedStream<T> {
     inner: T,
-    prefetched: [u8; 32],
+    prefetched: [u8; CONNECT_PREFACE_MAX_BYTES],
     prefetched_len: usize,
     prefetched_pos: usize,
 }
 
 impl<T> PrefetchedStream<T> {
     fn new(inner: T, prefetched: &[u8]) -> Self {
-        let mut local = [0_u8; 32];
+        let mut local = [0_u8; CONNECT_PREFACE_MAX_BYTES];
         let len = prefetched.len().min(local.len());
         local[..len].copy_from_slice(&prefetched[..len]);
         Self {
@@ -1929,6 +1945,132 @@ Content-Length: 2\r\n\
 
         cancel.cancel();
         target_cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_proxy_connect_mitm_tolerates_crlf_preface_before_tls() {
+        let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let proxy_addr = free_addr();
+        let handler = test_handler(test_pipeline_deny_for_host("*"));
+        let cancel = CancellationToken::new();
+
+        let mitm_config = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["localhost".to_string()],
+            strict_hosts: vec!["localhost".to_string()],
+            cert_ttl_secs: 300,
+            cert_cache_capacity: 16,
+            ..HttpsMitmConfig::default()
+        };
+
+        let server_handle = start_proxy_with_mitm(
+            proxy_addr,
+            handler,
+            cancel.clone(),
+            mitm_config,
+            ca_tempdir.path().to_path_buf(),
+        )
+        .await;
+
+        let mut stream = TcpStream::connect(proxy_addr)
+            .await
+            .unwrap_or_else(|e| panic!("failed to connect to proxy: {e}"));
+        let connect_req = "CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\nx-firma-session-id: _test_\r\n\r\n";
+        stream
+            .write_all(connect_req.as_bytes())
+            .await
+            .unwrap_or_else(|e| panic!("failed to write CONNECT request: {e}"));
+        let connect_response = read_connect_response(&mut stream).await;
+        assert!(
+            connect_response.starts_with("HTTP/1.1 200"),
+            "expected CONNECT 200, got: {connect_response:?}"
+        );
+
+        let ca_cert_path = ca_tempdir.path().join("firma-ca.crt");
+        for _ in 0..20 {
+            if ca_cert_path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(ca_cert_path.exists(), "expected CA cert to be generated");
+
+        // Repro shape seen in the field: CRLF emitted before TLS preface.
+        stream
+            .write_all(b"\r\n")
+            .await
+            .unwrap_or_else(|e| panic!("failed to write CRLF preface: {e}"));
+
+        let mut tls_stream = connect_tls_with_ca(stream, &ca_cert_path, "localhost").await;
+        let tunneled_request = "POST /v1/chat/completions HTTP/1.1\r\n\
+Host: localhost:443\r\n\
+Content-Length: 2\r\n\
+\r\n\
+{}";
+        tls_stream
+            .write_all(tunneled_request.as_bytes())
+            .await
+            .unwrap_or_else(|e| panic!("failed to write tunneled HTTPS request: {e}"));
+
+        let mut buf = [0u8; 2048];
+        let n = tokio::time::timeout(Duration::from_secs(3), tls_stream.read(&mut buf))
+            .await
+            .unwrap_or_else(|_| panic!("timed out reading tunneled HTTPS response"))
+            .unwrap_or_else(|e| panic!("failed reading tunneled HTTPS response: {e}"));
+        let response = String::from_utf8_lossy(&buf[..n]).to_string();
+        let status = response
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse::<u16>().ok())
+            .unwrap_or(0);
+        assert_eq!(
+            status, 403,
+            "expected L7 deny over MITM path even with CRLF preface, got: {response}"
+        );
+
+        cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_proxy_connect_mitm_non_strict_non_tls_still_enforces_connect_policy() {
+        let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let proxy_addr = free_addr();
+        // Deny all CONNECT destinations.
+        let handler = test_handler(test_pipeline_deny_connect_for_host("*"));
+        let cancel = CancellationToken::new();
+
+        let mitm_config = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["localhost".to_string()],
+            strict_hosts: vec![],
+            cert_ttl_secs: 300,
+            cert_cache_capacity: 16,
+            ..HttpsMitmConfig::default()
+        };
+
+        let server_handle = start_proxy_with_mitm(
+            proxy_addr,
+            handler,
+            cancel.clone(),
+            mitm_config,
+            ca_tempdir.path().to_path_buf(),
+        )
+        .await;
+
+        let status = proxy_request(
+            proxy_addr,
+            "CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\nx-firma-session-id: _test_\r\n\r\n",
+        )
+        .await;
+        assert_eq!(
+            status, 403,
+            "non-strict MITM host must still enforce CONNECT policy before any fallback"
+        );
+
+        cancel.cancel();
         let _ = server_handle.await;
     }
 
