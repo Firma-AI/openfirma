@@ -1593,6 +1593,7 @@ dependencies = [
  "chrono",
  "clap",
  "ctrlc",
+ "nix 0.31.2",
  "pretty_assertions",
  "serde",
  "serde_json",

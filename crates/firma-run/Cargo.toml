@@ -35,6 +35,7 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 serde_yaml.workspace = true
 ctrlc.workspace = true
+nix.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

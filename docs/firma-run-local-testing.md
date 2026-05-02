@@ -140,6 +140,24 @@ Built-in runtime profiles:
 - `codex`
 - `claude-code`
 
+Optional seccomp layer (Linux `bwrap`):
+
+`firma-run` can optionally pass a compiled seccomp cBPF program to `bwrap`
+(`--seccomp`) for additional syscall-level restriction.
+
+Example:
+
+```toml
+[profiles.claude-code]
+backend = "bwrap"
+seccomp_bpf_path = "/absolute/path/to/seccomp.bpf"
+```
+
+Notes:
+- `seccomp_bpf_path` is supported only with backend `bwrap`.
+- path must be absolute and point to an existing file.
+- file format must match `bwrap --seccomp` expectations (compiled cBPF).
+
 Manual backend override example:
 
 ```bash

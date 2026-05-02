@@ -153,6 +153,13 @@ fn build_execution_env(
         serde_json::to_string(&attr_headers).unwrap_or_else(|_| "{}".to_string()),
     );
 
+    if let Some(seccomp_path) = &profile.seccomp_bpf_path {
+        env.insert(
+            "FIRMA_RUN_SECCOMP_BPF_PATH".to_string(),
+            seccomp_path.display().to_string(),
+        );
+    }
+
     if let Some(token) = lease.token() {
         env.insert("FIRMA_CAPABILITY_TOKEN".to_string(), token);
     }
@@ -324,6 +331,7 @@ mod tests {
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::<MountSpec>::new(),
+            seccomp_bpf_path: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -368,6 +376,7 @@ mod tests {
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
+            seccomp_bpf_path: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -395,6 +404,46 @@ mod tests {
         assert_eq!(
             env.get("FIRMA_CAPABILITY_TOKEN"),
             Some(&"token".to_string())
+        );
+    }
+
+    #[test]
+    fn seccomp_bpf_path_is_exported_when_configured() {
+        let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let seccomp_path = tempdir.path().join("seccomp.bpf");
+        fs::write(&seccomp_path, [0_u8; 8]).unwrap_or_else(|e| panic!("{e}"));
+
+        let profile = ResolvedProfile {
+            id: "generic".to_string(),
+            backend: crate::backend::BackendKind::Bwrap,
+            sidecar_endpoint: SidecarEndpoint::Tcp {
+                addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
+            },
+            env_passthrough: BTreeSet::default(),
+            env_set: BTreeMap::default(),
+            mounts: Vec::new(),
+            seccomp_bpf_path: Some(seccomp_path.clone()),
+            allowed_domains: Vec::new(),
+            network: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+            identity_mode: SandboxIdentityMode::SandboxUser,
+            capability: CapabilityLeaseConfig {
+                source: CapabilitySource::Disabled,
+                refresh_ratio: 0.60,
+                grace_seconds: 30,
+            },
+        };
+
+        let identity = RunIdentity::new("generic");
+        let lease = crate::capability::CapabilityLeaseManager::new(&profile.capability)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let env = build_execution_env(&profile, &identity, &lease, &BTreeMap::default());
+
+        assert_eq!(
+            env.get("FIRMA_RUN_SECCOMP_BPF_PATH"),
+            Some(&seccomp_path.display().to_string())
         );
     }
 

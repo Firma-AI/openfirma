@@ -24,6 +24,7 @@ pub struct ResolvedProfile {
     pub env_passthrough: BTreeSet<String>,
     pub env_set: BTreeMap<String, String>,
     pub mounts: Vec<MountSpec>,
+    pub seccomp_bpf_path: Option<PathBuf>,
     pub allowed_domains: Vec<String>,
     pub network: NetworkPolicy,
     pub identity_mode: SandboxIdentityMode,
@@ -67,6 +68,27 @@ impl ResolvedProfile {
                 return Err(RunError::ConfigValidation(format!(
                     "mount target must be absolute: {}",
                     mount.target.display()
+                )));
+            }
+        }
+
+        if let Some(path) = &self.seccomp_bpf_path {
+            if !path.is_absolute() {
+                return Err(RunError::ConfigValidation(format!(
+                    "seccomp_bpf_path must be absolute: {}",
+                    path.display()
+                )));
+            }
+            if !path.is_file() {
+                return Err(RunError::ConfigValidation(format!(
+                    "seccomp_bpf_path must point to an existing file: {}",
+                    path.display()
+                )));
+            }
+            if self.backend != BackendKind::Bwrap {
+                return Err(RunError::ConfigValidation(format!(
+                    "seccomp_bpf_path is only supported with backend 'bwrap', got '{backend}'",
+                    backend = self.backend
                 )));
             }
         }
@@ -173,6 +195,7 @@ struct FileConfig {
 pub(crate) struct ProfilePatch {
     pub(crate) backend: Option<BackendKind>,
     pub(crate) sidecar_endpoint: Option<String>,
+    pub(crate) seccomp_bpf_path: Option<PathBuf>,
     #[serde(default)]
     pub(crate) env_passthrough: Vec<String>,
     #[serde(default)]
@@ -241,6 +264,7 @@ impl ProfilePatch {
         Self {
             backend: higher.backend.or(self.backend),
             sidecar_endpoint: higher.sidecar_endpoint.or(self.sidecar_endpoint),
+            seccomp_bpf_path: higher.seccomp_bpf_path.or(self.seccomp_bpf_path),
             env_passthrough,
             env_set,
             mounts,
@@ -269,6 +293,7 @@ pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
     let cli_patch = ProfilePatch {
         backend: args.backend.map(Into::into),
         sidecar_endpoint: args.sidecar_endpoint.clone(),
+        seccomp_bpf_path: None,
         env_passthrough: Vec::new(),
         env_set: BTreeMap::new(),
         mounts: Vec::new(),
@@ -357,6 +382,7 @@ pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
         env_passthrough,
         env_set: patch.env_set,
         mounts,
+        seccomp_bpf_path: patch.seccomp_bpf_path,
         allowed_domains: patch.allowed_domains,
         network,
         identity_mode,
@@ -475,19 +501,26 @@ mod tests {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let config_path = tmpdir.path().join("firma-run.yaml");
 
-        let yaml = r#"
+        let seccomp_path = tmpdir.path().join("seccomp.bpf");
+        fs::write(&seccomp_path, [0_u8; 8]).unwrap_or_else(|e| panic!("{e}"));
+
+        let yaml = format!(
+            r#"
 defaults:
   sidecar_endpoint: "tcp://127.0.0.1:18080"
 profiles:
   codex:
     backend: bwrap
+    seccomp_bpf_path: {}
     identity_mode: host_user
     env_passthrough:
       - HOME
     capability:
       kind: file
       path: /tmp/capability.token
-"#;
+"#,
+            seccomp_path.display()
+        );
         fs::write(&config_path, yaml).unwrap_or_else(|e| panic!("{e}"));
 
         let mut run_args = args("codex");
@@ -495,6 +528,7 @@ profiles:
 
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved.backend, BackendKind::Bwrap);
+        assert_eq!(resolved.seccomp_bpf_path, Some(seccomp_path));
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::HostUser);
         assert!(resolved.env_passthrough.contains("HOME"));
         assert_eq!(
@@ -565,6 +599,34 @@ fail_closed = true
                 .to_string()
                 .contains("enforce_network_namespace=true is unsupported"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn seccomp_bpf_path_rejected_for_non_bwrap_backend() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let seccomp_path = tmpdir.path().join("seccomp.bpf");
+        fs::write(&seccomp_path, [0_u8; 8]).unwrap_or_else(|e| panic!("{e}"));
+
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "vz"
+seccomp_bpf_path = "{}"
+"#,
+            seccomp_path.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let err =
+            resolve_profile(&run_args).expect_err("expected seccomp backend validation error");
+        assert!(
+            err.to_string()
+                .contains("seccomp_bpf_path is only supported with backend 'bwrap'"),
+            "unexpected error: {err}"
         );
     }
 }

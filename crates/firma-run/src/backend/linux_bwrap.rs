@@ -1,5 +1,9 @@
 use std::path::PathBuf;
 use std::process::{Child, Command};
+#[cfg(target_os = "linux")]
+use std::{fs::File, os::fd::AsRawFd};
+
+use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
 use crate::backend::{
     BackendKind, EnforcementProof, LaunchSpec, PrepareRequest, SandboxBackend, SandboxHandle,
@@ -193,6 +197,21 @@ impl SandboxBackend for BwrapBackend {
             command.arg("--unshare-net");
         }
 
+        let mut _seccomp_file: Option<File> = None;
+        if let Some(seccomp_path) = launch
+            .env
+            .get("FIRMA_RUN_SECCOMP_BPF_PATH")
+            .filter(|value| !value.trim().is_empty())
+        {
+            let file = File::open(seccomp_path).map_err(|error| RunError::Backend {
+                backend: BackendKind::Bwrap.to_string(),
+                reason: format!("failed to open seccomp bpf file {seccomp_path}: {error}"),
+            })?;
+            clear_fd_cloexec(&file)?;
+            command.arg("--seccomp").arg(file.as_raw_fd().to_string());
+            _seccomp_file = Some(file);
+        }
+
         for mount in &handle.mounts {
             if mount.read_only {
                 command
@@ -255,6 +274,21 @@ impl SandboxBackend for BwrapBackend {
     }
 }
 
+fn clear_fd_cloexec(file: &File) -> Result<(), RunError> {
+    let fd = file.as_raw_fd();
+    let flags = fcntl(file, FcntlArg::F_GETFD).map_err(|error| RunError::Backend {
+        backend: BackendKind::Bwrap.to_string(),
+        reason: format!("failed to read fd flags for seccomp descriptor {fd}: {error}"),
+    })?;
+    let mut fd_flags = FdFlag::from_bits_truncate(flags);
+    fd_flags.remove(FdFlag::FD_CLOEXEC);
+    fcntl(file, FcntlArg::F_SETFD(fd_flags)).map_err(|error| RunError::Backend {
+        backend: BackendKind::Bwrap.to_string(),
+        reason: format!("failed to clear CLOEXEC on seccomp descriptor {fd}: {error}"),
+    })?;
+    Ok(())
+}
+
 fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec) {
     let home = launch
         .env
@@ -272,6 +306,7 @@ fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec) {
         ".azure",
         ".kube",
         ".gnupg",
+        ".config",
         ".config/gcloud",
     ];
     for suffix in sensitive_suffixes {
