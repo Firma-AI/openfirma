@@ -36,10 +36,22 @@ From repo root:
 scripts/firma-run-local-setup.sh
 ```
 
+Optional diagnostics/observability bootstrap (stricter guard defaults, richer MITM visibility for key agent hosts):
+
+```bash
+scripts/firma-run-local-setup.sh --observability
+```
+
 PowerShell (Windows only):
 
 ```powershell
 pwsh ./scripts/firma-run-local-setup.ps1
+```
+
+PowerShell observability mode:
+
+```powershell
+pwsh ./scripts/firma-run-local-setup.ps1 --observability
 ```
 
 The script creates:
@@ -52,6 +64,7 @@ Templates used:
 
 - `docs/examples/firma-run/mapping-rules.local.example.toml`
 - `docs/examples/firma-run/firma_sidecar.local.example.toml`
+- `docs/examples/firma-run/firma_sidecar.local.observability.example.toml` (opt-in diagnostics profile)
 
 ## Environment Variables
 

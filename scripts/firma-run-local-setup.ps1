@@ -20,10 +20,23 @@ $localDir = Join-Path $rootDir ".local"
 $examplesDir = Join-Path $rootDir "docs/examples/firma-run"
 
 $mappingSrc = Join-Path $examplesDir "mapping-rules.local.example.toml"
-$sidecarSrc = Join-Path $examplesDir "firma_sidecar.local.example.toml"
+$sidecarSrcDefault = Join-Path $examplesDir "firma_sidecar.local.example.toml"
+$sidecarSrcObservability = Join-Path $examplesDir "firma_sidecar.local.observability.example.toml"
 $mappingDst = Join-Path $localDir "mapping-rules.toml"
 $sidecarDst = Join-Path $localDir "firma_sidecar.local.toml"
 $auditKeyDst = Join-Path $localDir "audit-key.pem"
+$setupMode = "default"
+
+foreach ($arg in $args) {
+  if ($arg -eq "--observability") {
+    $setupMode = "observability"
+    continue
+  }
+
+  Fail "unknown argument: $arg (supported: --observability)"
+}
+
+$sidecarSrc = if ($setupMode -eq "observability") { $sidecarSrcObservability } else { $sidecarSrcDefault }
 
 New-Item -ItemType Directory -Path $localDir -Force | Out-Null
 Write-Ok "ensured local runtime directory: $localDir"
@@ -37,7 +50,7 @@ if (-not (Test-Path -Path $mappingDst -PathType Leaf)) {
 
 if (-not (Test-Path -Path $sidecarDst -PathType Leaf)) {
   Copy-Item -Path $sidecarSrc -Destination $sidecarDst
-  Write-Ok "created $sidecarDst from example template"
+  Write-Ok "created $sidecarDst from $setupMode example template"
 } else {
   Write-Warn "keeping existing $sidecarDst"
 }
