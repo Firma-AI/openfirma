@@ -189,6 +189,9 @@ Validation:
   deterministic `403` fail-closed denies.
 - For non-strict intercepted hosts, MITM preflight failures fall back to
   CONNECT tunnel mode.
+- For intercepted hosts, HTTPS upgrade handshakes (for example WebSocket
+  `Connection: Upgrade` + `Upgrade: websocket`) are policy-evaluated at
+  handshake request time and then relayed as upgraded streams when allowed.
 
 Default `intercept_hosts` includes common providers/services such as OpenAI,
 Anthropic/Claude (`api.anthropic.com`, `platform.claude.com`, `claude.ai`,

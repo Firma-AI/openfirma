@@ -28,14 +28,20 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use rustls::ClientConfig;
+use rustls::RootCertStore;
+use rustls::pki_types::ServerName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
+use tokio_rustls::TlsConnector;
 use tokio_util::sync::CancellationToken;
 
 use super::https_mitm::HttpsMitmRuntime;
 use crate::config::{ConnectRelayConfig, HttpsMitmConfig};
-use crate::handler::{ConnectDecision, DispatchedResponse, HandledResponse, RequestHandler};
+use crate::handler::{
+    ConnectDecision, DispatchedResponse, HandledResponse, RequestHandler, UpgradeAuthorization,
+};
 use crate::interceptor::{Interceptor, InterceptorError};
 use crate::pipeline::RawRequest;
 
@@ -318,10 +324,20 @@ async fn handle_connect_request(
     };
 
     match connect_decision {
-        ConnectDecision::Deny { reason, detail } => Ok(deny_json_response(
-            StatusCode::FORBIDDEN,
-            crate::handler::deny_body_json(reason, &detail),
-        )),
+        ConnectDecision::Deny { reason, detail } => {
+            tracing::warn!(
+                host = %target_info.host,
+                port = target_info.port,
+                session_id = %session_id,
+                reason = ?reason,
+                detail = %detail,
+                "CONNECT denied by guard policy"
+            );
+            Ok(deny_json_response(
+                StatusCode::FORBIDDEN,
+                crate::handler::deny_body_json(reason, &detail),
+            ))
+        }
         ConnectDecision::Allow => {
             let limits = connect_relay_limits(&connect_relay);
             let target = connect_target(&target_info.authority);
@@ -543,24 +559,26 @@ async fn relay_connect_mitm(
 
     let target_host = target.host.clone();
     let io = TokioIo::new(tls_stream);
-    let serve = http1::Builder::new().serve_connection(
-        io,
-        service_fn(move |req: Request<Incoming>| {
-            let handler = Arc::clone(&handler);
-            let target = target.clone();
-            let connect_session_id = connect_session_id.clone();
-            async move {
-                handle_mitm_https_request(
-                    req,
-                    handler,
-                    target,
-                    &connect_session_id,
-                    max_request_body_bytes,
-                )
-                .await
-            }
-        }),
-    );
+    let serve = http1::Builder::new()
+        .serve_connection(
+            io,
+            service_fn(move |req: Request<Incoming>| {
+                let handler = Arc::clone(&handler);
+                let target = target.clone();
+                let connect_session_id = connect_session_id.clone();
+                async move {
+                    handle_mitm_https_request(
+                        req,
+                        handler,
+                        target,
+                        &connect_session_id,
+                        max_request_body_bytes,
+                    )
+                    .await
+                }
+            }),
+        )
+        .with_upgrades();
     tokio::time::timeout(limits.session_max, serve)
         .await
         .map_err(|_| {
@@ -768,7 +786,7 @@ fn connect_established_response() -> Response<Full<Bytes>> {
 }
 
 async fn handle_mitm_https_request(
-    req: Request<Incoming>,
+    mut req: Request<Incoming>,
     handler: Arc<RequestHandler>,
     target: ConnectTargetInfo,
     connect_session_id: &str,
@@ -779,6 +797,16 @@ async fn handle_mitm_https_request(
             StatusCode::BAD_REQUEST,
             "MALFORMED_REQUEST: nested CONNECT is not supported",
         ));
+    }
+
+    if is_websocket_upgrade_request(&req) {
+        return handle_mitm_websocket_upgrade_request(
+            &mut req,
+            handler,
+            target,
+            connect_session_id,
+        )
+        .await;
     }
 
     let raw = match build_raw_https_request(req, &target, max_request_body_bytes).await {
@@ -811,6 +839,301 @@ async fn handle_mitm_https_request(
         ),
     };
     Ok(response)
+}
+
+async fn handle_mitm_websocket_upgrade_request(
+    req: &mut Request<Incoming>,
+    handler: Arc<RequestHandler>,
+    target: ConnectTargetInfo,
+    connect_session_id: &str,
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    let raw = match build_raw_https_request_head(req, &target) {
+        Ok(raw) => raw,
+        Err(detail) => return Ok(deny_response(StatusCode::FORBIDDEN, &detail)),
+    };
+    let session_id = raw
+        .headers
+        .get("x-firma-session-id")
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| connect_session_id.to_string());
+
+    let authorization = handler.authorize_upgrade(raw, &session_id).await;
+    let (credentials, audit_payload) = match authorization {
+        UpgradeAuthorization::Allow {
+            credentials,
+            audit_payload,
+        } => (credentials, *audit_payload),
+        UpgradeAuthorization::Deny { reason, detail } => {
+            tracing::warn!(
+                host = %target.host,
+                port = target.port,
+                session_id = %session_id,
+                reason = ?reason,
+                detail = %detail,
+                "websocket upgrade denied by guard policy"
+            );
+            return Ok(deny_json_response(
+                StatusCode::FORBIDDEN,
+                crate::handler::deny_body_json(reason, &detail),
+            ));
+        }
+    };
+
+    let path_and_query = req
+        .uri()
+        .path_and_query()
+        .map_or("/", |pq| pq.as_str())
+        .to_string();
+    let handshake_request =
+        build_upstream_handshake_request(req, &target, &path_and_query, &credentials);
+
+    let mut upstream = match connect_upstream_tls(&target).await {
+        Ok(stream) => stream,
+        Err(detail) => {
+            tracing::warn!(
+                host = %target.host,
+                port = target.port,
+                session_id = %session_id,
+                detail = %detail,
+                "websocket upstream TLS connect failed"
+            );
+            handler.emit_upgrade_audit(audit_payload, 0, 0).await;
+            return Ok(deny_json_response(
+                StatusCode::BAD_GATEWAY,
+                crate::handler::deny_body_json(
+                    DenyReason::ConnectorNetworkError,
+                    &format!("upstream websocket connect failed: {detail}"),
+                ),
+            ));
+        }
+    };
+
+    if let Err(e) = upstream.write_all(&handshake_request).await {
+        tracing::warn!(
+            host = %target.host,
+            port = target.port,
+            session_id = %session_id,
+            error = %e,
+            "websocket upstream handshake write failed"
+        );
+        handler.emit_upgrade_audit(audit_payload, 0, 0).await;
+        return Ok(deny_json_response(
+            StatusCode::BAD_GATEWAY,
+            crate::handler::deny_body_json(
+                DenyReason::ConnectorNetworkError,
+                &format!("upstream websocket handshake write failed: {e}"),
+            ),
+        ));
+    }
+
+    let (status, response_headers, prefetched) = match read_http_response_head(&mut upstream).await
+    {
+        Ok(parsed) => parsed,
+        Err(detail) => {
+            tracing::warn!(
+                host = %target.host,
+                port = target.port,
+                session_id = %session_id,
+                detail = %detail,
+                "websocket upstream handshake read failed"
+            );
+            handler.emit_upgrade_audit(audit_payload, 0, 0).await;
+            return Ok(deny_json_response(
+                StatusCode::BAD_GATEWAY,
+                crate::handler::deny_body_json(
+                    DenyReason::ConnectorNetworkError,
+                    &format!("upstream websocket handshake read failed: {detail}"),
+                ),
+            ));
+        }
+    };
+
+    handler
+        .emit_upgrade_audit(audit_payload, status, prefetched.len())
+        .await;
+
+    if status != 101 {
+        tracing::warn!(
+            host = %target.host,
+            port = target.port,
+            session_id = %session_id,
+            status = status,
+            "websocket upstream rejected protocol upgrade"
+        );
+        return Ok(deny_json_response(
+            StatusCode::BAD_GATEWAY,
+            crate::handler::deny_body_json(
+                DenyReason::ConnectorNetworkError,
+                &format!("upstream websocket upgrade rejected with status {status}"),
+            ),
+        ));
+    }
+
+    let on_upgrade = hyper::upgrade::on(req);
+    tokio::spawn(async move {
+        let upgraded = match on_upgrade.await {
+            Ok(upgraded) => upgraded,
+            Err(e) => {
+                tracing::warn!("websocket downstream upgrade failed: {e}");
+                return;
+            }
+        };
+        let mut downstream = TokioIo::new(upgraded);
+        if !prefetched.is_empty()
+            && let Err(e) = downstream.write_all(&prefetched).await
+        {
+            tracing::warn!("websocket downstream prefetch write failed: {e}");
+            return;
+        }
+        if let Err(e) = copy_bidirectional(&mut downstream, &mut upstream).await {
+            tracing::warn!("websocket MITM relay failed: {e}");
+        }
+    });
+
+    Ok(build_websocket_switching_response(response_headers))
+}
+
+fn is_websocket_upgrade_request(req: &Request<Incoming>) -> bool {
+    req.method() == Method::GET
+        && header_contains_token(req.headers(), "connection", "upgrade")
+        && req
+            .headers()
+            .get("upgrade")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+}
+
+fn header_contains_token(headers: &hyper::HeaderMap, name: &str, token: &str) -> bool {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case(token))
+        })
+}
+
+fn build_upstream_handshake_request(
+    req: &Request<Incoming>,
+    target: &ConnectTargetInfo,
+    path_and_query: &str,
+    credentials: &firma_core::InjectedCredentials,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1024);
+    out.extend_from_slice(format!("GET {path_and_query} HTTP/1.1\r\n").as_bytes());
+    let mut has_host = false;
+    for (name, value) in req.headers() {
+        if name.as_str().eq_ignore_ascii_case("host") {
+            has_host = true;
+        }
+        if let Ok(v) = value.to_str() {
+            out.extend_from_slice(name.as_str().as_bytes());
+            out.extend_from_slice(b": ");
+            out.extend_from_slice(v.as_bytes());
+            out.extend_from_slice(b"\r\n");
+        }
+    }
+    if !has_host {
+        out.extend_from_slice(b"Host: ");
+        out.extend_from_slice(target.authority.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    for (k, v) in credentials.headers() {
+        out.extend_from_slice(k.as_bytes());
+        out.extend_from_slice(b": ");
+        out.extend_from_slice(v.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(b"\r\n");
+    out
+}
+
+async fn connect_upstream_tls(
+    target: &ConnectTargetInfo,
+) -> Result<tokio_rustls::client::TlsStream<TcpStream>, String> {
+    let upstream = TcpStream::connect(&target.authority)
+        .await
+        .map_err(|e| format!("TCP connect failed for {}: {e}", target.authority))?;
+    let roots = webpki_roots::TLS_SERVER_ROOTS
+        .iter()
+        .cloned()
+        .collect::<RootCertStore>();
+    let config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(config));
+    let server_name = ServerName::try_from(target.host.clone())
+        .map_err(|e| format!("invalid upstream server name {}: {e}", target.host))?;
+    connector
+        .connect(server_name, upstream)
+        .await
+        .map_err(|e| format!("TLS connect failed for {}: {e}", target.host))
+}
+
+async fn read_http_response_head<S: tokio::io::AsyncRead + Unpin>(
+    stream: &mut S,
+) -> Result<(u16, Vec<(String, String)>, Vec<u8>), String> {
+    const MAX_HEAD: usize = 64 * 1024;
+    let mut buf = Vec::with_capacity(2048);
+    let mut chunk = [0_u8; 1024];
+    let head_end = loop {
+        let n = stream
+            .read(&mut chunk)
+            .await
+            .map_err(|e| format!("read failed: {e}"))?;
+        if n == 0 {
+            return Err("early eof while reading response head".to_string());
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.len() > MAX_HEAD {
+            return Err("response head exceeds 64KiB".to_string());
+        }
+        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            break pos + 4;
+        }
+    };
+
+    let head = String::from_utf8(buf[..head_end].to_vec())
+        .map_err(|_| "response head is not valid UTF-8".to_string())?;
+    let mut lines = head.split("\r\n");
+    let status_line = lines
+        .next()
+        .ok_or_else(|| "missing status line".to_string())?;
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| "malformed status line".to_string())?
+        .parse::<u16>()
+        .map_err(|e| format!("invalid status code: {e}"))?;
+
+    let mut headers = Vec::new();
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_string(), value.trim().to_string()));
+        }
+    }
+    let prefetched = buf[head_end..].to_vec();
+    Ok((status, headers, prefetched))
+}
+
+fn build_websocket_switching_response(headers: Vec<(String, String)>) -> Response<Full<Bytes>> {
+    let mut builder = Response::builder().status(StatusCode::SWITCHING_PROTOCOLS);
+    for (name, value) in headers {
+        if let (Ok(hn), Ok(hv)) = (
+            hyper::header::HeaderName::from_bytes(name.as_bytes()),
+            hyper::header::HeaderValue::from_str(&value),
+        ) {
+            builder = builder.header(hn, hv);
+        }
+    }
+    builder
+        .body(Full::new(Bytes::new()))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
 
 async fn build_raw_https_request(
@@ -1545,6 +1868,41 @@ mod tests {
     fn test_extract_path_origin_form() {
         let path = extract_path(b"/v1/chat/completions");
         assert_eq!(path, "/v1/chat/completions");
+    }
+
+    #[test]
+    fn test_header_contains_token_parses_comma_separated_tokens() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(
+            "connection",
+            hyper::header::HeaderValue::from_static("keep-alive, Upgrade"),
+        );
+        assert!(header_contains_token(&headers, "connection", "upgrade"));
+        assert!(!header_contains_token(&headers, "connection", "close"));
+    }
+
+    #[tokio::test]
+    async fn test_read_http_response_head_parses_status_headers_and_prefetch() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        tokio::spawn(async move {
+            let _ = server
+                .write_all(
+                    b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nprefetch",
+                )
+                .await;
+        });
+
+        let (status, headers, prefetched) = read_http_response_head(&mut client)
+            .await
+            .unwrap_or_else(|e| panic!("expected parsed response head: {e}"));
+        assert_eq!(status, 101);
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("upgrade")
+                    && v.eq_ignore_ascii_case("websocket"))
+        );
+        assert_eq!(prefetched, b"prefetch".to_vec());
     }
 
     #[test]

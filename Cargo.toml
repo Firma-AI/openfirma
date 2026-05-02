@@ -97,3 +97,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 x509-parser = "0.16"
+webpki-roots = "1"

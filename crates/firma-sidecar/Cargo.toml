@@ -69,6 +69,7 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 xxhash-rust = { workspace = true }
 x509-parser = { workspace = true }
+webpki-roots = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

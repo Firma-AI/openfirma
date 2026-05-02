@@ -74,6 +74,27 @@ pub enum ConnectDecision {
     },
 }
 
+/// Authorization result for HTTP upgrade requests (for example WebSocket
+/// handshakes) where the interceptor owns upstream byte relay.
+#[derive(Debug)]
+pub enum UpgradeAuthorization {
+    /// Upgrade request is authorized. The interceptor must complete upstream
+    /// relay and then call [`RequestHandler::emit_upgrade_audit`].
+    Allow {
+        /// Credentials injected by policy pipeline for this request.
+        credentials: InjectedCredentials,
+        /// Pending audit payload captured at authorization time.
+        audit_payload: Box<AuditPayload>,
+    },
+    /// Upgrade request denied by policy pipeline.
+    Deny {
+        /// Denial reason selected by the enforcement pipeline.
+        reason: DenyReason,
+        /// Human-readable denial detail.
+        detail: String,
+    },
+}
+
 /// Reason an approved call was aborted before producing a target
 /// response.
 ///
@@ -380,6 +401,51 @@ impl RequestHandler {
         }
 
         outcome
+    }
+
+    /// Authorizes an HTTP upgrade request without dispatching via the connector
+    /// registry.
+    ///
+    /// Intended for upgraded protocols (for example WebSocket) where dispatch
+    /// switches from request/response to long-lived byte relay.
+    pub async fn authorize_upgrade(
+        &self,
+        request: RawRequest,
+        session_id: &str,
+    ) -> UpgradeAuthorization {
+        let (decision, audit_payload) = self.pipeline.enforce(&request, session_id).await;
+
+        match decision {
+            EnforcementDecision::Allow { credentials, .. } => UpgradeAuthorization::Allow {
+                credentials,
+                audit_payload: Box::new(audit_payload),
+            },
+            EnforcementDecision::Passthrough { .. } => UpgradeAuthorization::Allow {
+                credentials: InjectedCredentials::empty(),
+                audit_payload: Box::new(audit_payload),
+            },
+            EnforcementDecision::Deny { reason, detail, .. } => {
+                if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
+                    tracing::error!("failed to send audit event: {err}");
+                }
+                UpgradeAuthorization::Deny { reason, detail }
+            }
+        }
+    }
+
+    /// Emits audit payload for an authorized HTTP upgrade flow.
+    pub async fn emit_upgrade_audit(
+        &self,
+        mut payload: AuditPayload,
+        dispatch_status: u16,
+        response_size: usize,
+    ) {
+        payload.dispatch_status = i32::from(dispatch_status);
+        payload.dispatch_latency_us = 0;
+        payload.response_size = i64::try_from(response_size).unwrap_or(i64::MAX);
+        if let Err(err) = self.audit_sink_sender.send(payload).await {
+            tracing::error!("failed to send audit event: {err}");
+        }
     }
 
     /// Dispatches an approved call through the connector registry.

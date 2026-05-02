@@ -787,6 +787,10 @@ mod tests {
                 .contains(&"api.anthropic.com".to_string()),
             "default MITM intercept list should include api.anthropic.com"
         );
+        assert!(
+            config.interceptor.https_mitm.bypass_hosts.is_empty(),
+            "default MITM bypass list should be empty"
+        );
     }
 
     #[test]
