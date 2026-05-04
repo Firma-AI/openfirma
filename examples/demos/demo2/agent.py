@@ -17,6 +17,7 @@ import dotenv
 from agents import Agent, Runner, set_tracing_disabled
 from agents.repl import run_demo_loop
 
+from agent import normalize_env
 from agent.tools.github import (
     comment_on_pr,
     create_issue,
@@ -30,6 +31,7 @@ from agent.tools.github import (
 )
 
 dotenv.load_dotenv()
+normalize_env()
 set_tracing_disabled(True)
 
 _gh_token = os.environ.get("GITHUB_TOKEN", "ghp_demo_full_scope")

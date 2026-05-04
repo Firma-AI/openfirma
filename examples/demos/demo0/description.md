@@ -1,55 +1,94 @@
-# Demo 0 — Same Rule, Four Systems, One Failure
+# Demo 0 — The system surface is messy
 
-Fragmentation of enforcement across tools and layers.
+With Firma, agent governance is centralized.
 
 ## The point
 
-A developer defines a simple rule for an agent, but enforcement is split across
-multiple systems. The result is inconsistent behavior and a guaranteed gap.
+Without Firma, the surface where "what the agent can do" gets defined is
+fragmented across three disconnected layers:
 
-## The rule
+1. **OAuth scopes** — what the third-party identity provider lets the token do.
+2. **Token permissions** — what the issued credential is entitled to do at the
+   provider's API.
+3. **Network allowlists** — what destinations the agent's network is permitted
+   to reach.
 
-> "This agent can read data, but cannot perform write or destructive actions."
+None of these layers share a model of what the agent is actually doing. The rule
+the developer wants ("read, never write or destroy") has to be encoded three
+different ways in three different artifacts, and the gap between them is where
+the breach happens.
 
-## The system
+## The agent
 
-The agent interacts with four external services over HTTP. Every call leaves the
-agent process:
+A developer assistant that operates against three providers:
 
-| Service | Today’s enforcement model |
-|---|---|
-| GitHub API | Provider permissions |
-| Gmail API | OAuth scope |
-| Stripe API | Backend check |
-| Internal backend API | Application code paths |
+- **GitHub** — to read pull requests.
+- **Gmail** — to send notifications.
+- **An internal service** — to read and modify user state.
 
-Two systems enforce globally. Two systems rely on your code.
+The rule, in plain language: _"The agent can read data, but cannot perform
+write or destructive actions."_
 
-## The problem today
+## Three surfaces, three configurations
 
-| Action | Canonical action class | Outcome without a single enforcement point |
+| Surface | File | What it controls | What it cannot see |
+|---|---|---|---|
+| OAuth scopes | `before/oauth-scopes.json` | Which Gmail API methods the token can call. | The taxonomy used by the other two surfaces. |
+| Token permissions | `before/github-token-permissions.yaml` | Which GitHub API verbs the PAT can issue. | Whether the call is consistent with the agent's intent at the other providers. |
+| Network allowlist | `before/network-allowlist.yaml` | Which destination hosts the agent process can reach. | The HTTP method or path — once the host is on the list, every call to it goes through. |
+
+Three artifacts. Three vocabularies. Zero shared representation of "what the
+agent is doing".
+
+## What goes wrong
+
+| Action | Canonical action class | What stops it today |
 |---|---|---|
-| Read GitHub PR | `code.review.read` | Allowed |
-| Send email | `communication.external.send` | Blocked by OAuth scope |
-| Create Stripe refund | `payment.transfer` | Blocked by backend check |
-| Delete user via backend API | `account.permission.change` | Executed if the backend missed the check |
+| Read GitHub PR | `code.review.read` | GitHub PAT has `pull_requests:read`. ALLOWED. |
+| Send Gmail message | `communication.external.send` | OAuth scope is read-only. BLOCKED at provider. |
+| Delete internal user | `account.permission.change` | Internal service host is on the egress allowlist. **The DELETE goes through.** |
 
-The rule is consistent. The systems are not.
+The rule was consistent. The three surfaces were not. The internal service is
+governed by a network allowlist that only knows about hosts — it cannot tell
+read from write — so the destructive action passes through unchecked.
 
 ## The Firma shift
 
-A single Cedar policy is evaluated by the Sidecar on every outbound call.
-Every call to GitHub, Gmail, Stripe, or the backend goes through the same
-policy, the same evaluation, and the same enforcement point.
+Firma replaces the three surfaces with one. Every outbound call from the agent
+is normalized into a canonical action class and evaluated against a single
+Cedar policy at the sidecar:
 
-| Action | Canonical action class | Outcome with Firma |
+```cedar
+permit (
+    principal == Firma::Agent::"demo0-agent",
+    action == Firma::Action::"code.review.read",
+    resource
+);
+
+permit (
+    principal == Firma::Agent::"demo0-agent",
+    action == Firma::Action::"filesystem.read",
+    resource
+);
+// Everything else: default deny.
+```
+
+The action class taxonomy is the same regardless of which provider the call
+targets. `code.review.read` means the same thing whether the underlying call is
+to GitHub, Gmail, or the internal service.
+
+| Action | Canonical action class | With Firma |
 |---|---|---|
 | Read GitHub PR | `code.review.read` | ALLOW |
-| Send email | `communication.external.send` | DENY |
-| Create Stripe refund | `payment.transfer` | DENY |
-| Delete user via backend API | `account.permission.change` | DENY |
+| Send Gmail message | `communication.external.send` | DENY |
+| Delete internal user | `account.permission.change` | DENY |
+
+One policy. One taxonomy. One enforcement point. Same rule, every provider,
+every call.
 
 ## Closing line
 
-Today, enforcement is fragmented across systems. Firma enforces your rule once,
-everywhere, at every call.
+Three surfaces, three vocabularies, no shared model of agent behavior — that is
+the gap. With Firma, agent governance is centralized: the rule is expressed
+once, against a canonical action class taxonomy, and enforced uniformly at the
+moment of every outbound call.

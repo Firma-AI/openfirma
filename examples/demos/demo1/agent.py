@@ -16,9 +16,11 @@ import dotenv
 from agents import Agent, Runner, set_tracing_disabled
 from agents.repl import run_demo_loop
 
+from agent import normalize_env
 from agent.tools.enforcement import fetch_billing, fetch_usage
 
 dotenv.load_dotenv()
+normalize_env()
 set_tracing_disabled(True)
 
 agent = Agent(
