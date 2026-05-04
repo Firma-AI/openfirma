@@ -1,0 +1,29 @@
+[[rules]]
+method = "CONNECT"
+host = "api.anthropic.com"
+path = "/"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "platform.claude.com"
+path = "/"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "claude.ai"
+path = "/"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "console.anthropic.com"
+path = "/"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.anthropic.com"
+path = "/"
+action_class = "communication.external.send"

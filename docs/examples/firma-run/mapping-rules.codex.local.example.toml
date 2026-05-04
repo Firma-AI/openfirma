@@ -1,0 +1,39 @@
+[[rules]]
+method = "CONNECT"
+host = "chatgpt.com"
+path = "/"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.chatgpt.com"
+path = "/"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "chatgpt.com"
+path = "/backend-api/*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.chatgpt.com"
+path = "/backend-api/*"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "*.chatgpt.com"
+path = "/otlp/v1/metrics"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "github.com"
+path = "/"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "api.github.com"
+path = "/"
+action_class = "communication.external.send"

@@ -2,6 +2,11 @@
 
 This guide shows how to test `firma run` locally without committing local secrets/config.
 
+For agent-specific strict-mode setups (separate Codex and Claude samples),
+see:
+
+- `docs/firma-run-codex-claude-local-setup.md`
+
 Verification reference:
 
 - `docs/firma-run-verification-report.md` contains a full reproducible checklist and an example PASS/FAIL matrix from a successful run.
