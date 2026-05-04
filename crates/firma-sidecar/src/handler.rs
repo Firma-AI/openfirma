@@ -340,7 +340,9 @@ impl RequestHandler {
                 credentials,
                 ..
             } => {
-                let (response, outcome) = self.dispatch(*envelope, credentials).await;
+                let mut dispatch_envelope = *envelope;
+                hydrate_dispatch_http_fields(&mut dispatch_envelope, &request);
+                let (response, outcome) = self.dispatch(dispatch_envelope, credentials).await;
                 outcome.enrich(&mut audit_payload);
                 response
             }
@@ -567,6 +569,14 @@ impl RequestHandler {
             }
         }
     }
+}
+
+fn hydrate_dispatch_http_fields(envelope: &mut ExecutionEnvelope, request: &RawRequest) {
+    let ActionParams::Http(http) = &mut envelope.intent.params else {
+        return;
+    };
+    http.headers.clone_from(&request.headers);
+    http.body.clone_from(&request.body);
 }
 
 /// Builds a minimal [`ExecutionEnvelope`] for a non-protected

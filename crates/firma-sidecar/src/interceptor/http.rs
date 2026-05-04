@@ -333,14 +333,7 @@ async fn handle_connect_request(
 
     match connect_decision {
         ConnectDecision::Deny { reason, detail } => {
-            tracing::warn!(
-                host = %target_info.host,
-                port = target_info.port,
-                session_id = %session_id,
-                reason = ?reason,
-                detail = %detail,
-                "CONNECT denied by guard policy"
-            );
+            log_connect_deny(&target_info, &session_id, reason, &detail);
             Ok(deny_json_response(
                 StatusCode::FORBIDDEN,
                 crate::handler::deny_body_json(reason, &detail),
@@ -377,6 +370,31 @@ async fn handle_connect_request(
             Ok(connect_established_response())
         }
     }
+}
+
+fn log_connect_deny(
+    target_info: &ConnectTargetInfo,
+    session_id: &str,
+    reason: firma_core::DenyReason,
+    detail: &str,
+) {
+    if reason == firma_core::DenyReason::TokenExpired {
+        tracing::warn!(
+            host = %target_info.host,
+            port = target_info.port,
+            session_id = %session_id,
+            detail = %detail,
+            "CONNECT denied due to expired capability token; renew token for this session_id and reload sidecar capability source"
+        );
+    }
+    tracing::warn!(
+        host = %target_info.host,
+        port = target_info.port,
+        session_id = %session_id,
+        reason = ?reason,
+        detail = %detail,
+        "CONNECT denied by guard policy"
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
