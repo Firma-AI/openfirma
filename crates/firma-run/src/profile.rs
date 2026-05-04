@@ -7,14 +7,33 @@ use crate::config::{
 };
 use crate::error::RunError;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BuiltInProfileId {
+    Generic,
+    Codex,
+    ClaudeCode,
+}
+
+impl BuiltInProfileId {
+    #[must_use]
+    pub(crate) fn from_str(profile: &str) -> Option<Self> {
+        match profile {
+            "generic" => Some(Self::Generic),
+            "codex" => Some(Self::Codex),
+            "claude-code" => Some(Self::ClaudeCode),
+            _ => None,
+        }
+    }
+}
+
 /// Returns built-in profile patch for a given profile id.
 pub(crate) fn built_in_profile(profile: &str) -> Result<ProfilePatch, RunError> {
-    match profile {
-        "generic" => Ok(generic_profile()),
-        "codex" => Ok(codex_profile()),
-        "claude-code" => Ok(claude_code_profile()),
-        other => Err(RunError::ConfigValidation(format!(
-            "unknown profile '{other}'; supported profiles: generic, codex, claude-code"
+    match BuiltInProfileId::from_str(profile) {
+        Some(BuiltInProfileId::Generic) => Ok(generic_profile()),
+        Some(BuiltInProfileId::Codex) => Ok(codex_profile()),
+        Some(BuiltInProfileId::ClaudeCode) => Ok(claude_code_profile()),
+        None => Err(RunError::ConfigValidation(format!(
+            "unknown profile '{profile}'; supported profiles: generic, codex, claude-code"
         ))),
     }
 }

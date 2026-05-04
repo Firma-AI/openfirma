@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::args::RunArgs;
 use crate::backend::BackendKind;
 use crate::error::RunError;
-use crate::profile::built_in_profile;
+use crate::profile::{BuiltInProfileId, built_in_profile};
 
 fn backend_supports_structural_network(backend: BackendKind) -> bool {
     matches!(backend, BackendKind::Bwrap)
@@ -395,6 +395,18 @@ pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
         capability,
         executable_policies,
     };
+
+    if matches!(
+        BuiltInProfileId::from_str(&resolved.id),
+        Some(BuiltInProfileId::ClaudeCode)
+    ) && resolved.backend != BackendKind::Bwrap
+    {
+        tracing::warn!(
+            profile = %resolved.id,
+            backend = %resolved.backend,
+            "claude-code profile is running in compatibility mode; full Linux structural confinement guarantees require backend=bwrap"
+        );
+    }
 
     resolved.validate()?;
     Ok(resolved)
