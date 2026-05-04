@@ -2,16 +2,14 @@
 
 [Introduction](./index.md)
 
----
-
-## Getting Started
+# Getting Started
 
 - [Installation](./getting-started/installation.md)
 - [Quick Start](./getting-started/quick-start.md)
 - [Configuration](./getting-started/configuration.md)
 - [CLI Usage](./getting-started/cli.md)
 
-## Usage Guides
+# Usage Guides
 
 - [Writing Cedar Policies](./guides/writing-policies.md)
 - [Capability Lifecycle](./guides/capability-lifecycle.md)
@@ -20,7 +18,7 @@
   - [Google ADK](./guides/integrating-agents/google-adk.md)
 - [Running the firma-run Sandbox](./guides/firma-run.md)
 
-## Operations
+# Operations
 
 - [Operating the Authority](./operations/authority.md)
 - [Audit Log Consumption](./operations/audit-logs.md)
@@ -28,7 +26,7 @@
 - [Release Notes](./operations/release-notes.md)
 - [Binary Dependencies](./operations/binary-deps.md)
 
-## Architecture
+# Architecture
 
 - [Overview](./architecture/overview.md)
 - [Sidecar Interfaces](./architecture/sidecar-interfaces.md)
@@ -38,12 +36,12 @@
 - [HTTPS MITM Strategy](./architecture/https-mitm.md)
 - [Sidecar ↔ firma-run Relation](./architecture/sidecar-firma-run.md)
 
-## Security
+# Security
 
 - [Bypass Analysis](./security/bypass-analysis.md)
 - [Bypass Risks](./security/bypass-risks.md)
 
-## Reference
+# Reference
 
 - [CLI Reference](./reference/cli.md)
 - [Configuration Reference](./reference/configuration.md)
