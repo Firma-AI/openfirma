@@ -189,11 +189,152 @@ Validation:
   deterministic `403` fail-closed denies.
 - For non-strict intercepted hosts, MITM preflight failures fall back to
   CONNECT tunnel mode.
+- For intercepted hosts, HTTPS upgrade handshakes (for example WebSocket
+  `Connection: Upgrade` + `Upgrade: websocket`) are policy-evaluated at
+  handshake request time and then relayed as upgraded streams when allowed.
 
 Default `intercept_hosts` includes common providers/services such as OpenAI,
-Anthropic, OpenRouter, Groq, Mistral, Cohere, Google GenAI/Vertex, DeepSeek,
-Together, Fireworks, Replicate, Perplexity, xAI, Supabase, Resend, Twilio,
-SendGrid, Stripe, Slack, and GitHub APIs.
+Anthropic/Claude (`api.anthropic.com`, `platform.claude.com`, `claude.ai`,
+`console.anthropic.com`), OpenRouter, Groq, Mistral, Cohere, Google
+GenAI/Vertex, DeepSeek, Together, Fireworks, Replicate, Perplexity, xAI,
+Supabase, Resend, Twilio, SendGrid, Stripe, Slack, and GitHub APIs.
+
+#### Practical operating modes
+
+The sidecar supports progressive rollout patterns. A useful mental model:
+
+- `intercept_hosts` controls where you get L7 visibility/enforcement via MITM.
+- `mapping.default_protected` controls whether unmapped traffic is blocked by
+  policy (`true`) or allowed by default (`false`).
+
+1. Open connectivity + targeted governance (recommended for onboarding)
+
+Use when you want agents to keep working broadly, but still inspect/enforce
+high-value destinations (for example model APIs, secrets-bearing backends, or
+billing endpoints).
+
+```toml
+[interceptor.https_mitm]
+enabled = true
+intercept_hosts = ["api.anthropic.com", "platform.claude.com", "api.openai.com"]
+strict_hosts = ["api.anthropic.com", "api.openai.com"]
+
+[mapping]
+default_protected = false
+```
+
+Behavior:
+
+- Unmapped hosts are allowed (lower friction rollout).
+- This includes plain HTTP requests and HTTPS CONNECT destinations that are not
+  explicitly blocked by mapping/policy.
+- Intercepted hosts still flow through full intent normalization + policy +
+  audit.
+- `strict_hosts` fail closed if MITM setup cannot be established.
+
+Audit/log visibility note:
+
+- Hosts outside `intercept_hosts` are handled as CONNECT tunnel flows. They are
+  still governed, but without decrypted L7 request details.
+- For clearer counterpart observability (action/resource-rich audit + explicit
+  sidecar handling logs), include target hosts in `intercept_hosts` and keep
+  them out of `bypass_hosts`.
+
+#### Quick Troubleshooting
+
+- Sidecar is healthy, but you see no traffic logs/audit for a command:
+  - In `http_proxy` mode, sidecar only governs traffic that is actually routed
+    to its proxy listener.
+  - Verify client env:
+    - `HTTP_PROXY=http://<sidecar-listen-addr>`
+    - `HTTPS_PROXY=http://<sidecar-listen-addr>`
+    - `ALL_PROXY=http://<sidecar-listen-addr>`
+  - If you use `firma run`, use the wrapper path so bridge/proxy wiring is
+    injected automatically.
+  - If the client reports `Failed to connect to 127.0.0.1:18080`, that is a
+    local proxy-bridge reachability failure before sidecar mediation. In that
+    case, no sidecar deny/allow record is expected for that request.
+  - With interactive agent CLIs, this can also happen when a command is
+    explicitly executed outside the governed sandbox path; the command may
+    inherit proxy env pointing to `127.0.0.1:18080` even though the sandbox
+    bridge is not in that execution context.
+- If you see `TokenExpired` denies, re-issue a capability for the same
+  `session_id` and restart sidecar when using `[capability_seed]`. For local
+  workflows use:
+  - `scripts/firma-capability-renew.sh --session-id "$FIRMA_RUN_SESSION_ID"`
+  - `pwsh ./scripts/firma-capability-renew.ps1 -SessionId $env:FIRMA_RUN_SESSION_ID`
+
+- You see `curl` timeout / agent network timeout, but no obvious deny:
+  - Check audit for `action=network.connect` on the target host. This confirms
+  policy allowed the destination-level CONNECT.
+  - Check logs for `CONNECT relay failed after policy allow` or
+    `MITM CONNECT relay failed after policy allow`. These include
+    `failure_class` (`timeout`, `refused`, `reset`, `tls_handshake`, `dns`) so
+    operators can distinguish policy allow from upstream network failure.
+  - Add the host to `intercept_hosts` to get richer L7 policy/audit context.
+  - For `firma run --profile codex`, wrapper defaults inject:
+    - `--sandbox workspace-write`
+    - `--ask-for-approval never`
+    This keeps tool commands on the governed path by default and avoids
+    out-of-sandbox runs that bypass sidecar mediation.
+
+- You want clear “blocked by policy” signals:
+  - Look for:
+    - `HTTP request denied by guard policy`
+    - `MITM HTTPS request denied by guard policy`
+    - `CONNECT denied by guard policy`
+    - `websocket upgrade denied by guard policy`
+  - These include reason/detail and are the primary operators signals for
+    config/policy tuning.
+
+- You want explicit audit trace when CONNECT was allowed but failed later:
+  - Sidecar emits a follow-up ABORT audit record with:
+    - `action=network.connect`
+    - `resource=<host>/`
+    - `deny_reason` prefixed with `CONNECT_RELAY_FAILURE: ...`
+
+- You see `websocket MITM relay closed by peer (expected shutdown)`:
+  - This is normal when clients close without TLS `close_notify` (for example
+    interactive CLI shutdown). It is informational, not a policy failure.
+
+2. High-control / deny-by-default
+
+Use when compliance posture requires explicit allowlists for all relevant
+traffic.
+
+```toml
+[interceptor.https_mitm]
+enabled = true
+intercept_hosts = ["api.anthropic.com", "platform.claude.com", "api.openai.com"]
+strict_hosts = ["api.anthropic.com", "platform.claude.com", "api.openai.com"]
+
+[mapping]
+default_protected = true
+```
+
+Behavior:
+
+- Unmapped traffic is protected/denied unless explicit mapping/policy allows it.
+- This applies to both plain HTTP requests and HTTPS CONNECT destinations.
+- Intercepted strict hosts are fail-closed on MITM failures.
+
+3. Destination-level governance only (no HTTPS decryption)
+
+Use when you need host-level control but cannot run MITM for policy, legal, or
+certificate-distribution reasons.
+
+```toml
+[interceptor.https_mitm]
+enabled = false
+
+[mapping]
+default_protected = false
+```
+
+Behavior:
+
+- Sidecar enforces at CONNECT destination level for HTTPS.
+- No decrypted request path/body visibility for HTTPS.
 
 ### `[policy]`
 

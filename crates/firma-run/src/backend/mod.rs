@@ -19,6 +19,17 @@ pub use linux_bwrap::BwrapBackend;
 pub use macos_vz::VzBackend;
 pub use windows_wsl2::Wsl2Backend;
 
+/// Shared default home-relative paths considered sensitive across agent CLIs.
+pub const DEFAULT_SENSITIVE_HOME_SUFFIXES: &[&str] = &[
+    ".ssh",
+    ".aws",
+    ".azure",
+    ".kube",
+    ".gnupg",
+    ".config",
+    ".config/gcloud",
+];
+
 /// Supported runtime backend choices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

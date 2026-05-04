@@ -117,6 +117,10 @@ impl AuditSink for FileAuditSink {
             }
         }
 
+        if let Err(err) = file.flush().await {
+            tracing::error!("failed to flush audit file on shutdown: {err}");
+        }
+
         Ok(())
     }
 }

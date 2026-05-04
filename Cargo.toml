@@ -52,6 +52,7 @@ hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 lru = "0.17"
 notify = "8"
+nix = { version = "0.31", features = ["fs"] }
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 pasetors = "0.7"
 pingora-core = "0.8"
@@ -96,3 +97,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 x509-parser = "0.16"
+webpki-roots = "1"
