@@ -22,6 +22,10 @@ pub(crate) fn built_in_profile(profile: &str) -> Result<ProfilePatch, RunError> 
 fn generic_profile() -> ProfilePatch {
     let mut env_set = BTreeMap::new();
     env_set.insert("FIRMA_RUN_PROFILE".to_string(), "generic".to_string());
+    env_set.insert(
+        "FIRMA_RUN_BWRAP_RUNTIME_HOME".to_string(),
+        "true".to_string(),
+    );
 
     ProfilePatch {
         backend: None,
@@ -84,10 +88,6 @@ fn claude_code_profile() -> ProfilePatch {
     base.env_set.insert(
         "FIRMA_RUN_BWRAP_ROOTFS_MODE".to_string(),
         "readonly".to_string(),
-    );
-    base.env_set.insert(
-        "FIRMA_RUN_BWRAP_RUNTIME_HOME".to_string(),
-        "true".to_string(),
     );
     base.env_set.insert(
         "FIRMA_RUN_BWRAP_MASK_HOME_PATHS".to_string(),
