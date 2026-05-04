@@ -6,6 +6,7 @@ For agent-specific strict-mode setups (separate Codex and Claude samples),
 see:
 
 - `docs/firma-run-codex-claude-local-setup.md`
+- `docs/firma-run-ready-to-work-setup.md` (quick onboarding cookbook)
 
 Verification reference:
 
