@@ -27,3 +27,23 @@ method = "CONNECT"
 host = "*.anthropic.com"
 path = "/"
 action_class = "communication.external.send"
+
+[[rules]]
+host = "platform.claude.com"
+path = "/v1/*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "api.anthropic.com"
+path = "/api/*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.anthropic.com"
+path = "/*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.claude.com"
+path = "/*"
+action_class = "communication.external.send"

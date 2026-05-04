@@ -65,6 +65,13 @@ Claude:
 - `docs/examples/firma-run/firma_sidecar.local.claude.example.toml`
 - `docs/examples/firma-run/mapping-rules.claude.local.example.toml`
 
+Note: the Claude mapping sample includes both:
+
+- `CONNECT` destination mappings, and
+- MITM inner HTTP path mappings (for example `/v1/*`, `/api/*`)
+
+This is required when `https_mitm.enabled = true` and `default_protected = true`.
+
 Recommended local destinations:
 
 - `.local/firma_sidecar.local.toml`
