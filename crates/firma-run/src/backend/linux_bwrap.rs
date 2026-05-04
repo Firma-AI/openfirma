@@ -14,6 +14,10 @@ use crate::config::SandboxIdentityMode;
 use crate::error::RunError;
 
 const BWRAP_ENTRYPOINT_SCRIPT: &str = include_str!("../resources/bwrap_entrypoint.sh");
+const BWRAP_ROOTFS_MODE_ENV: &str = "FIRMA_RUN_BWRAP_ROOTFS_MODE";
+const BWRAP_RUNTIME_HOME_ENV: &str = "FIRMA_RUN_BWRAP_RUNTIME_HOME";
+const BWRAP_MASK_HOME_PATHS_ENV: &str = "FIRMA_RUN_BWRAP_MASK_HOME_PATHS";
+const BWRAP_ROOTFS_MODE_READONLY: &str = "readonly";
 
 /// Linux bubblewrap backend.
 #[derive(Debug, Default)]
@@ -173,11 +177,8 @@ impl SandboxBackend for BwrapBackend {
         let mut command = Command::new("bwrap");
         command.arg("--die-with-parent");
         command.arg("--new-session");
-        let claude_profile = launch
-            .env
-            .get("FIRMA_RUN_PROFILE")
-            .is_some_and(|profile| profile == "claude-code");
-        if claude_profile {
+        let hardening = bwrap_hardening_from_env(&launch.env);
+        if hardening.readonly_rootfs {
             command.arg("--ro-bind").arg("/").arg("/");
             command.arg("--tmpfs").arg("/tmp");
             command.arg("--tmpfs").arg("/var/tmp");
@@ -186,7 +187,7 @@ impl SandboxBackend for BwrapBackend {
                 .arg("--bind")
                 .arg(&handle.runtime_dir)
                 .arg(&handle.runtime_dir);
-            mask_sensitive_paths(&mut command, launch);
+            mask_sensitive_paths(&mut command, launch, &hardening.mask_home_paths);
         } else {
             command.arg("--bind").arg("/").arg("/");
         }
@@ -231,7 +232,7 @@ impl SandboxBackend for BwrapBackend {
             .arg("FIRMA_RUN_RUNTIME_DIR")
             .arg(&handle.runtime_dir);
 
-        if claude_profile {
+        if hardening.runtime_home_isolation {
             let runtime_home = handle.runtime_dir.display().to_string();
             // Apply after launch.env so passthrough HOME/XDG values can't override it.
             command.arg("--setenv").arg("HOME").arg(&runtime_home);
@@ -289,7 +290,44 @@ fn clear_fd_cloexec(file: &File) -> Result<(), RunError> {
     Ok(())
 }
 
-fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec) {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BwrapHardening {
+    readonly_rootfs: bool,
+    runtime_home_isolation: bool,
+    mask_home_paths: Vec<String>,
+}
+
+fn bwrap_hardening_from_env(env: &std::collections::BTreeMap<String, String>) -> BwrapHardening {
+    let readonly_rootfs = env
+        .get(BWRAP_ROOTFS_MODE_ENV)
+        .is_some_and(|mode| mode == BWRAP_ROOTFS_MODE_READONLY);
+    let runtime_home_isolation = env
+        .get(BWRAP_RUNTIME_HOME_ENV)
+        .is_some_and(|value| parse_truthy(value));
+    let mask_home_paths = env
+        .get(BWRAP_MASK_HOME_PATHS_ENV)
+        .map_or_else(Vec::new, |raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        });
+    BwrapHardening {
+        readonly_rootfs,
+        runtime_home_isolation,
+        mask_home_paths,
+    }
+}
+
+fn parse_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec, suffixes: &[String]) {
     let home = launch
         .env
         .get("HOME")
@@ -300,16 +338,7 @@ fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec) {
         return;
     }
 
-    let sensitive_suffixes = [
-        ".ssh",
-        ".aws",
-        ".azure",
-        ".kube",
-        ".gnupg",
-        ".config",
-        ".config/gcloud",
-    ];
-    for suffix in sensitive_suffixes {
+    for suffix in suffixes {
         let path = format!("{home}/{suffix}");
         if std::path::Path::new(&path).exists() {
             command.arg("--tmpfs").arg(&path);
@@ -325,6 +354,34 @@ mod tests {
 
     use crate::backend::LaunchSpec;
     use crate::config::SandboxIdentityMode;
+
+    #[test]
+    fn hardening_from_env_is_profile_driven() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            super::BWRAP_ROOTFS_MODE_ENV.to_string(),
+            super::BWRAP_ROOTFS_MODE_READONLY.to_string(),
+        );
+        env.insert(
+            super::BWRAP_RUNTIME_HOME_ENV.to_string(),
+            "true".to_string(),
+        );
+        env.insert(
+            super::BWRAP_MASK_HOME_PATHS_ENV.to_string(),
+            ".ssh,.aws,.config/gcloud".to_string(),
+        );
+        let hardening = super::bwrap_hardening_from_env(&env);
+        assert!(hardening.readonly_rootfs);
+        assert!(hardening.runtime_home_isolation);
+        assert_eq!(
+            hardening.mask_home_paths,
+            vec![
+                ".ssh".to_string(),
+                ".aws".to_string(),
+                ".config/gcloud".to_string()
+            ]
+        );
+    }
 
     #[test]
     fn mask_sensitive_paths_adds_expected_mounts() {
@@ -344,7 +401,12 @@ mod tests {
             env,
             identity_mode: SandboxIdentityMode::SandboxUser,
         };
-        super::mask_sensitive_paths(&mut cmd, &launch);
+        let suffixes = vec![
+            ".ssh".to_string(),
+            ".aws".to_string(),
+            ".config/gcloud".to_string(),
+        ];
+        super::mask_sensitive_paths(&mut cmd, &launch, &suffixes);
         let rendered = cmd
             .get_args()
             .map(|arg| arg.to_string_lossy().to_string())

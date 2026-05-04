@@ -81,6 +81,18 @@ fn claude_code_profile() -> ProfilePatch {
     let mut base = generic_profile();
     base.env_set
         .insert("FIRMA_RUN_PROFILE".to_string(), "claude-code".to_string());
+    base.env_set.insert(
+        "FIRMA_RUN_BWRAP_ROOTFS_MODE".to_string(),
+        "readonly".to_string(),
+    );
+    base.env_set.insert(
+        "FIRMA_RUN_BWRAP_RUNTIME_HOME".to_string(),
+        "true".to_string(),
+    );
+    base.env_set.insert(
+        "FIRMA_RUN_BWRAP_MASK_HOME_PATHS".to_string(),
+        ".ssh,.aws,.azure,.kube,.gnupg,.config,.config/gcloud".to_string(),
+    );
     base.env_passthrough.extend([
         "ANTHROPIC_API_KEY".to_string(),
         "ANTHROPIC_AUTH_TOKEN".to_string(),
