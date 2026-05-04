@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::process::{Child, Command};
 
 use crate::backend::{
@@ -106,13 +107,38 @@ impl SandboxBackend for VzBackend {
         }
 
         let mut command = Command::new("sandbox-exec");
-        command
-            .arg("-p")
-            .arg("(version 1) (allow default)")
-            .arg(&launch.executable)
-            .args(&launch.args)
-            .current_dir(&launch.cwd)
-            .envs(&launch.env);
+        let claude_profile = launch
+            .env
+            .get("FIRMA_RUN_PROFILE")
+            .is_some_and(|profile| profile == "claude-code");
+        let profile = if claude_profile {
+            build_claude_code_sandbox_profile(launch)
+        } else {
+            "(version 1) (allow default)".to_string()
+        };
+
+        command.arg("-p").arg(profile);
+        command.arg(&launch.executable).args(&launch.args);
+        command.current_dir(&launch.cwd);
+
+        command.envs(&launch.env);
+
+        if claude_profile {
+            let runtime_home = std::env::temp_dir()
+                .join("firma-run")
+                .join(
+                    launch
+                        .env
+                        .get("FIRMA_RUN_SANDBOX_ID")
+                        .cloned()
+                        .unwrap_or_else(|| "claude-code".to_string()),
+                )
+                .display()
+                .to_string();
+            command.env("HOME", &runtime_home);
+            command.env("XDG_CONFIG_HOME", &runtime_home);
+            command.env("XDG_CACHE_HOME", &runtime_home);
+        }
 
         command.spawn().map_err(|error| {
             RunError::Spawn(format!(
@@ -124,6 +150,58 @@ impl SandboxBackend for VzBackend {
     fn teardown(&self, handle: SandboxHandle) -> Result<(), RunError> {
         remove_runtime_dir(&handle.runtime_dir);
         Ok(())
+    }
+}
+
+fn build_claude_code_sandbox_profile(launch: &LaunchSpec) -> String {
+    let home = launch
+        .env
+        .get("HOME")
+        .cloned()
+        .or_else(|| std::env::var("HOME").ok())
+        .unwrap_or_default();
+
+    let mut profile = String::from("(version 1)\n(allow default)\n");
+    if !home.is_empty() && home.starts_with('/') {
+        for suffix in crate::backend::DEFAULT_SENSITIVE_HOME_SUFFIXES {
+            let path = format!("{home}/{suffix}");
+            let escaped = escape_sandbox_path(&path);
+            let _ = write!(
+                profile,
+                "(deny file-read* (subpath \"{escaped}\"))\n(deny file-write* (subpath \"{escaped}\"))\n"
+            );
+        }
+    }
+    profile
+}
+
+fn escape_sandbox_path(path: &str) -> String {
+    path.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    use crate::backend::LaunchSpec;
+    use crate::config::SandboxIdentityMode;
+
+    #[test]
+    fn claude_profile_denies_sensitive_home_paths() {
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), "/Users/tester".to_string());
+        env.insert("FIRMA_RUN_PROFILE".to_string(), "claude-code".to_string());
+        let launch = LaunchSpec {
+            executable: "/usr/bin/true".to_string(),
+            args: vec![],
+            cwd: PathBuf::from("/tmp"),
+            env,
+            identity_mode: SandboxIdentityMode::SandboxUser,
+        };
+        let profile = super::build_claude_code_sandbox_profile(&launch);
+        assert!(profile.contains("deny file-read* (subpath \"/Users/tester/.ssh\")"));
+        assert!(profile.contains("deny file-write* (subpath \"/Users/tester/.config\")"));
     }
 }
 

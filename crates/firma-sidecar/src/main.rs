@@ -76,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
         &config,
         pipeline_runtime.mapping_rules_loaded,
     );
+    emit_operator_routing_hints(&config);
 
     let authority_stream_tasks = async {
         if let Some(handle) = authority_handle {
@@ -131,6 +132,20 @@ fn interceptor_addr_display(ic: &config::InterceptorConfig) -> String {
             .socket_path
             .as_ref()
             .map_or_else(String::new, |p| p.display().to_string()),
+    }
+}
+
+/// Emit operator hints for common routing/coverage confusion cases.
+fn emit_operator_routing_hints(config: &config::SidecarConfig) {
+    if config.interceptor.mode == config::InterceptorMode::HttpProxy {
+        let proxy = format!("http://{}", config.interceptor.listen_addr);
+        tracing::info!(
+            proxy = %proxy,
+            "http_proxy mode active: clients must route traffic through this proxy for sidecar enforcement/audit"
+        );
+        tracing::info!(
+            "set HTTP_PROXY/HTTPS_PROXY/ALL_PROXY or run via firma-run wrapper to guarantee coverage"
+        );
     }
 }
 

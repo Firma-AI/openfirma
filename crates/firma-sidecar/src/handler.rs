@@ -74,6 +74,27 @@ pub enum ConnectDecision {
     },
 }
 
+/// Authorization result for HTTP upgrade requests (for example WebSocket
+/// handshakes) where the interceptor owns upstream byte relay.
+#[derive(Debug)]
+pub enum UpgradeAuthorization {
+    /// Upgrade request is authorized. The interceptor must complete upstream
+    /// relay and then call [`RequestHandler::emit_upgrade_audit`].
+    Allow {
+        /// Credentials injected by policy pipeline for this request.
+        credentials: InjectedCredentials,
+        /// Pending audit payload captured at authorization time.
+        audit_payload: Box<AuditPayload>,
+    },
+    /// Upgrade request denied by policy pipeline.
+    Deny {
+        /// Denial reason selected by the enforcement pipeline.
+        reason: DenyReason,
+        /// Human-readable denial detail.
+        detail: String,
+    },
+}
+
 /// Reason an approved call was aborted before producing a target
 /// response.
 ///
@@ -319,7 +340,9 @@ impl RequestHandler {
                 credentials,
                 ..
             } => {
-                let (response, outcome) = self.dispatch(*envelope, credentials).await;
+                let mut dispatch_envelope = *envelope;
+                hydrate_dispatch_http_fields(&mut dispatch_envelope, &request);
+                let (response, outcome) = self.dispatch(dispatch_envelope, credentials).await;
                 outcome.enrich(&mut audit_payload);
                 response
             }
@@ -342,6 +365,16 @@ impl RequestHandler {
                 envelope,
                 ..
             } => {
+                if reason == firma_core::DenyReason::TokenExpired {
+                    tracing::warn!(
+                        method = %request.method,
+                        host = %request.host,
+                        path = %request.path,
+                        session_id = %session_id,
+                        detail = %detail,
+                        "request denied because capability token expired; renew token (same session_id) and reload sidecar capability source"
+                    );
+                }
                 let context = denial_context_of(envelope.as_ref());
                 HandledResponse::Deny {
                     reason,
@@ -380,6 +413,79 @@ impl RequestHandler {
         }
 
         outcome
+    }
+
+    /// Authorizes an HTTP upgrade request without dispatching via the connector
+    /// registry.
+    ///
+    /// Intended for upgraded protocols (for example WebSocket) where dispatch
+    /// switches from request/response to long-lived byte relay.
+    pub async fn authorize_upgrade(
+        &self,
+        request: RawRequest,
+        session_id: &str,
+    ) -> UpgradeAuthorization {
+        let (decision, audit_payload) = self.pipeline.enforce(&request, session_id).await;
+
+        match decision {
+            EnforcementDecision::Allow { credentials, .. } => UpgradeAuthorization::Allow {
+                credentials,
+                audit_payload: Box::new(audit_payload),
+            },
+            EnforcementDecision::Passthrough { .. } => UpgradeAuthorization::Allow {
+                credentials: InjectedCredentials::empty(),
+                audit_payload: Box::new(audit_payload),
+            },
+            EnforcementDecision::Deny { reason, detail, .. } => {
+                if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
+                    tracing::error!("failed to send audit event: {err}");
+                }
+                UpgradeAuthorization::Deny { reason, detail }
+            }
+        }
+    }
+
+    /// Emits audit payload for an authorized HTTP upgrade flow.
+    pub async fn emit_upgrade_audit(
+        &self,
+        mut payload: AuditPayload,
+        dispatch_status: u16,
+        response_size: usize,
+    ) {
+        payload.dispatch_status = i32::from(dispatch_status);
+        payload.dispatch_latency_us = 0;
+        payload.response_size = i64::try_from(response_size).unwrap_or(i64::MAX);
+        if let Err(err) = self.audit_sink_sender.send(payload).await {
+            tracing::error!("failed to send audit event: {err}");
+        }
+    }
+
+    /// Emits a synthetic audit event when CONNECT was policy-allowed but
+    /// upstream tunnel establishment/relay failed after authorization.
+    pub async fn emit_connect_relay_failure_audit(
+        &self,
+        session_id: &str,
+        host: &str,
+        detail: &str,
+    ) {
+        let payload = AuditPayload {
+            session_id: session_id.to_string(),
+            token_id: String::new(),
+            agent_id: String::new(),
+            action: "network.connect".to_string(),
+            resource: format!("{host}/"),
+            decision: crate::pipeline::DECISION_ABORT,
+            deny_reason: format!("CONNECT_RELAY_FAILURE: {detail}"),
+            enforcement_latency_us: 0,
+            context_hash: String::new(),
+            bundle_version: String::new(),
+            dispatch_status: 0,
+            dispatch_latency_us: 0,
+            response_size: 0,
+        };
+        if let Err(err) = self.audit_sink_sender.send(payload).await {
+            tracing::error!("failed to send audit event: {err}");
+        }
     }
 
     /// Dispatches an approved call through the connector registry.
@@ -463,6 +569,14 @@ impl RequestHandler {
             }
         }
     }
+}
+
+fn hydrate_dispatch_http_fields(envelope: &mut ExecutionEnvelope, request: &RawRequest) {
+    let ActionParams::Http(http) = &mut envelope.intent.params else {
+        return;
+    };
+    http.headers.clone_from(&request.headers);
+    http.body.clone_from(&request.body);
 }
 
 /// Builds a minimal [`ExecutionEnvelope`] for a non-protected

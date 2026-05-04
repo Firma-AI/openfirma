@@ -1,5 +1,9 @@
 use std::path::PathBuf;
 use std::process::{Child, Command};
+#[cfg(target_os = "linux")]
+use std::{fs::File, os::fd::AsRawFd};
+
+use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
 use crate::backend::{
     BackendKind, EnforcementProof, LaunchSpec, PrepareRequest, SandboxBackend, SandboxHandle,
@@ -10,6 +14,10 @@ use crate::config::SandboxIdentityMode;
 use crate::error::RunError;
 
 const BWRAP_ENTRYPOINT_SCRIPT: &str = include_str!("../resources/bwrap_entrypoint.sh");
+const BWRAP_ROOTFS_MODE_ENV: &str = "FIRMA_RUN_BWRAP_ROOTFS_MODE";
+const BWRAP_RUNTIME_HOME_ENV: &str = "FIRMA_RUN_BWRAP_RUNTIME_HOME";
+const BWRAP_MASK_HOME_PATHS_ENV: &str = "FIRMA_RUN_BWRAP_MASK_HOME_PATHS";
+const BWRAP_ROOTFS_MODE_READONLY: &str = "readonly";
 
 /// Linux bubblewrap backend.
 #[derive(Debug, Default)]
@@ -169,12 +177,40 @@ impl SandboxBackend for BwrapBackend {
         let mut command = Command::new("bwrap");
         command.arg("--die-with-parent");
         command.arg("--new-session");
-        command.arg("--bind").arg("/").arg("/");
+        let hardening = bwrap_hardening_from_env(&launch.env);
+        if hardening.readonly_rootfs {
+            command.arg("--ro-bind").arg("/").arg("/");
+            command.arg("--tmpfs").arg("/tmp");
+            command.arg("--tmpfs").arg("/var/tmp");
+            command.arg("--bind").arg(&launch.cwd).arg(&launch.cwd);
+            command
+                .arg("--bind")
+                .arg(&handle.runtime_dir)
+                .arg(&handle.runtime_dir);
+            mask_sensitive_paths(&mut command, launch, &hardening.mask_home_paths);
+        } else {
+            command.arg("--bind").arg("/").arg("/");
+        }
         command.arg("--dev").arg("/dev");
         command.arg("--chdir").arg(&launch.cwd);
 
         if handle.network_policy.enforce_network_namespace {
             command.arg("--unshare-net");
+        }
+
+        let mut _seccomp_file: Option<File> = None;
+        if let Some(seccomp_path) = launch
+            .env
+            .get("FIRMA_RUN_SECCOMP_BPF_PATH")
+            .filter(|value| !value.trim().is_empty())
+        {
+            let file = File::open(seccomp_path).map_err(|error| RunError::Backend {
+                backend: BackendKind::Bwrap.to_string(),
+                reason: format!("failed to open seccomp bpf file {seccomp_path}: {error}"),
+            })?;
+            clear_fd_cloexec(&file)?;
+            command.arg("--seccomp").arg(file.as_raw_fd().to_string());
+            _seccomp_file = Some(file);
         }
 
         for mount in &handle.mounts {
@@ -195,6 +231,20 @@ impl SandboxBackend for BwrapBackend {
             .arg("--setenv")
             .arg("FIRMA_RUN_RUNTIME_DIR")
             .arg(&handle.runtime_dir);
+
+        if hardening.runtime_home_isolation {
+            let runtime_home = handle.runtime_dir.display().to_string();
+            // Apply after launch.env so passthrough HOME/XDG values can't override it.
+            command.arg("--setenv").arg("HOME").arg(&runtime_home);
+            command
+                .arg("--setenv")
+                .arg("XDG_CONFIG_HOME")
+                .arg(&runtime_home);
+            command
+                .arg("--setenv")
+                .arg("XDG_CACHE_HOME")
+                .arg(&runtime_home);
+        }
 
         if launch.identity_mode == SandboxIdentityMode::SandboxUser {
             command.arg("--setenv").arg("USER").arg("firma-user");
@@ -222,6 +272,150 @@ impl SandboxBackend for BwrapBackend {
     fn teardown(&self, handle: SandboxHandle) -> Result<(), RunError> {
         remove_runtime_dir(&handle.runtime_dir);
         Ok(())
+    }
+}
+
+fn clear_fd_cloexec(file: &File) -> Result<(), RunError> {
+    let fd = file.as_raw_fd();
+    let flags = fcntl(file, FcntlArg::F_GETFD).map_err(|error| RunError::Backend {
+        backend: BackendKind::Bwrap.to_string(),
+        reason: format!("failed to read fd flags for seccomp descriptor {fd}: {error}"),
+    })?;
+    let mut fd_flags = FdFlag::from_bits_truncate(flags);
+    fd_flags.remove(FdFlag::FD_CLOEXEC);
+    fcntl(file, FcntlArg::F_SETFD(fd_flags)).map_err(|error| RunError::Backend {
+        backend: BackendKind::Bwrap.to_string(),
+        reason: format!("failed to clear CLOEXEC on seccomp descriptor {fd}: {error}"),
+    })?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BwrapHardening {
+    readonly_rootfs: bool,
+    runtime_home_isolation: bool,
+    mask_home_paths: Vec<String>,
+}
+
+fn bwrap_hardening_from_env(env: &std::collections::BTreeMap<String, String>) -> BwrapHardening {
+    let readonly_rootfs = env
+        .get(BWRAP_ROOTFS_MODE_ENV)
+        .is_some_and(|mode| mode == BWRAP_ROOTFS_MODE_READONLY);
+    let runtime_home_isolation = env
+        .get(BWRAP_RUNTIME_HOME_ENV)
+        .is_some_and(|value| parse_truthy(value));
+    let mask_home_paths = env
+        .get(BWRAP_MASK_HOME_PATHS_ENV)
+        .map_or_else(Vec::new, |raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        });
+    BwrapHardening {
+        readonly_rootfs,
+        runtime_home_isolation,
+        mask_home_paths,
+    }
+}
+
+fn parse_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec, suffixes: &[String]) {
+    let home = launch
+        .env
+        .get("HOME")
+        .cloned()
+        .or_else(|| std::env::var("HOME").ok())
+        .unwrap_or_default();
+    if home.is_empty() || !home.starts_with('/') {
+        return;
+    }
+
+    for suffix in suffixes {
+        let path = format!("{home}/{suffix}");
+        if std::path::Path::new(&path).exists() {
+            command.arg("--tmpfs").arg(&path);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    use crate::backend::LaunchSpec;
+    use crate::config::SandboxIdentityMode;
+
+    #[test]
+    fn hardening_from_env_is_profile_driven() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            super::BWRAP_ROOTFS_MODE_ENV.to_string(),
+            super::BWRAP_ROOTFS_MODE_READONLY.to_string(),
+        );
+        env.insert(
+            super::BWRAP_RUNTIME_HOME_ENV.to_string(),
+            "true".to_string(),
+        );
+        env.insert(
+            super::BWRAP_MASK_HOME_PATHS_ENV.to_string(),
+            ".ssh,.aws,.config/gcloud".to_string(),
+        );
+        let hardening = super::bwrap_hardening_from_env(&env);
+        assert!(hardening.readonly_rootfs);
+        assert!(hardening.runtime_home_isolation);
+        assert_eq!(
+            hardening.mask_home_paths,
+            vec![
+                ".ssh".to_string(),
+                ".aws".to_string(),
+                ".config/gcloud".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn mask_sensitive_paths_adds_expected_mounts() {
+        let mut cmd = Command::new("bwrap");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(home.join(".ssh")).expect("mkdir .ssh");
+        std::fs::create_dir_all(home.join(".aws")).expect("mkdir .aws");
+        std::fs::create_dir_all(home.join(".config").join("gcloud")).expect("mkdir .config/gcloud");
+
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), home.display().to_string());
+        let launch = LaunchSpec {
+            executable: "/bin/true".to_string(),
+            args: vec![],
+            cwd: PathBuf::from("/tmp"),
+            env,
+            identity_mode: SandboxIdentityMode::SandboxUser,
+        };
+        let suffixes = vec![
+            ".ssh".to_string(),
+            ".aws".to_string(),
+            ".config/gcloud".to_string(),
+        ];
+        super::mask_sensitive_paths(&mut cmd, &launch, &suffixes);
+        let rendered = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(rendered.contains(&format!("--tmpfs {}/.ssh", home.display())));
+        assert!(rendered.contains(&format!("--tmpfs {}/.aws", home.display())));
+        assert!(rendered.contains(&format!("--tmpfs {}/.config/gcloud", home.display())));
     }
 }
 

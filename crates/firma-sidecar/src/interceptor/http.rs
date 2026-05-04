@@ -28,18 +28,25 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use tokio::io::copy_bidirectional;
+use rustls::ClientConfig;
+use rustls::RootCertStore;
+use rustls::pki_types::ServerName;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
+use tokio_rustls::TlsConnector;
 use tokio_util::sync::CancellationToken;
 
 use super::https_mitm::HttpsMitmRuntime;
 use crate::config::{ConnectRelayConfig, HttpsMitmConfig};
-use crate::handler::{ConnectDecision, DispatchedResponse, HandledResponse, RequestHandler};
+use crate::handler::{
+    ConnectDecision, DispatchedResponse, HandledResponse, RequestHandler, UpgradeAuthorization,
+};
 use crate::interceptor::{Interceptor, InterceptorError};
 use crate::pipeline::RawRequest;
 
 const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
+const CONNECT_PREFACE_MAX_BYTES: usize = 32;
 
 /// HTTP forward proxy interceptor.
 ///
@@ -232,10 +239,18 @@ async fn handle_request(
             reason,
             detail,
             context: _,
-        } => deny_json_response(
-            StatusCode::FORBIDDEN,
-            crate::handler::deny_body_json(reason, &detail),
-        ),
+        } => {
+            tracing::warn!(
+                session_id = %session_id,
+                reason = ?reason,
+                detail = %detail,
+                "HTTP request denied by guard policy"
+            );
+            deny_json_response(
+                StatusCode::FORBIDDEN,
+                crate::handler::deny_body_json(reason, &detail),
+            )
+        }
         HandledResponse::Aborted { reason, detail } => deny_json_response(
             StatusCode::GATEWAY_TIMEOUT,
             crate::handler::abort_body_json(reason, &detail),
@@ -300,22 +315,43 @@ async fn handle_connect_request(
         }
     }
 
-    // MITM-intercepted hosts (preflight succeeded): skip CONNECT-level
-    // enforcement; each decrypted inner request is enforced individually at L7.
+    // MITM-intercepted hosts (preflight succeeded): by default skip CONNECT-level
+    // enforcement because each decrypted inner request is enforced at L7.
+    //
+    // Safety hardening: for non-strict MITM candidates we still evaluate
+    // CONNECT once up-front. If this session later needs to fall back to a
+    // blind tunnel (e.g. non-TLS tunneled payload), destination-level policy
+    // has already been enforced and no bypass is introduced.
+    //
     // Blind-tunnel hosts AND non-strict MITM with failed preflight: CONNECT is
     // the only enforcement point, so enforce it.
-    let connect_decision = if effective_mitm.is_some() {
+    let connect_decision = if effective_mitm.is_some() && strict_mitm {
         ConnectDecision::Allow
     } else {
         handler.handle_connect(raw, &session_id).await
     };
 
     match connect_decision {
-        ConnectDecision::Deny { reason, detail } => Ok(deny_json_response(
-            StatusCode::FORBIDDEN,
-            crate::handler::deny_body_json(reason, &detail),
-        )),
+        ConnectDecision::Deny { reason, detail } => {
+            log_connect_deny(&target_info, &session_id, reason, &detail);
+            Ok(deny_json_response(
+                StatusCode::FORBIDDEN,
+                crate::handler::deny_body_json(reason, &detail),
+            ))
+        }
         ConnectDecision::Allow => {
+            let relay_mode = if effective_mitm.is_some() {
+                "mitm"
+            } else {
+                "tunnel"
+            };
+            tracing::debug!(
+                host = %target_info.host,
+                port = target_info.port,
+                session_id = %session_id,
+                relay_mode = relay_mode,
+                "CONNECT authorized and handled by sidecar"
+            );
             let limits = connect_relay_limits(&connect_relay);
             let target = connect_target(&target_info.authority);
             let on_upgrade = hyper::upgrade::on(req);
@@ -329,10 +365,36 @@ async fn handle_connect_request(
                 prepared_acceptor,
                 max_request_body_bytes,
                 limits,
+                strict_mitm,
             );
             Ok(connect_established_response())
         }
     }
+}
+
+fn log_connect_deny(
+    target_info: &ConnectTargetInfo,
+    session_id: &str,
+    reason: firma_core::DenyReason,
+    detail: &str,
+) {
+    if reason == firma_core::DenyReason::TokenExpired {
+        tracing::warn!(
+            host = %target_info.host,
+            port = target_info.port,
+            session_id = %session_id,
+            detail = %detail,
+            "CONNECT denied due to expired capability token; renew token for this session_id and reload sidecar capability source"
+        );
+    }
+    tracing::warn!(
+        host = %target_info.host,
+        port = target_info.port,
+        session_id = %session_id,
+        reason = ?reason,
+        detail = %detail,
+        "CONNECT denied by guard policy"
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -346,6 +408,7 @@ fn spawn_connect_relay(
     prepared_acceptor: Option<TlsAcceptor>,
     max_request_body_bytes: usize,
     limits: ConnectRelayLimits,
+    strict_mitm: bool,
 ) {
     // Invariant enforced by handle_connect_request: when mitm_candidate is Some,
     // prepared_acceptor is also Some (preflight runs synchronously and either
@@ -355,25 +418,71 @@ fn spawn_connect_relay(
     match (mitm_candidate, prepared_acceptor) {
         (None, _) => {
             tokio::spawn(async move {
-                if let Err(e) = relay_connect_tunnel(on_upgrade, &target, limits).await {
-                    tracing::warn!("CONNECT tunnel failed: {e}");
+                match relay_connect_tunnel(on_upgrade, &target, limits).await {
+                    Err(e) => {
+                        let failure_class = classify_connect_relay_failure(&e);
+                        tracing::warn!(
+                            host = %target_info.host,
+                            port = target_info.port,
+                            session_id = %session_id,
+                            policy_decision = "allow",
+                            failure_class,
+                            detail = %e,
+                            "CONNECT relay failed after policy allow"
+                        );
+                        handler
+                            .emit_connect_relay_failure_audit(&session_id, &target_info.host, &e)
+                            .await;
+                    }
+                    Ok(stats)
+                        if stats.downstream_to_upstream_bytes > 0
+                            && stats.upstream_to_downstream_bytes == 0 =>
+                    {
+                        tracing::warn!(
+                            host = %target_info.host,
+                            port = target_info.port,
+                            session_id = %session_id,
+                            policy_decision = "allow",
+                            downstream_to_upstream_bytes = stats.downstream_to_upstream_bytes,
+                            upstream_to_downstream_bytes = stats.upstream_to_downstream_bytes,
+                            "CONNECT tunnel closed without upstream response bytes"
+                        );
+                    }
+                    Ok(_) => {}
                 }
             });
         }
         (Some(_), Some(acceptor)) => {
             tokio::spawn(async move {
+                let relay_target_info = target_info.clone();
+                let relay_session_id = session_id.clone();
+                let relay_handler = Arc::clone(&handler);
                 if let Err(e) = relay_connect_mitm(
                     on_upgrade,
-                    target_info,
-                    handler,
-                    session_id,
+                    relay_target_info,
+                    relay_handler,
+                    relay_session_id,
                     acceptor,
                     max_request_body_bytes,
                     limits,
+                    strict_mitm,
                 )
                 .await
                 {
-                    tracing::warn!("MITM CONNECT flow failed: {e}");
+                    let failure_class = classify_connect_relay_failure(&e);
+                    tracing::warn!(
+                        host = %target_info.host,
+                        port = target_info.port,
+                        session_id = %session_id,
+                        policy_decision = "allow",
+                        relay_mode = "mitm",
+                        failure_class,
+                        detail = %e,
+                        "MITM CONNECT relay failed after policy allow"
+                    );
+                    handler
+                        .emit_connect_relay_failure_audit(&session_id, &target_info.host, &e)
+                        .await;
                 }
             });
         }
@@ -391,6 +500,12 @@ struct ConnectTargetInfo {
     host: String,
     port: u16,
     authority: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TunnelRelayStats {
+    downstream_to_upstream_bytes: u64,
+    upstream_to_downstream_bytes: u64,
 }
 
 fn connect_target_info(host: &str) -> ConnectTargetInfo {
@@ -424,7 +539,7 @@ async fn relay_connect_tunnel(
     on_upgrade: hyper::upgrade::OnUpgrade,
     target: &str,
     limits: ConnectRelayLimits,
-) -> Result<(), String> {
+) -> Result<TunnelRelayStats, String> {
     let upgraded = tokio::time::timeout(limits.setup_timeout, on_upgrade)
         .await
         .map_err(|_| {
@@ -444,7 +559,7 @@ async fn relay_connect_tunnel(
             )
         })?
         .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
-    let _ = tokio::time::timeout(
+    let (downstream_to_upstream_bytes, upstream_to_downstream_bytes) = tokio::time::timeout(
         limits.session_max,
         copy_bidirectional(&mut downstream, &mut upstream),
     )
@@ -456,9 +571,13 @@ async fn relay_connect_tunnel(
         )
     })?
     .map_err(|e| format!("tunnel relay failed: {e}"))?;
-    Ok(())
+    Ok(TunnelRelayStats {
+        downstream_to_upstream_bytes,
+        upstream_to_downstream_bytes,
+    })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn relay_connect_mitm(
     on_upgrade: hyper::upgrade::OnUpgrade,
     target: ConnectTargetInfo,
@@ -467,6 +586,7 @@ async fn relay_connect_mitm(
     acceptor: TlsAcceptor,
     max_request_body_bytes: usize,
     limits: ConnectRelayLimits,
+    strict_mitm: bool,
 ) -> Result<(), String> {
     let upgraded = tokio::time::timeout(limits.setup_timeout, on_upgrade)
         .await
@@ -477,7 +597,48 @@ async fn relay_connect_mitm(
             )
         })?
         .map_err(|e| format!("upgrade failed: {e}"))?;
-    let downstream = TokioIo::new(upgraded);
+    let mut downstream = TokioIo::new(upgraded);
+    let mut preface = [0_u8; CONNECT_PREFACE_MAX_BYTES];
+    let preface_len = tokio::time::timeout(
+        limits.setup_timeout,
+        read_connect_preface(&mut downstream, &mut preface),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "downstream preface read timed out after {} seconds for {}",
+            limits.setup_timeout.as_secs(),
+            target.host
+        )
+    })?
+    .map_err(|e| format!("downstream preface read failed for {}: {e}", target.host))?;
+    let tls_start = first_non_crlf_index(&preface[..preface_len]);
+    let first_non_crlf = preface.get(tls_start).copied().unwrap_or(0);
+    let tls_header_valid = is_likely_tls_record_header(&preface[..preface_len], tls_start);
+    if !tls_header_valid {
+        if strict_mitm {
+            return Err(format!(
+                "strict MITM requires TLS tunneled traffic; received non-TLS CONNECT preface (first_non_crlf=0x{:02x}) for {}",
+                first_non_crlf, target.host
+            ));
+        }
+        tracing::warn!(
+            host = %target.host,
+            first_byte = format_args!("0x{:02x}", first_non_crlf),
+            preface = %hex_preface(&preface[..preface_len]),
+            "non-strict MITM detected non-TLS CONNECT payload/header; falling back to blind tunnel"
+        );
+        let _ = relay_connect_tunnel_from_stream_with_prefetch(
+            downstream,
+            &target.authority,
+            limits,
+            &preface[..preface_len],
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let downstream = PrefetchedStream::new(downstream, &preface[tls_start..preface_len]);
     let tls_stream = tokio::time::timeout(limits.setup_timeout, acceptor.accept(downstream))
         .await
         .map_err(|_| {
@@ -491,24 +652,26 @@ async fn relay_connect_mitm(
 
     let target_host = target.host.clone();
     let io = TokioIo::new(tls_stream);
-    let serve = http1::Builder::new().serve_connection(
-        io,
-        service_fn(move |req: Request<Incoming>| {
-            let handler = Arc::clone(&handler);
-            let target = target.clone();
-            let connect_session_id = connect_session_id.clone();
-            async move {
-                handle_mitm_https_request(
-                    req,
-                    handler,
-                    target,
-                    &connect_session_id,
-                    max_request_body_bytes,
-                )
-                .await
-            }
-        }),
-    );
+    let serve = http1::Builder::new()
+        .serve_connection(
+            io,
+            service_fn(move |req: Request<Incoming>| {
+                let handler = Arc::clone(&handler);
+                let target = target.clone();
+                let connect_session_id = connect_session_id.clone();
+                async move {
+                    handle_mitm_https_request(
+                        req,
+                        handler,
+                        target,
+                        &connect_session_id,
+                        max_request_body_bytes,
+                    )
+                    .await
+                }
+            }),
+        )
+        .with_upgrades();
     tokio::time::timeout(limits.session_max, serve)
         .await
         .map_err(|_| {
@@ -520,6 +683,182 @@ async fn relay_connect_mitm(
         })?
         .map_err(|e| format!("HTTPS MITM connection failed: {e}"))?;
     Ok(())
+}
+
+async fn read_connect_preface(
+    downstream: &mut TokioIo<hyper::upgrade::Upgraded>,
+    out: &mut [u8; CONNECT_PREFACE_MAX_BYTES],
+) -> std::io::Result<usize> {
+    // Ignore leading CR/LF bytes before the tunneled protocol payload.
+    // Some client/proxy stacks emit an extra line break between CONNECT and TLS payload.
+    let mut seen_non_crlf = false;
+    let mut payload_bytes = 0usize;
+    for idx in 0..out.len() {
+        downstream.read_exact(&mut out[idx..=idx]).await?;
+        let byte = out[idx];
+        if !seen_non_crlf {
+            if byte == b'\r' || byte == b'\n' {
+                continue;
+            }
+            seen_non_crlf = true;
+            // Fast-path: if the first payload byte cannot be a TLS record content
+            // type, we already know this is non-TLS and can fall back immediately.
+            if !matches!(byte, 20..=23) {
+                return Ok(idx + 1);
+            }
+        }
+        payload_bytes += 1;
+        if seen_non_crlf && payload_bytes >= 5 {
+            // Have at least 5 bytes from first non-CRLF onward to validate TLS record header.
+            return Ok(idx + 1);
+        }
+    }
+    Ok(out.len())
+}
+
+fn first_non_crlf_index(preface: &[u8]) -> usize {
+    preface
+        .iter()
+        .position(|b| *b != b'\r' && *b != b'\n')
+        .unwrap_or(preface.len())
+}
+
+fn is_likely_tls_record_header(preface: &[u8], start: usize) -> bool {
+    if start >= preface.len() {
+        return false;
+    }
+    let rem = &preface[start..];
+    if rem.len() < 5 {
+        return false;
+    }
+    let content_type_ok = matches!(rem[0], 20..=23);
+    let major_ok = rem[1] == 0x03;
+    let minor_ok = rem[2] <= 0x04;
+    let record_len = u16::from_be_bytes([rem[3], rem[4]]);
+    let len_ok = record_len > 0;
+    content_type_ok && major_ok && minor_ok && len_ok
+}
+
+fn hex_preface(preface: &[u8]) -> String {
+    use std::fmt::Write as _;
+    preface.iter().enumerate().fold(
+        String::with_capacity(preface.len().saturating_mul(3)),
+        |mut out, (idx, byte)| {
+            if idx > 0 {
+                out.push(' ');
+            }
+            let _ = write!(&mut out, "{byte:02x}");
+            out
+        },
+    )
+}
+
+struct PrefetchedStream<T> {
+    inner: T,
+    prefetched: [u8; CONNECT_PREFACE_MAX_BYTES],
+    prefetched_len: usize,
+    prefetched_pos: usize,
+}
+
+impl<T> PrefetchedStream<T> {
+    fn new(inner: T, prefetched: &[u8]) -> Self {
+        let mut local = [0_u8; CONNECT_PREFACE_MAX_BYTES];
+        let len = prefetched.len().min(local.len());
+        local[..len].copy_from_slice(&prefetched[..len]);
+        Self {
+            inner,
+            prefetched: local,
+            prefetched_len: len,
+            prefetched_pos: 0,
+        }
+    }
+}
+
+impl<T: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for PrefetchedStream<T> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if self.prefetched_pos < self.prefetched_len && buf.remaining() > 0 {
+            let remaining = self.prefetched_len - self.prefetched_pos;
+            let to_copy = remaining.min(buf.remaining());
+            let start = self.prefetched_pos;
+            let end = start + to_copy;
+            buf.put_slice(&self.prefetched[start..end]);
+            self.prefetched_pos = end;
+            return std::task::Poll::Ready(Ok(()));
+        }
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<T: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for PrefetchedStream<T> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+async fn relay_connect_tunnel_from_stream_with_prefetch(
+    mut downstream: TokioIo<hyper::upgrade::Upgraded>,
+    target: &str,
+    limits: ConnectRelayLimits,
+    prefetched: &[u8],
+) -> Result<TunnelRelayStats, String> {
+    let mut upstream = tokio::time::timeout(limits.setup_timeout, TcpStream::connect(target))
+        .await
+        .map_err(|_| {
+            format!(
+                "upstream connect timed out after {} seconds for {target}",
+                limits.setup_timeout.as_secs()
+            )
+        })?
+        .map_err(|e| format!("upstream connect failed for {target}: {e}"))?;
+    if !prefetched.is_empty() {
+        tokio::time::timeout(limits.setup_timeout, upstream.write_all(prefetched))
+            .await
+            .map_err(|_| {
+                format!(
+                    "upstream prefetch write timed out after {} seconds for {target}",
+                    limits.setup_timeout.as_secs()
+                )
+            })?
+            .map_err(|e| format!("upstream prefetch write failed for {target}: {e}"))?;
+    }
+    let (downstream_to_upstream_bytes, upstream_to_downstream_bytes) = tokio::time::timeout(
+        limits.session_max,
+        copy_bidirectional(&mut downstream, &mut upstream),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "CONNECT tunnel exceeded {} seconds session cap",
+            limits.session_max.as_secs()
+        )
+    })?
+    .map_err(|e| format!("tunnel relay failed: {e}"))?;
+    Ok(TunnelRelayStats {
+        downstream_to_upstream_bytes,
+        upstream_to_downstream_bytes,
+    })
 }
 
 #[derive(Clone)]
@@ -535,6 +874,23 @@ fn connect_relay_limits(config: &ConnectRelayConfig) -> ConnectRelayLimits {
     }
 }
 
+fn classify_connect_relay_failure(detail: &str) -> &'static str {
+    let lowered = detail.to_ascii_lowercase();
+    if lowered.contains("timed out") {
+        "timeout"
+    } else if lowered.contains("connection refused") {
+        "refused"
+    } else if lowered.contains("connection reset") {
+        "reset"
+    } else if lowered.contains("tls") || lowered.contains("handshake") {
+        "tls_handshake"
+    } else if lowered.contains("dns") || lowered.contains("name or service not known") {
+        "dns"
+    } else {
+        "other"
+    }
+}
+
 fn connect_established_response() -> Response<Full<Bytes>> {
     Response::builder()
         .status(StatusCode::OK)
@@ -543,7 +899,7 @@ fn connect_established_response() -> Response<Full<Bytes>> {
 }
 
 async fn handle_mitm_https_request(
-    req: Request<Incoming>,
+    mut req: Request<Incoming>,
     handler: Arc<RequestHandler>,
     target: ConnectTargetInfo,
     connect_session_id: &str,
@@ -554,6 +910,16 @@ async fn handle_mitm_https_request(
             StatusCode::BAD_REQUEST,
             "MALFORMED_REQUEST: nested CONNECT is not supported",
         ));
+    }
+
+    if is_websocket_upgrade_request(&req) {
+        return handle_mitm_websocket_upgrade_request(
+            &mut req,
+            handler,
+            target,
+            connect_session_id,
+        )
+        .await;
     }
 
     let raw = match build_raw_https_request(req, &target, max_request_body_bytes).await {
@@ -576,16 +942,345 @@ async fn handle_mitm_https_request(
             reason,
             detail,
             context: _,
-        } => deny_json_response(
-            StatusCode::FORBIDDEN,
-            crate::handler::deny_body_json(reason, &detail),
-        ),
+        } => {
+            tracing::warn!(
+                host = %target.host,
+                port = target.port,
+                session_id = %session_id,
+                reason = ?reason,
+                detail = %detail,
+                "MITM HTTPS request denied by guard policy"
+            );
+            deny_json_response(
+                StatusCode::FORBIDDEN,
+                crate::handler::deny_body_json(reason, &detail),
+            )
+        }
         HandledResponse::Aborted { reason, detail } => deny_json_response(
             StatusCode::GATEWAY_TIMEOUT,
             crate::handler::abort_body_json(reason, &detail),
         ),
     };
     Ok(response)
+}
+
+#[allow(clippy::too_many_lines)]
+async fn handle_mitm_websocket_upgrade_request(
+    req: &mut Request<Incoming>,
+    handler: Arc<RequestHandler>,
+    target: ConnectTargetInfo,
+    connect_session_id: &str,
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    let raw = match build_raw_https_request_head(req, &target) {
+        Ok(raw) => raw,
+        Err(detail) => return Ok(deny_response(StatusCode::FORBIDDEN, &detail)),
+    };
+    let session_id = raw
+        .headers
+        .get("x-firma-session-id")
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| connect_session_id.to_string());
+
+    let authorization = handler.authorize_upgrade(raw, &session_id).await;
+    let (credentials, audit_payload) = match authorization {
+        UpgradeAuthorization::Allow {
+            credentials,
+            audit_payload,
+        } => {
+            tracing::debug!(
+                host = %target.host,
+                port = target.port,
+                session_id = %session_id,
+                "websocket upgrade authorized by sidecar policy"
+            );
+            (credentials, *audit_payload)
+        }
+        UpgradeAuthorization::Deny { reason, detail } => {
+            tracing::warn!(
+                host = %target.host,
+                port = target.port,
+                session_id = %session_id,
+                reason = ?reason,
+                detail = %detail,
+                "websocket upgrade denied by guard policy"
+            );
+            return Ok(deny_json_response(
+                StatusCode::FORBIDDEN,
+                crate::handler::deny_body_json(reason, &detail),
+            ));
+        }
+    };
+
+    let path_and_query = req
+        .uri()
+        .path_and_query()
+        .map_or("/", |pq| pq.as_str())
+        .to_string();
+    let handshake_request =
+        build_upstream_handshake_request(req, &target, &path_and_query, &credentials);
+
+    let mut upstream = match connect_upstream_tls(&target).await {
+        Ok(stream) => stream,
+        Err(detail) => {
+            tracing::warn!(
+                host = %target.host,
+                port = target.port,
+                session_id = %session_id,
+                detail = %detail,
+                "websocket upstream TLS connect failed"
+            );
+            handler.emit_upgrade_audit(audit_payload, 0, 0).await;
+            return Ok(deny_json_response(
+                StatusCode::BAD_GATEWAY,
+                crate::handler::deny_body_json(
+                    DenyReason::ConnectorNetworkError,
+                    &format!("upstream websocket connect failed: {detail}"),
+                ),
+            ));
+        }
+    };
+
+    if let Err(e) = upstream.write_all(&handshake_request).await {
+        tracing::warn!(
+            host = %target.host,
+            port = target.port,
+            session_id = %session_id,
+            error = %e,
+            "websocket upstream handshake write failed"
+        );
+        handler.emit_upgrade_audit(audit_payload, 0, 0).await;
+        return Ok(deny_json_response(
+            StatusCode::BAD_GATEWAY,
+            crate::handler::deny_body_json(
+                DenyReason::ConnectorNetworkError,
+                &format!("upstream websocket handshake write failed: {e}"),
+            ),
+        ));
+    }
+
+    let (status, response_headers, prefetched) = match read_http_response_head(&mut upstream).await
+    {
+        Ok(parsed) => parsed,
+        Err(detail) => {
+            tracing::warn!(
+                host = %target.host,
+                port = target.port,
+                session_id = %session_id,
+                detail = %detail,
+                "websocket upstream handshake read failed"
+            );
+            handler.emit_upgrade_audit(audit_payload, 0, 0).await;
+            return Ok(deny_json_response(
+                StatusCode::BAD_GATEWAY,
+                crate::handler::deny_body_json(
+                    DenyReason::ConnectorNetworkError,
+                    &format!("upstream websocket handshake read failed: {detail}"),
+                ),
+            ));
+        }
+    };
+
+    handler
+        .emit_upgrade_audit(audit_payload, status, prefetched.len())
+        .await;
+
+    if status != 101 {
+        tracing::warn!(
+            host = %target.host,
+            port = target.port,
+            session_id = %session_id,
+            status = status,
+            "websocket upstream rejected protocol upgrade"
+        );
+        return Ok(deny_json_response(
+            StatusCode::BAD_GATEWAY,
+            crate::handler::deny_body_json(
+                DenyReason::ConnectorNetworkError,
+                &format!("upstream websocket upgrade rejected with status {status}"),
+            ),
+        ));
+    }
+
+    let on_upgrade = hyper::upgrade::on(req);
+    tokio::spawn(async move {
+        let upgraded = match on_upgrade.await {
+            Ok(upgraded) => upgraded,
+            Err(e) => {
+                tracing::warn!("websocket downstream upgrade failed: {e}");
+                return;
+            }
+        };
+        let mut downstream = TokioIo::new(upgraded);
+        if !prefetched.is_empty()
+            && let Err(e) = downstream.write_all(&prefetched).await
+        {
+            tracing::warn!("websocket downstream prefetch write failed: {e}");
+            return;
+        }
+        if let Err(e) = copy_bidirectional(&mut downstream, &mut upstream).await {
+            if is_expected_tls_close_error(&e) {
+                tracing::debug!("websocket MITM relay closed by peer (expected shutdown): {e}");
+            } else {
+                tracing::warn!("websocket MITM relay failed: {e}");
+            }
+        }
+    });
+    tracing::debug!(
+        host = %target.host,
+        port = target.port,
+        session_id = %session_id,
+        "websocket upgrade handled by sidecar relay"
+    );
+
+    Ok(build_websocket_switching_response(response_headers))
+}
+
+fn is_websocket_upgrade_request(req: &Request<Incoming>) -> bool {
+    req.method() == Method::GET
+        && header_contains_token(req.headers(), "connection", "upgrade")
+        && req
+            .headers()
+            .get("upgrade")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+}
+
+fn header_contains_token(headers: &hyper::HeaderMap, name: &str, token: &str) -> bool {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case(token))
+        })
+}
+
+fn is_expected_tls_close_error(error: &std::io::Error) -> bool {
+    let msg = error.to_string();
+    msg.contains("close_notify") || msg.contains("unexpected-eof")
+}
+
+fn build_upstream_handshake_request(
+    req: &Request<Incoming>,
+    target: &ConnectTargetInfo,
+    path_and_query: &str,
+    credentials: &firma_core::InjectedCredentials,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1024);
+    out.extend_from_slice(format!("GET {path_and_query} HTTP/1.1\r\n").as_bytes());
+    let mut has_host = false;
+    for (name, value) in req.headers() {
+        if name.as_str().eq_ignore_ascii_case("host") {
+            has_host = true;
+        }
+        if let Ok(v) = value.to_str() {
+            out.extend_from_slice(name.as_str().as_bytes());
+            out.extend_from_slice(b": ");
+            out.extend_from_slice(v.as_bytes());
+            out.extend_from_slice(b"\r\n");
+        }
+    }
+    if !has_host {
+        out.extend_from_slice(b"Host: ");
+        out.extend_from_slice(target.authority.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    for (k, v) in credentials.headers() {
+        out.extend_from_slice(k.as_bytes());
+        out.extend_from_slice(b": ");
+        out.extend_from_slice(v.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(b"\r\n");
+    out
+}
+
+async fn connect_upstream_tls(
+    target: &ConnectTargetInfo,
+) -> Result<tokio_rustls::client::TlsStream<TcpStream>, String> {
+    let upstream = TcpStream::connect(&target.authority)
+        .await
+        .map_err(|e| format!("TCP connect failed for {}: {e}", target.authority))?;
+    let roots = webpki_roots::TLS_SERVER_ROOTS
+        .iter()
+        .cloned()
+        .collect::<RootCertStore>();
+    let config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(config));
+    let server_name = ServerName::try_from(target.host.clone())
+        .map_err(|e| format!("invalid upstream server name {}: {e}", target.host))?;
+    connector
+        .connect(server_name, upstream)
+        .await
+        .map_err(|e| format!("TLS connect failed for {}: {e}", target.host))
+}
+
+async fn read_http_response_head<S: tokio::io::AsyncRead + Unpin>(
+    stream: &mut S,
+) -> Result<(u16, Vec<(String, String)>, Vec<u8>), String> {
+    const MAX_HEAD: usize = 64 * 1024;
+    let mut buf = Vec::with_capacity(2048);
+    let mut chunk = [0_u8; 1024];
+    let head_end = loop {
+        let n = stream
+            .read(&mut chunk)
+            .await
+            .map_err(|e| format!("read failed: {e}"))?;
+        if n == 0 {
+            return Err("early eof while reading response head".to_string());
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.len() > MAX_HEAD {
+            return Err("response head exceeds 64KiB".to_string());
+        }
+        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            break pos + 4;
+        }
+    };
+
+    let head = String::from_utf8(buf[..head_end].to_vec())
+        .map_err(|_| "response head is not valid UTF-8".to_string())?;
+    let mut lines = head.split("\r\n");
+    let status_line = lines
+        .next()
+        .ok_or_else(|| "missing status line".to_string())?;
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| "malformed status line".to_string())?
+        .parse::<u16>()
+        .map_err(|e| format!("invalid status code: {e}"))?;
+
+    let mut headers = Vec::new();
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_string(), value.trim().to_string()));
+        }
+    }
+    let prefetched = buf[head_end..].to_vec();
+    Ok((status, headers, prefetched))
+}
+
+fn build_websocket_switching_response(headers: Vec<(String, String)>) -> Response<Full<Bytes>> {
+    let mut builder = Response::builder().status(StatusCode::SWITCHING_PROTOCOLS);
+    for (name, value) in headers {
+        if let (Ok(hn), Ok(hv)) = (
+            hyper::header::HeaderName::from_bytes(name.as_bytes()),
+            hyper::header::HeaderValue::from_str(&value),
+        ) {
+            builder = builder.header(hn, hv);
+        }
+    }
+    builder
+        .body(Full::new(Bytes::new()))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
 
 async fn build_raw_https_request(
@@ -1323,6 +2018,41 @@ mod tests {
     }
 
     #[test]
+    fn test_header_contains_token_parses_comma_separated_tokens() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(
+            "connection",
+            hyper::header::HeaderValue::from_static("keep-alive, Upgrade"),
+        );
+        assert!(header_contains_token(&headers, "connection", "upgrade"));
+        assert!(!header_contains_token(&headers, "connection", "close"));
+    }
+
+    #[tokio::test]
+    async fn test_read_http_response_head_parses_status_headers_and_prefetch() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        tokio::spawn(async move {
+            let _ = server
+                .write_all(
+                    b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nprefetch",
+                )
+                .await;
+        });
+
+        let (status, headers, prefetched) = read_http_response_head(&mut client)
+            .await
+            .unwrap_or_else(|e| panic!("expected parsed response head: {e}"));
+        assert_eq!(status, 101);
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("upgrade")
+                    && v.eq_ignore_ascii_case("websocket"))
+        );
+        assert_eq!(prefetched, b"prefetch".to_vec());
+    }
+
+    #[test]
     fn test_connect_target_info_parses_ipv4_authority() {
         let info = connect_target_info("api.openai.com:443");
         assert_eq!(info.host, "api.openai.com");
@@ -1353,6 +2083,30 @@ mod tests {
             &connect_target_info("chat.openai.com:443"),
             &connect
         ));
+    }
+
+    #[test]
+    fn test_classify_connect_relay_failure() {
+        assert_eq!(
+            classify_connect_relay_failure("upstream connect timed out after 10 seconds"),
+            "timeout"
+        );
+        assert_eq!(
+            classify_connect_relay_failure("upstream connect failed: Connection refused"),
+            "refused"
+        );
+        assert_eq!(
+            classify_connect_relay_failure("tunnel relay failed: Connection reset by peer"),
+            "reset"
+        );
+        assert_eq!(
+            classify_connect_relay_failure("downstream TLS handshake failed: bad cert"),
+            "tls_handshake"
+        );
+        assert_eq!(
+            classify_connect_relay_failure("dns resolution failed"),
+            "dns"
+        );
     }
 
     // ── pipeline sanity checks ─────────────────────────────────────────
@@ -1660,6 +2414,194 @@ Content-Length: 2\r\n\
         assert_eq!(
             status, 403,
             "expected L7 deny over MITM path, got: {response}"
+        );
+
+        cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_proxy_connect_mitm_non_strict_falls_back_for_non_tls_payload() {
+        let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let proxy_addr = free_addr();
+        let handler = test_handler(test_pipeline_allow_connect());
+        let cancel = CancellationToken::new();
+
+        let mitm_config = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["localhost".to_string()],
+            // Non-strict host should fail open to blind tunnel when payload is non-TLS.
+            strict_hosts: vec![],
+            cert_ttl_secs: 300,
+            cert_cache_capacity: 16,
+            ..HttpsMitmConfig::default()
+        };
+
+        let (target_addr, target_cancel) = mock_connect_target().await;
+        let server_handle = start_proxy_with_mitm(
+            proxy_addr,
+            handler,
+            cancel.clone(),
+            mitm_config,
+            ca_tempdir.path().to_path_buf(),
+        )
+        .await;
+
+        let mut stream = TcpStream::connect(proxy_addr)
+            .await
+            .unwrap_or_else(|e| panic!("failed to connect to proxy: {e}"));
+        let host = format!("localhost:{}", target_addr.port());
+        let connect_req = format!(
+            "CONNECT {host} HTTP/1.1\r\nHost: {host}\r\nx-firma-session-id: _test_\r\n\r\n"
+        );
+        stream
+            .write_all(connect_req.as_bytes())
+            .await
+            .unwrap_or_else(|e| panic!("failed to write CONNECT request: {e}"));
+        let connect_response = read_connect_response(&mut stream).await;
+        assert!(
+            connect_response.starts_with("HTTP/1.1 200"),
+            "expected CONNECT 200, got: {connect_response:?}"
+        );
+
+        // Send a non-TLS payload. MITM path should auto-fallback (non-strict host)
+        // and preserve raw CONNECT tunnel semantics.
+        stream
+            .write_all(b"ping")
+            .await
+            .unwrap_or_else(|e| panic!("failed to write tunnel payload: {e}"));
+        let mut reply = [0u8; 4];
+        stream
+            .read_exact(&mut reply)
+            .await
+            .unwrap_or_else(|e| panic!("failed to read tunnel reply: {e}"));
+        assert_eq!(&reply, b"pong");
+
+        cancel.cancel();
+        target_cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_proxy_connect_mitm_tolerates_crlf_preface_before_tls() {
+        let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let proxy_addr = free_addr();
+        let handler = test_handler(test_pipeline_deny_for_host("*"));
+        let cancel = CancellationToken::new();
+
+        let mitm_config = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["localhost".to_string()],
+            strict_hosts: vec!["localhost".to_string()],
+            cert_ttl_secs: 300,
+            cert_cache_capacity: 16,
+            ..HttpsMitmConfig::default()
+        };
+
+        let server_handle = start_proxy_with_mitm(
+            proxy_addr,
+            handler,
+            cancel.clone(),
+            mitm_config,
+            ca_tempdir.path().to_path_buf(),
+        )
+        .await;
+
+        let mut stream = TcpStream::connect(proxy_addr)
+            .await
+            .unwrap_or_else(|e| panic!("failed to connect to proxy: {e}"));
+        let connect_req = "CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\nx-firma-session-id: _test_\r\n\r\n";
+        stream
+            .write_all(connect_req.as_bytes())
+            .await
+            .unwrap_or_else(|e| panic!("failed to write CONNECT request: {e}"));
+        let connect_response = read_connect_response(&mut stream).await;
+        assert!(
+            connect_response.starts_with("HTTP/1.1 200"),
+            "expected CONNECT 200, got: {connect_response:?}"
+        );
+
+        let ca_cert_path = ca_tempdir.path().join("firma-ca.crt");
+        for _ in 0..20 {
+            if ca_cert_path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(ca_cert_path.exists(), "expected CA cert to be generated");
+
+        // Repro shape seen in the field: CRLF emitted before TLS preface.
+        stream
+            .write_all(b"\r\n")
+            .await
+            .unwrap_or_else(|e| panic!("failed to write CRLF preface: {e}"));
+
+        let mut tls_stream = connect_tls_with_ca(stream, &ca_cert_path, "localhost").await;
+        let tunneled_request = "POST /v1/chat/completions HTTP/1.1\r\n\
+Host: localhost:443\r\n\
+Content-Length: 2\r\n\
+\r\n\
+{}";
+        tls_stream
+            .write_all(tunneled_request.as_bytes())
+            .await
+            .unwrap_or_else(|e| panic!("failed to write tunneled HTTPS request: {e}"));
+
+        let mut buf = [0u8; 2048];
+        let n = tokio::time::timeout(Duration::from_secs(3), tls_stream.read(&mut buf))
+            .await
+            .unwrap_or_else(|_| panic!("timed out reading tunneled HTTPS response"))
+            .unwrap_or_else(|e| panic!("failed reading tunneled HTTPS response: {e}"));
+        let response = String::from_utf8_lossy(&buf[..n]).to_string();
+        let status = response
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse::<u16>().ok())
+            .unwrap_or(0);
+        assert_eq!(
+            status, 403,
+            "expected L7 deny over MITM path even with CRLF preface, got: {response}"
+        );
+
+        cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_proxy_connect_mitm_non_strict_non_tls_still_enforces_connect_policy() {
+        let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let proxy_addr = free_addr();
+        // Deny all CONNECT destinations.
+        let handler = test_handler(test_pipeline_deny_connect_for_host("*"));
+        let cancel = CancellationToken::new();
+
+        let mitm_config = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["localhost".to_string()],
+            strict_hosts: vec![],
+            cert_ttl_secs: 300,
+            cert_cache_capacity: 16,
+            ..HttpsMitmConfig::default()
+        };
+
+        let server_handle = start_proxy_with_mitm(
+            proxy_addr,
+            handler,
+            cancel.clone(),
+            mitm_config,
+            ca_tempdir.path().to_path_buf(),
+        )
+        .await;
+
+        let status = proxy_request(
+            proxy_addr,
+            "CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\nx-firma-session-id: _test_\r\n\r\n",
+        )
+        .await;
+        assert_eq!(
+            status, 403,
+            "non-strict MITM host must still enforce CONNECT policy before any fallback"
         );
 
         cancel.cancel();

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::args::RunArgs;
 use crate::backend::BackendKind;
 use crate::error::RunError;
-use crate::profile::built_in_profile;
+use crate::profile::{BuiltInProfileId, built_in_profile};
 
 fn backend_supports_structural_network(backend: BackendKind) -> bool {
     matches!(backend, BackendKind::Bwrap)
@@ -24,10 +24,12 @@ pub struct ResolvedProfile {
     pub env_passthrough: BTreeSet<String>,
     pub env_set: BTreeMap<String, String>,
     pub mounts: Vec<MountSpec>,
+    pub seccomp_bpf_path: Option<PathBuf>,
     pub allowed_domains: Vec<String>,
     pub network: NetworkPolicy,
     pub identity_mode: SandboxIdentityMode,
     pub capability: CapabilityLeaseConfig,
+    pub executable_policies: BTreeMap<String, ExecutableLaunchPolicy>,
 }
 
 impl ResolvedProfile {
@@ -67,6 +69,27 @@ impl ResolvedProfile {
                 return Err(RunError::ConfigValidation(format!(
                     "mount target must be absolute: {}",
                     mount.target.display()
+                )));
+            }
+        }
+
+        if let Some(path) = &self.seccomp_bpf_path {
+            if !path.is_absolute() {
+                return Err(RunError::ConfigValidation(format!(
+                    "seccomp_bpf_path must be absolute: {}",
+                    path.display()
+                )));
+            }
+            if !path.is_file() {
+                return Err(RunError::ConfigValidation(format!(
+                    "seccomp_bpf_path must point to an existing file: {}",
+                    path.display()
+                )));
+            }
+            if self.backend != BackendKind::Bwrap {
+                return Err(RunError::ConfigValidation(format!(
+                    "seccomp_bpf_path is only supported with backend 'bwrap', got '{backend}'",
+                    backend = self.backend
                 )));
             }
         }
@@ -150,6 +173,15 @@ pub struct CapabilityLeaseConfig {
     pub grace_seconds: u64,
 }
 
+/// Per-executable CLI argument policy injected by `firma run`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExecutableLaunchPolicy {
+    pub enforce_wrapper_defaults: bool,
+    pub sandbox_mode: Option<String>,
+    pub approval_policy: Option<String>,
+    pub config_overrides: BTreeMap<String, String>,
+}
+
 /// Source for capability material.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -173,6 +205,7 @@ struct FileConfig {
 pub(crate) struct ProfilePatch {
     pub(crate) backend: Option<BackendKind>,
     pub(crate) sidecar_endpoint: Option<String>,
+    pub(crate) seccomp_bpf_path: Option<PathBuf>,
     #[serde(default)]
     pub(crate) env_passthrough: Vec<String>,
     #[serde(default)]
@@ -184,6 +217,10 @@ pub(crate) struct ProfilePatch {
     pub(crate) network: Option<NetworkPolicyPatch>,
     pub(crate) identity_mode: Option<SandboxIdentityMode>,
     pub(crate) capability: Option<CapabilityLeasePatch>,
+    #[serde(default)]
+    pub(crate) executable_policies: BTreeMap<String, ExecutableLaunchPolicyPatch>,
+    #[serde(default)]
+    pub(crate) codex_cli: Option<ExecutableLaunchPolicyPatch>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -212,6 +249,15 @@ pub(crate) struct CapabilityLeasePatch {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ExecutableLaunchPolicyPatch {
+    pub(crate) enforce_wrapper_defaults: Option<bool>,
+    pub(crate) sandbox_mode: Option<String>,
+    pub(crate) approval_policy: Option<String>,
+    #[serde(default)]
+    pub(crate) config_overrides: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum CapabilitySourcePatch {
     Disabled,
@@ -225,6 +271,8 @@ impl ProfilePatch {
 
         let mut env_passthrough = self.env_passthrough;
         env_passthrough.extend(higher.env_passthrough);
+        let mut executable_policies = self.executable_policies;
+        executable_policies.extend(higher.executable_policies);
 
         let mounts = if higher.mounts.is_empty() {
             self.mounts
@@ -241,6 +289,7 @@ impl ProfilePatch {
         Self {
             backend: higher.backend.or(self.backend),
             sidecar_endpoint: higher.sidecar_endpoint.or(self.sidecar_endpoint),
+            seccomp_bpf_path: higher.seccomp_bpf_path.or(self.seccomp_bpf_path),
             env_passthrough,
             env_set,
             mounts,
@@ -248,6 +297,8 @@ impl ProfilePatch {
             network: higher.network.or(self.network),
             identity_mode: higher.identity_mode.or(self.identity_mode),
             capability: higher.capability.or(self.capability),
+            executable_policies,
+            codex_cli: higher.codex_cli.or(self.codex_cli),
         }
     }
 }
@@ -266,30 +317,7 @@ pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
         patch = patch.merge(file_patch);
     }
 
-    let cli_patch = ProfilePatch {
-        backend: args.backend.map(Into::into),
-        sidecar_endpoint: args.sidecar_endpoint.clone(),
-        env_passthrough: Vec::new(),
-        env_set: BTreeMap::new(),
-        mounts: Vec::new(),
-        allowed_domains: Vec::new(),
-        network: None,
-        identity_mode: if args.preserve_host_user {
-            Some(SandboxIdentityMode::HostUser)
-        } else {
-            args.identity_mode.map(Into::into)
-        },
-        capability: args
-            .capability_file
-            .as_ref()
-            .map(|path| CapabilityLeasePatch {
-                source: Some(CapabilitySourcePatch::File { path: path.clone() }),
-                kind: None,
-                path: None,
-                refresh_ratio: None,
-                grace_seconds: None,
-            }),
-    };
+    let cli_patch = cli_profile_patch(args);
     patch = patch.merge(cli_patch);
 
     let backend = patch
@@ -350,6 +378,9 @@ pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
         .identity_mode
         .unwrap_or(SandboxIdentityMode::SandboxUser);
 
+    let executable_policies =
+        resolve_executable_policies(patch.executable_policies, patch.codex_cli);
+
     let resolved = ResolvedProfile {
         id: args.profile.clone(),
         backend,
@@ -357,14 +388,85 @@ pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
         env_passthrough,
         env_set: patch.env_set,
         mounts,
+        seccomp_bpf_path: patch.seccomp_bpf_path,
         allowed_domains: patch.allowed_domains,
         network,
         identity_mode,
         capability,
+        executable_policies,
     };
+
+    if matches!(
+        BuiltInProfileId::from_str(&resolved.id),
+        Some(BuiltInProfileId::ClaudeCode)
+    ) && resolved.backend != BackendKind::Bwrap
+    {
+        tracing::warn!(
+            profile = %resolved.id,
+            backend = %resolved.backend,
+            "claude-code profile is running in compatibility mode; full Linux structural confinement guarantees require backend=bwrap"
+        );
+    }
 
     resolved.validate()?;
     Ok(resolved)
+}
+
+fn cli_profile_patch(args: &RunArgs) -> ProfilePatch {
+    ProfilePatch {
+        backend: args.backend.map(Into::into),
+        sidecar_endpoint: args.sidecar_endpoint.clone(),
+        seccomp_bpf_path: None,
+        env_passthrough: Vec::new(),
+        env_set: BTreeMap::new(),
+        mounts: Vec::new(),
+        allowed_domains: Vec::new(),
+        network: None,
+        identity_mode: if args.preserve_host_user {
+            Some(SandboxIdentityMode::HostUser)
+        } else {
+            args.identity_mode.map(Into::into)
+        },
+        capability: args
+            .capability_file
+            .as_ref()
+            .map(|path| CapabilityLeasePatch {
+                source: Some(CapabilitySourcePatch::File { path: path.clone() }),
+                kind: None,
+                path: None,
+                refresh_ratio: None,
+                grace_seconds: None,
+            }),
+        executable_policies: BTreeMap::new(),
+        codex_cli: None,
+    }
+}
+
+fn resolve_executable_policies(
+    patch: BTreeMap<String, ExecutableLaunchPolicyPatch>,
+    legacy_codex: Option<ExecutableLaunchPolicyPatch>,
+) -> BTreeMap<String, ExecutableLaunchPolicy> {
+    let mut resolved = patch
+        .into_iter()
+        .map(|(executable, policy)| (executable, resolve_executable_policy(policy)))
+        .collect::<BTreeMap<_, _>>();
+
+    if let Some(codex_policy) = legacy_codex {
+        resolved
+            .entry("codex".to_string())
+            .or_insert_with(|| resolve_executable_policy(codex_policy));
+    }
+
+    resolved
+}
+
+fn resolve_executable_policy(policy: ExecutableLaunchPolicyPatch) -> ExecutableLaunchPolicy {
+    ExecutableLaunchPolicy {
+        enforce_wrapper_defaults: policy.enforce_wrapper_defaults.unwrap_or(true),
+        sandbox_mode: policy.sandbox_mode,
+        approval_policy: policy.approval_policy,
+        config_overrides: policy.config_overrides,
+    }
 }
 
 fn capability_from_patch(patch: CapabilityLeasePatch) -> CapabilityLeaseConfig {
@@ -475,19 +577,26 @@ mod tests {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let config_path = tmpdir.path().join("firma-run.yaml");
 
-        let yaml = r#"
+        let seccomp_path = tmpdir.path().join("seccomp.bpf");
+        fs::write(&seccomp_path, [0_u8; 8]).unwrap_or_else(|e| panic!("{e}"));
+
+        let yaml = format!(
+            r#"
 defaults:
   sidecar_endpoint: "tcp://127.0.0.1:18080"
 profiles:
   codex:
     backend: bwrap
+    seccomp_bpf_path: {}
     identity_mode: host_user
     env_passthrough:
       - HOME
     capability:
       kind: file
       path: /tmp/capability.token
-"#;
+"#,
+            seccomp_path.display()
+        );
         fs::write(&config_path, yaml).unwrap_or_else(|e| panic!("{e}"));
 
         let mut run_args = args("codex");
@@ -495,6 +604,7 @@ profiles:
 
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved.backend, BackendKind::Bwrap);
+        assert_eq!(resolved.seccomp_bpf_path, Some(seccomp_path));
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::HostUser);
         assert!(resolved.env_passthrough.contains("HOME"));
         assert_eq!(
@@ -506,6 +616,31 @@ profiles:
     }
 
     #[test]
+    fn legacy_codex_cli_config_maps_to_executable_policy() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = r#"
+[profiles.codex.codex_cli]
+enforce_wrapper_defaults = true
+sandbox_mode = "workspace-write"
+approval_policy = "never"
+"#;
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+
+        let policy = resolved
+            .executable_policies
+            .get("codex")
+            .unwrap_or_else(|| panic!("missing codex executable policy"));
+        assert!(policy.enforce_wrapper_defaults);
+        assert_eq!(policy.sandbox_mode.as_deref(), Some("workspace-write"));
+        assert_eq!(policy.approval_policy.as_deref(), Some("never"));
+    }
+
+    #[test]
     fn preserve_host_user_cli_overrides_profile_identity_mode() {
         let mut run_args = args("generic");
         run_args.identity_mode = Some(crate::args::IdentityModeOverride::SandboxUser);
@@ -513,6 +648,13 @@ profiles:
 
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::HostUser);
+    }
+
+    #[test]
+    fn resolves_claude_code_profile() {
+        let resolved = resolve_profile(&args("claude-code")).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(resolved.id, "claude-code");
+        assert!(resolved.env_passthrough.contains("ANTHROPIC_API_KEY"));
     }
 
     #[test]
@@ -558,6 +700,34 @@ fail_closed = true
                 .to_string()
                 .contains("enforce_network_namespace=true is unsupported"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn seccomp_bpf_path_rejected_for_non_bwrap_backend() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let seccomp_path = tmpdir.path().join("seccomp.bpf");
+        fs::write(&seccomp_path, [0_u8; 8]).unwrap_or_else(|e| panic!("{e}"));
+
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "vz"
+seccomp_bpf_path = "{}"
+"#,
+            seccomp_path.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let err =
+            resolve_profile(&run_args).expect_err("expected seccomp backend validation error");
+        assert!(
+            err.to_string()
+                .contains("seccomp_bpf_path is only supported with backend 'bwrap'"),
+            "unexpected error: {err}"
         );
     }
 }

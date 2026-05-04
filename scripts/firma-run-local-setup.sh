@@ -10,10 +10,30 @@ LOCAL_DIR="${ROOT_DIR}/.local"
 EXAMPLES_DIR="${ROOT_DIR}/docs/examples/firma-run"
 
 MAPPING_SRC="${EXAMPLES_DIR}/mapping-rules.local.example.toml"
-SIDECAR_SRC="${EXAMPLES_DIR}/firma_sidecar.local.example.toml"
+SIDECAR_SRC_DEFAULT="${EXAMPLES_DIR}/firma_sidecar.local.example.toml"
+SIDECAR_SRC_OBSERVABILITY="${EXAMPLES_DIR}/firma_sidecar.local.observability.example.toml"
 MAPPING_DST="${LOCAL_DIR}/mapping-rules.toml"
 SIDECAR_DST="${LOCAL_DIR}/firma_sidecar.local.toml"
 AUDIT_KEY_DST="${LOCAL_DIR}/audit-key.pem"
+SETUP_MODE="default"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --observability)
+      SETUP_MODE="observability"
+      shift
+      ;;
+    *)
+      fail "unknown argument: $1 (supported: --observability)"
+      ;;
+  esac
+done
+
+if [[ "$SETUP_MODE" == "observability" ]]; then
+  SIDECAR_SRC="$SIDECAR_SRC_OBSERVABILITY"
+else
+  SIDECAR_SRC="$SIDECAR_SRC_DEFAULT"
+fi
 
 mkdir -p "$LOCAL_DIR"
 ok "ensured local runtime directory: $LOCAL_DIR"
@@ -27,7 +47,7 @@ fi
 
 if [[ ! -f "$SIDECAR_DST" ]]; then
   cp "$SIDECAR_SRC" "$SIDECAR_DST"
-  ok "created ${SIDECAR_DST} from example template"
+  ok "created ${SIDECAR_DST} from ${SETUP_MODE} example template"
 else
   warn "keeping existing ${SIDECAR_DST}"
 fi
