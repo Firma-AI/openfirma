@@ -1,16 +1,10 @@
-"""Tools for demo0 — four systems, one enforcement gap.
+"""Tools for demo0 and demo1.
 
-Each tool maps to a specific URL intercepted by the sidecar:
-  read_github_pr        GET  api.github.com         /repos/*/*/pulls/*                code.review.read      ALLOW
-  send_gmail_message    POST gmail.googleapis.com   /gmail/v1/users/*/messages/send   communication.ext.send DENY
-  create_stripe_refund  POST api.stripe.com         /v1/refunds                       payment.transfer      DENY
-  delete_backend_user   DEL  httpbin.org            /delete                           account.permission.change DENY
-
-And for demo1 — same internal service, different path:
-  fetch_usage           GET  api.internal /usage             filesystem.read   ALLOW
-  fetch_billing         GET  api.internal /billing           credential.read   DENY
-
-The demo uses httpbin.org as the public stand-in for api.internal.
+Docstrings are kept neutral on purpose — the LLM must not be told in
+advance whether a call is allowed or denied. The whole point of the
+demos is that the agent issues every call and only discovers the
+outcome from the HTTP response. Mapping of tool to canonical action
+class is documented in `examples/demos/demo*/mapping-rules.toml`.
 """
 import os
 
@@ -32,7 +26,7 @@ def _client(**kwargs) -> httpx.AsyncClient:
 
 @function_tool
 async def read_github_pr(repo: str, pr_number: int) -> str:
-    """Read a GitHub pull request. Allowed (code.review.read)."""
+    """Read a GitHub pull request and return the response."""
     gh_token = os.environ.get("GITHUB_TOKEN", "demo-token")
     async with _client() as client:
         response = await client.get(
@@ -47,7 +41,7 @@ async def read_github_pr(repo: str, pr_number: int) -> str:
 
 @function_tool
 async def send_gmail_message(to: str, subject: str, body: str) -> str:
-    """Send an email via Gmail API. DENIED by policy (communication.external.send)."""
+    """Send an email via Gmail and return the response."""
     gh_token = os.environ.get("GITHUB_TOKEN", "demo-token")
     async with _client() as client:
         response = await client.post(
@@ -60,7 +54,7 @@ async def send_gmail_message(to: str, subject: str, body: str) -> str:
 
 @function_tool
 async def create_stripe_refund(charge_id: str, amount_cents: int) -> str:
-    """Create a Stripe refund. DENIED by policy (payment.transfer)."""
+    """Create a Stripe refund and return the response."""
     async with _client() as client:
         response = await client.post(
             "https://api.stripe.com/v1/refunds",
@@ -71,14 +65,16 @@ async def create_stripe_refund(charge_id: str, amount_cents: int) -> str:
 
 
 @function_tool
-async def delete_backend_user(user_id: int) -> str:
-    """Delete a user via the internal backend API. DENIED by policy (account.permission.change).
-    Uses httpbin.org/delete as a stand-in for the internal backend.
+async def delete_backend_user() -> str:
+    """Delete the demo user (id 42) from the internal backend service.
+
+    No arguments. Uses httpbin.org/delete as the public stand-in for the
+    private api.internal endpoint.
     """
     async with _client() as client:
         response = await client.delete(
             "https://httpbin.org/delete",
-            json={"user_id": user_id},
+            json={"user_id": "42"},
         )
         return f"HTTP {response.status_code}\n{response.text[:500]}"
 
@@ -87,7 +83,7 @@ async def delete_backend_user(user_id: int) -> str:
 
 @function_tool
 async def fetch_usage(user_id: str) -> str:
-    """Fetch customer usage metrics from api.internal/usage. Allowed (filesystem.read)."""
+    """Fetch customer usage metrics from api.internal/usage."""
     async with _client() as client:
         response = await client.get(
             "https://httpbin.org/get",
@@ -98,7 +94,7 @@ async def fetch_usage(user_id: str) -> str:
 
 @function_tool
 async def fetch_billing(user_id: str) -> str:
-    """Fetch billing data from api.internal/billing. DENIED by policy."""
+    """Fetch billing data from api.internal/billing."""
     async with _client() as client:
         response = await client.get(
             "https://httpbin.org/anything/billing",

@@ -6,6 +6,17 @@ mode               = "http_proxy"
 listen_addr        = "127.0.0.1:8080"
 drain_timeout_secs = 30
 
+# Override the built-in HTTPS MITM allowlist. Only the three demo
+# providers are MITM'd so the policy can see plaintext requests; the
+# agent's own LLM traffic (api.openai.com) tunnels through untouched
+# so the OpenAI SDK doesn't have to trust the generated firma-ca.
+[interceptor.https_mitm]
+intercept_hosts = [
+    "api.github.com",
+    "gmail.googleapis.com",
+    "httpbin.org",
+]
+
 [policy]
 dir           = "examples/demos/demo0"
 authority_url = "http://127.0.0.1:50051"

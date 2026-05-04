@@ -1,6 +1,10 @@
 # Demo 0 mapping rules.
-# Four systems, one rule: "agent may read, not write or destroy."
-# Each system enforces differently today — Firma enforces once, everywhere.
+# Three providers (GitHub, Gmail, internal service), one rule:
+# "agent may read, not write or destroy."
+# Today each provider enforces this rule on a different surface
+# (token permissions, OAuth scopes, network allowlist) with no shared
+# vocabulary. Firma normalizes every call into a canonical action class
+# so a single Cedar policy enforces the rule once, everywhere.
 
 # GitHub — read PR (allowed by policy)
 [[rules]]
@@ -22,13 +26,6 @@ method       = "POST"
 host         = "gmail.googleapis.com"
 path         = "/gmail/v1/users/*/messages/send"
 action_class = "communication.external.send"
-
-# Stripe — create refund (denied by policy)
-[[rules]]
-method       = "POST"
-host         = "api.stripe.com"
-path         = "/v1/refunds"
-action_class = "payment.transfer"
 
 # Internal backend — read user (allowed by policy)
 [[rules]]

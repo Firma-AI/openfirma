@@ -1,0 +1,14 @@
+{
+  "client_id": "demo0-agent.apps.googleusercontent.com",
+  "principal": "demo0-agent@workspace.example",
+  "granted_scopes": [
+    "https://www.googleapis.com/auth/gmail.readonly"
+  ],
+  "denied_scopes": [
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.modify"
+  ],
+  "issued_at": "2026-05-04T09:00:00Z",
+  "expires_at": "2026-05-04T10:00:00Z",
+  "_comment": "Surface 1 of 3 — OAuth scopes. Governs Gmail. The vocabulary here is Google's scope URI namespace; it has no notion of GitHub PRs or internal services."
+}

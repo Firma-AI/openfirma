@@ -1,0 +1,12 @@
+# Surface 3 of 3 — Network allowlist. Governs the internal service.
+# This is what an egress firewall or NetworkPolicy enforces: hosts only.
+# It cannot tell GET from DELETE. Once a host is on the list, every method
+# and every path on that host is permitted to leave the agent's network.
+agent: demo0-agent
+egress:
+  allow:
+    - api.github.com
+    - gmail.googleapis.com
+    - api.internal       # internal service — read AND delete pass through
+  deny:
+    - "*"                # default deny
