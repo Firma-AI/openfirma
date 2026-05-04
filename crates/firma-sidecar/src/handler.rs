@@ -363,6 +363,16 @@ impl RequestHandler {
                 envelope,
                 ..
             } => {
+                if reason == firma_core::DenyReason::TokenExpired {
+                    tracing::warn!(
+                        method = %request.method,
+                        host = %request.host,
+                        path = %request.path,
+                        session_id = %session_id,
+                        detail = %detail,
+                        "request denied because capability token expired; renew token (same session_id) and reload sidecar capability source"
+                    );
+                }
                 let context = denial_context_of(envelope.as_ref());
                 HandledResponse::Deny {
                     reason,

@@ -258,6 +258,11 @@ Audit/log visibility note:
     explicitly executed outside the governed sandbox path; the command may
     inherit proxy env pointing to `127.0.0.1:18080` even though the sandbox
     bridge is not in that execution context.
+- If you see `TokenExpired` denies, re-issue a capability for the same
+  `session_id` and restart sidecar when using `[capability_seed]`. For local
+  workflows use:
+  - `scripts/firma-capability-renew.sh --session-id "$FIRMA_RUN_SESSION_ID"`
+  - `pwsh ./scripts/firma-capability-renew.ps1 -SessionId $env:FIRMA_RUN_SESSION_ID`
 
 - You see `curl` timeout / agent network timeout, but no obvious deny:
   - Check audit for `action=network.connect` on the target host. This confirms

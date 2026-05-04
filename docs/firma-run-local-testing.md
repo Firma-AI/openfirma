@@ -74,6 +74,9 @@ Templates used:
 - `FIRMA_PROXY_LISTEN_ADDR`: Proxy bridge listen address (default: `127.0.0.1:18080`)
 - `FIRMA_SIDECAR_CA_CERT_PATH`: Explicit path to sidecar MITM CA cert (preferred override)
 - `FIRMA_SIDECAR_CA_DIR`: Directory containing `firma-ca.crt` (fallback override)
+- `FIRMA_RUN_SESSION_ID`: Optional stable session id override (useful when capability tokens are session-bound)
+- `FIRMA_RUN_SANDBOX_ID`: Optional sandbox id override
+- `FIRMA_RUN_REQUIRE_SESSION_ID`: If `true|1|yes|on`, `firma run` fails fast unless `FIRMA_RUN_SESSION_ID` is set
 
 Example:
 
@@ -82,6 +85,17 @@ export FIRMA_SIDECAR_ENDPOINT=tcp://127.0.0.1:9090
 export FIRMA_PROXY_LISTEN_ADDR=127.0.0.1:18181
 cargo run -p firma-run -- run -- "your command"
 ```
+
+Strict capability workflow (session-bound tokens):
+
+```bash
+export FIRMA_RUN_SESSION_ID=demo-session
+export FIRMA_RUN_REQUIRE_SESSION_ID=true
+cargo run -p firma-run -- run --profile codex -- codex
+```
+
+This prevents late `TokenInvalid` denials caused by runtime-generated session
+ids drifting from pre-issued capability seed session ids.
 
 When a sidecar MITM CA certificate is detected, `firma run` automatically exports trust env vars for common runtimes:
 
@@ -154,6 +168,18 @@ PowerShell helper wrapper:
 
 ```powershell
 pwsh ./scripts/firma-run-local.ps1 -- codex
+```
+
+Capability token renewal helper (to prevent `TokenExpired` interruptions):
+
+```bash
+scripts/firma-capability-renew.sh --session-id "$FIRMA_RUN_SESSION_ID"
+```
+
+PowerShell:
+
+```powershell
+pwsh ./scripts/firma-capability-renew.ps1 -SessionId $env:FIRMA_RUN_SESSION_ID
 ```
 
 Identity default:

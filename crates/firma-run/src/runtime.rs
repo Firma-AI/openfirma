@@ -23,6 +23,7 @@ pub fn execute_run(args: &RunArgs) -> Result<i32, RunError> {
     if args.command.is_empty() {
         return Err(RunError::MissingCommand);
     }
+    ensure_required_session_identity()?;
 
     let profile = resolve_profile(args)?;
     if args.print_effective_config {
@@ -113,6 +114,27 @@ pub fn execute_run(args: &RunArgs) -> Result<i32, RunError> {
             "run failed: {run_error}; teardown failed: {teardown_error}"
         ))),
     }
+}
+
+fn ensure_required_session_identity() -> Result<(), RunError> {
+    let require = std::env::var("FIRMA_RUN_REQUIRE_SESSION_ID")
+        .ok()
+        .is_some_and(|v| {
+            let v = v.trim().to_ascii_lowercase();
+            matches!(v.as_str(), "1" | "true" | "yes" | "on")
+        });
+    if !require {
+        return Ok(());
+    }
+    let has_session = std::env::var("FIRMA_RUN_SESSION_ID")
+        .ok()
+        .is_some_and(|v| !v.trim().is_empty());
+    if has_session {
+        return Ok(());
+    }
+    Err(RunError::ConfigValidation(
+        "FIRMA_RUN_REQUIRE_SESSION_ID is enabled but FIRMA_RUN_SESSION_ID is not set; set a stable session id so capability issuance/seed selection can match runtime attribution".to_string(),
+    ))
 }
 
 fn maybe_apply_executable_policy(

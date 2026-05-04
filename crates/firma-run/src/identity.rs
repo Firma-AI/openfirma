@@ -19,8 +19,10 @@ impl RunIdentity {
     #[must_use]
     pub fn new(profile: impl Into<String>) -> Self {
         Self {
-            sandbox_id: Uuid::now_v7().to_string(),
-            session_id: Uuid::now_v7().to_string(),
+            sandbox_id: read_identity_override("FIRMA_RUN_SANDBOX_ID")
+                .unwrap_or_else(|| Uuid::now_v7().to_string()),
+            session_id: read_identity_override("FIRMA_RUN_SESSION_ID")
+                .unwrap_or_else(|| Uuid::now_v7().to_string()),
             profile: profile.into(),
         }
     }
@@ -45,6 +47,13 @@ impl RunIdentity {
         headers.insert("x-firma-profile".to_string(), self.profile.clone());
         headers
     }
+}
+
+fn read_identity_override(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 #[cfg(test)]
