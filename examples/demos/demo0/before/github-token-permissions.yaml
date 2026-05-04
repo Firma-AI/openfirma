@@ -1,0 +1,13 @@
+# Surface 2 of 3 — Token permissions. Governs GitHub.
+# The vocabulary here is GitHub's fine-grained PAT permission set;
+# it has no notion of OAuth scopes or network destinations.
+token: github_pat_demo0_agent
+owner: demo0-agent
+repository_access:
+  - acme/api
+permissions:
+  contents: read
+  pull_requests: read
+  metadata: read
+  # No write or admin permissions are granted.
+expires_at: "2026-05-04T10:00:00Z"
