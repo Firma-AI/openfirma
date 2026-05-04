@@ -91,7 +91,7 @@ fn claude_code_profile() -> ProfilePatch {
     );
     base.env_set.insert(
         "FIRMA_RUN_BWRAP_MASK_HOME_PATHS".to_string(),
-        ".ssh,.aws,.azure,.kube,.gnupg,.config,.config/gcloud".to_string(),
+        crate::backend::DEFAULT_SENSITIVE_HOME_SUFFIXES.join(","),
     );
     base.env_passthrough.extend([
         "ANTHROPIC_API_KEY".to_string(),

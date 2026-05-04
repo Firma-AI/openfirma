@@ -160,11 +160,10 @@ fn build_claude_code_sandbox_profile(launch: &LaunchSpec) -> String {
         .cloned()
         .or_else(|| std::env::var("HOME").ok())
         .unwrap_or_default();
-    let deny_suffixes = [".ssh", ".aws", ".azure", ".kube", ".gnupg", ".config"];
 
     let mut profile = String::from("(version 1)\n(allow default)\n");
     if !home.is_empty() && home.starts_with('/') {
-        for suffix in deny_suffixes {
+        for suffix in crate::backend::DEFAULT_SENSITIVE_HOME_SUFFIXES {
             let path = format!("{home}/{suffix}");
             let escaped = escape_sandbox_path(&path);
             let _ = write!(
