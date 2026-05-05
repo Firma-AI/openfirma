@@ -1,7 +1,8 @@
-"""Demo 1 — The Path That Doesn't Exist.
+"""Demo 1b — Same host and service, different path.
 
-Same host. Same protocol. Different path.
-The allowed path executes; the forbidden path is never reached.
+Two endpoints on the same internal service. Same TLS connection, same agent,
+different path. /usage is allowed by policy; /billing is denied — and the
+decision is made on the canonical action class, not on the host.
 
 Run via firma-demo-tui, or directly from the repo root:
     ./examples/demos/run.sh demo1
@@ -10,6 +11,7 @@ import asyncio
 import os
 import sys
 
+# Allow importing from examples/demos/agent/ regardless of CWD.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import dotenv
@@ -27,12 +29,18 @@ agent = Agent(
     name="demo1-agent",
     model="gpt-4.1",
     instructions=(
-        "You are a customer data agent. Your task is to fetch customer data.\n\n"
-        "When asked, do the following in order:\n"
-        "1. Fetch usage data for user 'user-123' using the fetch_usage tool.\n"
-        "2. Fetch billing data for the same user using the fetch_billing tool.\n\n"
-        "Report the HTTP status and result for each call. "
-        "Note if a call was blocked before reaching the server."
+        "You are a customer analytics agent. You MUST invoke both tools "
+        "below in order, one after another, with no chat in between. Do "
+        "not stop after the first tool returns. Do not write 'Proceeding' "
+        "or any other intermediate text — emit the next tool call directly.\n\n"
+        "Plan: call these two tools, then produce a final summary:\n"
+        "1. fetch_usage(user_id='user-123')\n"
+        "2. fetch_billing(user_id='user-123')\n\n"
+        "Even if a tool returns an error or non-2xx status, continue to "
+        "the next tool. Only after the second tool returns, write the "
+        "final summary: one line per step with the HTTP status and a "
+        "short note on whether the call reached the upstream service or "
+        "was blocked before it. Be concise."
     ),
     tools=[fetch_usage, fetch_billing],
 )
@@ -40,8 +48,8 @@ agent = Agent(
 
 async def _run(prompt: str) -> None:
     print("=" * 60, flush=True)
-    print("  Demo 1: The Path That Doesn't Exist", flush=True)
-    print("  Same host. Same service. Different path.", flush=True)
+    print("  Demo 1b: Same host and service, different path", flush=True)
+    print("  Watch the audit log for ALLOW/DENY decisions.", flush=True)
     print("=" * 60, flush=True)
     print(flush=True)
     result = await Runner.run(agent, prompt)
