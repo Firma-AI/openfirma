@@ -151,6 +151,22 @@ pub enum ActionParams {
     DbQuery(DbQueryParams),
     /// Tool/function invocation.
     ToolUse(ToolUseParams),
+    /// Payment transfer — extracted semantic fields from a `payment.transfer`
+    /// HTTP request body. The raw HTTP layer (method, headers, body bytes) is
+    /// not preserved; `raw_action_ref` and `raw_transport` on the parent
+    /// `ExecutionIntent` retain the observational HTTP metadata.
+    PaymentTransfer(PaymentTransferParams),
+}
+
+/// Semantic parameters extracted from a `payment.transfer` request body.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PaymentTransferParams {
+    /// Transfer amount in minor units (e.g. cents). `0` when the body is
+    /// absent or the field cannot be parsed.
+    pub amount: i64,
+    /// Payee identifier extracted from the request body. `"_unknown_payee_"`
+    /// when no recognisable payee field is present.
+    pub payee: String,
 }
 
 /// HTTP methods that can appear in an outbound request.

@@ -24,7 +24,7 @@ mod mapping;
 use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
-use firma_core::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
+use firma_core::{ActionParams, ExecutionIntent, HttpMethod, HttpParams, PaymentTransferParams};
 
 /// Hosts whose traffic earns the `provider = "github"` resource tag.
 /// Exact match, not glob — typo-squat hostnames must not be tagged.
@@ -190,16 +190,31 @@ impl IntentNormalizer {
                         .into_deny(EnforcementStage::Normalization));
                 };
 
+                let params = if rule.action_class == "payment.transfer" {
+                    if let Some(body) = request.body.as_deref() {
+                        ActionParams::PaymentTransfer(extract_payment_transfer_params(body))
+                    } else {
+                        ActionParams::Http(HttpParams {
+                            method: http_method,
+                            headers: sanitize_headers(&request.headers),
+                            body: None,
+                            query: HashMap::new(),
+                        })
+                    }
+                } else {
+                    ActionParams::Http(HttpParams {
+                        method: http_method,
+                        headers: sanitize_headers(&request.headers),
+                        body: request.body.clone(),
+                        query: HashMap::new(),
+                    })
+                };
+
                 let envelope = NormalizedEnvelope {
                     intent: ExecutionIntent {
                         action_class: rule.action_class.clone(),
                         resource,
-                        params: ActionParams::Http(HttpParams {
-                            method: http_method,
-                            headers: sanitize_headers(&request.headers),
-                            body: request.body.clone(),
-                            query: HashMap::new(),
-                        }),
+                        params,
                         raw_transport: raw_transport.to_string(),
                         raw_action_ref,
                     },
@@ -230,6 +245,56 @@ fn sanitize_headers(headers: &HashMap<String, String>) -> HashMap<String, String
         .filter(|(k, _)| !SENSITIVE_HEADERS.contains(&k.to_lowercase().as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
+}
+
+fn extract_payment_transfer_params(body: &[u8]) -> PaymentTransferParams {
+    let amount = extract_i64_field(body, "amount").unwrap_or(0);
+    let payee = extract_string_field(
+        body,
+        &[
+            "payee",
+            "payee_id",
+            "customer",
+            "destination",
+            "account",
+            "recipient",
+        ],
+    )
+    .unwrap_or_else(|| "_unknown_payee_".to_string());
+    PaymentTransferParams { amount, payee }
+}
+
+fn extract_i64_field(body: &[u8], key: &str) -> Option<i64> {
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
+        return value.get(key).and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_u64().and_then(|n| i64::try_from(n).ok()))
+                .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+        });
+    }
+    let text = std::str::from_utf8(body).ok()?;
+    form_field(text, key).and_then(|s| s.parse::<i64>().ok())
+}
+
+fn extract_string_field(body: &[u8], keys: &[&str]) -> Option<String> {
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
+        for key in keys {
+            if let Some(s) = value.get(*key).and_then(serde_json::Value::as_str) {
+                return Some(s.to_string());
+            }
+        }
+        return None;
+    }
+    let text = std::str::from_utf8(body).ok()?;
+    keys.iter()
+        .find_map(|key| form_field(text, key).map(ToString::to_string))
+}
+
+fn form_field<'a>(body: &'a str, key: &str) -> Option<&'a str> {
+    body.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        (k == key).then_some(v)
+    })
 }
 
 fn parse_http_method(method: &str) -> Option<HttpMethod> {

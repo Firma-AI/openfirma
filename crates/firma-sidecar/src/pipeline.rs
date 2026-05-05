@@ -19,7 +19,8 @@
 use std::time::Duration;
 
 use firma_core::{
-    ActionParams, DenyReason, ExecutionEnvelope, ExecutionMetadata, InjectedCredentials, SessionId,
+    ActionParams, DenyReason, ExecutionEnvelope, ExecutionMetadata, InjectedCredentials,
+    PaymentTransferParams, SessionId,
 };
 
 use std::sync::Arc;
@@ -197,7 +198,10 @@ impl EnforcementPipeline {
         signals.action_count = action_count;
 
         let now = std::time::Instant::now();
-        let payment_transfer = payment_transfer_from_envelope(&normalized);
+        let payment_transfer = match &normalized.intent.params {
+            ActionParams::PaymentTransfer(p) => Some(p.clone()),
+            _ => None,
+        };
         self.attach_payment_signals(
             &capability.claims.session_id,
             &mut signals,
@@ -323,7 +327,7 @@ impl EnforcementPipeline {
         &self,
         session_id: &SessionId,
         signals: &mut crate::enforcement::session_state::RuntimeSignals,
-        payment_transfer: Option<&PaymentTransfer>,
+        payment_transfer: Option<&PaymentTransferParams>,
         now: std::time::Instant,
     ) {
         let Some(transfer) = payment_transfer else {
@@ -351,7 +355,7 @@ impl EnforcementPipeline {
     fn record_admitted_allow(
         &self,
         session_id: &SessionId,
-        payment_transfer: Option<&PaymentTransfer>,
+        payment_transfer: Option<&PaymentTransferParams>,
         now: std::time::Instant,
     ) -> f64 {
         let budget_cost = payment_transfer.map_or(1.0, payment_budget_cost);
@@ -369,77 +373,12 @@ impl EnforcementPipeline {
     }
 }
 
-#[derive(Debug, Clone)]
-struct PaymentTransfer {
-    amount: i64,
-    payee: String,
-}
-
 #[expect(
     clippy::cast_precision_loss,
     reason = "budget_consumed is f64 by public schema; transfer cents fit exactly for supported test limits"
 )]
-fn payment_budget_cost(transfer: &PaymentTransfer) -> f64 {
+fn payment_budget_cost(transfer: &PaymentTransferParams) -> f64 {
     transfer.amount.max(0) as f64
-}
-
-fn payment_transfer_from_envelope(
-    envelope: &crate::normalizer::NormalizedEnvelope,
-) -> Option<PaymentTransfer> {
-    if envelope.intent.action_class != "payment.transfer" {
-        return None;
-    }
-    let ActionParams::Http(params) = &envelope.intent.params else {
-        return None;
-    };
-    let body = params.body.as_deref()?;
-    let amount = extract_i64_field(body, "amount").unwrap_or(0);
-    let payee = extract_string_field(
-        body,
-        &[
-            "payee",
-            "payee_id",
-            "customer",
-            "destination",
-            "account",
-            "recipient",
-        ],
-    )
-    .unwrap_or_else(|| "_unknown_payee_".to_string());
-    Some(PaymentTransfer { amount, payee })
-}
-
-fn extract_i64_field(body: &[u8], key: &str) -> Option<i64> {
-    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
-        return value.get(key).and_then(|v| {
-            v.as_i64()
-                .or_else(|| v.as_u64().and_then(|n| i64::try_from(n).ok()))
-                .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
-        });
-    }
-    let text = std::str::from_utf8(body).ok()?;
-    form_field(text, key).and_then(|s| s.parse::<i64>().ok())
-}
-
-fn extract_string_field(body: &[u8], keys: &[&str]) -> Option<String> {
-    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
-        for key in keys {
-            if let Some(s) = value.get(*key).and_then(serde_json::Value::as_str) {
-                return Some(s.to_string());
-            }
-        }
-        return None;
-    }
-    let text = std::str::from_utf8(body).ok()?;
-    keys.iter()
-        .find_map(|key| form_field(text, key).map(ToString::to_string))
-}
-
-fn form_field<'a>(body: &'a str, key: &str) -> Option<&'a str> {
-    body.split('&').find_map(|pair| {
-        let (k, v) = pair.split_once('=')?;
-        (k == key).then_some(v)
-    })
 }
 
 /// Extracts an [`AuditPayload`] from an [`EnforcementDecision`].

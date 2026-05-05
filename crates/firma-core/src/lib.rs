@@ -18,7 +18,7 @@ pub use credential::InjectedCredentials;
 pub use decision::{Decision, DenyReason};
 pub use envelope::{
     ActionParams, DbQueryParams, ExecutionContext, ExecutionEnvelope, ExecutionIntent,
-    ExecutionMetadata, HttpMethod, HttpParams, ToolUseParams,
+    ExecutionMetadata, HttpMethod, HttpParams, PaymentTransferParams, ToolUseParams,
 };
 pub use policy::{EvaluationError, PolicyBundle, PolicyBundleStore, PolicyEvaluator};
 pub use session::SessionId;

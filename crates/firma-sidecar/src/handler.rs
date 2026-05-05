@@ -141,12 +141,14 @@ pub enum DenialContext {
 
 /// Maps an [`ActionParams`] variant to its [`DenialContext`].
 ///
-/// `ToolUse` → `Tool`; `Http` / `DbQuery` → `Api`.
+/// `ToolUse` → `Tool`; `Http` / `DbQuery` / `PaymentTransfer` → `Api`.
 #[must_use]
 pub fn denial_context_from_params(params: &ActionParams) -> DenialContext {
     match params {
         ActionParams::ToolUse(_) => DenialContext::Tool,
-        ActionParams::Http(_) | ActionParams::DbQuery(_) => DenialContext::Api,
+        ActionParams::Http(_) | ActionParams::DbQuery(_) | ActionParams::PaymentTransfer(_) => {
+            DenialContext::Api
+        }
     }
 }
 
