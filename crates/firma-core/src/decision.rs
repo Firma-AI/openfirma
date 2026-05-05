@@ -16,7 +16,6 @@ pub enum Decision {
 /// Typed reason code explaining why a request was denied.
 ///
 /// Deferred variants (add back when corresponding mechanisms exist):
-/// - `BudgetExceeded` — when budget tracking mechanism is designed
 /// - `RiskThreshold` — when anomaly detection is designed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 #[cfg_attr(test, derive(strum::EnumIter))]

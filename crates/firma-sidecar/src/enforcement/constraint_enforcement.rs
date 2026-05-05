@@ -369,9 +369,8 @@ impl ConstraintEnforcer {
         let session_duration_s = (envelope.timestamp - claims.issued_at).num_seconds().max(0);
         let timestamp_ms = envelope.timestamp.timestamp_millis();
         let params = serde_json::to_string(&envelope.intent.params).unwrap_or_else(|_| "{}".into());
-        // Payment-context fields are declared in the canonical schema but
-        // sourced by future tasks. V1 supplies fixed placeholders so the
-        // schema-strict `Context::from_json_value` accepts the record.
+        // Payment-context fields are sidecar-local Layer 2 counters. They
+        // describe prior admitted transfers plus current transfer amount.
         serde_json::json!({
             "session_id": claims.session_id,
             "timestamp_ms": timestamp_ms,
@@ -381,11 +380,11 @@ impl ConstraintEnforcer {
             "session_duration_s": session_duration_s,
             "action_count": i64::try_from(signals.action_count).unwrap_or(i64::MAX),
             "raw_transport": envelope.intent.raw_transport,
-            "transfer_amount": 0i64,
-            "daily_cumulative_amount": 0i64,
-            "transfers_last_10m": 0i64,
-            "same_payee_count_30m": 0i64,
-            "session_transfer_count": 0i64,
+            "transfer_amount": signals.transfer_amount,
+            "daily_cumulative_amount": signals.daily_cumulative_amount,
+            "transfers_last_10m": i64::try_from(signals.transfers_last_10m).unwrap_or(i64::MAX),
+            "same_payee_count_30m": i64::try_from(signals.same_payee_count_30m).unwrap_or(i64::MAX),
+            "session_transfer_count": i64::try_from(signals.session_transfer_count).unwrap_or(i64::MAX),
         })
     }
 }
@@ -566,6 +565,11 @@ mod tests {
             action_count: 1,
             budget_consumed: 0.0,
             risk_score: 0.0,
+            session_transfer_count: 0,
+            transfer_amount: 0,
+            daily_cumulative_amount: 0,
+            transfers_last_10m: 0,
+            same_payee_count_30m: 0,
         }
     }
 
@@ -679,6 +683,11 @@ mod tests {
             action_count: 7,
             budget_consumed: 12.75,
             risk_score: 3.0,
+            session_transfer_count: 4,
+            transfer_amount: 200_000,
+            daily_cumulative_amount: 800_000,
+            transfers_last_10m: 3,
+            same_payee_count_30m: 2,
         };
 
         let context = evaluator.build_context(&envelope, &claims, &signals);
@@ -691,6 +700,14 @@ mod tests {
         assert_eq!(context["budget_remaining"], serde_json::json!(87));
         assert_eq!(context["session_duration_s"], serde_json::json!(42));
         assert_eq!(context["action_count"], serde_json::json!(7));
+        assert_eq!(context["transfer_amount"], serde_json::json!(200_000));
+        assert_eq!(
+            context["daily_cumulative_amount"],
+            serde_json::json!(800_000)
+        );
+        assert_eq!(context["transfers_last_10m"], serde_json::json!(3));
+        assert_eq!(context["same_payee_count_30m"], serde_json::json!(2));
+        assert_eq!(context["session_transfer_count"], serde_json::json!(4));
 
         // Schema does not declare action_class / resource / agent_id /
         // timestamp — they are passed as Cedar principal/action/resource
@@ -710,6 +727,11 @@ mod tests {
             action_count: 1,
             budget_consumed: 0.0,
             risk_score: 0.0,
+            session_transfer_count: 0,
+            transfer_amount: 0,
+            daily_cumulative_amount: 0,
+            transfers_last_10m: 0,
+            same_payee_count_30m: 0,
         };
         let context = evaluator.build_context(&envelope, &claims, &signals);
         assert_eq!(context["budget_remaining"], serde_json::json!(i64::MAX));
@@ -726,6 +748,11 @@ mod tests {
             action_count: 1,
             budget_consumed: 0.0,
             risk_score: 0.0,
+            session_transfer_count: 0,
+            transfer_amount: 0,
+            daily_cumulative_amount: 0,
+            transfers_last_10m: 0,
+            same_payee_count_30m: 0,
         };
         let context = evaluator.build_context(&envelope, &claims, &signals);
         assert_eq!(context["session_duration_s"], serde_json::json!(0));
