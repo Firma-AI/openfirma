@@ -72,7 +72,8 @@ async def delete_backend_user() -> str:
     private api.internal endpoint.
     """
     async with _client() as client:
-        response = await client.delete(
+        response = await client.request(
+            "DELETE",
             "https://httpbin.org/delete",
             json={"user_id": "42"},
         )
