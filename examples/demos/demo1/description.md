@@ -1,40 +1,78 @@
-# Demo 1b — The Path That Doesn't Exist
+# Demo 1b — Same host and service, different path
+
+With Firma, two endpoints on the same host can be governed differently — and
+the policy is expressed against agent intent, not against routing.
 
 ## The point
 
-An agent calls two endpoints on the same internal service. One is allowed, one
-is forbidden. The allowed path executes normally; the forbidden path is never
-reached. Enforcement happens at execution time, outside the application.
+Enforcement based on transport-layer signals (host, port, network) cannot see
+what the agent is trying to do. Firma enforces on the semantic action, not on
+the packet — so two endpoints on the same host can be governed differently
+without rewriting the application or the network layer.
 
-## The setup
+## The agent
 
-Task: "Fetch customer activity and summarize usage."
+A customer analytics agent. The user asks the agent to _"fetch customer
+activity and summarize usage."_ The agent issues two HTTP calls against the
+same internal service:
 
-| Endpoint | Policy outcome |
-|---|---|
-| `api.internal/usage?user=123` | ALLOW — usage metrics |
-| `api.internal/billing?user=123` | DENY — billing data |
+| Call | Endpoint                                         | What it returns |
+| ---- | ------------------------------------------------ | --------------- |
+| 1    | `GET https://api.internal/usage?user=user-123`   | Usage metrics   |
+| 2    | `GET https://api.internal/billing?user=user-123` | Billing records |
 
-Same host. Same protocol. Same agent behavior. Different path.
+Same host. Same TLS endpoint. Same agent. Same protocol. Different path.
 
-The agent has a generic fetch tool. It has no awareness of which paths are
-sensitive, and it is behaving normally — not compromised and not misconfigured.
+The agent has a generic fetch surface and no awareness of which paths are
+sensitive — it is behaving normally, neither compromised nor misconfigured.
 
-## What you will see
+## One surface, one blind spot
 
-1. `GET api.internal/usage?user=123` passes through and returns a response.
-2. `GET api.internal/billing?user=123` is intercepted and denied. No upstream
-   call is made.
+| Surface           | File                            | What it controls                                     | What it cannot see                                                                     |
+| ----------------- | ------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Network allowlist | `before/network-allowlist.yaml` | Which destination hosts the agent process can reach. | The HTTP method or path — once the host is allowed, every endpoint on it goes through. |
 
-## Why this differs from existing approaches
+`api.internal` is on the allowlist. `/usage` and `/billing` ride the same
+TLS connection to the same host. The allowlist is structurally incapable of
+telling them apart.
 
-| Approach | What it can enforce |
-|---|---|
-| API gateway / backend | Request reaches app — enforcement depends on code |
-| Network allowlisting (host-level) | Cannot distinguish `/usage` from `/billing` |
-| Firma | Path-level, before execution, uniform across all calls |
+## What goes wrong
 
-## Key insight
+| Action       | Request                    | What stops it today                          |
+| ------------ | -------------------------- | -------------------------------------------- |
+| Read usage   | `GET api.internal/usage`   | Host is allowed. Call goes through.          |
+| Read billing | `GET api.internal/billing` | Host is allowed. **Call also goes through.** |
 
-Same host. Same service. Different path.
-The allowed path executes. The forbidden path is never reached.
+A path-aware network rule could be added — but every new endpoint on
+`api.internal` then drifts into a per-route allowlist that has to be kept in
+sync with the application by hand. That is the gap.
+
+## The Firma shift
+
+The normalizer maps `(host, path)` to a canonical action class. Cedar
+evaluates the action class, not the host. Two endpoints on the same host
+produce two different decisions because they describe two different things
+the agent is doing.
+
+```cedar
+permit (
+    principal == Firma::Agent::"demo1-agent",
+    action == Firma::Action::"filesystem.read",
+    resource
+);
+// Everything else: default deny.
+```
+
+| Action       | Path       | Canonical action class | With Firma |
+| ------------ | ---------- | ---------------------- | ---------- |
+| Read usage   | `/usage`   | `filesystem.read`      | ALLOW      |
+| Read billing | `/billing` | `credential.read`      | DENY       |
+
+Same host. Same TLS. Same agent. Two action classes. Two decisions.
+
+## Closing line
+
+Same host, same service, two endpoints — and the enforcement decision is
+different, because the decision is made on what the agent is doing, not on
+where the packet is going. Path-level and intent-level enforcement is not
+something you can retrofit onto a network proxy.

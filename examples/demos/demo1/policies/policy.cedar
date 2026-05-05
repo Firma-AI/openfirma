@@ -1,11 +1,15 @@
-// Demo 1 — path-level enforcement on the same host.
+// Demo 1b — same host, same service, two paths, two decisions.
 //
-// api.internal/usage (filesystem.read) → permitted
-// api.internal/billing (credential.read) → no permit → default deny
+// Canonical action class taxonomy in scope for this demo (the same vocabulary
+// the normalizer assigns regardless of provider or transport):
 //
-// The OSS demo uses httpbin.org as a public stand-in for api.internal.
-// Same agent, same tool, same host. The forbidden path is unreachable —
-// enforced at execution time.
+//   filesystem.read   GET api.internal/usage     → ALLOW (permit below)
+//   credential.read   GET api.internal/billing   → DENY  (default deny)
+//
+// Cedar evaluates the action class, not the host or the path. Two endpoints
+// on the same host map to two different action classes because they describe
+// two different things the agent is doing — and the policy expresses what
+// the agent is allowed to do, not where the packet may go.
 
 permit (
     principal == Firma::Agent::"demo1-agent",

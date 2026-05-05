@@ -1,18 +1,33 @@
-# Demo 1 mapping rules.
-# Same internal service, different paths → different action classes.
-# Policy permits filesystem.read only. credential.read (billing) is denied.
-# httpbin.org is the public stand-in for api.internal in this OSS demo.
+# Demo 1b mapping rules.
+# One host, one service, two paths → two canonical action classes.
+# Policy permits filesystem.read only; payment.read falls through to default
+# deny. httpbin.org is the public stand-in for api.internal in this OSS demo
+# so the demo runs without a private network.
 
-# api.internal/usage?user=123 → usage metrics (allowed by policy)
+# api.internal/usage?user=… → usage metrics (allowed by policy)
+# Stand-in: GET httpbin.org/get
 [[rules]]
 method       = "GET"
 host         = "httpbin.org"
 path         = "/get*"
 action_class = "filesystem.read"
 
-# api.internal/billing?user=123 → sensitive billing data (no permit → default deny)
+# api.internal/billing?user=… → sensitive billing records (no permit → default deny)
+# Stand-in: GET httpbin.org/anything/billing
 [[rules]]
 method       = "GET"
 host         = "httpbin.org"
 path         = "/anything/billing*"
 action_class = "credential.read"
+
+# Local LLM access (any method) — the agent's own LLM traffic is not a demo
+# subject. Kept here for parity with the other demos.
+[[rules]]
+host         = "localhost:*"
+path         = "*"
+action_class = "filesystem.read"
+
+[[rules]]
+host         = "127.0.0.1:*"
+path         = "*"
+action_class = "filesystem.read"

@@ -1,0 +1,11 @@
+# Before Firma — the only governance surface available to the platform team
+# for the internal service is a host-level egress allowlist. Once api.internal
+# is on the list, every HTTP method to every path on that host is permitted to
+# leave the agent's network. Path-level rules can be bolted on, but they then
+# drift as the API evolves into a per-endpoint ruleset that nobody owns.
+agent: demo1-agent
+egress:
+  allow:
+    - api.internal       # /usage AND /billing both pass through
+  deny:
+    - "*"                # default deny

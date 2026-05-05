@@ -1,10 +1,26 @@
-# Demo 1 — sidecar config.
-# Path-level enforcement on the same host.
+# Demo 1b — sidecar config.
+# Same host, same service, two paths, two decisions.
 
 [interceptor]
 mode               = "http_proxy"
 listen_addr        = "127.0.0.1:8080"
 drain_timeout_secs = 30
+
+# Override the built-in HTTPS MITM allowlist. Only the demo's stand-in for
+# api.internal is MITM'd so the policy can see the path of inner GETs; the
+# agent's own LLM traffic (api.openai.com) tunnels through untouched so the
+# OpenAI SDK doesn't have to trust the generated firma-ca.
+[interceptor.https_mitm]
+intercept_hosts = [
+    "httpbin.org",
+]
+# Strict-MITM the demo target so the CONNECT preface is auto-authorized once
+# the TLS preflight succeeds — inner L7 requests (which carry the
+# x-firma-session-id header) are then evaluated individually. Without this,
+# the bare CONNECT (no session header, no L7 path) would fail Stage 1.
+strict_hosts = [
+    "httpbin.org",
+]
 
 [policy]
 dir           = "examples/demos/demo1"

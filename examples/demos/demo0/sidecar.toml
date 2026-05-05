@@ -16,6 +16,15 @@ intercept_hosts = [
     "gmail.googleapis.com",
     "httpbin.org",
 ]
+# Strict-MITM the demo targets so the CONNECT preface is auto-authorized once
+# the TLS preflight succeeds — inner L7 requests (which carry the
+# x-firma-session-id header) are then evaluated individually. Without this,
+# the bare CONNECT (no session header, no L7 path) would fail Stage 1.
+strict_hosts = [
+    "api.github.com",
+    "gmail.googleapis.com",
+    "httpbin.org",
+]
 
 [policy]
 dir           = "examples/demos/demo0"
