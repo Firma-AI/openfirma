@@ -321,6 +321,11 @@ impl RevocationStore {
         let tx_for_task = tx_broadcast.clone();
 
         let watch_path = path.clone();
+        // macOS FSEvents reports canonical paths (e.g. `/private/var/...`) while
+        // the user-supplied path may be the symlinked form (`/var/...`). Match by
+        // file name within the watched directory; `RecursiveMode::NonRecursive`
+        // limits events to direct children, so this stays unambiguous.
+        let watch_file_name = watch_path.file_name().map(std::ffi::OsString::from);
         let mut watcher = notify::recommended_watcher(
             move |res: notify::Result<notify::Event>| match res {
                 Ok(event)
@@ -330,7 +335,12 @@ impl RevocationStore {
                             | notify::event::EventKind::Create(_)
                     ) =>
                 {
-                    if !event.paths.iter().any(|event_path| event_path == &watch_path) {
+                    let matches_target = event.paths.iter().any(|event_path| {
+                        event_path == &watch_path
+                            || (watch_file_name.is_some()
+                                && event_path.file_name() == watch_file_name.as_deref())
+                    });
+                    if !matches_target {
                         return;
                     }
                     tracing::info!(path = %watch_path.display(), "revocation file changed; reloading");
@@ -502,7 +512,7 @@ mod tests {
         let id = TokenId::new();
         s.revoke(id, "test").await.unwrap();
 
-        tokio::time::timeout(tokio::time::Duration::from_millis(500), rx.recv())
+        tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
             .await
             .unwrap()
             .unwrap();
@@ -524,7 +534,7 @@ mod tests {
         let id = TokenId::new();
         s.revoke(id, "security breach").await.unwrap();
 
-        tokio::time::timeout(tokio::time::Duration::from_millis(500), rx.recv())
+        tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
             .await
             .unwrap()
             .unwrap();
@@ -555,7 +565,7 @@ mod tests {
 
         s.revoke(id, "test").await.unwrap();
 
-        tokio::time::timeout(tokio::time::Duration::from_millis(500), rx.recv())
+        tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
             .await
             .unwrap()
             .unwrap();
@@ -583,7 +593,7 @@ mod tests {
             .unwrap();
 
         for _ in 0..2 {
-            tokio::time::timeout(tokio::time::Duration::from_millis(500), rx.recv())
+            tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
                 .await
                 .unwrap()
                 .unwrap();
@@ -641,7 +651,7 @@ mod tests {
         let id = TokenId::new();
         std::fs::write(&file, format!("{id}\n")).unwrap();
 
-        tokio::time::timeout(tokio::time::Duration::from_millis(500), rx.recv())
+        tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
             .await
             .unwrap()
             .unwrap();
@@ -662,7 +672,7 @@ mod tests {
         let id = TokenId::new();
         std::fs::write(&file, format!("{id}\n")).unwrap();
 
-        let entry = tokio::time::timeout(tokio::time::Duration::from_millis(500), rx.recv())
+        let entry = tokio::time::timeout(tokio::time::Duration::from_secs(2), rx.recv())
             .await
             .unwrap()
             .unwrap();

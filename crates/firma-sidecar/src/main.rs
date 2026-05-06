@@ -151,26 +151,41 @@ fn emit_operator_routing_hints(config: &config::SidecarConfig) {
 
 /// Handler worker for catching sigterm signals.
 ///
-/// When a SIGTERM signal is caught, the `exit` flag is triggered.
+/// When a SIGTERM signal is caught, the `exit` flag is triggered. On Windows,
+/// only Ctrl-C (`SIGINT` equivalent) is supported.
 async fn handle_sigterm(exit: CancellationToken) {
-    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-        Ok(mut sigterm) => {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    tracing::info!("received SIGINT, shutting down");
+    #[cfg(unix)]
+    {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sigterm) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        tracing::info!("received SIGINT, shutting down");
+                    }
+                    _ = sigterm.recv() => {
+                        tracing::info!("received SIGTERM, shutting down");
+                    }
                 }
-                _ = sigterm.recv() => {
-                    tracing::info!("received SIGTERM, shutting down");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "failed to register SIGTERM handler: {e}; falling back to SIGINT only"
+                );
+                if let Err(e) = tokio::signal::ctrl_c().await {
+                    tracing::error!("failed to listen for SIGINT: {e}");
+                } else {
+                    tracing::info!("received SIGINT, shutting down");
                 }
             }
         }
-        Err(e) => {
-            tracing::warn!("failed to register SIGTERM handler: {e}; falling back to SIGINT only");
-            if let Err(e) = tokio::signal::ctrl_c().await {
-                tracing::error!("failed to listen for SIGINT: {e}");
-            } else {
-                tracing::info!("received SIGINT, shutting down");
-            }
+    }
+
+    #[cfg(not(unix))]
+    {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::error!("failed to listen for SIGINT: {e}");
+        } else {
+            tracing::info!("received SIGINT, shutting down");
         }
     }
 
