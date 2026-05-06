@@ -1,4 +1,4 @@
-// Baseline Cedar policy for Claude Code / generic LLM agent — v0.1.
+// Baseline Cedar policy for a generic LLM agent — v0.1.
 //
 // Covers enforcement layers 1 (network) and 4 (semantic action classes).
 // Layers 2 (command) and 3 (filesystem path) are enforced at the sandbox level
@@ -9,8 +9,7 @@
 // account.permission.change) auto-deny. Terminal HITL flow is a planned
 // extension.
 //
-// Principal:  Firma::Agent::"claude-code-agent" — substitute your agent ID.
-// Resource:   Firma::Resource::"<host><path>" (e.g., "api.anthropic.com/v1/messages").
+// Resource: Firma::Resource::"<host><path>" (e.g., "api.example.com/v1/endpoint").
 //
 // Cedar: no permit = DENY (default-deny). forbid beats permit always.
 // Load alongside provider-specific files (github.cedar, stripe.cedar) as needed,
@@ -69,13 +68,13 @@ forbid (
 //
 // Cedar gates execution by risk score only. Command-pattern blocking
 // (rm -rf, curl|sh, sudo, crontab, etc.) is enforced at the seccomp-unotify
-// / ESF layer (FIR-79) — those patterns are not expressible in Cedar without
-// structured params inspection.
+// / ESF layer — those patterns are not expressible in Cedar without structured
+// params inspection.
 
 // Execution permitted at low risk. High-risk execution is denied by the
 // global circuit-breaker at the bottom of this file.
 permit (
-    principal == Firma::Agent::"claude-code-agent",
+    principal,
     action == Firma::Action::"system.execute",
     resource
 ) when {
@@ -86,7 +85,7 @@ permit (
 // Uncomment only for an agent explicitly tasked with managing dependencies.
 //
 // permit (
-//     principal == Firma::Agent::"claude-code-agent",
+//     principal,
 //     action == Firma::Action::"system.install",
 //     resource
 // ) when {
@@ -101,13 +100,13 @@ permit (
 // filesystem path containment.
 
 permit (
-    principal == Firma::Agent::"claude-code-agent",
+    principal,
     action == Firma::Action::"filesystem.read",
     resource
 );
 
 permit (
-    principal == Firma::Agent::"claude-code-agent",
+    principal,
     action == Firma::Action::"filesystem.write",
     resource
 ) when {
@@ -125,8 +124,8 @@ forbid (
 // ─── LAYER 4: Semantic — action class circuit-breakers ───────────────────────
 
 // Hard-block: payment actions.
-// v0.1 HITL decision: auto-deny. A coding agent must not initiate financial
-// transactions. Remove these forbids only after HITL infrastructure ships.
+// v0.1 HITL decision: auto-deny. Remove these forbids only after HITL
+// infrastructure ships.
 forbid (
     principal,
     action in [
@@ -151,8 +150,7 @@ forbid (
 );
 
 // Hard-block: credential writes.
-// v0.1 HITL decision: auto-deny. An agent planting or rotating credentials
-// is a high-severity operation requiring explicit operator authorization.
+// v0.1 HITL decision: auto-deny. Requires explicit operator authorization.
 forbid (
     principal,
     action == Firma::Action::"credential.write",
@@ -167,7 +165,6 @@ forbid (
 );
 
 // Hard-block: cross-namespace memory access.
-// A coding agent has no business reading or writing other agents' memory.
 forbid (
     principal,
     action in [
@@ -179,17 +176,16 @@ forbid (
 
 // Credential reads — permitted at low risk.
 permit (
-    principal == Firma::Agent::"claude-code-agent",
+    principal,
     action == Firma::Action::"credential.read",
     resource
 ) when {
     context.risk_score < 50
 };
 
-// Code read operations — issue read, notifications, security alerts.
-// Lower blast radius; gated at moderate risk.
+// Code read operations — lower blast radius; gated at moderate risk.
 permit (
-    principal == Firma::Agent::"claude-code-agent",
+    principal,
     action in [
         Firma::Action::"code.read",
         Firma::Action::"code.review.read",
@@ -202,10 +198,9 @@ permit (
     context.risk_score < 60
 };
 
-// Code write operations — pull request creation, review submission, issue write.
-// Tighter risk gate than reads.
+// Code write operations — tighter risk gate than reads.
 permit (
-    principal == Firma::Agent::"claude-code-agent",
+    principal,
     action in [
         Firma::Action::"code.write",
         Firma::Action::"code.review.submit",
@@ -218,7 +213,7 @@ permit (
 
 // Merge — permanent change to the repository record; requires lowest risk.
 permit (
-    principal == Firma::Agent::"claude-code-agent",
+    principal,
     action == Firma::Action::"code.merge",
     resource
 ) when {
@@ -226,10 +221,10 @@ permit (
 };
 
 // External communication — permits outbound to hosts classified by the mapping
-// TOML (LLM API, package registries). default_protected = true in sidecar.toml
-// ensures only explicitly mapped hosts reach Cedar evaluation.
+// TOML. default_protected = true in sidecar.toml ensures only explicitly
+// mapped hosts reach Cedar evaluation.
 permit (
-    principal == Firma::Agent::"claude-code-agent",
+    principal,
     action == Firma::Action::"communication.external.send",
     resource
 ) when {
@@ -238,7 +233,7 @@ permit (
 
 // Internal communication — low blast radius, always permitted.
 permit (
-    principal == Firma::Agent::"claude-code-agent",
+    principal,
     action == Firma::Action::"communication.internal.send",
     resource
 );
