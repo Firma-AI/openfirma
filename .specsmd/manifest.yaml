@@ -1,6 +1,0 @@
-flow: aidlc
-version: 0.1.65
-installed_at: '2026-03-25T18:11:59.496Z'
-tools:
-  - claude
-  - cursor
