@@ -264,7 +264,7 @@ permit (
 
 Key rules:
 
-- Script holds full credentials (e.g. `GITHUB_TOKEN`); the sidecar gates each call.
+- Script holds full credentials in its env (e.g. demo0 `RESEND_API_KEY`); the sidecar gates each call. Exception: demo2 scrubs `GITHUB_TOKEN` from the agent process and lets the sidecar inject it after ALLOW.
 - Calls are issued in a fixed order via `agent.run_step(...)` so the audit log is reproducible across runs.
 - A short pause between steps keeps the audit and sidecar panes legible during recording.
 - Traffic routed through `HTTP_PROXY=http://127.0.0.1:8080`.
@@ -443,17 +443,19 @@ fetch("https://httpbin.org/anything/billing?user=123")
 
 ---
 
-### Demo 2 — The Agent That Cannot Misuse Credentials
+### Demo 2 — The Compromised Agent
 
-**Point:** An agent is compromised and attempts exfiltration and credential misuse — every action is blocked before execution, regardless of intent.
+**Point:** Even with a fully compromised agent, credentials are never exposed and actions remain bounded by policy. The blast radius of a compromise is what the policy permits, not what the token permits.
 
 **Setup:**
 
-Agent task: review PRs, interact with GitHub, access environment data.
+Agent task: review PRs, interact with GitHub. From its own perspective the agent appears to wield a full-access token:
 
 ```text
-GITHUB_TOKEN=ghp_full_repo_scope_token   # full access: read, write, merge, secrets
+GITHUB_TOKEN=ghp_FULL_REPO_SCOPE_xxxxxxxxxxxxxxxxxxxxxxxx   # display only
 ```
+
+Reality: the agent process scrubs `GITHUB_TOKEN` from its environment at startup. The real token lives in the sidecar's `[credentials.github]` config and is injected as `Authorization: Bearer …` only after an ALLOW decision.
 
 Enforced capability (outside the agent):
 
@@ -464,7 +466,7 @@ Enforced capability (outside the agent):
 |                    | `credential.read`             |
 |                    | `communication.external.send` |
 
-Agent does not hold credentials directly. Sidecar injects credentials only after ALLOW.
+Agent process holds no credentials at all. Sidecar injects them only after ALLOW.
 
 **The moment:**
 
@@ -510,4 +512,4 @@ Agent → Sidecar → ALLOW → inject credentials → forward
 
 No bypass path. Credentials never exposed to agent process.
 
-**Closing line:** Even if the agent is compromised and the credentials allow everything, nothing happens outside policy — because every call is enforced before execution.
+**Closing line:** The perimeter is the call, not the agent. A compromised agent leaks nothing — it never held the token.
