@@ -79,6 +79,9 @@ action_class = "communication.external.send"
     std::fs::write(
         &sidecar_toml,
         format!(
+            // Paths embedded as TOML literal strings (single quotes) so Windows
+            // backslashes pass through verbatim instead of being interpreted as
+            // escape sequences.
             r#"
 [interceptor]
 mode = "http_proxy"
@@ -86,16 +89,16 @@ listen_addr = "127.0.0.1:{interceptor_port}"
 drain_timeout_secs = 30
 
 [policy]
-dir = "{policies}"
+dir = '{policies}'
 
 [ca]
-dir = "{ca}"
+dir = '{ca}'
 
 [log]
 level = "info"
 
 [mapping]
-rules_path = "{mapping}"
+rules_path = '{mapping}'
 default_protected = true
 
 [connector]
@@ -103,7 +106,7 @@ default_timeout_ms = 30000
 
 [audit]
 sink = "stdout"
-signing_key_path = "{audit_key}"
+signing_key_path = '{audit_key}'
 "#,
             policies = policies.display(),
             ca = ca_dir.display(),
