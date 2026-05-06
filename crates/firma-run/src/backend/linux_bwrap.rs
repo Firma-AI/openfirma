@@ -3,6 +3,7 @@ use std::process::{Child, Command};
 #[cfg(target_os = "linux")]
 use std::{fs::File, os::fd::AsRawFd};
 
+#[cfg(target_os = "linux")]
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
 use crate::backend::{
@@ -198,7 +199,9 @@ impl SandboxBackend for BwrapBackend {
             command.arg("--unshare-net");
         }
 
+        #[cfg(target_os = "linux")]
         let mut _seccomp_file: Option<File> = None;
+        #[cfg(target_os = "linux")]
         if let Some(seccomp_path) = launch
             .env
             .get("FIRMA_RUN_SECCOMP_BPF_PATH")
@@ -275,6 +278,7 @@ impl SandboxBackend for BwrapBackend {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn clear_fd_cloexec(file: &File) -> Result<(), RunError> {
     let fd = file.as_raw_fd();
     let flags = fcntl(file, FcntlArg::F_GETFD).map_err(|error| RunError::Backend {

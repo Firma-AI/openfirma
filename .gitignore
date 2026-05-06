@@ -49,3 +49,4 @@ audit.jsonl
 
 # Demo runtime artifacts
 /examples/demos/*/.runtime/*
+.claude/

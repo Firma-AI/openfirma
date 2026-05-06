@@ -35,6 +35,8 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 serde_yaml.workspace = true
 ctrlc.workspace = true
+
+[target.'cfg(unix)'.dependencies]
 nix.workspace = true
 
 [dev-dependencies]
