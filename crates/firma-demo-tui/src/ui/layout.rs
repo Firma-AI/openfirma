@@ -169,8 +169,7 @@ fn render_running(f: &mut Frame, app: &App) {
     render_audit_pane(f, outer[1], &app.audit_logs);
     render_agent_pane(f, outer[2], app);
 
-    let status = Paragraph::new("[Enter] send to agent   [ESC] quit")
-        .style(Style::default().fg(Color::DarkGray));
+    let status = Paragraph::new("[ESC] quit").style(Style::default().fg(Color::DarkGray));
     f.render_widget(status, outer[3]);
 }
 
@@ -251,12 +250,7 @@ fn render_agent_pane(f: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
-        .split(inner);
-
-    let height = chunks[0].height as usize;
+    let height = inner.height as usize;
     let start = app
         .agent_logs
         .len()
@@ -266,13 +260,7 @@ fn render_agent_pane(f: &mut Frame, area: Rect, app: &App) {
     let output = Paragraph::new(text)
         .scroll((scroll, 0))
         .wrap(Wrap { trim: false });
-    f.render_widget(output, chunks[0]);
-
-    let input_line = format!("> {}", app.input);
-    let input = Paragraph::new(input_line)
-        .style(Style::default().fg(Color::White))
-        .wrap(Wrap { trim: false });
-    f.render_widget(input, chunks[1]);
+    f.render_widget(output, inner);
 }
 
 fn ansi_lines_to_text(logs: &[String]) -> Text<'_> {

@@ -1,18 +1,28 @@
-"""Shared helpers for the demo agents."""
-import os
+"""Shared helpers for the demo scripts."""
+import time
+from typing import Any, Callable
+
+_STEP_PAUSE_SECONDS = 1.5
 
 
-def normalize_env() -> None:
-    """Drop env vars that are set but empty — they break SDK clients.
+def run_step(label: str, fn: Callable[..., str], *args: Any, **kwargs: Any) -> None:
+    """Execute one demo step and print result with a short pause.
 
-    python-dotenv loads `KEY=` as `KEY=""`. The OpenAI client treats an
-    empty `OPENAI_BASE_URL` as a literal base URL and fails with
-    "Request URL is missing an 'http://' or 'https://' protocol" before
-    any traffic leaves the process. Removing empty assignments lets each
-    SDK fall back to its built-in default
-    (e.g. https://api.openai.com/v1).
+    Pause keeps audit and sidecar panes legible during a recording.
     """
-    for key in ("OPENAI_BASE_URL",):
-        value = os.environ.get(key)
-        if value is not None and not value.strip():
-            os.environ.pop(key, None)
+    print(f"\n>>> {label}", flush=True)
+    try:
+        result = fn(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 — demo prints any failure verbatim
+        result = f"ERROR: {type(exc).__name__}: {exc}"
+    print(result, flush=True)
+    time.sleep(_STEP_PAUSE_SECONDS)
+
+
+def banner(title: str, *subtitles: str) -> None:
+    """Print a centred banner before a demo runs."""
+    print("=" * 60, flush=True)
+    print(f"  {title}", flush=True)
+    for line in subtitles:
+        print(f"  {line}", flush=True)
+    print("=" * 60, flush=True)

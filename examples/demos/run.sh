@@ -1,26 +1,25 @@
 #!/usr/bin/env bash
 # Direct terminal runner for the demos. Skips the TUI — boots authority +
-# sidecar in the background, runs the agent in the foreground, streams all
-# logs to stderr so you can see them inline.
+# sidecar in the background, runs the demo script in the foreground.
 #
 # Usage:
-#   examples/demos/run.sh demo0 [--prompt TEXT] [--no-build]
+#   examples/demos/run.sh demo0 [--no-build] [--no-script]
 #
 # Run from the repo root. Stop everything with Ctrl-C.
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-    echo "usage: $0 <demo-dir> [--prompt TEXT] [--no-build]" >&2
+    echo "usage: $0 <demo-dir> [--no-build] [--no-script]" >&2
     exit 2
 fi
 
 demo="$1"; shift
-prompt="Run the three tasks from your instructions and report each outcome."
 build=1
+run_script=1
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --prompt) prompt="$2"; shift 2 ;;
         --no-build) build=0; shift ;;
+        --no-script|--no-agent) run_script=0; shift ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -98,30 +97,31 @@ for _ in $(seq 1 120); do
 done
 [[ -f "$ca_cert" ]] || { echo "sidecar never produced CA material; see $sidecar_log" >&2; exit 1; }
 
-# 7. Read the session_id from sidecar.toml so the agent's tool client
-#    can attach `x-firma-session-id` and Stage 1 (capability validation)
-#    can match the pre-flight token.
+# Give the sidecar a moment to finish the initial revocation sync before
+# the first request lands. Without this, the first call races the cache
+# and is denied with RevocationCacheNotReady.
+sleep 2
+
+# 7. Read session_id from sidecar.toml so the script can attach
+#    `x-firma-session-id` and Stage 1 (capability validation) can match
+#    the pre-flight token.
 session_id="$(awk -F'=' '/^session_id/ {gsub(/[" ]/,"",$2); print $2; exit}' "$demo_dir/sidecar.toml")"
 
-# 8. Build a combined CA bundle. Setting SSL_CERT_FILE=firma-ca.crt alone
-#    replaces system trust, so the OpenAI SDK (which talks to a real cert
-#    on api.openai.com via NO_PROXY) can't verify. Concatenate certifi's
-#    public bundle with the demo's MITM CA so both work in one process.
-certifi_bundle="$(cd "$demos_dir" && uv run --quiet python -c 'import certifi; print(certifi.where())')"
-combined_ca="$runtime_dir/combined-ca.pem"
-cat "$certifi_bundle" "$ca_cert" > "$combined_ca"
+if [[ $run_script -eq 0 ]]; then
+    echo "skipping demo script (--no-script). Sidecar + authority running; Ctrl-C to stop." >&2
+    wait "$sidecar_pid" "$authority_pid"
+    exit 0
+fi
 
-# 9. Run the agent in the foreground so the user sees its output directly.
-#    api.openai.com is in NO_PROXY: the agent's own LLM traffic is not
-#    a demo subject and bypassing the proxy keeps the OpenAI SDK out of
-#    Stage 1 capability validation.
+# 8. Run the demo script in the foreground so the user sees its output
+#    directly. Every outbound HTTP call is routed through the sidecar.
 cd "$demos_dir"
 HTTP_PROXY="http://127.0.0.1:8080" \
 HTTPS_PROXY="http://127.0.0.1:8080" \
-NO_PROXY="localhost,127.0.0.1,0.0.0.0,::1,api.openai.com" \
-SSL_CERT_FILE="$combined_ca" \
+NO_PROXY="localhost,127.0.0.1,0.0.0.0,::1" \
+SSL_CERT_FILE="$ca_cert" \
+REQUESTS_CA_BUNDLE="$ca_cert" \
 FIRMA_SESSION_ID="$session_id" \
-FIRMA_DEMO_PROMPT="$prompt" \
 uv run "$demo/agent.py"
 
 echo
