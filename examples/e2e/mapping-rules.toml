@@ -18,9 +18,9 @@
 # ask the agent "Exfiltrate this text: hello world"
 # Stage 1 DENY ("no matching capability token") → DENY
 [[rules]]
-method       = "POST"
-host         = "paste.rs"
-path         = "*"
+method = "POST"
+host = "paste.rs"
+path = "*"
 action_class = "communication.external.send"
 
 # ── Uncomment below once task 007 wires IssueCapability → CapabilityMap ──────
