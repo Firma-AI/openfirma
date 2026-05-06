@@ -29,6 +29,16 @@ demos_dir="$repo_root/examples/demos"
 demo_dir="$demos_dir/$demo"
 [[ -d "$demo_dir" ]] || { echo "demo not found: $demo_dir" >&2; exit 1; }
 
+# Source .env so the sidecar inherits demo credentials (e.g. GITHUB_TOKEN
+# for demo2's [credentials.github] block). Values in .env override prior
+# shell exports — shape demo behaviour from this single file.
+if [[ -f "$demos_dir/.env" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$demos_dir/.env"
+    set +a
+fi
+
 runtime_dir="$demo_dir/.runtime"
 mkdir -p "$runtime_dir"
 
@@ -113,16 +123,21 @@ if [[ $run_script -eq 0 ]]; then
     exit 0
 fi
 
-# 8. Run the demo script in the foreground so the user sees its output
+# 8. Pre-sync Python deps before exporting the proxy. `uv run` would
+#    otherwise try to fetch hatchling/etc. through the sidecar, which has
+#    no policy for pypi.org and denies the request.
+(cd "$demos_dir" && uv sync --quiet)
+
+# 9. Run the demo script in the foreground so the user sees its output
 #    directly. Every outbound HTTP call is routed through the sidecar.
 cd "$demos_dir"
 HTTP_PROXY="http://127.0.0.1:8080" \
 HTTPS_PROXY="http://127.0.0.1:8080" \
-NO_PROXY="localhost,127.0.0.1,0.0.0.0,::1" \
+NO_PROXY="localhost,127.0.0.1,0.0.0.0,::1,pypi.org,files.pythonhosted.org" \
 SSL_CERT_FILE="$ca_cert" \
 REQUESTS_CA_BUNDLE="$ca_cert" \
 FIRMA_SESSION_ID="$session_id" \
-uv run "$demo/agent.py"
+uv run --offline "$demo/agent.py"
 
 echo
 echo "--- audit log: $runtime_dir/audit.jsonl ---"
