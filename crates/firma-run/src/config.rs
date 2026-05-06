@@ -710,11 +710,13 @@ fail_closed = true
         fs::write(&seccomp_path, [0_u8; 8]).unwrap_or_else(|e| panic!("{e}"));
 
         let config_path = tmpdir.path().join("firma-run.toml");
+        // TOML literal string (single quotes) keeps backslashes verbatim so
+        // Windows paths like `C:\Users\...` parse without escape interpretation.
         let toml = format!(
             r#"
 [profiles.generic]
 backend = "vz"
-seccomp_bpf_path = "{}"
+seccomp_bpf_path = '{}'
 "#,
             seccomp_path.display()
         );
