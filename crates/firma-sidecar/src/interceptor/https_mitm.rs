@@ -7,6 +7,7 @@
 
 use std::collections::VecDeque;
 use std::fs;
+#[cfg(unix)]
 use std::io::Write;
 use std::net::IpAddr;
 use std::path::Path;
@@ -264,6 +265,7 @@ impl CaMaterial {
         }
 
         let key_pem = if key_exists {
+            #[cfg(unix)]
             ensure_private_key_permissions(&key_path)?;
             fs::read_to_string(&key_path)
                 .map_err(|e| format!("failed to read MITM CA key {}: {e}", key_path.display()))?
@@ -398,30 +400,22 @@ fn parse_cert_spki_from_pem(cert_pem: &str, cert_path: &Path) -> Result<Vec<u8>,
     Ok(cert.tbs_certificate.subject_pki.raw.to_vec())
 }
 
+#[cfg(unix)]
 fn ensure_private_key_permissions(path: &Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = fs::metadata(path)
-            .map_err(|e| format!("failed to inspect MITM CA key {}: {e}", path.display()))?
-            .permissions()
-            .mode()
-            & 0o777;
-        if mode & 0o077 != 0 {
-            return Err(format!(
-                "MITM CA key {} permissions too open: {:o} (expected owner-only access)",
-                path.display(),
-                mode
-            ));
-        }
-        Ok(())
+    use std::os::unix::fs::PermissionsExt;
+    let mode = fs::metadata(path)
+        .map_err(|e| format!("failed to inspect MITM CA key {}: {e}", path.display()))?
+        .permissions()
+        .mode()
+        & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(format!(
+            "MITM CA key {} permissions too open: {:o} (expected owner-only access)",
+            path.display(),
+            mode
+        ));
     }
-
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        Ok(())
-    }
+    Ok(())
 }
 
 fn ca_certificate_params() -> CertificateParams {

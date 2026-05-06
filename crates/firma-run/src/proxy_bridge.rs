@@ -1,8 +1,14 @@
+#[cfg(any(unix, test))]
 use std::collections::BTreeMap;
-use std::io::{self, Read, Write};
+#[cfg(any(unix, test))]
+use std::io;
+#[cfg(unix)]
+use std::io::{Read, Write};
+#[cfg(unix)]
 use std::net::{TcpListener, TcpStream};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
+#[cfg(unix)]
 use std::thread;
 
 use crate::args::ProxyBridgeArgs;
@@ -127,6 +133,7 @@ fn relay_tcp_to_unix(client: &mut TcpStream, upstream: &mut UnixStream) -> io::R
     Ok(())
 }
 
+#[cfg(unix)]
 fn load_attr_headers_from_env() -> BTreeMap<String, String> {
     let Ok(raw) = std::env::var("FIRMA_RUN_ATTR_HEADERS_JSON") else {
         return BTreeMap::new();
@@ -137,6 +144,7 @@ fn load_attr_headers_from_env() -> BTreeMap<String, String> {
     serde_json::from_str::<BTreeMap<String, String>>(&raw).unwrap_or_default()
 }
 
+#[cfg(unix)]
 fn forward_requests_with_header_injection(
     client: &mut TcpStream,
     upstream: &mut UnixStream,
@@ -192,6 +200,7 @@ fn forward_requests_with_header_injection(
     }
 }
 
+#[cfg(any(unix, test))]
 fn append_missing_headers(
     header_block: &mut Vec<u8>,
     attribution_headers: &BTreeMap<String, String>,
@@ -236,10 +245,12 @@ fn append_missing_headers(
     Ok(())
 }
 
+#[cfg(any(unix, test))]
 fn find_header_terminator(buffer: &[u8]) -> Option<usize> {
     buffer.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
+#[cfg(unix)]
 fn read_until_header_block(
     client: &mut TcpStream,
     buffer: &mut Vec<u8>,
@@ -272,6 +283,7 @@ fn read_until_header_block(
     }
 }
 
+#[cfg(any(unix, test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BodyKind {
     None,
@@ -279,12 +291,14 @@ enum BodyKind {
     Chunked,
 }
 
+#[cfg(any(unix, test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RequestMetadata {
     method: String,
     body: BodyKind,
 }
 
+#[cfg(any(unix, test))]
 fn parse_request_metadata(header_block: &[u8]) -> io::Result<RequestMetadata> {
     let head_str = std::str::from_utf8(header_block).map_err(|_| {
         io::Error::new(
@@ -333,6 +347,7 @@ fn parse_request_metadata(header_block: &[u8]) -> io::Result<RequestMetadata> {
     Ok(RequestMetadata { method, body })
 }
 
+#[cfg(unix)]
 fn copy_exact_bytes(
     client: &mut TcpStream,
     upstream: &mut UnixStream,
@@ -354,6 +369,7 @@ fn copy_exact_bytes(
     Ok(())
 }
 
+#[cfg(unix)]
 fn forward_chunked_body(
     client: &mut TcpStream,
     upstream: &mut UnixStream,
@@ -392,6 +408,7 @@ fn forward_chunked_body(
     }
 }
 
+#[cfg(unix)]
 fn ensure_buffered(client: &mut TcpStream, buffer: &mut Vec<u8>, needed: usize) -> io::Result<()> {
     let mut chunk = [0_u8; 4096];
     while buffer.len() < needed {
@@ -407,6 +424,7 @@ fn ensure_buffered(client: &mut TcpStream, buffer: &mut Vec<u8>, needed: usize) 
     Ok(())
 }
 
+#[cfg(unix)]
 fn read_until_crlf(client: &mut TcpStream, buffer: &mut Vec<u8>) -> io::Result<usize> {
     if let Some(pos) = find_crlf(buffer) {
         return Ok(pos);
@@ -427,6 +445,7 @@ fn read_until_crlf(client: &mut TcpStream, buffer: &mut Vec<u8>) -> io::Result<u
     }
 }
 
+#[cfg(unix)]
 fn find_crlf(buffer: &[u8]) -> Option<usize> {
     buffer.windows(2).position(|w| w == b"\r\n")
 }

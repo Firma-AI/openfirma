@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -16,6 +18,7 @@ use crate::backend::SandboxHandle;
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 
+#[cfg(unix)]
 fn structural_proxy_listen_addr() -> &'static str {
     static ADDR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     ADDR.get_or_init(|| {
@@ -23,6 +26,7 @@ fn structural_proxy_listen_addr() -> &'static str {
     })
 }
 
+#[cfg(unix)]
 fn structural_dns_stub_listen_addr() -> &'static str {
     static ADDR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     ADDR.get_or_init(|| {
@@ -70,10 +74,10 @@ pub fn prepare_network_runtime(
     #[cfg(not(unix))]
     {
         let _ = sidecar_endpoint;
-        return Err(RunError::UnsupportedBackend {
+        Err(RunError::UnsupportedBackend {
             backend: handle.backend.to_string(),
             reason: "structural network confinement currently requires unix sockets".to_string(),
-        });
+        })
     }
 
     #[cfg(unix)]
