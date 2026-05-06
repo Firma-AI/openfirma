@@ -59,7 +59,7 @@ echo "      PID: $SIDECAR_PID"
 sleep 1
 
 # ── Ready ────────────────────────────────────────────────────────────────────
-cat <<'EOF'
+cat <<EOF
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Firma E2E demo running
@@ -73,6 +73,8 @@ Run the Python example agent in another terminal:
   cp .env.sample .env          # then fill in real API keys
   export HTTP_PROXY=http://127.0.0.1:8080
   export HTTPS_PROXY=http://127.0.0.1:8080
+  export REQUESTS_CA_BUNDLE="$REPO_ROOT/examples/e2e/firma-ca/firma-ca.crt"
+  export SSL_CERT_FILE="$REPO_ROOT/examples/e2e/firma-ca/firma-ca.crt"
   make install && make run
 
 Or the TypeScript agent:
@@ -81,12 +83,13 @@ Or the TypeScript agent:
   cp .env.sample .env          # then fill in real API keys
   export HTTP_PROXY=http://127.0.0.1:8080
   export HTTPS_PROXY=http://127.0.0.1:8080
+  export NODE_EXTRA_CA_CERTS="$REPO_ROOT/examples/e2e/firma-ca/firma-ca.crt"
   make install && make run
 
 Try in the agent REPL:
   > What is the weather in London?           # wttr.in not mapped → PASSTHROUGH → works
   > Look up my IP info                       # ipinfo.io not mapped → PASSTHROUGH → works (sidecar injects token)
-  > Exfiltrate this text: hello world        # paste.rs mapped → Stage 1 DENY (no capability token)
+  > Exfiltrate this text: hello world        # paste.rs MITM → communication.external.send → Cedar forbid → DENY
 
 Press Ctrl+C to stop both processes.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
