@@ -81,6 +81,38 @@ impl App {
         std::fs::write(self.demos_dir.join(".env"), content)?;
         Ok(())
     }
+
+    /// Spawn the Python demo script for the currently loaded manifest +
+    /// runtime. Caller is expected to have set `manifest` and `runtime`
+    /// already and to have transitioned to `Phase::Running`.
+    fn start_script(&mut self) -> Result<()> {
+        let Some(manifest) = self.manifest.as_ref() else {
+            return Ok(());
+        };
+        let Some(rt) = self.runtime.as_ref() else {
+            return Ok(());
+        };
+
+        let mut extra_env = HashMap::new();
+        for item in &self.config_items {
+            if !item.value.is_empty() {
+                extra_env.insert(item.key.clone(), item.value.clone());
+            }
+        }
+        let ca_cert = rt.ca_cert_path.to_string_lossy().into_owned();
+        extra_env.insert("SSL_CERT_FILE".to_string(), ca_cert.clone());
+        extra_env.insert("REQUESTS_CA_BUNDLE".to_string(), ca_cert);
+        if !manifest.session_id.is_empty() {
+            extra_env.insert("FIRMA_SESSION_ID".to_string(), manifest.session_id.clone());
+        }
+
+        let ag = spawn_agent(&manifest.agent_script, "http://127.0.0.1:8080", &extra_env)?;
+        self.agent = Some(ag);
+        self.agent_logs
+            .push("Demo running. ESC to quit.".to_string());
+        self.agent_logs.push(String::new());
+        Ok(())
+    }
 }
 
 pub fn run(demos_dir: &Path, initial_demo: Option<&Path>) -> Result<()> {
@@ -103,28 +135,10 @@ pub fn run(demos_dir: &Path, initial_demo: Option<&Path>) -> Result<()> {
     if let Some(demo_path) = initial_demo {
         let manifest = load(demo_path)?;
         let rt = boot(&manifest)?;
-
-        let mut extra_env = HashMap::new();
-        for item in &app.config_items {
-            if !item.value.is_empty() {
-                extra_env.insert(item.key.clone(), item.value.clone());
-            }
-        }
-        let ca_cert = rt.ca_cert_path.to_string_lossy().into_owned();
-        extra_env.insert("SSL_CERT_FILE".to_string(), ca_cert.clone());
-        extra_env.insert("REQUESTS_CA_BUNDLE".to_string(), ca_cert);
-        if !manifest.session_id.is_empty() {
-            extra_env.insert("FIRMA_SESSION_ID".to_string(), manifest.session_id.clone());
-        }
-
-        let ag = spawn_agent(&manifest.agent_script, "http://127.0.0.1:8080", &extra_env)?;
-        app.agent_logs
-            .push("Demo running. ESC to quit.".to_string());
-        app.agent_logs.push(String::new());
         note_process_log_paths(&mut app, &rt);
         app.manifest = Some(manifest);
         app.runtime = Some(rt);
-        app.agent = Some(ag);
+        push_ready_banner(&mut app);
         app.phase = Phase::Running;
     }
 
@@ -232,7 +246,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
     match app.phase {
         Phase::Config => handle_config_key(app, key),
         Phase::Menu => handle_menu_key(app, key)?,
-        Phase::Running => handle_running_key(app, key),
+        Phase::Running => handle_running_key(app, key)?,
     }
     Ok(())
 }
@@ -288,28 +302,10 @@ fn handle_menu_key(app: &mut App, key: KeyEvent) -> Result<()> {
             let path = app.menu_entries[app.menu_selected].path.clone();
             let manifest = load(&path)?;
             let rt = boot(&manifest)?;
-
-            let mut extra_env = HashMap::new();
-            for item in &app.config_items {
-                if !item.value.is_empty() {
-                    extra_env.insert(item.key.clone(), item.value.clone());
-                }
-            }
-            let ca_cert = rt.ca_cert_path.to_string_lossy().into_owned();
-            extra_env.insert("SSL_CERT_FILE".to_string(), ca_cert.clone());
-            extra_env.insert("REQUESTS_CA_BUNDLE".to_string(), ca_cert);
-            if !manifest.session_id.is_empty() {
-                extra_env.insert("FIRMA_SESSION_ID".to_string(), manifest.session_id.clone());
-            }
-
-            let ag = spawn_agent(&manifest.agent_script, "http://127.0.0.1:8080", &extra_env)?;
-            app.agent_logs
-                .push("Demo running. ESC to quit.".to_string());
-            app.agent_logs.push(String::new());
             note_process_log_paths(app, &rt);
             app.manifest = Some(manifest);
             app.runtime = Some(rt);
-            app.agent = Some(ag);
+            push_ready_banner(app);
             app.phase = Phase::Running;
         }
         _ => {}
@@ -328,8 +324,35 @@ fn note_process_log_paths(app: &mut App, rt: &DemoRuntime) {
     ));
 }
 
-fn handle_running_key(app: &mut App, key: KeyEvent) {
-    if matches!(key.code, KeyCode::Esc) {
-        app.should_quit = true;
+fn push_ready_banner(app: &mut App) {
+    let prompt = app
+        .manifest
+        .as_ref()
+        .map(|m| m.prompt.clone())
+        .unwrap_or_default();
+    if !prompt.trim().is_empty() {
+        for line in prompt.lines() {
+            app.agent_logs.push(line.to_string());
+        }
+        app.agent_logs.push(String::new());
     }
+    app.agent_logs.push("─".repeat(40));
+    app.agent_logs
+        .push("Authority + sidecar booted.".to_string());
+    app.agent_logs
+        .push("Press Enter to start the demo. ESC to quit.".to_string());
+    app.agent_logs.push(String::new());
+}
+
+fn handle_running_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => {
+            app.should_quit = true;
+        }
+        KeyCode::Enter if app.agent.is_none() => {
+            app.start_script()?;
+        }
+        _ => {}
+    }
+    Ok(())
 }

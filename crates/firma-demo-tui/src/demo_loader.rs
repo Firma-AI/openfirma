@@ -15,6 +15,10 @@ pub struct DemoManifest {
     pub sidecar_config: PathBuf,
     pub agent_script: PathBuf,
     pub session_id: String,
+    /// Human-readable description of what the script will do, shown in
+    /// the agent pane before the user presses Enter to start. Loaded
+    /// from `prompt.md` in the demo directory; empty if absent.
+    pub prompt: String,
 }
 
 #[derive(Clone, Debug)]
@@ -126,6 +130,7 @@ pub fn load(dir: &Path) -> Result<DemoManifest> {
     let sidecar_config = required_path(&root, "sidecar.toml")?;
     let agent_script = required_path(&root, "agent.py")?;
     let session_id = parse_preflight_session_id(&sidecar_config);
+    let prompt = std::fs::read_to_string(root.join("prompt.md")).unwrap_or_default();
 
     Ok(DemoManifest {
         root,
@@ -133,6 +138,7 @@ pub fn load(dir: &Path) -> Result<DemoManifest> {
         sidecar_config,
         agent_script,
         session_id,
+        prompt,
     })
 }
 

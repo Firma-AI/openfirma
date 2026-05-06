@@ -169,7 +169,12 @@ fn render_running(f: &mut Frame, app: &App) {
     render_audit_pane(f, outer[1], &app.audit_logs);
     render_agent_pane(f, outer[2], app);
 
-    let status = Paragraph::new("[ESC] quit").style(Style::default().fg(Color::DarkGray));
+    let hint = if app.agent.is_none() {
+        "[Enter] start demo   [ESC] quit"
+    } else {
+        "[ESC] quit"
+    };
+    let status = Paragraph::new(hint).style(Style::default().fg(Color::DarkGray));
     f.render_widget(status, outer[3]);
 }
 
