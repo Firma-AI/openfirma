@@ -43,7 +43,6 @@ pub struct App {
     pub audit_logs: Vec<String>,
     pub audit_log_offset: u64,
     pub agent_logs: Vec<String>,
-    pub input: String,
     pub should_quit: bool,
     // Stored for lazy boot on menu selection
     demos_dir: PathBuf,
@@ -66,7 +65,6 @@ impl App {
             audit_logs: Vec::new(),
             audit_log_offset: 0,
             agent_logs: Vec::new(),
-            input: String::new(),
             should_quit: false,
             demos_dir: demos_dir.to_path_buf(),
         }
@@ -119,19 +117,9 @@ pub fn run(demos_dir: &Path, initial_demo: Option<&Path>) -> Result<()> {
             extra_env.insert("FIRMA_SESSION_ID".to_string(), manifest.session_id.clone());
         }
 
-        let ag = spawn_agent(
-            &manifest.agent_script,
-            "http://127.0.0.1:8080",
-            "", // Empty prompt so it doesn't auto-run
-            &extra_env,
-        )?;
-        app.agent_logs.push("Suggested Prompt:".to_string());
-        for line in manifest.agent_prompt.lines() {
-            app.agent_logs.push(format!("  {line}"));
-        }
-        app.agent_logs.push("---".to_string());
+        let ag = spawn_agent(&manifest.agent_script, "http://127.0.0.1:8080", &extra_env)?;
         app.agent_logs
-            .push("Type a prompt and press Enter to start.".to_string());
+            .push("Demo running. ESC to quit.".to_string());
         app.agent_logs.push(String::new());
         note_process_log_paths(&mut app, &rt);
         app.manifest = Some(manifest);
@@ -314,19 +302,9 @@ fn handle_menu_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 extra_env.insert("FIRMA_SESSION_ID".to_string(), manifest.session_id.clone());
             }
 
-            let ag = spawn_agent(
-                &manifest.agent_script,
-                "http://127.0.0.1:8080",
-                "", // Empty prompt so it doesn't auto-run
-                &extra_env,
-            )?;
-            app.agent_logs.push("Suggested Prompt:".to_string());
-            for line in manifest.agent_prompt.lines() {
-                app.agent_logs.push(format!("  {line}"));
-            }
-            app.agent_logs.push("---".to_string());
+            let ag = spawn_agent(&manifest.agent_script, "http://127.0.0.1:8080", &extra_env)?;
             app.agent_logs
-                .push("Type a prompt and press Enter to start.".to_string());
+                .push("Demo running. ESC to quit.".to_string());
             app.agent_logs.push(String::new());
             note_process_log_paths(app, &rt);
             app.manifest = Some(manifest);
@@ -351,23 +329,7 @@ fn note_process_log_paths(app: &mut App, rt: &DemoRuntime) {
 }
 
 fn handle_running_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Esc => {
-            app.should_quit = true;
-        }
-        KeyCode::Char(c) => {
-            app.input.push(c);
-        }
-        KeyCode::Backspace => {
-            app.input.pop();
-        }
-        KeyCode::Enter => {
-            if let Some(ag) = app.agent.as_ref() {
-                let line = std::mem::take(&mut app.input);
-                app.agent_logs.push(format!("> {line}"));
-                ag.send_input(line);
-            }
-        }
-        _ => {}
+    if matches!(key.code, KeyCode::Esc) {
+        app.should_quit = true;
     }
 }
