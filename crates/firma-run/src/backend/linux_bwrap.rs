@@ -388,6 +388,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn mask_sensitive_paths_adds_expected_mounts() {
         let mut cmd = Command::new("bwrap");
         let temp = tempfile::tempdir().expect("tempdir");
