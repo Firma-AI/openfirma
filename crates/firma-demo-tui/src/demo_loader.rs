@@ -14,7 +14,6 @@ pub struct DemoManifest {
     pub authority_config: PathBuf,
     pub sidecar_config: PathBuf,
     pub agent_script: PathBuf,
-    pub agent_prompt: String,
     pub session_id: String,
 }
 
@@ -126,7 +125,6 @@ pub fn load(dir: &Path) -> Result<DemoManifest> {
     let authority_config = required_path(&root, "authority.toml")?;
     let sidecar_config = required_path(&root, "sidecar.toml")?;
     let agent_script = required_path(&root, "agent.py")?;
-    let agent_prompt = read_required(&root, "agent_prompt.md")?;
     let session_id = parse_preflight_session_id(&sidecar_config);
 
     Ok(DemoManifest {
@@ -134,7 +132,6 @@ pub fn load(dir: &Path) -> Result<DemoManifest> {
         authority_config,
         sidecar_config,
         agent_script,
-        agent_prompt,
         session_id,
     })
 }
@@ -164,9 +161,4 @@ fn required_path(root: &Path, file: &str) -> Result<PathBuf> {
     let path = root.join(file);
     ensure!(path.exists(), "missing {file} in {}", root.display());
     Ok(path)
-}
-
-fn read_required(root: &Path, file: &str) -> Result<String> {
-    let path = root.join(file);
-    std::fs::read_to_string(&path).with_context(|| format!("missing {file} in {}", root.display()))
 }

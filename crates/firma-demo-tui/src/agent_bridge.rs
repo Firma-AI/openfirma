@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
@@ -9,14 +9,9 @@ use std::thread;
 pub struct AgentBridge {
     pub child: Child,
     pub output_rx: mpsc::Receiver<String>,
-    stdin_tx: mpsc::SyncSender<String>,
 }
 
 impl AgentBridge {
-    pub fn send_input(&self, line: String) {
-        let _ = self.stdin_tx.send(line);
-    }
-
     pub fn shutdown(&mut self) {
         crate::process_manager::kill_tree_pub(self.child.id());
         let _ = self.child.kill();
@@ -33,7 +28,6 @@ impl Drop for AgentBridge {
 pub fn spawn_agent(
     script: &Path,
     proxy_addr: &str,
-    prompt: &str,
     extra_env: &HashMap<String, String>,
 ) -> Result<AgentBridge> {
     // Run uv from the demos directory so it finds examples/demos/pyproject.toml.
@@ -56,8 +50,7 @@ pub fn spawn_agent(
         .current_dir(demos_dir)
         .env("HTTP_PROXY", proxy_addr)
         .env("HTTPS_PROXY", proxy_addr)
-        .env("NO_PROXY", "localhost,127.0.0.1,0.0.0.0,::1")
-        .env("FIRMA_DEMO_PROMPT", prompt);
+        .env("NO_PROXY", "localhost,127.0.0.1,0.0.0.0,::1");
 
     for (k, v) in extra_env {
         cmd.env(k, v);
@@ -66,7 +59,6 @@ pub fn spawn_agent(
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .stdin(Stdio::piped())
         .spawn()
         .context("failed to spawn agent — is uv installed?")?;
 
@@ -78,14 +70,9 @@ pub fn spawn_agent(
         .stderr
         .take()
         .context("failed to capture agent stderr")?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .context("failed to capture agent stdin")?;
 
     let (out_tx, out_rx) = mpsc::channel::<String>();
     let out_tx_err = out_tx.clone();
-    let (in_tx, in_rx) = mpsc::sync_channel::<String>(16);
 
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
@@ -113,20 +100,8 @@ pub fn spawn_agent(
         }
     });
 
-    thread::spawn(move || {
-        for line in in_rx {
-            if writeln!(stdin, "{line}").is_err() {
-                break;
-            }
-            if stdin.flush().is_err() {
-                break;
-            }
-        }
-    });
-
     Ok(AgentBridge {
         child,
         output_rx: out_rx,
-        stdin_tx: in_tx,
     })
 }
