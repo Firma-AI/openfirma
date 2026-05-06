@@ -60,7 +60,7 @@ This is an architectural distinction, not a blanket immunity claim.
 
 ## 4. Acceptance coverage (implemented)
 
-`scripts/e2e-firma-run.sh --claude-acceptance` covers:
+`examples/firma-run/e2e/run.sh --claude-acceptance` covers:
 - shell `curl` egress interception + deny,
 - child-process `wget` interception + deny,
 - write outside working directory blocked by sandbox filesystem policy,
@@ -90,7 +90,7 @@ cargo run -p firma-run -- run --profile claude-code -- claude
 Run acceptance harness:
 
 ```bash
-scripts/e2e-firma-run.sh --claude-acceptance
+examples/firma-run/e2e/run.sh --claude-acceptance
 ```
 
 ## 7. Current non-goals

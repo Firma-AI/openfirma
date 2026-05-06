@@ -24,7 +24,7 @@ while [[ $# -gt 0 ]]; do
     --output) OUTPUT_PATH="$2"; shift 2 ;;
     -h|--help)
       cat <<'EOF'
-Usage: scripts/firma-capability-renew.sh [options]
+Usage: examples/firma-run/local/renew-capability.sh [options]
 
 Options:
   --authority-config <path>  Authority config TOML (default: .local/authority.toml)

@@ -18,7 +18,7 @@ Use this when onboarding a developer who needs a known-good setup quickly.
 ## 1) Bootstrap local files
 
 ```bash
-scripts/firma-run-local-setup.sh
+examples/firma-run/local/setup.sh
 ```
 
 ## 2) Pick your target agent
@@ -26,19 +26,19 @@ scripts/firma-run-local-setup.sh
 Codex:
 
 ```bash
-cp docs/examples/firma-run/firma_sidecar.local.codex.example.toml .local/firma_sidecar.local.toml
-cp docs/examples/firma-run/mapping-rules.codex.local.example.toml .local/mapping-rules.toml
+cp examples/firma-run/local/assets/firma_sidecar.local.codex.example.toml .local/firma_sidecar.local.toml
+cp examples/firma-run/local/assets/mapping-rules.codex.local.example.toml .local/mapping-rules.toml
 export FIRMA_RUN_SESSION_ID=demo-session-codex
-scripts/firma-capability-renew.sh --session-id "$FIRMA_RUN_SESSION_ID" --output .local/capability-codex.toml
+examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID" --output .local/capability-codex.toml
 ```
 
 Claude:
 
 ```bash
-cp docs/examples/firma-run/firma_sidecar.local.claude.example.toml .local/firma_sidecar.local.toml
-cp docs/examples/firma-run/mapping-rules.claude.local.example.toml .local/mapping-rules.toml
+cp examples/firma-run/local/assets/firma_sidecar.local.claude.example.toml .local/firma_sidecar.local.toml
+cp examples/firma-run/local/assets/mapping-rules.claude.local.example.toml .local/mapping-rules.toml
 export FIRMA_RUN_SESSION_ID=demo-session-claude
-scripts/firma-capability-renew.sh --session-id "$FIRMA_RUN_SESSION_ID" --output .local/capability-claude.toml
+examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID" --output .local/capability-claude.toml
 ```
 
 ## 3) Start services (3 terminals)

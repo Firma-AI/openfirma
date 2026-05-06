@@ -5,9 +5,9 @@ ok() { printf '[ok] %s\n' "$1"; }
 warn() { printf '[warn] %s\n' "$1"; }
 fail() { printf '[fail] %s\n' "$1" >&2; exit 1; }
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 LOCAL_DIR="${ROOT_DIR}/.local"
-EXAMPLES_DIR="${ROOT_DIR}/docs/examples/firma-run"
+EXAMPLES_DIR="${ROOT_DIR}/examples/firma-run/local/assets"
 
 MAPPING_SRC="${EXAMPLES_DIR}/mapping-rules.local.example.toml"
 SIDECAR_SRC_DEFAULT="${EXAMPLES_DIR}/firma_sidecar.local.example.toml"
@@ -78,5 +78,5 @@ Next steps:
    cargo run -p firma-run -- run --profile codex -- codex
 
 3) Optional structural E2E smoke:
-   scripts/e2e-firma-run.sh
+   examples/firma-run/e2e/run.sh
 EOM

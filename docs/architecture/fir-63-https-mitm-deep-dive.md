@@ -27,7 +27,7 @@ Primary objective:
 - HTTPS L7 integration test (`test_proxy_connect_mitm_intercepts_and_applies_l7_deny`)
 
 3. E2E harness already validates HTTPS CONNECT path at destination level:
-- `scripts/e2e-firma-run.sh --https-check`
+- `examples/firma-run/e2e/run.sh --https-check`
 
 ### What is not implemented yet
 
@@ -35,7 +35,7 @@ Primary objective:
 - profile/env/mount system exists, but no profile-level CA propagation contract has been finalized for Python/Node/curl/Java/Go runtimes.
 
 2. Expanded HTTPS parity coverage in E2E harness:
-- sidecar has MITM unit/integration coverage, but `scripts/e2e-firma-run.sh` still needs explicit HTTPS L7 assertions across representative agent profiles.
+- sidecar has MITM unit/integration coverage, but `examples/firma-run/e2e/run.sh` still needs explicit HTTPS L7 assertions across representative agent profiles.
 
 3. Performance and observability hardening:
 - MITM hot path is functional, but dedicated perf benchmarks and handshake/cert-cache metrics are a follow-up.
@@ -169,7 +169,7 @@ Gate:
 ### Phase 5: Full E2E and Regression Matrix
 
 Scope:
-- Extend `scripts/e2e-firma-run.sh` with HTTPS L7 assertions (not only CONNECT success).
+- Extend `examples/firma-run/e2e/run.sh` with HTTPS L7 assertions (not only CONNECT success).
 - Preserve existing FIR-61 HTTP and CONNECT-only regression behavior.
 
 Required scenarios:
@@ -190,7 +190,7 @@ Scope:
 - Document pinning behavior and runtime compatibility caveats.
 
 Deliverables:
-- docs update (`docs/configuration.md`, `docs/firma-run-local-testing.md`, architecture/security docs)
+- docs update (`docs/configuration.md`, `examples/firma-run/local/docs/local-testing.md`, architecture/security docs)
 - performance snapshot under concurrent TLS handshakes
 
 Gate:

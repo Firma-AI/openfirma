@@ -261,8 +261,8 @@ Audit/log visibility note:
 - If you see `TokenExpired` denies, re-issue a capability for the same
   `session_id` and restart sidecar when using `[capability_seed]`. For local
   workflows use:
-  - `scripts/firma-capability-renew.sh --session-id "$FIRMA_RUN_SESSION_ID"`
-  - `pwsh ./scripts/firma-capability-renew.ps1 -SessionId $env:FIRMA_RUN_SESSION_ID`
+  - `examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID"`
+  - `pwsh ./examples/firma-run/local/renew-capability.ps1 -SessionId $env:FIRMA_RUN_SESSION_ID`
 
 - You see `curl` timeout / agent network timeout, but no obvious deny:
   - Check audit for `action=network.connect` on the target host. This confirms

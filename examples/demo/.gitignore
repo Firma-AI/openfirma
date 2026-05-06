@@ -1,4 +1,4 @@
-# Bootstrapped at first run by `scripts/demo.sh`.
+# Bootstrapped at first run by `examples/demo/run.sh`.
 firma-authority.key
 firma-authority.pub
 audit.key

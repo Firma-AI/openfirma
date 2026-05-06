@@ -1,7 +1,7 @@
 # Firma Sidecar — release demo configuration.
 #
 # Run from the repo root via `make demo` / `make demo-ci`. The
-# orchestrator (`scripts/demo.sh`) bootstraps the keys, the audit key,
+# orchestrator (`examples/demo/run.sh`) bootstraps the keys, the audit key,
 # and the capability seed before launching the binary.
 
 [interceptor]
@@ -12,7 +12,7 @@ drain_timeout_secs = 30
 # The hero demo's two turns hit wttr.in (ALLOW) and paste.rs (DENY)
 # over HTTPS, and the Python agents SDK reaches api.openai.com over
 # HTTPS to drive the model. The Python agent trusts only the demo CA
-# (SSL_CERT_FILE in scripts/demo.sh), so any HTTPS host the agent
+# (SSL_CERT_FILE in examples/demo/run.sh), so any HTTPS host the agent
 # touches must be MITM'd to receive demo-CA-signed leaf certs AND
 # (for wttr.in/paste.rs) to surface a Stage 2 decision in the audit
 # log that scripted.py asserts on.

@@ -18,10 +18,10 @@ bench:
 	cargo bench --workspace --no-fail-fast
 
 demo:
-	./scripts/demo.sh hero
+	./examples/demo/run.sh hero
 
 demo-repl:
-	./scripts/demo.sh repl
+	./examples/demo/run.sh repl
 
 demo-ci:
-	./scripts/demo.sh ci
+	./examples/demo/run.sh ci

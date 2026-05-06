@@ -35,7 +35,7 @@ examples/demo/
 ```
 
 The seven `generated:` artifacts are produced on first run by
-`scripts/demo.sh` and `make demo-ci`. None of them are committed.
+`examples/demo/run.sh` and `make demo-ci`. None of them are committed.
 
 ## Modes
 
