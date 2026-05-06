@@ -32,6 +32,18 @@ dir = "examples/demos/demo2/.runtime/generated-firma-ca"
 [log]
 level = "info"
 
+# Credential injection. The real GitHub token lives only here, in the sidecar.
+# The agent process scrubs GITHUB_TOKEN from its own environment at startup
+# and never sets an Authorization header. After an ALLOW decision, the sidecar
+# attaches the header on the way out — so a compromised agent has nothing to
+# leak.
+[credentials.github]
+mode           = "basic"
+target_host    = "api.github.com"
+header         = "Authorization"
+prefix         = "Bearer "
+value_from_env = "GITHUB_TOKEN"
+
 [mapping]
 rules_path        = "examples/demos/demo2/mapping-rules.toml"
 default_protected = true
