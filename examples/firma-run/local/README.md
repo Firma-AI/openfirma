@@ -1,25 +1,38 @@
-# Local Firma Run Setup
+# Local Firma Run setup
 
-This example prepares a local `.local/` runtime directory for experimenting
-with `firma run` and `firma-sidecar`.
+This folder helps you prepare a local `.local/` workspace for experimenting with `firma run` and `firma-sidecar`.
+
+Use it when you want to run an agent command through Firma on your own machine without committing local keys, policies, or runtime files.
+
+## Quick start
+
+From the repository root:
+
+```bash
+examples/firma-run/local/setup.sh
+cargo run -p firma-sidecar -- -c .local/firma_sidecar.local.toml
+examples/firma-run/local/run.sh -- curl https://example.com
+```
+
+PowerShell users can run the equivalent setup script:
+
+```powershell
+pwsh ./examples/firma-run/local/setup.ps1
+```
+
+## What the setup script creates
+
+The setup script creates `.local/` at the repository root. It copies starter config files from `assets/` and generates a local audit signing key.
+
+Generated files are intentionally local-only. Edit `.local/` when testing; leave `assets/` as clean templates.
 
 ## Scripts
 
-- `setup.sh` / `setup.ps1` copy example Sidecar and mapping configs into
-  `.local/` and generate a local audit signing key.
-- `run.sh` / `run.ps1` run an arbitrary command through `firma run`.
-- `preflight.sh` / `preflight.ps1` check whether the host has the expected
-  runtime dependencies for the default backend.
-- `renew-capability.sh` / `renew-capability.ps1` issue a fresh capability seed
-  through `firma-authority`.
+- `setup.sh` / `setup.ps1` create `.local/` config from the templates.
+- `run.sh` / `run.ps1` run any command through `firma run`.
+- `preflight.sh` / `preflight.ps1` check whether the host has the expected backend tools.
+- `renew-capability.sh` / `renew-capability.ps1` issue a fresh capability seed with `firma-authority`.
 
-## Assets
+## More detail
 
-`assets/` contains the example Sidecar and mapping templates copied by the setup
-scripts. Edit the generated files under `.local/`; keep the templates here as
-known-good starting points.
-
-## Documentation
-
-Additional local setup and verification notes live under `docs/` in this
-directory.
+The `docs/` folder contains focused local runbooks for Codex, Claude Code, verification, and ready-to-work setup flows.
