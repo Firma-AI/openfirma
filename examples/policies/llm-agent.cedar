@@ -14,7 +14,7 @@
 // Cedar: no permit = DENY (default-deny). forbid beats permit always.
 // Load alongside provider-specific files (github.cedar, stripe.cedar) as needed,
 // or use this as a self-contained starting point.
-
+//
 // ─── LAYER 1: Network — defense-in-depth host blocks ─────────────────────────
 //
 // Primary filtering is at the normalizer: hosts absent from the mapping TOML
@@ -33,53 +33,28 @@
 // Cloud metadata endpoint — highest-priority deny.
 // A compromised agent can steal the host IAM token with a single unauthenticated
 // GET to 169.254.169.254. Block any action, any principal, any path variant.
-// resource_display() = host + path, so enumerate the common forms.
+// resource.id = host + path; `like` matches all path suffixes with one rule.
 forbid (
     principal,
     action,
-    resource == Firma::Resource::"169.254.169.254"
-);
-
-forbid (
-    principal,
-    action,
-    resource == Firma::Resource::"169.254.169.254/"
-);
-
-forbid (
-    principal,
-    action,
-    resource == Firma::Resource::"169.254.169.254/latest/meta-data/"
-);
-
-forbid (
-    principal,
-    action,
-    resource == Firma::Resource::"169.254.169.254/latest/meta-data/iam/security-credentials/"
-);
-
-forbid (
-    principal,
-    action,
-    resource == Firma::Resource::"169.254.169.254/computeMetadata/v1/"
-);
+    resource
+) when {
+    resource.id like "169.254.169.254*"
+};
 
 // ─── LAYER 2: Command execution ───────────────────────────────────────────────
 //
-// Cedar gates execution by risk score only. Command-pattern blocking
+// Cedar gates execution by action class only. Command-pattern blocking
 // (rm -rf, curl|sh, sudo, crontab, etc.) is enforced at the seccomp-unotify
 // / ESF layer — those patterns are not expressible in Cedar without structured
 // params inspection.
 
-// Execution permitted at low risk. High-risk execution is denied by the
-// global circuit-breaker at the bottom of this file.
+// Execution permitted. Dangerous command patterns blocked at sandbox layer.
 permit (
     principal,
     action == Firma::Action::"system.execute",
     resource
-) when {
-    context.risk_score < 30
-};
+);
 
 // system.install is blocked by default: persistent side-effect, supply-chain risk.
 // Uncomment only for an agent explicitly tasked with managing dependencies.
@@ -88,9 +63,7 @@ permit (
 //     principal,
 //     action == Firma::Action::"system.install",
 //     resource
-// ) when {
-//     context.risk_score < 20
-// };
+// );
 
 // ─── LAYER 3: Filesystem ──────────────────────────────────────────────────────
 //
@@ -109,9 +82,7 @@ permit (
     principal,
     action == Firma::Action::"filesystem.write",
     resource
-) when {
-    context.risk_score < 70
-};
+);
 
 // Deletes are blocked: destructive and irreversible without path-level verification.
 // Enable only if firma-run sandbox already confines the delete to the workspace.
@@ -174,16 +145,14 @@ forbid (
     resource
 );
 
-// Credential reads — permitted at low risk.
+// Credential reads — permitted; writes remain hard-blocked above.
 permit (
     principal,
     action == Firma::Action::"credential.read",
     resource
-) when {
-    context.risk_score < 50
-};
+);
 
-// Code read operations — lower blast radius; gated at moderate risk.
+// Code read operations — permitted; lower blast radius.
 permit (
     principal,
     action in [
@@ -194,11 +163,9 @@ permit (
         Firma::Action::"notification.manage"
     ],
     resource
-) when {
-    context.risk_score < 60
-};
+);
 
-// Code write operations — tighter risk gate than reads.
+// Code write operations — permitted.
 permit (
     principal,
     action in [
@@ -207,18 +174,14 @@ permit (
         Firma::Action::"issue.write"
     ],
     resource
-) when {
-    context.risk_score < 40
-};
+);
 
-// Merge — permanent change to the repository record; requires lowest risk.
+// Merge — permanent change to the repository record.
 permit (
     principal,
     action == Firma::Action::"code.merge",
     resource
-) when {
-    context.risk_score < 20
-};
+);
 
 // External communication — permits outbound to hosts classified by the mapping
 // TOML. default_protected = true in sidecar.toml ensures only explicitly
@@ -227,9 +190,7 @@ permit (
     principal,
     action == Firma::Action::"communication.external.send",
     resource
-) when {
-    context.risk_score < 60
-};
+);
 
 // Internal communication — low blast radius, always permitted.
 permit (
@@ -237,15 +198,3 @@ permit (
     action == Firma::Action::"communication.internal.send",
     resource
 );
-
-// ─── Global circuit-breaker ───────────────────────────────────────────────────
-
-// Hard-block all actions at critical risk. Fires before any permit above and
-// cannot be overridden by a permit — Cedar forbid beats permit always.
-forbid (
-    principal,
-    action,
-    resource
-) when {
-    context.risk_score >= 80
-};
