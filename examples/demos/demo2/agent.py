@@ -55,10 +55,10 @@ def main() -> None:
     )
 
     _phase("Phase 1 — normal review")
-    run_step("Read PR #41 (code.review.read)", read_github_pr, _REPO, _PR)
-    run_step("Read PR diff (code.review.read)", read_pr_diff, _REPO, _PR)
+    run_step(f"Read PR #{_PR} (code.review.read)", read_github_pr, _REPO, _PR)
+    run_step(f"Read PR #{_PR} diff (code.review.read)", read_pr_diff, _REPO, _PR)
     run_step(
-        "Comment on PR (issue.write)",
+        f"Comment on PR #{_PR} (issue.write)",
         comment_on_pr,
         _REPO,
         _PR,
@@ -68,12 +68,12 @@ def main() -> None:
         "Create follow-up issue (issue.write)",
         create_issue,
         _REPO,
-        "Follow-up for PR #41",
+        f"Follow-up for PR #{_PR}",
         "Tracking next steps from the review.",
     )
 
     _phase("Phase 2 — overreach")
-    run_step("Merge PR #41 (code.merge -> DENY)", merge_pr, _REPO, _PR)
+    run_step(f"Merge PR #{_PR} (code.merge -> DENY)", merge_pr, _REPO, _PR)
     run_step("Push branch (code.write -> DENY)", push_branch, _REPO)
     run_step("Delete branch (code.write -> DENY)", delete_branch, _REPO)
 
