@@ -27,6 +27,9 @@ from agent.tools.enforcement import (
 
 dotenv.load_dotenv()
 
+_REPO = os.environ.get("DEMO0_REPO", "acme/api")
+_PR = int(os.environ.get("DEMO0_PR", "41"))
+
 
 def main() -> None:
     banner(
@@ -34,10 +37,10 @@ def main() -> None:
         "Watch the audit log for ALLOW/DENY decisions.",
     )
     run_step(
-        "Read GitHub PR #41 (code.review.read)",
+        f"Read GitHub PR #{_PR} (code.review.read)",
         read_github_pr,
-        repo="acme/api",
-        pr_number=41,
+        repo=_REPO,
+        pr_number=_PR,
     )
     run_step(
         "Send Gmail summary (communication.external.send)",
