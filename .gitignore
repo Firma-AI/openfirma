@@ -30,9 +30,11 @@ __pycache__/
 dist/
 build/
 .venv/
+.mypy_cache/
 *.egg
 .data/
 .env
+.codex
 
 # generated key
 *.key
