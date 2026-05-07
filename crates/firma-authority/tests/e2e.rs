@@ -33,6 +33,14 @@ impl TestServer {
         )
         .expect("failed to write policy");
 
+        let issuance_policy_dir = temp_dir.path().join("issuance-policies");
+        std::fs::create_dir(&issuance_policy_dir).expect("failed to create issuance policy dir");
+        std::fs::write(
+            issuance_policy_dir.join("permit_all.cedar"),
+            "permit(principal, action, resource);",
+        )
+        .expect("failed to write issuance policy");
+
         let revocation_file = temp_dir.path().join("revocations.txt");
 
         let key_file = temp_dir.path().join("authority.key");
@@ -42,6 +50,7 @@ impl TestServer {
         let config = AuthorityConfig {
             listen_addr: "127.0.0.1:0".to_string(),
             policy_dir: policy_dir.clone(),
+            issuance_policy_dir: issuance_policy_dir.clone(),
             schema_path: None,
             revocation_file: revocation_file.clone(),
             key_file,

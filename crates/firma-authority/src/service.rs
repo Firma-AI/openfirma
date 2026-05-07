@@ -27,32 +27,42 @@ use crate::revocation::{RevocationStore, RevocationStoreWatcher};
 
 /// gRPC implementation of the `AuthorityService` defined in `authority.proto`.
 pub struct AuthorityServiceImpl {
-    policy_store: Arc<CedarPolicyStore>,
-    policy_watcher: Arc<CedarPolicyStoreWatcher>,
+    issuance_policy_store: Arc<CedarPolicyStore>,
+    /// Keeps issuance policy hot-reload task alive.
+    #[allow(dead_code)]
+    issuance_policy_watcher: CedarPolicyStoreWatcher,
+    /// Keeps enforcement policy hot-reload task alive; also used to subscribe bundle updates.
+    policy_watcher: CedarPolicyStoreWatcher,
     revocation_store: Arc<RevocationStore>,
-    revocation_watcher: Arc<RevocationStoreWatcher>,
+    /// Keeps revocation hot-reload task alive; also used to subscribe revocation events.
+    revocation_watcher: RevocationStoreWatcher,
     signer: Arc<PasetoV4Signer>,
     max_ttl_seconds: i32,
 }
 
 impl AuthorityServiceImpl {
-    #[must_use]
-    pub fn new(
+    /// # Errors
+    ///
+    /// Returns an error if any file watcher cannot be initialised.
+    pub fn try_new(
+        issuance_policy_store: Arc<CedarPolicyStore>,
         policy_store: Arc<CedarPolicyStore>,
-        policy_watcher: Arc<CedarPolicyStoreWatcher>,
         revocation_store: Arc<RevocationStore>,
-        revocation_watcher: Arc<RevocationStoreWatcher>,
         signer: Arc<PasetoV4Signer>,
         max_ttl_seconds: i32,
-    ) -> Self {
-        Self {
-            policy_store,
+    ) -> anyhow::Result<Self> {
+        let issuance_policy_watcher = issuance_policy_store.watch()?;
+        let policy_watcher = policy_store.watch()?;
+        let revocation_watcher = revocation_store.watch()?;
+        Ok(Self {
+            issuance_policy_store,
+            issuance_policy_watcher,
             policy_watcher,
             revocation_store,
             revocation_watcher,
             signer,
             max_ttl_seconds,
-        }
+        })
     }
 }
 
@@ -91,7 +101,7 @@ impl AuthorityService for AuthorityServiceImpl {
         };
 
         match crate::issuance::issue_capability(
-            &self.policy_store,
+            &self.issuance_policy_store,
             &self.signer,
             self.max_ttl_seconds,
             &issuance_req,
