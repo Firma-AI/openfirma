@@ -176,7 +176,7 @@ impl EnforcementPipeline {
         // Capability validation: select token → validate
         let capability = match self.capability_validator.enforce(&normalized, session_id) {
             Ok(cap) => cap,
-            Err(deny) => return deny.with_normalized_envelope(normalized),
+            Err(deny) => return deny,
         };
 
         // Constraint enforcement: scope check + Cedar policy evaluation.
@@ -206,7 +206,7 @@ impl EnforcementPipeline {
                 .evaluate(&normalized, &capability.claims, &signals),
         };
         if let Err(deny) = stage2_result {
-            return deny.with_normalized_envelope(normalized);
+            return deny;
         }
 
         // All stages passed — assemble the fully populated envelope.
@@ -1350,7 +1350,7 @@ mod tests {
 
         assert_eq!(payload.session_id, "sess_deny");
         assert_eq!(payload.decision, 2); // DENY
-        assert_eq!(payload.action, "communication.external.send");
+        assert_eq!(payload.action, "raw.http.POST");
         assert_eq!(payload.resource, "api.openai.com/v1/chat/completions");
     }
 
