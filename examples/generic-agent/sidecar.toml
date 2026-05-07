@@ -37,7 +37,7 @@ level = "info"
 
 [mapping]
 # Supplemental rules (CONNECT tunnels, package managers, localhost).
-rules_path  = "examples/generic-agent/mapping-rules.toml"
+rules_path = "examples/generic-agent/mapping-rules.toml"
 # Shipped provider-specific rules merged on top.
 rules_paths = [
     "crates/firma-sidecar/config/mappings/github.toml",
@@ -69,8 +69,8 @@ revocation_readiness_grace_ms        = 500
 revocation_fail_closed_on_disconnect = false
 
 [preflight]
-agent_id   = "generic-agent"
-session_id = "preflight-session"
+agent_id          = "generic-agent"
+session_id        = "preflight-session"
 requested_actions = [
     "system.install",
     "credential.read",

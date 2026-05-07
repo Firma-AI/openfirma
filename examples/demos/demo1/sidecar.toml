@@ -59,9 +59,9 @@ revocation_readiness_grace_ms        = 500
 revocation_fail_closed_on_disconnect = false
 
 [preflight]
-agent_id              = "demo1-agent"
-session_id            = "demo1-session-001"
-requested_actions     = ["filesystem.read"]
-resource_scope        = "*"
+agent_id               = "demo1-agent"
+session_id             = "demo1-session-001"
+requested_actions      = ["filesystem.read"]
+resource_scope         = "*"
 authority_pub_key_path = "examples/demos/demo1/.runtime/authority.pub"
-ttl_seconds           = 3600
+ttl_seconds            = 3600
