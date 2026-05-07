@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -306,7 +307,7 @@ impl RevocationStore {
     /// # Errors
     ///
     /// Returns an error if the OS file watcher cannot be created or registered.
-    pub fn watch(&self) -> Result<RevocationStoreWatcher> {
+    pub fn watch(self) -> Result<RevocationStoreWatcher> {
         use notify::Watcher as _;
 
         let path = self.revocation_file.clone();
@@ -385,6 +386,7 @@ impl RevocationStore {
         Ok(RevocationStoreWatcher {
             _watcher: watcher,
             task,
+            store: self,
             tx: tx_broadcast,
         })
     }
@@ -395,7 +397,16 @@ impl RevocationStore {
 pub struct RevocationStoreWatcher {
     _watcher: notify::RecommendedWatcher,
     task: JoinHandle<()>,
+    store: RevocationStore,
     tx: broadcast::Sender<RevocationEntry>,
+}
+
+impl Deref for RevocationStoreWatcher {
+    type Target = RevocationStore;
+
+    fn deref(&self) -> &Self::Target {
+        &self.store
+    }
 }
 
 impl RevocationStoreWatcher {
@@ -506,7 +517,7 @@ mod tests {
         std::fs::write(&file, "").unwrap();
 
         let s = store(&file);
-        let watcher = s.watch().unwrap();
+        let watcher = s.clone().watch().unwrap();
         let mut rx = watcher.subscribe();
 
         let id = TokenId::new();
@@ -528,7 +539,7 @@ mod tests {
         std::fs::write(&file, "").unwrap();
 
         let s = store(&file);
-        let watcher = s.watch().unwrap();
+        let watcher = s.clone().watch().unwrap();
         let mut rx = watcher.subscribe();
 
         let id = TokenId::new();
@@ -557,7 +568,7 @@ mod tests {
         std::fs::write(&file, "").unwrap();
 
         let s = store(&file);
-        let watcher = s.watch().unwrap();
+        let watcher = s.clone().watch().unwrap();
         let mut rx = watcher.subscribe();
 
         let id = TokenId::new();
@@ -580,7 +591,7 @@ mod tests {
         std::fs::write(&file, "").unwrap();
 
         let s = store(&file);
-        let watcher = s.watch().unwrap();
+        let watcher = s.clone().watch().unwrap();
         let mut rx = watcher.subscribe();
 
         let before = Utc::now() - chrono::Duration::seconds(1);
@@ -645,7 +656,7 @@ mod tests {
         let file = dir.path().join("revocations.txt");
 
         let s = store(&file);
-        let watcher = s.watch().unwrap();
+        let watcher = s.clone().watch().unwrap();
         let mut rx = watcher.subscribe();
 
         let id = TokenId::new();
@@ -666,7 +677,7 @@ mod tests {
 
         let s = store(&file);
         std::fs::write(&file, "").unwrap();
-        let watcher = s.watch().unwrap();
+        let watcher = s.clone().watch().unwrap();
         let mut rx = watcher.subscribe();
 
         let id = TokenId::new();
