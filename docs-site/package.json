@@ -1,0 +1,18 @@
+{
+  "name": "docs-site",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Documentation site for OpenFirma.",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "build:with-rustdoc": "cargo doc --manifest-path ../Cargo.toml --workspace --no-deps && pnpm run build && rm -rf dist/api && mkdir -p dist/api && cp -R ../target/doc/. dist/api/ && node scripts/write-rustdoc-index.mjs",
+    "preview": "astro preview"
+  },
+  "type": "module",
+  "packageManager": "pnpm@10.30.3",
+  "dependencies": {
+    "@astrojs/starlight": "^0.39.0",
+    "astro": "^6.3.0"
+  }
+}

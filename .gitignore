@@ -22,6 +22,8 @@ target
 
 # JS
 node_modules
+.astro
+/docs-site/public/api/
 
 # Python
 __pycache__/
