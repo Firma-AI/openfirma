@@ -23,6 +23,9 @@ echo "      Done."
 echo "[2/4] Setting up .runtime/..."
 mkdir -p "$RUNTIME/generated-firma-ca"
 
+# Remove stale capability tokens — preflight will re-issue on startup.
+rm -f "$DIR"/capability-*.toml
+
 if [[ ! -f "$RUNTIME/authority.key" ]]; then
     "$AUTHORITY_BIN" generate-key --output "$RUNTIME/authority.key"
     echo "      Generated authority key."
@@ -63,26 +66,27 @@ cat <<EOF
 
 Smoke tests — run in another terminal:
 
-  # ALLOW — system.install (pypi.org mapped)
-  curl -sx $PROXY http://pypi.org/simple/requests/ -o /dev/null -w "%{http_code}\n"
+  # ALLOW — system.install (crates.io, HTTP)
+  curl -sx $PROXY http://crates.io/api/v1/crates/serde -o /dev/null -w "crates.io  → %{http_code} (expect 200)\n"
 
-  # ALLOW — system.install (crates.io mapped)
-  curl -sx $PROXY http://crates.io/api/v1/crates/serde -o /dev/null -w "%{http_code}\n"
+  # ALLOW — system.install (pypi.org, HTTPS — pypi requires SSL)
+  curl -sx $PROXY https://pypi.org/simple/requests/ -o /dev/null -w "pypi.org   → %{http_code} (expect 200)\n"
 
   # DENY — not mapped → default_protected blocks before Cedar
-  curl -sx $PROXY http://evil.com/ -o /dev/null -w "%{http_code}\n"
+  curl -sx $PROXY http://evil.com/ -o /dev/null -w "evil.com   → %{http_code} (expect 403)\n"
 
   # DENY — cloud metadata endpoint (not mapped)
-  curl -sx $PROXY http://169.254.169.254/latest/meta-data/ -o /dev/null -w "%{http_code}\n"
+  curl -sx $PROXY http://169.254.169.254/ -o /dev/null -w "metadata   → %{http_code} (expect 403)\n"
 
-  # ALLOW — code.review.read (GitHub MITM, needs firma-ca)
-  curl -sx $PROXY --cacert "$CA_CERT" https://api.github.com/zen
+  # ALLOW — code.read (GitHub MITM — GET /repos/*/*, needs firma-ca)
+  curl -sx $PROXY --cacert "$CA_CERT" \
+    https://api.github.com/repos/serde-rs/serde \
+    -o /dev/null -w "github.com → %{http_code} (expect 200)\n"
 
-  # DENY — code.destructive (hard-block in llm-agent.cedar)
-  # Requires a GitHub token: -H "Authorization: token \$GITHUB_TOKEN"
+  # DENY — code.destructive (hard-block in llm-agent.cedar, needs GITHUB_TOKEN)
   curl -sx $PROXY --cacert "$CA_CERT" -X DELETE \
     https://api.github.com/repos/owner/repo/git/refs/heads/my-branch \
-    -o /dev/null -w "%{http_code}\n"
+    -o /dev/null -w "gh DELETE  → %{http_code} (expect 403)\n"
 
 Point any agent at the proxy:
   export HTTP_PROXY=$PROXY

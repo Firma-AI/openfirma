@@ -71,13 +71,14 @@ action_class = "system.install"
 
 # ─── Localhost fallthrough ────────────────────────────────────────────────────
 # Local LLM inference (LM-Studio, Ollama, etc.) and in-process service calls.
+# communication.internal.send is already permitted by llm-agent.cedar.
 
 [[rules]]
 host         = "localhost:*"
 path         = "*"
-action_class = "filesystem.read"
+action_class = "communication.internal.send"
 
 [[rules]]
 host         = "127.0.0.1:*"
 path         = "*"
-action_class = "filesystem.read"
+action_class = "communication.internal.send"
