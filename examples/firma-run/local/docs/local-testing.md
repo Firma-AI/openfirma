@@ -5,12 +5,12 @@ This guide shows how to test `firma run` locally without committing local secret
 For agent-specific strict-mode setups (separate Codex and Claude samples),
 see:
 
-- `docs/firma-run-codex-claude-local-setup.md`
-- `docs/firma-run-ready-to-work-setup.md` (quick onboarding cookbook)
+- `examples/firma-run/local/docs/codex-claude-local-setup.md`
+- `examples/firma-run/local/docs/ready-to-work-setup.md` (quick onboarding cookbook)
 
 Verification reference:
 
-- `docs/firma-run-verification-report.md` contains a full reproducible checklist and an example PASS/FAIL matrix from a successful run.
+- `examples/firma-run/local/docs/verification-report.md` contains a full reproducible checklist and an example PASS/FAIL matrix from a successful run.
 
 Latest verification snapshot (2026-04-26):
 
@@ -39,25 +39,25 @@ The repo now reserves `/.local/` for this purpose and ignores it in git.
 From repo root:
 
 ```bash
-scripts/firma-run-local-setup.sh
+examples/firma-run/local/setup.sh
 ```
 
 Optional diagnostics/observability bootstrap (stricter guard defaults, richer MITM visibility for key agent hosts):
 
 ```bash
-scripts/firma-run-local-setup.sh --observability
+examples/firma-run/local/setup.sh --observability
 ```
 
 PowerShell (Windows only):
 
 ```powershell
-pwsh ./scripts/firma-run-local-setup.ps1
+pwsh ./examples/firma-run/local/setup.ps1
 ```
 
 PowerShell observability mode:
 
 ```powershell
-pwsh ./scripts/firma-run-local-setup.ps1 --observability
+pwsh ./examples/firma-run/local/setup.ps1 --observability
 ```
 
 The script creates:
@@ -68,9 +68,9 @@ The script creates:
 
 Templates used:
 
-- `docs/examples/firma-run/mapping-rules.local.example.toml`
-- `docs/examples/firma-run/firma_sidecar.local.example.toml`
-- `docs/examples/firma-run/firma_sidecar.local.observability.example.toml` (opt-in diagnostics profile)
+- `examples/firma-run/local/assets/mapping-rules.local.example.toml`
+- `examples/firma-run/local/assets/firma_sidecar.local.example.toml`
+- `examples/firma-run/local/assets/firma_sidecar.local.observability.example.toml` (opt-in diagnostics profile)
 
 ## Environment Variables
 
@@ -133,12 +133,14 @@ cargo run -p firma-run -- run --profile codex -- codex
 ```
 
 Startup should include:
+
 - `applied executable wrapper defaults for governed execution`
 
 If that line is missing, the session may not be running with codex wrapper-default
 governance arguments.
 
 Codex wrapper-default policy (now default for `--profile codex`):
+
 - `--sandbox workspace-write`
 - `--ask-for-approval never`
 - `--config sandbox_workspace_write.network_access=true`
@@ -173,19 +175,19 @@ profiles:
 PowerShell helper wrapper:
 
 ```powershell
-pwsh ./scripts/firma-run-local.ps1 -- codex
+pwsh ./examples/firma-run/local/run.ps1 -- codex
 ```
 
 Capability token renewal helper (to prevent `TokenExpired` interruptions):
 
 ```bash
-scripts/firma-capability-renew.sh --session-id "$FIRMA_RUN_SESSION_ID"
+examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID"
 ```
 
 PowerShell:
 
 ```powershell
-pwsh ./scripts/firma-capability-renew.ps1 -SessionId $env:FIRMA_RUN_SESSION_ID
+pwsh ./examples/firma-run/local/renew-capability.ps1 -SessionId $env:FIRMA_RUN_SESSION_ID
 ```
 
 Identity default:
@@ -219,6 +221,7 @@ Network-confinement defaults are backend-aware:
 - `vz`/`wsl2`: `enforce_network_namespace=false` (proxy-mediated path)
 
 `claude-code` profile platform posture:
+
 - Linux + `bwrap`: full structural confinement target.
 - macOS (`vz`): anticipated support path now includes `sandbox-exec` profile
   deny rules for common sensitive paths and runtime-home isolation; guarantees
@@ -249,6 +252,7 @@ seccomp_bpf_path = "/absolute/path/to/seccomp.bpf"
 ```
 
 Notes:
+
 - `seccomp_bpf_path` is supported only with backend `bwrap`.
 - path must be absolute and point to an existing file.
 - file format must match `bwrap --seccomp` expectations (compiled cBPF).
@@ -262,31 +266,32 @@ cargo run -p firma-run -- run --backend vz --profile codex -- codex
 ## Run the local E2E harness
 
 ```bash
-scripts/e2e-firma-run.sh
+examples/firma-run/e2e/run.sh
 ```
 
-Note: `scripts/e2e-firma-run.sh` is Linux-only by design because it validates
+Note: `examples/firma-run/e2e/run.sh` is Linux-only by design because it validates
 the structural `bwrap` confinement path.
 
 HTTPS CONNECT scenario:
 
 ```bash
-scripts/e2e-firma-run.sh --https-check
+examples/firma-run/e2e/run.sh --https-check
 ```
 
 Claude-code profile smoke:
 
 ```bash
-scripts/e2e-firma-run.sh --profile claude-code
+examples/firma-run/e2e/run.sh --profile claude-code
 ```
 
 Claude-code shell acceptance suite (Linux-only, unified harness):
 
 ```bash
-scripts/e2e-firma-run.sh --claude-acceptance
+examples/firma-run/e2e/run.sh --claude-acceptance
 ```
 
 This suite currently validates:
+
 - shell-originated network attempts are intercepted and denied when policy is protected-by-default,
 - child-process shellouts (`wget`) are intercepted under the same path,
 - `claude-code` profile filesystem hardening blocks writes outside the working directory,
@@ -295,13 +300,13 @@ This suite currently validates:
 Custom command example:
 
 ```bash
-scripts/e2e-firma-run.sh --cmd 'cd example_agents/agents_sdk_py && curl -fsS --max-time 20 http://httpbin.org/get -o /dev/null'
+examples/firma-run/e2e/run.sh --cmd 'cd examples/agents/agents_sdk_py && curl -fsS --max-time 20 http://httpbin.org/get -o /dev/null'
 ```
 
 Keep artifacts:
 
 ```bash
-scripts/e2e-firma-run.sh --keep-artifacts
+examples/firma-run/e2e/run.sh --keep-artifacts
 ```
 
 ## Preflight checks
@@ -309,14 +314,14 @@ scripts/e2e-firma-run.sh --keep-artifacts
 Bash:
 
 ```bash
-scripts/firma-run-preflight.sh
+examples/firma-run/local/preflight.sh
 ```
 
 PowerShell (macOS/Linux/Windows):
 PowerShell (Windows only):
 
 ```powershell
-pwsh ./scripts/firma-run-preflight.ps1
+pwsh ./examples/firma-run/local/preflight.ps1
 ```
 
 ## Git safety rules
@@ -360,11 +365,13 @@ sed -n '1,200p' /tmp/firma-run/<sandbox_id>/dns-stub.log
 ```
 
 If commands fail with `Failed to connect to 127.0.0.1:18080`:
+
 - inspect `/tmp/firma-run/<sandbox_id>/proxy-bridge.log`,
 - recent bridge diagnostics now include an explicit pre-sidecar mediation hint
   when the bridge cannot reach the host-side sidecar adapter.
 
 If sidecar shows no request logs for a failed command:
+
 - failure likely happened before sidecar mediation (for example command executed
   outside `firma run`, missing proxy env in that process, or local bridge path issue),
 - sidecar can only log traffic that actually reaches its listener.

@@ -1,168 +1,52 @@
-# Firma E2E Example
+# E2E stack example
 
-Wires `firma-authority` + `firma-sidecar` + an example agent end-to-end.
+This example starts a local Authority and Sidecar, then shows how to point the demo agents at the Sidecar with `HTTP_PROXY` and `HTTPS_PROXY`.
 
-> **NOT FOR PRODUCTION USE.** Local development and demo only.
+Use this when you want to inspect the stack manually instead of running the release demo wrapper.
 
----
+> This example is for local development and demos only. It is not a production deployment recipe.
 
-## What this demonstrates
+## Run the stack
 
-```
-example-agent
-    │  HTTP_PROXY=http://127.0.0.1:8080
-    ▼
-firma-sidecar :8080          ← intercepts every outbound call
-    │  WatchPolicyBundle
-    │  WatchRevocations
-    ▼
-firma-authority :50051       ← streams Cedar policy bundle to sidecar
-
-Enforcement per request:
-  normalizer → Stage 1 (token) → Stage 2 (Cedar) → ALLOW / DENY
-                    │
-                    └─ PASSTHROUGH if host is not in mapping rules
-                       (default_protected = false)
-```
-
-### Current enforcement behavior
-
-Stage 1 (capability token validation) uses a stub verifier with an empty
-`CapabilityMap` until task 007 wires `IssueCapability → CapabilityMap`
-population. Every mapped host is denied by Stage 1. `mapping-rules.toml`
-therefore maps **only `paste.rs`** so the demo works:
-
-| Host | mapping-rules.toml | Result |
-|------|--------------------|--------|
-| `paste.rs` | Mapped | **DENY** — Stage 1, no matching token |
-| All other hosts | Not mapped | **PASSTHROUGH** — tools work normally |
-
-When task 007 lands, uncomment the additional rules in `mapping-rules.toml`
-to bring all agent traffic under full Cedar enforcement (Stage 1 + Stage 2).
-
-### Stage 2 Cedar policy (takes over once task 007 lands)
-
-`examples/policies/demo.cedar` is loaded by the Authority and streamed to
-the Sidecar. It:
-- Permits `example-agent` to use `communication.external.send` (weather, LLM
-  calls, email, Supabase) when `risk_score < 80`
-- Permits `filesystem.read` and `filesystem.write`
-- Hard-blocks `communication.external.send` to `ipinfo.io/json` (`get_ip_info` tool — IP leak risk)
-- Hard-blocks `communication.external.send` to `paste.rs` (exfiltration)
-
----
-
-## Prerequisites
-
-- Rust toolchain (`cargo build` must work)
-- `protoc` installed (for `firma-proto` build)
-- Run from **repo root**
-
----
-
-## Quick start
+From the repository root:
 
 ```bash
-# From repo root:
 ./examples/e2e/run.sh
 ```
 
-The script:
-1. Builds `firma-authority` and `firma-sidecar`
-2. Generates `examples/e2e/authority.key` (Ed25519, on first run)
-3. Starts authority on `127.0.0.1:50051`
-4. Starts sidecar on `127.0.0.1:8080` (connects to authority)
-5. Prints agent run instructions
+The script builds `firma-authority` and `firma-sidecar`, generates local keys on first run, starts the Authority on `127.0.0.1:50051`, starts the Sidecar on `127.0.0.1:8080`, and prints commands for running the Python or TypeScript example agent.
 
-Then in another terminal:
+## Try it with an agent
+
+In another terminal, run the Python agent:
 
 ```bash
-cd example_agents/agents_sdk_py
-cp .env.sample .env         # fill in OPENAI_API_KEY and other keys
+cd examples/agents/agents_sdk_py
+cp .env.sample .env
+# Fill in the required API keys.
 export HTTP_PROXY=http://127.0.0.1:8080
 export HTTPS_PROXY=http://127.0.0.1:8080
 make install && make run
 ```
 
-Or the TypeScript agent:
+Or run the TypeScript agent:
 
 ```bash
-cd example_agents/adk_js
-cp .env.sample .env         # fill in GOOGLE_GENAI_API_KEY and other keys
+cd examples/agents/adk_js
+cp .env.sample .env
+# Fill in the required API keys.
 export HTTP_PROXY=http://127.0.0.1:8080
 export HTTPS_PROXY=http://127.0.0.1:8080
 make install && make run
 ```
 
----
+## What to try
 
-## Try in the agent REPL
-
-```
-> What's the weather in London?
-  → wttr.in mapped → Cedar permit fires (risk_score < 80) → ALLOW
-
-> Look up my IP info
-  → ipinfo.io/json mapped → Cedar forbid fires → DENY
-
-> Exfiltrate this text: hello world
-  → paste.rs mapped → Stage 1 DENY ("no capability token")
-```
-
----
+Ask the agent for normal outbound work, then ask it to exfiltrate text to a paste service. The mapped paste path is denied, while unmapped demo traffic can pass through when `default_protected = false`.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `authority.toml` | Authority config — listens on `:50051`, loads `examples/policies/` |
-| `sidecar.toml` | Sidecar config — proxy on `:8080`, connects to authority |
-| `mapping-rules.toml` | Host → action class mapping for example agent endpoints |
-| `run.sh` | Build + start both processes |
-
-Shared across examples (see `examples/policies/README.md`):
-
-| File | Purpose |
-|------|---------|
-| `../policies/demo.cedar` | Cedar policy loaded by authority, streamed to sidecar |
-| `../policies/schema.cedarschema` | Optional schema override — omit to use the schema embedded in `firma-authority` |
-
-Generated at runtime (not committed):
-
-| File | Created by |
-|------|-----------|
-| `authority.key` | `run.sh` on first run via `generate-key` |
-| `authority.pub` | Same |
-| `revocations.txt` | `run.sh` (`touch`) |
-| `firma-ca/` | `run.sh` (`mkdir -p`) |
-
----
-
-## Manual run (without the script)
-
-```bash
-# Terminal 1 — Authority
-./target/debug/firma-authority generate-key --output examples/e2e/authority.key
-./target/debug/firma-authority --config examples/e2e/authority.toml
-
-# Terminal 2 — Sidecar
-./target/debug/firma-sidecar --config-file examples/e2e/sidecar.toml
-
-# Terminal 3 — Agent
-cd example_agents/agents_sdk_py
-export HTTP_PROXY=http://127.0.0.1:8080 HTTPS_PROXY=http://127.0.0.1:8080
-make run
-```
-
----
-
-## Revoking a token (once task 007 lands)
-
-```bash
-./target/debug/firma-authority \
-  --config examples/e2e/authority.toml \
-  revocations add <token-id> --reason "demo-revocation"
-```
-
-The sidecar receives the revocation event on the `WatchRevocations` stream
-within one heartbeat.
+- `run.sh` builds and starts the local stack.
+- `authority.toml` configures the local Authority.
+- `sidecar.toml` configures the local Sidecar.
+- `mapping-rules.toml` maps selected outbound requests to Firma action classes.

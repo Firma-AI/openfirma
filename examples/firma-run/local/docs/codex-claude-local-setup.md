@@ -38,7 +38,7 @@ capability claims.
 ### Token lifecycle
 
 1. Issue token for the exact session id:
-   - `scripts/firma-capability-renew.sh --session-id "$FIRMA_RUN_SESSION_ID" ...`
+   - `examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID" ...`
 2. Sidecar loads token via `[capability_seed].paths` at startup.
 3. Requests are enforced against that token until expiry.
 4. On expiry, sidecar denies with `TokenExpired`.
@@ -57,13 +57,13 @@ capability claims.
 
 Codex:
 
-- `docs/examples/firma-run/firma_sidecar.local.codex.example.toml`
-- `docs/examples/firma-run/mapping-rules.codex.local.example.toml`
+- `examples/firma-run/local/assets/firma_sidecar.local.codex.example.toml`
+- `examples/firma-run/local/assets/mapping-rules.codex.local.example.toml`
 
 Claude:
 
-- `docs/examples/firma-run/firma_sidecar.local.claude.example.toml`
-- `docs/examples/firma-run/mapping-rules.claude.local.example.toml`
+- `examples/firma-run/local/assets/firma_sidecar.local.claude.example.toml`
+- `examples/firma-run/local/assets/mapping-rules.claude.local.example.toml`
 
 Note: the Claude mapping sample includes both:
 
@@ -80,7 +80,7 @@ Recommended local destinations:
 ## 1) Bootstrap local artifacts
 
 ```bash
-scripts/firma-run-local-setup.sh
+examples/firma-run/local/setup.sh
 ```
 
 This creates `.local/` scaffolding, including audit key material.
@@ -99,12 +99,12 @@ Copy one sidecar sample and one mapping sample into `.local/`:
 
 ```bash
 # Codex track
-cp docs/examples/firma-run/firma_sidecar.local.codex.example.toml .local/firma_sidecar.local.toml
-cp docs/examples/firma-run/mapping-rules.codex.local.example.toml .local/mapping-rules.toml
+cp examples/firma-run/local/assets/firma_sidecar.local.codex.example.toml .local/firma_sidecar.local.toml
+cp examples/firma-run/local/assets/mapping-rules.codex.local.example.toml .local/mapping-rules.toml
 
 # Claude track
-# cp docs/examples/firma-run/firma_sidecar.local.claude.example.toml .local/firma_sidecar.local.toml
-# cp docs/examples/firma-run/mapping-rules.claude.local.example.toml .local/mapping-rules.toml
+# cp examples/firma-run/local/assets/firma_sidecar.local.claude.example.toml .local/firma_sidecar.local.toml
+# cp examples/firma-run/local/assets/mapping-rules.claude.local.example.toml .local/mapping-rules.toml
 ```
 
 ## 4) Set stable session id and issue capability token
@@ -113,7 +113,7 @@ Codex:
 
 ```bash
 export FIRMA_RUN_SESSION_ID=demo-session-codex
-scripts/firma-capability-renew.sh \
+examples/firma-run/local/renew-capability.sh \
   --session-id "$FIRMA_RUN_SESSION_ID" \
   --output .local/capability-codex.toml
 ```
@@ -122,7 +122,7 @@ Claude:
 
 ```bash
 export FIRMA_RUN_SESSION_ID=demo-session-claude
-scripts/firma-capability-renew.sh \
+examples/firma-run/local/renew-capability.sh \
   --session-id "$FIRMA_RUN_SESSION_ID" \
   --output .local/capability-claude.toml
 ```
@@ -166,7 +166,7 @@ cargo run -p firma-run -- run --profile claude-code -- claude
 Capability expired:
 
 ```bash
-scripts/firma-capability-renew.sh --session-id "$FIRMA_RUN_SESSION_ID" --output .local/capability-codex.toml
+examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID" --output .local/capability-codex.toml
 # or .local/capability-claude.toml
 ```
 
@@ -182,11 +182,11 @@ Unclassified endpoint:
 Codex local smoke:
 
 ```bash
-scripts/e2e-firma-run.sh --profile codex
+examples/firma-run/e2e/run.sh --profile codex
 ```
 
 Claude local acceptance (Linux-first):
 
 ```bash
-scripts/e2e-firma-run.sh --claude-acceptance
+examples/firma-run/e2e/run.sh --claude-acceptance
 ```

@@ -1,119 +1,74 @@
-# Firma Example Cedar Policies
+# Example Cedar policies
 
-Cedar policies for the Firma examples. Loaded by `firma-authority`
-and streamed to `firma-sidecar` as a policy bundle.
+This folder contains the policy files used by the local Firma examples.
 
-> **NOT FOR PRODUCTION USE.** Starting points and demo policies only.
+The policies are deliberately small. They are meant to show how a human-readable rule becomes a deterministic Sidecar decision, not to be copied into production as-is.
 
----
+> These policies are for demos and tests only.
+
+## How they are used
+
+`firma-authority` loads the `.cedar` files from this folder, validates them against the Firma schema, and streams the resulting policy bundle to `firma-sidecar`.
+
+The Sidecar uses that bundle when it decides whether a normalized agent action should be allowed or denied.
+
+Cedar is default-deny: if no `permit` rule matches, the request is denied. A matching `forbid` rule wins over any permit.
 
 ## Files
 
 | File | Purpose |
-|------|---------|
-| `demo.cedar` | E2E demo policy — permits normal agent traffic, hard-blocks `paste.rs` (exfiltration demo) |
-| `communication.cedar` | Reference policy for `communication.internal.send` / `communication.external.send` |
-| `credential.cedar` | Reference policy for `credential.read` / `credential.write` |
-| `filesystem.cedar` | Reference policy for `filesystem.read` / `filesystem.write` / `filesystem.delete` |
-| `payment.cedar` | Reference policy for `payment.purchase` / `payment.transfer` with Layer 2 counter constraints |
+| --- | --- |
+| `demo.cedar` | Demo policy used by the E2E stack. It permits normal agent traffic and blocks the paste-service exfiltration path. |
+| `communication.cedar` | Reference rules for internal and external communication actions. |
+| `credential.cedar` | Reference rules for credential read and write actions. |
+| `filesystem.cedar` | Reference rules for filesystem-style read, write, and delete actions. |
+| `payment.cedar` | Reference rules for payment actions, including cumulative counter checks. |
 
-The canonical schema (`EnforcementContext`, 15 action classes) lives at
-`crates/firma-authority/schema.cedarschema` and is embedded in the
-`firma-authority` binary. Place a `schema.cedarschema` beside your `.cedar`
-files to override it, or set `schema_path` in the authority config.
+The canonical schema lives at `crates/firma-authority/schema.cedarschema` and is embedded in the Authority binary. Put a `schema.cedarschema` file beside your policies only when you need to override the embedded schema.
 
----
+## Entity names
 
-## Schema
+Firma policies use three Cedar entity types:
 
-`crates/firma-authority/schema.cedarschema` declares three entity types and
-15 action classes:
-
-```
-namespace Firma {
-    entity Agent;
-    entity Resource;
-
-    action "<action_class>" appliesTo {
-        principal: [Agent],
-        resource:  [Resource],
-        context:   EnforcementContext
-    };
-}
-```
-
-**Entity UID conventions** (must match what Authority issues and Sidecar enforces):
-
-| Role | Pattern |
-|------|---------|
+| Role | Format |
+| --- | --- |
 | Principal | `Firma::Agent::"<agent_id>"` |
-| Action | `Firma::Action::"<action_class>"` (e.g. `"communication.external.send"`) |
-| Resource | `Firma::Resource::"<host>"` |
+| Action | `Firma::Action::"<action_class>"` |
+| Resource | `Firma::Resource::"<resource>"` |
 
-**Context** (`EnforcementContext`) fields populated per request:
+For example, a request from `example-agent` to send data to `paste.rs` is evaluated as an agent principal, a communication action, and a resource that represents the destination.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `session_id` | String | Enclosing session identity |
-| `timestamp_ms` | Long | Unix epoch milliseconds |
-| `params` | String | JSON-serialised `intent.params` |
-| `risk_score` | Long | Pre-computed risk (0–100; V1 = 0) |
-| `budget_remaining` | Long | Ceiling minus consumed; `i64::MAX` when unbounded |
-| `session_duration_s` | Long | Seconds since `claims.issued_at` |
-| `action_count` | Long | Monotonic per-session counter, 1-based |
-| `raw_transport` | String | `"http"` or `"https"`; set by normalizer — use sparingly in policies |
-| `transfer_amount` | Long | Current transfer amount in cents; `0` for non-payment actions |
-| `daily_cumulative_amount` | Long | Rolling 24-hour committed amount in cents |
-| `transfers_last_10m` | Long | Transfer count in the last 10-minute window |
-| `same_payee_count_30m` | Long | Transfers to same payee in the last 30 minutes |
-| `session_transfer_count` | Long | Total transfers in this session |
+## Context
 
-The last five fields are **Layer 2 counter fields** populated by the Sidecar's
-runtime enforcement context builder. Policies should condition on the semantic
-fields (`transfer_amount`, `daily_cumulative_amount`, etc.) rather than
-`raw_transport` or `raw_action_ref`.
+The Sidecar adds request context before policy evaluation. Policy conditions can use fields such as:
 
----
+| Field | Meaning |
+| --- | --- |
+| `session_id` | The current agent session. |
+| `timestamp_ms` | The request time. |
+| `params` | Serialized action parameters. |
+| `risk_score` | A precomputed risk value. |
+| `budget_remaining` | Remaining budget for bounded actions. |
+| `action_count` | The request count within the session. |
+| `transfer_amount` | Current transfer amount in cents. |
+| `daily_cumulative_amount` | Rolling 24-hour transfer amount in cents. |
+| `transfers_last_10m` | Recent transfer count. |
+| `same_payee_count_30m` | Recent transfer count to the same payee. |
+| `session_transfer_count` | Total transfers in the session. |
 
-## Action classes
+Prefer semantic fields such as `transfer_amount` or `daily_cumulative_amount` over transport details. Policies should describe the action, not the shape of the HTTP request that carried it.
 
-Full registry: `docs/markdown/firma_action_class_registry.md`.
-
-| Action class | Typical trigger |
-|---|---|
-| `communication.external.send` | Outbound HTTP to external hosts |
-| `communication.internal.send` | Inbound / internal service calls |
-| `credential.read` | Reading secrets or tokens |
-| `credential.write` | Writing secrets or tokens |
-| `filesystem.read` | GET on storage endpoints |
-| `filesystem.write` | POST / PUT on storage endpoints |
-| `filesystem.delete` | DELETE on storage endpoints |
-| `payment.purchase` | Browser purchase flows |
-| `payment.transfer` | Transfer / wire operations |
-| `memory.cross_namespace.read` | Cross-agent memory read |
-| `memory.cross_namespace.write` | Cross-agent memory write |
-| `system.execute` | Shell / process execution |
-| `system.install` | Package installation |
-| `browser.purchase` | In-browser purchase action |
-| `account.permission.change` | IAM / role modifications |
-
----
-
-## Writing policies
-
-Cedar evaluation: **forbid beats permit**. No permit = implicit deny.
+## A minimal rule
 
 ```cedar
-// Permit with context guard
 permit (
-    principal == Firma::Agent::"my-agent",
+    principal == Firma::Agent::"example-agent",
     action == Firma::Action::"communication.external.send",
     resource
 ) when {
     context.risk_score < 60
 };
 
-// Hard-block — overrides any permit
 forbid (
     principal,
     action == Firma::Action::"communication.external.send",
@@ -121,44 +76,26 @@ forbid (
 );
 ```
 
-All policies bind to `action_class` and `resource`. Conditions reference
-Layer 2 context fields (`risk_score`, `budget_remaining`, `transfer_amount`,
-`daily_cumulative_amount`, etc.). Do not reference `raw_transport` or
-`raw_action_ref` in policy conditions — those are transport-layer facts.
+The first rule permits low-risk external communication for one agent. The second rule blocks sends to `paste.rs` for everyone, even if another permit rule would otherwise allow the request.
 
-The authority loads all `*.cedar` files in `policy_dir` alphabetically.
+## Payment-splitting example
 
----
+`payment.cedar` shows why Firma tracks counters at enforcement time.
 
-## Payment-splitting scenario (Layer 2 counter enforcement)
+A single $12,000 transfer is easy to block when the policy says the daily limit is $10,000. The harder case is six separate $2,000 transfers. Each individual transfer is under the single-transfer limit, but the sequence still exceeds the daily cap.
 
-`payment.cedar` demonstrates how the daily cumulative limit blocks quota
-circumvention. An agent attempting 6 × $2,000 transfers against a $10,000
-daily cap:
-
-| # | `transfer_amount` | `daily_cumulative_amount` | Cumulative total | Decision |
-|---|---|---|---|---|
-| 1 | $2,000 | $0 | $2,000 | **PERMIT** |
-| 2 | $2,000 | $2,000 | $4,000 | **PERMIT** |
-| 3 | $2,000 | $4,000 | $6,000 | **PERMIT** |
-| 4 | $2,000 | $6,000 | $8,000 | **PERMIT** |
-| 5 | $2,000 | $8,000 | $10,000 | **PERMIT** |
-| 6 | $2,000 | $10,000 | $12,000 | **DENY** ← daily limit forbid fires |
-
-Transfer 6 is blocked by the Cedar forbid:
+The policy blocks the sixth transfer with a deterministic counter check:
 
 ```cedar
 forbid (principal, action == Firma::Action::"payment.transfer", resource)
 when { context.daily_cumulative_amount + context.transfer_amount > 1000000 };
 ```
 
-No provenance or LLM reasoning is required — only deterministic Layer 2 counters.
+No model reasoning is needed. The Sidecar supplies the current counters, and Cedar evaluates the rule.
 
----
+## Test the policies
 
-## Testing locally
-
-**Rust unit tests** (fastest; tests use inlined policy fixtures):
+Run the focused Rust tests:
 
 ```bash
 cargo test -p firma-sidecar payment_splitting_blocked_at_daily_limit
@@ -166,26 +103,23 @@ cargo test -p firma-sidecar payment_single_transfer_ceiling_enforced
 cargo test -p firma-sidecar payment_payee_concentration_enforced
 ```
 
-**E2E stack** (tests against a running Mini Authority + Sidecar):
+Run the local E2E stack:
 
 ```bash
 cd examples/e2e && bash run.sh
 ```
 
-**Cedar CLI** (requires `cedar` CLI: `brew install cedar-policy/tap/cedar`):
+Or use the Cedar CLI directly:
 
 ```bash
-cedar authorize \
-  --policies examples/policies/payment.cedar \
-  --schema  crates/firma-authority/schema.cedarschema \
-  --entities '[]' \
-  --principal 'Firma::Agent::"example-agent"' \
-  --action    'Firma::Action::"payment.transfer"' \
-  --resource  'Firma::Resource::"payments.example.com"' \
-  --context '{
-    "session_id":"s1", "timestamp_ms":0, "params":"{}",
-    "risk_score":10, "budget_remaining":5000000,
-    "session_duration_s":0, "action_count":1,
+cedar authorize   --policies examples/policies/payment.cedar   --schema crates/firma-authority/schema.cedarschema   --entities '[]'   --principal 'Firma::Agent::"example-agent"'   --action 'Firma::Action::"payment.transfer"'   --resource 'Firma::Resource::"payments.example.com"'   --context '{
+    "session_id":"s1",
+    "timestamp_ms":0,
+    "params":"{}",
+    "risk_score":10,
+    "budget_remaining":5000000,
+    "session_duration_s":0,
+    "action_count":1,
     "raw_transport":"https",
     "transfer_amount":200000,
     "daily_cumulative_amount":1000000,
@@ -193,5 +127,6 @@ cedar authorize \
     "same_payee_count_30m":0,
     "session_transfer_count":5
   }'
-# Expected output: DENY  (daily limit exceeded on transfer 6)
 ```
+
+That command should return `DENY`, because the next transfer would exceed the daily limit.

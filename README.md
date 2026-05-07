@@ -1,123 +1,114 @@
-# Firma OSS
+# OpenFirma
 
-Firma OSS is the open-source release of the Firma security architecture for AI agents. It provides L7 policy enforcement via a sidecar proxy pattern — every outbound call from an agent passes through the Firma Sidecar before reaching the external system.
+AI agents are becoming software operators: they call APIs, read and write files, query databases, send messages, run tools, and execute code. Uncontrolled agents do not just make mistakes; they can leak data, let you lose money, change production systems, and execute code before anyone notices.
 
-## Architecture
+Firma is a governed runtime for those agents.
 
-```txt
-                    ┌──────────────────────────────────────────────┐
-                    │  Agent Host / Container                      │
-                    │                                              │
-                    │  ┌──────────┐  HTTP_PROXY   ┌─────────────┐  │
-                    │  │ AI Agent │ ──────────────│   Sidecar   │  │
-                    │  └──────────┘               │ (Gate)      │  │
-                    │                             │             │  │
-                    │                             │ ┌─────────┐ │  │
-                    │                             │ │ Stage 1 │ │  │──── External
-                    │                             │ │ crypto  │ │  │     System
-                    │                             │ ├─────────┤ │  │
-                    │                             │ │ Stage 2 │ │  │
-                    │                             │ │ Cedar   │ │  │
-                    │                             │ └─────────┘ │  │
-                    │                             └──────┬──────┘  │
-                    │                                    │ gRPC    │
-                    │                             ┌──────┴──────┐  │
-                    │                             │  Authority  │  │
-                    │                             │ (pre-flight)│  │
-                    │                             └─────────────┘  │
-                    └──────────────────────────────────────────────┘
-```
+Firma starts an agent with a runtime profile, routes the agent's outbound traffic through a local enforcement process, checks protected actions against policy, and records the result. The goal is simple: an agent should only be able to do what it was allowed to do, and every important decision should be visible afterwards.
 
-### Authority — Permission Perimeter
+## Quickstart
 
-The Authority evaluates Cedar policies at issuance time and defines the **permission perimeter**: scope, budget, and expiry. The Gate (Sidecar) enforces within that perimeter but **cannot extend or override it**. The Authority is contacted only at pre-flight (capability issuance), never on the hot path.
+Prerequisites: a Rust toolchain and `protoc`.
 
-### Gate (Sidecar) — Two-Stage Enforcement
-
-Every outbound call passes through two enforcement stages, both fully local with no network calls:
-
-- **Stage 1 — Capability Validation** (< 1ms): Token parse, signature verification, expiry check, revocation bloom filter. Rejects forged, tampered, expired, or revoked tokens.
-- **Stage 2 — Constraint / Policy Enforcement (CEE)** (< 200us): Context build, Cedar policy evaluation, budget/scope/threshold checks. Deterministic: same context + same bundle = same decision.
-
-### ExecutionEnvelope — Core Protocol Unit
-
-The ExecutionEnvelope is the fundamental protocol unit flowing through the entire system. Every outbound call from an agent is represented as a distinct ExecutionEnvelope, evaluated independently by the Sidecar. Each request is evaluated, enforced, and audited as an ExecutionEnvelope. Treated as immutable once created.
-
-### Connectors — Technical Constraints Only
-
-Connectors translate the ExecutionEnvelope into target system protocols (HTTP, gRPC, DB). They apply **technical constraints only**: rate limits, schema validation, protocol translation. Business logic and authorization **must** remain in Cedar / Authority / Gate. A connector that becomes a second policy engine breaks auditability and system guarantees.
-
-## Workspace Crates
-
-| Crate | Type | Responsibility |
-|-------|------|----------------|
-| `firma-core` | Library | Shared types, capability tokens, Cedar wrapper, error types |
-| `firma-proto` | Library | Protobuf/gRPC service definitions and generated code (wire contract) |
-| `firma-sidecar` | Binary | HTTP proxy, two-stage enforcement pipeline, audit, credential injection |
-| `firma-authority` | Binary | Mini Authority — Cedar policy loading, capability issuance, gRPC streams |
-
-## Wire Contract (`firma-proto`)
-
-The gRPC contract between Sidecar and Authority:
-
-- **AuthorityService** — `IssueCapability` (unary), `WatchPolicyBundle` (server-stream), `WatchRevocations` (server-stream)
-- **ExecutionEnvelope** — intent, capability token, metadata, provenance
-- **CapabilityToken** — PASETO v4 (preferred) or JWT RS256
-- **PolicyBundle** — Cedar policies distributed from Authority to Sidecar
-- **EnforcementDecision** — ALLOW, DENY, ABORT
-
-## Run the demo
+From the repository root, run the deterministic local demo:
 
 ```bash
-make demo-ci   # deterministic Rust client; ALLOW + DENY round-trip
-make demo      # LLM-driven Python agent (best-effort); needs OPENAI_API_KEY
-make demo-repl # interactive Python REPL behind the same sidecar
+make demo-ci
 ```
 
-The orchestrator (`scripts/demo.sh`) builds release binaries, boots
-the Mini Authority, pre-issues a capability seed for `demo-agent`,
-boots the sidecar, and dispatches the chosen driver. All artifacts
-(`firma-authority.key`, `audit.key`, `capability-demo-agent.toml`,
-logs) live under `examples/demo/` and are gitignored.
+This builds the required binaries, starts a local Authority and Sidecar, sends one allowed request and one denied request, and checks that both decisions were audited. It does not require API keys. See [`examples/demo/README.md`](examples/demo/README.md) for the full demo flow, including the optional LLM-backed agent modes.
 
-The `demo-e2e` GitHub Actions workflow gates merges on
-`make demo-ci`. See `examples/demo/README.md` for the full runbook
-and `docs/cli.md` for the seven-line standalone startup contract.
-
-## Firma Run: Claude Code (Linux-first)
-
-`firma run` now ships a built-in `claude-code` profile for Linux `bwrap`:
+To try your own command through the governed launcher:
 
 ```bash
-cargo run -p firma-run -- run --profile claude-code -- claude
+examples/firma-run/local/setup.sh
+cargo run -p firma-sidecar -- -c .local/firma_sidecar.local.toml
+# In a separate terminal
+cargo run -p firma-run -- run --profile generic -- curl https://example.com
 ```
 
-Key behavior:
-- wraps the full Claude Code process in the sandbox boundary (not Bash-only),
-- routes sandbox egress through Firma sidecar mediation,
-- injects Claude runtime setting `sandbox.autoAllowBashIfSandboxed=true`,
-- attaches deterministic attribution metadata (`agent`, `user`, `session`, `sandbox`).
+For more detail, see the [`firma run` examples](examples/firma-run/README.md), the [CLI reference](docs/cli.md), and the [configuration reference](docs/configuration.md). The intentionally risky demo agents live in [`examples/agents`](examples/agents/README.md).
 
-Platform note:
-- Linux `bwrap` is the full structural confinement target for this slice.
-- macOS/Windows can run the profile in compatibility mode (same policy/audit
-  plane, reduced confinement guarantees versus Linux structural mode).
+## How Firma is structured
 
-### Coverage delta vs Claude Code standalone sandbox
+Firma has three main runtime pieces.
 
-Architectural differences from a standalone Claude sandbox deployment:
-- **Whole-process coverage**: Firma wraps the full agent process, not only shell tool children.
-- **Central policy plane**: enforcement decisions live outside agent process logic.
-- **Cross-model parity**: same policy/audit surfaces can be used for Claude, Codex, and custom agents.
-- **Durable audit continuity**: attribution and event trails survive agent restarts.
-- **Structural mediation path**: network governance is enforced by the runtime+sidecar boundary, not by agent prompt/permission UX.
+`firma run` is the launcher. It starts the agent command with a selected profile. A profile defines how the process should run, what environment it receives, how traffic is routed, and which runtime backend is used.
 
-This is an architectural coverage difference, not a claim of immunity to all bypass classes.
+The **Sidecar** is the local enforcement point. It receives outbound requests from the agent, turns each request into a clear action, checks whether that action is allowed, and forwards only allowed traffic. The Sidecar is not the sandbox. The sandbox constrains the process; the Sidecar decides application-level policy.
 
-For local validation and acceptance checks:
-- `scripts/e2e-firma-run.sh`
-- `scripts/e2e-firma-run.sh --claude-acceptance`
+The **Authority** is the source of permission. It loads policy, signs short-lived permission tokens, and sends policy updates and revocations to Sidecars. A revocation cancels a token before it naturally expires. A permission token is a signed statement that says what an agent may do, where it may do it, and for how long.
+
+```mermaid
+flowchart LR
+    Run["firma run"]
+    Agent["Agent process"]
+    Sidecar["Firma Sidecar"]
+    Authority["Firma Authority"]
+    External["External services"]
+    Audit["Audit event"]
+
+    Run -->|"starts with profile"| Agent
+    Agent -->|"routed traffic"| Sidecar
+    Authority -->|"tokens, policies, revocations"| Sidecar
+    Sidecar -->|"allowed traffic"| External
+    Sidecar -->|"policy decision"| Audit
+```
+
+## What happens during a run
+
+A typical Firma run follows this sequence:
+
+1. You start an agent with `firma run`.
+2. Firma chooses a profile and creates a session identity.
+3. The Authority issues or refreshes permission for that session.
+4. The Sidecar receives the Authority public key, policy updates, and revocation updates.
+5. The agent starts inside the selected runtime backend.
+6. Outbound traffic is routed toward the Sidecar.
+7. The Sidecar identifies the action the agent is trying to perform.
+8. The Sidecar verifies the agent's permission token.
+9. The Sidecar checks policy for that action and resource.
+10. The request is allowed or denied.
+11. Firma writes an audit event for the decision.
+
+The important runtime property is local enforcement. Once the Sidecar has the current policy and revocation data, it can decide on each request without calling the Authority on the hot path.
+
+## Authority, tokens, and certificates
+
+Firma uses two different kinds of cryptographic material.
+
+The **Authority signing key** is used to sign permission tokens. The Authority keeps the private key. The Sidecar gets the matching public key so it can verify tokens locally.
+
+The **Sidecar HTTPS CA** is used when the Sidecar decrypts selected HTTPS traffic for policy enforcement. The CA lets the Sidecar create certificates for intercepted hosts. This is separate from the Authority signing key.
+
+The basic setup flow is:
+
+1. Start the Authority with a policy directory and signing key.
+2. Configure the Sidecar with the Authority address and public key.
+3. Issue a permission token for an agent session.
+4. Start the Sidecar with policies, mappings, and token material.
+5. Run the agent through `firma run` so traffic reaches the Sidecar.
+
+## Repository map
+
+```text
+crates/          Rust workspace crates for the launcher, Sidecar, Authority, shared types, and demos.
+examples/        Runnable demo stacks, demo agents, policy files, mapping files, and end-to-end assets.
+docs/            Architecture notes, configuration references, CLI docs, security analysis, and release notes.
+context/         Internal design material and early proof-of-concept references.
+.github/         GitHub Actions workflows.
+.cursor/         Cursor workspace guidance.
+```
+
+The top-level `Cargo.toml` defines the Rust workspace. The `Makefile` contains the common build, lint, test, and demo commands.
+
+## Build
+
+```bash
+cargo build --workspace
+make check
+```
 
 ## License
 
-Apache 2.0
+This project is licensed under the [Apache 2.0 License](LICENSE).
