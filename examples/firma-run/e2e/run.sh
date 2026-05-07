@@ -8,7 +8,7 @@ fail() { printf '[fail] %s\n' "$1" >&2; exit 1; }
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/e2e-firma-run.sh [--profile <name>] [--cmd "<shell command>"] [--https-check] [--claude-acceptance] [--keep-artifacts]
+  examples/firma-run/e2e/run.sh [--profile <name>] [--cmd "<shell command>"] [--https-check] [--claude-acceptance] [--keep-artifacts]
 
 Description:
   End-to-end local harness for firma-run runtime plumbing.
@@ -27,10 +27,13 @@ Options:
   -h, --help          Show this help
 
 Examples:
-  scripts/e2e-firma-run.sh
-  scripts/e2e-firma-run.sh --cmd "cd example_agents/agents_sdk_py && uv run python -m agent.main"
+  examples/firma-run/e2e/run.sh
+  examples/firma-run/e2e/run.sh --cmd "cd example_agents/agents_sdk_py && uv run python -m agent.main"
 EOF
 }
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+cd "$ROOT_DIR"
 
 require_command() {
   local cmd="$1"

@@ -8,7 +8,7 @@ Two canned turns through the same Agent + tool registry the REPL uses:
    expected DENY at the second tool call (paste.rs is forbidden in the
    demo Cedar bundle).
 
-Used by ``make demo`` and ``scripts/demo.sh hero``. The script does not
+Used by ``make demo`` and ``examples/demo/run.sh hero``. The script does not
 infer outcomes from the LLM's natural-language reply (LLMs paraphrase
 errors and sometimes route around them). Instead it reads the sidecar
 audit log directly — the same source the CI gate uses — and asserts

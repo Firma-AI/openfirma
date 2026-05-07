@@ -9,6 +9,7 @@ Owners: Runtime + Sidecar teams
 This document explains, in implementation-level detail, how `firma-run` and `firma-sidecar` work together to enforce outbound traffic policy for agent runtimes.
 
 It is intended to be the common reference for:
+
 - engineering implementation decisions,
 - security/design reviews,
 - onboarding and incident response,
@@ -17,6 +18,7 @@ It is intended to be the common reference for:
 ## 2. Scope
 
 In scope:
+
 - `firma-run` runtime wrapper and sandbox launch behavior.
 - Sidecar HTTP proxy interception path.
 - HTTPS handling through `CONNECT` and TLS MITM.
@@ -24,6 +26,7 @@ In scope:
 - Known limits and explicit next steps.
 
 Out of scope:
+
 - Authority internals (covered by authority docs).
 - eBPF/kernel-level interception (future work).
 - Full enterprise deployment controls (separate operational docs).
@@ -33,6 +36,7 @@ Out of scope:
 ### 3.1 Runtime wrapper (`firma-run`)
 
 Primary responsibilities:
+
 - resolve runtime profile (`generic`, `codex`, config/CLI overrides),
 - create deterministic run identity (`sandbox_id`, `session_id`, profile attribution),
 - prepare selected backend (Linux `bwrap`, macOS `vz`, Windows `wsl2`),
@@ -40,6 +44,7 @@ Primary responsibilities:
 - launch wrapped command with routing/identity env.
 
 Key files:
+
 - `crates/firma-run/src/runtime.rs`
 - `crates/firma-run/src/routing.rs`
 - `crates/firma-run/src/profile.rs`
@@ -50,6 +55,7 @@ Key files:
 ### 3.2 Enforcement sidecar (`firma-sidecar`)
 
 Primary responsibilities:
+
 - intercept outgoing requests,
 - normalize intent + evaluate policy,
 - dispatch allowed requests through connector,
@@ -57,6 +63,7 @@ Primary responsibilities:
 - fail closed on malformed/unsafe/unready conditions.
 
 Key files:
+
 - `crates/firma-sidecar/src/interceptor/http.rs`
 - `crates/firma-sidecar/src/interceptor/https_mitm.rs`
 - `crates/firma-sidecar/src/handler.rs`
@@ -74,6 +81,7 @@ Key files:
 5. Wrapped process starts.
 
 Linux structural mode:
+
 - sandbox-local bridge path is used to route proxy traffic through controlled endpoint.
 - sandbox `/etc/resolv.conf` is generated and mounted by `firma-run`.
 - the resolver points at the sandbox-local DNS stub (`127.0.0.1:53`), not the
@@ -95,9 +103,11 @@ Linux structural mode:
 ### 4.3 HTTPS path via CONNECT
 
 At CONNECT handshake:
+
 - sidecar evaluates decision on `host:port` and emits audit outcome.
 
 If allowed:
+
 - host matches MITM interception scope: sidecar performs TLS termination, inspects decrypted HTTP request, enforces L7 policy, then re-encrypts upstream.
 - host outside interception scope (or bypassed): sidecar creates a blind TCP tunnel and enforces only CONNECT-level policy.
 
@@ -117,6 +127,7 @@ If allowed:
 Sidecar uses local CA material to sign per-host leaf certificates for intercepted TLS sessions.
 
 Current behavior:
+
 - if CA cert/key are both absent, sidecar performs first-run local generation,
 - if any CA artifact exists, sidecar must load that exact CA state or fail startup,
 - if CA cert exists but key is missing, startup fails,
@@ -135,11 +146,13 @@ No external certificate service dependency is required.
 Wildcard controls are DNS-label-aware and intentionally restricted.
 
 Allowed forms:
+
 - `*`
 - exact host (`api.openai.com`)
 - leading subdomain wildcard (`*.example.com`)
 
 Rejected forms:
+
 - mid-pattern wildcard (`api.*.com`)
 - prefix wildcard without label boundary (`*openai.com`)
 - top-level wildcard scope (`*.com`)
@@ -147,9 +160,11 @@ Rejected forms:
 ## 6. Configuration Surfaces
 
 Main configuration reference:
+
 - `docs/configuration.md`
 
 Important fields:
+
 - `[interceptor]`
   - `mode`
   - `listen_addr`
@@ -170,21 +185,23 @@ Important fields:
 
 ## 7. Behavior Matrix
 
-| Traffic type | Visibility | Enforcement level | Typical usage |
-| --- | --- | --- | --- |
-| HTTP | Full request | L7 method/path/action | plain HTTP targets |
-| HTTPS CONNECT tunnel | Handshake (`host:port`) only | destination-level | non-intercepted/bypassed hosts |
-| HTTPS MITM | Full decrypted request | L7 method/path/action | managed/intercepted HTTPS APIs |
+| Traffic type         | Visibility                   | Enforcement level     | Typical usage                  |
+| -------------------- | ---------------------------- | --------------------- | ------------------------------ |
+| HTTP                 | Full request                 | L7 method/path/action | plain HTTP targets             |
+| HTTPS CONNECT tunnel | Handshake (`host:port`) only | destination-level     | non-intercepted/bypassed hosts |
+| HTTPS MITM           | Full decrypted request       | L7 method/path/action | managed/intercepted HTTPS APIs |
 
 ## 8. Performance Characteristics
 
 Current implementation choices:
+
 - cached per-host TLS acceptors (bounded cache + TTL),
 - bounded request body reads,
 - bounded CONNECT/MITM setup timeout,
 - bounded CONNECT/MITM session max lifetime.
 
 Known hotspots for benchmark phase:
+
 - cert cache lock contention under high host cardinality,
 - cache order maintenance cost at high churn,
 - memory overhead from buffered request bodies,
@@ -193,6 +210,7 @@ Known hotspots for benchmark phase:
 ## 9. Testing and Validation Status
 
 Covered in sidecar tests:
+
 - CONNECT allow/deny behavior,
 - MITM L7 policy path,
 - strict host fail-closed preflight behavior,
@@ -202,6 +220,7 @@ Covered in sidecar tests:
 - request body limits for HTTP and MITM-decrypted HTTPS.
 
 E2E harness currently validates:
+
 - runtime launch + sidecar routing,
 - audit emission,
 - fail-closed behavior when sidecar is unavailable,
@@ -231,6 +250,7 @@ E2E harness currently validates:
 ### 11.3 Rollback controls
 
 If interoperability issues occur:
+
 1. narrow `intercept_hosts` scope, or
 2. move problematic endpoints into `bypass_hosts`, or
 3. disable MITM (`enabled = false`) temporarily.
@@ -241,4 +261,4 @@ If interoperability issues occur:
 - [FIR-63 HTTPS MITM Deep Dive](./fir-63-https-mitm-deep-dive.md)
 - [Sidecar Overview](./sidecar-overview.md)
 - [Configuration Reference](../configuration.md)
-- [Firma Run Local Testing](../firma-run-local-testing.md)
+- [Firma Run Local Testing](../../examples/firma-run/local/docs/local-testing.md)

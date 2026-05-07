@@ -9,7 +9,7 @@ param(
   [string]$Action = "communication.external.send",
   [string]$ResourceScope = "*",
   [int]$TtlSeconds = 3600,
-  [string]$Output = ".local/capability-chatgpt.toml"
+  [string]$Output = ""
 )
 
 function Write-Ok([string]$Message) { Write-Host "[ok] $Message" }
@@ -29,6 +29,9 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 }
 if (-not $SessionId) {
   Fail "session id must not be empty"
+}
+if (-not $Output) {
+  Fail "--output is required (example: --output .local/capability-codex.toml)"
 }
 
 Write-Ok "issuing capability token (agent=$AgentId session=$SessionId ttl=${TtlSeconds}s)"

@@ -73,7 +73,6 @@ crates/          Rust workspace crates for the launcher, Sidecar, Authority, sha
 examples/        Runnable demo stacks, policy files, mapping files, and end-to-end assets.
 example_agents/  Demo agents used to show risky tool behavior and Firma enforcement.
 docs/            Architecture notes, configuration references, CLI docs, security analysis, and release notes.
-scripts/         Legacy helper scripts. These are expected to move under examples as the repo is reorganized.
 context/         Internal design material and early proof-of-concept references.
 .github/         GitHub Actions workflows.
 .cursor/         Cursor workspace guidance.

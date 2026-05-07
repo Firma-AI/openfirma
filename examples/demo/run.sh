@@ -2,9 +2,9 @@
 # Firma OSS — release demo orchestrator.
 #
 # Usage:
-#   scripts/demo.sh hero   # default; LLM-driven scripted Python agent
-#   scripts/demo.sh repl   # interactive Python agent REPL
-#   scripts/demo.sh ci     # deterministic Rust client (CI gate)
+#   examples/demo/run.sh hero   # default; LLM-driven scripted Python agent
+#   examples/demo/run.sh repl   # interactive Python agent REPL
+#   examples/demo/run.sh ci     # deterministic Rust client (CI gate)
 #
 # Boots the Mini Authority and the sidecar, pre-issues a capability
 # seed for `demo-agent`/`demo-session`, and dispatches the chosen
@@ -14,7 +14,7 @@ set -euo pipefail
 
 MODE="${1:-hero}"
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEMO="$ROOT/examples/demo"
 LOG_DIR="$DEMO/logs"
 TARGET_DIR="$ROOT/target/release"
