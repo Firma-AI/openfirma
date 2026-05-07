@@ -70,23 +70,20 @@ impl Server {
             issuance_policy_dir = %config.issuance_policy_dir.display(),
             "loading issuance policy store"
         );
-        let issuance_policy_store = Arc::new(CedarPolicyStore::load(
+        let issuance_policy_store = CedarPolicyStore::load(
             &config.issuance_policy_dir,
             config.schema_path.clone(),
             config.bundle_ttl_seconds,
-        )?);
+        )?;
 
         // Load revocation store
         let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds));
-        let revocation_store = Arc::new(RevocationStore::try_new(
-            &config.revocation_file,
-            token_ttl,
-        )?);
+        let revocation_store = RevocationStore::try_new(&config.revocation_file, token_ttl)?;
 
         // Build gRPC service (starts all file watchers internally)
         let authority_service = AuthorityServiceImpl::try_new(
             issuance_policy_store,
-            &policy_store,
+            policy_store,
             revocation_store,
             signer,
             config.max_ttl_seconds,
