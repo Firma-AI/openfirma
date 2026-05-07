@@ -517,8 +517,8 @@ mod tests {
         std::fs::write(&file, "").unwrap();
 
         let s = store(&file);
-        let watcher = s.clone().watch().unwrap();
-        let mut rx = watcher.subscribe();
+        let s = s.watch().unwrap();
+        let mut rx = s.subscribe();
 
         let id = TokenId::new();
         s.revoke(id, "test").await.unwrap();
@@ -539,8 +539,8 @@ mod tests {
         std::fs::write(&file, "").unwrap();
 
         let s = store(&file);
-        let watcher = s.clone().watch().unwrap();
-        let mut rx = watcher.subscribe();
+        let s = s.watch().unwrap();
+        let mut rx = s.subscribe();
 
         let id = TokenId::new();
         s.revoke(id, "security breach").await.unwrap();
@@ -568,8 +568,8 @@ mod tests {
         std::fs::write(&file, "").unwrap();
 
         let s = store(&file);
-        let watcher = s.clone().watch().unwrap();
-        let mut rx = watcher.subscribe();
+        let s = s.watch().unwrap();
+        let mut rx = s.subscribe();
 
         let id = TokenId::new();
         assert!(!s.is_revoked(id).await);
@@ -591,8 +591,8 @@ mod tests {
         std::fs::write(&file, "").unwrap();
 
         let s = store(&file);
-        let watcher = s.clone().watch().unwrap();
-        let mut rx = watcher.subscribe();
+        let s = s.watch().unwrap();
+        let mut rx = s.subscribe();
 
         let before = Utc::now() - chrono::Duration::seconds(1);
         let id1 = TokenId::new();
@@ -656,8 +656,8 @@ mod tests {
         let file = dir.path().join("revocations.txt");
 
         let s = store(&file);
-        let watcher = s.clone().watch().unwrap();
-        let mut rx = watcher.subscribe();
+        let s = s.watch().unwrap();
+        let mut rx = s.subscribe();
 
         let id = TokenId::new();
         std::fs::write(&file, format!("{id}\n")).unwrap();
@@ -677,8 +677,8 @@ mod tests {
 
         let s = store(&file);
         std::fs::write(&file, "").unwrap();
-        let watcher = s.clone().watch().unwrap();
-        let mut rx = watcher.subscribe();
+        let s = s.watch().unwrap();
+        let mut rx = s.subscribe();
 
         let id = TokenId::new();
         std::fs::write(&file, format!("{id}\n")).unwrap();
