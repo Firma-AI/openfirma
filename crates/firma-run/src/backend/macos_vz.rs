@@ -179,6 +179,16 @@ fn escape_sandbox_path(path: &str) -> String {
     path.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+fn command_available(binary: &str) -> bool {
+    Command::new(binary).status().is_ok()
+}
+
+fn remove_runtime_dir(runtime_dir: &std::path::Path) {
+    if runtime_dir.exists() {
+        let _ = std::fs::remove_dir_all(runtime_dir);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -202,15 +212,5 @@ mod tests {
         let profile = super::build_claude_code_sandbox_profile(&launch);
         assert!(profile.contains("deny file-read* (subpath \"/Users/tester/.ssh\")"));
         assert!(profile.contains("deny file-write* (subpath \"/Users/tester/.config\")"));
-    }
-}
-
-fn command_available(binary: &str) -> bool {
-    Command::new(binary).status().is_ok()
-}
-
-fn remove_runtime_dir(runtime_dir: &std::path::Path) {
-    if runtime_dir.exists() {
-        let _ = std::fs::remove_dir_all(runtime_dir);
     }
 }

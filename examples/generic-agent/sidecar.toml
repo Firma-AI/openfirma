@@ -52,7 +52,7 @@ bundle_ttl_seconds     = 3600
 enforcement_timeout_ms = 50
 
 [connector]
-default_timeout_ms = 10000
+default_timeout_ms = 120000  # 2 min — covers LLM first-token latency
 
 [audit]
 sink             = "file"
@@ -68,7 +68,7 @@ revocation_fail_closed_on_disconnect = false
 
 [preflight]
 agent_id   = "generic-agent"
-session_id = "generic-agent-session-001"
+session_id = "preflight-session"
 requested_actions = [
     "system.install",
     "credential.read",

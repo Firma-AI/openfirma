@@ -350,80 +350,6 @@ fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec, suffixes: &[
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-    use std::path::PathBuf;
-    use std::process::Command;
-
-    use crate::backend::LaunchSpec;
-    use crate::config::SandboxIdentityMode;
-
-    #[test]
-    fn hardening_from_env_is_profile_driven() {
-        let mut env = BTreeMap::new();
-        env.insert(
-            super::BWRAP_ROOTFS_MODE_ENV.to_string(),
-            super::BWRAP_ROOTFS_MODE_READONLY.to_string(),
-        );
-        env.insert(
-            super::BWRAP_RUNTIME_HOME_ENV.to_string(),
-            "true".to_string(),
-        );
-        env.insert(
-            super::BWRAP_MASK_HOME_PATHS_ENV.to_string(),
-            ".ssh,.aws,.config/gcloud".to_string(),
-        );
-        let hardening = super::bwrap_hardening_from_env(&env);
-        assert!(hardening.readonly_rootfs);
-        assert!(hardening.runtime_home_isolation);
-        assert_eq!(
-            hardening.mask_home_paths,
-            vec![
-                ".ssh".to_string(),
-                ".aws".to_string(),
-                ".config/gcloud".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn mask_sensitive_paths_adds_expected_mounts() {
-        let mut cmd = Command::new("bwrap");
-        let temp = tempfile::tempdir().expect("tempdir");
-        let home = temp.path().join("home");
-        std::fs::create_dir_all(home.join(".ssh")).expect("mkdir .ssh");
-        std::fs::create_dir_all(home.join(".aws")).expect("mkdir .aws");
-        std::fs::create_dir_all(home.join(".config").join("gcloud")).expect("mkdir .config/gcloud");
-
-        let mut env = BTreeMap::new();
-        env.insert("HOME".to_string(), home.display().to_string());
-        let launch = LaunchSpec {
-            executable: "/bin/true".to_string(),
-            args: vec![],
-            cwd: PathBuf::from("/tmp"),
-            env,
-            identity_mode: SandboxIdentityMode::SandboxUser,
-        };
-        let suffixes = vec![
-            ".ssh".to_string(),
-            ".aws".to_string(),
-            ".config/gcloud".to_string(),
-        ];
-        super::mask_sensitive_paths(&mut cmd, &launch, &suffixes);
-        let rendered = cmd
-            .get_args()
-            .map(|arg| arg.to_string_lossy().to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        assert!(rendered.contains(&format!("--tmpfs {}/.ssh", home.display())));
-        assert!(rendered.contains(&format!("--tmpfs {}/.aws", home.display())));
-        assert!(rendered.contains(&format!("--tmpfs {}/.config/gcloud", home.display())));
-    }
-}
-
 fn command_available(binary: &str) -> bool {
     Command::new(binary)
         .arg("--version")
@@ -501,4 +427,78 @@ fn maybe_write_entrypoint_script(
     })?;
 
     Ok(Some(script_path))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    use crate::backend::LaunchSpec;
+    use crate::config::SandboxIdentityMode;
+
+    #[test]
+    fn hardening_from_env_is_profile_driven() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            super::BWRAP_ROOTFS_MODE_ENV.to_string(),
+            super::BWRAP_ROOTFS_MODE_READONLY.to_string(),
+        );
+        env.insert(
+            super::BWRAP_RUNTIME_HOME_ENV.to_string(),
+            "true".to_string(),
+        );
+        env.insert(
+            super::BWRAP_MASK_HOME_PATHS_ENV.to_string(),
+            ".ssh,.aws,.config/gcloud".to_string(),
+        );
+        let hardening = super::bwrap_hardening_from_env(&env);
+        assert!(hardening.readonly_rootfs);
+        assert!(hardening.runtime_home_isolation);
+        assert_eq!(
+            hardening.mask_home_paths,
+            vec![
+                ".ssh".to_string(),
+                ".aws".to_string(),
+                ".config/gcloud".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn mask_sensitive_paths_adds_expected_mounts() {
+        let mut cmd = Command::new("bwrap");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(home.join(".ssh")).expect("mkdir .ssh");
+        std::fs::create_dir_all(home.join(".aws")).expect("mkdir .aws");
+        std::fs::create_dir_all(home.join(".config").join("gcloud")).expect("mkdir .config/gcloud");
+
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), home.display().to_string());
+        let launch = LaunchSpec {
+            executable: "/bin/true".to_string(),
+            args: vec![],
+            cwd: PathBuf::from("/tmp"),
+            env,
+            identity_mode: SandboxIdentityMode::SandboxUser,
+        };
+        let suffixes = vec![
+            ".ssh".to_string(),
+            ".aws".to_string(),
+            ".config/gcloud".to_string(),
+        ];
+        super::mask_sensitive_paths(&mut cmd, &launch, &suffixes);
+        let rendered = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(rendered.contains(&format!("--tmpfs {}/.ssh", home.display())));
+        assert!(rendered.contains(&format!("--tmpfs {}/.aws", home.display())));
+        assert!(rendered.contains(&format!("--tmpfs {}/.config/gcloud", home.display())));
+    }
 }
