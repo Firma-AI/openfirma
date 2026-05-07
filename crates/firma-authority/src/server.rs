@@ -55,6 +55,10 @@ impl Server {
         let signer = Arc::new(PasetoV4Signer::try_new(&key_bytes).context("invalid signing key")?);
 
         // Load Cedar policies for streaming to sidecars (enforcement bundle)
+        tracing::info!(
+            policy_dir = %config.policy_dir.display(),
+            "loading enforcement policy store"
+        );
         let policy_store = CedarPolicyStore::load(
             &config.policy_dir,
             config.schema_path.clone(),
