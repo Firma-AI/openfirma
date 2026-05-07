@@ -37,6 +37,11 @@ method       = "CONNECT"
 host         = "gmail.googleapis.com:443"
 action_class = "communication.external.send"
 
+[[rules]]
+method       = "CONNECT"
+host         = "pypi.org:443"
+action_class = "system.install"
+
 # ─── Package managers ─────────────────────────────────────────────────────────
 # Scoped to registries for Python (pip/uv), Rust (cargo), and Node.js (npm).
 # Extend or remove entries to match the agent's toolchain profile.

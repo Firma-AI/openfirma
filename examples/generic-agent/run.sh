@@ -64,27 +64,32 @@ cat <<EOF
   Sidecar   : 127.0.0.1:7474  (HTTP proxy)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Smoke tests — run in another terminal:
+Smoke tests — run in another terminal.
+The x-firma-session-id header binds the request to the preflight token's
+session_id (see [preflight] in sidecar.toml). Without it the sidecar cannot
+select the pre-issued capability.
+
+  SESSION="x-firma-session-id: preflight-session"
 
   # ALLOW — system.install (crates.io, HTTP)
-  curl -sx $PROXY http://crates.io/api/v1/crates/serde -o /dev/null -w "crates.io  → %{http_code} (expect 200)\n"
+  curl -sx $PROXY -H "\$SESSION" http://crates.io/api/v1/crates/serde -o /dev/null -w "crates.io  → %{http_code} (expect 200)\n"
 
-  # ALLOW — system.install (pypi.org, HTTPS — pypi requires SSL)
-  curl -sx $PROXY https://pypi.org/simple/requests/ -o /dev/null -w "pypi.org   → %{http_code} (expect 200)\n"
+  # ALLOW — system.install (pypi.org, HTTPS MITM — needs firma-ca)
+  curl -sx $PROXY -H "\$SESSION" --cacert "$CA_CERT" https://pypi.org/simple/requests/ -o /dev/null -w "pypi.org   → %{http_code} (expect 200)\n"
 
   # DENY — not mapped → default_protected blocks before Cedar
-  curl -sx $PROXY http://evil.com/ -o /dev/null -w "evil.com   → %{http_code} (expect 403)\n"
+  curl -sx $PROXY -H "\$SESSION" http://evil.com/ -o /dev/null -w "evil.com   → %{http_code} (expect 403)\n"
 
   # DENY — cloud metadata endpoint (not mapped)
-  curl -sx $PROXY http://169.254.169.254/ -o /dev/null -w "metadata   → %{http_code} (expect 403)\n"
+  curl -sx $PROXY -H "\$SESSION" http://169.254.169.254/ -o /dev/null -w "metadata   → %{http_code} (expect 403)\n"
 
   # ALLOW — code.read (GitHub MITM — GET /repos/*/*, needs firma-ca)
-  curl -sx $PROXY --cacert "$CA_CERT" \
+  curl -sx $PROXY -H "\$SESSION" --cacert "$CA_CERT" \
     https://api.github.com/repos/serde-rs/serde \
     -o /dev/null -w "github.com → %{http_code} (expect 200)\n"
 
   # DENY — code.destructive (hard-block in llm-agent.cedar, needs GITHUB_TOKEN)
-  curl -sx $PROXY --cacert "$CA_CERT" -X DELETE \
+  curl -sx $PROXY -H "\$SESSION" --cacert "$CA_CERT" -X DELETE \
     https://api.github.com/repos/owner/repo/git/refs/heads/my-branch \
     -o /dev/null -w "gh DELETE  → %{http_code} (expect 403)\n"
 

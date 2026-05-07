@@ -14,6 +14,7 @@ drain_timeout_secs = 30
 intercept_hosts = [
     "api.github.com",
     "gmail.googleapis.com",
+    "pypi.org",
 ]
 # Strict-MITM: the bare CONNECT is auto-authorized once the TLS preflight
 # succeeds; inner L7 requests (which carry x-firma-session-id) are then
@@ -21,6 +22,7 @@ intercept_hosts = [
 strict_hosts = [
     "api.github.com",
     "gmail.googleapis.com",
+    "pypi.org",
 ]
 
 [policy]
