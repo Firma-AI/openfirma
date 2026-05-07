@@ -55,11 +55,11 @@ impl Server {
         let signer = Arc::new(PasetoV4Signer::try_new(&key_bytes).context("invalid signing key")?);
 
         // Load Cedar policies for streaming to sidecars (enforcement bundle)
-        let policy_store = Arc::new(CedarPolicyStore::load(
+        let policy_store = CedarPolicyStore::load(
             &config.policy_dir,
             config.schema_path.clone(),
             config.bundle_ttl_seconds,
-        )?);
+        )?;
 
         // Load separate issuance policy store
         tracing::info!(
@@ -82,7 +82,7 @@ impl Server {
         // Build gRPC service (starts all file watchers internally)
         let authority_service = AuthorityServiceImpl::try_new(
             issuance_policy_store,
-            policy_store,
+            &policy_store,
             revocation_store,
             signer,
             config.max_ttl_seconds,
