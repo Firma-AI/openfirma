@@ -6,6 +6,29 @@ Firma is a governed runtime for those agents.
 
 Firma starts an agent with a runtime profile, routes the agent's outbound traffic through a local enforcement process, checks protected actions against policy, and records the result. The goal is simple: an agent should only be able to do what it was allowed to do, and every important decision should be visible afterwards.
 
+## Quickstart
+
+Prerequisites: a Rust toolchain and `protoc`.
+
+From the repository root, run the deterministic local demo:
+
+```bash
+make demo-ci
+```
+
+This builds the required binaries, starts a local Authority and Sidecar, sends one allowed request and one denied request, and checks that both decisions were audited. It does not require API keys. See [`examples/demo/README.md`](examples/demo/README.md) for the full demo flow, including the optional LLM-backed agent modes.
+
+To try your own command through the governed launcher:
+
+```bash
+examples/firma-run/local/setup.sh
+cargo run -p firma-sidecar -- -c .local/firma_sidecar.local.toml
+# In a separate terminal
+cargo run -p firma-run -- run --profile generic -- curl https://example.com
+```
+
+For more detail, see the [`firma run` examples](examples/firma-run/README.md), the [CLI reference](docs/cli.md), and the [configuration reference](docs/configuration.md). The intentionally risky demo agents live in [`examples/agents`](examples/agents/README.md).
+
 ## How Firma is structured
 
 Firma has three main runtime pieces.
