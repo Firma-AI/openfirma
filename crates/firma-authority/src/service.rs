@@ -46,7 +46,7 @@ impl AuthorityServiceImpl {
     /// Returns an error if any file watcher cannot be initialised.
     pub fn try_new(
         issuance_policy_store: Arc<CedarPolicyStore>,
-        policy_store: Arc<CedarPolicyStore>,
+        policy_store: &CedarPolicyStore,
         revocation_store: Arc<RevocationStore>,
         signer: Arc<PasetoV4Signer>,
         max_ttl_seconds: i32,
