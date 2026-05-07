@@ -104,18 +104,6 @@ impl EnforcementDecision {
             Self::Allow { .. } | Self::Passthrough { .. } => None,
         }
     }
-
-    /// Attach a normalized envelope to a `Deny` decision. No-op on Allow/Passthrough.
-    /// Used by the pipeline to propagate the normalized action class into audit records
-    /// for denials that occur after normalization succeeded.
-    #[must_use]
-    pub fn with_normalized_envelope(self, envelope: NormalizedEnvelope) -> Self {
-        if let Self::Deny { reason, stage, detail, .. } = self {
-            Self::Deny { reason, stage, detail, envelope: Some(envelope) }
-        } else {
-            self
-        }
-    }
 }
 
 #[cfg(test)]
