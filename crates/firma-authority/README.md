@@ -1,55 +1,53 @@
-# firma-authority — Mini Authority
+# firma-authority
 
-> **NOT FOR PRODUCTION USE.**
-> This is the Mini Authority (Firma OSS v1) — a local development and testing
-> service only. It has no HA, no audit log, no HSM, and no access controls on
-> the management interface. Run it on localhost or in an isolated dev/CI
-> environment.
+`firma-authority` is the local Authority included with Firma OSS. It is the source of permission for local development and demos: it loads policy, signs short-lived permission tokens, and streams policy and revocation updates to Sidecars.
 
-The Mini Authority is the pre-flight gate for the Firma enforcement stack. It
-evaluates Cedar policies and issues signed PASETO v4 capability tokens that the
-Sidecar validates on every outbound agent call. It also streams policy bundle
-updates and revocation events to connected Sidecars.
+> This Mini Authority is not a production control plane. It has no high availability, HSM integration, management-plane access control, or production audit backend. Run it on localhost or in isolated development and CI environments.
 
+## How it fits into Firma
+
+The Authority answers the first permission question: can this agent receive a token for these actions and resources?
+
+If the request is allowed, the Authority signs a permission token. The Sidecar later verifies that token locally on each outbound request. The Sidecar also keeps its policy and revocation state fresh by subscribing to Authority streams.
+
+```text
+Agent session starts
+        |
+        | request permission
+        v
+firma-authority ---- signed token ----> Sidecar / agent runtime
+        |
+        | policy and revocation streams
+        v
+firma-sidecar enforces locally on each request
 ```
-agent ──IssueCapability──▶ Authority ──▶ Cedar eval ──▶ signed token
-                                │
-                   WatchPolicyBundle / WatchRevocations
-                                │
-Sidecar ◀───────────────────────┘   (hot-reload; never on the hot path)
-```
 
-Authority is contacted **once per session** (pre-flight). The Sidecar enforces
-on every call, fully locally, with no network round-trips.
-
----
+The important point is that the Authority is not on the hot path for every outbound call. It issues permission and distributes state; the Sidecar enforces locally.
 
 ## Quick start
 
-### 1. Build
+Build the binary:
 
 ```bash
 cargo build -p firma-authority
 ```
 
-Or pull the Docker image (see [Docker](#docker)).
-
-### 2. Generate a signing key
+Generate a signing key:
 
 ```bash
-firma-authority generate-key --output firma-authority.key
-# Writes firma-authority.key (secret, 0600) and firma-authority.pub
+cargo run -p firma-authority -- generate-key --output firma-authority.key
 ```
 
-The public key (`firma-authority.pub`) must be distributed to every Sidecar
-instance so it can verify tokens.
+This writes two files:
 
-### 3. Create a config file
+- `firma-authority.key`, the private signing key. Keep this secret.
+- `firma-authority.pub`, the public verification key. Give this to Sidecars.
+
+Create a config file:
 
 ```toml
-# authority.toml
 listen_addr        = "[::1]:50051"
-policy_dir         = "examples/policies"   # must contain schema.cedarschema + *.cedar files
+policy_dir         = "examples/policies"
 revocation_file    = "revocations.txt"
 key_file           = "firma-authority.key"
 max_ttl_seconds    = 3600
@@ -57,195 +55,85 @@ bundle_ttl_seconds = 30
 log_level          = "info"
 ```
 
-`policy_dir` must contain at least one `*.cedar` policy file. The schema is embedded in the
-binary — no `schema.cedarschema` is required unless you want to override it (place one in
-`policy_dir` or set `schema_path` in the config). Example policies are in `examples/policies/`.
-
-All other fields are optional — defaults are shown above.
-
-### 4. Start the server
+Start the Authority:
 
 ```bash
-firma-authority --config authority.toml
+cargo run -p firma-authority -- --config authority.toml
 ```
 
-Expected startup output (JSON lines):
+`policy_dir` must contain at least one `.cedar` policy. The binary includes the default schema, so a `schema.cedarschema` file is optional unless you want to override it.
 
+## Issue a permission token
+
+For local demos, you can issue a token into a seed file that the Sidecar loads at startup:
+
+```bash
+cargo run -p firma-authority -- --config authority.toml issue   --agent-id demo-agent   --session-id demo-session   --action communication.external.send   --resource-scope '*'   --ttl-seconds 3600   --output capability-demo-agent.toml
 ```
-{"level":"INFO","listen_addr":"[::1]:50051","policy_dir":"...","message":"firma-authority starting"}
-{"level":"WARN","message":"NOT FOR PRODUCTION USE: ..."}
-{"level":"INFO","version":"a3f1...","policy_count":3,"message":"cedar policies loaded"}
-{"level":"INFO","port":50051,"message":"gRPC server listening"}
-```
 
----
+The output file contains the signed token and matching claims. Configure the Sidecar with the Authority public key and list the seed file under `[capability_seed].paths`.
 
-## Configuration reference
+## Configuration
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `listen_addr` | `[::1]:50051` | gRPC bind address |
-| `policy_dir` | `policies` | Directory scanned for `*.cedar` files |
-| `revocation_file` | `revocations.txt` | One token ID per line; created on first revoke |
-| `key_file` | `firma-authority.key` | 64-byte Ed25519 secret key (seed \|\| public) |
-| `max_ttl_seconds` | `3600` | Token TTL is clamped to this value |
-| `bundle_ttl_seconds` | `30` | TTL advertised in `PolicyBundleUpdate` messages |
-| `log_level` | `info` | `tracing` filter — e.g. `debug`, `info`, `warn` |
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `listen_addr` | `[::1]:50051` | gRPC address for the Authority service. |
+| `policy_dir` | `policies` | Directory containing `.cedar` policy files. |
+| `schema_path` | unset | Optional schema override. |
+| `revocation_file` | `revocations.txt` | File containing revoked token IDs. |
+| `key_file` | `firma-authority.key` | Authority private signing key. |
+| `max_ttl_seconds` | `3600` | Maximum token lifetime. |
+| `bundle_ttl_seconds` | `30` | TTL advertised with streamed policy bundles. |
+| `log_level` | `info` | Logging filter. |
 
-All keys can be overridden with environment variables using the
-`FIRMA_AUTHORITY_` prefix (e.g. `FIRMA_AUTHORITY_LISTEN_ADDR`). Environment
-variables take precedence over the TOML file.
-
----
+Every key can be overridden with a `FIRMA_AUTHORITY_` environment variable. For example, `FIRMA_AUTHORITY_LISTEN_ADDR` overrides `listen_addr`.
 
 ## Policy files
 
-The Authority loads every `*.cedar` file found in `policy_dir` at startup and
-hot-reloads them when the directory changes. The `schema.cedarschema` file in
-the same directory defines the entity types and the 15 canonical Firma actions
-(FEP v0.1 §2.3.5).
+The Authority loads every `.cedar` file in `policy_dir` and streams the resulting bundle to connected Sidecars. Cedar is default-deny: if no permit applies, the request is denied. Forbid rules override permit rules.
 
-### Entity UID conventions
+Example policies live in `examples/policies/`.
+
+Entity identifiers follow this shape:
 
 | Role | Format |
-|------|--------|
+| --- | --- |
 | Principal | `Firma::Agent::"<agent_id>"` |
 | Action | `Firma::Action::"<action_class>"` |
 | Resource | `Firma::Resource::"<resource_uri>"` |
 
-### Context fields (populated by the Sidecar at enforcement time)
+The Sidecar supplies request context such as session ID, timestamp, serialized parameters, budget state, risk score, and action count when it evaluates policy.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `session_id` | String | Enclosing session identity |
-| `timestamp_ms` | Long | Unix epoch ms at evaluation time |
-| `params` | String | JSON-serialised `intent.params` |
-| `risk_score` | Long | Static or pre-computed risk attribute (v1 = 0) |
-| `budget_remaining` | Long | Ceiling minus consumed; `i64::MAX` when unbounded |
-| `session_duration_s` | Long | Seconds since token issuance |
-| `action_count` | Long | Monotonic per-session call counter (1-based) |
+## Services
 
-### Example policies
+`firma-authority` implements `firma.v1.AuthorityService`.
 
-Three copy-paste-ready examples ship in `policies/`:
+`IssueCapability` evaluates policy and returns either a signed token or a denial reason.
 
-| File | Actions covered |
-|------|-----------------|
-| `payment.cedar` | `payment.purchase`, `payment.transfer` |
-| `communication.cedar` | `communication.internal.send`, `communication.external.send` |
-| `filesystem.cedar` | `filesystem.read`, `filesystem.write`, `filesystem.delete` |
+`WatchPolicyBundle` streams the current policy bundle immediately on connect and again whenever policies change.
 
-Each file follows the same pattern: permit rules with `when {}` guards for
-acceptable conditions, and a global `forbid` for hard-blocked states. Cedar
-evaluation is default-deny — no permit means no access.
+`WatchRevocations` streams token revocation events so Sidecars can deny revoked tokens locally.
 
----
-
-## gRPC services
-
-The Authority implements `firma.v1.AuthorityService` (see
-`crates/firma-proto/proto/firma/v1/authority.proto`).
-
-### `IssueCapability` (unary)
-
-Evaluates Cedar policies and issues a signed PASETO v4 token.
-
-```
-→ IssueCapabilityRequest { agent_id, session_id, requested_actions[], resource_scope, requested_ttl_seconds }
-← IssueCapabilityResponse { granted, token, deny_reason, deny_message }
-```
-
-The issued token contains: `token_id`, `agent_id`, `session_id`, `action_set`,
-`resource_scope`, `issued_at`, `expiry`, `context_hash` (SHA-256 binding the
-token to the policy bundle version).
-
-### `WatchPolicyBundle` (server streaming)
-
-Streams `PolicyBundleUpdate` messages. The Authority pushes the current bundle
-immediately on connect, then pushes again whenever the policy directory changes.
-Sidecars use this to stay in sync without polling.
-
-```
-→ WatchPolicyBundleRequest { current_version }
-← stream of PolicyBundleUpdate { bundle, updated_at }
-```
-
-### `WatchRevocations` (server streaming)
-
-Replays historical revocation events since a given timestamp, then streams new
-events as they occur.
-
-```
-→ WatchRevocationsRequest { since }
-← stream of RevocationEvent { token_id, reason, timestamp }
-```
-
----
-
-## Connecting a Sidecar
-
-Point the Sidecar at the Authority address in its config:
-
-```toml
-[authority]
-address = "http://[::1]:50051"
-public_key_file = "firma-authority.pub"
-```
-
-The Sidecar will call `IssueCapability` at session start, subscribe to
-`WatchPolicyBundle` and `WatchRevocations` for continuous updates, then enforce
-every outbound call locally with no further Authority contact.
-
----
-
-## Revoking a token
+## Revoke a token
 
 ```bash
-firma-authority --config authority.toml revocations add <token-id> --reason "session-terminated"
+cargo run -p firma-authority -- --config authority.toml revocations add <token-id> --reason "session-terminated"
 ```
 
-The Sidecar receives the revocation event within one streaming heartbeat and
-denies subsequent calls carrying the revoked token.
+A connected Sidecar receives the revocation on the stream and denies later requests that use the revoked token.
 
-To remove expired entries from the revocation file:
+To compact expired revocation entries:
 
 ```bash
-firma-authority --config authority.toml revocations compact
+cargo run -p firma-authority -- --config authority.toml revocations compact
 ```
-
----
-
-## End-to-end flow
-
-```
-1. Agent starts → calls IssueCapability(agent_id, session_id, actions, resource)
-2. Authority evaluates Cedar policy
-   - DENY → IssueCapabilityResponse { granted: false, deny_reason }
-   - ALLOW → signs PASETO v4 token, returns IssueCapabilityResponse { granted: true, token }
-3. Agent holds token; attaches it to each outbound request header
-4. Sidecar intercepts the request (Stage 1: parse + verify token, check expiry + revocation)
-5. Sidecar runs Stage 2: Cedar eval with live policy bundle + context
-   - DENY  → 403 returned to agent
-   - ALLOW → request forwarded to destination
-```
-
-See `example_agents/` for runnable Python (OpenAI SDK) and TypeScript (Google
-ADK) agents that exercise this full flow.
-
----
 
 ## Docker
 
 ```bash
 docker build -f crates/firma-authority/Dockerfile -t firma-authority .
 
-docker run --rm \
-  -p 50051:50051 \
-  -v /path/to/policies:/app/policies:ro \
-  -v /path/to/data:/app/data \
-  -e FIRMA_AUTHORITY_KEY_FILE=/app/data/firma-authority.key \
-  firma-authority
+docker run --rm   -p 50051:50051   -v /path/to/policies:/app/policies:ro   -v /path/to/data:/app/data   -e FIRMA_AUTHORITY_KEY_FILE=/app/data/firma-authority.key   firma-authority
 ```
 
-The image copies the bundled `policies/` directory into `/app/policies`. Mount
-your own policy directory over it to use custom policies.
+Mount your own policy directory when you want to test custom policies.

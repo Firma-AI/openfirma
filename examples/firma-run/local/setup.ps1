@@ -15,9 +15,9 @@ function Fail([string]$Message) {
   exit 1
 }
 
-$rootDir = Split-Path -Parent $PSScriptRoot
+$rootDir = (Resolve-Path (Join-Path $PSScriptRoot "../../..")).Path
 $localDir = Join-Path $rootDir ".local"
-$examplesDir = Join-Path $rootDir "docs/examples/firma-run"
+$examplesDir = Join-Path $PSScriptRoot "assets"
 
 $mappingSrc = Join-Path $examplesDir "mapping-rules.local.example.toml"
 $sidecarSrcDefault = Join-Path $examplesDir "firma_sidecar.local.example.toml"
@@ -76,4 +76,4 @@ Write-Host "2) In a new terminal, run Codex through the wrapper:"
 Write-Host "   cargo run -p firma-run -- run --profile codex -- codex"
 Write-Host ""
 Write-Host "3) Optional structural E2E smoke (Linux-only):"
-Write-Host "   scripts/e2e-firma-run.sh"
+Write-Host "   examples/firma-run/e2e/run.sh"

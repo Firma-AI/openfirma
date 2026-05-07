@@ -12,6 +12,7 @@ ACTION="${ACTION:-communication.external.send}"
 RESOURCE_SCOPE="${RESOURCE_SCOPE:-*}"
 TTL_SECONDS="${TTL_SECONDS:-3600}"
 OUTPUT_PATH="${OUTPUT_PATH:-.local/capability-chatgpt.toml}"
+OUTPUT_PATH="${OUTPUT_PATH:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -24,7 +25,7 @@ while [[ $# -gt 0 ]]; do
     --output) OUTPUT_PATH="$2"; shift 2 ;;
     -h|--help)
       cat <<'EOF'
-Usage: scripts/firma-capability-renew.sh [options]
+Usage: examples/firma-run/local/renew-capability.sh [options]
 
 Options:
   --authority-config <path>  Authority config TOML (default: .local/authority.toml)
@@ -33,7 +34,7 @@ Options:
   --action <action>          Requested action (default: communication.external.send)
   --resource-scope <scope>   Resource scope (default: *)
   --ttl-seconds <n>          Token TTL in seconds (default: 3600)
-  --output <path>            Output capability seed path (default: .local/capability-chatgpt.toml)
+  --output <path>            Output capability seed path (required)
 EOF
       exit 0
       ;;
@@ -48,6 +49,7 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 [[ -n "$SESSION_ID" ]] || fail "session id must not be empty"
+[[ -n "$OUTPUT_PATH" ]] || fail "--output is required (example: --output .local/capability-codex.toml)"
 
 ok "issuing capability token (agent=$AGENT_ID session=$SESSION_ID ttl=${TTL_SECONDS}s)"
 cargo run -p firma-authority -- --config "$AUTHORITY_CONFIG" issue \

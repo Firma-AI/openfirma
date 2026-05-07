@@ -69,7 +69,7 @@ cat <<'EOF'
 
 Run the Python example agent in another terminal:
 
-  cd example_agents/agents_sdk_py
+  cd examples/agents/agents_sdk_py
   cp .env.sample .env          # then fill in real API keys
   export HTTP_PROXY=http://127.0.0.1:8080
   export HTTPS_PROXY=http://127.0.0.1:8080
@@ -77,7 +77,7 @@ Run the Python example agent in another terminal:
 
 Or the TypeScript agent:
 
-  cd example_agents/adk_js
+  cd examples/agents/adk_js
   cp .env.sample .env          # then fill in real API keys
   export HTTP_PROXY=http://127.0.0.1:8080
   export HTTPS_PROXY=http://127.0.0.1:8080

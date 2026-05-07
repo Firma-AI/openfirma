@@ -2,9 +2,9 @@
 # Firma OSS — release demo orchestrator.
 #
 # Usage:
-#   scripts/demo.sh hero   # default; LLM-driven scripted Python agent
-#   scripts/demo.sh repl   # interactive Python agent REPL
-#   scripts/demo.sh ci     # deterministic Rust client (CI gate)
+#   examples/demo/run.sh hero   # default; LLM-driven scripted Python agent
+#   examples/demo/run.sh repl   # interactive Python agent REPL
+#   examples/demo/run.sh ci     # deterministic Rust client (CI gate)
 #
 # Boots the Mini Authority and the sidecar, pre-issues a capability
 # seed for `demo-agent`/`demo-session`, and dispatches the chosen
@@ -14,7 +14,7 @@ set -euo pipefail
 
 MODE="${1:-hero}"
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEMO="$ROOT/examples/demo"
 LOG_DIR="$DEMO/logs"
 TARGET_DIR="$ROOT/target/release"
@@ -163,10 +163,10 @@ sleep 1
 case "$MODE" in
   hero)
     echo "[demo] installing Python agent deps (uv sync, no proxy)"
-    (cd "$ROOT/example_agents/agents_sdk_py" && make install)
+    (cd "$ROOT/examples/agents/agents_sdk_py" && make install)
     CA_BUNDLE="$DEMO/firma-ca/firma-ca.crt"
     echo "[demo] dispatching scripted Python hero agent (CA=$CA_BUNDLE)"
-    (cd "$ROOT/example_agents/agents_sdk_py" && \
+    (cd "$ROOT/examples/agents/agents_sdk_py" && \
         HTTPS_PROXY=http://127.0.0.1:7474 \
         HTTP_PROXY=http://127.0.0.1:7474 \
         SSL_CERT_FILE="$CA_BUNDLE" \
@@ -177,10 +177,10 @@ case "$MODE" in
     ;;
   repl)
     echo "[demo] installing Python agent deps (uv sync, no proxy)"
-    (cd "$ROOT/example_agents/agents_sdk_py" && make install)
+    (cd "$ROOT/examples/agents/agents_sdk_py" && make install)
     CA_BUNDLE="$DEMO/firma-ca/firma-ca.crt"
     echo "[demo] dispatching interactive Python REPL (CA=$CA_BUNDLE)"
-    (cd "$ROOT/example_agents/agents_sdk_py" && \
+    (cd "$ROOT/examples/agents/agents_sdk_py" && \
         HTTPS_PROXY=http://127.0.0.1:7474 \
         HTTP_PROXY=http://127.0.0.1:7474 \
         SSL_CERT_FILE="$CA_BUNDLE" \
