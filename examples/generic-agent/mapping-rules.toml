@@ -1,0 +1,83 @@
+# Generic agent — supplemental mapping rules.
+# Provider-specific rules (GitHub, Gmail) are loaded from the shipped mapping
+# files via rules_paths in sidecar.toml. This file covers supplemental rules:
+# LLM APIs, HTTPS CONNECT tunnels, package managers, and localhost fallthrough.
+#
+# Hosts NOT listed here are DENIED before Cedar (default_protected = true).
+# 169.254.169.254 (cloud metadata), RFC-1918 ranges, and all other unlisted
+# hosts are blocked at this layer — no mapping rule needed for them.
+# RFC-1918 ranges (10/8, 172.16/12, 192.168/16) cannot be expressed as CIDR
+# in Cedar; enforce at the OS/network layer instead:
+#   iptables -I OUTPUT -d 10.0.0.0/8     -j DROP
+#   iptables -I OUTPUT -d 172.16.0.0/12  -j DROP
+#   iptables -I OUTPUT -d 192.168.0.0/16 -j DROP
+
+# ─── LLM API ──────────────────────────────────────────────────────────────────
+# Tunnels through without MITM (not in intercept_hosts); the CONNECT itself is
+# authorized, inner requests are not inspected. This keeps the Anthropic SDK
+# from having to trust the generated firma-ca.
+
+[[rules]]
+method       = "CONNECT"
+host         = "api.anthropic.com:443"
+action_class = "communication.external.send"
+
+# ─── HTTPS CONNECT tunnels (MITM targets) ─────────────────────────────────────
+# Required for MITM interception of the providers listed in intercept_hosts.
+# The CONNECT preface is authorized with the dominant action class for the
+# tunnel; inner L7 requests are evaluated individually.
+
+[[rules]]
+method       = "CONNECT"
+host         = "api.github.com:443"
+action_class = "code.review.read"
+
+[[rules]]
+method       = "CONNECT"
+host         = "gmail.googleapis.com:443"
+action_class = "communication.external.send"
+
+# ─── Package managers ─────────────────────────────────────────────────────────
+# Scoped to registries for Python (pip/uv), Rust (cargo), and Node.js (npm).
+# Extend or remove entries to match the agent's toolchain profile.
+
+# Python
+[[rules]]
+host         = "pypi.org"
+path         = "*"
+action_class = "system.install"
+
+[[rules]]
+host         = "files.pythonhosted.org"
+path         = "*"
+action_class = "system.install"
+
+# Rust
+[[rules]]
+host         = "crates.io"
+path         = "*"
+action_class = "system.install"
+
+[[rules]]
+host         = "static.crates.io"
+path         = "*"
+action_class = "system.install"
+
+# Node.js
+[[rules]]
+host         = "registry.npmjs.org"
+path         = "*"
+action_class = "system.install"
+
+# ─── Localhost fallthrough ────────────────────────────────────────────────────
+# Local LLM inference (LM-Studio, Ollama, etc.) and in-process service calls.
+
+[[rules]]
+host         = "localhost:*"
+path         = "*"
+action_class = "filesystem.read"
+
+[[rules]]
+host         = "127.0.0.1:*"
+path         = "*"
+action_class = "filesystem.read"

@@ -10,20 +10,20 @@
 // not in Cedar policies.
 
 // Internal sends are always permitted — low blast radius.
-//permit (
-//    principal == Firma::Agent::"example-agent",
-//    action == Firma::Action::"communication.internal.send",
-//    resource
-//);
-//
-//// External sends are permitted when risk is acceptable.
-//permit (
-//    principal == Firma::Agent::"example-agent",
-//    action == Firma::Action::"communication.external.send",
-//    resource
-//) when {
-//    context.risk_score < 60
-//};
+permit (
+    principal == Firma::Agent::"example-agent",
+    action == Firma::Action::"communication.internal.send",
+    resource
+);
+
+// External sends are permitted when risk is acceptable.
+permit (
+    principal == Firma::Agent::"example-agent",
+    action == Firma::Action::"communication.external.send",
+    resource
+) when {
+    context.risk_score < 60
+};
 
 // Hard-block external sends at critical risk — prevents exfiltration.
 // Applies to any agent; overrides any permit above.
@@ -31,4 +31,6 @@ forbid (
     principal,
     action == Firma::Action::"communication.external.send",
     resource
-);
+) when {
+    context.risk_score >= 80
+};
