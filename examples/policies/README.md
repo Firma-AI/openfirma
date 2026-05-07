@@ -11,7 +11,6 @@ and streamed to `firma-sidecar` as a policy bundle.
 
 | File | Purpose |
 |------|---------|
-| `llm-agent.cedar` | Baseline policy for a generic LLM agent |
 | `demo.cedar` | E2E demo policy — permits normal agent traffic, hard-blocks `paste.rs` (exfiltration demo) |
 | `communication.cedar` | Reference policy for `communication.internal.send` / `communication.external.send` |
 | `credential.cedar` | Reference policy for `credential.read` / `credential.write` |
