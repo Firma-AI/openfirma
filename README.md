@@ -70,8 +70,7 @@ The basic setup flow is:
 
 ```text
 crates/          Rust workspace crates for the launcher, Sidecar, Authority, shared types, and demos.
-examples/        Runnable demo stacks, policy files, mapping files, and end-to-end assets.
-example_agents/  Demo agents used to show risky tool behavior and Firma enforcement.
+examples/        Runnable demo stacks, demo agents, policy files, mapping files, and end-to-end assets.
 docs/            Architecture notes, configuration references, CLI docs, security analysis, and release notes.
 context/         Internal design material and early proof-of-concept references.
 .github/         GitHub Actions workflows.
@@ -89,4 +88,4 @@ make check
 
 ## License
 
-Apache 2.0
+This project is licensed under the [Apache 2.0 License](LICENSE).

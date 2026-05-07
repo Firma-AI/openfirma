@@ -21,7 +21,7 @@ The script builds `firma-authority` and `firma-sidecar`, generates local keys on
 In another terminal, run the Python agent:
 
 ```bash
-cd example_agents/agents_sdk_py
+cd examples/agents/agents_sdk_py
 cp .env.sample .env
 # Fill in the required API keys.
 export HTTP_PROXY=http://127.0.0.1:8080
@@ -32,7 +32,7 @@ make install && make run
 Or run the TypeScript agent:
 
 ```bash
-cd example_agents/adk_js
+cd examples/agents/adk_js
 cp .env.sample .env
 # Fill in the required API keys.
 export HTTP_PROXY=http://127.0.0.1:8080

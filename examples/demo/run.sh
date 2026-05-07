@@ -163,10 +163,10 @@ sleep 1
 case "$MODE" in
   hero)
     echo "[demo] installing Python agent deps (uv sync, no proxy)"
-    (cd "$ROOT/example_agents/agents_sdk_py" && make install)
+    (cd "$ROOT/examples/agents/agents_sdk_py" && make install)
     CA_BUNDLE="$DEMO/firma-ca/firma-ca.crt"
     echo "[demo] dispatching scripted Python hero agent (CA=$CA_BUNDLE)"
-    (cd "$ROOT/example_agents/agents_sdk_py" && \
+    (cd "$ROOT/examples/agents/agents_sdk_py" && \
         HTTPS_PROXY=http://127.0.0.1:7474 \
         HTTP_PROXY=http://127.0.0.1:7474 \
         SSL_CERT_FILE="$CA_BUNDLE" \
@@ -177,10 +177,10 @@ case "$MODE" in
     ;;
   repl)
     echo "[demo] installing Python agent deps (uv sync, no proxy)"
-    (cd "$ROOT/example_agents/agents_sdk_py" && make install)
+    (cd "$ROOT/examples/agents/agents_sdk_py" && make install)
     CA_BUNDLE="$DEMO/firma-ca/firma-ca.crt"
     echo "[demo] dispatching interactive Python REPL (CA=$CA_BUNDLE)"
-    (cd "$ROOT/example_agents/agents_sdk_py" && \
+    (cd "$ROOT/examples/agents/agents_sdk_py" && \
         HTTPS_PROXY=http://127.0.0.1:7474 \
         HTTP_PROXY=http://127.0.0.1:7474 \
         SSL_CERT_FILE="$CA_BUNDLE" \

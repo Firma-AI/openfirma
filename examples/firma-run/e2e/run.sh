@@ -28,7 +28,7 @@ Options:
 
 Examples:
   examples/firma-run/e2e/run.sh
-  examples/firma-run/e2e/run.sh --cmd "cd example_agents/agents_sdk_py && uv run python -m agent.main"
+  examples/firma-run/e2e/run.sh --cmd "cd examples/agents/agents_sdk_py && uv run python -m agent.main"
 EOF
 }
 

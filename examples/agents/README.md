@@ -57,7 +57,7 @@ Both agents share one Supabase project.
 ## Run the Python agent
 
 ```bash
-cd example_agents/agents_sdk_py
+cd examples/agents/agents_sdk_py
 cp .env.sample .env
 # Fill in OPENAI_API_KEY, SUPABASE_*, and RESEND_* as needed.
 make install
@@ -67,7 +67,7 @@ make run
 ## Run the TypeScript agent
 
 ```bash
-cd example_agents/adk_js
+cd examples/agents/adk_js
 cp .env.sample .env
 # Fill in GOOGLE_GENAI_API_KEY, SUPABASE_*, and RESEND_* as needed.
 make install
