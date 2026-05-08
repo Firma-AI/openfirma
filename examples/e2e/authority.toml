@@ -4,8 +4,8 @@
 # NOT FOR PRODUCTION USE. Local dev/testing only.
 
 listen_addr         = "127.0.0.1:50051"
-policy_dir          = "examples/policies"
-issuance_policy_dir = "examples/e2e/issuance-policies"
+policy_dir          = "examples/policies/"
+issuance_policy_dir = "examples/e2e/issuance-policies/"
 revocation_file     = "examples/e2e/revocations.txt"
 key_file            = "examples/e2e/authority.key"
 max_ttl_seconds     = 3600

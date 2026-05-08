@@ -4,8 +4,8 @@
 # NOT FOR PRODUCTION USE. Local dev/testing only.
 
 listen_addr         = "127.0.0.1:50051"
-policy_dir          = "examples/generic-agent/policies"
-issuance_policy_dir = "examples/generic-agent/issuance-policies"
+policy_dir          = "examples/generic-agent/policies/"
+issuance_policy_dir = "examples/generic-agent/issuance-policies/"
 revocation_file     = "examples/generic-agent/.runtime/revocations.txt"
 key_file            = "examples/generic-agent/.runtime/authority.key"
 max_ttl_seconds     = 3600

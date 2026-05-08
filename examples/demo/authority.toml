@@ -1,8 +1,8 @@
 # Mini Authority — release demo configuration.
 
 listen_addr         = "[::1]:50051"
-policy_dir          = "examples/demo/policies"
-issuance_policy_dir = "examples/demo/issuance-policies"
+policy_dir          = "examples/demo/policies/"
+issuance_policy_dir = "examples/demo/issuance-policies/"
 revocation_file     = "examples/demo/revocations.txt"
 key_file            = "examples/demo/firma-authority.key"
 max_ttl_seconds     = 3600
