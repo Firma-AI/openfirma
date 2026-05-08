@@ -1,32 +1,12 @@
+//! Args for `firma run`, `firma __dns-stub`, and `firma __proxy-bridge`.
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, ValueEnum};
 
-use crate::backend::BackendKind;
-use crate::config::SandboxIdentityMode;
-
-/// Top-level CLI for `firma` binary.
-#[derive(Debug, Parser)]
-#[command(name = "firma")]
-#[command(about = "Firma runtime tools")]
-pub struct Cli {
-    #[command(subcommand)]
-    pub command: Command,
-}
-
-/// Supported top-level commands.
-#[derive(Debug, Subcommand)]
-pub enum Command {
-    /// Run an agent command through the Firma runtime wrapper.
-    Run(RunArgs),
-    /// Internal sandbox-local DNS stub for deterministic DNS confinement.
-    #[command(name = "__dns-stub", hide = true)]
-    DnsStub(DnsStubArgs),
-    /// Internal process-local bridge from sandbox TCP proxy to host-side UDS.
-    #[command(name = "__proxy-bridge", hide = true)]
-    ProxyBridge(ProxyBridgeArgs),
-}
+use firma_run::backend::BackendKind;
+use firma_run::config::SandboxIdentityMode;
 
 /// Arguments for `firma run`.
 #[derive(Debug, Args)]
@@ -83,7 +63,7 @@ pub struct ProxyBridgeArgs {
 }
 
 /// Internal helper args for DNS stub process.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Copy, Args)]
 pub struct DnsStubArgs {
     /// UDP/TCP DNS listen address reachable by the sandboxed agent process.
     #[arg(long, default_value = "127.0.0.1:53")]

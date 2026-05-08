@@ -2,10 +2,15 @@
 //! by the same key whose public half is configured) admits a request
 //! through Stage 1's token selection + verification path. Locks the
 //! demo's capability-seeding contract end-to-end so a regression in
-//! either `firma-authority issue` or `startup::capability` will trip
+//! either `firma authority issue` or `startup::capability` will trip
 //! CI.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code: panics are acceptable test failures"
+)]
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -13,51 +18,8 @@ use std::process::Command;
 use firma_sidecar::config::CapabilitySeedConfig;
 use firma_sidecar::startup::{build_token_verifier, load_capability_map};
 
-/// Build the `firma-authority` binary and return the absolute path to
-/// the produced executable. We cannot rely on `CARGO_BIN_EXE_*` here
-/// because it is only populated for integration tests living in the
-/// same package as the binary target; `firma-authority` lives in a
-/// sibling crate.
-fn build_authority_bin() -> PathBuf {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let status = Command::new(&cargo)
-        .args([
-            "build",
-            "-p",
-            "firma-authority",
-            "--bin",
-            "firma-authority",
-            "--quiet",
-        ])
-        .status()
-        .expect("cargo build firma-authority");
-    assert!(status.success(), "cargo build firma-authority failed");
-
-    // `CARGO_MANIFEST_DIR` is `crates/firma-sidecar`; the workspace
-    // target directory is two levels up unless the user has overridden
-    // it via `CARGO_TARGET_DIR`.
-    let target_dir = std::env::var_os("CARGO_TARGET_DIR").map_or_else(
-        || {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .and_then(std::path::Path::parent)
-                .expect("workspace root")
-                .join("target")
-        },
-        PathBuf::from,
-    );
-    let exe_name = if cfg!(windows) {
-        "firma-authority.exe"
-    } else {
-        "firma-authority"
-    };
-    let bin = target_dir.join("debug").join(exe_name);
-    assert!(
-        bin.exists(),
-        "firma-authority binary missing at {}",
-        bin.display()
-    );
-    bin
+fn firma_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_firma"))
 }
 
 #[test]
@@ -75,18 +37,11 @@ fn issued_token_seeds_capability_map_and_admits_stage1() {
     let schema_src = include_str!("../../firma-authority/schema.cedarschema");
     std::fs::write(policies.join("schema.cedarschema"), schema_src).unwrap();
 
-    // Resolve (and ensure) the firma-authority binary. Cargo does not
-    // set `CARGO_BIN_EXE_firma-authority` for tests outside that bin's
-    // own package, so we trigger the build explicitly.
-    let auth_bin = build_authority_bin();
-
-    // 1. Generate the Ed25519 key pair. `generate-key` writes the
-    //    private key to <output> and the public key to
-    //    <output with .pub extension> (see `run_generate_key`).
+    // 1. Generate the Ed25519 key pair via `firma authority generate-key`.
     let key_path = tmp.path().join("firma-authority.key");
     let pub_path: PathBuf = key_path.with_extension("pub");
-    let status = Command::new(&auth_bin)
-        .args(["generate-key", "--output"])
+    let status = Command::new(firma_bin())
+        .args(["authority", "generate-key", "--output"])
         .arg(&key_path)
         .current_dir(tmp.path())
         .status()
@@ -115,10 +70,10 @@ fn issued_token_seeds_capability_map_and_admits_stage1() {
     )
     .unwrap();
 
-    // 3. Issue a capability seed file via the CLI subcommand.
+    // 3. Issue a capability seed file via `firma authority issue`.
     let seed_path = tmp.path().join("capability.toml");
-    let status = Command::new(&auth_bin)
-        .arg("--config")
+    let status = Command::new(firma_bin())
+        .args(["authority", "--config"])
         .arg(&auth_toml)
         .args([
             "issue",
@@ -146,8 +101,7 @@ fn issued_token_seeds_capability_map_and_admits_stage1() {
     };
     let map = load_capability_map(&seed).expect("seed must load");
 
-    // 5. Build the verifier from the public key the authority just
-    //    wrote.
+    // 5. Build the verifier from the public key the authority just wrote.
     let verifier = build_token_verifier(Some(pub_path.as_path())).expect("verifier must build");
 
     // 6. Selecting the seeded action class returns the seed entry.

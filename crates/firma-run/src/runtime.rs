@@ -4,7 +4,6 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::args::RunArgs;
 use crate::backend::{LaunchSpec, PrepareRequest, build_backend};
 use crate::capability::CapabilityLeaseManager;
 use crate::config::{CapabilitySource, ResolvedProfile, SidecarEndpoint, resolve_profile};
@@ -13,13 +12,37 @@ use crate::identity::RunIdentity;
 use crate::routing::prepare_network_runtime;
 use crate::supervisor::wait_with_signal_forwarding;
 
+/// Lib-level input for [`execute_run`]. The CLI layer (in the `firma`
+/// host crate) builds this from its `clap`-derived args struct.
+#[derive(Debug, Clone)]
+pub struct RunInput {
+    /// Built-in profile id to use.
+    pub profile: String,
+    /// Optional runtime config path (.toml, .yaml, .yml).
+    pub config: Option<PathBuf>,
+    /// Override backend selection.
+    pub backend: Option<crate::backend::BackendKind>,
+    /// Optional sidecar endpoint override.
+    pub sidecar_endpoint: Option<String>,
+    /// Optional capability token file path for runtime lease refresh.
+    pub capability_file: Option<PathBuf>,
+    /// Override sandbox identity mode.
+    pub identity_mode: Option<crate::config::SandboxIdentityMode>,
+    /// Preserve host user identity inside sandbox for compatibility workflows.
+    pub preserve_host_user: bool,
+    /// Print the resolved effective config as JSON before execution.
+    pub print_effective_config: bool,
+    /// Wrapped command and args.
+    pub command: Vec<String>,
+}
+
 /// Execute `firma run`.
 ///
 /// # Errors
 ///
 /// Returns an error when config resolution, backend lifecycle operations, or
 /// wrapped process supervision fails.
-pub fn execute_run(args: &RunArgs) -> Result<i32, RunError> {
+pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
     if args.command.is_empty() {
         return Err(RunError::MissingCommand);
     }

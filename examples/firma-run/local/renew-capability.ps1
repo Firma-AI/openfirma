@@ -35,7 +35,7 @@ if (-not $Output) {
 }
 
 Write-Ok "issuing capability token (agent=$AgentId session=$SessionId ttl=${TtlSeconds}s)"
-cargo run -p firma-authority -- --config $AuthorityConfig issue `
+cargo run -p firma -- authority --config $AuthorityConfig issue `
   --agent-id $AgentId `
   --session-id $SessionId `
   --action $Action `

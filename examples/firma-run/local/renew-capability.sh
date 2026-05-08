@@ -52,7 +52,7 @@ fi
 [[ -n "$OUTPUT_PATH" ]] || fail "--output is required (example: --output .local/capability-codex.toml)"
 
 ok "issuing capability token (agent=$AGENT_ID session=$SESSION_ID ttl=${TTL_SECONDS}s)"
-cargo run -p firma-authority -- --config "$AUTHORITY_CONFIG" issue \
+cargo run -p firma -- authority --config "$AUTHORITY_CONFIG" issue \
   --agent-id "$AGENT_ID" \
   --session-id "$SESSION_ID" \
   --action "$ACTION" \

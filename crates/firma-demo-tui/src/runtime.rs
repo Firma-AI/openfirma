@@ -41,11 +41,11 @@ pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
 
     let mut authority = spawn_with_output_to_file(
         Command::new("cargo")
-            .args(["run", "--bin", "firma-authority", "--", "--config"])
+            .args(["run", "--bin", "firma", "--", "authority", "--config"])
             .arg(&manifest.authority_config),
         &authority_log_path,
     )
-    .context("failed to start firma-authority")?;
+    .context("failed to start firma authority")?;
 
     wait_for_authority_ready(&mut authority, &manifest.authority_config)?;
 
@@ -54,11 +54,11 @@ pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
 
     let sidecar = spawn_with_output_to_file(
         Command::new("cargo")
-            .args(["run", "--bin", "firma-sidecar", "--", "--config-file"])
+            .args(["run", "--bin", "firma", "--", "sidecar", "--config-file"])
             .arg(&manifest.sidecar_config),
         &sidecar_log_path,
     )
-    .context("failed to start firma-sidecar")?;
+    .context("failed to start firma sidecar")?;
 
     let ca_dir = runtime_dir.join("generated-firma-ca");
     wait_for_demo_ca_material(&ca_dir)?;
@@ -85,17 +85,17 @@ fn wait_for_authority_ready(authority: &mut ManagedProcess, config_path: &Path) 
         if let Some(status) = authority
             .child
             .try_wait()
-            .context("failed to check firma-authority process status")?
+            .context("failed to check firma authority process status")?
         {
             ensure!(
                 status.success(),
-                "firma-authority exited before listening on {addr}: {status}"
+                "firma authority exited before listening on {addr}: {status}"
             );
         }
 
         ensure!(
             Instant::now() < deadline,
-            "firma-authority did not start listening on {addr}"
+            "firma authority did not start listening on {addr}"
         );
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -140,7 +140,7 @@ fn wait_for_demo_ca_material(ca_dir: &Path) -> Result<()> {
         if Instant::now() >= deadline {
             ensure!(
                 cert.exists() && key.exists(),
-                "firma-sidecar did not generate CA material at '{}' and '{}'",
+                "firma sidecar did not generate CA material at '{}' and '{}'",
                 cert.display(),
                 key.display()
             );
@@ -157,8 +157,9 @@ fn provision_keys(runtime_dir: &Path) -> Result<()> {
             .args([
                 "run",
                 "--bin",
-                "firma-authority",
+                "firma",
                 "--",
+                "authority",
                 "generate-key",
                 "--output",
             ])
@@ -166,7 +167,7 @@ fn provision_keys(runtime_dir: &Path) -> Result<()> {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-            .context("failed to run firma-authority generate-key")?;
+            .context("failed to run firma authority generate-key")?;
         ensure!(status.success(), "generate-key failed");
     }
 

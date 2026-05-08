@@ -5,10 +5,10 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::args::RunArgs;
 use crate::backend::BackendKind;
 use crate::error::RunError;
 use crate::profile::{BuiltInProfileId, built_in_profile};
+use crate::runtime::RunInput;
 
 fn backend_supports_structural_network(backend: BackendKind) -> bool {
     matches!(backend, BackendKind::Bwrap)
@@ -309,7 +309,7 @@ impl ProfilePatch {
 ///
 /// Returns an error when profile resolution fails due to invalid inputs,
 /// parse errors, or resulting validation failures.
-pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
+pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     let mut patch = built_in_profile(&args.profile)?;
 
     if let Some(path) = &args.config {
@@ -412,9 +412,9 @@ pub fn resolve_profile(args: &RunArgs) -> Result<ResolvedProfile, RunError> {
     Ok(resolved)
 }
 
-fn cli_profile_patch(args: &RunArgs) -> ProfilePatch {
+fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
     ProfilePatch {
-        backend: args.backend.map(Into::into),
+        backend: args.backend,
         sidecar_endpoint: args.sidecar_endpoint.clone(),
         seccomp_bpf_path: None,
         env_passthrough: Vec::new(),
@@ -425,7 +425,7 @@ fn cli_profile_patch(args: &RunArgs) -> ProfilePatch {
         identity_mode: if args.preserve_host_user {
             Some(SandboxIdentityMode::HostUser)
         } else {
-            args.identity_mode.map(Into::into)
+            args.identity_mode
         },
         capability: args
             .capability_file
@@ -538,14 +538,14 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
-    use crate::args::RunArgs;
+    use crate::runtime::RunInput;
 
     use super::{
         BackendKind, CapabilitySource, SandboxIdentityMode, SidecarEndpoint, resolve_profile,
     };
 
-    fn args(profile: &str) -> RunArgs {
-        RunArgs {
+    fn args(profile: &str) -> RunInput {
+        RunInput {
             profile: profile.to_string(),
             config: None,
             backend: None,
@@ -643,7 +643,7 @@ approval_policy = "never"
     #[test]
     fn preserve_host_user_cli_overrides_profile_identity_mode() {
         let mut run_args = args("generic");
-        run_args.identity_mode = Some(crate::args::IdentityModeOverride::SandboxUser);
+        run_args.identity_mode = Some(SandboxIdentityMode::SandboxUser);
         run_args.preserve_host_user = true;
 
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
@@ -660,7 +660,7 @@ approval_policy = "never"
     #[test]
     fn structural_network_defaults_to_true_for_bwrap_backend() {
         let mut run_args = args("generic");
-        run_args.backend = Some(crate::args::BackendOverride::Bwrap);
+        run_args.backend = Some(BackendKind::Bwrap);
 
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert!(resolved.network.enforce_network_namespace);
@@ -670,7 +670,7 @@ approval_policy = "never"
     #[test]
     fn structural_network_defaults_to_false_for_non_bwrap_backends() {
         let mut run_args = args("generic");
-        run_args.backend = Some(crate::args::BackendOverride::Vz);
+        run_args.backend = Some(BackendKind::Vz);
 
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert!(!resolved.network.enforce_network_namespace);

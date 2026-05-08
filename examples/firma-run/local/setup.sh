@@ -72,10 +72,10 @@ cat <<'EOM'
 
 Next steps:
 1) Start sidecar:
-   cargo run -p firma-sidecar -- -c .local/firma_sidecar.local.toml
+   cargo run -p firma -- sidecar -c .local/firma_sidecar.local.toml
 
 2) In a new terminal, run Codex through the wrapper:
-   cargo run -p firma-run -- run --profile codex -- codex
+   cargo run -p firma -- run --profile codex -- codex
 
 3) Optional structural E2E smoke:
    examples/firma-run/e2e/run.sh

@@ -88,7 +88,7 @@ This creates `.local/` scaffolding, including audit key material.
 ## 2) Start authority (required for fail-closed stream mode)
 
 ```bash
-cargo run -p firma-authority -- --config .local/authority.toml
+cargo run -p firma -- authority --config .local/authority.toml
 ```
 
 Keep this running in its own terminal.
@@ -130,7 +130,7 @@ examples/firma-run/local/renew-capability.sh \
 ## 5) Start sidecar
 
 ```bash
-cargo run -p firma-sidecar -- -c .local/firma_sidecar.local.toml
+cargo run -p firma -- sidecar -c .local/firma_sidecar.local.toml
 ```
 
 Verify startup includes:
@@ -144,14 +144,14 @@ Codex:
 
 ```bash
 export FIRMA_RUN_REQUIRE_SESSION_ID=true
-cargo run -p firma-run -- run --profile codex -- codex
+cargo run -p firma -- run --profile codex -- codex
 ```
 
 Claude:
 
 ```bash
 export FIRMA_RUN_REQUIRE_SESSION_ID=true
-cargo run -p firma-run -- run --profile claude-code -- claude
+cargo run -p firma -- run --profile claude-code -- claude
 ```
 
 ## Expected behavior

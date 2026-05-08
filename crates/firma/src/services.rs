@@ -1,0 +1,7 @@
+//! Per-service runners dispatched by `crate::main`.
+
+pub mod authority;
+pub mod dns_stub;
+pub mod proxy_bridge;
+pub mod run;
+pub mod sidecar;

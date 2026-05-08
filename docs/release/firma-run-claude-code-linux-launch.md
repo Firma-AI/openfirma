@@ -84,7 +84,7 @@ Outcome:
 Run Claude under Firma:
 
 ```bash
-cargo run -p firma-run -- run --profile claude-code -- claude
+cargo run -p firma -- run --profile claude-code -- claude
 ```
 
 Run acceptance harness:

@@ -22,9 +22,9 @@ To try your own command through the governed launcher:
 
 ```bash
 examples/firma-run/local/setup.sh
-cargo run -p firma-sidecar -- -c .local/firma_sidecar.local.toml
+cargo run -p firma -- sidecar -c .local/firma_sidecar.local.toml
 # In a separate terminal
-cargo run -p firma-run -- run --profile generic -- curl https://example.com
+cargo run -p firma -- run --profile generic -- curl https://example.com
 ```
 
 For more detail, see the [`firma run` examples](examples/firma-run/README.md), the [CLI reference](docs/cli.md), and the [configuration reference](docs/configuration.md). The intentionally risky demo agents live in [`examples/agents`](examples/agents/README.md).
