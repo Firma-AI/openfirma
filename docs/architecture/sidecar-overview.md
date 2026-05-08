@@ -642,7 +642,7 @@ crates/firma-sidecar/src/
 
 ## 10. Standalone startup sequence
 
-`firma-sidecar --config-file <path>` (and `scripts/demo.sh`) emit
+`firma-sidecar --config-file <path>` (and `examples/demo/run.sh`) emit
 exactly seven INFO lines on every successful start, in order:
 
 ```text

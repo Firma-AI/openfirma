@@ -49,12 +49,12 @@ ca_cert="$ca_dir/firma-ca.crt"
 
 # 1. Build (once, unless --no-build).
 if [[ $build -eq 1 ]]; then
-    cargo build -p firma-authority -p firma-sidecar
+    cargo build -p firma
 fi
 
 # 2. Provision authority key if absent.
 if [[ ! -f "$authority_key" ]]; then
-    cargo run -q -p firma-authority -- generate-key --output "$authority_key"
+    cargo run -q -p firma -- authority generate-key --output "$authority_key"
 fi
 
 # 3. Audit key — must exist. The TUI ships an embedded PEM. For run.sh we
@@ -77,7 +77,7 @@ log_dir="$runtime_dir"
 authority_log="$log_dir/authority.log"
 sidecar_log="$log_dir/sidecar.log"
 
-cargo run -q -p firma-authority -- --config "$demo_dir/authority.toml" \
+cargo run -q -p firma -- authority --config "$demo_dir/authority.toml" \
     >"$authority_log" 2>&1 &
 authority_pid=$!
 
@@ -89,8 +89,7 @@ for _ in $(seq 1 60); do
     sleep 0.5
 done
 
-FIRMA_SIDECAR_LOG_LEVEL="${FIRMA_SIDECAR_LOG_LEVEL:-info}" \
-cargo run -q -p firma-sidecar -- --config-file "$demo_dir/sidecar.toml" \
+cargo run -q -p firma -- --log-filter "${FIRMA_SIDECAR_LOG_LEVEL:-info}" sidecar --config-file "$demo_dir/sidecar.toml" \
     >"$sidecar_log" 2>&1 &
 sidecar_pid=$!
 

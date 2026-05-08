@@ -1,0 +1,10 @@
+/* Font stack for the OpenFirma docs.
+ *
+ * We use Inter Variable for body and headings, and JetBrains Mono Variable
+ * for code. Both are loaded through Fontsource's variable packages installed
+ * via package.json. Fall back to system fonts if the variable face fails to
+ * load.
+ */
+
+@import '@fontsource-variable/inter/index.css';
+@import '@fontsource-variable/jetbrains-mono/index.css';

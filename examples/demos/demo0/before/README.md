@@ -1,24 +1,21 @@
-# Before Firma — three governance surfaces
+# Before Firma: three separate control surfaces
 
-These are the three artifacts a team would hand-roll today to express the rule
-"the agent can read but cannot write or destroy" against three providers.
+This folder shows what teams often have before a system like Firma: several unrelated control files that all try to describe what an agent may do.
 
-| File | Surface | Provider | Vocabulary |
-|---|---|---|---|
-| `oauth-scopes.json` | OAuth scopes | Gmail | Google scope URIs |
-| `github-token-permissions.yaml` | Token permissions | GitHub | GitHub PAT permission set |
-| `network-allowlist.yaml` | Network allowlist | Internal service | Hostnames |
+The intended rule is simple: the agent may read, but it must not write or destroy. In practice, that rule is split across provider-specific files:
 
-Three vocabularies. Zero shared representation of "what the agent is doing".
+| File | Surface | Vocabulary |
+| --- | --- | --- |
+| `oauth-scopes.json` | Gmail OAuth scopes | Google scope URIs |
+| `github-token-permissions.yaml` | GitHub token permissions | GitHub PAT permissions |
+| `network-allowlist.yaml` | Network egress | Hostnames |
+
+Each file speaks a different language. None of them gives a shared answer to the question: what is the agent trying to do?
 
 ## The gap
 
-The Gmail scope blocks `gmail.send`. The GitHub PAT has only read permissions.
-The network allowlist permits the internal service host — **and that is all it
-permits at**. Once the host is on the list, every HTTP method to every path on
-that host is allowed to leave the agent's network. A `DELETE /users/42` to the
-internal service goes through.
+The Gmail scope can block sending mail. The GitHub token can be read-only. The network allowlist can permit an internal host.
 
-The rule was consistent. The three surfaces were not. That is the gap Firma
-closes by replacing all three with a single Cedar policy evaluated against a
-canonical action class taxonomy.
+But once the host is allowed, the network layer does not understand whether the agent is reading a harmless endpoint or calling `DELETE /users/42`. The policy is fragmented, and the gaps appear between systems.
+
+Firma closes that gap by evaluating a normalized action, not a provider-specific permission string or a hostname alone.

@@ -1,0 +1,61 @@
+[package]
+name = "firma"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Firma CLI for managing and running OpenFirma components"
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "firma"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true, features = [
+  "color",
+  "derive",
+  "env",
+  "error-context",
+  "help",
+  "std",
+  "suggestions",
+  "usage",
+] }
+firma-authority = { workspace = true }
+firma-core = { workspace = true }
+firma-run = { workspace = true }
+firma-sidecar = { workspace = true }
+pasetors = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, default-features = false, features = [
+  "fs",
+  "macros",
+  "net",
+  "rt-multi-thread",
+  "signal",
+  "sync",
+  "time",
+] }
+tokio-util = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+nix = { workspace = true }

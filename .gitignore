@@ -22,6 +22,9 @@ target
 
 # JS
 node_modules
+.astro
+# Generated rustdoc -> Starlight content (built by docs-site/scripts/build-rustdoc-mdx.mjs)
+/docs-site/src/content/docs/api/
 
 # Python
 __pycache__/
@@ -30,9 +33,11 @@ __pycache__/
 dist/
 build/
 .venv/
+.mypy_cache/
 *.egg
 .data/
 .env
+.codex
 
 # generated key
 *.key
@@ -51,3 +56,4 @@ audit.jsonl
 # Demo runtime artifacts
 /examples/demos/*/.runtime/*
 .claude/
+.cursor/

@@ -1,31 +1,19 @@
-# Before Firma — host-level allowlist only
+# Before Firma: host-level allowlist only
 
-This is the artifact a platform team would hand-roll today to govern the
-agent's access to the internal service: an egress allowlist keyed on
-hostname.
+This folder shows the limits of governing an agent with only a network allowlist.
 
-| File                     | Surface           | Vocabulary |
-| ------------------------ | ----------------- | ---------- |
-| `network-allowlist.yaml` | Network allowlist | Hostnames  |
+The platform team wants to allow access to an internal API. The control file allows the host:
+
+| File | Surface | Vocabulary |
+| --- | --- | --- |
+| `network-allowlist.yaml` | Network egress | Hostnames |
+
+That seems safe until the agent reaches the wrong endpoint on the right host.
 
 ## The gap
 
-`api.internal` is on the allowlist. The egress firewall sees a TCP connection
-to `api.internal:443` carrying a TLS handshake — and that is all it sees. The
-HTTP method, the path, and the query string are inside the TLS stream and
-opaque to the proxy. Once the host is permitted, every endpoint on the host
-is permitted with it.
+`api.internal` is allowed. The network layer sees a connection to `api.internal:443`, but it does not know whether the agent is calling `GET /usage` or `GET /billing`.
 
-`GET /usage?user=user-123` and `GET /billing?user=user-123` are
-indistinguishable to this layer. Both reach the upstream service.
+A path-aware proxy could try to keep up with every route, but then the policy becomes a hand-maintained copy of the application. When the API changes, stale rules silently create risk.
 
-A path-aware network rule could be attempted by terminating TLS at an
-in-line proxy and matching on URL — but the result is a per-endpoint
-allowlist tied to the application's routing, hand-edited every time the API
-evolves. The blast radius of a stale rule is silent: a sensitive path is
-added on the server, the allowlist is not updated, the agent reaches it.
-
-That is the gap Firma closes. The decision is made on what the agent is
-doing — the canonical action class — not on the host or the path. Two
-endpoints on the same host evaluate against the same policy and produce two
-different decisions because they describe two different actions.
+Firma moves the decision up a level: it asks what action the agent is performing, then applies policy to that action.
