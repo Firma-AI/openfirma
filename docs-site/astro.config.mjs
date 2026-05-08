@@ -9,6 +9,11 @@ const base = isGitHubPages ? '/firma-oss' : '/';
 export default defineConfig({
   site: 'https://firma-ai.github.io',
   base,
+  vite: {
+    optimizeDeps: {
+      exclude: ['starlight-blog'],
+    },
+  },
   integrations: [
     mermaid({
       theme: 'neutral',
