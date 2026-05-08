@@ -1,0 +1,51 @@
+---
+title: OpenFirma
+description: Govern AI agents with local policy enforcement, scoped capabilities, and auditable decisions.
+editUrl: false
+tableOfContents: false
+pagefind: false
+---
+
+import Hero from '../../components/Hero.astro';
+import FeatureGrid from '../../components/FeatureGrid.astro';
+
+<Hero
+  eyebrow="Open source"
+  title="Govern AI agents at the runtime layer."
+  tagline="OpenFirma is an enforcement sidecar that wraps every outbound agent call with capability validation, policy evaluation, and signed audit - fully local, fully deterministic, fail-closed by design."
+  actions={[
+    { text: 'Read the quickstart', href: './quickstart/', variant: 'primary' },
+    { text: 'Browse the Rust API', href: './api/', variant: 'minimal' },
+  ]}
+/>
+
+<FeatureGrid
+  items={[
+    {
+      title: 'Quickstart',
+      description: 'Install, run the bundled demo, and observe a real ALLOW / DENY decision in under five minutes.',
+      href: './quickstart/',
+    },
+    {
+      title: 'Rust API Reference',
+      description: 'Auto-generated reference for every public item in the OpenFirma workspace crates.',
+      href: './api/',
+    },
+    {
+      title: 'Blog & changelog',
+      description: 'Release notes, design write-ups, and updates from the OpenFirma team.',
+      href: './blog/',
+    },
+  ]}
+/>
+
+## What it is
+
+OpenFirma is a governed runtime for AI agents. It starts agents with a runtime profile, routes outbound traffic through a local enforcement point, checks protected actions against policy, and records the result.
+
+Four invariants shape the design:
+
+- **Fail-closed** - every error path returns DENY.
+- **No network on the hot path** - capability validation and constraint enforcement run fully in-process.
+- **Deterministic** - same input plus same policy bundle produces the same decision.
+- **Envelope immutability** - `ExecutionEnvelope` is built once and never mutated in place.

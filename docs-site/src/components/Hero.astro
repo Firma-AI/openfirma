@@ -1,0 +1,286 @@
+---
+import { Code } from '@astrojs/starlight/components';
+
+interface Action {
+  text: string;
+  href: string;
+  variant?: 'primary' | 'minimal';
+}
+
+interface Props {
+  eyebrow?: string;
+  title: string;
+  tagline: string;
+  actions?: Action[];
+}
+
+const {
+  eyebrow = 'OpenFirma',
+  title,
+  tagline,
+  actions = [],
+} = Astro.props;
+
+const sample = `use firma_sidecar::pipeline::Pipeline;
+
+let decision = pipeline
+    .enforce(envelope)
+    .await?;
+
+match decision {
+    Decision::Allow(_)  => dispatch().await,
+    Decision::Deny(why) => audit(why),
+}`;
+---
+
+<section class="of-hero not-content">
+  <div class="of-hero__bg" aria-hidden="true"></div>
+
+  <div class="of-hero__inner">
+    <div class="of-hero__copy">
+      {eyebrow && <span class="of-hero__eyebrow">{eyebrow}</span>}
+      <h1 class="of-hero__title">{title}</h1>
+      <p class="of-hero__tagline">{tagline}</p>
+
+      {actions.length > 0 && (
+        <div class="of-hero__actions">
+          {actions.map((action) => (
+            <a
+              href={action.href}
+              class={`of-hero__btn of-hero__btn--${action.variant ?? 'minimal'}`}
+            >
+              {action.text}
+              {action.variant === 'primary' && (
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M5 3l5 5-5 5"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              )}
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+
+    <div class="of-hero__demo" aria-hidden="true">
+      <div class="of-hero__demo-frame">
+        <div class="of-hero__demo-chrome">
+          <span class="of-hero__demo-dot"></span>
+          <span class="of-hero__demo-dot"></span>
+          <span class="of-hero__demo-dot"></span>
+          <span class="of-hero__demo-name">enforce.rs</span>
+        </div>
+        <Code code={sample} lang="rust" />
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .of-hero {
+    position: relative;
+    isolation: isolate;
+    width: min(72rem, calc(100vw - 2rem));
+    margin-inline: calc(50% - min(36rem, calc(50vw - 1rem)));
+    padding: clamp(2.5rem, 6vw, 5rem) var(--sl-content-pad-x, 1.5rem)
+      clamp(3rem, 7vw, 6rem);
+    overflow: hidden;
+  }
+
+  .of-hero__bg {
+    position: absolute;
+    inset: -1px;
+    z-index: -1;
+    background:
+      radial-gradient(
+        ellipse 60% 60% at 80% 0%,
+        color-mix(in srgb, var(--sl-color-accent) 22%, transparent) 0%,
+        transparent 60%
+      ),
+      radial-gradient(
+        ellipse 50% 60% at 20% 100%,
+        color-mix(in srgb, var(--sl-color-accent) 12%, transparent) 0%,
+        transparent 60%
+      ),
+      linear-gradient(180deg, transparent, var(--sl-color-bg) 100%);
+  }
+
+  .of-hero__bg::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--sl-color-hairline-light) 1px, transparent 1px),
+      linear-gradient(90deg, var(--sl-color-hairline-light) 1px, transparent 1px);
+    background-size: 28px 28px;
+    mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, black, transparent 80%);
+    -webkit-mask-image: radial-gradient(
+      ellipse 70% 60% at 50% 0%,
+      black,
+      transparent 80%
+    );
+    opacity: 0.6;
+  }
+
+  .of-hero__inner {
+    display: grid;
+    gap: clamp(2rem, 4vw, 3rem);
+    grid-template-columns: 1fr;
+    align-items: center;
+    max-width: 68rem;
+    margin: 0 auto;
+  }
+
+  @media (min-width: 60rem) {
+    .of-hero__inner {
+      grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    }
+  }
+
+  .of-hero__copy {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .of-hero__eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--sl-color-text-accent);
+    width: fit-content;
+    padding: 0.3rem 0.65rem;
+    border-radius: 999px;
+    background: var(--sl-color-accent-low);
+    border: 1px solid color-mix(in srgb, var(--sl-color-accent) 25%, transparent);
+  }
+
+  .of-hero__title {
+    font-size: clamp(2.25rem, 5vw, 3.6rem);
+    line-height: 1.05;
+    letter-spacing: -0.035em;
+    font-weight: 700;
+    margin: 0;
+    color: var(--sl-color-gray-1);
+  }
+
+  .of-hero__tagline {
+    font-size: clamp(1rem, 1.5vw, 1.15rem);
+    line-height: 1.55;
+    color: var(--sl-color-gray-3);
+    max-width: 36rem;
+    margin: 0;
+  }
+
+  .of-hero__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.625rem;
+    margin-top: 0.5rem;
+  }
+
+  .of-hero__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.55rem 1rem;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: background-color 120ms ease, border-color 120ms ease,
+      transform 120ms ease;
+    line-height: 1;
+  }
+
+  .of-hero__btn--primary {
+    background: var(--sl-color-text);
+    color: var(--sl-color-text-invert);
+    border: 1px solid var(--sl-color-text);
+    box-shadow:
+      0 1px 0 rgba(0, 0, 0, 0.05),
+      0 1px 2px rgba(0, 0, 0, 0.04);
+  }
+
+  .of-hero__btn--primary:hover {
+    background: var(--sl-color-gray-2);
+    border-color: var(--sl-color-gray-2);
+  }
+
+  .of-hero__btn--minimal {
+    background: transparent;
+    color: var(--sl-color-text);
+    border: 1px solid var(--sl-color-hairline-shade);
+  }
+
+  .of-hero__btn--minimal:hover {
+    background: var(--sl-color-hairline-light);
+  }
+
+  .of-hero__demo {
+    position: relative;
+  }
+
+  .of-hero__demo-frame {
+    border-radius: 0.75rem;
+    overflow: hidden;
+    border: 1px solid var(--sl-color-hairline-shade);
+    background: var(--of-surface-elevated);
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.04) inset,
+      0 24px 48px -16px rgba(15, 23, 42, 0.18),
+      0 12px 24px -12px rgba(15, 23, 42, 0.12);
+  }
+
+  .of-hero__demo-chrome {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--sl-color-hairline-light);
+    border-bottom: 1px solid var(--sl-color-hairline);
+  }
+
+  .of-hero__demo-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 999px;
+    background: var(--sl-color-hairline-shade);
+  }
+
+  .of-hero__demo-name {
+    margin-inline-start: auto;
+    font-family: var(--sl-font-mono);
+    font-size: 0.7rem;
+    color: var(--sl-color-gray-4);
+  }
+
+  .of-hero__demo-frame :global(.expressive-code) {
+    margin: 0;
+  }
+
+  .of-hero__demo-frame :global(.expressive-code .frame) {
+    border: none !important;
+    border-radius: 0 !important;
+  }
+
+  .of-hero__demo-frame :global(.expressive-code .frame .header) {
+    display: none;
+  }
+</style>

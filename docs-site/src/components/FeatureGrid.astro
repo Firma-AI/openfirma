@@ -1,0 +1,122 @@
+---
+interface Item {
+  title: string;
+  description: string;
+  href: string;
+  badge?: string;
+}
+
+interface Props {
+  items: Item[];
+}
+
+const { items } = Astro.props;
+---
+
+<div class="of-grid not-content">
+  {items.map((item) => (
+    <a class="of-grid__card" href={item.href}>
+      <div class="of-grid__head">
+        <h3 class="of-grid__title">{item.title}</h3>
+        {item.badge && <span class="of-grid__badge">{item.badge}</span>}
+      </div>
+      <p class="of-grid__desc">{item.description}</p>
+      <span class="of-grid__arrow" aria-hidden="true">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+          <path
+            d="M5 3l5 5-5 5"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </span>
+    </a>
+  ))}
+</div>
+
+<style>
+  .of-grid {
+    display: grid;
+    gap: 0.875rem;
+    grid-template-columns: 1fr;
+    width: min(72rem, calc(100vw - 2rem));
+    margin-inline: calc(50% - min(36rem, calc(50vw - 1rem)));
+    margin-block: 2rem;
+  }
+
+  @media (min-width: 50rem) {
+    .of-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+
+  .of-grid__card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 1.125rem 1.25rem 1.25rem;
+    border-radius: 0.625rem;
+    border: 1px solid var(--sl-color-hairline);
+    background: var(--of-surface-elevated);
+    text-decoration: none;
+    color: inherit;
+    transition: border-color 140ms ease, transform 140ms ease,
+      box-shadow 140ms ease, background-color 140ms ease;
+  }
+
+  .of-grid__card:hover {
+    border-color: color-mix(in srgb, var(--sl-color-accent) 35%, var(--sl-color-hairline-shade));
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px -10px rgba(15, 23, 42, 0.12);
+  }
+
+  .of-grid__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .of-grid__title {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 650;
+    letter-spacing: -0.012em;
+    color: var(--sl-color-gray-1);
+  }
+
+  .of-grid__badge {
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.4rem;
+    border-radius: 999px;
+    color: var(--sl-color-text-accent);
+    background: var(--sl-color-accent-low);
+    border: 1px solid color-mix(in srgb, var(--sl-color-accent) 25%, transparent);
+  }
+
+  .of-grid__desc {
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.55;
+    color: var(--sl-color-gray-3);
+  }
+
+  .of-grid__arrow {
+    position: absolute;
+    top: 1.125rem;
+    right: 1rem;
+    color: var(--sl-color-gray-5);
+    transition: color 140ms ease, transform 140ms ease;
+  }
+
+  .of-grid__card:hover .of-grid__arrow {
+    color: var(--sl-color-text-accent);
+    transform: translateX(2px);
+  }
+</style>
