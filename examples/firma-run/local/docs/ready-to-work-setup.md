@@ -46,13 +46,13 @@ examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID
 Terminal A (authority):
 
 ```bash
-cargo run -p firma-authority -- --config .local/authority.toml
+cargo run -p firma -- authority --config .local/authority.toml
 ```
 
 Terminal B (sidecar):
 
 ```bash
-cargo run -p firma-sidecar -- -c .local/firma_sidecar.local.toml
+cargo run -p firma -- sidecar -c .local/firma_sidecar.local.toml
 ```
 
 Terminal C (agent via `firma run`):
@@ -64,13 +64,13 @@ export FIRMA_RUN_REQUIRE_SESSION_ID=true
 Codex:
 
 ```bash
-cargo run -p firma-run -- run --profile codex -- codex
+cargo run -p firma -- run --profile codex -- codex
 ```
 
 Claude:
 
 ```bash
-cargo run -p firma-run -- run --profile claude-code -- claude
+cargo run -p firma -- run --profile claude-code -- claude
 ```
 
 ## 4) Expected signals

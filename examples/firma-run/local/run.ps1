@@ -16,5 +16,5 @@ if ($commandArgs[0] -eq "--") {
   $commandArgs = $commandArgs[1..($commandArgs.Count - 1)]
 }
 
-& cargo run -p firma-run -- run -- @commandArgs
+& cargo run -p firma -- run -- @commandArgs
 exit $LASTEXITCODE

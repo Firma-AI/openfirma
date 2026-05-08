@@ -1,11 +1,14 @@
 # CLI Reference
 
-## `firma-sidecar`
+Single binary: `firma <subcommand>`. All examples below assume `firma` is on
+PATH or invoked via `cargo run -p firma --`.
+
+## `firma sidecar`
 
 ### Usage
 
 ```text
-firma-sidecar [OPTIONS]
+firma sidecar [OPTIONS]
 ```
 
 ### Options
@@ -14,41 +17,45 @@ firma-sidecar [OPTIONS]
 | -------------------- | ----- | -------------------------------- | -------------------- | ------------------------- |
 | `--config-file`      | `-c`  | `FIRMA_SIDECAR_CONFIG_FILE`      | `firma_sidecar.toml` | TOML configuration file   |
 | `--health-bind-addr` |       | `FIRMA_SIDECAR_HEALTH_BIND_ADDR` | `127.0.0.1:9000`     | Health check bind address |
-| `--log-file`         | `-L`  | `FIRMA_SIDECAR_LOG_FILE`         | none                 | File path for log output  |
-| `--log-filter`       | `-f`  | `FIRMA_SIDECAR_LOG_FILTER`       | none                 | Tracing filter directive  |
-| `--log-level`        | `-l`  | `FIRMA_SIDECAR_LOG_LEVEL`        | `info`               | Log level                 |
+
+Log-level flags are global (placed **before** the subcommand):
+
+| Flag           | Env                | Default | Description                                |
+| -------------- | ------------------ | ------- | ------------------------------------------ |
+| `--log-filter` | `FIRMA_LOG_FILTER` | `info`  | `EnvFilter` directive (e.g. `firma=debug`) |
+| `--log-file`   | `FIRMA_LOG_FILE`   | none    | File path for log output                   |
 
 All options can be set through environment variables. CLI flags take precedence
 over environment variables.
 
-Valid log levels are `trace`, `debug`, `info`, `warn`, and `error`.
+Valid log-filter values include `trace`, `debug`, `info`, `warn`, and `error`.
 
 ### Examples
 
 Start with defaults:
 
 ```bash
-firma-sidecar
+firma sidecar
 ```
 
 Specify a config file and debug logging:
 
 ```bash
-firma-sidecar -c /etc/firma/sidecar.toml -l debug
+firma --log-filter debug sidecar -c /etc/firma/sidecar.toml
 ```
 
 Log to a file with a filter:
 
 ```bash
-firma-sidecar -L /var/log/firma.log -f "firma_sidecar=debug,tower=warn"
+firma --log-file /var/log/firma.log --log-filter "firma_sidecar=debug,tower=warn" sidecar
 ```
 
 Use environment variables:
 
 ```bash
 export FIRMA_SIDECAR_CONFIG_FILE=/etc/firma/sidecar.toml
-export FIRMA_SIDECAR_LOG_LEVEL=debug
-firma-sidecar
+export FIRMA_LOG_FILTER=debug
+firma sidecar
 ```
 
 ### Health Check
@@ -88,19 +95,19 @@ endpoint is reported as `(disabled)`.
 
 ### Exit codes
 
-| Code | When                                                              |
-| ---- | ----------------------------------------------------------------- |
-| `0`  | Graceful shutdown after `SIGINT` / `SIGTERM`.                     |
+| Code | When                                                             |
+| ---- | ---------------------------------------------------------------- |
+| `0`  | Graceful shutdown after `SIGINT` / `SIGTERM`.                    |
 | `1`  | Configuration parse error, validation error, or startup failure. |
 
 
-## `firma-authority`
+## `firma authority`
 
 Reference Authority binary used for local development. Issues
 PASETO v4 capability tokens, streams policy bundles and
 revocations. Pre-flight only, never on the hot path.
 
-### `firma-authority issue`
+### `firma authority issue`
 
 Issues a signed capability token directly from the loaded Cedar
 bundle and writes it to a TOML seed file consumable by the
@@ -109,7 +116,7 @@ wires the gRPC `IssueCapability` client; not intended for
 production traffic.
 
 ```bash
-firma-authority --config authority.toml issue \
+firma authority --config authority.toml issue \
   --agent-id demo-agent \
   --session-id demo-session \
   --action communication.external.send \
@@ -118,14 +125,14 @@ firma-authority --config authority.toml issue \
   --output capability-demo-agent.toml
 ```
 
-| Flag               | Required | Default | Description                                              |
-| ------------------ | -------- | ------- | -------------------------------------------------------- |
-| `--agent-id`       | yes      |         | Token agent identity.                                    |
-| `--session-id`     | yes      |         | Token session identity.                                  |
-| `--action`         | yes      |         | Action class. Repeat the flag for multiple.              |
-| `--resource-scope` | no       | `*`     | Resource scope pattern.                                  |
-| `--ttl-seconds`    | no       | `3600`  | Requested TTL. Clamped by `max_ttl_seconds` in config.   |
-| `--output`/`-o`    | yes      |         | Path to write the seed TOML.                             |
+| Flag               | Required | Default | Description                                            |
+| ------------------ | -------- | ------- | ------------------------------------------------------ |
+| `--agent-id`       | yes      |         | Token agent identity.                                  |
+| `--session-id`     | yes      |         | Token session identity.                                |
+| `--action`         | yes      |         | Action class. Repeat the flag for multiple.            |
+| `--resource-scope` | no       | `*`     | Resource scope pattern.                                |
+| `--ttl-seconds`    | no       | `3600`  | Requested TTL. Clamped by `max_ttl_seconds` in config. |
+| `--output`/`-o`    | yes      |         | Path to write the seed TOML.                           |
 
 The subcommand evaluates the loaded Cedar bundle exactly like
 the gRPC `IssueCapability` handler — a Cedar deny exits non-zero

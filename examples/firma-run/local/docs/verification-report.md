@@ -9,7 +9,7 @@ Use it as a reviewer checklist when validating local setup changes.
 Use this prompt inside a Codex session started with:
 
 ```bash
-cargo run -p firma-run -- run --profile codex -- codex
+cargo run -p firma -- run --profile codex -- codex
 ```
 
 Then ask:

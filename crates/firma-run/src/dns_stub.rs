@@ -1,9 +1,16 @@
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream, UdpSocket};
+use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::thread;
 
-use crate::args::DnsStubArgs;
 use crate::error::RunError;
+
+/// Lib-level input for [`execute_dns_stub`]. The CLI layer builds this
+/// from its `clap`-derived args struct.
+#[derive(Debug, Clone)]
+pub struct DnsStubInput {
+    /// UDP/TCP DNS listen address reachable by the sandboxed agent process.
+    pub listen: SocketAddr,
+}
 
 const DNS_HEADER_LEN: usize = 12;
 const DNS_RCODE_REFUSED: u8 = 5;
@@ -17,7 +24,7 @@ const DNS_RCODE_REFUSED: u8 = 5;
 /// # Errors
 ///
 /// Returns an error if UDP or TCP DNS listeners cannot bind.
-pub fn execute_dns_stub(args: &DnsStubArgs) -> Result<i32, RunError> {
+pub fn execute_dns_stub(args: &DnsStubInput) -> Result<i32, RunError> {
     let udp = UdpSocket::bind(args.listen).map_err(|error| {
         RunError::Spawn(format!(
             "failed to bind sandbox DNS UDP stub at {}: {error}",

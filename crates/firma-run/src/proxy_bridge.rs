@@ -8,11 +8,21 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 #[cfg(unix)]
 use std::thread;
 
-use crate::args::ProxyBridgeArgs;
 use crate::error::RunError;
+
+/// Lib-level input for [`execute_proxy_bridge`]. The CLI layer builds this
+/// from its `clap`-derived args struct.
+#[derive(Debug, Clone)]
+pub struct ProxyBridgeInput {
+    /// TCP listen address reachable by the sandboxed agent process.
+    pub listen: std::net::SocketAddr,
+    /// Upstream host-side Unix socket path exposed by `firma run`.
+    pub upstream_uds: PathBuf,
+}
 
 /// Run the internal sandbox bridge process.
 ///
@@ -23,7 +33,7 @@ use crate::error::RunError;
 ///
 /// Returns an error if the bridge cannot bind/listen or if the platform does
 /// not support Unix sockets.
-pub fn execute_proxy_bridge(args: &ProxyBridgeArgs) -> Result<i32, RunError> {
+pub fn execute_proxy_bridge(args: &ProxyBridgeInput) -> Result<i32, RunError> {
     #[cfg(unix)]
     {
         run_proxy_bridge_unix(args)?;
@@ -41,7 +51,7 @@ pub fn execute_proxy_bridge(args: &ProxyBridgeArgs) -> Result<i32, RunError> {
 }
 
 #[cfg(unix)]
-fn run_proxy_bridge_unix(args: &ProxyBridgeArgs) -> Result<(), RunError> {
+fn run_proxy_bridge_unix(args: &ProxyBridgeInput) -> Result<(), RunError> {
     let attribution_headers = load_attr_headers_from_env();
     let listener = TcpListener::bind(args.listen).map_err(|error| {
         RunError::Spawn(format!(

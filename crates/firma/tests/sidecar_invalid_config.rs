@@ -8,10 +8,19 @@
 //! - validation error (`log.level = "verbose"`)
 //! - validation error (`policy.dir` empty)
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code: panics are acceptable test failures"
+)]
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+
+fn firma_bin() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_firma"))
+}
 
 fn write_config(toml_body: &str) -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
@@ -21,14 +30,13 @@ fn write_config(toml_body: &str) -> (tempfile::TempDir, PathBuf) {
 }
 
 fn run_sidecar(config_path: &PathBuf) -> (i32, String, String) {
-    let bin = env!("CARGO_BIN_EXE_firma-sidecar");
-    let output = Command::new(bin)
-        .arg("--config-file")
+    let output = Command::new(firma_bin())
+        .args(["sidecar", "--config-file"])
         .arg(config_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .expect("spawn firma-sidecar");
+        .expect("spawn firma sidecar");
     let code = output.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
