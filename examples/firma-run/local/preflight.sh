@@ -46,10 +46,10 @@ case "$uname_s" in
     ;;
 esac
 
-if command -v firma-sidecar >/dev/null 2>&1; then
-  ok "firma-sidecar binary found"
+if command -v firma >/dev/null 2>&1; then
+  ok "firma binary found"
 else
-  warn "firma-sidecar binary not found in PATH"
+  warn "firma binary not found in PATH"
 fi
 
 ok "preflight completed"

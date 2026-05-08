@@ -10,4 +10,4 @@ if [[ $1 == "--" ]]; then
   shift
 fi
 
-cargo run -p firma-run -- run -- "$@"
+cargo run -p firma -- run -- "$@"

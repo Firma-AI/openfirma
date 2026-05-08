@@ -1,6 +1,6 @@
 # Configuration Reference
 
-`firma-sidecar` reads configuration from a TOML file specified with the
+`firma sidecar` reads configuration from a TOML file specified with the
 `--config-file` CLI flag. The default path is `firma_sidecar.toml`.
 
 Configuration is validated at startup. Invalid fields cause the sidecar to exit
@@ -116,13 +116,13 @@ signing_key_path = "/etc/firma/audit.pem"
 
 Selects the interception mode and transport-specific parameters.
 
-| Field                | Type        | Default        | Description                         |
-| -------------------- | ----------- | -------------- | ----------------------------------- |
-| `mode`               | string      | `http_proxy`   | `http_proxy`, `grpc`, `unix_socket` |
-| `listen_addr`        | socket addr | `0.0.0.0:8080` | TCP address for HTTP proxy and gRPC |
-| `socket_path`        | path        | none           | Required when mode is `unix_socket` |
-| `drain_timeout_secs` | u64         | `30`           | Shutdown drain timeout in seconds   |
-| `max_request_body_bytes` | usize   | `4194304`      | Max inbound request body size (bytes) |
+| Field                    | Type        | Default        | Description                           |
+| ------------------------ | ----------- | -------------- | ------------------------------------- |
+| `mode`                   | string      | `http_proxy`   | `http_proxy`, `grpc`, `unix_socket`   |
+| `listen_addr`            | socket addr | `0.0.0.0:8080` | TCP address for HTTP proxy and gRPC   |
+| `socket_path`            | path        | none           | Required when mode is `unix_socket`   |
+| `drain_timeout_secs`     | u64         | `30`           | Shutdown drain timeout in seconds     |
+| `max_request_body_bytes` | usize       | `4194304`      | Max inbound request body size (bytes) |
 
 Validation:
 
@@ -151,16 +151,16 @@ Defaults are MITM-enabled with a curated common API host list. Hosts not matched
 by `intercept_hosts` stay in transparent CONNECT tunnel mode (destination-level
 enforcement only).
 
-| Field                 | Type        | Default  | Description                                        |
-| --------------------- | ----------- | -------- | -------------------------------------------------- |
-| `enabled`             | bool        | `true`   | Enables MITM for hosts matched by `intercept_hosts` |
-| `ca_cert_path`        | path        | none     | Optional explicit CA certificate path              |
-| `ca_key_path`         | path        | none     | Optional explicit CA private key path              |
-| `intercept_hosts`     | list<string>| curated common API hosts | Host patterns to intercept (`*` or `*.example.com`) |
-| `bypass_hosts`        | list<string>| `[]`     | Host patterns to force CONNECT tunnel mode         |
-| `strict_hosts`        | list<string>| `[]`     | Host patterns that must be intercepted             |
-| `cert_ttl_secs`       | u64         | `86400`  | Leaf certificate cache TTL in seconds              |
-| `cert_cache_capacity` | usize       | `1024`   | Maximum number of cached leaf certificates         |
+| Field                 | Type         | Default                  | Description                                         |
+| --------------------- | ------------ | ------------------------ | --------------------------------------------------- |
+| `enabled`             | bool         | `true`                   | Enables MITM for hosts matched by `intercept_hosts` |
+| `ca_cert_path`        | path         | none                     | Optional explicit CA certificate path               |
+| `ca_key_path`         | path         | none                     | Optional explicit CA private key path               |
+| `intercept_hosts`     | list<string> | curated common API hosts | Host patterns to intercept (`*` or `*.example.com`) |
+| `bypass_hosts`        | list<string> | `[]`                     | Host patterns to force CONNECT tunnel mode          |
+| `strict_hosts`        | list<string> | `[]`                     | Host patterns that must be intercepted              |
+| `cert_ttl_secs`       | u64          | `86400`                  | Leaf certificate cache TTL in seconds               |
+| `cert_cache_capacity` | usize        | `1024`                   | Maximum number of cached leaf certificates          |
 
 Validation:
 
@@ -506,13 +506,13 @@ Tuning for the background Authority stream clients
 `policy.authority_url` is set; when unset the sidecar runs in dev
 mode and this section is ignored.
 
-| Field                                  | Type | Default | Description                                                   |
-| -------------------------------------- | ---- | ------- | ------------------------------------------------------------- |
-| `connect_timeout_secs`                 | u64  | `10`    | Connection timeout for the tonic channel                      |
-| `reconnect_min_backoff_ms`             | u64  | `250`   | Minimum reconnect backoff                                     |
-| `reconnect_max_backoff_secs`           | u64  | `30`    | Maximum reconnect backoff                                     |
-| `revocation_readiness_grace_ms`        | u64  | `500`   | Grace period after revocation stream opens before readiness   |
-| `revocation_fail_closed_on_disconnect` | bool | `false` | Flip revocation readiness back to false when the stream drops |
+| Field                                  | Type | Default | Description                                                                                                                 |
+| -------------------------------------- | ---- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `connect_timeout_secs`                 | u64  | `10`    | Connection timeout for the tonic channel                                                                                    |
+| `reconnect_min_backoff_ms`             | u64  | `250`   | Minimum reconnect backoff                                                                                                   |
+| `reconnect_max_backoff_secs`           | u64  | `30`    | Maximum reconnect backoff                                                                                                   |
+| `revocation_readiness_grace_ms`        | u64  | `500`   | Grace period after revocation stream opens before readiness                                                                 |
+| `revocation_fail_closed_on_disconnect` | bool | `false` | Flip revocation readiness back to false when the stream drops                                                               |
 | `public_key_path`                      | path | none    | Authority Ed25519 public key. Required when `[capability_seed].paths` is non-empty so the sidecar can verify seeded tokens. |
 
 Validation:
@@ -581,7 +581,7 @@ Validation:
 ### `[capability_seed]`
 
 Static capability provisioning. Each path entry is a TOML file
-produced by `firma-authority issue` (see `docs/cli.md`). The sidecar
+produced by `firma authority issue` (see `docs/cli.md`). The sidecar
 loads every seed at startup, parses it, and pre-populates the
 `CapabilityMap` so Stage 1 has tokens to select against.
 

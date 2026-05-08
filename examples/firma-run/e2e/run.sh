@@ -13,7 +13,7 @@ Usage:
 Description:
   End-to-end local harness for firma-run runtime plumbing.
   It:
-    1) boots a local firma-sidecar with temporary config,
+    1) boots a local firma sidecar with temporary config,
     2) runs a sandboxed command via firma run,
     3) asserts sidecar audit events were emitted,
     4) verifies fail-closed behavior when sidecar is down.
@@ -251,7 +251,7 @@ else
 fi
 
 ok "starting local sidecar on 127.0.0.1:${SIDECAR_PORT}"
-cargo run -p firma-sidecar -- -c "$SIDECAR_CONFIG" --health-bind-addr "$HEALTH_ADDR" -l info >"$SIDECAR_LOG" 2>&1 &
+cargo run -p firma -- --log-filter info sidecar -c "$SIDECAR_CONFIG" --health-bind-addr "$HEALTH_ADDR" >"$SIDECAR_LOG" 2>&1 &
 SIDECAR_PID=$!
 
 if ! wait_for_health "$HEALTH_ADDR"; then
@@ -263,14 +263,14 @@ ok "sidecar is healthy"
 if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
   run_expect_fail "curl request is intercepted+denied" \
     env HOME="$FAKE_HOME" \
-    cargo run -p firma-run -- run \
+    cargo run -p firma -- run \
       --profile claude-code \
       --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
       -- /bin/sh -lc 'curl -fsS --max-time 20 http://httpbin.org/get -o /dev/null'
 
   run_expect_fail "child-process wget is intercepted+denied" \
     env HOME="$FAKE_HOME" \
-    cargo run -p firma-run -- run \
+    cargo run -p firma -- run \
       --profile claude-code \
       --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
       -- /bin/sh -lc 'cat > /tmp/child-fetch.sh << "SH"
@@ -282,14 +282,14 @@ chmod +x /tmp/child-fetch.sh
 
   run_expect_fail "write outside cwd is blocked" \
     env HOME="$FAKE_HOME" \
-    cargo run -p firma-run -- run \
+    cargo run -p firma -- run \
       --profile claude-code \
       --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
       -- /bin/sh -lc 'echo blocked >/etc/firma-run-claude-probe'
 
   run_expect_fail "read masked ssh key is blocked" \
     env HOME="$FAKE_HOME" \
-    cargo run -p firma-run -- run \
+    cargo run -p firma -- run \
       --profile claude-code \
       --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
       -- /bin/sh -lc 'cat ~/.ssh/id_rsa'
@@ -299,7 +299,7 @@ ok "running sandboxed command through firma run"
 if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
   # Validate post-acceptance that normal wrapped run still executes and is audited.
   set +e
-  cargo run -p firma-run -- run \
+  cargo run -p firma -- run \
     --profile "$PROFILE" \
     --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
     -- /bin/sh -lc 'true' >"$RUN_STDOUT" 2>"$RUN_STDERR"
@@ -307,7 +307,7 @@ if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
   set -e
 else
   set +e
-  cargo run -p firma-run -- run \
+  cargo run -p firma -- run \
     --profile "$PROFILE" \
     --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
     -- "${SANDBOX_CMD[@]}" >"$RUN_STDOUT" 2>"$RUN_STDERR"
@@ -351,7 +351,7 @@ ok "verifying fail-closed when sidecar is unavailable"
 stop_sidecar
 
 set +e
-cargo run -p firma-run -- run \
+cargo run -p firma -- run \
   --profile "$PROFILE" \
   --sidecar-endpoint "tcp://127.0.0.1:${SIDECAR_PORT}" \
   -- "${SANDBOX_CMD[@]}" >/dev/null 2>"$FAIL_STDERR"
@@ -370,7 +370,7 @@ ok "fail-closed behavior verified (exit=${STATUS})"
 if [[ "$CLAUDE_ACCEPTANCE" -eq 1 ]]; then
   ok "claude-code shell acceptance E2E PASSED"
 else
-  ok "firma-run E2E PASSED"
+  ok "firma run E2E PASSED"
 fi
 if [[ "$KEEP_ARTIFACTS" -eq 1 ]]; then
   ok "artifacts: ${WORKDIR}"

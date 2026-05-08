@@ -11,7 +11,8 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    clippy::too_many_lines
+    clippy::too_many_lines,
+    reason = "test code: panics are acceptable test failures"
 )]
 
 use std::fs::File;
@@ -42,6 +43,10 @@ fn pick_free_port() -> u16 {
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     port
+}
+
+fn firma_bin() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_firma"))
 }
 
 #[test]
@@ -116,28 +121,24 @@ signing_key_path = '{audit_key}'
     )
     .unwrap();
 
-    let stdout_log = tmp.path().join("sidecar.stdout.log");
-    let stdout_file = File::create(&stdout_log).unwrap();
-    let stderr_file = File::create(tmp.path().join("sidecar.stderr.log")).unwrap();
+    let stdout_file = File::create(tmp.path().join("sidecar.stdout.log")).unwrap();
+    let stderr_log = tmp.path().join("sidecar.stderr.log");
+    let stderr_file = File::create(&stderr_log).unwrap();
 
-    let bin = env!("CARGO_BIN_EXE_firma-sidecar");
-    let mut child = Command::new(bin)
-        .arg("--config-file")
+    let mut child = Command::new(firma_bin())
+        .args(["sidecar", "--config-file"])
         .arg(&sidecar_toml)
-        .arg("--health-bind-addr")
-        .arg(format!("127.0.0.1:{health_port}"))
-        .arg("--log-level")
-        .arg("info")
+        .args(["--health-bind-addr", &format!("127.0.0.1:{health_port}")])
         .stdout(stdout_file)
         .stderr(stderr_file)
         .spawn()
-        .expect("spawn firma-sidecar");
+        .expect("spawn firma sidecar");
 
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut lines: Vec<String> = Vec::new();
     while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(200));
-        let Ok(file) = File::open(&stdout_log) else {
+        let Ok(file) = File::open(&stderr_log) else {
             continue;
         };
         lines = BufReader::new(file).lines().map_while(Result::ok).collect();

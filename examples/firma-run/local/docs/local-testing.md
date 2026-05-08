@@ -89,7 +89,7 @@ Example:
 ```bash
 export FIRMA_SIDECAR_ENDPOINT=tcp://127.0.0.1:9090
 export FIRMA_PROXY_LISTEN_ADDR=127.0.0.1:18181
-cargo run -p firma-run -- run -- "your command"
+cargo run -p firma -- run -- "your command"
 ```
 
 Strict capability workflow (session-bound tokens):
@@ -97,7 +97,7 @@ Strict capability workflow (session-bound tokens):
 ```bash
 export FIRMA_RUN_SESSION_ID=demo-session
 export FIRMA_RUN_REQUIRE_SESSION_ID=true
-cargo run -p firma-run -- run --profile codex -- codex
+cargo run -p firma -- run --profile codex -- codex
 ```
 
 This prevents late `TokenInvalid` denials caused by runtime-generated session
@@ -119,7 +119,7 @@ This prevents `UnknownCA` failures for managed HTTPS MITM targets.
 Terminal A:
 
 ```bash
-cargo run -p firma-sidecar -- -c .local/firma_sidecar.local.toml
+cargo run -p firma -- sidecar -c .local/firma_sidecar.local.toml
 ```
 
 When sidecar starts in `http_proxy` mode, it now prints an explicit routing
@@ -129,7 +129,7 @@ the sidecar listener (`127.0.0.1:8080` by default).
 Terminal B:
 
 ```bash
-cargo run -p firma-run -- run --profile codex -- codex
+cargo run -p firma -- run --profile codex -- codex
 ```
 
 Startup should include:
@@ -198,7 +198,7 @@ Identity default:
 Compatibility override:
 
 ```bash
-cargo run -p firma-run -- run --profile codex --preserve-host-user -- codex
+cargo run -p firma -- run --profile codex --preserve-host-user -- codex
 ```
 
 Config override (`firma-run.yaml`):
@@ -260,7 +260,7 @@ Notes:
 Manual backend override example:
 
 ```bash
-cargo run -p firma-run -- run --backend vz --profile codex -- codex
+cargo run -p firma -- run --backend vz --profile codex -- codex
 ```
 
 ## Run the local E2E harness

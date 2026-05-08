@@ -1,8 +1,8 @@
 pub mod cedar_loader;
-pub mod cli;
 pub mod config;
 pub mod issuance;
 pub mod revocation;
+pub mod seed;
 pub mod server;
 pub mod service;
 

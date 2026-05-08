@@ -38,11 +38,11 @@ if ($IsWindows) {
   Write-Warn "unrecognized host OS"
 }
 
-$sidecar = Get-Command firma-sidecar -ErrorAction SilentlyContinue
+$sidecar = Get-Command firma -ErrorAction SilentlyContinue
 if ($null -ne $sidecar) {
-  Write-Ok "firma-sidecar binary found"
+  Write-Ok "firma binary found"
 } else {
-  Write-Warn "firma-sidecar binary not found in PATH"
+  Write-Warn "firma binary not found in PATH"
 }
 
 Write-Ok "preflight completed"

@@ -10,7 +10,7 @@ From the repository root:
 
 ```bash
 examples/firma-run/local/setup.sh
-cargo run -p firma-sidecar -- -c .local/firma_sidecar.local.toml
+cargo run -p firma -- sidecar -c .local/firma_sidecar.local.toml
 examples/firma-run/local/run.sh -- curl https://example.com
 ```
 

@@ -1,18 +1,24 @@
+//! Runner for `firma sidecar`.
+
 use std::path::Path;
+use std::process::ExitCode;
 use std::sync::Arc;
 
-use clap::Parser as _;
-use firma_sidecar::{args, config, handler, health, log, startup};
+use firma_sidecar::{config, handler, health, startup};
 use tokio::io::AsyncReadExt as _;
 use tokio_util::sync::CancellationToken;
 
-use crate::args::Args;
+use crate::args::sidecar::Args;
+use crate::signal::wait_for_shutdown;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
-    log::init_log(args.log_level, args.log_file.as_deref(), args.log_filter)?;
-    tracing::debug!("firma-sidecar starting");
+/// Run the sidecar subcommand.
+///
+/// # Errors
+///
+/// Returns an error if config loading, startup, or any spawned task
+/// fails.
+pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
+    tracing::debug!("firma sidecar starting");
 
     tracing::debug!("loading configuration from {}", args.config_file.display());
     let config = read_config(&args.config_file).await?;
@@ -30,13 +36,12 @@ async fn main() -> anyhow::Result<()> {
     tracing::debug!("health check server listening at {}", args.health_bind_addr);
 
     tracing::debug!("registering signal handlers for graceful shutdown");
-    let sigterm_handler = {
+    let shutdown_handler = {
         let exit = exit.clone();
         tokio::spawn(async move {
-            handle_sigterm(exit).await;
+            wait_for_shutdown(exit).await;
         })
     };
-    tracing::debug!("signal handlers registered");
 
     let (audit_payload_tx, audit_payload_rx) = tokio::sync::mpsc::channel(100);
     let audit_event_builder = startup::load_audit_event_builder(&config.audit)?;
@@ -47,7 +52,6 @@ async fn main() -> anyhow::Result<()> {
         exit.clone(),
     )?;
 
-    // Optional pre-flight: call IssueCapability to provision Stage 1 tokens.
     let preflight = match (&config.preflight, config.policy.authority_url.as_deref()) {
         (Some(pf_config), Some(authority_url)) => {
             Some(startup::run_preflight(pf_config, authority_url).await?)
@@ -87,16 +91,14 @@ async fn main() -> anyhow::Result<()> {
         audit_sink,
         health_server,
         interceptor_handle,
-        sigterm_handler,
+        shutdown_handler,
         authority_stream_tasks
     );
-    tracing::debug!("firma-sidecar exiting");
+    tracing::debug!("firma sidecar exiting");
 
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
-/// Build the [`startup::StartupReport`] from runtime state and emit
-/// the seven-line contract.
 fn emit_ready_sequence(config_path: &Path, config: &config::SidecarConfig, mapping_rules: usize) {
     let (policy_bundle_version, policy_count) =
         startup::compute_policy_bundle_version(&config.policy.dir)
@@ -120,8 +122,6 @@ fn emit_ready_sequence(config_path: &Path, config: &config::SidecarConfig, mappi
     });
 }
 
-/// Format the interceptor address used in the contract's "interceptor
-/// listening" line according to the active mode.
 fn interceptor_addr_display(ic: &config::InterceptorConfig) -> String {
     match ic.mode {
         config::InterceptorMode::HttpProxy | config::InterceptorMode::Grpc => {
@@ -135,7 +135,6 @@ fn interceptor_addr_display(ic: &config::InterceptorConfig) -> String {
     }
 }
 
-/// Emit operator hints for common routing/coverage confusion cases.
 fn emit_operator_routing_hints(config: &config::SidecarConfig) {
     if config.interceptor.mode == config::InterceptorMode::HttpProxy {
         let proxy = format!("http://{}", config.interceptor.listen_addr);
@@ -144,64 +143,18 @@ fn emit_operator_routing_hints(config: &config::SidecarConfig) {
             "http_proxy mode active: clients must route traffic through this proxy for sidecar enforcement/audit"
         );
         tracing::info!(
-            "set HTTP_PROXY/HTTPS_PROXY/ALL_PROXY or run via firma-run wrapper to guarantee coverage"
+            "set HTTP_PROXY/HTTPS_PROXY/ALL_PROXY or run via firma run wrapper to guarantee coverage"
         );
     }
 }
 
-/// Handler worker for catching sigterm signals.
-///
-/// When a SIGTERM signal is caught, the `exit` flag is triggered. On Windows,
-/// only Ctrl-C (`SIGINT` equivalent) is supported.
-async fn handle_sigterm(exit: CancellationToken) {
-    #[cfg(unix)]
-    {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut sigterm) => {
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {
-                        tracing::info!("received SIGINT, shutting down");
-                    }
-                    _ = sigterm.recv() => {
-                        tracing::info!("received SIGTERM, shutting down");
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "failed to register SIGTERM handler: {e}; falling back to SIGINT only"
-                );
-                if let Err(e) = tokio::signal::ctrl_c().await {
-                    tracing::error!("failed to listen for SIGINT: {e}");
-                } else {
-                    tracing::info!("received SIGINT, shutting down");
-                }
-            }
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        if let Err(e) = tokio::signal::ctrl_c().await {
-            tracing::error!("failed to listen for SIGINT: {e}");
-        } else {
-            tracing::info!("received SIGINT, shutting down");
-        }
-    }
-
-    exit.cancel();
-}
-
-/// Read [`config::SidecarConfig`] from the given [`Path`].
 async fn read_config(path: &Path) -> anyhow::Result<config::SidecarConfig> {
     let mut f = tokio::fs::File::open(path).await?;
     let mut content = String::new();
     f.read_to_string(&mut content).await?;
-
     let config: config::SidecarConfig = toml::from_str(&content)?;
     config
         .validate()
         .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;
-
     Ok(config)
 }

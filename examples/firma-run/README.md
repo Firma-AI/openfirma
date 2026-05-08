@@ -10,8 +10,8 @@ If you want to try the wrapper locally, begin with `local/`:
 
 ```bash
 examples/firma-run/local/setup.sh
-cargo run -p firma-sidecar -- -c .local/firma_sidecar.local.toml
-cargo run -p firma-run -- run --profile generic -- curl https://example.com
+cargo run -p firma -- sidecar -c .local/firma_sidecar.local.toml
+cargo run -p firma -- run --profile generic -- curl https://example.com
 ```
 
 If you are on Linux and want to verify the structural sandbox path, use the E2E harness:
