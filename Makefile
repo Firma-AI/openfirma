@@ -26,11 +26,7 @@ docs: docs-build
 
 docs-dev:
 	cd docs-site && corepack pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/
-	cargo doc --workspace --no-deps
-	rm -rf docs-site/public/api
-	mkdir -p docs-site/public/api
-	cp -R target/doc/. docs-site/public/api/
-	cd docs-site && node scripts/write-rustdoc-index.mjs public/api
+	cd docs-site && corepack pnpm run build:rustdoc-mdx
 	cd docs-site && ASTRO_TELEMETRY_DISABLED=1 corepack pnpm dev --host 127.0.0.1 --open
 
 demo:

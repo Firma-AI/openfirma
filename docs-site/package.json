@@ -6,13 +6,19 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "build:with-rustdoc": "cargo doc --manifest-path ../Cargo.toml --workspace --no-deps && pnpm run build && rm -rf dist/api && mkdir -p dist/api && cp -R ../target/doc/. dist/api/ && node scripts/write-rustdoc-index.mjs",
+    "build:rustdoc-mdx": "node scripts/build-rustdoc-mdx.mjs",
+    "build:with-rustdoc": "node scripts/build-rustdoc-mdx.mjs && astro build",
     "preview": "astro preview"
   },
   "type": "module",
   "packageManager": "pnpm@10.30.3",
   "dependencies": {
     "@astrojs/starlight": "^0.39.0",
-    "astro": "^6.3.0"
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "astro": "^6.3.0",
+    "astro-mermaid": "^2.0.1",
+    "mermaid": "^11.14.0",
+    "starlight-blog": "^0.26.1"
   }
 }

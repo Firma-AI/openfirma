@@ -32,17 +32,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust nightly (required by cargo-doc-md)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: docs
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Rust API reference
-        run: cargo doc --workspace --no-deps
+      - name: Install cargo-doc-md
+        run: cargo install --locked cargo-doc-md
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -62,16 +68,11 @@ jobs:
         run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/
         working-directory: docs-site
 
-      - name: Build Starlight site
-        run: pnpm run build
+      - name: Build Starlight site (with Rust API)
+        run: pnpm run build:with-rustdoc
         working-directory: docs-site
         env:
           GITHUB_PAGES: "true"
-
-      - name: Mount Rustdoc
-        run: |
-          mkdir -p docs-site/dist/api
-          cp -R target/doc/. docs-site/dist/api/
 
       - name: Upload Pages artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

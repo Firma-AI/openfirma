@@ -23,7 +23,8 @@ target
 # JS
 node_modules
 .astro
-/docs-site/public/api/
+# Generated rustdoc -> Starlight content (built by docs-site/scripts/build-rustdoc-mdx.mjs)
+/docs-site/src/content/docs/api/
 
 # Python
 __pycache__/
