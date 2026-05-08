@@ -14,12 +14,11 @@ KEY_FILE="$E2E_DIR/authority.key"
 AUDIT_KEY_FILE="$E2E_DIR/audit.key"
 REVOCATIONS_FILE="$E2E_DIR/revocations.txt"
 CA_DIR="$E2E_DIR/firma-ca"
-AUTHORITY_BIN="./target/debug/firma-authority"
-SIDECAR_BIN="./target/debug/firma-sidecar"
+FIRMA_BIN="./target/debug/firma"
 
 # ── Build ────────────────────────────────────────────────────────────────────
 echo "[1/4] Building binaries..."
-cargo build -p firma-authority -p firma-sidecar
+cargo build -p firma
 echo "      Done."
 
 # ── Setup ────────────────────────────────────────────────────────────────────
@@ -27,7 +26,7 @@ echo "[2/4] Setting up runtime files..."
 
 if [[ ! -f "$KEY_FILE" ]]; then
     echo "      Generating authority signing key → $KEY_FILE"
-    "$AUTHORITY_BIN" generate-key --output "$KEY_FILE"
+    "$FIRMA_BIN" authority generate-key --output "$KEY_FILE"
 else
     echo "      Authority key exists: $KEY_FILE"
 fi
@@ -45,15 +44,15 @@ touch "$REVOCATIONS_FILE"
 echo "      Done."
 
 # ── Start Authority ──────────────────────────────────────────────────────────
-echo "[3/4] Starting firma-authority on 127.0.0.1:50051..."
-"$AUTHORITY_BIN" --config "$E2E_DIR/authority.toml" &
+echo "[3/4] Starting firma authority on 127.0.0.1:50051..."
+"$FIRMA_BIN" authority --config "$E2E_DIR/authority.toml" &
 AUTHORITY_PID=$!
 echo "      PID: $AUTHORITY_PID"
 sleep 1
 
 # ── Start Sidecar ────────────────────────────────────────────────────────────
-echo "[4/4] Starting firma-sidecar on 127.0.0.1:8080..."
-"$SIDECAR_BIN" --config-file "$E2E_DIR/sidecar.toml" &
+echo "[4/4] Starting firma sidecar on 127.0.0.1:8080..."
+"$FIRMA_BIN" sidecar --config-file "$E2E_DIR/sidecar.toml" &
 SIDECAR_PID=$!
 echo "      PID: $SIDECAR_PID"
 sleep 1
@@ -69,7 +68,7 @@ cat <<EOF
 
 Run the Python example agent in another terminal:
 
-  cd example_agents/agents_sdk_py
+  cd examples/agents/agents_sdk_py
   cp .env.sample .env          # then fill in real API keys
   export HTTP_PROXY=http://127.0.0.1:8080
   export HTTPS_PROXY=http://127.0.0.1:8080
@@ -79,7 +78,7 @@ Run the Python example agent in another terminal:
 
 Or the TypeScript agent:
 
-  cd example_agents/adk_js
+  cd examples/agents/adk_js
   cp .env.sample .env          # then fill in real API keys
   export HTTP_PROXY=http://127.0.0.1:8080
   export HTTPS_PROXY=http://127.0.0.1:8080

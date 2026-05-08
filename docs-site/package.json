@@ -1,0 +1,24 @@
+{
+  "name": "docs-site",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Documentation site for OpenFirma.",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "build:rustdoc-mdx": "node scripts/build-rustdoc-mdx.mjs",
+    "build:with-rustdoc": "node scripts/build-rustdoc-mdx.mjs && astro build",
+    "preview": "astro preview"
+  },
+  "type": "module",
+  "packageManager": "pnpm@10.30.3",
+  "dependencies": {
+    "@astrojs/starlight": "^0.39.0",
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "astro": "^6.3.0",
+    "astro-mermaid": "^2.0.1",
+    "mermaid": "^11.14.0",
+    "starlight-blog": "^0.26.1"
+  }
+}

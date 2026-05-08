@@ -1,12 +1,12 @@
 # firma-sidecar release binary dependency snapshot
 
-Placeholder — populated by `scripts/snapshot-binary-deps.sh` on each
+Placeholder — populated by `examples/release/binary-deps/snapshot.sh` on each
 release host.
 
 Run from the repo root after `cargo build --release -p firma-sidecar`:
 
 ```bash
-./scripts/snapshot-binary-deps.sh
+./examples/release/binary-deps/snapshot.sh
 ```
 
 The script overwrites this file with the host's `otool -L` (macOS) or

@@ -16,16 +16,6 @@ arc-swap = { workspace = true }
 async-trait = { workspace = true }
 cedar-policy = { workspace = true }
 chrono = { workspace = true }
-clap = { workspace = true, features = [
-  "color",
-  "derive",
-  "env",
-  "error-context",
-  "help",
-  "std",
-  "suggestions",
-  "usage",
-] }
 ecdsa = { workspace = true }
 elliptic-curve = { workspace = true }
 firma-core = { workspace = true }

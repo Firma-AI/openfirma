@@ -31,7 +31,6 @@
 //! - [`startup`] — Per-subsystem builders that translate
 //!   [`config::SidecarConfig`] into runtime components.
 
-pub mod args;
 pub mod audit;
 pub mod authority_client;
 pub mod config;
@@ -41,7 +40,6 @@ pub mod enforcement;
 pub mod handler;
 pub mod health;
 pub mod interceptor;
-pub mod log;
 pub mod normalizer;
 pub mod pipeline;
 pub mod startup;

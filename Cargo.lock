@@ -1485,6 +1485,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9844ddc3a6e533d62bba727eb6c28b5d360921d5175e9ff0f1e621a5c590a4d5"
 
 [[package]]
+name = "firma"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "firma-authority",
+ "firma-core",
+ "firma-run",
+ "firma-sidecar",
+ "nix 0.31.2",
+ "pasetors",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "firma-authority"
 version = "0.1.0"
 dependencies = [
@@ -1492,7 +1518,6 @@ dependencies = [
  "async-stream",
  "cedar-policy",
  "chrono",
- "clap",
  "firma-core",
  "firma-proto",
  "hex",
@@ -1591,7 +1616,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "clap",
  "ctrlc",
  "nix 0.31.2",
  "pretty_assertions",
@@ -1615,7 +1639,6 @@ dependencies = [
  "async-trait",
  "cedar-policy",
  "chrono",
- "clap",
  "criterion",
  "ecdsa",
  "elliptic-curve",

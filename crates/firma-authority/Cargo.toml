@@ -12,15 +12,6 @@ anyhow = { workspace = true }
 async-stream = { workspace = true }
 cedar-policy = { workspace = true }
 chrono = { workspace = true }
-clap = { workspace = true, features = [
-    "color",
-    "derive",
-    "error-context",
-    "help",
-    "std",
-    "suggestions",
-    "usage",
-] }
 firma-core = { workspace = true }
 firma-proto = { workspace = true }
 hex = { workspace = true }

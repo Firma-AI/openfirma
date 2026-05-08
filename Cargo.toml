@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/firma",
     "crates/firma-core",
     "crates/firma-grpc-interceptor-proto",
     "crates/firma-proto",
@@ -41,9 +42,12 @@ criterion = { version = "0.8", default-features = false, features = [
 ] }
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
 elliptic-curve = { version = "0.13", features = ["pem"] }
+firma-authority = { path = "crates/firma-authority" }
 firma-core = { path = "crates/firma-core" }
 firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto" }
 firma-proto = { path = "crates/firma-proto" }
+firma-run = { path = "crates/firma-run" }
+firma-sidecar = { path = "crates/firma-sidecar" }
 governor = "0.10"
 hex = "0.4"
 http-body-util = "0.1"
@@ -52,7 +56,7 @@ hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 lru = "0.17"
 notify = "8"
-nix = { version = "0.31", features = ["fs"] }
+nix = { version = "0.31", features = ["fs", "process", "signal"] }
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 pasetors = "0.7"
 pingora-core = "0.8"
