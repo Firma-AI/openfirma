@@ -1,7 +1,7 @@
 # Demo 2 — authority config.
 listen_addr         = "127.0.0.1:50051"
-policy_dir          = "examples/demos/demo2/policies"
-issuance_policy_dir = "examples/demos/demo2/issuance-policies"
+policy_dir          = "examples/demos/demo2/policies/"
+issuance_policy_dir = "examples/demos/demo2/issuance-policies/"
 revocation_file     = "examples/demos/demo2/.runtime/revocations.txt"
 key_file            = "examples/demos/demo2/.runtime/authority.key"
 max_ttl_seconds     = 3600

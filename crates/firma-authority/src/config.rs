@@ -97,8 +97,8 @@ impl Default for AuthorityConfig {
     fn default() -> Self {
         Self {
             listen_addr: "[::1]:50051".to_string(),
-            policy_dir: PathBuf::from("policies"),
-            issuance_policy_dir: PathBuf::from("issuance-policies"),
+            policy_dir: PathBuf::from("policies/"),
+            issuance_policy_dir: PathBuf::from("issuance-policies/"),
             schema_path: None,
             revocation_file: PathBuf::from("revocations.txt"),
             max_ttl_seconds: 3600,
