@@ -24,13 +24,12 @@ fn wait_for_line<R: std::io::BufRead>(reader: &mut R, needle: &str) -> bool {
     while start.elapsed() < READY_TIMEOUT {
         line.clear();
         match reader.read_line(&mut line) {
-            Ok(0) => return false,
+            Ok(0) | Err(_) => return false,
             Ok(_) => {
                 if line.contains(needle) {
                     return true;
                 }
             }
-            Err(_) => return false,
         }
     }
     false
@@ -113,4 +112,5 @@ fn authority_starts_then_terminates_cleanly() {
             "unexpected exit: {status:?}"
         );
     }
+    child.wait().unwrap();
 }

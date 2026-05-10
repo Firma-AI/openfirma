@@ -91,25 +91,28 @@ async fn run_compact(config: &AuthorityConfig) -> Result<()> {
 }
 
 fn run_generate_key(path: &std::path::Path) -> Result<()> {
-    let mut out_open_opts = std::fs::OpenOptions::new();
-    out_open_opts.create_new(true).write(true);
+    let mut secret_opts = std::fs::OpenOptions::new();
+    secret_opts.create_new(true).write(true);
+    let mut public_opts = std::fs::OpenOptions::new();
+    public_opts.create_new(true).write(true);
     #[cfg(unix)]
     {
-        out_open_opts.mode(0o600);
+        use std::os::unix::fs::OpenOptionsExt;
+        secret_opts.mode(0o600);
+        public_opts.mode(0o644);
     }
 
     let kp = AsymmetricKeyPair::<V4>::generate().context("failed to generate key pair")?;
 
-    let mut private_key_file = out_open_opts
+    let mut private_key_file = secret_opts
         .open(path)
         .context("failed to open output key file")?;
-
     private_key_file
         .write_all(kp.secret.as_bytes())
         .context("failed to write key file")?;
 
     let pub_path = path.with_extension("pub");
-    let mut pub_key_file = out_open_opts
+    let mut pub_key_file = public_opts
         .open(&pub_path)
         .context("failed to open public key file")?;
     pub_key_file
