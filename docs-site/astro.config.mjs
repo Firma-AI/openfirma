@@ -68,6 +68,35 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Concepts',
+          items: [
+            { label: 'Architecture & invariants', slug: 'concepts/architecture' },
+            { label: 'The enforcement pipeline', slug: 'concepts/pipeline' },
+            { label: 'Action classes', slug: 'concepts/action-classes' },
+            { label: 'Capabilities', slug: 'concepts/capabilities' },
+            { label: 'Policies', slug: 'concepts/policies' },
+            { label: 'Interception', slug: 'concepts/interception' },
+            { label: 'Connectors', slug: 'concepts/connectors' },
+            { label: 'The sandbox boundary', slug: 'concepts/sandbox' },
+            { label: 'Threat model & bypasses', slug: 'concepts/threat-model' },
+          ],
+        },
+        {
+          label: 'User Guides',
+          items: [
+            { label: 'Run the sidecar standalone', slug: 'guides/run-the-sidecar' },
+            { label: 'Write your first Cedar policy', slug: 'guides/write-a-cedar-policy' },
+            { label: 'Issue capability tokens', slug: 'guides/issue-capability-tokens' },
+            { label: 'Wrap an agent with firma run', slug: 'guides/firma-run' },
+            { label: 'Enable HTTPS MITM', slug: 'guides/https-mitm' },
+            { label: 'Extend the action-class mapping', slug: 'guides/extend-mapping' },
+            { label: 'Inject credentials', slug: 'guides/inject-credentials' },
+            { label: 'Read & verify the audit log', slug: 'guides/audit-log' },
+            { label: 'Secure a local coding agent', slug: 'guides/secure-a-coding-agent' },
+            { label: 'Deploy a GenAI web app', slug: 'guides/deploy-a-genai-webapp' },
+          ],
+        },
+        {
           label: 'Rust API Reference',
           collapsed: true,
           items: [

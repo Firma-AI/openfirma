@@ -1,0 +1,235 @@
+---
+title: Issue capability tokens
+description: Stand up a local Authority, mint a capability for an agent, and seed it into the Sidecar.
+---
+
+A capability token is what an agent needs to clear [Stage 1](../../concepts/pipeline/) of the enforcement pipeline. This guide walks you through running an Authority, minting a capability with the right scope, and getting it loaded into a Sidecar.
+
+By the end you will have:
+
+- A running Authority with its own signing keypair and issuance policy.
+- A signed PASETO v4 capability for an agent of your choosing.
+- A Sidecar that recognizes the capability and uses it to validate Stage 1.
+
+You should already have completed [Run the sidecar standalone](../run-the-sidecar/). This guide adds the Authority piece.
+
+## When to issue capabilities at the CLI vs over gRPC
+
+The reference Authority supports both:
+
+- **CLI issuance** (`firma authority issue …`) writes a TOML "seed" file the Sidecar reads at startup. Right for fixed, long-lived sessions — a daemon, a CI agent, anything where the agent identity and scope are known at deploy time.
+- **gRPC issuance** (the `IssueCapability` RPC) lets a controlled component request a capability dynamically. Right for orchestrators that spin up sessions on demand — a SaaS where each user gets their own short-lived session.
+
+This guide covers the CLI path because it's the simpler starting point. The gRPC path uses the same underlying flow.
+
+## Step 1: Generate the Authority signing key
+
+The Authority signs every capability with an Ed25519 keypair. Generate one:
+
+```bash
+firma authority generate-key -o /tmp/firma-standalone/firma-authority.key
+```
+
+This writes two files:
+
+- `firma-authority.key` — the **private** key. Keep it readable only by the Authority process.
+- `firma-authority.pub` — the **public** key. The Sidecar holds a copy and uses it to verify signatures.
+
+These keys are the trust root for capabilities. If the private key leaks, an attacker can mint capabilities your Sidecars will accept. Treat it like any signing key: file mode 600, never in a repo, rotated on a schedule.
+
+## Step 2: Write the issuance policy
+
+The Authority runs a separate Cedar bundle when deciding whether to mint a capability — the **issuance policy**. It answers "*should we ever mint this kind of capability for this agent?*", separate from the runtime policy that decides "*should we allow this specific call right now?*".
+
+For development, a permissive issuance policy is fine:
+
+```bash
+mkdir -p /tmp/firma-standalone/issuance
+cat > /tmp/firma-standalone/issuance/issuance.cedar <<'EOF'
+// Development issuance policy: mint anything any agent asks for.
+// Replace with mission-bounded rules in production.
+permit (principal, action, resource);
+EOF
+```
+
+For production, you'd write rules like:
+
+```cedar
+// Only mint capabilities for agents we know about.
+permit (
+    principal in [
+        Firma::Agent::"support-agent",
+        Firma::Agent::"billing-agent"
+    ],
+    action,
+    resource
+);
+
+// support-agent is never minted a payment capability.
+forbid (
+    principal == Firma::Agent::"support-agent",
+    action == Firma::Action::"payment.transfer",
+    resource
+);
+```
+
+## Step 3: Write the Authority config
+
+Create `/tmp/firma-standalone/authority.toml`:
+
+```toml
+listen_addr         = "[::1]:50051"
+policy_dir          = "/tmp/firma-standalone/config/policies"
+issuance_policy_dir = "/tmp/firma-standalone/issuance"
+revocation_file     = "/tmp/firma-standalone/revocations.txt"
+key_file            = "/tmp/firma-standalone/firma-authority.key"
+max_ttl_seconds     = 3600
+bundle_ttl_seconds  = 30
+log_level           = "info"
+```
+
+Notable fields:
+
+- `policy_dir` — the **runtime** Cedar bundle the Authority streams to Sidecars. Same directory the Sidecar would have read directly; using the Authority makes hot-reload work.
+- `issuance_policy_dir` — the issuance bundle from Step 2.
+- `revocation_file` — append-only file. Each line is a `token_id` to revoke. The Authority broadcasts revocations to connected Sidecars over gRPC.
+- `max_ttl_seconds` — clamps `--ttl-seconds` requests. Even if a CLI invocation asks for a year, the Authority issues at most this much.
+- `bundle_ttl_seconds` — how often the Authority pushes a bundle update to Sidecars (independent of the Sidecar's `[constraint_enforcement].bundle_ttl_seconds` which is its staleness deadline).
+
+Touch the revocations file so the Authority finds it:
+
+```bash
+touch /tmp/firma-standalone/revocations.txt
+```
+
+## Step 4: Start the Authority
+
+In a dedicated terminal:
+
+```bash
+firma authority -c /tmp/firma-standalone/authority.toml
+```
+
+Expected output:
+
+```text
+INFO firma_authority::startup: loaded issuance bundle (1 file)
+INFO firma_authority::startup: loaded runtime bundle (1 file)
+INFO firma_authority::startup: gRPC listening on [::1]:50051
+INFO firma_authority: authority ready
+```
+
+Leave it running. The next steps are CLI commands that don't need it (CLI issuance is offline; the Authority binary mints from your config), but the Sidecar in Step 7 will connect to it for policy and revocation streams.
+
+## Step 5: Mint a capability
+
+The CLI subcommand:
+
+```bash
+firma authority -c /tmp/firma-standalone/authority.toml issue \
+  --agent-id support-agent \
+  --session-id session-001 \
+  --action communication.external.send \
+  --action model.inference.chat \
+  --resource-scope '*' \
+  --ttl-seconds 3600 \
+  --output /tmp/firma-standalone/capability-support.toml
+```
+
+What just happened:
+
+1. The Authority CLI loaded the issuance bundle.
+2. It evaluated `(principal=support-agent, action=communication.external.send, resource=*)` against the bundle. Same for the second `--action`.
+3. Both passed (we wrote a permissive issuance policy in Step 2).
+4. It assembled a `CapabilityClaims` with these fields, signed it as a PASETO v4 token using `firma-authority.key`, and wrote both the raw token and the parsed claims to the output file.
+
+Inspect the result:
+
+```bash
+cat /tmp/firma-standalone/capability-support.toml
+```
+
+You'll see the structure described in [Capabilities](../../concepts/capabilities/): `raw_token`, `token_id`, `agent_id`, `session_id`, `action_set`, `resource_scope`, `issued_at`, `expiry`, `context_hash`. The `raw_token` is the wire-format PASETO; everything else is a parsed mirror for convenience.
+
+Note: `--action` can be repeated. `--resource-scope '*'` is the loosest scope — match anything. In production you would tighten this to e.g. `'api.openai.com*'`.
+
+## Step 6: Wire the capability into the Sidecar
+
+Edit `firma_sidecar.toml` to add:
+
+```toml
+[authority]
+public_key_path = "/tmp/firma-standalone/firma-authority.pub"
+
+[capability_seed]
+paths = ["/tmp/firma-standalone/capability-support.toml"]
+```
+
+`[authority].public_key_path` is what Stage 1 verifies signatures against. `[capability_seed].paths` is a list — you can ship multiple capabilities, one per session, and the Sidecar will populate its `CapabilityMap` from all of them.
+
+Restart the Sidecar. In its startup log:
+
+```text
+INFO firma_sidecar::startup::capability: seeded 1 capability (agent=support-agent session=session-001)
+INFO firma_sidecar::startup::authority: connected to authority [::1]:50051
+INFO firma_sidecar: sidecar ready
+```
+
+## Step 7: See Stage 1 in action
+
+Make a permitted call (assuming the runtime policy from [Write your first Cedar policy](../write-a-cedar-policy/) is in place):
+
+```bash
+curl --proxy http://127.0.0.1:8080 \
+  -X POST https://api.openai.com/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{"model":"gpt-4","messages":[]}'
+```
+
+The audit event for this call will include a `capability` block:
+
+```json
+{
+  "capability": {
+    "token_id":   "79dd9ffb-…",
+    "agent_id":   "support-agent",
+    "session_id": "session-001",
+    "action_set": ["communication.external.send", "model.inference.chat"]
+  },
+  "decision": { "outcome": "ALLOW", "matched_policies": ["…"] }
+}
+```
+
+If you delete the capability seed file and restart, the same call returns a 403 with `decision.reason = "CapabilityNotFound"`. That's Stage 1 doing its job.
+
+## Revocation
+
+To kill a specific capability immediately:
+
+```bash
+firma authority -c /tmp/firma-standalone/authority.toml revocations add 79dd9ffb-ebc8-4883-8f1e-72eb74a26e33
+```
+
+The Authority appends the `token_id` to `revocations.txt` and broadcasts it on its gRPC stream. Connected Sidecars update their bloom filter + LRU cache within seconds. The next attempt by that capability gets `CapabilityRevoked`.
+
+For housekeeping, clean expired entries periodically:
+
+```bash
+firma authority -c /tmp/firma-standalone/authority.toml revocations compact
+```
+
+## Common gotchas
+
+**`CapabilityNotFound` for matching agent.** The map is keyed by `(session_id, action_class, resource)`. If the request's normalized resource doesn't fall inside `resource_scope`, the lookup misses. Loosen `--resource-scope` or add multiple capabilities for different scopes.
+
+**`CapabilityExpired` right after issuance.** Clock drift between Authority and Sidecar. Set `[capability_validation].clock_skew_tolerance_seconds` (default 5) higher if your clocks aren't tight.
+
+**Authority refuses to mint.** Issuance policy denied the request. Check the Authority's stderr for the matched policy id. Loosen issuance policy or pick a different action class.
+
+**`bundle_ttl_seconds` mismatch.** If the Authority is down for longer than the Sidecar's `[constraint_enforcement].bundle_ttl_seconds`, the Sidecar starts denying with `PolicyBundleStale`. Run the Authority next to the Sidecar; restart it before the deadline.
+
+## What's next
+
+- [Wrap an agent with `firma run`](../firma-run/) — same model, with a real sandbox boundary.
+- [Inject credentials](../inject-credentials/) — what happens to capabilities-allowed calls.
+- [Concepts: Capabilities](../../concepts/capabilities/) — for the design rationale.
