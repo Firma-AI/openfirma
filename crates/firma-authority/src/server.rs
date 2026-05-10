@@ -54,35 +54,40 @@ impl Server {
 
         let signer = Arc::new(PasetoV4Signer::try_new(&key_bytes).context("invalid signing key")?);
 
-        // Load Cedar policies
-        let policy_store = Arc::new(CedarPolicyStore::load(
+        // Load Cedar policies for streaming to sidecars (enforcement bundle)
+        tracing::info!(
+            policy_dir = %config.policy_dir.display(),
+            "loading enforcement policy store"
+        );
+        let policy_store = CedarPolicyStore::load(
             &config.policy_dir,
             config.schema_path.clone(),
             config.bundle_ttl_seconds,
-        )?);
+        )?;
+
+        // Load separate issuance policy store
+        tracing::info!(
+            issuance_policy_dir = %config.issuance_policy_dir.display(),
+            "loading issuance policy store"
+        );
+        let issuance_policy_store = CedarPolicyStore::load(
+            &config.issuance_policy_dir,
+            config.schema_path.clone(),
+            config.bundle_ttl_seconds,
+        )?;
 
         // Load revocation store
         let token_ttl = chrono::Duration::seconds(i64::from(config.max_ttl_seconds));
-        let revocation_store = Arc::new(RevocationStore::try_new(
-            &config.revocation_file,
-            token_ttl,
-        )?);
+        let revocation_store = RevocationStore::try_new(&config.revocation_file, token_ttl)?;
 
-        // Start policy directory watcher for hot-reload
-        let policy_watcher = Arc::new(policy_store.watch()?);
-
-        // Start revocation file watcher
-        let revocation_watcher = Arc::new(revocation_store.watch()?);
-
-        // Build gRPC service
-        let authority_service = AuthorityServiceImpl::new(
-            Arc::clone(&policy_store),
-            policy_watcher,
-            Arc::clone(&revocation_store),
-            revocation_watcher,
+        // Build gRPC service (starts all file watchers internally)
+        let authority_service = AuthorityServiceImpl::try_new(
+            issuance_policy_store,
+            policy_store,
+            revocation_store,
             signer,
             config.max_ttl_seconds,
-        );
+        )?;
 
         let addr: SocketAddr = config
             .listen_addr

@@ -3,13 +3,14 @@
 #
 # NOT FOR PRODUCTION USE. Local dev/testing only.
 
-listen_addr        = "127.0.0.1:50051"
-policy_dir         = "examples/policies"
-revocation_file    = "examples/e2e/revocations.txt"
-key_file           = "examples/e2e/authority.key"
-max_ttl_seconds    = 3600
-bundle_ttl_seconds = 30
-log_level          = "info"
+listen_addr         = "127.0.0.1:50051"
+policy_dir          = "examples/policies/"
+issuance_policy_dir = "examples/e2e/issuance-policies/"
+revocation_file     = "examples/e2e/revocations.txt"
+key_file            = "examples/e2e/authority.key"
+max_ttl_seconds     = 3600
+bundle_ttl_seconds  = 30
+log_level           = "info"
 
 # schema_path is optional. Omit to use the schema embedded in the binary.
 # Set to override with a custom schema (e.g. to add action classes or context fields):

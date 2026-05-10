@@ -27,32 +27,39 @@ use crate::revocation::{RevocationStore, RevocationStoreWatcher};
 
 /// gRPC implementation of the `AuthorityService` defined in `authority.proto`.
 pub struct AuthorityServiceImpl {
-    policy_store: Arc<CedarPolicyStore>,
-    policy_watcher: Arc<CedarPolicyStoreWatcher>,
-    revocation_store: Arc<RevocationStore>,
-    revocation_watcher: Arc<RevocationStoreWatcher>,
+    /// Keeps issuance policy hot-reload task alive; also used to evaluate
+    /// issuance requests via `Deref<Target = CedarPolicyStore>`.
+    issuance_policy_watcher: CedarPolicyStoreWatcher,
+    /// Keeps enforcement policy hot-reload task alive; also used to subscribe bundle updates.
+    policy_watcher: CedarPolicyStoreWatcher,
+    /// Keeps revocation hot-reload task alive; also used to subscribe revocation events
+    /// and read in-memory revocation state via `Deref<Target = RevocationStore>`.
+    revocation_watcher: RevocationStoreWatcher,
     signer: Arc<PasetoV4Signer>,
     max_ttl_seconds: i32,
 }
 
 impl AuthorityServiceImpl {
-    #[must_use]
-    pub fn new(
-        policy_store: Arc<CedarPolicyStore>,
-        policy_watcher: Arc<CedarPolicyStoreWatcher>,
-        revocation_store: Arc<RevocationStore>,
-        revocation_watcher: Arc<RevocationStoreWatcher>,
+    /// # Errors
+    ///
+    /// Returns an error if any file watcher cannot be initialised.
+    pub fn try_new(
+        issuance_policy_store: CedarPolicyStore,
+        policy_store: CedarPolicyStore,
+        revocation_store: RevocationStore,
         signer: Arc<PasetoV4Signer>,
         max_ttl_seconds: i32,
-    ) -> Self {
-        Self {
-            policy_store,
+    ) -> anyhow::Result<Self> {
+        let issuance_policy_watcher = issuance_policy_store.watch()?;
+        let policy_watcher = policy_store.watch()?;
+        let revocation_watcher = revocation_store.watch()?;
+        Ok(Self {
+            issuance_policy_watcher,
             policy_watcher,
-            revocation_store,
             revocation_watcher,
             signer,
             max_ttl_seconds,
-        }
+        })
     }
 }
 
@@ -91,7 +98,7 @@ impl AuthorityService for AuthorityServiceImpl {
         };
 
         match crate::issuance::issue_capability(
-            &self.policy_store,
+            &self.issuance_policy_watcher,
             &self.signer,
             self.max_ttl_seconds,
             &issuance_req,
@@ -207,7 +214,7 @@ impl AuthorityService for AuthorityServiceImpl {
         tracing::info!(?since, "sidecar connected to revocation stream");
 
         // Replay events after `since` timestamp
-        let replay_events = self.revocation_store.events_since(since).await;
+        let replay_events = self.revocation_watcher.events_since(since).await;
         let broadcast_rx = self.revocation_watcher.subscribe();
 
         let stream = async_stream::try_stream! {

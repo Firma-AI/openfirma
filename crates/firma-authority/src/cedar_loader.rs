@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -147,7 +148,7 @@ impl CedarPolicyStore {
     /// # Errors
     ///
     /// Returns an error if the OS file watcher cannot be created or registered.
-    pub fn watch(&self) -> Result<CedarPolicyStoreWatcher> {
+    pub fn watch(self) -> Result<CedarPolicyStoreWatcher> {
         use notify::Watcher as _;
 
         let path = self.policy_dir.clone();
@@ -199,10 +200,12 @@ impl CedarPolicyStore {
             }
         });
 
+        let tx = self.bundle_tx.clone();
         Ok(CedarPolicyStoreWatcher {
             _watcher: watcher,
             task,
-            tx: self.bundle_tx.clone(),
+            store: self,
+            tx,
         })
     }
 }
@@ -212,6 +215,7 @@ impl CedarPolicyStore {
 pub struct CedarPolicyStoreWatcher {
     _watcher: notify::RecommendedWatcher,
     task: JoinHandle<()>,
+    store: CedarPolicyStore,
     tx: watch::Sender<PolicyBundle>,
 }
 
@@ -226,6 +230,14 @@ impl CedarPolicyStoreWatcher {
     /// Abort the background reload task immediately.
     pub fn abort(&self) {
         self.task.abort();
+    }
+}
+
+impl Deref for CedarPolicyStoreWatcher {
+    type Target = CedarPolicyStore;
+
+    fn deref(&self) -> &Self::Target {
+        &self.store
     }
 }
 
@@ -386,8 +398,8 @@ mod tests {
         let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap();
         let v1 = store.bundle().version.clone();
 
-        let watcher = store.watch().unwrap();
-        let mut rx = watcher.subscribe();
+        let store = store.watch().unwrap();
+        let mut rx = store.subscribe();
         let _ = rx.borrow_and_update().clone(); // mark initial value as seen
         tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
 
@@ -438,11 +450,12 @@ mod tests {
             ("schema.cedarschema", DEFAULT_SCHEMA),
         ]);
         let schema_path = dir.path().join("schema.cedarschema");
-        let store = CedarPolicyStore::load(dir.path(), Some(schema_path.clone()), 30).unwrap();
+        let store = CedarPolicyStore::load(dir.path(), Some(schema_path.clone()), 30)
+            .unwrap()
+            .watch()
+            .unwrap();
         let v1 = store.bundle().version.clone();
-
-        let watcher = store.watch().unwrap();
-        let mut rx = watcher.subscribe();
+        let mut rx = store.subscribe();
         let _ = rx.borrow_and_update().clone();
         tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
 
@@ -466,11 +479,13 @@ mod tests {
         let schema_path = schema_dir.path().join("external.cedarschema");
         fs::write(&schema_path, DEFAULT_SCHEMA).unwrap();
 
-        let store = CedarPolicyStore::load(dir.path(), Some(schema_path.clone()), 30).unwrap();
+        let store = CedarPolicyStore::load(dir.path(), Some(schema_path.clone()), 30)
+            .unwrap()
+            .watch()
+            .unwrap();
         let v1 = store.bundle().version.clone();
 
-        let watcher = store.watch().unwrap();
-        let mut rx = watcher.subscribe();
+        let mut rx = store.subscribe();
         let _ = rx.borrow_and_update().clone();
         tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
 

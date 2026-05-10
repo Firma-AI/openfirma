@@ -1,0 +1,16 @@
+# Generic agent — authority config.
+# Run from repo root: ./target/debug/firma-authority --config examples/generic-agent/authority.toml
+#
+# NOT FOR PRODUCTION USE. Local dev/testing only.
+
+listen_addr         = "127.0.0.1:50051"
+policy_dir          = "examples/generic-agent/policies/"
+issuance_policy_dir = "examples/generic-agent/issuance-policies/"
+revocation_file     = "examples/generic-agent/.runtime/revocations.txt"
+key_file            = "examples/generic-agent/.runtime/authority.key"
+max_ttl_seconds     = 3600
+bundle_ttl_seconds  = 30
+log_level           = "info"
+
+# schema_path is optional. Omit to use the schema embedded in the binary.
+# schema_path = "examples/generic-agent/policies/schema.cedarschema"

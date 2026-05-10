@@ -1,0 +1,91 @@
+# Generic agent — sidecar config.
+# HTTP proxy on :7474. All unmapped hosts DENY (fail-closed).
+# Run from repo root: ./target/debug/firma-sidecar --config examples/generic-agent/sidecar.toml
+
+[interceptor]
+mode               = "http_proxy"
+listen_addr        = "127.0.0.1:7474"
+drain_timeout_secs = 30
+
+# HTTPS MITM — intercept GitHub and Gmail so the sidecar can inspect L7 traffic.
+# The agent's LLM traffic (api.openai.com, api.anthropic.com) tunnels through
+# untouched; the LLM SDK does not need to trust the generated firma-ca.
+[interceptor.https_mitm]
+intercept_hosts = [
+    "api.github.com",
+    "gmail.googleapis.com",
+    "pypi.org",
+]
+# Strict-MITM: the bare CONNECT is auto-authorized once the TLS preflight
+# succeeds; inner L7 requests (which carry x-firma-session-id) are then
+# evaluated individually.
+strict_hosts = [
+    "api.github.com",
+    "gmail.googleapis.com",
+    "pypi.org",
+]
+
+[policy]
+dir           = "examples/generic-agent"
+authority_url = "http://127.0.0.1:50051"
+
+[ca]
+dir = "examples/generic-agent/.runtime/generated-firma-ca"
+
+[log]
+level = "info"
+
+[mapping]
+# Supplemental rules (CONNECT tunnels, package managers, localhost).
+rules_path = "examples/generic-agent/mapping-rules.toml"
+# Shipped provider-specific rules merged on top.
+rules_paths = [
+    "crates/firma-sidecar/config/mappings/github.toml",
+    "crates/firma-sidecar/config/mappings/gmail.toml",
+]
+# Fail-closed: any host not covered by a mapping rule is DENIED.
+default_protected = true
+
+[capability_validation]
+clock_skew_tolerance_seconds = 0
+
+[constraint_enforcement]
+bundle_ttl_seconds     = 3600
+enforcement_timeout_ms = 50
+
+[connector]
+default_timeout_ms = 120000  # 2 min — covers LLM first-token latency
+
+[audit]
+sink             = "file"
+file_path        = "examples/generic-agent/.runtime/audit.jsonl"
+signing_key_path = "examples/generic-agent/.runtime/audit.key"
+
+[authority]
+connect_timeout_secs                 = 10
+reconnect_min_backoff_ms             = 250
+reconnect_max_backoff_secs           = 30
+revocation_readiness_grace_ms        = 500
+revocation_fail_closed_on_disconnect = false
+
+[preflight]
+agent_id          = "generic-agent"
+session_id        = "preflight-session"
+requested_actions = [
+    "system.install",
+    "credential.read",
+    "code.read",
+    "code.review.read",
+    "code.review.submit",
+    "code.write",
+    "code.merge",
+    "issue.read",
+    "issue.write",
+    "security.alert.read",
+    "notification.manage",
+    "communication.external.send",
+    "communication.internal.send",
+]
+resource_scope         = "*"
+authority_pub_key_path = "examples/generic-agent/.runtime/authority.pub"
+ttl_seconds            = 3600
