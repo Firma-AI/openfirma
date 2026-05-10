@@ -1,134 +1,271 @@
 ---
 title: The enforcement pipeline
-description: How the Sidecar turns a raw agent request into an ALLOW or DENY decision in microseconds.
+description: How one outbound agent request moves through interception, normalization, capabilities, policy, connectors, and audit.
 ---
 
-The enforcement pipeline is the heart of OpenFirma. It runs inside the Sidecar and decides whether each outbound agent call is allowed. This page walks through the pipeline stage by stage so that, by the end, you can read an audit event and know *exactly* which check it passed or failed.
+The enforcement pipeline is the request path inside the Sidecar. It takes one outbound call from an agent and answers a narrow question:
 
-If you have not yet read [Architecture & invariants](../architecture/), start there: the four invariants (fail-closed, no network on hot path, determinism, envelope immutability) explain why the pipeline is shaped the way it is.
+**Should this call be allowed to leave the agent's environment?**
 
-## The pipeline at a glance
+This page follows a single request through that path. Each step adds one piece the next step needs: first the Sidecar sees the traffic, then it turns the request into stable policy vocabulary, then it checks whether the agent has authority to attempt the action, then it asks runtime policy whether this exact attempt is acceptable, and only then does the request leave.
 
-```text
-┌─────────────┐    ┌────────────┐    ┌──────────────────┐    ┌──────────────────┐    ┌────────────┐
-│ Interceptor │ ─► │ Normalizer │ ─► │ Stage 1          │ ─► │ Stage 2          │ ─► │ Connector  │
-│             │    │            │    │ Capability       │    │ Constraint       │    │            │
-│             │    │            │    │ validation       │    │ enforcement      │    │            │
-└─────────────┘    └────────────┘    └──────────────────┘    └──────────────────┘    └────────────┘
-                                                  │                          │
-                                                  └──────────┬───────────────┘
-                                                             ▼
-                                                      ┌────────────┐
-                                                      │ Audit sink │
-                                                      └────────────┘
+## The Shape Of The Flow
+
+```mermaid
+flowchart LR
+    agent["Agent"] -->|"Outbound request"| interceptor["Interceptor"]
+    interceptor -->|"RawRequest"| normalizer["Normalizer"]
+    normalizer -->|"NormalizedEnvelope"| capability["Stage 1: Capability validation"]
+    capability -->|"ValidatedCapability"| policy["Stage 2: Runtime policy"]
+    policy -->|"ALLOW"| credentials["Credential injection"]
+    credentials --> connector["Connector"]
+    connector --> upstream["Upstream service"]
+
+    normalizer -->|"DENY or PASSTHROUGH"| audit["Audit event"]
+    capability -->|"DENY"| audit
+    policy -->|"DENY"| audit
+    credentials -->|"DENY"| audit
+    connector -->|"Dispatch outcome"| audit
 ```
 
-The pipeline has a single entry point — `enforce()` in `firma_sidecar::pipeline`. Every interceptor (HTTP proxy, gRPC, Unix socket) feeds requests to the same entry point, and the rest of the pipeline does not care which interceptor produced the request.
+All interception modes feed the same Rust entry point, `EnforcementPipeline::enforce`. Once the request is inside the pipeline, the downstream stages do not care whether it arrived through an HTTP proxy, a gRPC hook, or a Unix socket.
 
-A request that reaches the **Connector** has been allowed by both stages. A request that fails any stage **never** reaches the upstream system. Both outcomes produce an audit event.
+That is the first simplifying idea: **transport is an input, not the policy model**.
 
-## Stage 0: Interception and normalization
+## Before The Request Arrives
 
-Before the two enforcement stages run, two preparation steps happen.
+The hot path is fast because the Sidecar is already holding the state it needs locally.
 
-**Interception** captures the outbound call. There are three modes — see [Interception](../interception/) for the full picture. For the purposes of this page, assume the Sidecar has just received a `RawRequest` containing the method, host, path, headers, and (optionally) the body.
+Before or around an agent session, the Authority prepares three kinds of material:
 
-**Normalization** turns the raw request into the canonical envelope the rest of the pipeline operates on. Concretely it:
+- **Capability tokens**: signed PASETO tokens that say what an agent may attempt.
+- **Policy bundles**: compiled Cedar policy and schema used for runtime decisions.
+- **Revocations**: token ids that are no longer valid even if their expiry is in the future.
 
-1. Looks up `(method, host, path)` in the mapping table and produces an `intent.action_class` (e.g. `communication.external.send`).
-2. Extracts the `intent.resource` map with conventional keys `host`, `path`, and optionally `provider` (when the host matches a known allowlist like `api.github.com` → `provider="github"`).
-3. Strips sensitive headers (cookies, authorization) so they don't end up in the audit log.
-4. Builds the `ExecutionEnvelope` — an immutable record of *what the agent is trying to do*.
+The Sidecar keeps those in local memory. It does not ask the Authority, a database, or an LLM for permission during each request. If the local state is not ready or no longer fresh enough to trust, the pipeline denies protected traffic.
 
-If the request is **unclassifiable** (no rule matches, and the mapping table is configured fail-closed), normalization itself produces a DENY. This is the first line of defense: an unmapped call is a call you have not thought about yet.
+That is why the pipeline can be strict without being slow: request-time enforcement is local, deterministic work.
 
-## Stage 1: Capability validation
+## Step 1: Get The Request Into The Sidecar
 
-Stage 1 answers a single question: **does the agent currently hold a valid capability for this action?**
+The pipeline begins when the Sidecar sees outbound traffic from the agent.
 
-A capability is a [PASETO v4 token](../capabilities/) that the Authority issued before the session started. It carries claims like:
+The intercepted request is represented as a `RawRequest`: method, host, path, headers, optional body, and whether the original transport was HTTP or HTTPS. At this point the request is still transport-shaped:
+
+```text
+POST https://paste.rs/
+Authorization: Bearer ...
+Content-Type: text/plain
+
+hello from an agent
+```
+
+This is not yet a good policy object. A policy should not have to know every API route, every SaaS URL shape, or every HTTP client detail. The rest of the pipeline needs something more stable than "POST to this host and path".
+
+That is the normalizer's job.
+
+## Step 2: Normalize Raw Traffic Into Intent
+
+The normalizer turns transport details into OpenFirma's canonical vocabulary. It uses the configured mapping table to translate a `(method, host, path)` tuple into an **action class** and a structured **resource**.
+
+For example:
+
+```text
+POST https://paste.rs/
+```
+
+can become:
+
+```text
+intent.action_class: communication.external.send
+intent.resource.host: paste.rs
+intent.resource.path: /
+intent.raw_transport: https
+intent.raw_action_ref: POST /
+```
+
+The important shift is from "what HTTP request is this?" to "what kind of action is the agent trying to perform?"
+
+That shift gives policies a portable language. A rule about `communication.external.send` can cover a paste service, a webhook, an email API, or a future connector without hard-coding every destination into the policy itself. The destination still matters, but it lives in the resource fields where policy can inspect it deliberately.
+
+Normalization also strips sensitive headers such as `Authorization`, `Cookie`, and `x-api-key` before the request becomes an auditable envelope. Policy needs to know what the agent is trying to do; it should not accidentally receive or log bearer secrets.
+
+### Protected, Denied, Or Passthrough
+
+The mapping table also decides whether a request is protected.
+
+If the request is not protected, the normalizer can return `PASSTHROUGH`. That means the call is outside the enforcement surface you configured, so it can be forwarded without Stage 1 or Stage 2.
+
+If the request is protected but cannot be classified, the pipeline returns `DENY` before capability validation. This is fail-closed behavior: an unclassified protected action is an action policy cannot reason about.
+
+If the request is protected and classified, the pipeline carries a `NormalizedEnvelope` into Stage 1.
+
+## Step 3: Validate The Capability
+
+Stage 1 asks:
+
+**Did an Authority authorize this agent to attempt this kind of action against this kind of resource?**
+
+The proof is a capability token. A capability is a short-lived, signed PASETO token with claims like:
 
 ```json
 {
+  "token_id": "79dd9ffb-ebc8-4883-8f1e-72eb74a26e33",
   "agent_id": "demo-agent",
   "session_id": "demo-session",
   "action_set": ["communication.external.send"],
   "resource_scope": "wttr.in*",
-  "issued_at": "2026-05-04T20:34:08Z",
-  "expiry":    "2026-05-04T21:34:08Z",
-  "context_hash": "bb10f57aba…"
+  "expiry": "2026-05-04T21:34:08Z"
 }
 ```
 
-Stage 1 does five things, in order:
+The Sidecar validates the token locally:
 
-1. **Token selection** — looks up the capability in the in-memory `CapabilityMap` keyed by `(session_id, action_class, resource)`.
-2. **Signature verification** — verifies the PASETO v4 signature using the Authority's public key (held in memory; never fetched on the hot path).
-3. **Expiry check** — compares `expiry` against the wall clock, with a configurable `clock_skew_tolerance_seconds`.
-4. **Revocation check** — looks up the `token_id` in the local revocation store (a bloom filter front, LRU cache for false positives).
-5. **Scope match** — confirms the requested action and resource fall inside `action_set` and `resource_scope`.
+1. Select a matching token from the in-memory `CapabilityMap`.
+2. Verify the PASETO signature using the Authority public key.
+3. Check that the token has not expired.
+4. Check local revocation state for the token id.
+5. Confirm the normalized action class and resource match the token scope.
 
-If any of these fail, Stage 1 returns a typed `DenyReason` (e.g. `CapabilityExpired`, `CapabilityRevoked`, `CapabilityNotFound`) and the pipeline short-circuits — Stage 2 does not run.
+Each check removes a different class of risk.
 
-The whole stage targets **under 1 ms p95** in production. There is no network call.
+Signature verification proves the token came from the Authority. Expiry limits how long leaked or stale authority can be useful. Revocation lets an operator kill a token before expiry. Scope matching makes sure a token for one mission cannot be stretched to cover another.
 
-## Stage 2: Constraint enforcement
+If any check fails, the request is denied and Stage 2 never runs. A Cedar policy cannot rescue a missing, expired, revoked, or out-of-scope capability.
 
-Stage 2 answers a different question: **is this action permitted by the current policy?**
+If all checks pass, Stage 1 emits a `ValidatedCapability`. Now the pipeline knows who the agent is, which session the call belongs to, and which signed claims are authoritative.
 
-A capability says *the agent is allowed to attempt this class of action*. A policy says *given the current context, is this specific call OK*. The split matters: a token outlives a single decision (typically an hour), but the policy bundle can be updated continuously, so you can tighten or relax rules without re-issuing tokens.
+## Step 4: Evaluate Runtime Policy
 
-Stage 2:
+Stage 2 asks a different question:
 
-1. **Bundle freshness** — checks that the in-memory Cedar policy bundle is younger than `bundle_ttl_seconds`. A stale bundle (Authority unreachable for too long) produces a `PolicyBundleStale` deny. This is what makes the system fail-closed when control-plane connectivity is lost.
-2. **Cedar evaluation** — calls the Cedar evaluator with the principal (`Firma::Agent::"<agent_id>"`), action (`Firma::Action::"<action_class>"`), resource (`Firma::Resource::"<host+path>"`) and a context object (see below).
-3. **Decision encoding** — turns Cedar's `Allow` / `Deny` result into the Sidecar's `Decision` type, attaching the matched policy IDs.
+**Given the current policy bundle and runtime context, is this exact call OK right now?**
 
-The Cedar context contains exactly the fields the schema in `examples/demo/policies/schema.cedarschema` declares:
+This is why OpenFirma has both capabilities and policies.
 
-| Field                | Type   | Source                                                  |
-| -------------------- | ------ | ------------------------------------------------------- |
-| `session_id`         | String | from the validated capability claims                    |
-| `timestamp_ms`       | Long   | wall clock at evaluation time                           |
-| `params`             | String | JSON-serialized `intent.params`                         |
-| `risk_score`         | Long   | static or pre-computed (V1 = `0`)                       |
-| `budget_remaining`   | Long   | `budget_ceiling` minus consumed; `i64::MAX` when unset  |
-| `session_duration_s` | Long   | seconds since `claims.issued_at`                        |
-| `action_count`       | Long   | monotonic per-session counter, 1-based                  |
-| `raw_transport`      | String | `"http"` or `"https"`, set by the normalizer            |
+The capability says the agent may attempt a bounded class of action. Runtime policy decides whether the specific attempt should be allowed under current rules. A capability might authorize `payment.transfer`, while policy still forbids transfers over a configured amount. A capability might authorize outbound communication, while policy still blocks `paste.rs`.
 
-These are the only signals a policy can look at. There is intentionally no live agent telemetry on the decision path — that would violate the no-network and determinism invariants.
+Before Cedar evaluation, Stage 2 checks that the local policy bundle is fresh. If the bundle is older than `bundle_ttl_seconds`, the request is denied with `PolicyBundleStale`. Stale policy is treated as unsafe because the operator may have tightened rules since the last update.
 
-Stage 2 targets **under 200 µs p95**. Cedar evaluation is by design total: the same bundle plus the same context produces the same decision every time.
+Then Stage 2 evaluates Cedar with the normalized request:
 
-## Audit emission
+```text
+principal: Firma::Agent::"demo-agent"
+action:    Firma::Action::"communication.external.send"
+resource:  Firma::Resource::"paste.rs/"
+context:   session_id, timestamp_ms, action_count, params, risk_score, ...
+```
 
-Both stages — and the connector dispatch — produce an `AuditPayload`. The payload includes:
+This is the second simplifying idea: **Cedar sees the semantic action, not raw transport trivia**.
 
-- the canonical `ExecutionEnvelope` (the agent's intent),
-- the `Decision` (allow / deny + reason + matched policy IDs),
-- the validated `CapabilityClaims` (or the deny reason that prevented validation),
-- timestamps and identifiers.
+The raw request still contributes useful information. The host and path become the resource. The body can become `intent.params`. The session store provides counters such as `action_count`. But those fields are presented to policy in a stable shape, so rules can stay understandable.
 
-A separate worker signs the payload with an ECDSA P-256 key off the hot path and writes it to the configured sink (stdout, file, gRPC, or WAL). Signing **never blocks** the request — the Sidecar acknowledges the decision to the agent first, then the audit worker handles delivery.
+If Cedar denies, the pipeline stops. If Cedar allows, the request has passed both authorization layers:
 
-For more on reading and verifying audit events, see [Read & verify the audit log](../../guides/audit-log/).
+- Stage 1 proved the agent had a valid signed capability.
+- Stage 2 proved current runtime policy allowed this specific attempt.
 
-## Why the pipeline is shaped this way
+Both must pass. A valid capability cannot bypass policy, and a permissive policy cannot help an agent with no matching capability.
 
-A few specific design choices are worth calling out, because they are easy to miss:
+## Step 5: Build The Execution Envelope
 
-- **The two stages are independent.** Stage 1 is about *who you are and what you proved at issuance time*. Stage 2 is about *what the world looks like right now*. Separating them lets the Authority do expensive work upfront (Cedar issuance evaluation, signing) and lets the Sidecar do cheap work on the hot path (signature verification, table lookup, Cedar runtime evaluation).
+After Stage 1 and Stage 2 pass, the pipeline assembles the full `ExecutionEnvelope`.
 
-- **Both stages must pass.** A valid capability is not enough — the runtime policy gets the final word. A passing policy is not enough — the agent must hold a capability that proves it was authorized to attempt this. This is the principle of **least privilege at two timescales**: long-lived tokens scoped to the agent's mission, short-lived policy that can react to new threats.
+The envelope is the canonical record of the action the Sidecar approved. It contains:
 
-- **Short-circuiting matters for the audit log.** If Stage 1 denies, Stage 2 does not run, and the audit event reflects that the deny was at the *capability* level — not at the *policy* level. When you read the log later, you can tell whether the agent had no business making the call, or whether the call was OK in principle but blocked by current policy.
+- `intent`: action class, resource, params, raw transport, and original action reference.
+- `capability`: the raw signed token that supported the request.
+- `metadata`: agent id, session id, timestamp, budget consumed, and risk score.
+- `provenance`: reserved for future causal-chain or attestation data.
 
-- **The connector is outside the enforcement boundary.** A `DENY` short-circuits before the connector ever sees the request, so you cannot accidentally leak data by misconfiguring the connector. Conversely, an `ALLOW` means the request is forwarded *as the agent submitted it* (modulo credential injection) — the Sidecar does not rewrite payloads.
+The envelope matters because it is shared by later steps and by audit. OpenFirma treats it as immutable once created. If a later step injects credentials or prepares a connector-specific request, it does so by creating derived data rather than rewriting what policy saw.
 
-## Where to go next
+That immutability is what makes audits explainable. You can inspect the envelope and know what the policy decision was based on.
 
-- [Action classes](../action-classes/) — the vocabulary the normalizer produces and the policies speak.
-- [Capabilities](../capabilities/) — what's inside a token and how it's validated.
-- [Policies](../policies/) — how to write Cedar rules that decide ALLOW / DENY.
-- [Read & verify the audit log](../../guides/audit-log/) — turn this conceptual flow into something you can grep.
+## Step 6: Inject Credentials After Allow
+
+Some upstream services require credentials. OpenFirma attaches those after the request has been allowed, not before.
+
+That ordering is deliberate:
+
+- The agent does not need to hold the upstream secret.
+- Policy evaluates the action before any secret is added.
+- A denied request never receives credentials.
+
+If no credentials are configured for the target connector, the pipeline continues with empty injected headers. If a credential should be fetched but the fetch fails, the pipeline denies with `CredentialInjectionFailed`.
+
+Credential injection is still part of the local pipeline, but it is downstream of the authorization decision.
+
+## Step 7: Dispatch Through A Connector
+
+The connector is the egress side of the Sidecar. It takes the approved envelope, the original request, and any injected credentials, then sends the request to the upstream service.
+
+Connectors are intentionally downstream of enforcement. They do not decide whether a request is allowed. Their job is operational:
+
+- apply the configured per-host timeout and rate limits;
+- attach injected headers;
+- open the outbound HTTP or HTTPS connection;
+- stream the upstream response back to the agent;
+- report dispatch errors in a typed way.
+
+This separation keeps the security boundary small. A connector timeout, DNS failure, or upstream `500` does not mean policy denied the action. It means policy allowed the action and dispatch later failed.
+
+The audit event records those facts separately.
+
+## Step 8: Record What Happened
+
+Every outcome produces an audit event:
+
+- A normalization deny records that the protected request could not be classified.
+- A Stage 1 deny records which capability check failed.
+- A Stage 2 deny records the policy-stage reason, such as stale bundle or Cedar deny.
+- A credential-injection deny records that the Sidecar could not safely fetch required secret material.
+- An allow records the envelope, capability claims, policy decision, injected credential metadata, and connector outcome.
+
+Audit signing happens off the hot path with the configured ECDSA P-256 key. The important point for readers is that audit follows the same model as enforcement: the event describes the normalized action and the stage that decided the outcome.
+
+This gives operators a useful answer to "what happened?" without replaying the agent's prompt or guessing what the model intended.
+
+## What Can Stop A Request
+
+The pipeline is built to short-circuit. Once a stage returns `DENY`, later stages do not run.
+
+| Stage | Why it can stop |
+| ----- | --------------- |
+| Readiness | Required local Authority-backed state is not ready. |
+| Normalization | The protected request cannot be mapped to a known action class. |
+| Capability validation | No matching token, bad signature, expired token, revoked token, or scope mismatch. |
+| Runtime policy | Stale bundle, policy timeout, evaluator error, or Cedar deny. |
+| Credential injection | Required credential material cannot be fetched safely. |
+| Connector | The request was allowed, but dispatch failed or timed out. |
+
+The connector row is different from the others: by the time connector dispatch happens, enforcement has already allowed the call. A connector failure is recorded as a dispatch outcome, not as a retroactive policy denial.
+
+## The Mental Model
+
+The pipeline is easiest to remember as a sequence of increasingly meaningful representations:
+
+```text
+RawRequest
+  -> NormalizedEnvelope
+  -> ValidatedCapability
+  -> Cedar decision
+  -> ExecutionEnvelope
+  -> Connector dispatch
+  -> Signed audit event
+```
+
+Each representation exists because the next decision needs a cleaner input than the previous step had.
+
+The interceptor sees bytes and HTTP metadata. The normalizer gives those bytes a semantic action class. Capability validation proves the agent had signed authority for that class and resource. Runtime policy checks current rules. The envelope freezes what was approved. The connector performs the allowed network operation. Audit records the decision in the same vocabulary policy used.
+
+That is the core OpenFirma idea: **agents can still act, but outbound actions become explicit, bounded, and explainable before they leave the machine.**
+
+## Where To Go Next
+
+- [Interception](../interception/) explains how requests enter the Sidecar.
+- [Action classes](../action-classes/) explains the vocabulary produced by the normalizer.
+- [Capabilities](../capabilities/) explains Stage 1 in depth.
+- [Policies](../policies/) explains the Cedar model used by Stage 2.
+- [Connectors](../connectors/) explains how allowed requests leave the Sidecar.
+- [Read & verify the audit log](../../guides/audit-log/) explains the signed record produced after decisions.
