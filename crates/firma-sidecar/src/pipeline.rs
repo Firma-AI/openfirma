@@ -18,9 +18,7 @@
 
 use std::time::Duration;
 
-use firma_core::{
-    DenyReason, ExecutionEnvelope, ExecutionMetadata, InjectedCredentials, SessionId,
-};
+use firma_core::{DenyReason, ExecutionEnvelope, ExecutionMetadata, InjectedCredentials};
 
 use std::sync::Arc;
 
@@ -43,16 +41,6 @@ pub(crate) const DECISION_DENY: i32 = 2;
 /// step 6. Emitted when the connector aborts an already-approved call
 /// (currently only `CONNECTOR_TIMEOUT`).
 pub(crate) const DECISION_ABORT: i32 = 3;
-
-#[expect(
-    clippy::expect_used,
-    reason = "the literal `_anonymous_` session id is non-empty by construction"
-)]
-fn anonymous_session_id() -> SessionId {
-    "_anonymous_"
-        .parse()
-        .expect("literal anonymous session id is non-empty")
-}
 
 /// Construction arguments for [`EnforcementPipeline`].
 ///
@@ -210,12 +198,11 @@ impl EnforcementPipeline {
         }
 
         // All stages passed — assemble the fully populated envelope.
-        // Empty session_id falls back to the `_anonymous_` sentinel so
-        // in-tree tests and callers that do not propagate a session
-        // header still reach the connector.
-        let session_id_typed = session_id
-            .parse::<SessionId>()
-            .unwrap_or_else(|_| anonymous_session_id());
+        // Use the session_id from the verified token claims, NOT the
+        // caller-supplied header value. This prevents session spoofing
+        // where an attacker sets a victim's session_id in the header
+        // to manipulate audit logs and metadata.
+        let session_id_typed = capability.claims.session_id.clone();
         let envelope = ExecutionEnvelope::new(
             normalized.intent,
             capability.raw_token,
@@ -341,7 +328,7 @@ pub fn audit_payload_from_decision(
             claims.token_id.to_string(),
             claims.agent_id.to_string(),
             envelope.intent().action_class.clone(),
-            envelope.intent().resource_display(),
+            redact_sensitive_query_params(&envelope.intent().resource_display()),
             DECISION_ALLOW,
             String::new(),
             claims.context_hash.clone(),
@@ -357,10 +344,15 @@ pub fn audit_payload_from_decision(
                 || {
                     (
                         raw_request_action_label(request),
-                        raw_request_resource_display(request),
+                        redact_sensitive_query_params(&raw_request_resource_display(request)),
                     )
                 },
-                |e| (e.intent.action_class.clone(), e.intent.resource_display()),
+                |e| {
+                    (
+                        e.intent.action_class.clone(),
+                        redact_sensitive_query_params(&e.intent.resource_display()),
+                    )
+                },
             );
 
             (
@@ -369,7 +361,7 @@ pub fn audit_payload_from_decision(
                 action,
                 resource,
                 DECISION_DENY,
-                format!("{reason}: {detail}"),
+                sanitize_audit_reason(&format!("{reason}: {detail}")),
                 String::new(),
                 String::new(),
             )
@@ -378,7 +370,7 @@ pub fn audit_payload_from_decision(
             String::new(),
             String::new(),
             raw_request_action_label(request),
-            raw_request_resource_display(request),
+            redact_sensitive_query_params(&raw_request_resource_display(request)),
             DECISION_ALLOW,
             String::new(),
             String::new(),
@@ -386,8 +378,17 @@ pub fn audit_payload_from_decision(
         ),
     };
 
+    let session_id_for_audit = match decision {
+        EnforcementDecision::Allow { envelope, .. } => {
+            envelope.metadata().session_id.as_ref().to_string()
+        }
+        EnforcementDecision::Deny { .. } | EnforcementDecision::Passthrough { .. } => {
+            session_id.to_string()
+        }
+    };
+
     AuditPayload {
-        session_id: session_id.to_string(),
+        session_id: session_id_for_audit,
         token_id,
         agent_id,
         action,
@@ -410,6 +411,59 @@ fn raw_request_action_label(request: &RawRequest) -> String {
     } else {
         format!("raw.http.{method}")
     }
+}
+
+/// Known sensitive query parameter names that must be redacted in audit output.
+/// Covers common API key, secret, password, and token parameter names.
+const SENSITIVE_QUERY_PARAMS: &[&str] = &[
+    "api_key",
+    "apikey",
+    "api-key",
+    "secret",
+    "password",
+    "passwd",
+    "pwd",
+    "token",
+    "auth",
+    "bearer",
+    "authorization",
+    "credential",
+    "credentials",
+    "private_key",
+    "privatekey",
+    "access_token",
+    "access-token",
+];
+
+/// Redacts sensitive query parameter values from audit strings as a
+/// defense-in-depth guardrail. Applied to `deny_reason` and audit
+/// resource paths before emission to prevent credential leaks.
+/// Preserves the query structure (param names visible) but replaces
+/// any values for known sensitive parameters with `[REDACTED]`.
+fn redact_sensitive_query_params(s: &str) -> String {
+    let mut result = s.to_string();
+    for param in SENSITIVE_QUERY_PARAMS {
+        let pattern = format!("{param}=");
+        let mut start = 0;
+        while let Some(pos) = result[start..].find(&pattern) {
+            let abs = start + pos;
+            let val_start = abs + pattern.len();
+            let val_end = result[val_start..]
+                .find('&')
+                .map_or(result.len(), |i| val_start + i);
+            result.replace_range(val_start..val_end, "[REDACTED]");
+            start = abs + 1;
+        }
+    }
+    result
+}
+
+/// Redacts URL query string fragments from audit reason strings as a
+/// defense-in-depth guardrail. Applied to `deny_reason` before audit
+/// emission to catch any residual credential leaks from error messages
+/// that may have escaped earlier sanitization.
+fn sanitize_audit_reason(reason: &str) -> String {
+    redact_sensitive_query_params(reason)
 }
 
 fn raw_request_resource_display(request: &RawRequest) -> String {
