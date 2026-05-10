@@ -170,6 +170,15 @@ header.header .site-title img {
   width: auto;
 }
 
+/* Hide the page H1 on the overview/landing page where the Hero component
+ * is present — the hero already serves as the title. The H1 sits in its
+ * own .content-panel above .sl-markdown-content, so we hide the whole
+ * panel to avoid leaving the bottom border. Scoped with :has(.of-hero)
+ * so it only affects the landing page. */
+body:has(.of-hero) .content-panel:has(> .sl-container > h1#_top) {
+  display: none;
+}
+
 /* Right-side header cluster: blog link, theme switcher, social icons.
  * Starlight + starlight-blog ship these as siblings of differing heights —
  * normalize them so they sit on a single baseline. */
@@ -180,7 +189,7 @@ header.header .social-icons {
   gap: 0.75rem;
 }
 
-header.header .right-group > * {
+header.header .right-group > *:not(script):not(style) {
   display: inline-flex;
   align-items: center;
 }
