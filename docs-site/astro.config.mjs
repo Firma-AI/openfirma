@@ -22,6 +22,11 @@ export default defineConfig({
     starlight({
       title: 'OpenFirma',
       description: 'Governed runtime and local policy enforcement for AI agents.',
+      logo: {
+        src: './src/assets/openfirma-logo.png',
+        replacesTitle: true,
+        alt: 'OpenFirma',
+      },
       customCss: ['./src/styles/fonts.css', './src/styles/custom.css'],
       editLink: {
         baseUrl: 'https://github.com/firma-ai/firma-oss/edit/main/docs-site/',
