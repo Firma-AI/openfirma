@@ -3,90 +3,88 @@ title: Architecture & invariants
 description: How the OpenFirma processes fit together, and the four invariants that shape every design choice.
 ---
 
-OpenFirma is a *governed runtime* for AI agents. It sits between an agent and the outside world, decides whether each outbound call is allowed, and writes a signed record of what happened. This page introduces the moving parts and the four invariants that the rest of the documentation builds on.
+OpenFirma is a runtime boundary for AI agents. It does not judge the model's thoughts, prompts, or chain of reasoning. It controls the concrete thing an agent process eventually does: outbound traffic.
 
-## The processes
+In these docs, an **agent** is software that uses a model to pursue a goal and take steps toward it. A coding agent might read files, ask a model what to edit, run tests, and call an LLM API again with the result. A GenAI web app might ask a model whether to call Stripe, GitHub, or an internal service. The agent may be autonomous, semi-autonomous, or mostly workflow-driven. OpenFirma treats all of those as processes that can make outbound calls.
 
-A working OpenFirma deployment runs three processes:
+This page separates the architecture into two paths:
 
-```text
-┌──────────────────┐      outbound HTTP/HTTPS      ┌──────────────────┐
-│      Agent       │  ───────────────────────────► │     Sidecar      │
-│ (LLM, codegen,   │   HTTP_PROXY + trusted CA     │  (enforcement    │
-│  webapp, …)      │                               │   point)         │
-└──────────────────┘                               └────────┬─────────┘
-                                                            │
-        ┌───────────────────────────────────────────────────┘
-        │ pre-flight (token issuance + policy stream)
-        ▼
-┌──────────────────┐
-│    Authority     │
-│  (signing,       │
-│   policy bundle, │
-│   revocations)   │
-└──────────────────┘
+- The **control plane**, where permission material and policy state are prepared.
+- The **data path**, where every intercepted request is classified, checked, dispatched, and audited.
+
+Keeping those paths separate makes the rest of the system easier to understand.
+
+## The Pieces
+
+```mermaid
+flowchart TB
+    subgraph controlPlane["Control plane: before and around a session"]
+        authority["Authority"]
+        sidecarState["Sidecar local state"]
+        authority -->|"Capability tokens"| sidecarState
+        authority -->|"Policy bundles"| sidecarState
+        authority -->|"Revocations"| sidecarState
+    end
+
+    subgraph dataPath["Data path: every outbound request"]
+        agent["Agent process"]
+        sidecar["Sidecar"]
+        upstream["External service"]
+        audit["Signed audit log"]
+        agent -->|"HTTP or HTTPS request"| sidecar
+        sidecar -->|"ALLOW or PASSTHROUGH"| upstream
+        sidecar -->|"DENY or ABORT response"| agent
+        sidecar -->|"Decision event"| audit
+    end
+
+    firmaRun["firma run"] -. "Optional sandbox launcher" .-> agent
+    sidecarState -. "Used locally by" .-> sidecar
 ```
 
-- **Agent** — any process that makes outbound calls. OpenFirma does not care whether it is an LLM agent loop, a code generator, or a web service that occasionally calls a model.
-- **Sidecar** — the enforcement point. It captures the agent's outbound traffic, decides whether to allow each call, and emits a signed audit event. It runs locally to the agent: no network hop on the decision path.
-- **Authority** — the trust root. It mints short-lived **capability tokens** for an agent before a session starts, and streams **policy bundles** and **revocations** to the Sidecar in the background.
+The **Agent** is the process doing work. It might be Claude Code, a custom Python loop, a CI worker, or your application server calling model APIs.
 
-A fourth process is optional but common: **`firma run`**, a sandbox wrapper that launches an agent with the right environment variables and a sandbox identity so that all of its traffic is forced through the Sidecar. See [The sandbox boundary](../sandbox/) for when to use it.
+The **Sidecar** is the local enforcement point. Interceptors feed requests into it. It normalizes each request, runs capability validation, runs policy enforcement, optionally injects credentials, dispatches allowed traffic, and emits audit payloads.
 
-## The request lifecycle
+The **Authority** is the trust root. It issues capability tokens and streams policy bundles and revocation updates to Sidecars. It is not consulted for every request.
 
-When the agent makes an outbound HTTP call, this is the path it takes:
+`firma run` is the optional launcher. It starts the agent inside a sandbox and routes network traffic toward the Sidecar. Without it, proxy environment variables can route cooperative agents. With it, bypassing the Sidecar is much harder.
 
-1. The Sidecar **intercepts** the request (proxy, gRPC hook, or Unix socket — see [Interception](../interception/)).
-2. The **normalizer** maps `(method, host, path)` to a canonical *action class* like `communication.external.send`. See [Action classes](../action-classes/).
-3. **Stage 1 — Capability validation**: the Sidecar finds a [capability token](../capabilities/) for this `(session, action_class, resource)`, verifies its PASETO signature, checks expiry, checks revocation. Target: under 1 ms p95.
-4. **Stage 2 — Constraint enforcement**: the Sidecar evaluates the action against the current [Cedar policy bundle](../policies/).
-5. If both stages allow, the [connector](../connectors/) dispatches the call upstream and (optionally) injects credentials.
-6. Either way — allow or deny — a signed audit event is emitted.
+## The Four Invariants
 
-The full path is covered in [The enforcement pipeline](../pipeline/).
+These invariants explain why the code is strict in places that might feel inconvenient during development.
 
-## The four invariants
+### Fail Closed
 
-Every design decision in the codebase is anchored to four invariants. If you ever wonder *why is it built this way*, the answer is almost always one of these.
+For protected traffic, uncertainty becomes DENY. Unknown mapping, missing capability, expired token, stale policy, unavailable policy evaluator, malformed request, failed credential fetch: all of these block the request. 
 
-### 1. Fail-closed
+If you add a new SaaS endpoint but forget to add a mapping rule, production should discover that as a denial, not silently let the agent reach it.
 
-Every error becomes a `DENY` decision. There is no error path that silently allows a call. A malformed token, a missing policy bundle, a normalizer crash, an unreachable Authority — all of these block traffic instead of letting it through.
+### No Network On The Enforcement Hot Path
 
-This is uncomfortable in development (you'll see denies you didn't expect), but it's the only honest posture for a security boundary. A system that *sometimes* enforces is not enforcing.
+Capability validation and Cedar policy evaluation use local Sidecar state. The Sidecar does not ask the Authority during each request decision. The invariant is about authorization: the decision to allow or deny does not depend on a request-time network round trip to the control plane. 
 
-### 2. No network on the hot path
+If for some reason the Authority connection drops, the Sidecar can continue using fresh local state until freshness checks say the policy or revocation state is no longer trustworthy. At that point it denies.
 
-Stage 1 and Stage 2 are fully local: token validation uses an in-memory copy of the Authority's public key, policy evaluation uses an in-memory copy of the Cedar bundle, and revocation lookups go to an in-memory bloom filter + LRU cache.
+### Determinism
 
-The Authority is only contacted **before** a session starts (to issue tokens) and **in the background** (to stream policy and revocation updates). The decision path itself never blocks on a network call. This is what makes the performance budget achievable.
+The enforcement decision is deterministic for the same normalized request, local capability state, runtime signals, and policy bundle. There is no LLM or probabilistic classifier in the Sidecar decision path.
 
-### 3. Determinism
+If a request was denied because `action_count` exceeded a policy threshold, you can inspect the audit event and the bundle to understand why. You are not trying to reproduce a model judgment.
 
-Same input plus same policy bundle produces the same decision. There is no probabilistic classifier, no LLM, no model inference on the decision path. The mapping from `(method, host, path)` to action class is a deterministic table lookup. Cedar evaluation is by design total and deterministic.
+### Envelope Immutability
 
-If the Sidecar denies a call, you can reproduce that decision exactly given the same envelope and bundle. This matters for debugging, for incident response, and for compliance.
+The Sidecar builds a canonical `ExecutionEnvelope` for the action being evaluated. Policy sees that envelope. Audit records that envelope. Later steps such as credential injection and connector dispatch use derived data rather than rewriting what policy saw.
 
-### 4. Envelope immutability
+Adding an `Authorization` header after policy allows a request does not change the action class, resource, or parameters that Cedar evaluated.
 
-Once the Sidecar has built the `ExecutionEnvelope` for a request — the canonical representation of *what the agent is trying to do* — it is never mutated. Enrichment steps (like injecting credentials before dispatch) produce derived structures rather than editing the envelope in place.
+## Why This Shape Matters
 
-This sounds pedantic but it pays off: the audit log records the exact envelope that the policy decided on, so you can replay decisions, you can sign the envelope as part of the audit event, and you can reason about state transitions without worrying about hidden side effects.
+The architecture gives OpenFirma a narrow job: govern outbound agent actions at the process boundary.
 
-## What this enables
+That narrowness is the point. The Sidecar does not need to understand every model, framework, prompt, or tool protocol. It needs to see the outbound request, classify it into a stable action vocabulary, validate local authority material, evaluate policy, and leave a signed audit trail.
 
-These four invariants together give you something that most "AI guardrail" products do not:
+## Where To Go Next
 
-- A **policy-mediated** outbound boundary that holds even when the agent is compromised, mis-prompted, or bug-ridden.
-- A **deterministic** record of every decision, not just a sample.
-- **Microsecond-class** decisions, so the boundary is cheap enough to leave on in production.
-- A **provable** scope: the agent cannot escape it without you noticing, because escape paths produce DENY events you can alert on.
-
-The rest of the Concepts section unpacks how each piece works. The User Guides section shows how to put it together for real workloads.
-
-## Where to go next
-
-- [The enforcement pipeline](../pipeline/) — how the two stages chain together.
-- [Action classes](../action-classes/) — the canonical vocabulary the policies speak.
-- [Quickstart](../../quickstart/) — run the bundled demo end-to-end.
+- [The enforcement pipeline](../pipeline/) explains the request path stage by stage.
+- [Action classes](../action-classes/) explains how raw HTTP requests become policy vocabulary.
+- [The sandbox boundary](../sandbox/) explains when `firma run` becomes part of the architecture.
