@@ -10,7 +10,7 @@ import Hero from '../../components/Hero.astro';
 import FeatureGrid from '../../components/FeatureGrid.astro';
 
 <Hero
-  eyebrow="Open source"
+  eyebrow={null}
   title="Govern AI agents at the runtime layer."
   tagline="OpenFirma is an enforcement sidecar that wraps every outbound agent call with capability validation, policy evaluation, and signed audit - fully local, fully deterministic, fail-closed by design."
   actions={[
@@ -27,25 +27,46 @@ import FeatureGrid from '../../components/FeatureGrid.astro';
       href: './quickstart/',
     },
     {
+      title: 'Concepts',
+      description: 'Mental model and architecture: pipeline, capabilities, policies, interception, and the threat model.',
+      href: './concepts/architecture/',
+    },
+    {
+      title: 'User Guides',
+      description: 'Task-shaped walkthroughs from running the sidecar to securing a coding agent or web app.',
+      href: './guides/run-the-sidecar/',
+    },
+    {
       title: 'Rust API Reference',
       description: 'Auto-generated reference for every public item in the OpenFirma workspace crates.',
       href: './api/',
-    },
-    {
-      title: 'Blog & changelog',
-      description: 'Release notes, design write-ups, and updates from the OpenFirma team.',
-      href: './blog/',
     },
   ]}
 />
 
 ## What it is
 
-OpenFirma is a governed runtime for AI agents. It starts agents with a runtime profile, routes outbound traffic through a local enforcement point, checks protected actions against policy, and records the result.
+OpenFirma is a governed runtime for AI agents. It starts agents with a runtime profile, routes outbound traffic through a [local enforcement point](./concepts/architecture/), checks protected actions against [policy](./concepts/policies/), and records the result in a [signed audit log](./guides/audit-log/).
 
-Four invariants shape the design:
+Four [invariants](./concepts/architecture/#the-four-invariants) shape the design:
 
 - **Fail-closed** - every error path returns DENY.
-- **No network on the hot path** - capability validation and constraint enforcement run fully in-process.
+- **No network on the hot path** - [capability validation](./concepts/capabilities/) and [constraint enforcement](./concepts/policies/) run fully in-process.
 - **Deterministic** - same input plus same policy bundle produces the same decision.
 - **Envelope immutability** - `ExecutionEnvelope` is built once and never mutated in place.
+
+## Where to go next
+
+**New here?** Run [`make demo`](./quickstart/) and watch a real ALLOW / DENY decision happen. Five minutes, no API keys.
+
+**Want the mental model?** Start with [Architecture & invariants](./concepts/architecture/), then [The enforcement pipeline](./concepts/pipeline/). Forty minutes of reading; everything else builds on it.
+
+**Have a real workload to secure?** Pick the closest user guide:
+
+- [Secure a local coding agent](./guides/secure-a-coding-agent/) — Claude Code, Codex, Cursor.
+- [Deploy a GenAI web app](./guides/deploy-a-genai-webapp/) — multi-tenant assistant calling LLMs and SaaS APIs.
+- [Run the sidecar standalone](./guides/run-the-sidecar/) — minimal hand-written config to point any HTTP-speaking agent at.
+
+**Designing policy for the first time?** [Write your first Cedar policy](./guides/write-a-cedar-policy/), then read [Policies](./concepts/policies/) for the deeper "why".
+
+**Trying to decide if OpenFirma fits your threat model?** Read [Threat model & bypasses](./concepts/threat-model/) — an honest accounting of what the system covers and what it doesn't.
