@@ -42,6 +42,8 @@ fn write_authority_fixture(dir: &std::path::Path) -> std::path::PathBuf {
     // schema diverges.
     let policy_dir = dir.join("policies");
     std::fs::create_dir_all(&policy_dir).unwrap();
+    let issuance_policy_dir = dir.join("issuance-policies");
+    std::fs::create_dir_all(&issuance_policy_dir).unwrap();
     let key_file = dir.join("auth.key");
     // Generate a key first via the binary itself.
     let status = Command::new(firma_bin())
@@ -59,6 +61,7 @@ fn write_authority_fixture(dir: &std::path::Path) -> std::path::PathBuf {
         r#"
 listen_addr = "127.0.0.1:0"
 policy_dir = "{policy_dir}"
+issuance_policy_dir = "{issuance_policy_dir}"
 revocation_file = "{revocation_file}"
 max_ttl_seconds = 3600
 key_file = "{key_file}"
@@ -66,6 +69,7 @@ log_level = "info"
 bundle_ttl_seconds = 30
 "#,
         policy_dir = policy_dir.display(),
+        issuance_policy_dir = issuance_policy_dir.display(),
         revocation_file = revocation_file.display(),
         key_file = key_file.display(),
     );

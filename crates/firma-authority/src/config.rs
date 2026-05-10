@@ -10,8 +10,16 @@ use std::path::PathBuf;
 pub struct AuthorityConfig {
     /// gRPC listen address (default: `[::1]:50051`).
     pub listen_addr: String,
-    /// Directory containing `.cedar` policy files.
+    /// Directory containing `.cedar` policy files streamed to sidecars for enforcement.
     pub policy_dir: PathBuf,
+    /// Directory containing `.cedar` policy files used to gate capability issuance.
+    ///
+    /// The Authority evaluates issuance requests against this policy set.
+    /// `policy_dir` is still streamed to sidecars for enforcement. This lets
+    /// issuance policies differ from enforcement policies (e.g. permit issuance
+    /// of `communication.external.send` while the sidecar's enforcement policy
+    /// forbids the actual call).
+    pub issuance_policy_dir: PathBuf,
     /// Optional path to the Cedar schema file.
     /// Overrides `policy_dir/schema.cedarschema`. When unset, falls back to
     /// the schema found in `policy_dir`, then to the embedded canonical schema.
@@ -55,6 +63,9 @@ impl AuthorityConfig {
         if let Ok(v) = std::env::var("FIRMA_AUTHORITY_POLICY_DIR") {
             config.policy_dir = PathBuf::from(v);
         }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_ISSUANCE_POLICY_DIR") {
+            config.issuance_policy_dir = PathBuf::from(v);
+        }
         if let Ok(v) = std::env::var("FIRMA_AUTHORITY_SCHEMA_PATH") {
             config.schema_path = Some(PathBuf::from(v));
         }
@@ -86,7 +97,8 @@ impl Default for AuthorityConfig {
     fn default() -> Self {
         Self {
             listen_addr: "[::1]:50051".to_string(),
-            policy_dir: PathBuf::from("policies"),
+            policy_dir: PathBuf::from("policies/"),
+            issuance_policy_dir: PathBuf::from("issuance-policies/"),
             schema_path: None,
             revocation_file: PathBuf::from("revocations.txt"),
             max_ttl_seconds: 3600,

@@ -6,13 +6,18 @@
 # Default: unlisted hosts PASSTHROUGH (default_protected = false)
 
 [interceptor]
-mode              = "http_proxy"
-listen_addr       = "127.0.0.1:8080"
+mode               = "http_proxy"
+listen_addr        = "127.0.0.1:8080"
 drain_timeout_secs = 30
+
+[interceptor.https_mitm]
+enabled         = true
+intercept_hosts = ["paste.rs"]
 
 [policy]
 dir           = "examples/policies"
 authority_url = "http://127.0.0.1:50051"
+
 
 [ca]
 dir = "examples/e2e/firma-ca"
@@ -28,7 +33,7 @@ default_protected = false
 clock_skew_tolerance_seconds = 0
 
 [constraint_enforcement]
-bundle_ttl_seconds    = 30
+bundle_ttl_seconds     = 30
 enforcement_timeout_ms = 50
 
 [connector]
@@ -46,8 +51,16 @@ sink             = "stdout"
 signing_key_path = "examples/e2e/audit.key"
 
 [authority]
-connect_timeout_secs           = 10
-reconnect_min_backoff_ms       = 250
-reconnect_max_backoff_secs     = 30
-revocation_readiness_grace_ms  = 500
+connect_timeout_secs                 = 10
+reconnect_min_backoff_ms             = 250
+reconnect_max_backoff_secs           = 30
+revocation_readiness_grace_ms        = 500
 revocation_fail_closed_on_disconnect = false
+
+[preflight]
+agent_id               = "demo-agent"
+session_id             = "demo-session-001"
+requested_actions      = ["communication.external.send"]
+resource_scope         = "*"
+authority_pub_key_path = "examples/e2e/authority.pub"
+ttl_seconds            = 3600

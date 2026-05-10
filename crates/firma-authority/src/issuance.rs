@@ -54,7 +54,7 @@ pub enum IssuanceError {
 /// Returns [`IssuanceError::Denied`] when Cedar denies, or
 /// [`IssuanceError::Sign`] when PASETO signing fails.
 pub async fn issue_capability(
-    policy_store: &Arc<CedarPolicyStore>,
+    policy_store: &CedarPolicyStore,
     signer: &Arc<PasetoV4Signer>,
     max_ttl_seconds: i32,
     req: &IssuanceRequest<'_>,
