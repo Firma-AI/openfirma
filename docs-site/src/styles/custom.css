@@ -1,12 +1,10 @@
-/* OpenFirma docs - Stripe / Linear inspired theme.
+/* OpenFirma docs theme.
  *
- * Design choices:
- *   - Indigo accent ramp (Tailwind indigo-500 family)
- *   - Slate-zinc gray ramp for text and surfaces
- *   - Near-black background in dark mode for high contrast
- *   - Tight reading column (~64ch) with calm line-height
- *   - Subtle 1px hairlines instead of heavy shadows
- *   - Inter Variable for UI/body, JetBrains Mono Variable for code
+ * Palette derived from the OpenFirma wordmark:
+ *   - Sage-teal accent #5b8a86 (the dot in the logo) for links and active state
+ *   - Dark navy #1b2330 (the "Firma" half) for primary text / headings
+ *   - Muted sage gray #97a3a0 (the "Open" half) for secondary text
+ *   - Warm off-white surface in light mode, deep navy in dark mode
  */
 
 :root {
@@ -43,19 +41,19 @@
   --sl-nav-height: 3.75rem;
 
   /* Base palette: light-safe so the "Auto" theme is readable on light systems. */
-  --sl-color-white: #18181b;
-  --sl-color-gray-1: #27272a;
-  --sl-color-gray-2: #3f3f46;
-  --sl-color-gray-3: #52525b;
-  --sl-color-gray-4: #71717a;
-  --sl-color-gray-5: #a1a1aa;
-  --sl-color-gray-6: #e4e4e7;
-  --sl-color-gray-7: #f4f4f5;
+  --sl-color-white: #1b2330;
+  --sl-color-gray-1: #2a3340;
+  --sl-color-gray-2: #3a4554;
+  --sl-color-gray-3: #55636f;
+  --sl-color-gray-4: #76828c;
+  --sl-color-gray-5: #97a3a0;
+  --sl-color-gray-6: #d9dedb;
+  --sl-color-gray-7: #eef0ee;
   --sl-color-black: #ffffff;
 
-  --sl-color-accent-low: #eef2ff;
-  --sl-color-accent: #4f46e5;
-  --sl-color-accent-high: #312e81;
+  --sl-color-accent-low: #e3edec;
+  --sl-color-accent: #5b8a86;
+  --sl-color-accent-high: #2f5d59;
 
   --sl-color-text: var(--sl-color-gray-2);
   --sl-color-text-accent: var(--sl-color-accent);
@@ -63,11 +61,11 @@
   --sl-color-bg: var(--sl-color-black);
   --sl-color-bg-nav: rgba(255, 255, 255, 0.85);
   --sl-color-bg-sidebar: var(--sl-color-black);
-  --sl-color-bg-inline-code: #f4f4f5;
+  --sl-color-bg-inline-code: #eef0ee;
   --sl-color-bg-accent: var(--sl-color-accent);
-  --sl-color-hairline: rgba(24, 24, 27, 0.08);
-  --sl-color-hairline-light: rgba(24, 24, 27, 0.05);
-  --sl-color-hairline-shade: rgba(24, 24, 27, 0.12);
+  --sl-color-hairline: rgba(27, 35, 48, 0.08);
+  --sl-color-hairline-light: rgba(27, 35, 48, 0.05);
+  --sl-color-hairline-shade: rgba(27, 35, 48, 0.12);
 
   /* Surface treatments */
   --of-surface-elevated: #ffffff;
@@ -75,49 +73,49 @@
 }
 
 :root[data-theme='dark'] {
-  --sl-color-white: #fafafa;
-  --sl-color-gray-1: #f4f4f5;
-  --sl-color-gray-2: #e4e4e7;
-  --sl-color-gray-3: #a1a1aa;
-  --sl-color-gray-4: #71717a;
-  --sl-color-gray-5: #52525b;
-  --sl-color-gray-6: #3f3f46;
-  --sl-color-gray-7: #1f1f23;
-  --sl-color-black: #0a0a0c;
+  --sl-color-white: #f4f6f5;
+  --sl-color-gray-1: #e6eae8;
+  --sl-color-gray-2: #c9d0ce;
+  --sl-color-gray-3: #97a3a0;
+  --sl-color-gray-4: #76828c;
+  --sl-color-gray-5: #55636f;
+  --sl-color-gray-6: #3a4554;
+  --sl-color-gray-7: #1f2733;
+  --sl-color-black: #0d141d;
 
-  --sl-color-accent-low: #1e1b4b;
-  --sl-color-accent: #818cf8;
-  --sl-color-accent-high: #c7d2fe;
+  --sl-color-accent-low: #173331;
+  --sl-color-accent: #8fb6b1;
+  --sl-color-accent-high: #c2dcd8;
 
   --sl-color-text: var(--sl-color-gray-2);
   --sl-color-text-accent: var(--sl-color-accent);
-  --sl-color-text-invert: #0a0a0c;
-  --sl-color-bg: #0a0a0c;
-  --sl-color-bg-nav: rgba(10, 10, 12, 0.78);
-  --sl-color-bg-sidebar: #0a0a0c;
-  --sl-color-bg-inline-code: rgba(255, 255, 255, 0.07);
+  --sl-color-text-invert: #0d141d;
+  --sl-color-bg: #0d141d;
+  --sl-color-bg-nav: rgba(13, 20, 29, 0.78);
+  --sl-color-bg-sidebar: #0d141d;
+  --sl-color-bg-inline-code: rgba(255, 255, 255, 0.06);
   --sl-color-bg-accent: var(--sl-color-accent);
   --sl-color-hairline: rgba(255, 255, 255, 0.08);
   --sl-color-hairline-light: rgba(255, 255, 255, 0.04);
   --sl-color-hairline-shade: rgba(255, 255, 255, 0.14);
 
-  --of-surface-elevated: #131318;
+  --of-surface-elevated: #142030;
 }
 
 :root[data-theme='light'] {
-  --sl-color-white: #18181b;
-  --sl-color-gray-1: #27272a;
-  --sl-color-gray-2: #3f3f46;
-  --sl-color-gray-3: #52525b;
-  --sl-color-gray-4: #71717a;
-  --sl-color-gray-5: #a1a1aa;
-  --sl-color-gray-6: #e4e4e7;
-  --sl-color-gray-7: #f4f4f5;
+  --sl-color-white: #1b2330;
+  --sl-color-gray-1: #2a3340;
+  --sl-color-gray-2: #3a4554;
+  --sl-color-gray-3: #55636f;
+  --sl-color-gray-4: #76828c;
+  --sl-color-gray-5: #97a3a0;
+  --sl-color-gray-6: #d9dedb;
+  --sl-color-gray-7: #eef0ee;
   --sl-color-black: #ffffff;
 
-  --sl-color-accent-low: #eef2ff;
-  --sl-color-accent: #4f46e5;
-  --sl-color-accent-high: #312e81;
+  --sl-color-accent-low: #e3edec;
+  --sl-color-accent: #5b8a86;
+  --sl-color-accent-high: #2f5d59;
 
   --sl-color-text: var(--sl-color-gray-2);
   --sl-color-text-accent: var(--sl-color-accent);
@@ -125,11 +123,11 @@
   --sl-color-bg: var(--sl-color-black);
   --sl-color-bg-nav: rgba(255, 255, 255, 0.85);
   --sl-color-bg-sidebar: var(--sl-color-black);
-  --sl-color-bg-inline-code: #f4f4f5;
+  --sl-color-bg-inline-code: #eef0ee;
   --sl-color-bg-accent: var(--sl-color-accent);
-  --sl-color-hairline: rgba(24, 24, 27, 0.08);
-  --sl-color-hairline-light: rgba(24, 24, 27, 0.05);
-  --sl-color-hairline-shade: rgba(24, 24, 27, 0.12);
+  --sl-color-hairline: rgba(27, 35, 48, 0.08);
+  --sl-color-hairline-light: rgba(27, 35, 48, 0.05);
+  --sl-color-hairline-shade: rgba(27, 35, 48, 0.12);
 
   --of-surface-elevated: #ffffff;
 }
@@ -149,13 +147,13 @@ body {
 }
 
 html ::selection {
-  color: #18181b;
-  background: #c7d2fe;
+  color: #1b2330;
+  background: #c2dcd8;
 }
 
 :root[data-theme='dark'] ::selection {
-  color: #f8fafc;
-  background: #3730a3;
+  color: #f4f6f5;
+  background: #2f5d59;
 }
 
 /* Header - translucent with subtle hairline (Stripe-style). */
@@ -164,6 +162,59 @@ header.header {
   backdrop-filter: var(--of-glass-blur);
   -webkit-backdrop-filter: var(--of-glass-blur);
   border-bottom: 1px solid var(--sl-color-hairline);
+}
+
+/* Site title / logo - keep the wordmark a comfortable size. */
+header.header .site-title img {
+  max-height: 1.75rem;
+  width: auto;
+}
+
+/* Right-side header cluster: blog link, theme switcher, social icons.
+ * Starlight + starlight-blog ship these as siblings of differing heights —
+ * normalize them so they sit on a single baseline. */
+header.header .right-group,
+header.header .social-icons {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+header.header .right-group > * {
+  display: inline-flex;
+  align-items: center;
+}
+
+header.header starlight-theme-select select,
+header.header starlight-theme-select label {
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.8125rem;
+  line-height: 1;
+}
+
+header.header .right-group a {
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  padding-inline: 0.5rem;
+  font-size: 0.8125rem;
+  line-height: 1;
+  border-radius: 0.375rem;
+  color: var(--sl-color-gray-3);
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+header.header .right-group a:hover {
+  color: var(--sl-color-gray-1);
+  background: var(--sl-color-hairline-light);
+}
+
+header.header .social-icons a {
+  width: 2rem;
+  padding: 0;
+  justify-content: center;
 }
 
 /* Sidebar - denser, no extra dividers, accent rail on active item. */
