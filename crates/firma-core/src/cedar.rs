@@ -104,4 +104,24 @@ mod tests {
     fn injection_payload_rejected_semicolon() {
         assert!("agent;permit".parse::<AgentId>().is_err());
     }
+
+    // Action and Resource take raw strings (normalizer-controlled). The typed
+    // builder stores the id opaquely — even a Cedar syntax payload cannot
+    // break out of the entity binding.
+    #[test]
+    fn action_injection_payload_stored_opaquely() {
+        let evil = r#"read"; permit(principal, action, resource); //"#;
+        let uid = EntityUid::try_from(FirmaEntityUid::Action(evil.to_string())).unwrap();
+        assert_eq!(uid.type_name().to_string(), "Firma::Action");
+        // id stored verbatim, not interpreted as Cedar syntax
+        assert_eq!(uid.id().as_ref(), evil);
+    }
+
+    #[test]
+    fn resource_injection_payload_stored_opaquely() {
+        let evil = "bucket\"; permit(principal, action, resource); //";
+        let uid = EntityUid::try_from(FirmaEntityUid::Resource(evil.to_string())).unwrap();
+        assert_eq!(uid.type_name().to_string(), "Firma::Resource");
+        assert_eq!(uid.id().as_ref(), evil);
+    }
 }
