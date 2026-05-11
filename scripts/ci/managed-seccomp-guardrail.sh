@@ -33,6 +33,9 @@ BASELINE_DIR="$OUT_ROOT/baseline"
 MANAGED_DIR="$OUT_ROOT/managed"
 mkdir -p "$OUT_ROOT/artifacts"
 
+ok "running managed seccomp compatibility check"
+scripts/seccomp/check-managed-compatibility.sh --format text | tee "$OUT_ROOT/compatibility.txt" >/dev/null
+
 MANAGED_CONFIG="$OUT_ROOT/firma-run.managed.toml"
 cat >"$MANAGED_CONFIG" <<EOF
 [profiles.generic]

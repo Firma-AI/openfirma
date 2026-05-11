@@ -5,6 +5,7 @@ on:
     paths:
       - "crates/firma-run/**"
       - "scripts/ci/managed-seccomp-guardrail.sh"
+      - "scripts/seccomp/**"
       - "spikes/firma-run/fir-111/**"
       - ".github/workflows/managed-seccomp-guardrail.yml"
       - "Makefile"
@@ -13,6 +14,7 @@ on:
     paths:
       - "crates/firma-run/**"
       - "scripts/ci/managed-seccomp-guardrail.sh"
+      - "scripts/seccomp/**"
       - "spikes/firma-run/fir-111/**"
       - ".github/workflows/managed-seccomp-guardrail.yml"
       - "Makefile"

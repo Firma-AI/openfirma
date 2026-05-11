@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -318,43 +319,78 @@ fn sanitize_path_segment(value: &str) -> String {
         let allowed = ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.');
         out.push(if allowed { ch } else { '_' });
     }
-    if out.is_empty() { "_".to_string() } else { out }
+    let trimmed = out.trim_matches('.');
+    if out.is_empty() || trimmed.is_empty() || out == "." || out == ".." {
+        "_".to_string()
+    } else {
+        out
+    }
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), RunError> {
-    let tmp = path.with_extension(format!(
-        "{}.tmp",
-        path.extension()
-            .and_then(std::ffi::OsStr::to_str)
-            .unwrap_or_default()
-    ));
-    {
-        let mut file = fs::File::create(&tmp).map_err(|error| {
-            RunError::ConfigValidation(format!(
-                "failed to create temporary file {}: {error}",
-                tmp.display()
-            ))
-        })?;
-        file.write_all(bytes).map_err(|error| {
-            RunError::ConfigValidation(format!(
+    let ext = path
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("tmp");
+    let pid = std::process::id();
+    let now_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+
+    let mut last_err: Option<std::io::Error> = None;
+    for attempt in 0_u32..32_u32 {
+        let tmp = path.with_extension(format!("{ext}.tmp.{pid}.{now_nanos}.{attempt}"));
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp);
+        let mut file = match file {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                last_err = Some(error);
+                continue;
+            }
+            Err(error) => {
+                return Err(RunError::ConfigValidation(format!(
+                    "failed to create temporary file {}: {error}",
+                    tmp.display()
+                )));
+            }
+        };
+
+        if let Err(error) = file.write_all(bytes) {
+            let _ = fs::remove_file(&tmp);
+            return Err(RunError::ConfigValidation(format!(
                 "failed to write temporary file {}: {error}",
                 tmp.display()
-            ))
-        })?;
-        file.sync_all().map_err(|error| {
-            RunError::ConfigValidation(format!(
+            )));
+        }
+        if let Err(error) = file.sync_all() {
+            let _ = fs::remove_file(&tmp);
+            return Err(RunError::ConfigValidation(format!(
                 "failed to sync temporary file {}: {error}",
                 tmp.display()
-            ))
-        })?;
+            )));
+        }
+        drop(file);
+
+        if let Err(error) = fs::rename(&tmp, path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(RunError::ConfigValidation(format!(
+                "failed to finalize file {}: {error}",
+                path.display()
+            )));
+        }
+        return Ok(());
     }
-    fs::rename(&tmp, path).map_err(|error| {
-        RunError::ConfigValidation(format!(
-            "failed to finalize file {}: {error}",
-            path.display()
-        ))
-    })?;
-    Ok(())
+
+    Err(RunError::ConfigValidation(format!(
+        "failed to create unique temporary file for {} after multiple attempts: {}",
+        path.display(),
+        last_err.map_or_else(|| "unknown error".to_string(), |e| e.to_string())
+    )))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -622,5 +658,13 @@ deny_actions = ["filesystem.delete"]
                 .contains("managed seccomp default_action 'deny' is unsupported"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn sanitize_path_segment_blocks_reserved_dot_segments() {
+        assert_eq!(sanitize_path_segment("."), "_");
+        assert_eq!(sanitize_path_segment(".."), "_");
+        assert_eq!(sanitize_path_segment("..."), "_");
+        assert_eq!(sanitize_path_segment("generic-v1"), "generic-v1");
     }
 }

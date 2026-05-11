@@ -69,6 +69,25 @@ Notes:
 1. `seccomp_managed` is Linux + `bwrap` only.
 2. `seccomp_managed` and legacy `seccomp_bpf_path` are mutually exclusive.
 
+## Compatibility constraints
+
+Managed static seccomp support is currently constrained to:
+
+1. Linux host
+2. `bwrap` backend
+3. CPU arch: `x86_64` or `aarch64`
+4. Kernel: `>= 4.14`
+5. Seccomp actions available: `kill_process`, `errno`, `allow`
+
+Validated via:
+
+1. `scripts/seccomp/check-managed-compatibility.sh`
+2. `make managed-seccomp-compat-check`
+
+CI guardrail stores compatibility output in:
+
+1. `.spike-output/managed-seccomp-guardrail-*/compatibility.txt`
+
 ## Artifact contract
 
 Generated metadata includes:
@@ -100,9 +119,11 @@ Unit-level:
 
 Guardrail/CI-level (Linux):
 
-1. `make managed-seccomp-guardrail`
-2. Guardrail enforces:
-   - release-mode baseline vs managed overhead threshold,
-   - artifact + metadata generation,
-   - fail-closed check for missing managed source policy,
-   - focused seccomp unit suite.
+1. `make managed-seccomp-compat-check`
+2. `make managed-seccomp-guardrail`
+3. Guardrail enforcement coverage:
+4. release-mode baseline vs managed overhead threshold
+5. artifact + metadata generation
+6. compatibility check output artifact
+7. fail-closed check for missing managed source policy
+8. focused seccomp unit suite
