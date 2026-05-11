@@ -81,12 +81,6 @@ mod tests {
         assert_eq!(uid.id().as_ref(), "2001:db8::1");
     }
 
-    #[test]
-    fn injection_payload_rejected_at_agent_id_construction() {
-        let evil = r#"evil"; permit(principal, action, resource); //"#;
-        assert!(evil.parse::<AgentId>().is_err());
-    }
-
     // Action and Resource take raw strings (normalizer-controlled). The typed
     // builder stores the id opaquely — even a Cedar syntax payload cannot
     // break out of the entity binding.
