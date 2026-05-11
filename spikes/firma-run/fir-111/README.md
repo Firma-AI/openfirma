@@ -64,7 +64,7 @@ Generate a static seccomp file:
 
 ```bash
 spikes/firma-run/fir-111/generate-static-seccomp-bpf.sh \
-  --output /tmp/fir-111-spike/seccomp-allow-all.bpf \
+  --output /path/to/fir-111-spike/seccomp-allow-all.bpf \
   --mode allow-all
 ```
 
@@ -102,9 +102,7 @@ Each run writes:
 
 Default output base:
 
-```text
-/tmp/fir-111-spike/<timestamp>/
-```
+`<spike-output-dir>/<timestamp>/`
 
 Matrix runs produce:
 
@@ -116,8 +114,8 @@ Generate memo input:
 
 ```bash
 spikes/firma-run/fir-111/generate-decision-memo-input.sh \
-  --matrix-dir /tmp/fir-111-spike/matrix-<timestamp> \
-  --out /tmp/fir-111-spike/matrix-<timestamp>/decision-memo-input.md
+  --matrix-dir /path/to/fir-111-spike/matrix-<timestamp> \
+  --out /path/to/fir-111-spike/matrix-<timestamp>/decision-memo-input.md
 ```
 
 ## Notes

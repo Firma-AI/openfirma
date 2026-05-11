@@ -56,7 +56,7 @@ Generate a valid static seccomp cBPF file first:
 
 ```bash
 spikes/firma-run/fir-111/generate-static-seccomp-bpf.sh \
-  --output /tmp/fir-111-spike/seccomp-allow-all.bpf \
+  --output /path/to/fir-111-spike/seccomp-allow-all.bpf \
   --mode allow-all
 ```
 
@@ -64,7 +64,7 @@ If you already have a valid static seccomp cBPF path:
 
 ```bash
 spikes/firma-run/fir-111/run-matrix.sh \
-  --seccomp-bpf-path /tmp/fir-111-spike/seccomp-allow-all.bpf
+  --seccomp-bpf-path /path/to/fir-111-spike/seccomp-allow-all.bpf
 ```
 
 If static cBPF file is not available yet, run without it (static scenario will
@@ -104,17 +104,15 @@ This is useful for documenting syscall-level policy semantics and caveats.
 
 ```bash
 spikes/firma-run/fir-111/generate-decision-memo-input.sh \
-  --matrix-dir /tmp/fir-111-spike/matrix-<timestamp> \
-  --out /tmp/fir-111-spike/matrix-<timestamp>/decision-memo-input.md
+  --matrix-dir /path/to/fir-111-spike/matrix-<timestamp> \
+  --out /path/to/fir-111-spike/matrix-<timestamp>/decision-memo-input.md
 ```
 
 ## 7. Artifacts and where they satisfy card acceptance criteria
 
 Generated under:
 
-```text
-/tmp/fir-111-spike/matrix-<timestamp>/
-```
+`<spike-output-dir>/matrix-<timestamp>/`
 
 Key files:
 

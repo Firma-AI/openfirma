@@ -2,7 +2,7 @@
 
 Imported at: 2026-05-11T14:36:12Z UTC
 
-Source matrix dir: `/tmp/fir-111-spike/matrix-20260511T143402Z`
+Source matrix dir: `sanitized (ephemeral local path removed for portability)`
 
 Copied to: `spikes/firma-run/fir-111/docs/artifacts/fir-111-20260511-final`
 

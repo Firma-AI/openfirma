@@ -20,7 +20,7 @@ Options:
   --iterations <n>                                      Number of samples (default: 20)
   --inner-loops <n>                                     Workload inner loops (default: 120)
   --workload <path>                                     Workload script path
-  --output-dir <path>                                   Output directory (default: /tmp/fir-111-spike/<ts>)
+  --output-dir <path>                                   Output directory (default: $FIR_SPIKE_OUTPUT_DIR/<ts> or <repo>/.spike-output/<ts>)
   --seccomp-bpf-path <absolute path>                    Required in seccomp-static mode
   -h, --help                                            Show this help
 EOF
@@ -185,7 +185,8 @@ fi
 
 if [[ -z "$OUTPUT_DIR" ]]; then
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
-  OUTPUT_DIR="/tmp/fir-111-spike/${ts}-${MODE}"
+  output_root="${FIR_SPIKE_OUTPUT_DIR:-${ROOT_DIR}/.spike-output}"
+  OUTPUT_DIR="${output_root}/${ts}-${MODE}"
 fi
 
 mkdir -p "$OUTPUT_DIR/logs"
