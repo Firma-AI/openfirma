@@ -1,5 +1,6 @@
 //! Runner for `firma authority`.
 
+use std::io::Write;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -89,27 +90,37 @@ async fn run_compact(config: &AuthorityConfig) -> Result<()> {
     Ok(())
 }
 
-fn run_generate_key(output: &std::path::Path) -> Result<()> {
-    let kp = AsymmetricKeyPair::<V4>::generate().context("failed to generate key pair")?;
-
-    std::fs::write(output, kp.secret.as_bytes())
-        .with_context(|| format!("failed to write key file {}", output.display()))?;
-
+fn run_generate_key(path: &std::path::Path) -> Result<()> {
+    let mut secret_opts = std::fs::OpenOptions::new();
+    secret_opts.create_new(true).write(true);
+    let mut public_opts = std::fs::OpenOptions::new();
+    public_opts.create_new(true).write(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        if let Err(e) = std::fs::set_permissions(output, perms) {
-            eprintln!("warning: could not set key file permissions: {e}");
-        }
+        use std::os::unix::fs::OpenOptionsExt;
+        secret_opts.mode(0o600);
+        public_opts.mode(0o644);
     }
 
-    let pub_path = output.with_extension("pub");
-    std::fs::write(&pub_path, kp.public.as_bytes())
-        .with_context(|| format!("failed to write public key file {}", pub_path.display()))?;
+    let kp = AsymmetricKeyPair::<V4>::generate().context("failed to generate key pair")?;
+
+    let mut private_key_file = secret_opts
+        .open(path)
+        .context("failed to open output key file")?;
+    private_key_file
+        .write_all(kp.secret.as_bytes())
+        .context("failed to write key file")?;
+
+    let pub_path = path.with_extension("pub");
+    let mut pub_key_file = public_opts
+        .open(&pub_path)
+        .context("failed to open public key file")?;
+    pub_key_file
+        .write_all(kp.public.as_bytes())
+        .context("failed to write public key file")?;
 
     println!("generated Ed25519 key pair:");
-    println!("  secret: {}", output.display());
+    println!("  secret: {}", path.display());
     println!("  public: {}", pub_path.display());
     Ok(())
 }

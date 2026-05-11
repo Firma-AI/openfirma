@@ -432,11 +432,6 @@ fn maybe_write_entrypoint_script(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::path::PathBuf;
-    use std::process::Command;
-
-    use crate::backend::LaunchSpec;
-    use crate::config::SandboxIdentityMode;
 
     #[test]
     fn hardening_from_env_is_profile_driven() {
@@ -469,7 +464,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn mask_sensitive_paths_adds_expected_mounts() {
-        let mut cmd = Command::new("bwrap");
+        let mut cmd = std::process::Command::new("bwrap");
         let temp = tempfile::tempdir().expect("tempdir");
         let home = temp.path().join("home");
         std::fs::create_dir_all(home.join(".ssh")).expect("mkdir .ssh");
@@ -478,12 +473,12 @@ mod tests {
 
         let mut env = BTreeMap::new();
         env.insert("HOME".to_string(), home.display().to_string());
-        let launch = LaunchSpec {
+        let launch = crate::backend::LaunchSpec {
             executable: "/bin/true".to_string(),
             args: vec![],
-            cwd: PathBuf::from("/tmp"),
+            cwd: std::path::PathBuf::from("/tmp"),
             env,
-            identity_mode: SandboxIdentityMode::SandboxUser,
+            identity_mode: crate::config::SandboxIdentityMode::SandboxUser,
         };
         let suffixes = vec![
             ".ssh".to_string(),
