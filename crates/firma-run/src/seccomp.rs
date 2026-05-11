@@ -336,8 +336,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), RunError> {
     let pid = std::process::id();
     let now_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_nanos());
 
     let mut last_err: Option<std::io::Error> = None;
     for attempt in 0_u32..32_u32 {
