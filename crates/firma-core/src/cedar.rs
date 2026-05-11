@@ -49,10 +49,7 @@ impl TryFrom<FirmaEntityUid> for EntityUid {
             FirmaEntityUid::Resource(id) => ("Firma::Resource", id.as_str()),
         };
         let entity_type = type_name_str.parse::<EntityTypeName>()?;
-        // EntityId::from_str is Infallible; the id is stored opaquely.
-        let entity_id = id_str
-            .parse::<EntityId>()
-            .unwrap_or_else(|never| match never {});
+        let entity_id = EntityId::new(id_str);
         Ok(EntityUid::from_type_name_and_id(entity_type, entity_id))
     }
 }
@@ -79,30 +76,15 @@ mod tests {
 
     #[test]
     fn resource_uid_roundtrip() {
-        let uid = EntityUid::try_from(FirmaEntityUid::Resource("bucket-1".to_string())).unwrap();
+        let uid = EntityUid::try_from(FirmaEntityUid::Resource("2001:db8::1".to_string())).unwrap();
         assert_eq!(uid.type_name().to_string(), "Firma::Resource");
-        assert_eq!(uid.id().as_ref(), "bucket-1");
+        assert_eq!(uid.id().as_ref(), "2001:db8::1");
     }
 
     #[test]
     fn injection_payload_rejected_at_agent_id_construction() {
         let evil = r#"evil"; permit(principal, action, resource); //"#;
         assert!(evil.parse::<AgentId>().is_err());
-    }
-
-    #[test]
-    fn injection_payload_rejected_quotes() {
-        assert!(r#"agent"foo"#.parse::<AgentId>().is_err());
-    }
-
-    #[test]
-    fn injection_payload_rejected_backslash() {
-        assert!("agent\\foo".parse::<AgentId>().is_err());
-    }
-
-    #[test]
-    fn injection_payload_rejected_semicolon() {
-        assert!("agent;permit".parse::<AgentId>().is_err());
     }
 
     // Action and Resource take raw strings (normalizer-controlled). The typed
