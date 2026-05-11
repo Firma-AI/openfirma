@@ -1548,6 +1548,7 @@ dependencies = [
  "criterion",
  "pasetors",
  "pretty_assertions",
+ "regex",
  "serde",
  "serde_json",
  "strum 0.28.0",
