@@ -76,7 +76,13 @@ Field-by-field:
 
 ## Tail the log
 
-For interactive debugging:
+If the Sidecar is running under [`firma stack`](../manage-the-stack/), use `firma monitor` — it knows the state-dir layout and adds filtering by decision, action class, and time window:
+
+```bash
+firma monitor --config /etc/firma/firma-stack.toml --source audit --decision deny
+```
+
+For ad-hoc inspection of a raw `audit.jsonl`:
 
 ```bash
 tail -f /tmp/firma-standalone/logs/audit.jsonl | jq '.'

@@ -2,8 +2,8 @@
 # HTTP proxy on :8080. All unmapped hosts DENY (fail-closed demo).
 
 [interceptor]
-mode               = "http_proxy"
-listen_addr        = "127.0.0.1:8080"
+mode = "http_proxy"
+listen_addr = "127.0.0.1:8080"
 drain_timeout_secs = 30
 
 # Override the built-in HTTPS MITM allowlist. Only the three demo
@@ -11,23 +11,15 @@ drain_timeout_secs = 30
 # agent's own LLM traffic (api.openai.com) tunnels through untouched
 # so the OpenAI SDK doesn't have to trust the generated firma-ca.
 [interceptor.https_mitm]
-intercept_hosts = [
-    "api.github.com",
-    "gmail.googleapis.com",
-    "httpbin.org",
-]
+intercept_hosts = ["api.github.com", "gmail.googleapis.com", "httpbin.org"]
 # Strict-MITM the demo targets so the CONNECT preface is auto-authorized once
 # the TLS preflight succeeds — inner L7 requests (which carry the
 # x-firma-session-id header) are then evaluated individually. Without this,
 # the bare CONNECT (no session header, no L7 path) would fail Stage 1.
-strict_hosts = [
-    "api.github.com",
-    "gmail.googleapis.com",
-    "httpbin.org",
-]
+strict_hosts = ["api.github.com", "gmail.googleapis.com", "httpbin.org"]
 
 [policy]
-dir           = "examples/demos/demo0"
+dir = "examples/demos/demo0"
 authority_url = "http://127.0.0.1:50051"
 
 [ca]
@@ -37,35 +29,35 @@ dir = "examples/demos/demo0/.runtime/generated-firma-ca"
 level = "info"
 
 [mapping]
-rules_path        = "examples/demos/demo0/mapping-rules.toml"
+rules_path = "examples/demos/demo0/mapping-rules.toml"
 default_protected = true
 
 [capability_validation]
 clock_skew_tolerance_seconds = 0
 
 [constraint_enforcement]
-bundle_ttl_seconds     = 3600
+bundle_ttl_seconds = 3600
 enforcement_timeout_ms = 50
 
 [connector]
 default_timeout_ms = 10000
 
 [audit]
-sink             = "file"
-file_path        = "examples/demos/demo0/.runtime/audit.jsonl"
+sink = "file"
+file_path = "examples/demos/demo0/.runtime/audit.jsonl"
 signing_key_path = "examples/demos/demo0/.runtime/audit.key"
 
 [authority]
-connect_timeout_secs                 = 10
-reconnect_min_backoff_ms             = 250
-reconnect_max_backoff_secs           = 30
-revocation_readiness_grace_ms        = 500
+connect_timeout_secs = 10
+reconnect_min_backoff_ms = 250
+reconnect_max_backoff_secs = 30
+revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false
 
 [preflight]
-agent_id               = "demo0-agent"
-session_id             = "demo0-session-001"
-requested_actions      = ["code.review.read", "filesystem.read"]
-resource_scope         = "*"
+agent_id = "demo0-agent"
+session_id = "demo0-session-001"
+requested_actions = ["code.review.read", "filesystem.read"]
+resource_scope = "*"
 authority_pub_key_path = "examples/demos/demo0/.runtime/authority.pub"
-ttl_seconds            = 3600
+ttl_seconds = 3600

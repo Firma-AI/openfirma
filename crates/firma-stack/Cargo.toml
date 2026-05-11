@@ -1,0 +1,29 @@
+[package]
+name = "firma-stack"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Process supervision and observability primitives for the firma stack"
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+ctrlc = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }

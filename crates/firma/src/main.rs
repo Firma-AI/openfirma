@@ -1,5 +1,6 @@
 mod args;
 mod log;
+mod monitor;
 mod services;
 mod signal;
 
@@ -21,8 +22,11 @@ fn main() -> ExitCode {
         Command::Sidecar(a) => block_on_async(services::sidecar::run(a)),
         Command::Authority(a) => block_on_async(services::authority::run(a)),
         Command::Run(a) => services::run::run(a),
+        Command::Stack(a) => Ok(services::stack::run(a)),
+        Command::Monitor(a) => Ok(services::monitor::run(a)),
         Command::DnsStub(a) => services::dns_stub::run(a),
         Command::ProxyBridge(a) => services::proxy_bridge::run(a),
+        Command::Supervise(a) => Ok(services::supervise::run(a)),
     };
 
     match result {

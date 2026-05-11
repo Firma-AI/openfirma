@@ -6,12 +6,7 @@ build-backend = "hatchling.build"
 name = "firma-agent"
 version = "0.1.0"
 requires-python = ">=3.13"
-dependencies = [
-    "openai-agents",
-    "httpx",
-    "supabase>=2.28",
-    "python-dotenv",
-]
+dependencies = ["openai-agents", "httpx", "supabase>=2.28", "python-dotenv"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["agent"]

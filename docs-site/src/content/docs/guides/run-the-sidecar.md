@@ -207,6 +207,7 @@ For verifying the signature, see [Read & verify the audit log](../audit-log/).
 
 This setup gives you a Sidecar that audits and enforces against destinations you map, using a hand-written Cedar policy. From here:
 
+- [Manage the stack with `firma stack` and `firma monitor`](../manage-the-stack/) — supervise Authority + Sidecar as one unit and live-tail decisions, instead of running each binary by hand.
 - [Write your first Cedar policy](../write-a-cedar-policy/) — go beyond the two-rule demo and learn the policy patterns.
 - [Issue capability tokens](../issue-capability-tokens/) — add an Authority and a real Stage 1 layer.
 - [Enable HTTPS MITM](../https-mitm/) — see L7 details for HTTPS hosts.
