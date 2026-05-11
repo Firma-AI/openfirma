@@ -77,6 +77,10 @@ rules_paths = [
 See `docs/markdown/firma_action_class_registry.md` for the full 44-class
 registry and `intent.resource` shape conventions.
 
+## TOML Formatting
+
+Always run `taplo format` after modifying any `.toml` file.
+
 ## Linting Rules
 
 Workspace lints are strict — these are enforced in CI:

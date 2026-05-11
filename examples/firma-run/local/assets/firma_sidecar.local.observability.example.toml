@@ -16,18 +16,14 @@ intercept_hosts = [
   "platform.claude.com",
   "claude.ai",
   "chatgpt.com",
-  "*.chatgpt.com"
+  "*.chatgpt.com",
 ]
 
 # Keep bypass empty while debugging so behavior is explicit.
 bypass_hosts = []
 
 # Strict for hosts where deterministic fail-closed behavior is required.
-strict_hosts = [
-  "api.anthropic.com",
-  "platform.claude.com",
-  "chatgpt.com"
-]
+strict_hosts = ["api.anthropic.com", "platform.claude.com", "chatgpt.com"]
 
 [mapping]
 rules_path = ".local/mapping-rules.toml"

@@ -2,28 +2,22 @@
 # Runtime enforcement under compromise.
 
 [interceptor]
-mode               = "http_proxy"
-listen_addr        = "127.0.0.1:8080"
+mode = "http_proxy"
+listen_addr = "127.0.0.1:8080"
 drain_timeout_secs = 30
 
 # Override the built-in HTTPS MITM allowlist so the policy can see plaintext
 # requests on the two demo targets.
 [interceptor.https_mitm]
-intercept_hosts = [
-    "api.github.com",
-    "httpbin.org",
-]
+intercept_hosts = ["api.github.com", "httpbin.org"]
 # Strict-MITM these hosts so the CONNECT preface is auto-authorized once the
 # TLS preflight succeeds — inner L7 requests (which carry the
 # x-firma-session-id header) are then evaluated individually. Without this,
 # the bare CONNECT (no session header, no L7 path) would fail Stage 1.
-strict_hosts = [
-    "api.github.com",
-    "httpbin.org",
-]
+strict_hosts = ["api.github.com", "httpbin.org"]
 
 [policy]
-dir           = "examples/demos/demo2"
+dir = "examples/demos/demo2"
 authority_url = "http://127.0.0.1:50051"
 
 [ca]
@@ -38,42 +32,42 @@ level = "info"
 # attaches the header on the way out — so a compromised agent has nothing to
 # leak.
 [credentials.github]
-mode           = "basic"
-target_host    = "api.github.com"
-header         = "Authorization"
-prefix         = "Bearer "
+mode = "basic"
+target_host = "api.github.com"
+header = "Authorization"
+prefix = "Bearer "
 value_from_env = "GITHUB_TOKEN"
 
 [mapping]
-rules_path        = "examples/demos/demo2/mapping-rules.toml"
+rules_path = "examples/demos/demo2/mapping-rules.toml"
 default_protected = true
 
 [capability_validation]
 clock_skew_tolerance_seconds = 0
 
 [constraint_enforcement]
-bundle_ttl_seconds     = 3600
+bundle_ttl_seconds = 3600
 enforcement_timeout_ms = 50
 
 [connector]
 default_timeout_ms = 10000
 
 [audit]
-sink             = "file"
-file_path        = "examples/demos/demo2/.runtime/audit.jsonl"
+sink = "file"
+file_path = "examples/demos/demo2/.runtime/audit.jsonl"
 signing_key_path = "examples/demos/demo2/.runtime/audit.key"
 
 [authority]
-connect_timeout_secs                 = 10
-reconnect_min_backoff_ms             = 250
-reconnect_max_backoff_secs           = 30
-revocation_readiness_grace_ms        = 500
+connect_timeout_secs = 10
+reconnect_min_backoff_ms = 250
+reconnect_max_backoff_secs = 30
+revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false
 
 [preflight]
-agent_id               = "demo2-agent"
-session_id             = "demo2-session-001"
-requested_actions      = ["code.review.read", "issue.write"]
-resource_scope         = "*"
+agent_id = "demo2-agent"
+session_id = "demo2-session-001"
+requested_actions = ["code.review.read", "issue.write"]
+resource_scope = "*"
 authority_pub_key_path = "examples/demos/demo2/.runtime/authority.pub"
-ttl_seconds            = 3600
+ttl_seconds = 3600

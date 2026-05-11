@@ -9,11 +9,7 @@ session_max_secs = 1200
 
 [interceptor.https_mitm]
 enabled = true
-intercept_hosts = [
-  "api.openai.com",
-  "chatgpt.com",
-  "*.chatgpt.com",
-]
+intercept_hosts = ["api.openai.com", "chatgpt.com", "*.chatgpt.com"]
 bypass_hosts = []
 
 [mapping]

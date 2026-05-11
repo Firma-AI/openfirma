@@ -1,155 +1,95 @@
-use anyhow::{Context, Result, ensure};
-use std::net::{SocketAddr, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use anyhow::{Context, Result, ensure};
+use firma_stack::{StackConfig, spawn_stack};
 
 use crate::demo_loader::DemoManifest;
-use crate::process_manager::{ManagedProcess, spawn_with_output_to_file};
 
 pub struct DemoRuntime {
-    pub authority: ManagedProcess,
-    pub sidecar: ManagedProcess,
-    pub audit_log_path: std::path::PathBuf,
-    pub authority_log_path: std::path::PathBuf,
-    pub sidecar_log_path: std::path::PathBuf,
-    pub ca_cert_path: std::path::PathBuf,
+    pub state_dir: PathBuf,
+    pub audit_log_path: PathBuf,
+    pub authority_log_path: PathBuf,
+    pub sidecar_log_path: PathBuf,
+    pub ca_cert_path: PathBuf,
 }
 
 impl DemoRuntime {
     pub fn shutdown(&mut self) {
-        self.sidecar.shutdown();
-        self.authority.shutdown();
+        let _ = firma_stack::stop(&self.state_dir, Duration::from_secs(10));
     }
 }
 
 pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
-    let runtime_dir = manifest.root.join(".runtime");
-    std::fs::create_dir_all(&runtime_dir).context("failed to create .runtime directory")?;
+    let state_dir = manifest.root.join(".runtime");
+    std::fs::create_dir_all(&state_dir).context("failed to create .runtime directory")?;
 
-    provision_keys(&runtime_dir)?;
+    provision_demo_assets(&state_dir)?;
+    // Demo-specific: always regenerate CA material so the cert reflects current code.
+    wipe_ca_dir(&state_dir.join("generated-firma-ca"))?;
 
+    let cfg = StackConfig {
+        state_dir: Some(state_dir.clone()),
+        authority_config: manifest.authority_config.clone(),
+        sidecar_config: manifest.sidecar_config.clone(),
+        firma_bin: Some(resolve_firma_bin()?),
+    };
+    spawn_stack(&cfg, &state_dir).context("firma_stack::spawn_stack")?;
+
+    Ok(DemoRuntime {
+        audit_log_path: state_dir.join("audit.jsonl"),
+        authority_log_path: state_dir.join("authority.log"),
+        sidecar_log_path: state_dir.join("sidecar.log"),
+        ca_cert_path: state_dir.join("generated-firma-ca/firma-ca.crt"),
+        state_dir,
+    })
+}
+
+/// Locate the `firma` binary. Demo-tui's own `current_exe()` is
+/// `firma-demo-tui`, which has no `authority` / `sidecar` subcommands.
+/// Look for a sibling `firma` next to it (typical `cargo` layout: both
+/// live under `target/<profile>/`).
+fn resolve_firma_bin() -> Result<PathBuf> {
+    let exe = std::env::current_exe().context("current_exe")?;
+    let parent = exe
+        .parent()
+        .context("current_exe has no parent directory")?;
+    let candidate = parent.join(if cfg!(windows) { "firma.exe" } else { "firma" });
+    if candidate.exists() {
+        return Ok(candidate);
+    }
+    anyhow::bail!(
+        "could not locate the `firma` binary at {} \
+         (run `cargo build -p firma` first)",
+        candidate.display()
+    );
+}
+
+fn wipe_ca_dir(ca_dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(ca_dir).context("failed to create firma-ca directory")?;
+    for name in ["firma-ca.crt", "firma-ca.key"] {
+        let path = ca_dir.join(name);
+        if path.exists() {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("failed to remove stale {}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn provision_demo_assets(runtime_dir: &Path) -> Result<()> {
     let revocations = runtime_dir.join("revocations.txt");
     if !revocations.exists() {
         std::fs::write(&revocations, "").context("failed to create revocations.txt")?;
     }
 
-    ensure_demo_ca_dir(&runtime_dir.join("generated-firma-ca"))?;
-
-    let authority_log_path = runtime_dir.join("authority.log");
-    let sidecar_log_path = runtime_dir.join("sidecar.log");
-
-    let mut authority = spawn_with_output_to_file(
-        Command::new("cargo")
-            .args(["run", "--bin", "firma", "--", "authority", "--config"])
-            .arg(&manifest.authority_config),
-        &authority_log_path,
-    )
-    .context("failed to start firma authority")?;
-
-    wait_for_authority_ready(&mut authority, &manifest.authority_config)?;
-
-    let audit_log_path = runtime_dir.join("audit.jsonl");
-    std::fs::write(&audit_log_path, "").context("failed to reset audit.jsonl")?;
-
-    let sidecar = spawn_with_output_to_file(
-        Command::new("cargo")
-            .args(["run", "--bin", "firma", "--", "sidecar", "--config-file"])
-            .arg(&manifest.sidecar_config),
-        &sidecar_log_path,
-    )
-    .context("failed to start firma sidecar")?;
-
-    let ca_dir = runtime_dir.join("generated-firma-ca");
-    wait_for_demo_ca_material(&ca_dir)?;
-
-    Ok(DemoRuntime {
-        authority,
-        sidecar,
-        audit_log_path,
-        authority_log_path,
-        sidecar_log_path,
-        ca_cert_path: ca_dir.join("firma-ca.crt"),
-    })
-}
-
-fn wait_for_authority_ready(authority: &mut ManagedProcess, config_path: &Path) -> Result<()> {
-    let addr = read_authority_listen_addr(config_path)?;
-    let deadline = Instant::now() + Duration::from_secs(60);
-
-    loop {
-        if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
-            return Ok(());
-        }
-
-        if let Some(status) = authority
-            .child
-            .try_wait()
-            .context("failed to check firma authority process status")?
-        {
-            ensure!(
-                status.success(),
-                "firma authority exited before listening on {addr}: {status}"
-            );
-        }
-
-        ensure!(
-            Instant::now() < deadline,
-            "firma authority did not start listening on {addr}"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn read_authority_listen_addr(config_path: &Path) -> Result<SocketAddr> {
-    let config = std::fs::read_to_string(config_path).with_context(|| {
-        format!(
-            "failed to read authority config '{}'",
-            config_path.display()
-        )
-    })?;
-
-    for line in config.lines() {
-        let line = line.split('#').next().unwrap_or_default().trim();
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim() == "listen_addr" {
-            let value = value.trim().trim_matches('"');
-            return value
-                .parse()
-                .with_context(|| format!("invalid authority listen_addr '{value}'"));
-        }
+    let audit_key = runtime_dir.join("audit.key");
+    if !audit_key.exists() {
+        std::fs::write(&audit_key, DEMO_AUDIT_KEY_PEM)
+            .context("failed to write demo audit signing key")?;
     }
 
-    anyhow::bail!(
-        "authority config '{}' does not define listen_addr",
-        config_path.display()
-    );
-}
-
-fn wait_for_demo_ca_material(ca_dir: &Path) -> Result<()> {
-    let cert = ca_dir.join("firma-ca.crt");
-    let key = ca_dir.join("firma-ca.key");
-    let deadline = Instant::now() + Duration::from_secs(60);
-
-    loop {
-        if cert.exists() && key.exists() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            ensure!(
-                cert.exists() && key.exists(),
-                "firma sidecar did not generate CA material at '{}' and '{}'",
-                cert.display(),
-                key.display()
-            );
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn provision_keys(runtime_dir: &Path) -> Result<()> {
     let key_file = runtime_dir.join("authority.key");
     if !key_file.exists() {
         // Suppress output — we are inside the TUI alternate screen.
@@ -171,25 +111,6 @@ fn provision_keys(runtime_dir: &Path) -> Result<()> {
         ensure!(status.success(), "generate-key failed");
     }
 
-    let audit_key = runtime_dir.join("audit.key");
-    if !audit_key.exists() {
-        std::fs::write(&audit_key, DEMO_AUDIT_KEY_PEM)
-            .context("failed to write demo audit signing key")?;
-    }
-
-    Ok(())
-}
-
-fn ensure_demo_ca_dir(ca_dir: &Path) -> Result<()> {
-    std::fs::create_dir_all(ca_dir).context("failed to create firma-ca directory")?;
-    // Always regenerate CA material on demo boot so the cert reflects current code.
-    for name in ["firma-ca.crt", "firma-ca.key"] {
-        let p = ca_dir.join(name);
-        if p.exists() {
-            std::fs::remove_file(&p)
-                .with_context(|| format!("failed to remove stale {}", p.display()))?;
-        }
-    }
     Ok(())
 }
 
