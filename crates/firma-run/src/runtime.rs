@@ -12,6 +12,7 @@ use crate::error::RunError;
 use crate::identity::RunIdentity;
 use crate::routing::{AutostartFlags, prepare_network_runtime};
 use crate::sidecar::supervisor::DEFAULT_STARTUP_TIMEOUT_SECS;
+use crate::seccomp::resolve_effective_seccomp;
 use crate::supervisor::wait_with_signal_forwarding;
 
 /// Selection between `firma run`'s autostart behaviour and an externally
@@ -167,12 +168,14 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             authority,
         )?;
         let effective_endpoint = network_runtime.sidecar_endpoint().clone();
+        let effective_seccomp = resolve_effective_seccomp(&profile)?;
         let env = build_execution_env(
             &profile,
             &identity,
             &lease,
             &effective_endpoint,
             network_runtime.env_overrides(),
+            effective_seccomp.as_ref().map(|s| s.bpf_path.as_path()),
         );
 
         let executable = args
@@ -192,6 +195,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             args: launch_args,
             cwd: working_dir,
             env,
+            seccomp_filter_path: effective_seccomp.as_ref().map(|s| s.bpf_path.clone()),
             identity_mode: profile.identity_mode,
         };
 
@@ -322,6 +326,7 @@ fn build_execution_env(
     lease: &CapabilityLeaseManager,
     sidecar_endpoint: &SidecarEndpoint,
     network_overrides: &BTreeMap<String, String>,
+    seccomp_bpf_path: Option<&Path>,
 ) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
 
@@ -363,7 +368,7 @@ fn build_execution_env(
         serde_json::to_string(&attr_headers).unwrap_or_else(|_| "{}".to_string()),
     );
 
-    if let Some(seccomp_path) = &profile.seccomp_bpf_path {
+    if let Some(seccomp_path) = seccomp_bpf_path.or(profile.seccomp_bpf_path.as_deref()) {
         env.insert(
             "FIRMA_RUN_SECCOMP_BPF_PATH".to_string(),
             seccomp_path.display().to_string(),
@@ -542,6 +547,7 @@ mod tests {
             env_set: BTreeMap::default(),
             mounts: Vec::<MountSpec>::new(),
             seccomp_bpf_path: None,
+            seccomp_managed: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -566,6 +572,7 @@ mod tests {
             &lease,
             &profile.sidecar_endpoint,
             &BTreeMap::default(),
+            None,
         );
         assert!(env.contains_key("HTTP_PROXY"));
         assert_eq!(env.get("FIRMA_RUN_PROFILE"), Some(&"generic".to_string()));
@@ -594,6 +601,7 @@ mod tests {
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
             seccomp_bpf_path: None,
+            seccomp_managed: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -620,6 +628,7 @@ mod tests {
             &lease,
             &profile.sidecar_endpoint,
             &BTreeMap::default(),
+            None,
         );
         assert_eq!(
             env.get("FIRMA_CAPABILITY_FILE"),
@@ -647,6 +656,7 @@ mod tests {
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
             seccomp_bpf_path: Some(seccomp_path.clone()),
+            seccomp_managed: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -670,6 +680,7 @@ mod tests {
             &lease,
             &profile.sidecar_endpoint,
             &BTreeMap::default(),
+            None,
         );
 
         assert_eq!(
@@ -705,6 +716,7 @@ mod tests {
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
             seccomp_bpf_path: None,
+            seccomp_managed: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -762,6 +774,7 @@ mod tests {
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
             seccomp_bpf_path: None,
+            seccomp_managed: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -828,6 +841,7 @@ mod tests {
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
             seccomp_bpf_path: None,
+            seccomp_managed: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,

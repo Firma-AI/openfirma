@@ -50,6 +50,7 @@ fn generic_profile() -> ProfilePatch {
         backend: None,
         sidecar_endpoint: None,
         seccomp_bpf_path: None,
+        seccomp_managed: None,
         env_passthrough: vec!["HOME".to_string(), "PATH".to_string(), "TERM".to_string()],
         env_set,
         mounts: vec![MountPatch {

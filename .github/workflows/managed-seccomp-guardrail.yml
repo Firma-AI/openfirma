@@ -1,0 +1,56 @@
+name: managed-seccomp-guardrail
+
+on:
+  pull_request:
+    paths:
+      - "crates/firma-run/**"
+      - "scripts/ci/managed-seccomp-guardrail.sh"
+      - "spikes/firma-run/fir-111/**"
+      - ".github/workflows/managed-seccomp-guardrail.yml"
+      - "Makefile"
+  push:
+    branches: [main]
+    paths:
+      - "crates/firma-run/**"
+      - "scripts/ci/managed-seccomp-guardrail.sh"
+      - "spikes/firma-run/fir-111/**"
+      - ".github/workflows/managed-seccomp-guardrail.yml"
+      - "Makefile"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  MANAGED_SECCOMP_GUARDRAIL_ITERATIONS: "10"
+  MANAGED_SECCOMP_GUARDRAIL_INNER_LOOPS: "120"
+  MANAGED_SECCOMP_MAX_OVERHEAD_PCT: "3.00"
+
+jobs:
+  linux-guardrail:
+    name: Linux managed seccomp guardrail
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install bwrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      - name: Run managed seccomp guardrail
+        run: make managed-seccomp-guardrail
+
+      - name: Upload guardrail artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: managed-seccomp-guardrail-artifacts
+          path: .spike-output/managed-seccomp-guardrail-*/
+          if-no-files-found: warn
