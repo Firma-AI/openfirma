@@ -11,7 +11,7 @@ Usage:
   spikes/firma-run/fir-111/run-matrix.sh [options]
 
 Options:
-  --output-dir <path>            Matrix output dir (default: /tmp/fir-111-spike/matrix-<ts>)
+  --output-dir <path>            Matrix output dir (default: $FIR_SPIKE_OUTPUT_DIR/matrix-<ts> or <repo>/.spike-output/matrix-<ts>)
   --profile <name>               firma run profile (default: generic)
   --iterations <n>               iterations per scenario (default: 20)
   --inner-loops <n>              workload inner loops (default: 120)
@@ -89,7 +89,8 @@ fi
 
 if [[ -z "$OUTPUT_DIR" ]]; then
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
-  OUTPUT_DIR="/tmp/fir-111-spike/matrix-${ts}"
+  output_root="${FIR_SPIKE_OUTPUT_DIR:-${ROOT_DIR}/.spike-output}"
+  OUTPUT_DIR="${output_root}/matrix-${ts}"
 fi
 mkdir -p "$OUTPUT_DIR"
 
