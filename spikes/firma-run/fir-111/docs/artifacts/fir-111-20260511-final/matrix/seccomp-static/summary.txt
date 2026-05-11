@@ -1,0 +1,21 @@
+fir-111 spike summary
+mode=seccomp-static
+profile=generic
+iterations=20
+inner_loops=120
+failure_mode=none
+seccomp_bpf_path=/tmp/fir-111-spike/seccomp-allow-all.bpf
+unotify_runner=<none>
+count=20
+successes=20
+failures=0
+total_ms=16379.047
+min_ms=808.370
+avg_ms=818.952
+p50_ms=808.784
+p95_ms=909.153
+p99_ms=910.040
+max_ms=910.040
+iterations_per_sec=1.221
+work_units_per_sec=146.529
+results_jsonl=/tmp/fir-111-spike/matrix-20260511T143402Z/seccomp-static/results.jsonl
