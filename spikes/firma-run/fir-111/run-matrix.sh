@@ -12,6 +12,7 @@ Usage:
 
 Options:
   --output-dir <path>            Matrix output dir (default: $FIR_SPIKE_OUTPUT_DIR/matrix-<ts> or <repo>/.spike-output/matrix-<ts>)
+  --firma-bin <path>             Path to firma binary (default: target/debug/firma)
   --profile <name>               firma run profile (default: generic)
   --iterations <n>               iterations per scenario (default: 20)
   --inner-loops <n>              workload inner loops (default: 120)
@@ -22,6 +23,7 @@ EOF
 }
 
 OUTPUT_DIR=""
+FIRMA_BIN="target/debug/firma"
 PROFILE="generic"
 ITERATIONS=20
 INNER_LOOPS=120
@@ -35,6 +37,11 @@ while [[ $# -gt 0 ]]; do
       shift
       [[ $# -gt 0 ]] || fail "--output-dir requires a value"
       OUTPUT_DIR="$1"
+      ;;
+    --firma-bin)
+      shift
+      [[ $# -gt 0 ]] || fail "--firma-bin requires a value"
+      FIRMA_BIN="$1"
       ;;
     --profile)
       shift
@@ -119,14 +126,14 @@ spikes/firma-run/fir-111/probe-kernel-seccomp.sh --format text >"$PROBE_OUT"
 
 printf '' >"$INDEX_TSV"
 
-base_args=(--mode baseline --profile "$PROFILE" --iterations "$ITERATIONS" --inner-loops "$INNER_LOOPS")
+base_args=(--mode baseline --firma-bin "$FIRMA_BIN" --profile "$PROFILE" --iterations "$ITERATIONS" --inner-loops "$INNER_LOOPS")
 if [[ -n "$WORKLOAD" ]]; then
   base_args+=(--workload "$WORKLOAD")
 fi
 run_case "baseline" "${base_args[@]}"
 
 if [[ -n "$SECCOMP_BPF_PATH" ]]; then
-  static_args=(--mode seccomp-static --profile "$PROFILE" --iterations "$ITERATIONS" --inner-loops "$INNER_LOOPS" --seccomp-bpf-path "$SECCOMP_BPF_PATH")
+  static_args=(--mode seccomp-static --firma-bin "$FIRMA_BIN" --profile "$PROFILE" --iterations "$ITERATIONS" --inner-loops "$INNER_LOOPS" --seccomp-bpf-path "$SECCOMP_BPF_PATH")
   if [[ -n "$WORKLOAD" ]]; then
     static_args+=(--workload "$WORKLOAD")
   fi
@@ -136,7 +143,7 @@ else
 fi
 
 if [[ -n "$UNOTIFY_RUNNER" ]]; then
-  unotify_args=(--mode unotify-prototype --profile "$PROFILE" --iterations "$ITERATIONS" --inner-loops "$INNER_LOOPS" --unotify-runner "$UNOTIFY_RUNNER")
+  unotify_args=(--mode unotify-prototype --firma-bin "$FIRMA_BIN" --profile "$PROFILE" --iterations "$ITERATIONS" --inner-loops "$INNER_LOOPS" --unotify-runner "$UNOTIFY_RUNNER")
   if [[ -n "$WORKLOAD" ]]; then
     unotify_args+=(--workload "$WORKLOAD")
   fi

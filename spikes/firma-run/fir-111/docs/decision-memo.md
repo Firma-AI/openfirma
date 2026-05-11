@@ -10,7 +10,7 @@ Scope: Linux local-command syscall enforcement path for `firma run`
 1. Spike specification:
    `spikes/firma-run/fir-111/docs/spike-spec.md`
 2. Evidence bundle used for this memo:
-   `spikes/firma-run/fir-111/docs/artifacts/fir-111-20260511-final/`
+   `spikes/firma-run/fir-111/docs/artifacts/fir-111-20260511-release/`
 3. Spike harness implementation:
    `spikes/firma-run/fir-111/`
 
@@ -105,21 +105,28 @@ Evidence used:
 2. FIR architecture/security docs in-repo.
 3. Linux seccomp_unotify primary documentation.
 4. FIR-111 matrix artifacts:
-   `spikes/firma-run/fir-111/docs/artifacts/fir-111-20260511-final/matrix/`
+   `spikes/firma-run/fir-111/docs/artifacts/fir-111-20260511-release/matrix/`
+
+Note:
+
+1. Attached release-mode matrix artifacts are authoritative for final
+   architecture go/no-go.
+2. Debug-mode historical artifacts are retained separately for diagnostic
+   context only.
 
 ### 4.1 Benchmark summary (shell-heavy workload)
 
 | Scenario | Mode | p50 ms | p95 ms | p99 ms | avg ms | iter/s | work-units/s |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| baseline | baseline | 808.457 | 809.927 | 812.365 | 808.768 | 1.236 | 148.374 |
-| static seccomp | seccomp-static | 808.784 | 909.153 | 910.040 | 818.952 | 1.221 | 146.529 |
-| unotify | unotify-prototype | 1527.778 | 1532.005 | 1632.576 | 1533.240 | 0.652 | 78.266 |
-| unotify (slow) | unotify-prototype/slow | 1532.316 | 1533.964 | 1534.402 | 1532.554 | 0.653 | 78.301 |
+| baseline | baseline | 806.695 | 806.987 | 807.071 | 806.761 | 1.240 | 148.743 |
+| static seccomp | seccomp-static | 806.875 | 807.213 | 807.542 | 806.927 | 1.239 | 148.712 |
+| unotify | unotify-prototype | 1526.526 | 1529.027 | 1530.002 | 1526.821 | 0.655 | 78.595 |
+| unotify (slow) | unotify-prototype/slow | 1531.836 | 1533.309 | 1533.564 | 1531.939 | 0.653 | 78.332 |
 
 Observed deltas:
 
-1. Static seccomp avg overhead vs baseline: about `+1.26%`.
-2. Unotify avg overhead vs baseline: about `+89.58%` (`~1.9x` slower).
+1. Static seccomp avg overhead vs baseline: about `+0.02%`.
+2. Unotify avg overhead vs baseline: about `+89.25%` (`~1.9x` slower).
 3. Unotify throughput vs baseline: about `0.53x`.
 
 ### 4.2 Failure-mode outcomes
