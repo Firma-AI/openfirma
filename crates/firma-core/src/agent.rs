@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 
 const AGENT_ID_PATTERN: &str = "^[a-zA-Z0-9_-]{1,128}$";
 
+#[allow(clippy::expect_used)]
 static AGENT_ID_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(AGENT_ID_PATTERN).expect("valid regex"));
+    LazyLock::new(|| Regex::new(AGENT_ID_PATTERN).expect("compile-time literal pattern"));
 
 /// Error returned when an [`AgentId`] string fails validation.
 #[derive(Debug, thiserror::Error)]
