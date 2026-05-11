@@ -7,27 +7,27 @@
 # api.internal/usage?user=… → usage metrics (allowed by policy)
 # Stand-in: GET httpbin.org/get
 [[rules]]
-method       = "GET"
-host         = "httpbin.org"
-path         = "/get*"
+method = "GET"
+host = "httpbin.org"
+path = "/get*"
 action_class = "filesystem.read"
 
 # api.internal/billing?user=… → sensitive billing records (no permit → default deny)
 # Stand-in: GET httpbin.org/anything/billing
 [[rules]]
-method       = "GET"
-host         = "httpbin.org"
-path         = "/anything/billing*"
+method = "GET"
+host = "httpbin.org"
+path = "/anything/billing*"
 action_class = "credential.read"
 
 # Local LLM access (any method) — the agent's own LLM traffic is not a demo
 # subject. Kept here for parity with the other demos.
 [[rules]]
-host         = "localhost:*"
-path         = "*"
+host = "localhost:*"
+path = "*"
 action_class = "filesystem.read"
 
 [[rules]]
-host         = "127.0.0.1:*"
-path         = "*"
+host = "127.0.0.1:*"
+path = "*"
 action_class = "filesystem.read"

@@ -1,8 +1,11 @@
 //! Top-level CLI for the unified `firma` binary.
 
 pub mod authority;
+pub mod monitor;
 pub mod run;
 pub mod sidecar;
+pub mod stack;
+pub mod supervise;
 
 use std::path::PathBuf;
 
@@ -24,16 +27,23 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Run the enforcement sidecar.
-    Sidecar(sidecar::Args),
     /// Run the authority (mini reference impl).
     Authority(authority::Args),
-    /// Wrap an agent process via firma-run.
-    Run(run::RunArgs),
     /// Internal sandbox-local DNS stub.
     #[command(name = "__dns-stub", hide = true)]
     DnsStub(run::DnsStubArgs),
+    /// Tail audit and component logs.
+    Monitor(monitor::Args),
     /// Internal proxy bridge for sandbox.
     #[command(name = "__proxy-bridge", hide = true)]
     ProxyBridge(run::ProxyBridgeArgs),
+    /// Wrap an agent process via firma-run.
+    Run(run::RunArgs),
+    /// Run the enforcement sidecar.
+    Sidecar(sidecar::Args),
+    /// Supervise authority + sidecar as one unit.
+    Stack(stack::StackArgs),
+    /// Internal detached stack supervisor.
+    #[command(name = "__supervise", hide = true)]
+    Supervise(supervise::Args),
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Direct terminal runner for the demos. Skips the TUI — boots authority +
-# sidecar in the background, runs the demo script in the foreground.
+# Direct terminal runner for the demos. Skips the TUI — boots the firma stack
+# (authority + sidecar) in the background via `firma stack start --detach`,
+# runs the demo script in the foreground, then tears the stack down on exit.
 #
 # Usage:
 #   examples/demos/run.sh demo0 [--no-build] [--no-script]
@@ -47,88 +48,77 @@ audit_key="$runtime_dir/audit.key"
 ca_dir="$runtime_dir/generated-firma-ca"
 ca_cert="$ca_dir/firma-ca.crt"
 
+firma() {
+    cargo run -q -p firma -- "$@"
+}
+
 # 1. Build (once, unless --no-build).
 if [[ $build -eq 1 ]]; then
     cargo build -p firma
 fi
 
-# 2. Provision authority key if absent.
+# 2. Provision authority key if absent. (Demo-specific; firma stack does not
+#    own key material.)
 if [[ ! -f "$authority_key" ]]; then
-    cargo run -q -p firma -- authority generate-key --output "$authority_key"
+    firma authority generate-key --output "$authority_key"
 fi
 
 # 3. Audit key — must exist. The TUI ships an embedded PEM. For run.sh we
-# require it to already be in place (the TUI has been run at least once,
-# or it was committed). Bail out with a clear hint otherwise.
+#    require it to already be in place (the TUI has been run at least once,
+#    or it was committed). Bail out with a clear hint otherwise.
 if [[ ! -f "$audit_key" ]]; then
     echo "missing $audit_key — run the TUI once to provision the embedded demo audit key, or copy one in." >&2
     exit 1
 fi
 
-# 4. Sidecar regenerates CA material on every boot. Remove stale cert.
+# 4. Sidecar regenerates CA material on every boot. Remove stale cert so the
+#    sidecar produces fresh material on stack start.
 rm -f "$ca_dir/firma-ca.crt" "$ca_dir/firma-ca.key"
 mkdir -p "$ca_dir"
 
 # 5. Reset audit log so the run is observable from scratch.
 : > "$runtime_dir/audit.jsonl"
 
-# 6. Boot authority + sidecar in background. Trap to clean up.
-log_dir="$runtime_dir"
-authority_log="$log_dir/authority.log"
-sidecar_log="$log_dir/sidecar.log"
+# 6. Generate a stack config pointing at this demo's authority/sidecar configs.
+stack_cfg="$runtime_dir/firma-stack.toml"
+cat >"$stack_cfg" <<EOF
+authority_config = "$demo_dir/authority.toml"
+sidecar_config = "$demo_dir/sidecar.toml"
+EOF
 
-cargo run -q -p firma -- authority --config "$demo_dir/authority.toml" \
-    >"$authority_log" 2>&1 &
-authority_pid=$!
-
-# Wait for authority to listen on 127.0.0.1:50051.
-listen_addr="$(awk -F'=' '/^listen_addr/ {gsub(/[" ]/,"",$2); print $2}' "$demo_dir/authority.toml")"
-host="${listen_addr%:*}"; port="${listen_addr##*:}"
-for _ in $(seq 1 60); do
-    if nc -z "$host" "$port" 2>/dev/null; then break; fi
-    sleep 0.5
-done
-
-cargo run -q -p firma -- --log-filter "${FIRMA_SIDECAR_LOG_LEVEL:-info}" sidecar --config-file "$demo_dir/sidecar.toml" \
-    >"$sidecar_log" 2>&1 &
-sidecar_pid=$!
+# 7. Start the stack (detached). `start` blocks until both components are
+#    listening and the sidecar has produced CA material, then forks a
+#    supervisor and returns. On any error, stack start tears down what it
+#    spawned and exits non-zero — fail-closed.
+firma stack start --detach --state-dir "$runtime_dir" --config "$stack_cfg"
 
 cleanup() {
-    kill "$sidecar_pid" "$authority_pid" 2>/dev/null || true
-    wait "$sidecar_pid" "$authority_pid" 2>/dev/null || true
+    firma stack stop --state-dir "$runtime_dir" --timeout 10 || true
 }
 trap cleanup EXIT INT TERM
-
-# Wait for CA material.
-for _ in $(seq 1 120); do
-    if [[ -f "$ca_cert" && -f "$ca_dir/firma-ca.key" ]]; then break; fi
-    sleep 0.5
-done
-[[ -f "$ca_cert" ]] || { echo "sidecar never produced CA material; see $sidecar_log" >&2; exit 1; }
 
 # Give the sidecar a moment to finish the initial revocation sync before
 # the first request lands. Without this, the first call races the cache
 # and is denied with RevocationCacheNotReady.
 sleep 2
 
-# 7. Read session_id from sidecar.toml so the script can attach
+# 8. Read session_id from sidecar.toml so the script can attach
 #    `x-firma-session-id` and Stage 1 (capability validation) can match
 #    the pre-flight token.
 session_id="$(awk -F'=' '/^session_id/ {gsub(/[" ]/,"",$2); print $2; exit}' "$demo_dir/sidecar.toml")"
 
 if [[ $run_script -eq 0 ]]; then
-    echo "skipping demo script (--no-script). Sidecar + authority running; Ctrl-C to stop." >&2
-    wait "$sidecar_pid" "$authority_pid"
-    exit 0
+    echo "skipping demo script (--no-script). Tailing audit log; Ctrl-C to stop." >&2
+    exec firma monitor --state-dir "$runtime_dir" --source audit
 fi
 
-# 8. Pre-sync Python deps before exporting the proxy. `uv run` would
+# 9. Pre-sync Python deps before exporting the proxy. `uv run` would
 #    otherwise try to fetch hatchling/etc. through the sidecar, which has
 #    no policy for pypi.org and denies the request.
 (cd "$demos_dir" && uv sync --quiet)
 
-# 9. Run the demo script in the foreground so the user sees its output
-#    directly. Every outbound HTTP call is routed through the sidecar.
+# 10. Run the demo script in the foreground so the user sees its output
+#     directly. Every outbound HTTP call is routed through the sidecar.
 cd "$demos_dir"
 HTTP_PROXY="http://127.0.0.1:8080" \
 HTTPS_PROXY="http://127.0.0.1:8080" \

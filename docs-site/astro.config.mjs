@@ -85,6 +85,7 @@ export default defineConfig({
           label: 'User Guides',
           items: [
             { label: 'Run the sidecar standalone', slug: 'guides/run-the-sidecar' },
+            { label: 'Manage the stack (firma stack & monitor)', slug: 'guides/manage-the-stack' },
             { label: 'Write your first Cedar policy', slug: 'guides/write-a-cedar-policy' },
             { label: 'Issue capability tokens', slug: 'guides/issue-capability-tokens' },
             { label: 'Wrap an agent with firma run', slug: 'guides/firma-run' },
