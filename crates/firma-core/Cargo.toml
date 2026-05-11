@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 cedar-policy = { workspace = true }
+regex = { workspace = true }
 chrono = { workspace = true }
 pasetors = { workspace = true }
 serde = { workspace = true }

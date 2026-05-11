@@ -269,6 +269,7 @@ fn extract_capability_claims(claims: &Claims) -> Result<CapabilityClaims, TokenE
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::AgentId;
     use crate::token::TokenId;
     use pasetors::keys::{AsymmetricKeyPair, Generate};
 
@@ -538,16 +539,22 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_unicode_agent_id() {
+    fn round_trip_non_default_agent_id() {
         let (sk, pk) = generate_keypair();
         let signer = PasetoV4Signer::try_new(&sk).unwrap();
         let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
 
         let mut claims = sample_claims(600);
-        claims.agent_id = "agent-\u{1F916}-bot".parse().unwrap(); // robot emoji
+        claims.agent_id = "agent-robot-bot".parse().unwrap();
 
         let token = signer.sign(&claims).unwrap();
         let recovered = verifier.verify(&token).unwrap();
-        assert_eq!(recovered.agent_id.to_string(), "agent-\u{1F916}-bot");
+        assert_eq!(recovered.agent_id.to_string(), "agent-robot-bot");
+    }
+
+    #[test]
+    fn agent_id_rejects_non_ascii() {
+        // AgentId now enforces [a-zA-Z0-9_-]{1,128}; emoji must be rejected.
+        assert!("agent-\u{1F916}-bot".parse::<AgentId>().is_err());
     }
 }
