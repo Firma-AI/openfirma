@@ -34,5 +34,6 @@ examples/firma-run/e2e/run.sh
 
 - `local/` contains setup scripts, config templates, capability renewal helpers, and local runbook docs.
 - `e2e/` contains the Linux end-to-end harness for sandbox routing, audit output, and fail-closed behavior.
+- `spikes/` contains focused research harnesses for architecture decisions.
 
 Each folder keeps its scripts, documentation, and supporting assets together so example-specific material does not live in the main `docs/` tree.

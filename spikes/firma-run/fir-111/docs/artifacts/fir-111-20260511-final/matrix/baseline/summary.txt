@@ -1,0 +1,21 @@
+fir-111 spike summary
+mode=baseline
+profile=generic
+iterations=20
+inner_loops=120
+failure_mode=none
+seccomp_bpf_path=<none>
+unotify_runner=<none>
+count=20
+successes=20
+failures=0
+total_ms=16175.360
+min_ms=808.121
+avg_ms=808.768
+p50_ms=808.457
+p95_ms=809.927
+p99_ms=812.365
+max_ms=812.365
+iterations_per_sec=1.236
+work_units_per_sec=148.374
+results_jsonl=/tmp/fir-111-spike/matrix-20260511T143402Z/baseline/results.jsonl
