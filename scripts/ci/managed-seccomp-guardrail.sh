@@ -132,7 +132,9 @@ fi
 ok "missing-policy fail-closed check passed"
 
 ok "running focused seccomp unit tests"
-cargo test -p firma-run seccomp::tests -- --nocapture >/dev/null
+# Run the focused suite in release profile to reuse release-built deps and
+# avoid an additional full dev/test-profile compile pass in CI.
+cargo test -p firma-run seccomp::tests --release -- --nocapture >/dev/null
 
 ok "managed seccomp guardrail passed"
 printf 'guardrail_output_dir=%s\n' "$OUT_ROOT"

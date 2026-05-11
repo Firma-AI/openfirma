@@ -37,6 +37,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Keep this cache stable across runs for this workflow and
+          # preserve artifacts even on failing guardrail attempts so
+          # iterative debugging doesn't always start from cold builds.
+          shared-key: managed-seccomp-linux
+          cache-workspace-crates: "true"
+          cache-on-failure: "true"
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
