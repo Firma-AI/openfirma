@@ -13,6 +13,10 @@ use crate::config::{self, InterceptorMode};
 use crate::handler::RequestHandler;
 use crate::interceptor::{self, Interceptor as _};
 
+fn is_loopback_addr(addr: std::net::SocketAddr) -> bool {
+    addr.ip().is_loopback()
+}
+
 /// Spawn the configured interceptor as a background tokio task.
 ///
 /// # Errors
@@ -26,6 +30,20 @@ pub fn spawn_interceptor(
     cancel: CancellationToken,
 ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     let ic = &config.interceptor;
+
+    match ic.mode {
+        InterceptorMode::HttpProxy | InterceptorMode::Grpc => {
+            if !is_loopback_addr(ic.listen_addr) {
+                tracing::warn!(
+                    listen_addr = %ic.listen_addr,
+                    "interceptor listening on non-loopback address; \
+                    this may accept connections from non-local processes if the port is exposed"
+                );
+            }
+        }
+        #[cfg(unix)]
+        InterceptorMode::UnixSocket => {}
+    }
 
     match ic.mode {
         InterceptorMode::HttpProxy => {
@@ -54,7 +72,33 @@ pub fn spawn_interceptor(
             let socket_path = ic
                 .socket_path
                 .clone()
-                .ok_or_else(|| anyhow::anyhow!("unix_socket mode requires socket_path"))?;
+                .unwrap_or_else(config::default_socket_path);
+            let parent_dir = socket_path.parent().map_or_else(
+                || std::path::PathBuf::from("."),
+                std::path::Path::to_path_buf,
+            );
+            if let Err(e) = std::fs::create_dir_all(&parent_dir) {
+                tracing::warn!(
+                    dir = %parent_dir.display(),
+                    error = %e,
+                    "could not create socket directory; continuing anyway"
+                );
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = std::fs::metadata(&parent_dir) {
+                    let perms = meta.permissions();
+                    let mode = perms.mode() & 0o777;
+                    if mode != 0o700 {
+                        tracing::warn!(
+                            dir = %parent_dir.display(),
+                            mode = %format!("{:o}", mode),
+                            "socket directory has loose permissions; consider chmod 0700"
+                        );
+                    }
+                }
+            }
             let interceptor =
                 interceptor::unix_socket::UnixSocketInterceptor::new(socket_path.clone());
             tracing::debug!(socket_path = %socket_path.display(), "Unix socket interceptor configured");

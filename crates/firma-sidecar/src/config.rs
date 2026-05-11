@@ -147,12 +147,11 @@ impl SidecarConfig {
 ///
 /// Determines which transport the sidecar uses to capture outbound
 /// agent traffic.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InterceptorMode {
-    /// Pingora-based HTTP forward proxy (default). The agent sets
+    /// Pingora-based HTTP forward proxy. The agent sets
     /// `HTTP_PROXY=http://localhost:<port>`.
-    #[default]
     HttpProxy,
     /// Tonic gRPC hook server. The agent calls the `Intercept` RPC
     /// directly.
@@ -161,6 +160,17 @@ pub enum InterceptorMode {
     #[cfg(unix)]
     #[cfg_attr(docsrs, doc(cfg(unix)))]
     UnixSocket,
+}
+
+impl Default for InterceptorMode {
+    #[cfg(unix)]
+    fn default() -> Self {
+        Self::UnixSocket
+    }
+    #[cfg(not(unix))]
+    fn default() -> Self {
+        Self::HttpProxy
+    }
 }
 
 impl fmt::Display for InterceptorMode {
@@ -247,7 +257,7 @@ impl Default for InterceptorConfig {
         Self {
             mode: InterceptorMode::default(),
             listen_addr: default_listen_addr(),
-            socket_path: None,
+            socket_path: Some(default_socket_path()),
             drain_timeout_secs: default_drain_timeout(),
             max_request_body_bytes: default_max_request_body_bytes(),
             connect_relay: ConnectRelayConfig::default(),
@@ -590,7 +600,13 @@ impl CredentialConfig {
 // ---------------------------------------------------------------------------
 
 fn default_listen_addr() -> SocketAddr {
-    SocketAddr::from(([0, 0, 0, 0], 8080))
+    SocketAddr::from(([127, 0, 0, 1], 8080))
+}
+
+pub(crate) fn default_socket_path() -> PathBuf {
+    let xdg = std::env::var("XDG_RUNTIME_DIR")
+        .unwrap_or_else(|_| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
+    PathBuf::from(xdg).join("firma/sidecar.sock")
 }
 
 const fn default_drain_timeout() -> u64 {
