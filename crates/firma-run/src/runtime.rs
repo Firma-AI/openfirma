@@ -326,7 +326,7 @@ fn build_execution_env(
     lease: &CapabilityLeaseManager,
     sidecar_endpoint: &SidecarEndpoint,
     network_overrides: &BTreeMap<String, String>,
-    seccomp_bpf_path: Option<&Path>,
+    seccomp_filter_path: Option<&Path>,
 ) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
 
@@ -368,7 +368,7 @@ fn build_execution_env(
         serde_json::to_string(&attr_headers).unwrap_or_else(|_| "{}".to_string()),
     );
 
-    if let Some(seccomp_path) = seccomp_bpf_path.or(profile.seccomp_bpf_path.as_deref()) {
+    if let Some(seccomp_path) = seccomp_filter_path {
         env.insert(
             "FIRMA_RUN_SECCOMP_BPF_PATH".to_string(),
             seccomp_path.display().to_string(),
@@ -546,8 +546,7 @@ mod tests {
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::<MountSpec>::new(),
-            seccomp_bpf_path: None,
-            seccomp_managed: None,
+            seccomp_policy: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -600,8 +599,7 @@ mod tests {
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
-            seccomp_bpf_path: None,
-            seccomp_managed: None,
+            seccomp_policy: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -641,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn seccomp_bpf_path_is_exported_when_configured() {
+    fn seccomp_path_is_exported_when_provided() {
         let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let seccomp_path = tempdir.path().join("seccomp.bpf");
         fs::write(&seccomp_path, [0_u8; 8]).unwrap_or_else(|e| panic!("{e}"));
@@ -655,8 +653,7 @@ mod tests {
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
-            seccomp_bpf_path: Some(seccomp_path.clone()),
-            seccomp_managed: None,
+            seccomp_policy: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -680,7 +677,7 @@ mod tests {
             &lease,
             &profile.sidecar_endpoint,
             &BTreeMap::default(),
-            None,
+            Some(seccomp_path.as_path()),
         );
 
         assert_eq!(
@@ -715,8 +712,7 @@ mod tests {
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
-            seccomp_bpf_path: None,
-            seccomp_managed: None,
+            seccomp_policy: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -773,8 +769,7 @@ mod tests {
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
-            seccomp_bpf_path: None,
-            seccomp_managed: None,
+            seccomp_policy: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -840,8 +835,7 @@ mod tests {
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
-            seccomp_bpf_path: None,
-            seccomp_managed: None,
+            seccomp_policy: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,

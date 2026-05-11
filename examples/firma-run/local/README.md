@@ -26,10 +26,10 @@ The setup script creates `.local/` at the repository root. It copies starter con
 
 Generated files are intentionally local-only. Edit `.local/` when testing; leave `assets/` as clean templates.
 
-For Linux managed seccomp hardening, an additional run-profile template is
+For Linux seccomp-policy hardening, an additional run-profile template is
 available:
 
-- `assets/firma_run.local.example.toml` (managed seccomp policy pipeline)
+- `assets/firma_run.local.example.toml` (seccomp policy pipeline)
 
 ## Scripts
 

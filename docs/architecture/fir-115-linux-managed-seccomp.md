@@ -15,8 +15,6 @@ the authoritative fail-closed layer, while adding a managed policy pipeline:
 3. The artifact is versioned on disk and paired with JSON metadata + checksum.
 4. Runtime verifies checksum before loading the filter into `bwrap --seccomp`.
 
-Legacy `seccomp_bpf_path` remains supported for migration compatibility.
-
 ## Supported Cedar Subset (deny actions)
 
 Current supported actions:
@@ -25,7 +23,16 @@ Current supported actions:
 2. `filesystem.delete`
 3. `credential.write`
 
+This list is intentionally **not exhaustive** for Cedar semantics; it is the
+current syscall-mappable subset implemented in `firma-run`.
+
 Unsupported actions are rejected explicitly during compilation.
+
+Current mapping intent:
+
+1. `system.execute` -> `execve`, `execveat`
+2. `filesystem.delete` -> unlink/rename/rmdir syscall family
+3. `credential.write` -> setuid/setgid/setresuid/setresgid
 
 ## Runtime model
 
@@ -58,7 +65,7 @@ behavior is explicitly intended.
 [profiles.generic]
 backend = "bwrap"
 
-[profiles.generic.seccomp_managed]
+[profiles.generic.seccomp_policy]
 source_policy_path = "/abs/path/to/crates/firma-run/policies/generic-local-command-v1.toml"
 artifact_dir = "/abs/path/to/.firma/seccomp-artifacts"
 verify_checksum = true
@@ -66,8 +73,7 @@ verify_checksum = true
 
 Notes:
 
-1. `seccomp_managed` is Linux + `bwrap` only.
-2. `seccomp_managed` and legacy `seccomp_bpf_path` are mutually exclusive.
+1. `seccomp_policy` is Linux + `bwrap` only.
 
 ## Compatibility constraints
 
@@ -113,9 +119,8 @@ Quick integrity inspection command:
 Unit-level:
 
 1. `cargo test -p firma-run seccomp::tests`
-2. `cargo test -p firma-run config::tests::seccomp_managed_resolves_when_configured_for_bwrap`
-3. `cargo test -p firma-run config::tests::seccomp_managed_rejected_for_non_bwrap_backend`
-4. `cargo test -p firma-run config::tests::seccomp_managed_and_legacy_path_are_mutually_exclusive`
+2. `cargo test -p firma-run config::tests::seccomp_policy_resolves_when_configured_for_bwrap`
+3. `cargo test -p firma-run config::tests::seccomp_policy_rejected_for_non_bwrap_backend`
 
 Guardrail/CI-level (Linux):
 

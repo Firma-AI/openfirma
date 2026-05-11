@@ -41,7 +41,7 @@ cat >"$MANAGED_CONFIG" <<EOF
 [profiles.generic]
 backend = "bwrap"
 
-[profiles.generic.seccomp_managed]
+[profiles.generic.seccomp_policy]
 source_policy_path = '$POLICY_PATH'
 artifact_dir = '$OUT_ROOT/artifacts'
 verify_checksum = true
@@ -55,7 +55,7 @@ backend = "bwrap"
 [profiles.generic.network]
 fail_closed = false
 
-[profiles.generic.seccomp_managed]
+[profiles.generic.seccomp_policy]
 source_policy_path = '$OUT_ROOT/does-not-exist.toml'
 artifact_dir = '$OUT_ROOT/artifacts'
 verify_checksum = true
@@ -122,9 +122,9 @@ target/release/firma run \
 status=$?
 set -e
 if [[ "$status" -eq 0 ]]; then
-  fail "expected non-zero exit for missing managed seccomp policy source"
+  fail "expected non-zero exit for missing seccomp policy source"
 fi
-if ! grep -q "failed to read managed seccomp policy" "$OUT_ROOT/missing-policy.stderr.log"; then
+if ! grep -q "failed to read seccomp policy" "$OUT_ROOT/missing-policy.stderr.log"; then
   warn "missing-policy stderr:"
   sed -n '1,120p' "$OUT_ROOT/missing-policy.stderr.log" >&2 || true
   fail "missing expected fail-closed error message for missing policy source"

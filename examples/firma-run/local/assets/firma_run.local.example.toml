@@ -1,7 +1,7 @@
 [profiles.generic]
 backend = "bwrap"
 
-[profiles.generic.seccomp_managed]
+[profiles.generic.seccomp_policy]
 # Absolute path to managed Cedar-subset policy source file.
 source_policy_path = "/abs/path/to/firma-oss/crates/firma-run/policies/generic-local-command-v1.toml"
 

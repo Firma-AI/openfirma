@@ -24,8 +24,7 @@ pub struct ResolvedProfile {
     pub env_passthrough: BTreeSet<String>,
     pub env_set: BTreeMap<String, String>,
     pub mounts: Vec<MountSpec>,
-    pub seccomp_bpf_path: Option<PathBuf>,
-    pub seccomp_managed: Option<ManagedSeccompPolicyConfig>,
+    pub seccomp_policy: Option<SeccompPolicyConfig>,
     pub allowed_domains: Vec<String>,
     pub network: NetworkPolicy,
     pub identity_mode: SandboxIdentityMode,
@@ -74,55 +73,28 @@ impl ResolvedProfile {
             }
         }
 
-        if let Some(path) = &self.seccomp_bpf_path {
-            if !path.is_absolute() {
-                return Err(RunError::ConfigValidation(format!(
-                    "seccomp_bpf_path must be absolute: {}",
-                    path.display()
-                )));
-            }
-            if !path.is_file() {
-                return Err(RunError::ConfigValidation(format!(
-                    "seccomp_bpf_path must point to an existing file: {}",
-                    path.display()
-                )));
-            }
-            if self.backend != BackendKind::Bwrap {
-                return Err(RunError::ConfigValidation(format!(
-                    "seccomp_bpf_path is only supported with backend 'bwrap', got '{backend}'",
-                    backend = self.backend
-                )));
-            }
-        }
-
-        if self.seccomp_bpf_path.is_some() && self.seccomp_managed.is_some() {
-            return Err(RunError::ConfigValidation(
-                "seccomp_bpf_path and seccomp_managed are mutually exclusive".to_string(),
-            ));
-        }
-
-        if let Some(managed) = &self.seccomp_managed {
+        if let Some(managed) = &self.seccomp_policy {
             if !managed.source_policy_path.is_absolute() {
                 return Err(RunError::ConfigValidation(format!(
-                    "seccomp_managed.source_policy_path must be absolute: {}",
+                    "seccomp_policy.source_policy_path must be absolute: {}",
                     managed.source_policy_path.display()
                 )));
             }
             if !managed.source_policy_path.is_file() {
                 return Err(RunError::ConfigValidation(format!(
-                    "seccomp_managed.source_policy_path must point to an existing file: {}",
+                    "seccomp_policy.source_policy_path must point to an existing file: {}",
                     managed.source_policy_path.display()
                 )));
             }
             if !managed.artifact_dir.is_absolute() {
                 return Err(RunError::ConfigValidation(format!(
-                    "seccomp_managed.artifact_dir must be absolute: {}",
+                    "seccomp_policy.artifact_dir must be absolute: {}",
                     managed.artifact_dir.display()
                 )));
             }
             if self.backend != BackendKind::Bwrap {
                 return Err(RunError::ConfigValidation(format!(
-                    "seccomp_managed is only supported with backend 'bwrap', got '{backend}'",
+                    "seccomp_policy is only supported with backend 'bwrap', got '{backend}'",
                     backend = self.backend
                 )));
             }
@@ -216,9 +188,9 @@ pub struct ExecutableLaunchPolicy {
     pub config_overrides: BTreeMap<String, String>,
 }
 
-/// Managed seccomp policy compilation settings for Linux bwrap backend.
+/// Seccomp policy compilation settings for Linux bwrap backend.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ManagedSeccompPolicyConfig {
+pub struct SeccompPolicyConfig {
     pub source_policy_path: PathBuf,
     pub artifact_dir: PathBuf,
     pub verify_checksum: bool,
@@ -247,8 +219,7 @@ struct FileConfig {
 pub(crate) struct ProfilePatch {
     pub(crate) backend: Option<BackendKind>,
     pub(crate) sidecar_endpoint: Option<String>,
-    pub(crate) seccomp_bpf_path: Option<PathBuf>,
-    pub(crate) seccomp_managed: Option<ManagedSeccompPolicyPatch>,
+    pub(crate) seccomp_policy: Option<SeccompPolicyPatch>,
     #[serde(default)]
     pub(crate) env_passthrough: Vec<String>,
     #[serde(default)]
@@ -281,7 +252,7 @@ pub(crate) struct NetworkPolicyPatch {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct ManagedSeccompPolicyPatch {
+pub(crate) struct SeccompPolicyPatch {
     pub(crate) source_policy_path: PathBuf,
     pub(crate) artifact_dir: PathBuf,
     pub(crate) verify_checksum: Option<bool>,
@@ -339,8 +310,7 @@ impl ProfilePatch {
         Self {
             backend: higher.backend.or(self.backend),
             sidecar_endpoint: higher.sidecar_endpoint.or(self.sidecar_endpoint),
-            seccomp_bpf_path: higher.seccomp_bpf_path.or(self.seccomp_bpf_path),
-            seccomp_managed: higher.seccomp_managed.or(self.seccomp_managed),
+            seccomp_policy: higher.seccomp_policy.or(self.seccomp_policy),
             env_passthrough,
             env_set,
             mounts,
@@ -439,8 +409,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         env_passthrough,
         env_set: patch.env_set,
         mounts,
-        seccomp_bpf_path: patch.seccomp_bpf_path,
-        seccomp_managed: patch.seccomp_managed.map(managed_seccomp_from_patch),
+        seccomp_policy: patch.seccomp_policy.map(seccomp_policy_from_patch),
         allowed_domains: patch.allowed_domains,
         network,
         identity_mode,
@@ -468,8 +437,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
     ProfilePatch {
         backend: args.backend,
         sidecar_endpoint: args.sidecar_endpoint.clone(),
-        seccomp_bpf_path: None,
-        seccomp_managed: None,
+        seccomp_policy: None,
         env_passthrough: Vec::new(),
         env_set: BTreeMap::new(),
         mounts: Vec::new(),
@@ -556,8 +524,8 @@ fn default_capability_config() -> CapabilityLeaseConfig {
     }
 }
 
-fn managed_seccomp_from_patch(patch: ManagedSeccompPolicyPatch) -> ManagedSeccompPolicyConfig {
-    ManagedSeccompPolicyConfig {
+fn seccomp_policy_from_patch(patch: SeccompPolicyPatch) -> SeccompPolicyConfig {
+    SeccompPolicyConfig {
         source_policy_path: patch.source_policy_path,
         artifact_dir: patch.artifact_dir,
         verify_checksum: patch.verify_checksum.unwrap_or(true),
@@ -645,9 +613,6 @@ mod tests {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let config_path = tmpdir.path().join("firma-run.yaml");
 
-        let seccomp_path = tmpdir.path().join("seccomp.bpf");
-        fs::write(&seccomp_path, [0_u8; 8]).unwrap_or_else(|e| panic!("{e}"));
-
         let yaml = format!(
             r#"
 defaults:
@@ -655,15 +620,13 @@ defaults:
 profiles:
   codex:
     backend: bwrap
-    seccomp_bpf_path: {}
     identity_mode: host_user
     env_passthrough:
       - HOME
     capability:
       kind: file
       path: /tmp/capability.token
-"#,
-            seccomp_path.display()
+"#
         );
         fs::write(&config_path, yaml).unwrap_or_else(|e| panic!("{e}"));
 
@@ -672,7 +635,6 @@ profiles:
 
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved.backend, BackendKind::Bwrap);
-        assert_eq!(resolved.seccomp_bpf_path, Some(seccomp_path));
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::HostUser);
         assert!(resolved.env_passthrough.contains("HOME"));
         assert_eq!(
@@ -772,37 +734,7 @@ fail_closed = true
     }
 
     #[test]
-    fn seccomp_bpf_path_rejected_for_non_bwrap_backend() {
-        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let seccomp_path = tmpdir.path().join("seccomp.bpf");
-        fs::write(&seccomp_path, [0_u8; 8]).unwrap_or_else(|e| panic!("{e}"));
-
-        let config_path = tmpdir.path().join("firma-run.toml");
-        // TOML literal string (single quotes) keeps backslashes verbatim so
-        // Windows paths like `C:\Users\...` parse without escape interpretation.
-        let toml = format!(
-            r#"
-[profiles.generic]
-backend = "vz"
-seccomp_bpf_path = '{}'
-"#,
-            seccomp_path.display()
-        );
-        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
-
-        let mut run_args = args("generic");
-        run_args.config = Some(config_path);
-        let err =
-            resolve_profile(&run_args).expect_err("expected seccomp backend validation error");
-        assert!(
-            err.to_string()
-                .contains("seccomp_bpf_path is only supported with backend 'bwrap'"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn seccomp_managed_resolves_when_configured_for_bwrap() {
+    fn seccomp_policy_resolves_when_configured_for_bwrap() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let policy_path = tmpdir.path().join("policy.toml");
         fs::write(
@@ -823,7 +755,7 @@ deny_actions = ["filesystem.delete"]
 [profiles.generic]
 backend = "bwrap"
 
-[profiles.generic.seccomp_managed]
+[profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
 verify_checksum = true
@@ -836,11 +768,11 @@ verify_checksum = true
         let mut run_args = args("generic");
         run_args.config = Some(config_path);
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
-        assert!(resolved.seccomp_managed.is_some());
+        assert!(resolved.seccomp_policy.is_some());
     }
 
     #[test]
-    fn seccomp_managed_rejected_for_non_bwrap_backend() {
+    fn seccomp_policy_rejected_for_non_bwrap_backend() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let policy_path = tmpdir.path().join("policy.toml");
         fs::write(
@@ -861,7 +793,7 @@ deny_actions = ["filesystem.delete"]
 [profiles.generic]
 backend = "vz"
 
-[profiles.generic.seccomp_managed]
+[profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
 "#,
@@ -875,52 +807,7 @@ artifact_dir = '{}'
         let err = resolve_profile(&run_args).expect_err("expected backend validation error");
         assert!(
             err.to_string()
-                .contains("seccomp_managed is only supported with backend 'bwrap'"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn seccomp_managed_and_legacy_path_are_mutually_exclusive() {
-        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let policy_path = tmpdir.path().join("policy.toml");
-        fs::write(
-            &policy_path,
-            r#"
-policy_id = "generic-local-command"
-policy_version = "v1"
-default_action = "allow"
-deny_actions = ["filesystem.delete"]
-"#,
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
-        let artifact_dir = tmpdir.path().join("artifacts");
-        let seccomp_path = tmpdir.path().join("legacy.bpf");
-        fs::write(&seccomp_path, [0_u8; 8]).unwrap_or_else(|e| panic!("{e}"));
-
-        let config_path = tmpdir.path().join("firma-run.toml");
-        let toml = format!(
-            r#"
-[profiles.generic]
-backend = "bwrap"
-seccomp_bpf_path = '{}'
-
-[profiles.generic.seccomp_managed]
-source_policy_path = '{}'
-artifact_dir = '{}'
-"#,
-            seccomp_path.display(),
-            policy_path.display(),
-            artifact_dir.display()
-        );
-        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
-
-        let mut run_args = args("generic");
-        run_args.config = Some(config_path);
-        let err = resolve_profile(&run_args).expect_err("expected mutual exclusivity error");
-        assert!(
-            err.to_string()
-                .contains("seccomp_bpf_path and seccomp_managed are mutually exclusive"),
+                .contains("seccomp_policy is only supported with backend 'bwrap'"),
             "unexpected error: {err}"
         );
     }
