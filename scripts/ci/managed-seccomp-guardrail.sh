@@ -124,7 +124,7 @@ set -e
 if [[ "$status" -eq 0 ]]; then
   fail "expected non-zero exit for missing seccomp policy source"
 fi
-if ! grep -q "failed to read seccomp policy" "$OUT_ROOT/missing-policy.stderr.log"; then
+if ! grep -Eq "failed to read seccomp policy|seccomp_policy\\.source_policy_path must point to an existing file" "$OUT_ROOT/missing-policy.stderr.log"; then
   warn "missing-policy stderr:"
   sed -n '1,120p' "$OUT_ROOT/missing-policy.stderr.log" >&2 || true
   fail "missing expected fail-closed error message for missing policy source"
