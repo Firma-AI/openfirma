@@ -12,7 +12,7 @@ Last updated: 2026-05-11
 2. Final architecture recommendation:
    `spikes/firma-run/fir-111/docs/decision-memo.md`
 3. Curated reproducible evidence bundle:
-   `spikes/firma-run/fir-111/docs/artifacts/fir-111-20260511-final/`
+   `spikes/firma-run/fir-111/docs/artifacts/fir-111-20260511-release/`
 
 ## 1. Why this spike exists
 
@@ -98,7 +98,7 @@ Non-goals:
 3. Final decision memo:
    `spikes/firma-run/fir-111/docs/decision-memo.md`.
 4. Durable artifact bundle:
-   `spikes/firma-run/fir-111/docs/artifacts/fir-111-20260511-final/`.
+   `spikes/firma-run/fir-111/docs/artifacts/fir-111-20260511-release/`.
 
 Current harness entrypoints:
 
@@ -151,10 +151,12 @@ Given pre-release target next Friday (2026-05-15), this spike should deliver:
    baseline, seccomp-static, unotify-none, startup-unavailable,
    mid-session-crash, slow-notifier.
 2. Reproducible raw outputs are imported in-repo:
-   `spikes/firma-run/fir-111/docs/artifacts/fir-111-20260511-final/matrix/`.
-3. Decision memo generated and finalized:
+   `spikes/firma-run/fir-111/docs/artifacts/fir-111-20260511-release/matrix/`.
+3. Release-mode matrix is authoritative for final go/no-go; debug-mode matrix
+   is retained as supporting diagnostic evidence.
+4. Decision memo generated and finalized:
    `spikes/firma-run/fir-111/docs/decision-memo.md`.
-4. Acceptance criteria are met:
+5. Acceptance criteria are met:
    reproducible methodology, fail-closed outcomes documented, Cedar-fidelity
    caveats with concrete examples, and go/no-go + migration direction.
 

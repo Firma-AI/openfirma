@@ -55,16 +55,30 @@ spikes/firma-run/fir-111/run.sh \
 Full matrix:
 
 ```bash
+SPIKE_DIR="${FIR_SPIKE_OUTPUT_DIR:-$PWD/.spike-output}"
 spikes/firma-run/fir-111/run-matrix.sh \
-  --seccomp-bpf-path /absolute/path/to/seccomp.bpf \
+  --firma-bin target/debug/firma \
+  --seccomp-bpf-path "$SPIKE_DIR/seccomp-allow-all.bpf" \
+  --unotify-runner spikes/firma-run/fir-111/adapters/unotify-runner-firma.sh
+```
+
+Release matrix (recommended for final go/no-go decision):
+
+```bash
+SPIKE_DIR="${FIR_SPIKE_OUTPUT_DIR:-$PWD/.spike-output}"
+cargo build -p firma --release
+spikes/firma-run/fir-111/run-matrix.sh \
+  --firma-bin target/release/firma \
+  --seccomp-bpf-path "$SPIKE_DIR/seccomp-allow-all.bpf" \
   --unotify-runner spikes/firma-run/fir-111/adapters/unotify-runner-firma.sh
 ```
 
 Generate a static seccomp file:
 
 ```bash
+SPIKE_DIR="${FIR_SPIKE_OUTPUT_DIR:-$PWD/.spike-output}"
 spikes/firma-run/fir-111/generate-static-seccomp-bpf.sh \
-  --output /path/to/fir-111-spike/seccomp-allow-all.bpf \
+  --output "$SPIKE_DIR/seccomp-allow-all.bpf" \
   --mode allow-all
 ```
 
@@ -104,6 +118,9 @@ Default output base:
 
 `<spike-output-dir>/<timestamp>/`
 
+Default is `<repo>/.spike-output/<timestamp>/`. Override with
+`FIR_SPIKE_OUTPUT_DIR=/your/path`.
+
 Matrix runs produce:
 
 - `runs.tsv`: scenario -> output directory index.
@@ -113,9 +130,11 @@ Matrix runs produce:
 Generate memo input:
 
 ```bash
+SPIKE_DIR="${FIR_SPIKE_OUTPUT_DIR:-$PWD/.spike-output}"
+LATEST_MATRIX="$(ls -1dt "$SPIKE_DIR"/matrix-* | head -n 1)"
 spikes/firma-run/fir-111/generate-decision-memo-input.sh \
-  --matrix-dir /path/to/fir-111-spike/matrix-<timestamp> \
-  --out /path/to/fir-111-spike/matrix-<timestamp>/decision-memo-input.md
+  --matrix-dir "$LATEST_MATRIX" \
+  --out "$LATEST_MATRIX/decision-memo-input.md"
 ```
 
 ## Notes

@@ -1,0 +1,21 @@
+fir-111 spike summary
+mode=seccomp-static
+profile=generic
+iterations=20
+inner_loops=120
+failure_mode=none
+seccomp_bpf_path=<local-generated-during-run>
+unotify_runner=spikes/firma-run/fir-111/adapters/unotify-runner-firma.sh
+count=20
+successes=20
+failures=0
+total_ms=16138.531
+min_ms=806.515
+avg_ms=806.927
+p50_ms=806.875
+p95_ms=807.213
+p99_ms=807.542
+max_ms=807.542
+iterations_per_sec=1.239
+work_units_per_sec=148.712
+results_jsonl=./results.jsonl

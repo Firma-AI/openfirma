@@ -48,6 +48,7 @@ revocations.txt
 
 # Local runtime/testing artifacts
 /.local/
+/.spike-output/
 /firma-ca/
 audit.jsonl
 *.crt

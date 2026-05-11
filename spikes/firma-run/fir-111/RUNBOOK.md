@@ -21,16 +21,23 @@ spikes/firma-run/fir-111/probe-kernel-seccomp.sh --format text
 
 You should see `user_notif_supported=true`.
 
-## 2. Build `firma` once
+## 2. Build `firma` binaries
 
 ```bash
 cargo build -p firma
+cargo build -p firma --release
 ```
 
-Binary used by harness:
+Debug binary:
 
 ```text
 target/debug/firma
+```
+
+Release binary:
+
+```text
+target/release/firma
 ```
 
 ## 3. Real unotify prototype smoke test
@@ -55,16 +62,19 @@ only confirms prototype runner wiring.
 Generate a valid static seccomp cBPF file first:
 
 ```bash
+SPIKE_DIR="${FIR_SPIKE_OUTPUT_DIR:-$PWD/.spike-output}"
 spikes/firma-run/fir-111/generate-static-seccomp-bpf.sh \
-  --output /path/to/fir-111-spike/seccomp-allow-all.bpf \
+  --output "$SPIKE_DIR/seccomp-allow-all.bpf" \
   --mode allow-all
 ```
 
 If you already have a valid static seccomp cBPF path:
 
 ```bash
+SPIKE_DIR="${FIR_SPIKE_OUTPUT_DIR:-$PWD/.spike-output}"
 spikes/firma-run/fir-111/run-matrix.sh \
-  --seccomp-bpf-path /path/to/fir-111-spike/seccomp-allow-all.bpf
+  --firma-bin target/debug/firma \
+  --seccomp-bpf-path "$SPIKE_DIR/seccomp-allow-all.bpf"
 ```
 
 If static cBPF file is not available yet, run without it (static scenario will
@@ -72,6 +82,15 @@ be skipped, and you can re-run later when file is available):
 
 ```bash
 spikes/firma-run/fir-111/run-matrix.sh
+```
+
+Run release profile matrix (required for final decision):
+
+```bash
+SPIKE_DIR="${FIR_SPIKE_OUTPUT_DIR:-$PWD/.spike-output}"
+spikes/firma-run/fir-111/run-matrix.sh \
+  --firma-bin target/release/firma \
+  --seccomp-bpf-path "$SPIKE_DIR/seccomp-allow-all.bpf"
 ```
 
 By default, matrix will use:
@@ -103,16 +122,19 @@ This is useful for documenting syscall-level policy semantics and caveats.
 ## 6. Generate decision-memo input artifact
 
 ```bash
+SPIKE_DIR="${FIR_SPIKE_OUTPUT_DIR:-$PWD/.spike-output}"
+LATEST_MATRIX="$(ls -1dt "$SPIKE_DIR"/matrix-* | head -n 1)"
 spikes/firma-run/fir-111/generate-decision-memo-input.sh \
-  --matrix-dir /path/to/fir-111-spike/matrix-<timestamp> \
-  --out /path/to/fir-111-spike/matrix-<timestamp>/decision-memo-input.md
+  --matrix-dir "$LATEST_MATRIX" \
+  --out "$LATEST_MATRIX/decision-memo-input.md"
 ```
 
 ## 7. Artifacts and where they satisfy card acceptance criteria
 
 Generated under:
 
-`<spike-output-dir>/matrix-<timestamp>/`
+`<spike-output-dir>/matrix-<timestamp>/` (default:
+`<repo>/.spike-output/matrix-<timestamp>/`)
 
 Key files:
 
@@ -135,6 +157,11 @@ Acceptance criteria mapping:
 4. Final recommendation + migration plan:
    update architecture memo with benchmark/failure evidence.
 
+Decision rule:
+
+1. Use release-mode matrix as the authoritative go/no-go dataset.
+2. Keep debug-mode matrix as diagnostic/supporting data only.
+
 ## 8. Finalize the architecture memo
 
 Update:
@@ -153,7 +180,7 @@ with:
 For this card, the canonical evidence set is already stored in:
 
 ```text
-spikes/firma-run/fir-111/docs/artifacts/fir-111-20260511-final/
+spikes/firma-run/fir-111/docs/artifacts/fir-111-20260511-release/
 ```
 
 For future spikes, keep the same evidence shape:

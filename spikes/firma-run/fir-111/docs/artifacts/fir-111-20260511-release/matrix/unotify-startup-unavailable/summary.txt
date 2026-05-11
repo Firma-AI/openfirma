@@ -1,0 +1,21 @@
+fir-111 spike summary
+mode=unotify-prototype
+profile=generic
+iterations=20
+inner_loops=120
+failure_mode=startup-unavailable
+seccomp_bpf_path=<local-generated-during-run>
+unotify_runner=spikes/firma-run/fir-111/adapters/unotify-runner-firma.sh
+count=20
+successes=0
+failures=20
+total_ms=112.600
+min_ms=5.205
+avg_ms=5.630
+p50_ms=5.601
+p95_ms=6.117
+p99_ms=6.214
+max_ms=6.214
+iterations_per_sec=177.620
+work_units_per_sec=21314.387
+results_jsonl=./results.jsonl
