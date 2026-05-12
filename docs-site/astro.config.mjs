@@ -49,6 +49,23 @@ export default defineConfig({
           details:
             'OpenFirma routes outbound agent traffic through a local Sidecar, checks protected actions against scoped capabilities and Cedar policy, and records signed audit events. Its core invariants are fail-closed behavior, no network on the enforcement hot path, deterministic policy decisions, and immutable execution envelopes.',
           promote: ['index*', 'quickstart*', 'working-with-coding-agents*', 'concepts/architecture*', 'concepts/pipeline*'],
+          customSets: [
+            {
+              label: 'Start here',
+              description: 'overview, quickstart, coding-agent workflow, and core architecture context',
+              paths: ['index*', 'quickstart*', 'working-with-coding-agents*', 'concepts/architecture*', 'concepts/pipeline*'],
+            },
+            {
+              label: 'Core concepts',
+              description: 'policy, capability, action-class, interception, sandbox, and threat model docs',
+              paths: ['concepts/**'],
+            },
+            {
+              label: 'Integration guides',
+              description: 'hands-on guides for running, wrapping, configuring, and auditing OpenFirma integrations',
+              paths: ['guides/**', 'working-with-coding-agents*'],
+            },
+          ],
           optionalLinks: [
             {
               label: 'GitHub repository',
