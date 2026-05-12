@@ -1,0 +1,58 @@
+# cargo-deny configuration.
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+targets = []
+
+# ---------------------------------------------------------------------------
+# Licenses
+# ---------------------------------------------------------------------------
+[licenses]
+version = 2
+# All licenses that appear in the dependency tree must be explicitly allowed.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSD-1-Clause",
+    "0BSD",
+    "ISC",
+    "Zlib",
+    "Unlicense",
+    "CC0-1.0",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    # r-efi v5 and v6: UEFI support library pulled in via getrandom → cc (build
+    # dep only). Not linked into the Firma binary; no LGPL linking obligation.
+    "LGPL-2.1-or-later",
+]
+
+# ---------------------------------------------------------------------------
+# Banned crates
+# ---------------------------------------------------------------------------
+[bans]
+# Warn on duplicate versions; deny on known-bad crates.
+multiple-versions = "warn"
+# workspace-internal crates use { workspace = true } which cargo-deny
+# treats as a wildcard; warn instead of deny to avoid false positives.
+wildcards = "warn"
+deny = [
+    # openssl: prefer rustls everywhere; openssl adds C build complexity and
+    # has a history of CVEs. Firma uses rustls exclusively.
+    { crate = "openssl", reason = "use rustls; openssl not permitted" },
+    { crate = "openssl-sys", reason = "use rustls; openssl not permitted" },
+]
+
+# Advisories are handled exclusively by cargo-audit (see .cargo/audit.toml).
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

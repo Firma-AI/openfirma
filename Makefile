@@ -44,7 +44,10 @@ build:
 audit:
 	cargo audit
 
-check: fmt toml-fmt lint test build audit
+deny:
+	cargo deny check licenses bans sources
+
+check: fmt toml-fmt lint test build audit deny
 
 bench:
 	cargo bench --workspace --no-fail-fast
