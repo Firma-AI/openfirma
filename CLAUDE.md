@@ -77,6 +77,13 @@ rules_paths = [
 See `docs/markdown/firma_action_class_registry.md` for the full 44-class
 registry and `intent.resource` shape conventions.
 
+## Documentation
+
+After any major behavior, architecture, CLI, configuration, or public API change,
+update the docs site under `docs-site/` in the same change set. Write docs for
+human readers first: concise, concrete, task-oriented, and clear about examples,
+operational gotchas, and relevant invariants.
+
 ## TOML Formatting
 
 Always run `taplo format` after modifying any `.toml` file.
