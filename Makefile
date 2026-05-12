@@ -1,4 +1,4 @@
-.PHONY: fmt lint test build check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps
+.PHONY: fmt lint test build check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps toml-fmt
 
 install: install-system install-cargo-tools install-docs-deps
 	@echo "Dev environment ready. Try 'make check' or 'make docs-dev'."
@@ -29,6 +29,9 @@ install-docs-deps:
 fmt:
 	cargo fmt --check
 
+toml-fmt:
+	taplo fmt --check '**/Cargo.toml'
+
 lint:
 	cargo clippy --workspace -- -D warnings
 
@@ -38,7 +41,7 @@ test:
 build:
 	cargo build --workspace
 
-check: fmt lint test build
+check: fmt toml-fmt lint test build
 
 bench:
 	cargo bench --workspace --no-fail-fast
