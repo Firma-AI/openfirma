@@ -108,7 +108,7 @@ fn write_log_line(log_file: Option<&Arc<Mutex<File>>>, stream: &str, line: &str)
     let _ = writeln!(file, "[{stream}] {line}");
 }
 
-pub(crate) fn kill_tree_pub(pid: u32) {
+pub fn kill_tree_pub(pid: u32) {
     kill_tree(pid);
 }
 

@@ -42,18 +42,18 @@ impl AuthorityConfig {
     /// # Errors
     ///
     /// Returns an error if the config file exists but cannot be parsed.
-    pub fn load(config_path: Option<&PathBuf>) -> Result<AuthorityConfig, ConfigError> {
+    pub fn load(config_path: Option<&PathBuf>) -> Result<Self, ConfigError> {
         let mut config = if let Some(path) = config_path {
             let contents = std::fs::read_to_string(path).map_err(|e| ConfigError::IoError {
                 path: path.clone(),
                 reason: e.to_string(),
             })?;
-            toml::from_str::<AuthorityConfig>(&contents).map_err(|e| ConfigError::ParseError {
+            toml::from_str::<Self>(&contents).map_err(|e| ConfigError::ParseError {
                 path: path.clone(),
                 reason: e.to_string(),
             })?
         } else {
-            AuthorityConfig::default()
+            Self::default()
         };
 
         // Environment variable overrides (FIRMA_AUTHORITY_ prefix)

@@ -1,8 +1,8 @@
 //! Build the runtime [`CapabilityMap`] and [`TokenVerifier`] from the
-//! sidecar's `[capability_seed]` and `[authority] public_key_path`
-//! config. Replaces the empty-default + stub-verifier wiring that
-//! lived inline in [`crate::startup::pipeline`] until the gRPC
-//! `IssueCapability` client lands.
+//! sidecar's `[capability_seed]` and `[authority] public_key_path` config.
+//!
+//! Replaces the empty-default + stub-verifier wiring that lived inline in
+//! [`crate::startup::pipeline`] until the gRPC `IssueCapability` client lands.
 
 use std::path::Path;
 

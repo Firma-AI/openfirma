@@ -48,7 +48,7 @@ pub struct GrpcInterceptor {
 impl GrpcInterceptor {
     /// Creates a new [`GrpcInterceptor`] that listens on the specified address.
     #[must_use]
-    pub fn new(address: SocketAddr) -> Self {
+    pub const fn new(address: SocketAddr) -> Self {
         Self {
             address,
             handler: None,

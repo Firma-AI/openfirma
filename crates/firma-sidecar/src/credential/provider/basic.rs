@@ -24,7 +24,7 @@ impl BasicCredentialInjector {
     /// Creates a new `BasicCredentialInjector` from a pre-built map
     /// of connector IDs to header sets.
     #[must_use]
-    pub fn new(credentials: HashMap<String, HashMap<String, String>>) -> Self {
+    pub const fn new(credentials: HashMap<String, HashMap<String, String>>) -> Self {
         Self { credentials }
     }
 

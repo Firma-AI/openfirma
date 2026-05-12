@@ -143,7 +143,7 @@ pub enum DenialContext {
 ///
 /// `ToolUse` → `Tool`; `Http` / `DbQuery` → `Api`.
 #[must_use]
-pub fn denial_context_from_params(params: &ActionParams) -> DenialContext {
+pub const fn denial_context_from_params(params: &ActionParams) -> DenialContext {
     match params {
         ActionParams::ToolUse(_) => DenialContext::Tool,
         ActionParams::Http(_) | ActionParams::DbQuery(_) => DenialContext::Api,
@@ -315,7 +315,7 @@ impl RequestHandler {
     /// Constructs a request handler from the enforcement pipeline, the
     /// connector registry, and the audit payload channel.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         pipeline: Arc<EnforcementPipeline>,
         connector_registry: Arc<ConnectorRegistry>,
         audit_sink_sender: mpsc::Sender<AuditPayload>,
@@ -677,7 +677,7 @@ pub(crate) mod tests {
         MappingTable, PipelineArgs,
     };
 
-    pub(crate) fn test_connector_registry() -> Arc<ConnectorRegistry> {
+    pub fn test_connector_registry() -> Arc<ConnectorRegistry> {
         let default = crate::connector::provider::GenericHttpConnector::default_for_unconfigured()
             .expect("default connector should build in tests");
         Arc::new(ConnectorRegistry::new(Arc::new(default)))

@@ -17,7 +17,13 @@ namespace Firma {
             risk_score: Long,
             budget_remaining: Long,
             session_duration_s: Long,
-            action_count: Long
+            action_count: Long,
+            raw_transport: String,
+            transfer_amount: Long,
+            daily_cumulative_amount: Long,
+            transfers_last_10m: Long,
+            same_payee_count_30m: Long,
+            session_transfer_count: Long
         }
     };
 }

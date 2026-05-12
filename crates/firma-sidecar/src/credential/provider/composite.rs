@@ -21,7 +21,7 @@ pub struct CompositeCredentialInjector {
 impl CompositeCredentialInjector {
     /// Creates a new composite from a basic and a vault provider.
     #[must_use]
-    pub fn new(basic: BasicCredentialInjector, vault: VaultCredentialInjector) -> Self {
+    pub const fn new(basic: BasicCredentialInjector, vault: VaultCredentialInjector) -> Self {
         Self { basic, vault }
     }
 }

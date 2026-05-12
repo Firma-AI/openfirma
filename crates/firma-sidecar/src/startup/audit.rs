@@ -19,9 +19,10 @@ use crate::audit::AuditSink as _;
 use crate::audit::sink as audit_sink;
 use crate::config;
 
-/// Spawns the audit sink pipeline: a signing adapter that receives
-/// [`AuditPayload`](audit::AuditPayload)s, signs them into
-/// [`ExecutionEvent`](audit::ExecutionEvent)s, and forwards to the
+/// Spawns the audit sink pipeline.
+///
+/// The pipeline is a signing adapter that receives [`AuditPayload`](audit::AuditPayload)s,
+/// signs them into [`ExecutionEvent`](audit::ExecutionEvent)s, and forwards to the
 /// concrete [`AuditSink`](audit::AuditSink).
 ///
 /// Returns a [`tokio::task::JoinHandle`] that resolves when the sink

@@ -160,7 +160,7 @@ pub fn run(demos_dir: &Path, initial_demo: Option<&Path>) -> Result<()> {
 
 fn event_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> Result<()> {
     loop {
-        if let Phase::Running = app.phase {
+        if matches!(app.phase, Phase::Running) {
             drain_channels(app);
         }
 

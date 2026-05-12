@@ -20,7 +20,8 @@ license = "Apache-2.0"
 repository = "https://github.com/firma-ai/firma-oss"
 
 [workspace.lints.clippy]
-pedantic = { level = "warn", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "warn", priority = -1 }
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"

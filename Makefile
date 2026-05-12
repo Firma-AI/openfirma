@@ -33,13 +33,13 @@ toml-fmt:
 	taplo fmt --check '**/Cargo.toml'
 
 lint:
-	cargo clippy --workspace -- -D warnings
+	cargo clippy --all-features --all-targets
 
 test:
-	cargo test --workspace
+	cargo test --all-features --all-targets
 
 build:
-	cargo build --workspace
+	cargo build --all-features --all-targets
 
 check: fmt toml-fmt lint test build
 

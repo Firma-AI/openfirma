@@ -36,7 +36,7 @@ pub struct PolicyBundle {
 impl PolicyBundle {
     /// Create a new `PolicyBundle`.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         version: String,
         policies: Vec<u8>,
         entity_schema: Vec<u8>,

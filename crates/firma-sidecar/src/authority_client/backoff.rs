@@ -47,7 +47,7 @@ impl ExponentialBackoff {
     }
 
     /// Reset to the minimum delay.
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.current = self.min;
     }
 }
