@@ -43,7 +43,7 @@ pub enum BackendKind {
 impl BackendKind {
     /// Default backend for current host platform.
     #[must_use]
-    pub fn default_for_current_host() -> Self {
+    pub const fn default_for_current_host() -> Self {
         #[cfg(target_os = "linux")]
         {
             return Self::Bwrap;

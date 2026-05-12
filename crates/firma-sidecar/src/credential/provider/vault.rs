@@ -45,7 +45,7 @@ impl VaultCredentialInjector {
     /// Creates a new injector from a pre-built mapping of connector
     /// IDs to secret entry lists.
     #[must_use]
-    pub fn new(entries: HashMap<String, Vec<VaultSecretEntry>>) -> Self {
+    pub const fn new(entries: HashMap<String, Vec<VaultSecretEntry>>) -> Self {
         Self { entries }
     }
 

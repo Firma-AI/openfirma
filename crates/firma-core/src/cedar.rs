@@ -50,7 +50,7 @@ impl TryFrom<FirmaEntityUid> for EntityUid {
         };
         let entity_type = type_name_str.parse::<EntityTypeName>()?;
         let entity_id = EntityId::new(id_str);
-        Ok(EntityUid::from_type_name_and_id(entity_type, entity_id))
+        Ok(Self::from_type_name_and_id(entity_type, entity_id))
     }
 }
 

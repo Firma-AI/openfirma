@@ -52,10 +52,10 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --all-features --all-targets
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --all-features --all-targets
 
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --all-features --all-targets

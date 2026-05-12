@@ -70,10 +70,10 @@ const SENSITIVE_HEADERS: &[&str] = &[
     "x-api-key",
 ];
 
-/// Output of the intent normalizer — contains only the fields the
-/// normalizer can fill. Missing fields (`capability`, `agent_id`,
-/// `session_id`) are populated by the pipeline after Stage 1 validation
-/// when constructing the full `ExecutionEnvelope`.
+/// Output of the intent normalizer — contains only the fields the normalizer can fill.
+///
+/// Missing fields (`capability`, `agent_id`, `session_id`) are populated by the pipeline
+/// after Stage 1 validation when constructing the full `ExecutionEnvelope`.
 #[derive(Debug, Clone)]
 pub struct NormalizedEnvelope {
     pub intent: ExecutionIntent,
@@ -145,7 +145,7 @@ fn runtime_timestamp() -> DateTime<Utc> {
 
 impl IntentNormalizer {
     #[must_use]
-    pub fn new(mapping_table: MappingTable) -> Self {
+    pub const fn new(mapping_table: MappingTable) -> Self {
         Self { mapping_table }
     }
 
