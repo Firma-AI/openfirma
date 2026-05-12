@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+set -e
+
+if command -v gitleaks >/dev/null 2>&1; then
+    gitleaks protect --staged --config .gitleaks.toml
+else
+    echo "warning: gitleaks not found — secret scan skipped (run 'make install-tools' to install)" >&2
+fi
