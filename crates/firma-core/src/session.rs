@@ -13,21 +13,11 @@ static SESSION_ID_RE: LazyLock<Regex> =
 
 /// Error returned when a [`SessionId`] string fails validation.
 #[derive(Debug, thiserror::Error)]
-#[error("invalid session id: {0}")]
-pub struct InvalidSessionIdError(&'static str);
-
-impl InvalidSessionIdError {
-    #[inline]
-    #[must_use]
-    pub fn empty_string() -> Self {
-        Self("must not be empty")
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn invalid_format() -> Self {
-        Self(SESSION_ID_PATTERN)
-    }
+pub enum InvalidSessionIdError {
+    #[error("session id must not be empty")]
+    Empty,
+    #[error("session id must be 1–128 characters: letters, digits, hyphens, or underscores")]
+    InvalidFormat,
 }
 
 /// Unique identifier for a session.
@@ -55,10 +45,10 @@ impl TryFrom<String> for SessionId {
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         if s.is_empty() {
-            return Err(InvalidSessionIdError::empty_string());
+            return Err(InvalidSessionIdError::Empty);
         }
         if !SESSION_ID_RE.is_match(&s) {
-            return Err(InvalidSessionIdError::invalid_format());
+            return Err(InvalidSessionIdError::InvalidFormat);
         }
         Ok(Self(s))
     }

@@ -13,21 +13,11 @@ static AGENT_ID_RE: LazyLock<Regex> =
 
 /// Error returned when an [`AgentId`] string fails validation.
 #[derive(Debug, thiserror::Error)]
-#[error("invalid agent id: {0}")]
-pub struct InvalidAgentIdError(&'static str);
-
-impl InvalidAgentIdError {
-    #[inline]
-    #[must_use]
-    pub fn empty_string() -> Self {
-        Self("must not be empty")
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn invalid_format() -> Self {
-        Self(AGENT_ID_PATTERN)
-    }
+pub enum InvalidAgentIdError {
+    #[error("agent id must not be empty")]
+    Empty,
+    #[error("agent id must be 1–128 characters: letters, digits, hyphens, or underscores")]
+    InvalidFormat,
 }
 
 /// Unique identifier for an agent.
@@ -55,10 +45,10 @@ impl TryFrom<String> for AgentId {
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         if s.is_empty() {
-            return Err(InvalidAgentIdError::empty_string());
+            return Err(InvalidAgentIdError::Empty);
         }
         if !AGENT_ID_RE.is_match(&s) {
-            return Err(InvalidAgentIdError::invalid_format());
+            return Err(InvalidAgentIdError::InvalidFormat);
         }
         Ok(Self(s))
     }
