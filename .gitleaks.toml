@@ -1,0 +1,42 @@
+# Gitleaks configuration.
+# https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml
+
+[extend]
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# Allowlists
+# ---------------------------------------------------------------------------
+
+# Example scripts, demo fixtures, documentation, and dedicated test directories
+# are allowed to contain key material by design.
+[[allowlists]]
+description = "Test data in examples, scripts, docs, demo crates, and test directories"
+paths = [
+    '''examples/''',
+    '''scripts/''',
+    '''docs-site/''',
+    '''crates/firma-demo''',
+    '''/tests/''',
+]
+
+# The same P-256 test key (`S+9b9zHd22EAeg9M...`) appears in #[cfg(test)]
+# modules inside several source files. It is a generated, non-secret fixture
+# key with no access to any real system.
+[[allowlists]]
+description = "Known P-256 test key used across embedded #[cfg(test)] modules"
+regexTarget = "secret"
+regexes = [
+    '''MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgS''',
+]
+
+# Hardcoded placeholders in tests and documentation.
+[[allowlists]]
+description = "Placeholder credentials in test fixtures and documentation examples"
+regexTarget = "secret"
+regexes = [
+    # Fake Stripe key in credential/provider/vault.rs tests.
+    '''sk_live_abc123''',
+    # Example token_id UUID in docs-site/src/content/docs/concepts/pipeline.md.
+    '''79dd9ffb-ebc8-4883-8f1e-72eb74a26e33''',
+]
