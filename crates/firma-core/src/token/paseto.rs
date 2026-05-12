@@ -269,7 +269,7 @@ fn extract_capability_claims(claims: &Claims) -> Result<CapabilityClaims, TokenE
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    
+
     use crate::token::TokenId;
     use pasetors::keys::{AsymmetricKeyPair, Generate};
 
