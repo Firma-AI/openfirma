@@ -14,22 +14,22 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+ansi-to-tui = "8"
 anyhow.workspace = true
 clap = { workspace = true, features = [
-    "color",
-    "derive",
-    "error-context",
-    "help",
-    "std",
-    "suggestions",
-    "usage",
+  "color",
+  "derive",
+  "error-context",
+  "help",
+  "std",
+  "suggestions",
+  "usage",
 ] }
 crossterm = "0.28"
 ratatui = "0.30"
-tui-markdown = "0.3.7"
-ansi-to-tui = "8"
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tui-markdown = "0.3.7"

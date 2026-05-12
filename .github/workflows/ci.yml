@@ -19,6 +19,17 @@ jobs:
           components: rustfmt
       - run: cargo fmt --check
 
+  toml-fmt:
+    name: TOML Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install taplo
+        run: |
+          curl -fsSL https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz \
+            | gzip -d | install -m 755 /dev/stdin /usr/local/bin/taplo
+      - run: taplo fmt --check '**/Cargo.toml'
+
   check:
     name: Check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
