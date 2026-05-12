@@ -24,9 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: tamasfe/taplo-action@v3
-        with:
-          args: fmt --check '**/Cargo.toml'
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall taplo-cli --no-confirm --locked
+      - run: taplo fmt --check '**/Cargo.toml'
 
   check:
     name: Check (${{ matrix.os }})
