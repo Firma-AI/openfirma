@@ -12,6 +12,7 @@ async-trait = { workspace = true }
 cedar-policy = { workspace = true }
 chrono = { workspace = true }
 pasetors = { workspace = true }
+regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
