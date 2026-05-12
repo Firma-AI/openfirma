@@ -1,14 +1,14 @@
 [workspace]
 members = [
-    "crates/firma",
-    "crates/firma-core",
-    "crates/firma-grpc-interceptor-proto",
-    "crates/firma-proto",
-    "crates/firma-sidecar",
-    "crates/firma-authority",
-    "crates/firma-run",
-    "crates/firma-demo-fixture",
-    "crates/firma-demo-tui",
+  "crates/firma",
+  "crates/firma-core",
+  "crates/firma-grpc-interceptor-proto",
+  "crates/firma-proto",
+  "crates/firma-sidecar",
+  "crates/firma-authority",
+  "crates/firma-run",
+  "crates/firma-demo-fixture",
+  "crates/firma-demo-tui",
 ]
 resolver = "3"
 
@@ -38,7 +38,7 @@ cedar-policy = "3"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", default-features = false }
 criterion = { version = "0.8", default-features = false, features = [
-    "cargo_bench_support",
+  "cargo_bench_support",
 ] }
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
 elliptic-curve = { version = "0.13", features = ["pem"] }
@@ -69,10 +69,10 @@ proptest = "1"
 rand = { version = "0.9", default-features = false, features = ["small_rng"] }
 rcgen = { version = "0.13", features = ["x509-parser"] }
 reqwest = { version = "0.13", default-features = false, features = [
-    "charset",
-    "http2",
-    "query",
-    "rustls",
+  "charset",
+  "http2",
+  "query",
+  "rustls",
 ] }
 ctrlc = "3.5"
 rustls = "0.23"
@@ -85,8 +85,8 @@ strum = "0.28"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", default-features = false, features = [
-    "rt-multi-thread",
-    "macros",
+  "rt-multi-thread",
+  "macros",
 ] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-rustls = "0.26"

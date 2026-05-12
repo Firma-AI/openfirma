@@ -19,6 +19,15 @@ jobs:
           components: rustfmt
       - run: cargo fmt --check
 
+  toml-fmt:
+    name: TOML Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: tamasfe/taplo-action@v3
+        with:
+          args: fmt --check '**/Cargo.toml'
+
   check:
     name: Check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
