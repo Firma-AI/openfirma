@@ -1,6 +1,6 @@
-.PHONY: fmt lint test build check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps toml-fmt
+.PHONY: fmt lint test build check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps install-tools toml-fmt
 
-install: install-system install-cargo-tools install-docs-deps
+install: install-system install-cargo-tools install-docs-deps install-tools
 	@echo "Dev environment ready. Try 'make check' or 'make docs-dev'."
 
 install-system:
@@ -19,6 +19,14 @@ install-system:
 	  fi; \
 	fi
 	@corepack enable >/dev/null 2>&1 || echo "warning: 'corepack enable' failed; you may need to run it with sudo"
+
+install-tools:
+	@if ! command -v gitleaks >/dev/null 2>&1; then \
+	  echo "warning: gitleaks not found — install from https://github.com/gitleaks/gitleaks/releases"; \
+	  echo "         (macOS: brew install gitleaks)"; \
+	fi
+	@git config core.hooksPath .githooks
+	@echo "Git hooks wired to .githooks/"
 
 install-cargo-tools:
 	@command -v cargo-doc-md >/dev/null 2>&1 || cargo install cargo-doc-md
