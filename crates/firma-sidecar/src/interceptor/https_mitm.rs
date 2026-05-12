@@ -164,11 +164,11 @@ impl LeafCertCache {
 
     fn get(&mut self, host: &str) -> Option<CachedLeafCert> {
         let now = Instant::now();
-        if let Some(entry) = self.entries.get(host).cloned() {
-            if entry.expires_at > now {
-                self.touch(host);
-                return Some(entry);
-            }
+        if let Some(entry) = self.entries.get(host).cloned()
+            && entry.expires_at > now
+        {
+            self.touch(host);
+            return Some(entry);
         }
         self.remove(host);
         None

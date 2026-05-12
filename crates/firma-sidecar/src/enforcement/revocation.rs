@@ -180,7 +180,7 @@ mod tests {
                 while Instant::now() < deadline {
                     let id = TokenId::new();
                     let _ = store.is_revoked(&id);
-                    if i % 8 == 0 {
+                    if i.is_multiple_of(8) {
                         let _ = store.add_revocation(&id);
                     }
                     i = i.wrapping_add(1);

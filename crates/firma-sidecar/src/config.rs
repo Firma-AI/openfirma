@@ -393,10 +393,10 @@ impl PolicyConfig {
         if self.dir.as_os_str().is_empty() {
             return Err("policy.dir must not be empty".into());
         }
-        if let Some(ref url) = self.authority_url {
-            if url.trim().is_empty() {
-                return Err("policy.authority_url must not be empty when set".into());
-            }
+        if let Some(ref url) = self.authority_url
+            && url.trim().is_empty()
+        {
+            return Err("policy.authority_url must not be empty when set".into());
         }
         Ok(())
     }
