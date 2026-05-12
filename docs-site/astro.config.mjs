@@ -2,6 +2,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import mermaid from 'astro-mermaid';
 import starlightBlog from 'starlight-blog';
+import starlightLlmsTxt from 'starlight-llms-txt';
 
 const isGitHubPages = process.env.GITHUB_PAGES === 'true';
 const base = isGitHubPages ? '/firma-oss' : '/';
@@ -42,6 +43,30 @@ export default defineConfig({
         },
       },
       plugins: [
+        starlightLlmsTxt({
+          projectName: 'OpenFirma',
+          description: 'OpenFirma is a governed runtime and local policy enforcement boundary for AI agents.',
+          details:
+            'OpenFirma routes outbound agent traffic through a local Sidecar, checks protected actions against scoped capabilities and Cedar policy, and records signed audit events. Its core invariants are fail-closed behavior, no network on the enforcement hot path, deterministic policy decisions, and immutable execution envelopes.',
+          promote: ['index*', 'quickstart*', 'working-with-coding-agents*', 'concepts/architecture*', 'concepts/pipeline*'],
+          optionalLinks: [
+            {
+              label: 'GitHub repository',
+              url: 'https://github.com/firma-ai/firma-oss',
+              description: 'Source code, examples, policies, mappings, and issue tracker.',
+            },
+            {
+              label: 'Configuration reference',
+              url: 'https://github.com/firma-ai/firma-oss/blob/main/docs/configuration.md',
+              description: 'Repository-level configuration details.',
+            },
+            {
+              label: 'CLI reference',
+              url: 'https://github.com/firma-ai/firma-oss/blob/main/docs/cli.md',
+              description: 'Command reference for the firma CLI.',
+            },
+          ],
+        }),
         starlightBlog({
           title: 'Blog',
           authors: {
@@ -65,6 +90,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'index' },
             { label: 'Quickstart', slug: 'quickstart' },
+            { label: 'Working with Coding Agents', slug: 'working-with-coding-agents' },
           ],
         },
         {
