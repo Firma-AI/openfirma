@@ -9,6 +9,18 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit
+        run: cargo audit
+
   fmt:
     name: Format
     runs-on: ubuntu-latest

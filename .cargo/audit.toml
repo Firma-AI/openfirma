@@ -1,0 +1,40 @@
+# cargo-audit configuration.
+#
+# Documented exceptions for advisories that cannot be fixed without upstream
+# changes. All entries must include an inline comment explaining the reason.
+#
+# Run: cargo audit
+# CI:  cargo audit (fails on any unignored vulnerability or warning)
+
+[advisories]
+ignore = [
+    # protobuf 2.28.0 — crash via uncontrolled recursion (CVSS unscored)
+    # Path: firma-sidecar → pingora-core → prometheus 0.13.4 → protobuf 2.x
+    # Fix: blocked on pingora upstream dropping prometheus or bumping to protobuf 3.x
+    "RUSTSEC-2024-0437",
+
+    # daemonize 0.5.0 — unmaintained
+    # Path: firma-sidecar → pingora-core → daemonize
+    # Fix: blocked on pingora upstream
+    "RUSTSEC-2025-0069",
+
+    # derivative 2.2.0 — unmaintained
+    # Path: firma-sidecar → pingora-core → derivative
+    # Fix: blocked on pingora upstream
+    "RUSTSEC-2024-0388",
+
+    # rustls-pemfile 2.2.0 — unmaintained (superseded by rustls-pki-types)
+    # Path: firma-sidecar → rustls-pemfile (direct, test-only usage in interceptor/http.rs)
+    # Fix: migrate to rustls-pki-types pem feature — tracked separately
+    "RUSTSEC-2025-0134",
+
+    # bincode 1.3.3 — unmaintained
+    # Path: firma-demo-tui → tui-markdown → syntect → bincode
+    # Demo crate only; not on the enforcement hot path
+    "RUSTSEC-2025-0141",
+
+    # yaml-rust 0.4.5 — unmaintained
+    # Path: firma-demo-tui → tui-markdown → syntect → yaml-rust
+    # Demo crate only; same root cause as bincode
+    "RUSTSEC-2024-0320",
+]

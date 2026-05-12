@@ -41,7 +41,10 @@ test:
 build:
 	cargo build --all-features --all-targets
 
-check: fmt toml-fmt lint test build
+audit:
+	cargo audit
+
+check: fmt toml-fmt lint test build audit
 
 bench:
 	cargo bench --workspace --no-fail-fast
