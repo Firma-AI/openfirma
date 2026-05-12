@@ -1,0 +1,35 @@
+name: Fuzz
+
+on:
+  schedule:
+    # Run daily at 02:00 UTC.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }}, 300 s)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [normalizer, paseto_verify, mapping_toml]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz -> fuzz/target
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Run ${{ matrix.target }}
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=300
