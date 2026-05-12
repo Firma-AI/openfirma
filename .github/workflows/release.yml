@@ -75,6 +75,15 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Export PROTOC for cross volume mount
+        if: matrix.use_cross == true
+        shell: bash
+        run: |
+          PROTOC_BIN=$(command -v protoc)
+          PROTOC_INCLUDE=$(dirname "$(dirname "$PROTOC_BIN")")/include
+          echo "PROTOC=$PROTOC_BIN" >> "$GITHUB_ENV"
+          echo "PROTOC_INCLUDE=$PROTOC_INCLUDE" >> "$GITHUB_ENV"
+
       - name: Install musl-tools (linux musl x86_64)
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
@@ -87,8 +96,6 @@ jobs:
 
       - name: Build with cross
         if: matrix.use_cross == true
-        env:
-          PROTOC: /usr/bin/protoc
         run: cross build --release --target ${{ matrix.target }} --bin firma
 
       - name: Build with cargo
