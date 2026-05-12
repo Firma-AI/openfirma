@@ -31,7 +31,7 @@ test = false
 doc = false
 
 [[bin]]
-name = "mapping_toml"
-path = "fuzz_targets/mapping_toml.rs"
+name = "capability_seed"
+path = "fuzz_targets/capability_seed.rs"
 test = false
 doc = false
