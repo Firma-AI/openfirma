@@ -19,6 +19,7 @@ struct MediatorRequest<'a> {
     session_id: &'a str,
     profile: &'a str,
     hitl_mode: &'static str,
+    // Optional governance context pass-through. Runtime does not enforce budget semantics.
     budget_state_ref: Option<String>,
 }
 
@@ -54,6 +55,8 @@ pub fn enforce_local_command_governance(
             CommandMediatorHitlMode::SyncWait => "sync_wait",
             CommandMediatorHitlMode::AsyncToken => "async_token",
         },
+        // `FIRMA_BUDGET_STATE_REF` is forwarded to mediator for cross-platform
+        // governance decisions; local runtime does not parse or validate it.
         budget_state_ref: std::env::var("FIRMA_BUDGET_STATE_REF")
             .ok()
             .filter(|value| !value.trim().is_empty()),

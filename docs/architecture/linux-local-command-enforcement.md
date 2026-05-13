@@ -161,11 +161,21 @@ Decision handling:
 2. `async_token`: mediator may return `pending_hitl` with `approval_token`; current launch attempt fails closed and caller may retry later with approved context.
 3. No background in-place escalation of an already running sandbox process.
 
-### Budget Source of Truth
+### Budget Source of Truth (Cross-Platform Governance Layer)
 
 1. Runtime passes `budget_state_ref` from environment (`FIRMA_BUDGET_STATE_REF`) to mediator for traceable decision context.
 2. Runtime does not own budget state consistency; mediator-side governance system is source of truth.
 3. Missing `budget_state_ref` is allowed, but policy can deny when budget reference is mandatory.
+4. Full platform-neutral mediator contract and ownership model: `docs/architecture/command-governance-mediator-contract.md`.
+
+### `FIRMA_BUDGET_STATE_REF` Clarification (Platform-Neutral)
+
+1. `FIRMA_BUDGET_STATE_REF` is an optional runtime environment variable, not a seccomp option and not a profile policy switch.
+2. Current product behavior is pass-through only:
+3. `firma run` reads env var -> serializes `budget_state_ref` in mediator request -> mediator decides how to use it.
+4. `firma run` does not parse, validate, persist, or enforce budget semantics from this field.
+5. Budget semantics (quota/spend/rate consistency and state lookup) belong to mediator-side governance services.
+6. These semantics are platform-neutral; Linux/macOS/Windows runtime paths can all forward this field to the same mediator contract.
 
 ### Non-Cooperative Anti-Bypass Guarantees
 
