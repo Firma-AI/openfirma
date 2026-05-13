@@ -1097,6 +1097,7 @@ verify_checksum = false
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn command_mediator_parses_unix_endpoint() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let policy_path = tmpdir.path().join("policy.toml");
