@@ -203,6 +203,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         let launch_args =
             maybe_apply_claude_settings(handle_ref, &profile, &executable, launch_args)?;
         if let Some(mediator) = &profile.command_mediator {
+            enforce_known_executable_policy(mediator, &executable)?;
             enforce_local_command_governance(mediator, &identity, &executable, &launch_args)?;
         }
         let launch = LaunchSpec {
@@ -333,6 +334,25 @@ fn has_config_override(args: &[String], key: &str) -> bool {
 
 fn config_item_matches_key(item: &str, key: &str) -> bool {
     item.split_once('=').is_some_and(|(k, _)| k.trim() == key)
+}
+
+fn enforce_known_executable_policy(
+    mediator: &crate::config::CommandMediatorConfig,
+    executable: &str,
+) -> Result<(), RunError> {
+    if !mediator.enforce_known_executables {
+        return Ok(());
+    }
+    let basename = std::path::Path::new(executable)
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or_default();
+    if mediator.allowed_executables.contains(basename) {
+        return Ok(());
+    }
+    Err(RunError::Governance(format!(
+        "executable '{basename}' is not in command_mediator.allowed_executables"
+    )))
 }
 
 fn build_execution_env(

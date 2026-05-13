@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{CommandMediatorConfig, CommandMediatorEndpoint};
+use crate::config::{CommandMediatorConfig, CommandMediatorEndpoint, CommandMediatorHitlMode};
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 
@@ -18,6 +18,8 @@ struct MediatorRequest<'a> {
     sandbox_id: &'a str,
     session_id: &'a str,
     profile: &'a str,
+    hitl_mode: &'static str,
+    budget_state_ref: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -25,6 +27,8 @@ struct MediatorRequest<'a> {
 struct MediatorResponse {
     decision: String,
     reason: Option<String>,
+    approval_token: Option<String>,
+    retry_after_ms: Option<u64>,
 }
 
 /// Enforces a mandatory pre-execution mediator decision in fail-closed mode.
@@ -46,6 +50,13 @@ pub fn enforce_local_command_governance(
         sandbox_id: &identity.sandbox_id,
         session_id: &identity.session_id,
         profile: &identity.profile,
+        hitl_mode: match mediator.hitl_mode {
+            CommandMediatorHitlMode::SyncWait => "sync_wait",
+            CommandMediatorHitlMode::AsyncToken => "async_token",
+        },
+        budget_state_ref: std::env::var("FIRMA_BUDGET_STATE_REF")
+            .ok()
+            .filter(|value| !value.trim().is_empty()),
     };
 
     let request_json = serde_json::to_string(&payload).map_err(|error| {
@@ -67,10 +78,11 @@ pub fn enforce_local_command_governance(
         ))
     })?;
 
-    apply_mediator_decision(&response, identity, executable)
+    apply_mediator_decision(mediator, &response, identity, executable)
 }
 
 fn apply_mediator_decision(
+    mediator: &CommandMediatorConfig,
     response: &MediatorResponse,
     identity: &RunIdentity,
     executable: &str,
@@ -86,7 +98,7 @@ fn apply_mediator_decision(
             );
             Ok(())
         }
-        "deny" | "pending_hitl" => {
+        "deny" => {
             let reason = response
                 .reason
                 .clone()
@@ -104,6 +116,28 @@ fn apply_mediator_decision(
                 response.decision
             )))
         }
+        "pending_hitl" => match mediator.hitl_mode {
+            CommandMediatorHitlMode::SyncWait => Err(RunError::Governance(
+                "decision=pending_hitl reason=approval required (sync_wait mode fail-closed)"
+                    .to_string(),
+            )),
+            CommandMediatorHitlMode::AsyncToken => {
+                let token = response
+                    .approval_token
+                    .clone()
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        RunError::Governance(
+                            "decision=pending_hitl reason=missing approval_token in async_token mode"
+                                .to_string(),
+                        )
+                    })?;
+                let retry_after_ms = response.retry_after_ms.unwrap_or(0);
+                Err(RunError::Governance(format!(
+                    "decision=pending_hitl approval_token={token} retry_after_ms={retry_after_ms}"
+                )))
+            }
+        },
         other => Err(RunError::Governance(format!(
             "mediator returned unsupported decision '{other}'"
         ))),
@@ -203,9 +237,20 @@ mod tests {
             profile: "generic".to_string(),
         };
         let out = apply_mediator_decision(
+            &CommandMediatorConfig {
+                endpoint: CommandMediatorEndpoint::Tcp {
+                    addr: "127.0.0.1:1".parse().unwrap_or_else(|e| panic!("{e}")),
+                },
+                timeout_ms: 500,
+                hitl_mode: CommandMediatorHitlMode::SyncWait,
+                enforce_known_executables: false,
+                allowed_executables: Default::default(),
+            },
             &MediatorResponse {
                 decision: "allow".to_string(),
                 reason: Some("ok".to_string()),
+                approval_token: None,
+                retry_after_ms: None,
             },
             &identity,
             "/bin/echo",
@@ -221,9 +266,20 @@ mod tests {
             profile: "generic".to_string(),
         };
         let err = apply_mediator_decision(
+            &CommandMediatorConfig {
+                endpoint: CommandMediatorEndpoint::Tcp {
+                    addr: "127.0.0.1:1".parse().unwrap_or_else(|e| panic!("{e}")),
+                },
+                timeout_ms: 500,
+                hitl_mode: CommandMediatorHitlMode::SyncWait,
+                enforce_known_executables: false,
+                allowed_executables: Default::default(),
+            },
             &MediatorResponse {
                 decision: "deny".to_string(),
                 reason: Some("blocked".to_string()),
+                approval_token: None,
+                retry_after_ms: None,
             },
             &identity,
             "/bin/echo",
@@ -231,6 +287,39 @@ mod tests {
         .expect_err("expected deny");
         assert!(
             err.to_string().contains("governance denied execution"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn mediator_pending_hitl_async_token_requires_token() {
+        let identity = RunIdentity {
+            sandbox_id: "sbx".to_string(),
+            session_id: "sess".to_string(),
+            profile: "generic".to_string(),
+        };
+        let err = apply_mediator_decision(
+            &CommandMediatorConfig {
+                endpoint: CommandMediatorEndpoint::Tcp {
+                    addr: "127.0.0.1:1".parse().unwrap_or_else(|e| panic!("{e}")),
+                },
+                timeout_ms: 500,
+                hitl_mode: CommandMediatorHitlMode::AsyncToken,
+                enforce_known_executables: false,
+                allowed_executables: Default::default(),
+            },
+            &MediatorResponse {
+                decision: "pending_hitl".to_string(),
+                reason: Some("needs-approval".to_string()),
+                approval_token: None,
+                retry_after_ms: Some(1200),
+            },
+            &identity,
+            "/bin/echo",
+        )
+        .expect_err("expected missing approval token error");
+        assert!(
+            err.to_string().contains("missing approval_token"),
             "unexpected error: {err}"
         );
     }

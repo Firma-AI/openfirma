@@ -121,6 +121,12 @@ impl ResolvedProfile {
                     path.display()
                 )));
             }
+            if mediator.enforce_known_executables && mediator.allowed_executables.is_empty() {
+                return Err(RunError::ConfigValidation(
+                    "command_mediator.enforce_known_executables=true requires non-empty command_mediator.allowed_executables"
+                        .to_string(),
+                ));
+            }
         }
 
         Ok(())
@@ -216,6 +222,9 @@ pub struct ExecutableLaunchPolicy {
 pub struct CommandMediatorConfig {
     pub endpoint: CommandMediatorEndpoint,
     pub timeout_ms: u64,
+    pub hitl_mode: CommandMediatorHitlMode,
+    pub enforce_known_executables: bool,
+    pub allowed_executables: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -223,6 +232,13 @@ pub struct CommandMediatorConfig {
 pub enum CommandMediatorEndpoint {
     Tcp { addr: SocketAddr },
     Unix { path: PathBuf },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandMediatorHitlMode {
+    SyncWait,
+    AsyncToken,
 }
 
 /// Seccomp policy compilation settings for Linux bwrap backend.
@@ -338,6 +354,10 @@ pub(crate) struct ExecutableLaunchPolicyPatch {
 pub(crate) struct CommandMediatorPatch {
     pub(crate) endpoint: String,
     pub(crate) timeout_ms: Option<u64>,
+    pub(crate) hitl_mode: Option<CommandMediatorHitlMode>,
+    pub(crate) enforce_known_executables: Option<bool>,
+    #[serde(default)]
+    pub(crate) allowed_executables: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -613,9 +633,19 @@ fn command_mediator_from_patch(
     patch: &CommandMediatorPatch,
 ) -> Result<CommandMediatorConfig, RunError> {
     let endpoint = parse_command_mediator_endpoint(&patch.endpoint)?;
+    let allowed_executables = patch
+        .allowed_executables
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
     Ok(CommandMediatorConfig {
         endpoint,
         timeout_ms: patch.timeout_ms.unwrap_or(500),
+        hitl_mode: patch.hitl_mode.unwrap_or(CommandMediatorHitlMode::SyncWait),
+        enforce_known_executables: patch.enforce_known_executables.unwrap_or(false),
+        allowed_executables,
     })
 }
 
@@ -1097,7 +1127,6 @@ verify_checksum = false
     }
 
     #[test]
-    #[cfg(not(target_os = "windows"))]
     fn command_mediator_parses_unix_endpoint() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let policy_path = tmpdir.path().join("policy.toml");
@@ -1125,7 +1154,7 @@ artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
 [profiles.generic.command_mediator]
-endpoint = "unix://{}"
+endpoint = 'unix://{}'
 timeout_ms = 700
 "#,
             policy_path.display(),
@@ -1183,6 +1212,102 @@ timeout_ms = 500
             err.to_string()
                 .contains("command_mediator.endpoint unix path must be absolute"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn command_mediator_rejects_empty_allowlist_when_enforced() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "bwrap"
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+runtime_mode = "precompiled_only"
+
+[profiles.generic.command_mediator]
+endpoint = "tcp://127.0.0.1:19090"
+timeout_ms = 500
+enforce_known_executables = true
+"#,
+            policy_path.display(),
+            artifact_dir.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let err = resolve_profile(&run_args).expect_err("expected validation failure");
+        assert!(
+            err.to_string()
+                .contains("command_mediator.enforce_known_executables=true requires non-empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn command_mediator_parses_async_hitl_mode_and_allowlist() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "bwrap"
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+runtime_mode = "precompiled_only"
+
+[profiles.generic.command_mediator]
+endpoint = "tcp://127.0.0.1:19090"
+timeout_ms = 800
+hitl_mode = "async_token"
+enforce_known_executables = true
+allowed_executables = ["codex", "claude", "bash"]
+"#,
+            policy_path.display(),
+            artifact_dir.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        let mediator = resolved
+            .command_mediator
+            .unwrap_or_else(|| panic!("missing command mediator config"));
+        assert!(mediator.enforce_known_executables);
+        assert!(mediator.allowed_executables.contains("codex"));
+        assert_eq!(
+            mediator.hitl_mode,
+            super::CommandMediatorHitlMode::AsyncToken
         );
     }
 }
