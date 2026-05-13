@@ -13,7 +13,7 @@ use nix::unistd::Pid;
 use crate::error::{Result, StackError};
 use crate::platform::{Group, Platform, SpawnedChild};
 
-pub(crate) struct UnixPlatform;
+pub struct UnixPlatform;
 
 fn raw_pid(pid: u32) -> Result<Pid> {
     let raw = i32::try_from(pid)

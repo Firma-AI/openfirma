@@ -7,7 +7,7 @@ use tracing::{debug, info};
 
 use crate::error::{Result, StackError};
 
-pub(crate) fn spawn_supervisor(state_dir: &Path) -> Result<()> {
+pub fn spawn_supervisor(state_dir: &Path) -> Result<()> {
     let exe = std::env::current_exe()?;
     debug!(exe = %exe.display(), state_dir = %state_dir.display(), "preparing detached supervisor");
     let log = std::fs::OpenOptions::new()

@@ -152,7 +152,7 @@ pub fn run(demos_dir: &Path, initial_demo: Option<&Path>) -> Result<()> {
     let _ = execute!(io::stdout(), LeaveAlternateScreen);
     let _ = terminal.show_cursor();
 
-    if let Some(mut rt) = app.runtime.take() {
+    if let Some(rt) = app.runtime.take() {
         rt.shutdown();
     }
     if let Some(mut ag) = app.agent.take() {
