@@ -37,6 +37,12 @@ pub fn load_capability_map(seed: &CapabilitySeedConfig) -> anyhow::Result<Capabi
     Ok(CapabilityMap::new(entries))
 }
 
+/// Convert a parsed capability seed file into a runtime entry.
+///
+/// # Errors
+///
+/// Returns a descriptive error string when any identifier (token, agent, or
+/// session) fails to parse.
 pub fn seed_into_entry(file: &SeedFile) -> Result<CapabilityEntry, String> {
     let token_id: TokenId = file
         .token_id

@@ -223,17 +223,17 @@ fn set_dir_mode_0700(path: &Path) -> Result<(), String> {
 /// Order: explicit `--state-dir` (or `FIRMA_STATE_DIR` env) → `state_dir` field
 /// from the stack config file at `config_path` if set → XDG/platform default
 /// via [`firma_stack::resolve_state_dir`].
-pub(crate) fn resolve_state_dir(
+pub fn resolve_state_dir(
     flag: Option<PathBuf>,
     config_path: Option<&Path>,
 ) -> Result<PathBuf, String> {
     if let Some(path) = flag {
         return Ok(path);
     }
-    if let Ok(env) = std::env::var("FIRMA_STATE_DIR") {
-        if !env.is_empty() {
-            return Ok(PathBuf::from(env));
-        }
+    if let Ok(env) = std::env::var("FIRMA_STATE_DIR")
+        && !env.is_empty()
+    {
+        return Ok(PathBuf::from(env));
     }
     if let Some(path) = config_path {
         match firma_stack::load_stack_config(path) {

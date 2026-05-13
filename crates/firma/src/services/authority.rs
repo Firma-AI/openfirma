@@ -90,7 +90,7 @@ async fn run_compact(config: &AuthorityConfig) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn run_generate_key(path: &std::path::Path) -> Result<()> {
+pub fn run_generate_key(path: &std::path::Path) -> Result<()> {
     let mut secret_opts = std::fs::OpenOptions::new();
     secret_opts.create_new(true).write(true);
     let mut public_opts = std::fs::OpenOptions::new();

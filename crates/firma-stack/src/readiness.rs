@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::error::{Result, StackError};
 
-pub(crate) fn wait_for_tcp(component: &str, addr: SocketAddr, timeout: Duration) -> Result<()> {
+pub fn wait_for_tcp(component: &str, addr: SocketAddr, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
         if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
@@ -22,7 +22,7 @@ pub(crate) fn wait_for_tcp(component: &str, addr: SocketAddr, timeout: Duration)
     }
 }
 
-pub(crate) fn wait_for_ca_material(ca_dir: &Path, timeout: Duration) -> Result<()> {
+pub fn wait_for_ca_material(ca_dir: &Path, timeout: Duration) -> Result<()> {
     let cert = ca_dir.join("firma-ca.crt");
     let key = ca_dir.join("firma-ca.key");
     let deadline = Instant::now() + timeout;
@@ -40,7 +40,7 @@ pub(crate) fn wait_for_ca_material(ca_dir: &Path, timeout: Duration) -> Result<(
     }
 }
 
-pub(crate) fn read_authority_listen_addr(config_path: &Path) -> Result<SocketAddr> {
+pub fn read_authority_listen_addr(config_path: &Path) -> Result<SocketAddr> {
     let text = std::fs::read_to_string(config_path)?;
     for line in text.lines() {
         let trimmed = line.split('#').next().unwrap_or_default().trim();
@@ -60,7 +60,7 @@ pub(crate) fn read_authority_listen_addr(config_path: &Path) -> Result<SocketAdd
     )))
 }
 
-pub(crate) fn read_sidecar_listen_addr(config_path: &Path) -> Result<SocketAddr> {
+pub fn read_sidecar_listen_addr(config_path: &Path) -> Result<SocketAddr> {
     let text = std::fs::read_to_string(config_path)?;
     let value: toml::Value = toml::from_str(&text)
         .map_err(|error: toml::de::Error| StackError::Platform(format!("sidecar toml: {error}")))?;

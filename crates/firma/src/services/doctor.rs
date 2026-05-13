@@ -82,10 +82,10 @@ async fn build_report(args: Args) -> RenderedReport {
     //    child configs to load.
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let config_check = config_parse::check(args.config.as_deref(), &cwd);
-    let stack_cfg_path = match args.config.clone() {
-        Some(p) => Some(p),
-        None => config_parse::find_stack_config(&cwd),
-    };
+    let stack_cfg_path = args
+        .config
+        .clone()
+        .or_else(|| config_parse::find_stack_config(&cwd));
     report.push(config_check);
 
     let stack_cfg = stack_cfg_path

@@ -10,11 +10,11 @@ use std::process::Command;
 
 use crate::error::Result;
 
-pub(crate) struct Group {
+pub struct Group {
     #[cfg(unix)]
-    pub(crate) pgid: i32,
+    pub pgid: i32,
     #[cfg(windows)]
-    pub(crate) job: *mut std::ffi::c_void,
+    pub job: *mut std::ffi::c_void,
 }
 
 #[cfg(windows)]
@@ -31,12 +31,12 @@ impl Drop for Group {
     }
 }
 
-pub(crate) struct SpawnedChild {
-    pub(crate) pid: u32,
+pub struct SpawnedChild {
+    pub pid: u32,
 }
 
 /// Platform-specific operations for managing process groups.
-pub(crate) trait Platform {
+pub trait Platform {
     /// Create a new process group.
     ///
     /// # Errors
@@ -70,6 +70,6 @@ pub(crate) trait Platform {
 }
 
 #[cfg(unix)]
-pub(crate) type SystemPlatform = self::unix::UnixPlatform;
+pub type SystemPlatform = self::unix::UnixPlatform;
 #[cfg(windows)]
-pub(crate) type SystemPlatform = self::windows::WindowsPlatform;
+pub type SystemPlatform = self::windows::WindowsPlatform;
