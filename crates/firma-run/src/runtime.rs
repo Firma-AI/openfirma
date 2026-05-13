@@ -10,9 +10,10 @@ use crate::capability::CapabilityLeaseManager;
 use crate::config::{CapabilitySource, ResolvedProfile, SidecarEndpoint, resolve_profile};
 use crate::error::RunError;
 use crate::identity::RunIdentity;
+use crate::mediator::enforce_local_command_governance;
 use crate::routing::{AutostartFlags, prepare_network_runtime};
-use crate::sidecar::supervisor::DEFAULT_STARTUP_TIMEOUT_SECS;
 use crate::seccomp::resolve_effective_seccomp;
+use crate::sidecar::supervisor::DEFAULT_STARTUP_TIMEOUT_SECS;
 use crate::supervisor::wait_with_signal_forwarding;
 
 /// Selection between `firma run`'s autostart behaviour and an externally
@@ -201,6 +202,9 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         );
         let launch_args =
             maybe_apply_claude_settings(handle_ref, &profile, &executable, launch_args)?;
+        if let Some(mediator) = &profile.command_mediator {
+            enforce_local_command_governance(mediator, &identity, &executable, &launch_args)?;
+        }
         let launch = LaunchSpec {
             executable,
             args: launch_args,
@@ -561,6 +565,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
+            command_mediator: None,
             executable_policies: BTreeMap::new(),
         };
 
@@ -616,6 +621,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
+            command_mediator: None,
             executable_policies: BTreeMap::new(),
         };
 
@@ -664,6 +670,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
+            command_mediator: None,
             executable_policies: BTreeMap::new(),
         };
 
@@ -723,6 +730,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
+            command_mediator: None,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
@@ -780,6 +788,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
+            command_mediator: None,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
@@ -846,6 +855,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
+            command_mediator: None,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {

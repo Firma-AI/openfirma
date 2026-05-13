@@ -4,6 +4,11 @@ Status: implementation complete (Linux path)
 Date: 2026-05-13  
 Scope: `firma run` + Linux `bwrap` backend
 
+## Full Validation Runbook
+
+1. End-to-end verification steps are documented in:
+`docs/architecture/fir-115-validation-runbook.md`
+
 ## Decision
 
 1. Linux syscall deny enforcement remains static seccomp cBPF in kernel space.
@@ -52,6 +57,7 @@ the static baseline uses `allow` default plus explicit deny syscall set for dete
 1. Runtime resolves the effective managed seccomp artifact.
 2. Runtime passes artifact path via launch contract (`LaunchSpec`) to Linux backend.
 3. Linux backend opens descriptor and passes `--seccomp <fd>` to `bwrap`.
+4. If `command_mediator` is configured, runtime performs a mandatory pre-exec mediator decision check before launching the wrapped command.
 
 Important hardening:
 
@@ -61,6 +67,29 @@ Important hardening:
 4. Artifact root/leaf directories and artifact files must be owned by the current runtime uid.
 5. Other-write permissions on managed artifact paths are rejected.
 6. Symlinked managed artifact paths are rejected.
+7. In mediated mode, timeout/unavailable/error from mediator fails closed (no direct exec fallback).
+
+## Userspace mediator layer (implemented)
+
+This layer complements static seccomp; it is not a syscall containment boundary.
+
+1. Decision point:
+`firma run` resolves final executable + args, then sends a decision request to mediator before process launch.
+2. Identity/session binding:
+request includes `sandbox_id`, `session_id`, and `profile` to prevent cross-session confusion.
+3. Decision model:
+1. `allow` -> launch proceeds
+2. `deny` -> launch blocked
+3. `pending_hitl` -> launch blocked (explicit fail-closed pending state)
+4. timeout/unavailable/invalid response -> launch blocked
+4. Endpoint forms:
+1. `tcp://host:port`
+2. `unix:///absolute/path.sock`
+5. Request contract (JSON line):
+`{"action":"local.exec","executable":"...","args":[...],"sandbox_id":"...","session_id":"...","profile":"..."}`
+6. Response contract (JSON line):
+`{"decision":"allow|deny|pending_hitl","reason":"optional"}`.
+Any unsupported/malformed response is fail-closed.
 
 ## Artifact contract
 

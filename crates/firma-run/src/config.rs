@@ -29,6 +29,7 @@ pub struct ResolvedProfile {
     pub network: NetworkPolicy,
     pub identity_mode: SandboxIdentityMode,
     pub capability: CapabilityLeaseConfig,
+    pub command_mediator: Option<CommandMediatorConfig>,
     pub executable_policies: BTreeMap<String, ExecutableLaunchPolicy>,
 }
 
@@ -102,6 +103,22 @@ impl ResolvedProfile {
                 return Err(RunError::ConfigValidation(format!(
                     "seccomp_policy is only supported with backend 'bwrap', got '{backend}'",
                     backend = self.backend
+                )));
+            }
+        }
+
+        if let Some(mediator) = &self.command_mediator {
+            if mediator.timeout_ms == 0 {
+                return Err(RunError::ConfigValidation(
+                    "command_mediator.timeout_ms must be > 0".to_string(),
+                ));
+            }
+            if let CommandMediatorEndpoint::Unix { path } = &mediator.endpoint
+                && !path.is_absolute()
+            {
+                return Err(RunError::ConfigValidation(format!(
+                    "command_mediator.endpoint unix path must be absolute: {}",
+                    path.display()
                 )));
             }
         }
@@ -194,6 +211,20 @@ pub struct ExecutableLaunchPolicy {
     pub config_overrides: BTreeMap<String, String>,
 }
 
+/// Runtime command mediation settings for governed local execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CommandMediatorConfig {
+    pub endpoint: CommandMediatorEndpoint,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CommandMediatorEndpoint {
+    Tcp { addr: SocketAddr },
+    Unix { path: PathBuf },
+}
+
 /// Seccomp policy compilation settings for Linux bwrap backend.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SeccompPolicyConfig {
@@ -254,6 +285,7 @@ pub(crate) struct ProfilePatch {
     pub(crate) network: Option<NetworkPolicyPatch>,
     pub(crate) identity_mode: Option<SandboxIdentityMode>,
     pub(crate) capability: Option<CapabilityLeasePatch>,
+    pub(crate) command_mediator: Option<CommandMediatorPatch>,
     #[serde(default)]
     pub(crate) executable_policies: BTreeMap<String, ExecutableLaunchPolicyPatch>,
     #[serde(default)]
@@ -303,6 +335,12 @@ pub(crate) struct ExecutableLaunchPolicyPatch {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CommandMediatorPatch {
+    pub(crate) endpoint: String,
+    pub(crate) timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum CapabilitySourcePatch {
     Disabled,
@@ -342,6 +380,7 @@ impl ProfilePatch {
             network: higher.network.or(self.network),
             identity_mode: higher.identity_mode.or(self.identity_mode),
             capability: higher.capability.or(self.capability),
+            command_mediator: higher.command_mediator.or(self.command_mediator),
             executable_policies,
             codex_cli: higher.codex_cli.or(self.codex_cli),
         }
@@ -425,6 +464,10 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
 
     let executable_policies =
         resolve_executable_policies(patch.executable_policies, patch.codex_cli);
+    let command_mediator = patch
+        .command_mediator
+        .map(command_mediator_from_patch)
+        .transpose()?;
 
     let seccomp_policy = patch
         .seccomp_policy
@@ -442,6 +485,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         network,
         identity_mode,
         capability,
+        command_mediator,
         executable_policies,
     };
 
@@ -486,6 +530,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
                 refresh_ratio: None,
                 grace_seconds: None,
             }),
+        command_mediator: None,
         executable_policies: BTreeMap::new(),
         codex_cli: None,
     }
@@ -561,6 +606,39 @@ fn seccomp_policy_from_patch(patch: SeccompPolicyPatch) -> SeccompPolicyConfig {
             .runtime_mode
             .unwrap_or(SeccompRuntimeMode::CompileOnLaunch),
     }
+}
+
+fn command_mediator_from_patch(
+    patch: CommandMediatorPatch,
+) -> Result<CommandMediatorConfig, RunError> {
+    let endpoint = parse_command_mediator_endpoint(&patch.endpoint)?;
+    Ok(CommandMediatorConfig {
+        endpoint,
+        timeout_ms: patch.timeout_ms.unwrap_or(500),
+    })
+}
+
+fn parse_command_mediator_endpoint(value: &str) -> Result<CommandMediatorEndpoint, RunError> {
+    if let Some(rest) = value.strip_prefix("tcp://") {
+        let addr = rest.parse::<SocketAddr>().map_err(|err| {
+            RunError::ConfigValidation(format!(
+                "invalid command_mediator.endpoint '{value}': {err}"
+            ))
+        })?;
+        return Ok(CommandMediatorEndpoint::Tcp { addr });
+    }
+    if let Some(rest) = value.strip_prefix("unix://") {
+        let path = PathBuf::from(rest);
+        if path.as_os_str().is_empty() {
+            return Err(RunError::ConfigValidation(
+                "command_mediator.endpoint unix path must not be empty".to_string(),
+            ));
+        }
+        return Ok(CommandMediatorEndpoint::Unix { path });
+    }
+    Err(RunError::ConfigValidation(format!(
+        "unsupported command_mediator.endpoint '{value}'; expected tcp://host:port or unix:///path"
+    )))
 }
 
 fn default_managed_seccomp_policy(
@@ -1012,6 +1090,95 @@ verify_checksum = false
         assert!(
             err.to_string()
                 .contains("seccomp_policy.verify_checksum=false is unsupported"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn command_mediator_parses_unix_endpoint() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
+        let socket_path = tmpdir.path().join("mediator.sock");
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "bwrap"
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+runtime_mode = "precompiled_only"
+
+[profiles.generic.command_mediator]
+endpoint = "unix://{}"
+timeout_ms = 700
+"#,
+            policy_path.display(),
+            artifact_dir.display(),
+            socket_path.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        let mediator = resolved
+            .command_mediator
+            .unwrap_or_else(|| panic!("missing command mediator config"));
+        assert_eq!(mediator.timeout_ms, 700);
+    }
+
+    #[test]
+    fn command_mediator_rejects_relative_unix_path() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "bwrap"
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+runtime_mode = "precompiled_only"
+
+[profiles.generic.command_mediator]
+endpoint = "unix://relative.sock"
+timeout_ms = 500
+"#,
+            policy_path.display(),
+            artifact_dir.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let err = resolve_profile(&run_args).expect_err("expected validation failure");
+        assert!(
+            err.to_string()
+                .contains("command_mediator.endpoint unix path must be absolute"),
             "unexpected error: {err}"
         );
     }

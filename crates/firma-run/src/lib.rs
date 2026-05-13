@@ -10,6 +10,7 @@ pub mod config;
 pub mod dns_stub;
 pub mod error;
 pub mod identity;
+pub mod mediator;
 pub mod profile;
 pub mod proxy_bridge;
 pub mod routing;
