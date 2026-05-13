@@ -42,13 +42,13 @@ If you already run real local services, you can override endpoints:
 
 ```bash
 FIRMA_SHOWCASE_SIDECAR_ENDPOINT="tcp://127.0.0.1:18080" \
-FIRMA_SHOWCASE_MEDIATOR_ENDPOINT="tcp://127.0.0.1:28991" \
+FIRMA_SHOWCASE_MEDIATOR_ENDPOINT="unix:///run/firma/sidecar-tools.sock" \
 ./examples/firma-run/local-command-governance/scripts/run-allow.sh
 ```
 
 ## Notes
 
-1. The mock mediator uses TCP on `127.0.0.1:28991`.
+1. The mock local-exec governance endpoint uses Unix socket at `.artifacts/firma-local-command-governance/sidecar-tools.sock`.
 2. The mock sidecar liveness stub uses TCP on `127.0.0.1:28992`.
 3. Scripts inject `FIRMA_BUDGET_STATE_REF` to demonstrate budget context propagation.
 4. Seccomp artifacts are generated under `.artifacts/firma-local-command-governance/` in repo root.

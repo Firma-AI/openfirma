@@ -60,7 +60,8 @@ hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 lru = "0.17"
 notify = "8"
-nix = { version = "0.31", features = ["fs", "process", "signal", "user"] }
+<<<<<<< HEAD
+nix = { version = "0.31", features = ["fs", "process", "signal", "socket", "user"] }
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 pasetors = "0.7"
 pingora-core = "0.8"

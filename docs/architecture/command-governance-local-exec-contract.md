@@ -1,12 +1,12 @@
-# Command Governance Mediator Contract
+# Command Governance Local-Exec Contract
 
 Status: active  
 Date: 2026-05-13  
-Scope: cross-platform mediator contract (`firma run` + mediator services)
+Scope: cross-platform contract (`firma run` + Sidecar governance services)
 
 ## Overview
 
-This document defines the platform-neutral request/response contract between runtime launchers and command-governance mediators.
+This document defines the platform-neutral request/response contract between runtime launchers and Sidecar local-exec governance endpoints.
 
 It focuses on governance semantics that are not kernel-specific, including HITL signaling and budget context propagation.
 
@@ -31,7 +31,7 @@ Fields:
 
 ## Response Contract
 
-Mediator returns one JSON line response:
+Governance endpoint returns one JSON line response:
 
 ```json
 {"decision":"allow|deny|pending_hitl","reason":"optional","approval_token":"optional","retry_after_ms":500}
@@ -54,7 +54,7 @@ Decision behavior:
 ### Ownership Model
 
 1. Runtime owns forwarding `budget_state_ref`.
-2. Mediator/governance services own interpretation and enforcement.
+2. Sidecar/governance services own interpretation and enforcement.
 3. Budget systems own state consistency, freshness, and quota/rate accounting.
 
 ### Current Runtime Behavior
@@ -66,7 +66,7 @@ Decision behavior:
 ### Why This Is Platform-Neutral
 
 1. `budget_state_ref` is governance context, not a kernel primitive.
-2. Same mediator contract can be used by Linux/macOS/Windows runtime paths.
+2. Same governance contract can be used by Linux/macOS/Windows runtime paths.
 3. Platform-specific containment (seccomp/sandbox backend) remains separate from budget semantics.
 
 ### Suggested Reference Format (initial)
@@ -86,15 +86,20 @@ Guidelines:
 
 For governed mode, runtime remains fail-closed:
 
-1. Mediator unavailable/timeout -> deny launch.
+1. Governance endpoint unavailable/timeout -> deny launch.
 2. Invalid response schema -> deny launch.
 3. `pending_hitl` async without token -> deny launch.
-4. Missing `budget_state_ref` can be denied by mediator policy where required.
+4. Missing `budget_state_ref` can be denied by governance policy where required.
+
+Optional strict startup gate:
+
+1. Set `FIRMA_RUN_REQUIRE_LOCAL_EXEC_GOVERNANCE=true` to require `sidecar_local_exec` config at startup.
+2. When enabled and config is missing, `firma run` fails before launching the wrapped command.
 
 ## Security Notes
 
 1. `budget_state_ref` must not be trusted as authoritative budget state by itself.
-2. Mediator should bind decision to `sandbox_id` + `session_id` to reduce replay/confusion.
+2. Governance endpoint should bind decision to `sandbox_id` + `session_id` to reduce replay/confusion.
 3. Audit logs should include decision reason and budget reference usage outcome.
 
 ## Testing Guidance
@@ -103,6 +108,6 @@ Minimum contract tests:
 
 1. Request includes `budget_state_ref` when env var is set.
 2. Request omits/sets null-equivalent when env var is missing/empty.
-3. Mediator deny path remains fail-closed regardless of budget context.
+3. Governance deny path remains fail-closed regardless of budget context.
 4. Async HITL path enforces token requirement.
 5. Budget-required policy path denies missing/invalid references.

@@ -202,7 +202,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         );
         let launch_args =
             maybe_apply_claude_settings(handle_ref, &profile, &executable, launch_args)?;
-        if let Some(mediator) = &profile.command_mediator {
+        if let Some(mediator) = &profile.sidecar_local_exec {
             enforce_known_executable_policy(mediator, &executable)?;
             enforce_local_command_governance(mediator, &identity, &executable, &launch_args)?;
         }
@@ -351,7 +351,7 @@ fn enforce_known_executable_policy(
         return Ok(());
     }
     Err(RunError::Governance(format!(
-        "executable '{basename}' is not in command_mediator.allowed_executables"
+        "executable '{basename}' is not in sidecar_local_exec.allowed_executables"
     )))
 }
 
@@ -585,7 +585,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
-            command_mediator: None,
+            sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
         };
 
@@ -641,7 +641,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
-            command_mediator: None,
+            sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
         };
 
@@ -690,7 +690,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
-            command_mediator: None,
+            sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
         };
 
@@ -750,7 +750,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
-            command_mediator: None,
+            sidecar_local_exec: None,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
@@ -808,7 +808,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
-            command_mediator: None,
+            sidecar_local_exec: None,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
@@ -875,7 +875,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
-            command_mediator: None,
+            sidecar_local_exec: None,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {

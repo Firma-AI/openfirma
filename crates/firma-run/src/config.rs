@@ -29,7 +29,7 @@ pub struct ResolvedProfile {
     pub network: NetworkPolicy,
     pub identity_mode: SandboxIdentityMode,
     pub capability: CapabilityLeaseConfig,
-    pub command_mediator: Option<CommandMediatorConfig>,
+    pub sidecar_local_exec: Option<CommandMediatorConfig>,
     pub executable_policies: BTreeMap<String, ExecutableLaunchPolicy>,
 }
 
@@ -107,26 +107,43 @@ impl ResolvedProfile {
             }
         }
 
-        if let Some(mediator) = &self.command_mediator {
+        if let Some(mediator) = &self.sidecar_local_exec {
             if mediator.timeout_ms == 0 {
                 return Err(RunError::ConfigValidation(
-                    "command_mediator.timeout_ms must be > 0".to_string(),
+                    "sidecar_local_exec.timeout_ms must be > 0".to_string(),
+                ));
+            }
+            #[cfg(target_family = "unix")]
+            if !matches!(self.sidecar_endpoint, SidecarEndpoint::Unix { .. }) {
+                return Err(RunError::ConfigValidation(
+                    "sidecar_local_exec requires sidecar_endpoint to use unix:// on unix hosts"
+                        .to_string(),
+                ));
+            }
+            #[cfg(target_family = "unix")]
+            if matches!(mediator.endpoint, CommandMediatorEndpoint::Tcp { .. }) {
+                return Err(RunError::ConfigValidation(
+                    "sidecar_local_exec.endpoint must use unix:// on unix hosts".to_string(),
                 ));
             }
             if let CommandMediatorEndpoint::Unix { path } = &mediator.endpoint
                 && !path.is_absolute()
             {
                 return Err(RunError::ConfigValidation(format!(
-                    "command_mediator.endpoint unix path must be absolute: {}",
+                    "sidecar_local_exec.endpoint unix path must be absolute: {}",
                     path.display()
                 )));
             }
             if mediator.enforce_known_executables && mediator.allowed_executables.is_empty() {
                 return Err(RunError::ConfigValidation(
-                    "command_mediator.enforce_known_executables=true requires non-empty command_mediator.allowed_executables"
+                    "sidecar_local_exec.enforce_known_executables=true requires non-empty sidecar_local_exec.allowed_executables"
                         .to_string(),
                 ));
             }
+        } else if env_truthy(REQUIRE_LOCAL_EXEC_GOVERNANCE_ENV) {
+            return Err(RunError::ConfigValidation(format!(
+                "{REQUIRE_LOCAL_EXEC_GOVERNANCE_ENV}=true requires [profiles.<id>.sidecar_local_exec] configuration"
+            )));
         }
 
         Ok(())
@@ -265,6 +282,7 @@ const MANAGED_POLICY_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_POLICY_PATH";
 const MANAGED_ARTIFACT_DIR_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_ARTIFACT_DIR";
 const MANAGED_RUNTIME_MODE_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_RUNTIME_MODE";
 const MANAGED_DEFAULT_DISABLE_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_DISABLE_DEFAULT";
+const REQUIRE_LOCAL_EXEC_GOVERNANCE_ENV: &str = "FIRMA_RUN_REQUIRE_LOCAL_EXEC_GOVERNANCE";
 
 /// Source for capability material.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -301,7 +319,9 @@ pub(crate) struct ProfilePatch {
     pub(crate) network: Option<NetworkPolicyPatch>,
     pub(crate) identity_mode: Option<SandboxIdentityMode>,
     pub(crate) capability: Option<CapabilityLeasePatch>,
-    pub(crate) command_mediator: Option<CommandMediatorPatch>,
+    /// Preferred governance config path. This routes local tool execution
+    /// decisions through a Sidecar-owned endpoint.
+    pub(crate) sidecar_local_exec: Option<CommandMediatorPatch>,
     #[serde(default)]
     pub(crate) executable_policies: BTreeMap<String, ExecutableLaunchPolicyPatch>,
     #[serde(default)]
@@ -352,7 +372,7 @@ pub(crate) struct ExecutableLaunchPolicyPatch {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct CommandMediatorPatch {
-    pub(crate) endpoint: String,
+    pub(crate) endpoint: Option<String>,
     pub(crate) timeout_ms: Option<u64>,
     pub(crate) hitl_mode: Option<CommandMediatorHitlMode>,
     pub(crate) enforce_known_executables: Option<bool>,
@@ -400,7 +420,7 @@ impl ProfilePatch {
             network: higher.network.or(self.network),
             identity_mode: higher.identity_mode.or(self.identity_mode),
             capability: higher.capability.or(self.capability),
-            command_mediator: higher.command_mediator.or(self.command_mediator),
+            sidecar_local_exec: higher.sidecar_local_exec.or(self.sidecar_local_exec),
             executable_policies,
             codex_cli: higher.codex_cli.or(self.codex_cli),
         }
@@ -438,6 +458,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     let sidecar_endpoint = sidecar_endpoint_value
         .parse::<SidecarEndpoint>()
         .map_err(RunError::ConfigValidation)?;
+    let sidecar_local_exec = resolve_sidecar_local_exec_config(&patch, &sidecar_endpoint)?;
 
     let env_passthrough = patch
         .env_passthrough
@@ -473,7 +494,6 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
             "network.enforce_network_namespace=true is unsupported for backend '{backend}'; use backend 'bwrap' or set enforce_network_namespace=false"
         )));
     }
-
     let capability = patch
         .capability
         .map_or_else(default_capability_config, capability_from_patch);
@@ -484,11 +504,6 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
 
     let executable_policies =
         resolve_executable_policies(patch.executable_policies, patch.codex_cli);
-    let command_mediator = patch
-        .command_mediator
-        .as_ref()
-        .map(command_mediator_from_patch)
-        .transpose()?;
 
     let seccomp_policy = patch
         .seccomp_policy
@@ -506,7 +521,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         network,
         identity_mode,
         capability,
-        command_mediator,
+        sidecar_local_exec,
         executable_policies,
     };
 
@@ -551,7 +566,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
                 refresh_ratio: None,
                 grace_seconds: None,
             }),
-        command_mediator: None,
+        sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
         codex_cli: None,
     }
@@ -629,10 +644,15 @@ fn seccomp_policy_from_patch(patch: SeccompPolicyPatch) -> SeccompPolicyConfig {
     }
 }
 
-fn command_mediator_from_patch(
+fn sidecar_local_exec_from_patch(
     patch: &CommandMediatorPatch,
+    sidecar_endpoint: &SidecarEndpoint,
 ) -> Result<CommandMediatorConfig, RunError> {
-    let endpoint = parse_command_mediator_endpoint(&patch.endpoint)?;
+    let endpoint = if let Some(endpoint) = &patch.endpoint {
+        parse_sidecar_local_exec_endpoint(endpoint)?
+    } else {
+        derive_sidecar_local_exec_endpoint(sidecar_endpoint)?
+    };
     let allowed_executables = patch
         .allowed_executables
         .iter()
@@ -649,11 +669,22 @@ fn command_mediator_from_patch(
     })
 }
 
-fn parse_command_mediator_endpoint(value: &str) -> Result<CommandMediatorEndpoint, RunError> {
+fn resolve_sidecar_local_exec_config(
+    patch: &ProfilePatch,
+    sidecar_endpoint: &SidecarEndpoint,
+) -> Result<Option<CommandMediatorConfig>, RunError> {
+    patch
+        .sidecar_local_exec
+        .as_ref()
+        .map(|cfg| sidecar_local_exec_from_patch(cfg, sidecar_endpoint))
+        .transpose()
+}
+
+fn parse_sidecar_local_exec_endpoint(value: &str) -> Result<CommandMediatorEndpoint, RunError> {
     if let Some(rest) = value.strip_prefix("tcp://") {
         let addr = rest.parse::<SocketAddr>().map_err(|err| {
             RunError::ConfigValidation(format!(
-                "invalid command_mediator.endpoint '{value}': {err}"
+                "invalid sidecar_local_exec.endpoint '{value}': {err}"
             ))
         })?;
         return Ok(CommandMediatorEndpoint::Tcp { addr });
@@ -662,14 +693,48 @@ fn parse_command_mediator_endpoint(value: &str) -> Result<CommandMediatorEndpoin
         let path = PathBuf::from(rest);
         if path.as_os_str().is_empty() {
             return Err(RunError::ConfigValidation(
-                "command_mediator.endpoint unix path must not be empty".to_string(),
+                "sidecar_local_exec.endpoint unix path must not be empty".to_string(),
             ));
         }
         return Ok(CommandMediatorEndpoint::Unix { path });
     }
     Err(RunError::ConfigValidation(format!(
-        "unsupported command_mediator.endpoint '{value}'; expected tcp://host:port or unix:///path"
+        "unsupported sidecar_local_exec.endpoint '{value}'; expected tcp://host:port or unix:///path"
     )))
+}
+
+fn derive_sidecar_local_exec_endpoint(
+    sidecar_endpoint: &SidecarEndpoint,
+) -> Result<CommandMediatorEndpoint, RunError> {
+    match sidecar_endpoint {
+        SidecarEndpoint::Unix { path } => {
+            let parent = path.parent().ok_or_else(|| {
+                RunError::ConfigValidation(format!(
+                    "cannot derive sidecar local-exec endpoint from unix path {}",
+                    path.display()
+                ))
+            })?;
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    RunError::ConfigValidation(format!(
+                        "cannot derive sidecar local-exec endpoint from unix path {}",
+                        path.display()
+                    ))
+                })?;
+            let derived_file_name = if let Some(base) = file_name.strip_suffix(".sock") {
+                format!("{base}-tools.sock")
+            } else {
+                format!("{file_name}-tools.sock")
+            };
+            let derived_path = parent.join(derived_file_name);
+            Ok(CommandMediatorEndpoint::Unix { path: derived_path })
+        }
+        SidecarEndpoint::Tcp { addr } => Err(RunError::ConfigValidation(format!(
+            "sidecar_local_exec endpoint is required when sidecar endpoint is tcp://{addr}; automatic derivation only supports unix sidecar endpoints"
+        ))),
+    }
 }
 
 fn default_managed_seccomp_policy(
@@ -985,6 +1050,7 @@ deny_actions = ["filesystem.delete"]
             r#"
 [profiles.generic]
 backend = "bwrap"
+sidecar_endpoint = "unix:///tmp/sidecar.sock"
 
 [profiles.generic.seccomp_policy]
 source_policy_path = '{}'
@@ -1064,6 +1130,7 @@ deny_actions = ["filesystem.delete"]
             r#"
 [profiles.generic]
 backend = "bwrap"
+sidecar_endpoint = "unix:///tmp/sidecar.sock"
 
 [profiles.generic.seccomp_policy]
 source_policy_path = '{}'
@@ -1105,6 +1172,7 @@ deny_actions = ["filesystem.delete"]
             r#"
 [profiles.generic]
 backend = "bwrap"
+sidecar_endpoint = "unix:///tmp/sidecar.sock"
 
 [profiles.generic.seccomp_policy]
 source_policy_path = '{}'
@@ -1127,7 +1195,7 @@ verify_checksum = false
     }
 
     #[test]
-    fn command_mediator_parses_unix_endpoint() {
+    fn sidecar_local_exec_parses_unix_endpoint() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let policy_path = tmpdir.path().join("policy.toml");
         fs::write(
@@ -1147,13 +1215,14 @@ deny_actions = ["filesystem.delete"]
             r#"
 [profiles.generic]
 backend = "bwrap"
+sidecar_endpoint = "unix:///tmp/sidecar.sock"
 
 [profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
-[profiles.generic.command_mediator]
+[profiles.generic.sidecar_local_exec]
 endpoint = 'unix://{}'
 timeout_ms = 700
 "#,
@@ -1166,13 +1235,13 @@ timeout_ms = 700
         run_args.config = Some(config_path);
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         let mediator = resolved
-            .command_mediator
-            .unwrap_or_else(|| panic!("missing command mediator config"));
+            .sidecar_local_exec
+            .unwrap_or_else(|| panic!("missing sidecar local-exec governance config"));
         assert_eq!(mediator.timeout_ms, 700);
     }
 
     #[test]
-    fn command_mediator_rejects_relative_unix_path() {
+    fn sidecar_local_exec_rejects_relative_unix_path() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let policy_path = tmpdir.path().join("policy.toml");
         fs::write(
@@ -1191,13 +1260,14 @@ deny_actions = ["filesystem.delete"]
             r#"
 [profiles.generic]
 backend = "bwrap"
+sidecar_endpoint = "unix:///tmp/sidecar.sock"
 
 [profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
-[profiles.generic.command_mediator]
+[profiles.generic.sidecar_local_exec]
 endpoint = "unix://relative.sock"
 timeout_ms = 500
 "#,
@@ -1210,13 +1280,13 @@ timeout_ms = 500
         let err = resolve_profile(&run_args).expect_err("expected validation failure");
         assert!(
             err.to_string()
-                .contains("command_mediator.endpoint unix path must be absolute"),
+                .contains("sidecar_local_exec.endpoint unix path must be absolute"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn command_mediator_rejects_empty_allowlist_when_enforced() {
+    fn sidecar_local_exec_rejects_empty_allowlist_when_enforced() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let policy_path = tmpdir.path().join("policy.toml");
         fs::write(
@@ -1235,14 +1305,15 @@ deny_actions = ["filesystem.delete"]
             r#"
 [profiles.generic]
 backend = "bwrap"
+sidecar_endpoint = "unix:///tmp/sidecar.sock"
 
 [profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
-[profiles.generic.command_mediator]
-endpoint = "tcp://127.0.0.1:19090"
+[profiles.generic.sidecar_local_exec]
+endpoint = "unix:///tmp/sidecar-local-exec.sock"
 timeout_ms = 500
 enforce_known_executables = true
 "#,
@@ -1255,13 +1326,13 @@ enforce_known_executables = true
         let err = resolve_profile(&run_args).expect_err("expected validation failure");
         assert!(
             err.to_string()
-                .contains("command_mediator.enforce_known_executables=true requires non-empty"),
+                .contains("sidecar_local_exec.enforce_known_executables=true requires non-empty"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn command_mediator_parses_async_hitl_mode_and_allowlist() {
+    fn sidecar_local_exec_parses_async_hitl_mode_and_allowlist() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let policy_path = tmpdir.path().join("policy.toml");
         fs::write(
@@ -1280,14 +1351,15 @@ deny_actions = ["filesystem.delete"]
             r#"
 [profiles.generic]
 backend = "bwrap"
+sidecar_endpoint = "unix:///tmp/sidecar.sock"
 
 [profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
-[profiles.generic.command_mediator]
-endpoint = "tcp://127.0.0.1:19090"
+[profiles.generic.sidecar_local_exec]
+endpoint = "unix:///tmp/sidecar-local-exec.sock"
 timeout_ms = 800
 hitl_mode = "async_token"
 enforce_known_executables = true
@@ -1301,13 +1373,63 @@ allowed_executables = ["codex", "claude", "bash"]
         run_args.config = Some(config_path);
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         let mediator = resolved
-            .command_mediator
-            .unwrap_or_else(|| panic!("missing command mediator config"));
+            .sidecar_local_exec
+            .unwrap_or_else(|| panic!("missing sidecar local-exec governance config"));
         assert!(mediator.enforce_known_executables);
         assert!(mediator.allowed_executables.contains("codex"));
         assert_eq!(
             mediator.hitl_mode,
             super::CommandMediatorHitlMode::AsyncToken
         );
+    }
+
+    #[test]
+    fn sidecar_local_exec_derives_unix_tools_endpoint() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let sidecar_sock = tmpdir.path().join("sidecar.sock");
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "bwrap"
+sidecar_endpoint = 'unix://{}'
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+runtime_mode = "precompiled_only"
+
+[profiles.generic.sidecar_local_exec]
+timeout_ms = 700
+"#,
+            sidecar_sock.display(),
+            policy_path.display(),
+            artifact_dir.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        let mediator = resolved
+            .sidecar_local_exec
+            .unwrap_or_else(|| panic!("missing sidecar local-exec governance config"));
+        match mediator.endpoint {
+            super::CommandMediatorEndpoint::Unix { path } => {
+                assert!(path.ends_with("sidecar-tools.sock"));
+            }
+            other => panic!("expected unix endpoint, got {other:?}"),
+        }
     }
 }

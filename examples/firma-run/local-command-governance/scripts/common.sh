@@ -7,10 +7,9 @@ POLICY_PATH="${ROOT_DIR}/crates/firma-run/policies/generic-local-command-v1.toml
 ARTIFACT_ROOT="${ROOT_DIR}/.artifacts/firma-local-command-governance"
 SIDECAR_HOST="127.0.0.1"
 SIDECAR_PORT="28992"
-MEDIATOR_HOST="127.0.0.1"
-MEDIATOR_PORT="28991"
 SIDECAR_ENDPOINT="${FIRMA_SHOWCASE_SIDECAR_ENDPOINT:-tcp://${SIDECAR_HOST}:${SIDECAR_PORT}}"
-MEDIATOR_ENDPOINT="${FIRMA_SHOWCASE_MEDIATOR_ENDPOINT:-tcp://${MEDIATOR_HOST}:${MEDIATOR_PORT}}"
+MEDIATOR_UNIX_PATH="${ARTIFACT_ROOT}/sidecar-tools.sock"
+MEDIATOR_ENDPOINT="${FIRMA_SHOWCASE_MEDIATOR_ENDPOINT:-unix://${MEDIATOR_UNIX_PATH}}"
 mkdir -p "${ARTIFACT_ROOT}"
 
 require_tools() {
@@ -41,7 +40,7 @@ artifact_dir = "${artifact_dir}"
 verify_checksum = true
 runtime_mode = "compile_on_launch"
 
-[profiles.generic.command_mediator]
+[profiles.generic.sidecar_local_exec]
 endpoint = "${MEDIATOR_ENDPOINT}"
 timeout_ms = 600
 hitl_mode = "${hitl_mode}"
@@ -56,7 +55,7 @@ start_mock_mediator() {
     return 0
   fi
   python3 "${ROOT_DIR}/examples/firma-run/local-command-governance/scripts/mock_mediator.py" \
-    --mode "${mode}" --port "${MEDIATOR_PORT}" --once &
+    --mode "${mode}" --unix-path "${MEDIATOR_UNIX_PATH}" --once &
   MEDIATOR_PID=$!
   sleep 0.2
 }

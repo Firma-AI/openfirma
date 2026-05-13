@@ -71,7 +71,7 @@ fn generic_profile() -> ProfilePatch {
             refresh_ratio: Some(0.60),
             grace_seconds: Some(30),
         }),
-        command_mediator: None,
+        sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
         codex_cli: None,
     }

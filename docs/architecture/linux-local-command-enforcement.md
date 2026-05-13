@@ -36,9 +36,9 @@ This is the canonical architecture + operations + validation guide for Linux loc
 4. Linux backend passes seccomp descriptor into `bwrap --seccomp`.
 5. Any failure in steps above blocks launch (fail-closed).
 
-### Layer 2: Userspace Command Mediator (optional but mandatory when enabled)
+### Layer 2: Sidecar Local-Exec Governance (optional but mandatory when enabled)
 
-When `command_mediator` is configured:
+When `sidecar_local_exec` is configured:
 
 1. Runtime builds final executable + args.
 2. Runtime sends a pre-exec decision request to mediator.
@@ -46,7 +46,7 @@ When `command_mediator` is configured:
 4. `deny`, `pending_hitl`, timeout, unavailable endpoint, malformed/unsupported response all block launch.
 5. No direct execution fallback path exists in mediated mode.
 
-The mediator layer complements seccomp; it does not replace kernel containment.
+The sidecar-governance layer complements seccomp; it does not replace kernel containment.
 
 ### Layer 3: Optional Operator Hardening Extensions
 
@@ -80,7 +80,7 @@ Unsupported actions are rejected with explicit validation errors.
 1. Seccomp is syscall-number enforcement, not semantic policy interpretation.
 2. No argument/path-level expression at kernel layer (`filesystem.delete` cannot encode path scopes like workspace-only).
 3. `rename*` blocking is intentionally conservative and may block benign atomic-update flows.
-4. Arch-specific syscall surfaces differ (`aarch64` behavior may map through `*at` variants where legacy syscalls are absent).
+4. Arch-specific syscall surfaces differ (`aarch64` behavior may map through `*at` variants where older syscall variants are absent).
 5. Dynamic context (HITL, budgets, tenant/session business logic) must stay in userspace governance.
 
 ## Artifact Contract
@@ -117,14 +117,15 @@ Artifact layout:
 9. When `enforce_known_executables=true`, launch is fail-closed if executable basename is not allowlisted.
 10. Mediator request includes `sandbox_id` + `session_id` for identity/session binding.
 
-## Mediator Contract
+## Local-Exec Governance Contract
 
 ### Configuration
 
-`command_mediator` supports:
+`sidecar_local_exec` supports:
 
 1. `tcp://host:port`
 2. `unix:///absolute/path.sock`
+3. On Unix hosts, governed mode requires `unix://` endpoint for peer-credential validation.
 
 `timeout_ms` must be `> 0`.
 
@@ -133,6 +134,8 @@ Optional governance controls:
 1. `hitl_mode = "sync_wait" | "async_token"` (default: `sync_wait`).
 2. `enforce_known_executables = true|false` (default: `false`).
 3. `allowed_executables = ["bash", "sh", "python3", ...]` (required when enforcement is enabled).
+4. If `endpoint` is omitted and sidecar endpoint is unix socket, runtime derives `*-tools.sock` next to sidecar socket.
+5. On Unix hosts, `sidecar_endpoint` must also use `unix://` when `sidecar_local_exec` is enabled.
 
 ### Request (JSON line)
 
@@ -157,25 +160,25 @@ Decision handling:
 
 ### HITL Runtime Model
 
-1. `sync_wait`: mediator must return final `allow|deny` in request timeout window.
-2. `async_token`: mediator may return `pending_hitl` with `approval_token`; current launch attempt fails closed and caller may retry later with approved context.
+1. `sync_wait`: governance endpoint must return final `allow|deny` in request timeout window.
+2. `async_token`: governance endpoint may return `pending_hitl` with `approval_token`; current launch attempt fails closed and caller may retry later with approved context.
 3. No background in-place escalation of an already running sandbox process.
 
 ### Budget Source of Truth (Cross-Platform Governance Layer)
 
-1. Runtime passes `budget_state_ref` from environment (`FIRMA_BUDGET_STATE_REF`) to mediator for traceable decision context.
-2. Runtime does not own budget state consistency; mediator-side governance system is source of truth.
+1. Runtime passes `budget_state_ref` from environment (`FIRMA_BUDGET_STATE_REF`) to governance endpoint for traceable decision context.
+2. Runtime does not own budget state consistency; Sidecar-governance system is source of truth.
 3. Missing `budget_state_ref` is allowed, but policy can deny when budget reference is mandatory.
-4. Full platform-neutral mediator contract and ownership model: `docs/architecture/command-governance-mediator-contract.md`.
+4. Full platform-neutral governance contract and ownership model: `docs/architecture/command-governance-local-exec-contract.md`.
 
 ### `FIRMA_BUDGET_STATE_REF` Clarification (Platform-Neutral)
 
 1. `FIRMA_BUDGET_STATE_REF` is an optional runtime environment variable, not a seccomp option and not a profile policy switch.
 2. Current product behavior is pass-through only:
-3. `firma run` reads env var -> serializes `budget_state_ref` in mediator request -> mediator decides how to use it.
+3. `firma run` reads env var -> serializes `budget_state_ref` in governance request -> Sidecar governance decides how to use it.
 4. `firma run` does not parse, validate, persist, or enforce budget semantics from this field.
-5. Budget semantics (quota/spend/rate consistency and state lookup) belong to mediator-side governance services.
-6. These semantics are platform-neutral; Linux/macOS/Windows runtime paths can all forward this field to the same mediator contract.
+5. Budget semantics (quota/spend/rate consistency and state lookup) belong to Sidecar-governance services.
+6. These semantics are platform-neutral; Linux/macOS/Windows runtime paths can all forward this field to the same governance contract.
 
 ### Non-Cooperative Anti-Bypass Guarantees
 
@@ -188,11 +191,11 @@ Current guarantees:
 Current limits:
 
 1. Arbitrary child processes spawned after initial launch are constrained primarily by sandbox/seccomp/namespace boundaries.
-2. Mediator is not itself a full containment boundary for non-cooperative process trees.
+2. Sidecar governance is not itself a full containment boundary for non-cooperative process trees.
 
 Required deployment position:
 
-1. Treat mediator as governance control for governed execution path.
+1. Treat Sidecar local-exec governance as control for governed execution path.
 2. Treat kernel sandboxing and seccomp as containment baseline.
 3. Add optional operator kernel controls (for example eBPF LSM) when stronger non-cooperative guarantees are required.
 
@@ -211,6 +214,7 @@ Optional overrides:
 2. `FIRMA_RUN_MANAGED_SECCOMP_ARTIFACT_DIR`
 3. `FIRMA_RUN_MANAGED_SECCOMP_RUNTIME_MODE`
 4. `FIRMA_RUN_MANAGED_SECCOMP_DISABLE_DEFAULT`
+5. `FIRMA_RUN_REQUIRE_LOCAL_EXEC_GOVERNANCE` (when `true`, runtime fails startup unless `sidecar_local_exec` is configured)
 
 ## Policy Update and Lifecycle Model
 
@@ -326,7 +330,7 @@ artifact_dir = "/tmp/firma/seccomp-artifacts"
 verify_checksum = true
 runtime_mode = "compile_on_launch"
 
-[profiles.generic.command_mediator]
+[profiles.generic.sidecar_local_exec]
 endpoint = "tcp://127.0.0.1:28991"
 timeout_ms = 500
 hitl_mode = "async_token"
@@ -372,7 +376,7 @@ Repeat with decision responses:
 1. `{"decision":"deny","reason":"blocked-by-policy"}` -> must fail closed.
 2. `{"decision":"pending_hitl","reason":"awaiting-approval"}` -> must fail closed.
 3. `{"decision":"pending_hitl","reason":"awaiting-approval","approval_token":"tok_123","retry_after_ms":500}` with `async_token` -> must fail closed and surface token in error context.
-4. mediator stopped/unavailable -> must fail closed.
+4. governance endpoint stopped/unavailable -> must fail closed.
 5. response missing `approval_token` in async mode -> must fail closed.
 6. run non-allowlisted executable (`/usr/bin/env`) -> must fail closed before launch.
 
@@ -388,7 +392,7 @@ All must be true:
 1. `cargo test -p firma-run -- --nocapture` passes.
 2. `make managed-seccomp-compat-check` passes.
 3. `make managed-seccomp-guardrail` passes.
-4. Mediator allow/deny/pending/unavailable behavior matches fail-closed model.
+4. Sidecar local-exec governance allow/deny/pending/unavailable behavior matches fail-closed model.
 5. No direct exec fallback path observed in mediated mode.
 6. Allowlist enforcement blocks unknown executable when enabled.
 
@@ -405,7 +409,7 @@ All must be true:
 1. Phase 1: opt-in profile enables managed seccomp + mediator.
 2. Phase 2: enable executable allowlist in governed environments after command inventory stabilization.
 3. Phase 3: default-enable governed path for target profile once latency and fail-closed gates pass.
-4. Phase 4: deprecate legacy unmanaged launch patterns for governed mode.
+4. Phase 4: deprecate unmanaged launch patterns for governed mode.
 
 ### Incident Rollback
 
