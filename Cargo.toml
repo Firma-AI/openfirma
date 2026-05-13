@@ -42,7 +42,6 @@ clap = { version = "4", default-features = false }
 criterion = { version = "0.8", default-features = false, features = [
   "cargo_bench_support",
 ] }
-dirs = "6"
 ctrlc = "3.5"
 dirs = "6"
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
@@ -62,7 +61,7 @@ hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 lru = "0.17"
 notify = "8"
-nix = { version = "0.31", features = ["fs", "process", "signal", "socket", "user"] }
+nix = { version = "0.31", features = ["fs", "process", "signal", "user"] }
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 pasetors = "0.7"
 pingora-core = "0.8"
@@ -81,6 +80,7 @@ reqwest = { version = "0.13", default-features = false, features = [
   "query",
   "rustls",
 ] }
+ctrlc = "3.5"
 rustls = "0.23"
 rustls-pemfile = "2"
 serde = { version = "1", features = ["derive"] }
