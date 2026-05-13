@@ -1,8 +1,27 @@
 #!/usr/bin/env sh
 set -e
 
-if command -v trufflehog >/dev/null 2>&1; then
-    trufflehog --no-update git file://. --since-commit HEAD --results=verified,unknown --fail
-else
+if ! command -v trufflehog >/dev/null 2>&1; then
     echo "warning: trufflehog not found — secret scan skipped (run 'make install-tools' to install)" >&2
+    exit 0
 fi
+
+# Scan only files staged for this commit. `--since-commit HEAD` scans nothing
+# pre-commit (there are no commits past HEAD yet), so we feed the staged blobs
+# through filesystem mode instead.
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+if [ -z "$staged" ]; then
+    exit 0
+fi
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+echo "$staged" | while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    dest="$tmp/$path"
+    mkdir -p "$(dirname "$dest")"
+    git show ":$path" > "$dest" 2>/dev/null || true
+done
+
+trufflehog filesystem "$tmp" --no-update --results=verified,unverified,unknown --fail
