@@ -1,6 +1,6 @@
 //! Wire `firma monitor` CLI args to the tailer and renderer.
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -9,17 +9,27 @@ use std::sync::mpsc::channel;
 
 use tracing::{debug, info};
 
-use crate::args::monitor::{Args, Source as ArgSource};
+use crate::args::monitor::{Args, Decision, Format, Source as ArgSource};
+use crate::monitor::follow::resolve_follow;
 use crate::monitor::since;
 use crate::monitor::tailer::{self, Source as TailSource};
 
 pub fn run(args: Args) -> ExitCode {
+    let decision_filter = if args.only_deny {
+        Some(Decision::Deny)
+    } else {
+        args.decision
+    };
+    let format = if args.json { Format::Json } else { args.format };
+    let follow = resolve_follow(args.tail, args.no_follow, io::stdout().is_terminal());
+
     info!(
         source = ?args.source,
-        format = ?args.format,
-        follow = args.follow,
-        decision = ?args.decision,
+        format = ?format,
+        follow,
+        decision = ?decision_filter,
         action_class = ?args.action_class,
+        agent = ?args.agent,
         since = ?args.since,
         "firma monitor starting"
     );
@@ -69,7 +79,6 @@ pub fn run(args: Args) -> ExitCode {
         debug!(?source, path = %path.display(), "starting tailer thread");
         let tx = tx.clone();
         let stop = Arc::clone(&stop);
-        let follow = args.follow;
         handles.push(std::thread::spawn(move || {
             tailer::tail(path, source, backfill, follow, tx, stop);
         }));
@@ -84,9 +93,10 @@ pub fn run(args: Args) -> ExitCode {
         }
         if let Err(error) = crate::monitor::render::render(
             &line,
-            args.format,
-            args.decision,
+            format,
+            decision_filter,
             args.action_class.as_deref(),
+            args.agent.as_deref(),
             &mut out,
         ) {
             if error.kind() == io::ErrorKind::BrokenPipe {

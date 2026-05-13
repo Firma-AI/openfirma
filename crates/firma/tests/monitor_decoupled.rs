@@ -7,7 +7,7 @@ use std::time::Duration;
 fn monitor_tolerates_missing_files() {
     let tmp = tempfile::tempdir().expect("tmp");
     let mut child = Command::new(env!("CARGO_BIN_EXE_firma"))
-        .args(["monitor", "--source", "audit", "--state-dir"])
+        .args(["monitor", "--source", "audit", "--tail", "--state-dir"])
         .arg(tmp.path())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
