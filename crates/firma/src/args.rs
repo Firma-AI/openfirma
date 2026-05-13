@@ -1,6 +1,7 @@
 //! Top-level CLI for the unified `firma` binary.
 
 pub mod authority;
+pub mod doctor;
 pub mod monitor;
 pub mod run;
 pub mod sidecar;
@@ -32,6 +33,9 @@ pub enum Command {
     /// Internal sandbox-local DNS stub.
     #[command(name = "__dns-stub", hide = true)]
     DnsStub(run::DnsStubArgs),
+    /// Print a structured diagnostic report of installed components,
+    /// reachable endpoints, and resolved configuration.
+    Doctor(doctor::Args),
     /// Tail audit and component logs.
     Monitor(monitor::Args),
     /// Internal proxy bridge for sandbox.

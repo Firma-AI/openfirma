@@ -71,17 +71,24 @@ fn init_scaffold(args: &InitArgs) -> Result<(), String> {
         "scaffolding firma stack"
     );
 
-    // Config dir: TOMLs, keys, policy dirs.
+    // Config dir: TOMLs, keys, policy dirs. Tight perms because
+    // `authority.key` + `audit.key` live here.
     for sub in ["", "policies", "issuance-policies"] {
         let path = config_dir.join(sub);
         debug!(path = %path.display(), "mkdir config subdir");
         std::fs::create_dir_all(&path).map_err(|e| format!("mkdir {}: {e}", path.display()))?;
+        #[cfg(unix)]
+        set_dir_mode_0700(&path)?;
     }
-    // State dir: revocations + generated-CA. Mutable runtime artifacts.
+    // State dir: revocations + generated-CA. Sockets, audit log, and
+    // CA private key live under here — must be 0700 on Unix to keep
+    // other local UIDs out (Hardening Issue 5; see firma_doctor).
     for sub in ["", "generated-firma-ca"] {
         let path = state_dir.join(sub);
         debug!(path = %path.display(), "mkdir state subdir");
         std::fs::create_dir_all(&path).map_err(|e| format!("mkdir {}: {e}", path.display()))?;
+        #[cfg(unix)]
+        set_dir_mode_0700(&path)?;
     }
 
     debug!("writing revocations.txt");
@@ -126,6 +133,7 @@ bundle_ttl_seconds  = 30
 
     let sidecar_toml = format!(
         r#"[interceptor]
+mode        = "http_proxy"
 listen_addr = "{listen}"
 
 [policy]
@@ -191,6 +199,23 @@ fn write_if_absent(path: &Path, content: &[u8], force: bool) -> Result<(), Strin
         return Ok(());
     }
     std::fs::write(path, content).map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+/// Set directory mode to `0700` on Unix. No-op on other platforms (Windows
+/// uses ACLs; the directory inherits the parent's ACL, which for user-owned
+/// scaffolding is already restricted to the calling user).
+///
+/// Tighter than the default `create_dir_all` mode (`0777 & !umask`) because
+/// the state and config dirs hold private keys, sockets, and audit material
+/// that other local UIDs must not be able to read or attach to.
+#[cfg(unix)]
+fn set_dir_mode_0700(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let perms = std::fs::Permissions::from_mode(0o700);
+    std::fs::set_permissions(path, perms)
+        .map_err(|e| format!("chmod 0700 {}: {e}", path.display()))?;
+
+    Ok(())
 }
 
 /// Resolve `state_dir` for stop/status/monitor.

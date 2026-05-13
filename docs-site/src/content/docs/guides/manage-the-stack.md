@@ -181,3 +181,7 @@ Resolution order: `--state-dir` flag → `FIRMA_STATE_DIR` env → `state_dir` f
 - [Issue capability tokens](../issue-capability-tokens/) — drive the Authority that `stack` boots for you.
 - [Write your first Cedar policy](../write-a-cedar-policy/) — change what the Sidecar permits.
 - [Run the Sidecar standalone](../run-the-sidecar/) — the hand-rolled equivalent, useful when you want to understand what `stack` is automating.
+
+## See also
+
+- [Diagnose with `firma doctor`](../firma-doctor/) — first command to run when anything looks off.
