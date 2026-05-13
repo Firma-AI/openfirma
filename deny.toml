@@ -26,9 +26,13 @@ allow = [
     "BSL-1.0",
     "Unicode-3.0",
     "CDLA-Permissive-2.0",
-    # r-efi v5 and v6: UEFI support library pulled in via getrandom → cc (build
-    # dep only). Not linked into the Firma binary; no LGPL linking obligation.
-    "LGPL-2.1-or-later",
+]
+
+# r-efi: UEFI support library pulled in via getrandom → cc (build dep only).
+# Not linked into the Firma binary; no LGPL linking obligation.
+# Scoped exception so any future runtime LGPL dep still trips the allowlist.
+exceptions = [
+    { allow = ["LGPL-2.1-or-later"], crate = "r-efi" },
 ]
 
 # ---------------------------------------------------------------------------
@@ -37,8 +41,10 @@ allow = [
 [bans]
 # Warn on duplicate versions; deny on known-bad crates.
 multiple-versions = "warn"
-# workspace-internal crates use { workspace = true } which cargo-deny
-# treats as a wildcard; warn instead of deny to avoid false positives.
+# workspace-internal crates use `{ workspace = true }` which cargo-deny treats
+# as a wildcard. `allow-wildcard-paths` does not help here because the crates
+# are publishable, so keep this at `warn` to surface third-party wildcards
+# without failing on internal paths.
 wildcards = "warn"
 deny = [
     # openssl: prefer rustls everywhere; openssl adds C build complexity and

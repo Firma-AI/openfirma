@@ -50,7 +50,7 @@ build:
 	cargo build --all-features --all-targets
 
 audit:
-	cargo audit
+	cargo audit --deny warnings
 
 deny:
 	cargo deny check licenses bans sources
