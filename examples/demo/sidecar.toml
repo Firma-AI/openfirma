@@ -5,8 +5,8 @@
 # and the capability seed before launching the binary.
 
 [interceptor]
-mode               = "http_proxy"
-listen_addr        = "127.0.0.1:7474"
+mode = "http_proxy"
+listen_addr = "127.0.0.1:7474"
 drain_timeout_secs = 30
 
 # The hero demo's two turns hit wttr.in (ALLOW) and paste.rs (DENY)
@@ -24,7 +24,7 @@ drain_timeout_secs = 30
 intercept_hosts = ["wttr.in", "paste.rs", "api.openai.com"]
 
 [policy]
-dir           = "examples/demo/policies"
+dir = "examples/demo/policies"
 authority_url = "http://[::1]:50051"
 
 [ca]
@@ -34,40 +34,40 @@ dir = "examples/demo/firma-ca"
 level = "info"
 
 [mapping]
-rules_path        = "examples/demo/mapping-rules.toml"
+rules_path = "examples/demo/mapping-rules.toml"
 default_protected = false
 
 [capability_validation]
 clock_skew_tolerance_seconds = 5
 
 [constraint_enforcement]
-bundle_ttl_seconds     = 60
+bundle_ttl_seconds = 60
 enforcement_timeout_ms = 50
 
 [revocation]
-capacity     = 100000
-fpr          = 0.001
+capacity = 100000
+fpr = 0.001
 lru_capacity = 10000
 
 [connector]
 default_timeout_ms = 30000
 
 [[connector.hosts]]
-host       = "wttr.in"
-rps        = 60
-burst      = 10
+host = "wttr.in"
+rps = 60
+burst = 10
 timeout_ms = 30000
 
 [[connector.hosts]]
-host       = "paste.rs"
-rps        = 60
-burst      = 10
+host = "paste.rs"
+rps = 60
+burst = 10
 timeout_ms = 30000
 
 [[connector.hosts]]
-host       = "127.0.0.1:9100"
-rps        = 200
-burst      = 50
+host = "127.0.0.1:9100"
+rps = 200
+burst = 50
 timeout_ms = 30000
 
 [authority]
@@ -77,5 +77,5 @@ public_key_path = "examples/demo/firma-authority.pub"
 paths = ["examples/demo/capability-demo-agent.toml"]
 
 [audit]
-sink             = "stdout"
+sink = "stdout"
 signing_key_path = "examples/demo/audit.key"

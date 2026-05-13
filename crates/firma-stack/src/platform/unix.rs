@@ -1,0 +1,90 @@
+//! Unix platform implementation.
+
+#![cfg(unix)]
+
+use std::os::unix::process::CommandExt;
+use std::path::Path;
+use std::process::{Command, Stdio};
+
+use nix::sys::signal::{Signal, kill, killpg};
+use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+use nix::unistd::Pid;
+
+use crate::error::{Result, StackError};
+use crate::platform::{Group, Platform, SpawnedChild};
+
+pub(crate) struct UnixPlatform;
+
+fn raw_pid(pid: u32) -> Result<Pid> {
+    let raw = i32::try_from(pid)
+        .map_err(|_| StackError::Platform(format!("pid {pid} does not fit platform pid_t")))?;
+    Ok(Pid::from_raw(raw))
+}
+
+fn raw_pid_lossy(pid: u32) -> Option<Pid> {
+    i32::try_from(pid).ok().map(Pid::from_raw)
+}
+
+impl Platform for UnixPlatform {
+    fn new_group() -> Result<Group> {
+        Ok(Group { pgid: 0 })
+    }
+
+    fn spawn_in_group(group: &Group, cmd: &mut Command, log_path: &Path) -> Result<SpawnedChild> {
+        if let Some(parent) = log_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(log_path)?;
+        let stderr_log = log.try_clone()?;
+
+        let _ = group.pgid;
+        cmd.process_group(0);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(stderr_log));
+        let child = cmd.spawn().map_err(|source| StackError::Spawn {
+            component: log_path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or("child")
+                .to_string(),
+            source,
+        })?;
+        let pid = child.id();
+        std::mem::forget(child);
+        Ok(SpawnedChild { pid })
+    }
+
+    fn signal_soft(group_pid: u32) -> Result<()> {
+        killpg(raw_pid(group_pid)?, Signal::SIGTERM)
+            .map_err(|error| StackError::Platform(format!("killpg(SIGTERM) failed: {error}")))
+    }
+
+    fn signal_hard(group_pid: u32) -> Result<()> {
+        killpg(raw_pid(group_pid)?, Signal::SIGKILL)
+            .map_err(|error| StackError::Platform(format!("killpg(SIGKILL) failed: {error}")))
+    }
+
+    fn is_alive(pid: u32) -> bool {
+        let Some(pid) = raw_pid_lossy(pid) else {
+            return false;
+        };
+        // If `pid` is our child and has exited, reap the zombie here. Otherwise
+        // `kill(pid, 0)` would still return Ok for the zombie entry and we would
+        // wait forever for an already-dead child. When `pid` is not our child
+        // (e.g. external `firma stack stop` against a detached supervisor) the
+        // `ECHILD` branch falls back to the kill probe.
+        match waitpid(pid, Some(WaitPidFlag::WNOHANG)) {
+            Ok(WaitStatus::Exited(_, _) | WaitStatus::Signaled(_, _, _)) => false,
+            Ok(_) => true,
+            Err(nix::errno::Errno::ECHILD) => {
+                matches!(kill(pid, None), Ok(()) | Err(nix::errno::Errno::EPERM))
+            }
+            Err(_) => false,
+        }
+    }
+}

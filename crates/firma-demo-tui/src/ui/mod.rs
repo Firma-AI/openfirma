@@ -39,7 +39,9 @@ pub struct App {
     pub agent: Option<AgentBridge>,
     // Log panes
     pub authority_logs: Vec<String>,
+    pub authority_log_offset: u64,
     pub sidecar_logs: Vec<String>,
+    pub sidecar_log_offset: u64,
     pub audit_logs: Vec<String>,
     pub audit_log_offset: u64,
     pub agent_logs: Vec<String>,
@@ -61,7 +63,9 @@ impl App {
             runtime: None,
             agent: None,
             authority_logs: Vec::new(),
+            authority_log_offset: 0,
             sidecar_logs: Vec::new(),
+            sidecar_log_offset: 0,
             audit_logs: Vec::new(),
             audit_log_offset: 0,
             agent_logs: Vec::new(),
@@ -180,14 +184,23 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut A
 }
 
 fn drain_channels(app: &mut App) {
-    if let Some(rt) = app.runtime.as_mut() {
-        while let Ok(line) = rt.authority.output_rx.try_recv() {
-            app.authority_logs.push(line);
+    if app.runtime.is_some() {
+        let authority_path = app.runtime.as_ref().map(|rt| rt.authority_log_path.clone());
+        if let Some(path) = authority_path {
+            drain_log_file(
+                &path,
+                &mut app.authority_logs,
+                &mut app.authority_log_offset,
+            );
         }
-        while let Ok(line) = rt.sidecar.output_rx.try_recv() {
-            app.sidecar_logs.push(line);
+        let sidecar_path = app.runtime.as_ref().map(|rt| rt.sidecar_log_path.clone());
+        if let Some(path) = sidecar_path {
+            drain_log_file(&path, &mut app.sidecar_logs, &mut app.sidecar_log_offset);
         }
-        drain_audit_log(app);
+        let audit_path = app.runtime.as_ref().map(|rt| rt.audit_log_path.clone());
+        if let Some(path) = audit_path {
+            drain_log_file(&path, &mut app.audit_logs, &mut app.audit_log_offset);
+        }
     }
     if let Some(ag) = app.agent.as_ref() {
         while let Ok(line) = ag.output_rx.try_recv() {
@@ -196,29 +209,19 @@ fn drain_channels(app: &mut App) {
     }
 }
 
-fn drain_audit_log(app: &mut App) {
-    let Some(rt) = app.runtime.as_ref() else {
+fn drain_log_file(path: &Path, sink: &mut Vec<String>, offset: &mut u64) {
+    let Ok(mut file) = std::fs::File::open(path) else {
         return;
     };
-
-    let Ok(mut file) = std::fs::File::open(&rt.audit_log_path) else {
-        return;
-    };
-
     let Ok(metadata) = file.metadata() else {
         return;
     };
-    if metadata.len() < app.audit_log_offset {
-        app.audit_log_offset = 0;
+    if metadata.len() < *offset {
+        *offset = 0;
     }
-
-    if file
-        .seek(std::io::SeekFrom::Start(app.audit_log_offset))
-        .is_err()
-    {
+    if file.seek(std::io::SeekFrom::Start(*offset)).is_err() {
         return;
     }
-
     let mut reader = std::io::BufReader::new(file);
     let mut line = String::new();
     loop {
@@ -233,12 +236,11 @@ fn drain_audit_log(app: &mut App) {
             line.pop();
         }
         if !line.is_empty() {
-            app.audit_logs.push(line.clone());
+            sink.push(line.clone());
         }
     }
-
     if let Ok(pos) = reader.stream_position() {
-        app.audit_log_offset = pos;
+        *offset = pos;
     }
 }
 
