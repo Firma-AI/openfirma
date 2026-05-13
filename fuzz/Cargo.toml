@@ -14,9 +14,10 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
 firma-core = { path = "../crates/firma-core" }
 firma-sidecar = { path = "../crates/firma-sidecar" }
-toml = "1"
+chrono = "0.4"
 
 [[bin]]
 name = "normalizer"

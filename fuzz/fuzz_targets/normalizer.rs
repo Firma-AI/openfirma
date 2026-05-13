@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use arbitrary::Arbitrary;
 use firma_sidecar::{
     config::{MappingRuleConfig, MappingRulesFile},
     enforcement::registry::ActionClassRegistry,
@@ -14,7 +15,6 @@ fn static_normalizer() -> &'static IntentNormalizer {
     static N: OnceLock<IntentNormalizer> = OnceLock::new();
     N.get_or_init(|| {
         let registry = ActionClassRegistry::v0_1();
-        // Minimal representative rules covering several action classes.
         let rules = vec![
             MappingRuleConfig {
                 method: Some("GET".into()),
@@ -42,25 +42,24 @@ fn static_normalizer() -> &'static IntentNormalizer {
     })
 }
 
-fuzz_target!(|data: &[u8]| {
-    let Ok(s) = std::str::from_utf8(data) else {
-        return;
-    };
+#[derive(Arbitrary, Debug)]
+struct FuzzRequest {
+    method: String,
+    host: String,
+    path: String,
+    headers: HashMap<String, String>,
+    body: Option<Vec<u8>>,
+    is_https: bool,
+}
 
-    // Split on NUL bytes: method\0host\0path
-    let mut parts = s.splitn(3, '\0');
-    let method = parts.next().unwrap_or("GET");
-    let host = parts.next().unwrap_or("");
-    let path = parts.next().unwrap_or("/");
-
+fuzz_target!(|input: FuzzRequest| {
     let request = RawRequest {
-        method: method.to_string(),
-        host: host.to_string(),
-        path: path.to_string(),
-        headers: HashMap::new(),
-        body: None,
-        is_https: false,
+        method: input.method,
+        host: input.host,
+        path: input.path,
+        headers: input.headers,
+        body: input.body,
+        is_https: input.is_https,
     };
-
     let _ = static_normalizer().normalize(&request);
 });
