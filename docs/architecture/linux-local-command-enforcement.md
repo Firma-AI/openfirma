@@ -346,7 +346,7 @@ PY
 Run governed command:
 
 ```bash
-target/release/firma run \
+cargo run -p firma -- run \
   --profile generic \
   --config /tmp/firma-run.mediator.toml \
   --sidecar-endpoint unix:///tmp/firma-sidecar.sock \
