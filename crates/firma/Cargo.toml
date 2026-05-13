@@ -27,10 +27,12 @@ clap = { workspace = true, features = [
   "suggestions",
   "usage",
 ] }
+ctrlc = { workspace = true }
 firma-authority = { workspace = true }
 firma-core = { workspace = true }
 firma-run = { workspace = true }
 firma-sidecar = { workspace = true }
+firma-stack = { workspace = true }
 pasetors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -40,6 +42,7 @@ tokio = { workspace = true, default-features = false, features = [
   "fs",
   "macros",
   "net",
+  "process",
   "rt-multi-thread",
   "signal",
   "sync",
@@ -52,6 +55,9 @@ tracing-subscriber = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

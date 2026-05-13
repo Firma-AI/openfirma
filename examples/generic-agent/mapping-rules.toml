@@ -18,8 +18,8 @@
 # from having to trust the generated firma-ca.
 
 [[rules]]
-method       = "CONNECT"
-host         = "api.anthropic.com:443"
+method = "CONNECT"
+host = "api.anthropic.com:443"
 action_class = "communication.external.send"
 
 # ─── HTTPS CONNECT tunnels (MITM targets) ─────────────────────────────────────
@@ -28,18 +28,18 @@ action_class = "communication.external.send"
 # tunnel; inner L7 requests are evaluated individually.
 
 [[rules]]
-method       = "CONNECT"
-host         = "api.github.com:443"
+method = "CONNECT"
+host = "api.github.com:443"
 action_class = "code.review.read"
 
 [[rules]]
-method       = "CONNECT"
-host         = "gmail.googleapis.com:443"
+method = "CONNECT"
+host = "gmail.googleapis.com:443"
 action_class = "communication.external.send"
 
 [[rules]]
-method       = "CONNECT"
-host         = "pypi.org:443"
+method = "CONNECT"
+host = "pypi.org:443"
 action_class = "system.install"
 
 # ─── Package managers ─────────────────────────────────────────────────────────
@@ -48,30 +48,30 @@ action_class = "system.install"
 
 # Python
 [[rules]]
-host         = "pypi.org"
-path         = "*"
+host = "pypi.org"
+path = "*"
 action_class = "system.install"
 
 [[rules]]
-host         = "files.pythonhosted.org"
-path         = "*"
+host = "files.pythonhosted.org"
+path = "*"
 action_class = "system.install"
 
 # Rust
 [[rules]]
-host         = "crates.io"
-path         = "*"
+host = "crates.io"
+path = "*"
 action_class = "system.install"
 
 [[rules]]
-host         = "static.crates.io"
-path         = "*"
+host = "static.crates.io"
+path = "*"
 action_class = "system.install"
 
 # Node.js
 [[rules]]
-host         = "registry.npmjs.org"
-path         = "*"
+host = "registry.npmjs.org"
+path = "*"
 action_class = "system.install"
 
 # ─── Localhost fallthrough ────────────────────────────────────────────────────
@@ -79,11 +79,11 @@ action_class = "system.install"
 # communication.internal.send is already permitted by llm-agent.cedar.
 
 [[rules]]
-host         = "localhost:*"
-path         = "*"
+host = "localhost:*"
+path = "*"
 action_class = "communication.internal.send"
 
 [[rules]]
-host         = "127.0.0.1:*"
-path         = "*"
+host = "127.0.0.1:*"
+path = "*"
 action_class = "communication.internal.send"

@@ -91,3 +91,18 @@ fn parse_proxy_bridge_with_uds() {
 fn global_log_filter_visible_under_subcommand() {
     parse_ok(&["--log-filter", "debug", "sidecar"]);
 }
+
+#[test]
+fn parse_stack_start() {
+    parse_ok(&["stack", "start", "--config", "stack.toml", "--detach"]);
+}
+
+#[test]
+fn parse_monitor_defaults() {
+    parse_ok(&["monitor"]);
+}
+
+#[test]
+fn parse_stack_status_json() {
+    parse_ok(&["stack", "status", "--json"]);
+}

@@ -7,28 +7,28 @@
 
 # CI: positive ALLOW path against the local fixture server.
 [[rules]]
-method       = "GET"
-host         = "127.0.0.1:9100"
-path         = "/allow"
+method = "GET"
+host = "127.0.0.1:9100"
+path = "/allow"
 action_class = "communication.external.send"
 
 # CI: deterministic DENY path against the local fixture server.
 [[rules]]
-method       = "POST"
-host         = "127.0.0.1:9100"
-path         = "/deny"
+method = "POST"
+host = "127.0.0.1:9100"
+path = "/deny"
 action_class = "communication.external.send"
 
 # Hero demo: weather lookup → ALLOW under the demo Cedar bundle.
 [[rules]]
-method       = "GET"
-host         = "wttr.in"
-path         = "*"
+method = "GET"
+host = "wttr.in"
+path = "*"
 action_class = "communication.external.send"
 
 # Hero demo: data exfiltration prompt → DENY under the demo Cedar bundle.
 [[rules]]
-method       = "POST"
-host         = "paste.rs"
-path         = "*"
+method = "POST"
+host = "paste.rs"
+path = "*"
 action_class = "communication.external.send"
