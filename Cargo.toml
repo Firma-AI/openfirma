@@ -56,25 +56,25 @@ firma-sidecar = { path = "crates/firma-sidecar" }
 firma-stack = { path = "crates/firma-stack" }
 governor = "0.10"
 hex = "0.4"
-http-body = "1"
 http-body-util = "0.1"
+http-body = "1"
 hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 lru = "0.17"
-nix = { version = "0.31", features = ["fs", "process", "signal", "socket", "user"] }
 notify = "8"
+nix = { version = "0.31", features = ["fs", "process", "signal", "socket", "user"] }
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 pasetors = "0.7"
 pingora-core = "0.8"
 pingora-http = "0.8"
 pingora-proxy = "0.8"
 pretty_assertions = "1"
-proptest = "1"
+regex = "1"
 prost = "0.14"
 prost-types = "0.14"
+proptest = "1"
 rand = { version = "0.9", default-features = false, features = ["small_rng"] }
 rcgen = { version = "0.13", features = ["x509-parser"] }
-regex = "1"
 reqwest = { version = "0.13", default-features = false, features = [
   "charset",
   "http2",
@@ -106,7 +106,6 @@ tonic-prost-build = "0.14"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
-webpki-roots = "1"
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_Security",
@@ -114,5 +113,6 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_JobObjects",
   "Win32_System_Threading",
 ] }
-x509-parser = "0.16"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+x509-parser = "0.16"
+webpki-roots = "1"

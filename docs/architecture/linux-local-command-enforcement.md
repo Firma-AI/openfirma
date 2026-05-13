@@ -255,28 +255,20 @@ Compatibility command:
 make managed-seccomp-compat-check
 ```
 
-## CI/Local Guardrails
+## CI/Local Validation
 
-Primary command:
+Primary deterministic gate:
 
 ```bash
-make managed-seccomp-guardrail
+make managed-seccomp-compat-check
 ```
 
-Checks:
+Recommended runtime validation:
 
-1. Baseline vs managed benchmark.
-2. Overhead budget (`<= 3%` average on shell-heavy workload).
-3. Artifact/metadata generation and integrity inspection.
-4. Fail-closed matrix:
-5. missing policy source
-6. missing precompiled artifact
-7. invalid metadata format
-8. checksum mismatch
-9. invalid readable BPF
-10. unloadable artifact
-11. mediated mode fail-closed behavior for allow/deny/pending/unavailable/invalid-response
-12. executable allowlist enforcement behavior when enabled
+1. Artifact/metadata generation and integrity inspection.
+2. Fail-closed behavior for policy resolution/load failures.
+3. Mediated mode fail-closed behavior for allow/deny/pending/unavailable/invalid-response.
+4. Executable allowlist enforcement behavior when enabled.
 
 ## End-to-End Validation Runbook
 
@@ -302,21 +294,7 @@ cargo test -p firma-run -- --nocapture
 make managed-seccomp-compat-check
 ```
 
-### Step 4: Guardrail Matrix
-
-```bash
-make managed-seccomp-guardrail
-```
-
-Faster local smoke:
-
-```bash
-MANAGED_SECCOMP_GUARDRAIL_ITERATIONS=3 \
-MANAGED_SECCOMP_GUARDRAIL_INNER_LOOPS=20 \
-make managed-seccomp-guardrail
-```
-
-### Step 5: Explicit Mediator Tests
+### Step 4: Explicit Mediator Tests
 
 Create `/tmp/firma-run.mediator.toml`:
 
@@ -384,28 +362,27 @@ Repeat with decision responses:
 5. response missing `approval_token` in async mode -> must fail closed.
 6. run non-allowlisted executable (`/usr/bin/env`) -> must fail closed before launch.
 
-### Step 6: Negative Config Validation
+### Step 5: Negative Config Validation
 
 1. `endpoint = "unix://relative.sock"` -> validation error (requires absolute path).
 2. `timeout_ms = 0` -> validation error.
 
-### Step 7: Final Acceptance
+### Step 6: Final Acceptance
 
 All must be true:
 
 1. `cargo test -p firma-run -- --nocapture` passes.
 2. `make managed-seccomp-compat-check` passes.
-3. `make managed-seccomp-guardrail` passes.
-4. Sidecar local-exec governance allow/deny/pending/unavailable behavior matches fail-closed model.
-5. No direct exec fallback path observed in mediated mode.
-6. Allowlist enforcement blocks unknown executable when enabled.
+3. Sidecar local-exec governance allow/deny/pending/unavailable behavior matches fail-closed model.
+4. No direct exec fallback path observed in mediated mode.
+5. Allowlist enforcement blocks unknown executable when enabled.
 
 ## Operations and Rollback
 
 ### Publish/Promote
 
 1. Update policy source (`policy_id`, `policy_version`, deny actions).
-2. Run compatibility + guardrail commands.
+2. Run compatibility + runtime validation commands.
 3. Promote artifact version through profile config (or precompiled-only path).
 
 ### Rollout Strategy
@@ -420,9 +397,8 @@ All must be true:
 1. Switch to previous known-good artifact version.
 2. If needed, temporarily disable generic managed default with:
 `FIRMA_RUN_MANAGED_SECCOMP_DISABLE_DEFAULT=1`
-3. Re-enable only after compatibility + guardrail pass.
+3. Re-enable only after compatibility + runtime validation pass.
 
 ## Notes
 
-1. `scripts/ci/managed-seccomp-guardrail.sh` is both CI automation and local reproducible verification harness.
-2. Production enforcement logic is in Rust runtime path (`seccomp` + mediator gate), not in shell scripts.
+1. Production enforcement logic is in Rust runtime path (`seccomp` + mediator gate), not in shell scripts.

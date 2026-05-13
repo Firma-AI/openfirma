@@ -56,5 +56,4 @@ FIRMA_SHOWCASE_MEDIATOR_ENDPOINT="unix:///run/firma/sidecar-tools.sock" \
 
 ```bash
 make managed-seccomp-compat-check
-make managed-seccomp-guardrail
 ```

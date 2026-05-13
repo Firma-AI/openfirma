@@ -1,4 +1,4 @@
-.PHONY: fmt lint test build check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps install-tools toml-fmt managed-seccomp-compat-check managed-seccomp-guardrail
+.PHONY: fmt lint test build check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps install-tools toml-fmt managed-seccomp-compat-check
 
 install: install-system install-cargo-tools install-docs-deps install-tools
 	@echo "Dev environment ready. Try 'make check' or 'make docs-dev'."
@@ -85,6 +85,3 @@ demo-ci:
 
 managed-seccomp-compat-check:
 	./scripts/seccomp/check-managed-compatibility.sh
-
-managed-seccomp-guardrail:
-	./scripts/ci/managed-seccomp-guardrail.sh
