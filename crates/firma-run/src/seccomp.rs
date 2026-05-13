@@ -219,17 +219,17 @@ fn materialize_seccomp_policy(
         SeccompRuntimeMode::CompileOnLaunch => compile_and_write_artifact(
             managed,
             target_arch,
-            parsed_policy,
-            syscalls,
-            expected_denied_syscalls,
+            &parsed_policy,
+            &syscalls,
+            &expected_denied_syscalls,
             bpf_path,
             metadata_path,
         ),
         SeccompRuntimeMode::PrecompiledOnly => load_precompiled_artifact(
             managed,
             target_arch,
-            parsed_policy,
-            expected_denied_syscalls,
+            &parsed_policy,
+            &expected_denied_syscalls,
             bpf_path,
             metadata_path,
         ),
@@ -278,9 +278,9 @@ fn validate_policy_source(parsed: &CedarSubsetPolicyFile) -> Result<(), RunError
 fn compile_and_write_artifact(
     managed: &SeccompPolicyConfig,
     target_arch: TargetArch,
-    parsed_policy: ParsedPolicy,
-    syscalls: Vec<SyscallId>,
-    expected_denied_syscalls: Vec<String>,
+    parsed_policy: &ParsedPolicy,
+    syscalls: &[SyscallId],
+    expected_denied_syscalls: &[String],
     bpf_path: PathBuf,
     metadata_path: PathBuf,
 ) -> Result<SeccompMaterialized, RunError> {
@@ -298,7 +298,7 @@ fn compile_and_write_artifact(
         ))
     })?;
 
-    let (bpf_bytes, effective_syscalls) = emit_bpf_program(target_arch, &syscalls);
+    let (bpf_bytes, effective_syscalls) = emit_bpf_program(target_arch, syscalls);
     let bpf_sha = sha256_hex(&bpf_bytes);
 
     write_atomic(&bpf_path, &bpf_bytes)?;
@@ -331,7 +331,7 @@ fn compile_and_write_artifact(
         target_arch,
         &parsed_policy.parsed,
         &parsed_policy.source_policy_sha256,
-        &expected_denied_syscalls,
+        expected_denied_syscalls,
     )?;
     verify_artifact_checksum(&bpf_path, &metadata)?;
 
@@ -345,8 +345,8 @@ fn compile_and_write_artifact(
 fn load_precompiled_artifact(
     managed: &SeccompPolicyConfig,
     target_arch: TargetArch,
-    parsed_policy: ParsedPolicy,
-    expected_denied_syscalls: Vec<String>,
+    parsed_policy: &ParsedPolicy,
+    expected_denied_syscalls: &[String],
     bpf_path: PathBuf,
     metadata_path: PathBuf,
 ) -> Result<SeccompMaterialized, RunError> {
@@ -357,7 +357,7 @@ fn load_precompiled_artifact(
         target_arch,
         &parsed_policy.parsed,
         &parsed_policy.source_policy_sha256,
-        &expected_denied_syscalls,
+        expected_denied_syscalls,
     )?;
     verify_artifact_checksum(&bpf_path, &metadata)?;
     Ok(SeccompMaterialized {

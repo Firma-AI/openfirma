@@ -27,6 +27,12 @@ struct MediatorResponse {
     reason: Option<String>,
 }
 
+/// Enforces a mandatory pre-execution mediator decision in fail-closed mode.
+///
+/// # Errors
+///
+/// Returns [`RunError::Governance`] when the mediator denies, is unavailable,
+/// times out, or returns invalid/unsupported data.
 pub fn enforce_local_command_governance(
     mediator: &CommandMediatorConfig,
     identity: &RunIdentity,
@@ -161,8 +167,8 @@ fn send_and_receive<T: Write + std::io::Read>(
 ) -> Result<String, RunError> {
     stream
         .write_all(request_json.as_bytes())
-        .and_then(|_| stream.write_all(b"\n"))
-        .and_then(|_| stream.flush())
+        .and_then(|()| stream.write_all(b"\n"))
+        .and_then(|()| stream.flush())
         .map_err(|error| {
             RunError::Governance(format!(
                 "mediator request failed in fail-closed mode: {error}"

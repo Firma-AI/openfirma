@@ -466,6 +466,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         resolve_executable_policies(patch.executable_policies, patch.codex_cli);
     let command_mediator = patch
         .command_mediator
+        .as_ref()
         .map(command_mediator_from_patch)
         .transpose()?;
 
@@ -609,7 +610,7 @@ fn seccomp_policy_from_patch(patch: SeccompPolicyPatch) -> SeccompPolicyConfig {
 }
 
 fn command_mediator_from_patch(
-    patch: CommandMediatorPatch,
+    patch: &CommandMediatorPatch,
 ) -> Result<CommandMediatorConfig, RunError> {
     let endpoint = parse_command_mediator_endpoint(&patch.endpoint)?;
     Ok(CommandMediatorConfig {
@@ -661,18 +662,19 @@ fn default_managed_seccomp_policy(
     let source_policy_path = std::env::var(MANAGED_POLICY_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
+        .map_or_else(
+            || {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("policies")
                 .join(DEFAULT_MANAGED_POLICY_FILE)
-        });
+            },
+            PathBuf::from,
+        );
 
     let artifact_dir = std::env::var(MANAGED_ARTIFACT_DIR_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(default_managed_artifact_dir);
+        .map_or_else(default_managed_artifact_dir, PathBuf::from);
 
     let runtime_mode = std::env::var(MANAGED_RUNTIME_MODE_ENV)
         .ok()
