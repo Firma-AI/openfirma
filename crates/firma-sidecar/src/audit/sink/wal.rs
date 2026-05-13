@@ -135,6 +135,14 @@ impl WalAuditSink {
         let dropped = total - kept.len() as u64;
 
         // Rewrite the file with only the kept lines.
+        //
+        // Important: this file descriptor may be opened with O_APPEND.
+        // In that mode, writes are forced to end-of-file regardless of
+        // seek position, so "seek + write + truncate" can produce
+        // inconsistent compaction results. Truncate first, then write.
+        if file.set_len(0).await.is_err() {
+            return 0;
+        }
         if file.seek(std::io::SeekFrom::Start(0)).await.is_err() {
             return 0;
         }
@@ -146,8 +154,7 @@ impl WalAuditSink {
         let new_len = new_contents.len() as u64;
         let write_ok = file.write_all(new_contents.as_bytes()).await.is_ok();
         if write_ok {
-            // Truncate any leftover bytes from the old file.
-            let _ = file.set_len(new_len).await;
+            let _ = file.sync_data().await;
             *wal_size = new_len;
         }
 
