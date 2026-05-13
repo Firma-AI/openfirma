@@ -155,7 +155,7 @@ mod tests {
         let stop_thread = Arc::clone(&stop);
         let path_thread = path.clone();
         let handle = std::thread::spawn(move || {
-            tail(path_thread, Source::Audit, None, true, tx, stop_thread)
+            tail(path_thread, Source::Audit, None, true, tx, stop_thread);
         });
 
         std::thread::sleep(Duration::from_millis(200));

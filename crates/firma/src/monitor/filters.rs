@@ -98,13 +98,13 @@ fn decision_matches(parsed: &AuditLite, want: Decision) -> bool {
 mod tests {
     use super::*;
 
-    /// Realistic ALLOW event (token_id set, classified action).
+    /// Realistic ALLOW event (`token_id` set, classified action).
     const ALLOW_LINE: &str = r#"{"event_id":"01900000-0000-7000-8000-000000000001","session_id":"sess_001","token_id":"tok_a","agent_id":"agent_codex","action":"github.issue.create","resource":"api.github.com/repos/x/y/issues","decision":1,"deny_reason":"","enforcement_latency_us":150,"context_hash":"ctx","bundle_version":"v1","timestamp":1715169751000000000,"dispatch_status":201,"dispatch_latency_us":42000,"response_size":128,"signature":[]}"#;
 
     /// Realistic DENY event.
     const DENY_LINE: &str = r#"{"event_id":"01900000-0000-7000-8000-000000000002","session_id":"sess_001","token_id":"tok_a","agent_id":"agent_codex","action":"stripe.payment.create","resource":"api.stripe.com/v1/charges","decision":2,"deny_reason":"scope_mismatch","enforcement_latency_us":80,"context_hash":"ctx","bundle_version":"v1","timestamp":1715169753000000000,"dispatch_status":0,"dispatch_latency_us":0,"response_size":0,"signature":[]}"#;
 
-    /// Passthrough — decision=1 (ALLOW) AND token_id="".
+    /// Passthrough — decision=1 (ALLOW) AND `token_id`="".
     const PASSTHROUGH_LINE: &str = r#"{"event_id":"01900000-0000-7000-8000-000000000003","session_id":"sess_001","token_id":"","agent_id":"","action":"raw.http.GET","resource":"example.com/","decision":1,"deny_reason":"","enforcement_latency_us":5,"context_hash":"","bundle_version":"","timestamp":1715169754000000000,"dispatch_status":200,"dispatch_latency_us":1000,"response_size":0,"signature":[]}"#;
 
     #[test]

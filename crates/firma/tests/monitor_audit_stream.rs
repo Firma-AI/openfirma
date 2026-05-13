@@ -1,5 +1,5 @@
 //! `firma monitor --since 0s --json --tail` emits appended audit records
-//! byte-for-byte (one ExecutionEvent JSON per line, unchanged).
+//! byte-for-byte (one `ExecutionEvent` JSON per line, unchanged).
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};

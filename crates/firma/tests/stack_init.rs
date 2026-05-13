@@ -69,6 +69,15 @@ fn init_writes_parseable_configs() {
     );
     assert_eq!(cfg.authority_config, config_dir.join("authority.toml"));
     assert_eq!(cfg.sidecar_config, config_dir.join("sidecar.toml"));
+
+    // The sidecar.toml emitted by init must pass `SidecarConfig`'s own
+    // validation — regression guard for the case where the default
+    // `InterceptorMode` flips (e.g. to `unix_socket` on Unix) and the
+    // scaffolder still writes only `listen_addr`, which then fails
+    // validation at sidecar startup with
+    // `interceptor.socket_path is required when mode is unix_socket`.
+    firma_sidecar::config::SidecarConfig::load_from_path(&cfg.sidecar_config)
+        .unwrap_or_else(|e| panic!("sidecar.toml fails validation: {e}"));
 }
 
 #[test]
@@ -146,4 +155,36 @@ fn init_handles_relative_paths() {
         "state_dir does not exist on disk: {}",
         state_dir.display(),
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn init_writes_state_and_config_dirs_with_mode_0700() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+
+    run_init(&config_dir, &state_dir);
+
+    for path in [
+        &state_dir,
+        &state_dir.join("generated-firma-ca"),
+        &config_dir,
+        &config_dir.join("policies"),
+        &config_dir.join("issuance-policies"),
+    ] {
+        let mode = std::fs::metadata(path)
+            .unwrap_or_else(|e| panic!("stat {}: {e}", path.display()))
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode,
+            0o700,
+            "expected {} to be mode 0700, got {mode:o}",
+            path.display(),
+        );
+    }
 }

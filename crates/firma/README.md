@@ -15,6 +15,8 @@ Single binary exposing every Firma OSS production component as a subcommand.
    `firma-demo-tui`.
 5. **`firma monitor`** — read-only tail of audit events and component
    logs from a running stack.
+6. **`firma doctor`** — one-shot diagnostic that prints what's installed,
+   reachable, and configured.
 
 ## Install
 
@@ -205,6 +207,38 @@ Exit codes:
 - `stop`: `0` on success (graceful or forced hard-kill), `2` on error.
 
 Full reference: `docs/markdown/firma_stack_command.md`.
+
+### `firma doctor`
+
+Print a structured diagnostic report — `firma binary`, sandbox backends,
+sidecar reachability, authority reachability, config parse status,
+capability seed presence, state directories. Read-only.
+
+```bash
+firma doctor                          # pretty
+firma doctor --json | jq .            # machine-readable
+firma doctor --timeout-ms 1500        # slower network probe
+```
+
+Flags:
+
+| Flag           | Env                  | Default  | Description                                               |
+| -------------- | -------------------- | -------- | --------------------------------------------------------- |
+| `--config`     | `FIRMA_STACK_CONFIG` | _unset_  | Explicit stack config path. Otherwise walked up from cwd. |
+| `--state-dir`  | `FIRMA_STATE_DIR`    | resolved | Override the runtime state directory.                     |
+| `--json`       | —                    | _off_    | Emit a single JSON object instead of pretty text.         |
+| `--timeout-ms` | —                    | `500`    | Per-probe network timeout (TCP / UDS connect).            |
+
+Each check is `OK` / `WARN` / `FAIL` with a one-line reason. Categories
+that don't apply to the current OS report `WARN`, never `FAIL`.
+
+Exit codes:
+
+- `0` — every check is `OK` or `WARN`.
+- `1` — at least one check is `FAIL`.
+- `2` — internal error (render or runtime failure).
+
+Full reference: [`docs/markdown/firma_doctor_command.md`](../../docs/markdown/firma_doctor_command.md).
 
 ### `firma monitor`
 
