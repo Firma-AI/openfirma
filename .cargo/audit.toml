@@ -4,7 +4,8 @@
 # changes. All entries must include an inline comment explaining the reason.
 #
 # Run: cargo audit
-# CI:  cargo audit (fails on any unignored vulnerability or warning)
+# CI:  cargo audit --deny warnings (fails on any unignored vulnerability or
+#      warning, including unmaintained / yanked advisories)
 
 [advisories]
 ignore = [
