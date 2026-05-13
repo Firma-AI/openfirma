@@ -54,12 +54,31 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
 
       - name: Run managed seccomp guardrail
-        run: make managed-seccomp-guardrail
+        id: guardrail
+        shell: bash
+        run: |
+          set -euo pipefail
+          log_file="$(mktemp)"
+          if ! make managed-seccomp-guardrail | tee "$log_file"; then
+            status=${PIPESTATUS[0]}
+            output_dir="$(awk -F= '/^guardrail_output_dir=/{print $2}' "$log_file" | tail -n1)"
+            if [[ -n "$output_dir" ]]; then
+              echo "output_dir=$output_dir" >> "$GITHUB_OUTPUT"
+            fi
+            rm -f "$log_file"
+            exit "$status"
+          fi
+
+          output_dir="$(awk -F= '/^guardrail_output_dir=/{print $2}' "$log_file" | tail -n1)"
+          if [[ -n "$output_dir" ]]; then
+            echo "output_dir=$output_dir" >> "$GITHUB_OUTPUT"
+          fi
+          rm -f "$log_file"
 
       - name: Upload guardrail artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: managed-seccomp-guardrail-artifacts
-          path: .spike-output/managed-seccomp-guardrail-*/
+          path: ${{ steps.guardrail.outputs.output_dir || '.spike-output/managed-seccomp-guardrail-*' }}
           if-no-files-found: warn
