@@ -208,31 +208,38 @@ Full reference: `docs/markdown/firma_stack_command.md`.
 
 ### `firma monitor`
 
-Tail audit events and component logs from a running stack. Read-only;
-multiple concurrent monitors are safe.
+Tail the local audit stream (and optionally the authority and sidecar
+component logs). Read-only; multiple concurrent monitors are safe.
 
 ```bash
-firma monitor --state-dir /tmp/firma                              # all sources
-firma monitor --state-dir /tmp/firma --source audit               # audit only
-firma monitor --state-dir /tmp/firma --source audit --decision deny
-firma monitor --state-dir /tmp/firma --source authority --no-follow
-firma monitor --state-dir /tmp/firma --since 15m --format json
+firma monitor                                          # audit, follow if TTY
+firma monitor --only-deny                              # audit, deny only
+firma monitor --agent codex --since 15m                # filtered backfill
+firma monitor --json | jq .                            # byte-for-byte pass-through
+firma monitor --source all --no-follow                 # one-shot, all sources
 ```
 
 Flags:
 
-| Flag             | Env                  | Default  | Description                                              |
-| ---------------- | -------------------- | -------- | -------------------------------------------------------- |
-| `--config`       | `FIRMA_STACK_CONFIG` | _unset_  | Stack config; `state_dir` read from it when set.         |
-| `--state-dir`    | `FIRMA_STATE_DIR`    | resolved | State dir override.                                      |
-| `--source`       | —                    | `all`    | `audit`, `authority`, `sidecar`, or `all`.               |
-| `--no-follow`    | —                    | _off_    | Read once and exit (default: follow tail).               |
-| `--decision`     | —                    | _unset_  | Audit filter: `allow`, `deny`, `passthrough`.            |
-| `--action-class` | —                    | _unset_  | Audit filter: exact match on `intent.action_class`.      |
-| `--since`        | —                    | _unset_  | Backfill window: `15m`, `2h`, `1d` or RFC3339 timestamp. |
-| `--format`       | —                    | `pretty` | `pretty` (human) or `json` (one object per line).        |
+| Flag             | Env                  | Default  | Description                                      |
+| ---------------- | -------------------- | -------- | ------------------------------------------------ |
+| `--config`       | `FIRMA_STACK_CONFIG` | _unset_  | Stack config; `state_dir` read from it when set. |
+| `--state-dir`    | `FIRMA_STATE_DIR`    | resolved | State dir override.                              |
+| `--source`       | —                    | `audit`  | `audit`, `authority`, `sidecar`, or `all`.       |
+| `--decision`     | —                    | _unset_  | Audit filter: `allow`, `deny`, `passthrough`.    |
+| `--only-deny`    | —                    | _off_    | Shortcut for `--decision deny`.                  |
+| `--action-class` | —                    | _unset_  | Audit filter: exact match on `action`.           |
+| `--agent`        | —                    | _unset_  | Audit filter: exact match on `agent_id`.         |
+| `--since`        | —                    | _unset_  | Backfill: `15m`, `2h`, RFC3339 timestamp.        |
+| `--format`       | —                    | `pretty` | `pretty` or `json` (byte-for-byte pass-through). |
+| `--json`         | —                    | _off_    | Shortcut for `--format json`.                    |
+| `--tail`         | —                    | _off_    | Force follow even when piped.                    |
+| `--no-follow`    | —                    | _off_    | Read once and exit (overrides TTY auto-tail).    |
 
-Ctrl-C exits with code 0.
+Auto-tail: follows when stdout is a TTY; one-shot when piped, unless
+`--tail` or `--no-follow` is set. Ctrl-C exits with code 0.
+
+Full reference: [`docs/markdown/firma_monitor_command.md`](../../docs/markdown/firma_monitor_command.md).
 
 ### Hidden helpers
 

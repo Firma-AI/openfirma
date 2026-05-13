@@ -1,14 +1,14 @@
-# `firma stack` and `firma monitor`
+# `firma stack`
 
-`firma stack` supervises authority and sidecar as one unit. `firma monitor`
-tails live activity.
+`firma stack` supervises authority and sidecar as one unit. For live
+activity tailing, see [`firma monitor`](firma_monitor_command.md).
 
 ## Quickstart
 
 ```bash
 firma stack init --config-dir /etc/firma --state-dir /var/run/firma
 firma stack start --config /etc/firma/firma-stack.toml --detach
-firma monitor --config /etc/firma/firma-stack.toml --since 5m
+# For `firma monitor` see firma_monitor_command.md.
 firma stack status --config /etc/firma/firma-stack.toml
 firma stack stop --config /etc/firma/firma-stack.toml
 ```
@@ -32,7 +32,7 @@ Scaffolds a fresh deployment in two separate directories:
 
 Existing files are preserved unless `--force` is set. The generated
 `firma-stack.toml` embeds `state_dir = "<state_dir>"` so subsequent
-`start` / `stop` / `status` / `monitor` invocations only need `--config`.
+`start` / `stop` / `status` / [`monitor`](firma_monitor_command.md) invocations only need `--config`.
 
 ## `firma stack start`
 
@@ -66,23 +66,6 @@ firma stack status [--config <stack.toml>] [--state-dir <dir>] [--json]
 ```
 
 Exit codes: `0` all running; `1` any unhealthy or stopped; `2` internal error.
-
-## `firma monitor`
-
-```text
-firma monitor [--config <stack.toml>]
-              [--state-dir <dir>]
-              [--source audit|authority|sidecar|all]
-              [--decision allow|deny|passthrough]
-              [--action-class <class>]
-              [--since <duration|rfc3339>]
-              [--format pretty|json]
-              [--no-follow]
-```
-
-`--source` defaults to `all`; `--format` defaults to `pretty`. `--decision` and
-`--action-class` apply only to audit events. `--no-follow` reads once and
-exits instead of tailing.
 
 ## Stack Config
 
