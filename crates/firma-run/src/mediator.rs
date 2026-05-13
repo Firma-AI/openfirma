@@ -196,34 +196,35 @@ fn request_over_unix(
         stream.set_write_timeout(Some(timeout)).map_err(|error| {
             RunError::Internal(format!("failed to set mediator write timeout: {error}"))
         })?;
+        #[cfg(target_os = "linux")]
         validate_unix_peer_credentials(&stream)?;
+        #[cfg(not(target_os = "linux"))]
+        validate_unix_peer_credentials(&stream);
         send_and_receive(stream, request_json)
     }
 }
 
 #[cfg(target_family = "unix")]
+#[cfg(target_os = "linux")]
 fn validate_unix_peer_credentials(stream: &UnixStream) -> Result<(), RunError> {
-    #[cfg(target_os = "linux")]
-    {
-        let creds = getsockopt(stream, PeerCredentials).map_err(|error| {
-            RunError::Governance(format!(
-                "mediator unix peer credential validation failed in fail-closed mode: {error}"
-            ))
-        })?;
-        let peer_uid = creds.uid();
-        let current_uid = nix::unistd::Uid::current().as_raw();
-        if peer_uid != current_uid {
-            return Err(RunError::Governance(format!(
-                "mediator unix peer uid mismatch in fail-closed mode: expected uid={current_uid} got uid={peer_uid}"
-            )));
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = stream;
+    let creds = getsockopt(stream, PeerCredentials).map_err(|error| {
+        RunError::Governance(format!(
+            "mediator unix peer credential validation failed in fail-closed mode: {error}"
+        ))
+    })?;
+    let peer_uid = creds.uid();
+    let current_uid = nix::unistd::Uid::current().as_raw();
+    if peer_uid != current_uid {
+        return Err(RunError::Governance(format!(
+            "mediator unix peer uid mismatch in fail-closed mode: expected uid={current_uid} got uid={peer_uid}"
+        )));
     }
     Ok(())
 }
+
+#[cfg(target_family = "unix")]
+#[cfg(not(target_os = "linux"))]
+fn validate_unix_peer_credentials(_stream: &UnixStream) {}
 
 fn send_and_receive<T: Write + std::io::Read>(
     mut stream: T,
