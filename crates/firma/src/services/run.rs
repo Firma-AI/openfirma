@@ -23,6 +23,10 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         identity_mode: args.identity_mode.map(Into::into),
         preserve_host_user: args.preserve_host_user,
         print_effective_config: args.print_effective_config,
+        sidecar_mode: args.sidecar.into(),
+        no_autostart: args.no_autostart,
+        sidecar_template_path: args.sidecar_config,
+        sidecar_startup_timeout_secs: args.sidecar_startup_timeout_secs,
         command: args.command,
     };
     match execute_run(&input) {

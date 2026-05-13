@@ -180,7 +180,16 @@ fn escape_sandbox_path(path: &str) -> String {
 }
 
 fn command_available(binary: &str) -> bool {
-    Command::new(binary).status().is_ok()
+    // `sandbox-exec` with no args writes its usage banner to stderr and
+    // exits non-zero. Probe by spawning with stdio silenced; `status()`
+    // returns `Ok` whenever the binary could be launched, which is all we
+    // need to assert availability.
+    Command::new(binary)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok()
 }
 
 fn remove_runtime_dir(runtime_dir: &std::path::Path) {

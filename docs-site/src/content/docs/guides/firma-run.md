@@ -24,19 +24,30 @@ For the conceptual background, read [The sandbox boundary](../../concepts/sandbo
 
 `firma run` uses a different sandbox backend per platform. The defaults are usually right:
 
-| Platform | Default backend | Notes                                         |
-| -------- | --------------- | --------------------------------------------- |
-| Linux    | `bwrap`         | Requires unprivileged user namespaces enabled |
-| macOS    | `vz`            | Native Apple Virtualization framework         |
-| Windows  | `wsl2`          | Linux guest under WSL2                        |
+| Platform | Default backend | Notes                                                                  |
+| -------- | --------------- | ---------------------------------------------------------------------- |
+| Linux    | `bwrap`         | Requires unprivileged user namespaces + AppArmor allowance for bwrap   |
+| macOS    | `vz`            | Native Apple Virtualization framework                                  |
+| Windows  | `wsl2`          | Linux guest under WSL2                                                 |
 
-Verify the platform default works on your host. On Linux:
+Verify the platform default works on your host. On Linux, the bwrap backend
+needs two things: unprivileged user namespaces enabled, and — on AppArmor
+distros — permission for bwrap to keep `CAP_NET_ADMIN` inside the namespace
+so it can bring up loopback.
 
 ```bash
-unshare --user --pid echo ok
+unshare --user --pid echo ok                # user namespaces
+bwrap --unshare-net --bind / / true         # bwrap + net namespace
 ```
 
-If this prints `ok`, bwrap will work. If it prints a permission error, you need to enable unprivileged user namespaces (`sysctl -w kernel.unprivileged_userns_clone=1` on some distros) or pick a different backend.
+If the first command prints `ok` but the second exits with `bwrap: loopback:
+Failed RTM_NEWADDR: Operation not permitted`, you're on a distro with
+AppArmor restricting unprivileged user namespaces (Ubuntu 24.04 ships this
+on by default). See [Common gotchas](#common-gotchas) below for the fix.
+
+If `unshare --user --pid echo ok` itself fails with a permission error,
+enable unprivileged user namespaces (`sysctl -w kernel.unprivileged_userns_clone=1`
+on some distros) or pick a different backend.
 
 ## Step 2: Use the bundled local example as a starting point
 
@@ -69,6 +80,17 @@ cargo run --release -p firma -- sidecar -c .local/firma_sidecar.local.toml
 ```
 
 Wait for the `sidecar ready` line.
+
+### Or: let `firma run` autostart it
+
+You can skip the explicit Sidecar terminal entirely. When `firma run` is invoked and the configured Sidecar endpoint is unreachable, it autostarts a Sidecar as a child of the wrapper, waits for the seven-line ready log contract, and tears it down on exit. Marker files land under `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/` (Linux) or `/tmp/firma-$UID/firma/run/<sandbox_id>/` (macOS fallback). The spawned Sidecar inherits a config template from `--sidecar-config`, then `FIRMA_SIDECAR_CONFIG_FILE`, then `./firma_sidecar.toml`, then a synthesized minimal config — in that order — with the `[interceptor]` section forced to `unix_socket` mode against the marker socket.
+
+Opt out for production or CI:
+
+- `--no-autostart` — fail with a typed `SidecarUnreachable` error instead of spawning a child Sidecar.
+- `--sidecar=external` — same intent, more explicit; pairs with a systemd-managed or `firma stack start` Sidecar.
+
+Autostart currently requires Unix. On Windows, use `--sidecar=external` with a pre-started Sidecar.
 
 ## Step 4: Run a command under `firma run`
 
@@ -129,6 +151,10 @@ This prints the resolved profile as JSON: which backend, which env vars are inje
 | `--config <file>`                   | Override profile defaults from a TOML/YAML file.                                                    |
 | `--backend <bwrap\|vz\|wsl2\|firecracker>` | Override the platform default backend.                                                       |
 | `--sidecar-endpoint <url>`          | Point at a Sidecar at a non-default address (e.g. UDS path or a different port).                    |
+| `--sidecar <auto\|external>`        | `auto` (default) autostarts a per-run Sidecar when the endpoint is unreachable; `external` requires a pre-running one. |
+| `--no-autostart`                    | Fail loudly if the Sidecar is unreachable, instead of autostarting. CI / production safety net.     |
+| `--sidecar-config <path>`           | Sidecar TOML template for autostart. Falls back to `FIRMA_SIDECAR_CONFIG_FILE`, then `./firma_sidecar.toml`. |
+| `--sidecar-startup-timeout-secs <n>` | Maximum wait for the autostarted Sidecar's `ready` line (default `10`). |
 | `--capability-file <path>`          | Pre-staged capability seed for this run.                                                            |
 | `--identity-mode <sandbox-user\|host-user>` | Choose whether the sandboxed process runs as the host user or a remapped sandbox user.        |
 | `--print-effective-config`          | Print resolved config and exit. No agent launched.                                                  |
@@ -160,6 +186,26 @@ What it *can* still do is whatever its capability + policy allow it to do *via* 
 ## Common gotchas
 
 **`bwrap: setting up uid map: Permission denied`.** Unprivileged user namespaces are disabled on your kernel. Either enable them or use `--backend firecracker` if available.
+
+**`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`.** Hits on Ubuntu 24.04 and other distros that ship `kernel.apparmor_restrict_unprivileged_userns=1`. When bwrap enters its unprivileged user namespace, AppArmor transitions it to the `unprivileged_userns` profile, which `audit deny capability` — stripping `CAP_NET_ADMIN`. bwrap then can't add `127.0.0.1/8` to `lo` inside the new netns, and `--unshare-net` fails. Confirm with `sysctl kernel.apparmor_restrict_unprivileged_userns` (expect `1`) and `bwrap --unshare-net --bind / / true` (reproduces the error in isolation). Pick one of:
+
+- **Targeted (recommended):** install an AppArmor profile that lets bwrap keep its caps inside the userns. Create `/etc/apparmor.d/bwrap`:
+
+  ```
+  abi <abi/4.0>,
+  include <tunables/global>
+
+  profile bwrap /usr/bin/bwrap flags=(unconfined) {
+      userns,
+      include if exists <local/bwrap>
+  }
+  ```
+
+  Then `sudo apparmor_parser -r /etc/apparmor.d/bwrap`. This carves out bwrap specifically; other unprivileged-userns users on the host remain restricted.
+
+- **Dev-host shortcut:** turn the restriction off globally. `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` (persist with a drop-in under `/etc/sysctl.d/`). Fine for a single-user dev VM; do not do this on shared or production hosts — any user can then create unprivileged user namespaces with full caps.
+
+- **Sidestep bwrap:** use `--backend firecracker` if it's available in your setup. The VM backends don't depend on host AppArmor for namespace setup.
 
 **`firma run` exits immediately with no output.** Almost always a startup failure in the bridge. Run with `--print-effective-config` to verify the config first, then `RUST_LOG=debug firma run …` to see the bridge logs.
 

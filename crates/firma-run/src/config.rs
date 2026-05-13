@@ -554,6 +554,10 @@ mod tests {
             identity_mode: None,
             preserve_host_user: false,
             print_effective_config: false,
+            sidecar_mode: crate::runtime::SidecarMode::Auto,
+            no_autostart: false,
+            sidecar_template_path: None,
+            sidecar_startup_timeout_secs: 10,
             command: vec!["echo".to_string(), "ok".to_string()],
         }
     }

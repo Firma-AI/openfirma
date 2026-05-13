@@ -142,3 +142,73 @@ The output TOML carries the raw `v4.public....` token plus the
 matching claims; the sidecar consumes it via
 `[capability_seed].paths` and verifies the signature with
 `[authority].public_key_path`.
+
+## `firma run`
+
+Wraps an agent process inside a sandbox and forces all outbound traffic
+through the Sidecar. When no Sidecar is reachable at the configured
+endpoint, `firma run` autostarts a per-run Sidecar that lives only for
+the duration of the wrapped process.
+
+### Autostart
+
+The autostart path runs only when all of the following are true:
+
+- The configured sidecar endpoint is unreachable (the probe returns an
+  error within 500ms).
+- `--sidecar` is at its default value of `auto`.
+- `--no-autostart` is **not** set.
+- The host network policy has `fail_closed = true` (the default).
+
+When autostart fires, `firma run`:
+
+1. Resolves the per-sandbox marker directory under
+   `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/` (Linux), `/tmp/firma-$UID/firma/run/<sandbox_id>/` (macOS fallback), or `%LOCALAPPDATA%\firma\runtime\run\<sandbox_id>\` (Windows; see platform caveat below).
+2. Synthesizes a sidecar TOML by inheriting the operator template
+   (`--sidecar-config` → `FIRMA_SIDECAR_CONFIG_FILE` → `./firma_sidecar.toml` → minimal) and overriding the `[interceptor]` section to bind a Unix-domain socket at `<marker_dir>/sidecar.sock`.
+3. Spawns `firma sidecar --config-file <marker_dir>/sidecar.toml` as a
+   child process with stderr piped.
+4. Reads stderr line by line and waits for the seven-line ready log
+   contract documented under [`firma sidecar`](#firma-sidecar). The third
+   and fourth lines populate `policy_bundle_version` and `authority_url`
+   in the marker `metadata.toml`.
+5. On `ready`, writes `sidecar.pid` and `metadata.toml` and continues to
+   drain stderr into `<marker_dir>/sidecar.log` for the lifetime of the
+   run.
+6. Substitutes `unix://<sock>` as the effective endpoint and proceeds.
+
+When the `firma run` process exits — by clean exit, `SIGINT`, or
+`SIGTERM` — the supervisor sends `SIGTERM` to the spawned sidecar, waits
+up to 5 seconds, then `SIGKILL`. The marker directory is removed on a
+best-effort basis (FIR-103's `firma sidecar status` also garbage-collects
+stale entries).
+
+### Flags
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--sidecar <auto\|external>` | `auto` | `auto` autostarts when unreachable; `external` requires an already-running sidecar at `--sidecar-endpoint`. |
+| `--no-autostart` | off | Fail with a typed error if the endpoint is unreachable. CI safety net. Mutually exclusive with `--sidecar`. |
+| `--sidecar-config <path>` | — | Sidecar TOML template for autostart. Overrides `FIRMA_SIDECAR_CONFIG_FILE` and the CWD fallback. |
+| `--sidecar-startup-timeout-secs <int>` | `10` | Maximum wait for the `ready` line. `0` reverts to the built-in default. |
+
+### Typed errors
+
+| Error | Trigger |
+| ----- | ------- |
+| `SidecarUnreachable` | Endpoint unreachable and autostart disabled (`--no-autostart` or `--sidecar=external`). |
+| `SidecarReadyTimeout` | Spawned sidecar did not emit `ready` within the configured budget. Error message points to `<marker_dir>/sidecar.log`. |
+| `SidecarStartupFailed` | Spawn or stderr-pipe setup failed; or stderr closed before `ready`. |
+| `UnsupportedPlatform` | Autostart requested on a platform that does not support a UDS interceptor (e.g. Windows). Use `--sidecar=external` instead. |
+
+### Operator caveats
+
+- A template with `interceptor.https_mitm.enabled = true` may fail
+  validation when the interceptor is forced to `unix_socket` mode.
+  Either disable MITM in the template or use `--sidecar=external` with a
+  long-lived externally-managed sidecar.
+- Autostart currently requires Unix (Linux + macOS). On Windows,
+  `--sidecar=auto` returns `UnsupportedPlatform`; pre-start the sidecar
+  yourself and pass `--sidecar=external`.
+- The marker layout is the contract consumed by `firma sidecar status`
+  (see FIR-103). Do not write or edit those files manually.

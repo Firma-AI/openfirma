@@ -1,8 +1,6 @@
 use std::collections::BTreeMap;
 use std::net::TcpStream;
-use std::path::Path;
-#[cfg(unix)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -17,6 +15,9 @@ use std::thread::{self, JoinHandle};
 use crate::backend::SandboxHandle;
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
+use crate::identity::RunIdentity;
+use crate::runtime::SidecarMode;
+use crate::sidecar::supervisor::{SidecarSupervisor, SpawnRequest};
 
 #[cfg(unix)]
 fn structural_proxy_listen_addr() -> &'static str {
@@ -37,6 +38,11 @@ fn structural_dns_stub_listen_addr() -> &'static str {
 /// Runtime-side network artifacts that must live while the wrapped process runs.
 pub struct NetworkRuntime {
     env_overrides: BTreeMap<String, String>,
+    sidecar_endpoint: SidecarEndpoint,
+    // Drop order: `_supervisor` (if present) kills the spawned sidecar
+    // before `_adapter` unbinds the per-run upstream UDS, before
+    // `env_overrides` falls out of scope.
+    _supervisor: Option<SidecarSupervisor>,
     #[cfg(unix)]
     _adapter: Option<SidecarAdapter>,
 }
@@ -47,25 +53,57 @@ impl NetworkRuntime {
     pub fn env_overrides(&self) -> &BTreeMap<String, String> {
         &self.env_overrides
     }
+
+    /// Endpoint the wrapped process should reach the sidecar through.
+    /// May differ from the configured profile endpoint when autostart
+    /// substituted a UDS path for the per-run sidecar.
+    #[must_use]
+    pub fn sidecar_endpoint(&self) -> &SidecarEndpoint {
+        &self.sidecar_endpoint
+    }
+}
+
+/// Inputs to [`prepare_network_runtime`] that gate autostart behaviour.
+#[derive(Debug, Clone)]
+pub struct AutostartFlags {
+    pub mode: SidecarMode,
+    pub no_autostart: bool,
+    pub template_path: Option<PathBuf>,
+    pub startup_timeout: std::time::Duration,
 }
 
 /// Prepare network runtime artifacts for a sandbox launch.
 ///
+/// On endpoint miss with `flags.mode == SidecarMode::Auto` and
+/// `flags.no_autostart == false`, autostarts a per-run sidecar via
+/// [`SidecarSupervisor`] and substitutes its UDS endpoint into the
+/// returned [`NetworkRuntime`]. The supervisor is held inside the
+/// returned struct so [`Drop`] tears the sidecar down when the wrapped
+/// process exits.
+///
 /// # Errors
 ///
-/// Returns an error when fail-closed endpoint checks fail, when helper
-/// sockets cannot be created, or when current executable path resolution fails.
+/// - [`RunError::SidecarUnreachable`] when the endpoint is unreachable and
+///   autostart is disabled.
+/// - [`RunError::SidecarReadyTimeout`] / [`RunError::SidecarStartupFailed`]
+///   when the autostarted sidecar fails to come up.
+/// - [`RunError::UnsupportedPlatform`] when autostart is required on a
+///   platform that does not support it.
+/// - [`RunError::Backend`] for adapter socket failures.
 pub fn prepare_network_runtime(
     handle: &SandboxHandle,
     sidecar_endpoint: &SidecarEndpoint,
+    identity: &RunIdentity,
+    flags: &AutostartFlags,
 ) -> Result<NetworkRuntime, RunError> {
-    if handle.network_policy.fail_closed {
-        ensure_sidecar_reachable(sidecar_endpoint)?;
-    }
+    let (effective_endpoint, supervisor) =
+        resolve_effective_endpoint(handle, sidecar_endpoint, identity, flags)?;
 
     if !handle.network_policy.enforce_network_namespace {
         return Ok(NetworkRuntime {
             env_overrides: BTreeMap::new(),
+            sidecar_endpoint: effective_endpoint,
+            _supervisor: supervisor,
             #[cfg(unix)]
             _adapter: None,
         });
@@ -73,7 +111,7 @@ pub fn prepare_network_runtime(
 
     #[cfg(not(unix))]
     {
-        let _ = sidecar_endpoint;
+        let _ = (effective_endpoint, supervisor);
         Err(RunError::UnsupportedBackend {
             backend: handle.backend.to_string(),
             reason: "structural network confinement currently requires unix sockets".to_string(),
@@ -83,7 +121,7 @@ pub fn prepare_network_runtime(
     #[cfg(unix)]
     {
         let adapter_path = handle.runtime_dir.join("sidecar-upstream.sock");
-        let adapter = SidecarAdapter::start(&adapter_path, sidecar_endpoint)?;
+        let adapter = SidecarAdapter::start(&adapter_path, &effective_endpoint)?;
         let current_exe = std::env::current_exe().map_err(|error| {
             RunError::Internal(format!(
                 "failed to resolve current executable path: {error}"
@@ -118,47 +156,104 @@ pub fn prepare_network_runtime(
 
         Ok(NetworkRuntime {
             env_overrides,
+            sidecar_endpoint: effective_endpoint,
+            _supervisor: supervisor,
             _adapter: Some(adapter),
         })
     }
 }
 
-fn ensure_sidecar_reachable(endpoint: &SidecarEndpoint) -> Result<(), RunError> {
-    match endpoint {
-        SidecarEndpoint::Tcp { addr } => {
-            TcpStream::connect_timeout(addr, Duration::from_millis(500)).map_err(|error| {
-                RunError::Backend {
-                    backend: "sidecar".to_string(),
-                    reason: format!("sidecar endpoint {addr} is unreachable: {error}"),
-                }
-            })?;
-            Ok(())
+fn resolve_effective_endpoint(
+    handle: &SandboxHandle,
+    sidecar_endpoint: &SidecarEndpoint,
+    identity: &RunIdentity,
+    flags: &AutostartFlags,
+) -> Result<(SidecarEndpoint, Option<SidecarSupervisor>), RunError> {
+    // `fail_closed = false` is an explicit dev/test escape that disables
+    // the probe (and therefore disables autostart). It mirrors the
+    // pre-FIR-102 behaviour.
+    if !handle.network_policy.fail_closed {
+        return Ok((sidecar_endpoint.clone(), None));
+    }
+
+    match probe_sidecar(sidecar_endpoint) {
+        Ok(()) => Ok((sidecar_endpoint.clone(), None)),
+        Err(reason) => {
+            if flags.no_autostart || matches!(flags.mode, SidecarMode::External) {
+                return Err(RunError::SidecarUnreachable {
+                    endpoint: format_endpoint(sidecar_endpoint),
+                    reason,
+                });
+            }
+            let supervisor = autostart_sidecar(identity, flags)?;
+            Ok((supervisor.endpoint(), Some(supervisor)))
         }
-        SidecarEndpoint::Unix { path } => ensure_unix_endpoint_reachable(path),
     }
 }
 
-fn ensure_unix_endpoint_reachable(path: &Path) -> Result<(), RunError> {
-    #[cfg(unix)]
-    {
-        UnixStream::connect(path).map_err(|error| RunError::Backend {
-            backend: "sidecar".to_string(),
-            reason: format!(
-                "sidecar unix socket {} is unreachable: {error}",
-                path.display()
-            ),
-        })?;
-        Ok(())
-    }
+fn autostart_sidecar(
+    identity: &RunIdentity,
+    flags: &AutostartFlags,
+) -> Result<SidecarSupervisor, RunError> {
+    let runtime_dir = firma_stack::runtime_paths::default_runtime_dir();
+    let marker_dir = firma_stack::runtime_paths::run_entry_from(&runtime_dir, &identity.sandbox_id);
+    let firma_exe = std::env::current_exe().map_err(|error| {
+        RunError::Internal(format!(
+            "failed to resolve current executable path: {error}"
+        ))
+    })?;
+    let env_template = std::env::var("FIRMA_SIDECAR_CONFIG_FILE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from);
+    let cwd_template = std::env::current_dir()
+        .ok()
+        .map(|cwd| cwd.join("firma_sidecar.toml"));
 
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        Err(RunError::UnsupportedBackend {
-            backend: "sidecar".to_string(),
-            reason: "unix socket sidecar endpoints are unsupported on this host".to_string(),
-        })
+    SidecarSupervisor::spawn(SpawnRequest {
+        sandbox_id: &identity.sandbox_id,
+        agent_id: &identity.profile,
+        session_id: &identity.session_id,
+        marker_dir,
+        template_path: flags.template_path.as_deref(),
+        env_template,
+        cwd_template,
+        firma_exe,
+        startup_timeout: flags.startup_timeout,
+    })
+}
+
+fn format_endpoint(endpoint: &SidecarEndpoint) -> String {
+    match endpoint {
+        SidecarEndpoint::Tcp { addr } => format!("tcp://{addr}"),
+        SidecarEndpoint::Unix { path } => format!("unix://{}", path.display()),
     }
+}
+
+/// Connect-with-timeout probe used to decide whether the configured
+/// endpoint is already serving. Returns `Err(reason)` so callers can
+/// surface the OS error in the resulting [`RunError::SidecarUnreachable`].
+fn probe_sidecar(endpoint: &SidecarEndpoint) -> Result<(), String> {
+    match endpoint {
+        SidecarEndpoint::Tcp { addr } => {
+            TcpStream::connect_timeout(addr, Duration::from_millis(500))
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        }
+        SidecarEndpoint::Unix { path } => probe_unix(path),
+    }
+}
+
+#[cfg(unix)]
+fn probe_unix(path: &Path) -> Result<(), String> {
+    UnixStream::connect(path)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(unix))]
+fn probe_unix(_path: &Path) -> Result<(), String> {
+    Err("unix socket sidecar endpoints are unsupported on this host".to_string())
 }
 
 #[cfg(unix)]

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::Serialize;
 
@@ -9,8 +10,21 @@ use crate::capability::CapabilityLeaseManager;
 use crate::config::{CapabilitySource, ResolvedProfile, SidecarEndpoint, resolve_profile};
 use crate::error::RunError;
 use crate::identity::RunIdentity;
-use crate::routing::prepare_network_runtime;
+use crate::routing::{AutostartFlags, prepare_network_runtime};
+use crate::sidecar::supervisor::DEFAULT_STARTUP_TIMEOUT_SECS;
 use crate::supervisor::wait_with_signal_forwarding;
+
+/// Selection between `firma run`'s autostart behaviour and an externally
+/// managed sidecar (e.g. systemd or `firma stack start`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SidecarMode {
+    /// Autostart when the configured endpoint is unreachable. Default.
+    #[default]
+    Auto,
+    /// Never autostart; require an already-running sidecar at the
+    /// configured endpoint.
+    External,
+}
 
 /// Lib-level input for [`execute_run`]. The CLI layer (in the `firma`
 /// host crate) builds this from its `clap`-derived args struct.
@@ -32,6 +46,16 @@ pub struct RunInput {
     pub preserve_host_user: bool,
     /// Print the resolved effective config as JSON before execution.
     pub print_effective_config: bool,
+    /// Sidecar selection (`auto` autostarts on miss; `external` requires
+    /// pre-running sidecar).
+    pub sidecar_mode: SidecarMode,
+    /// When set, never autostart — fail with a typed error if the
+    /// configured endpoint is unreachable. CI / production safety net.
+    pub no_autostart: bool,
+    /// Optional explicit template path for the autostarted sidecar config.
+    pub sidecar_template_path: Option<PathBuf>,
+    /// Seconds to wait for the autostarted sidecar's `ready` line.
+    pub sidecar_startup_timeout_secs: u64,
     /// Wrapped command and args.
     pub command: Vec<String>,
 }
@@ -90,8 +114,26 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             "backend network enforcement proof"
         );
 
-        let network_runtime = prepare_network_runtime(handle_ref, &profile.sidecar_endpoint)?;
-        let env = build_execution_env(&profile, &identity, &lease, network_runtime.env_overrides());
+        let flags = AutostartFlags {
+            mode: args.sidecar_mode,
+            no_autostart: args.no_autostart,
+            template_path: args.sidecar_template_path.clone(),
+            startup_timeout: Duration::from_secs(if args.sidecar_startup_timeout_secs == 0 {
+                DEFAULT_STARTUP_TIMEOUT_SECS
+            } else {
+                args.sidecar_startup_timeout_secs
+            }),
+        };
+        let network_runtime =
+            prepare_network_runtime(handle_ref, &profile.sidecar_endpoint, &identity, &flags)?;
+        let effective_endpoint = network_runtime.sidecar_endpoint().clone();
+        let env = build_execution_env(
+            &profile,
+            &identity,
+            &lease,
+            &effective_endpoint,
+            network_runtime.env_overrides(),
+        );
 
         let executable = args
             .command
@@ -240,6 +282,7 @@ fn build_execution_env(
     profile: &ResolvedProfile,
     identity: &RunIdentity,
     lease: &CapabilityLeaseManager,
+    sidecar_endpoint: &SidecarEndpoint,
     network_overrides: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
@@ -253,7 +296,7 @@ fn build_execution_env(
     env.extend(profile.env_set.clone());
     env.extend(identity.env_pairs());
 
-    match &profile.sidecar_endpoint {
+    match sidecar_endpoint {
         SidecarEndpoint::Tcp { addr } => {
             env.insert("HTTP_PROXY".to_string(), format!("http://{addr}"));
             env.insert("HTTPS_PROXY".to_string(), format!("http://{addr}"));
@@ -479,7 +522,13 @@ mod tests {
         let lease = crate::capability::CapabilityLeaseManager::new(&profile.capability)
             .unwrap_or_else(|e| panic!("{e}"));
 
-        let env = build_execution_env(&profile, &identity, &lease, &BTreeMap::default());
+        let env = build_execution_env(
+            &profile,
+            &identity,
+            &lease,
+            &profile.sidecar_endpoint,
+            &BTreeMap::default(),
+        );
         assert!(env.contains_key("HTTP_PROXY"));
         assert_eq!(env.get("FIRMA_RUN_PROFILE"), Some(&"generic".to_string()));
         let headers_json = env
@@ -527,7 +576,13 @@ mod tests {
         let lease = crate::capability::CapabilityLeaseManager::new(&profile.capability)
             .unwrap_or_else(|e| panic!("{e}"));
 
-        let env = build_execution_env(&profile, &identity, &lease, &BTreeMap::default());
+        let env = build_execution_env(
+            &profile,
+            &identity,
+            &lease,
+            &profile.sidecar_endpoint,
+            &BTreeMap::default(),
+        );
         assert_eq!(
             env.get("FIRMA_CAPABILITY_FILE"),
             Some(&token_path.display().to_string())
@@ -571,7 +626,13 @@ mod tests {
         let identity = RunIdentity::new("generic");
         let lease = crate::capability::CapabilityLeaseManager::new(&profile.capability)
             .unwrap_or_else(|e| panic!("{e}"));
-        let env = build_execution_env(&profile, &identity, &lease, &BTreeMap::default());
+        let env = build_execution_env(
+            &profile,
+            &identity,
+            &lease,
+            &profile.sidecar_endpoint,
+            &BTreeMap::default(),
+        );
 
         assert_eq!(
             env.get("FIRMA_RUN_SECCOMP_BPF_PATH"),
