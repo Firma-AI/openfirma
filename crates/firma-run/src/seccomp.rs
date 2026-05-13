@@ -531,6 +531,7 @@ fn current_runtime_uid() -> Result<u32, RunError> {
 }
 
 #[cfg(not(target_os = "linux"))]
+#[allow(clippy::unnecessary_wraps)]
 fn verify_artifact_trust_paths(
     _managed: &SeccompPolicyConfig,
     _bpf_path: &Path,

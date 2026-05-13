@@ -664,9 +664,9 @@ fn default_managed_seccomp_policy(
         .filter(|value| !value.trim().is_empty())
         .map_or_else(
             || {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("policies")
-                .join(DEFAULT_MANAGED_POLICY_FILE)
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("policies")
+                    .join(DEFAULT_MANAGED_POLICY_FILE)
             },
             PathBuf::from,
         );
