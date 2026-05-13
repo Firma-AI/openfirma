@@ -26,7 +26,7 @@ fn static_normalizer() -> &'static IntentNormalizer {
                 method: Some("POST".into()),
                 host: "api.stripe.com".into(),
                 path: Some("/v1/charges".into()),
-                action_class: "payment.charge".into(),
+                action_class: "payment.transfer".into(),
             },
             MappingRuleConfig {
                 method: None,
