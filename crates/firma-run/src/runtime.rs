@@ -169,6 +169,17 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         )?;
         let effective_endpoint = network_runtime.sidecar_endpoint().clone();
         let effective_seccomp = resolve_effective_seccomp(&profile)?;
+        if let Some(materialized) = &effective_seccomp {
+            tracing::info!(
+                policy_id = %materialized.metadata.policy_id,
+                policy_version = %materialized.metadata.policy_version,
+                policy_sha256 = %materialized.metadata.sha256,
+                target_arch = %materialized.metadata.target_arch,
+                compiler_version = %materialized.metadata.compiler_version,
+                seccomp_filter_path = %materialized.bpf_path.display(),
+                "resolved managed static seccomp artifact"
+            );
+        }
         let env = build_execution_env(
             &profile,
             &identity,
@@ -326,7 +337,6 @@ fn build_execution_env(
     lease: &CapabilityLeaseManager,
     sidecar_endpoint: &SidecarEndpoint,
     network_overrides: &BTreeMap<String, String>,
-    seccomp_filter_path: Option<&Path>,
 ) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
 
@@ -367,13 +377,6 @@ fn build_execution_env(
         "FIRMA_RUN_ATTR_HEADERS_JSON".to_string(),
         serde_json::to_string(&attr_headers).unwrap_or_else(|_| "{}".to_string()),
     );
-
-    if let Some(seccomp_path) = seccomp_filter_path {
-        env.insert(
-            "FIRMA_RUN_SECCOMP_BPF_PATH".to_string(),
-            seccomp_path.display().to_string(),
-        );
-    }
 
     if let Some(token) = lease.token() {
         env.insert("FIRMA_CAPABILITY_TOKEN".to_string(), token);
@@ -639,11 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn seccomp_path_is_exported_when_provided() {
-        let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let seccomp_path = tempdir.path().join("seccomp.bpf");
-        fs::write(&seccomp_path, [0_u8; 8]).unwrap_or_else(|e| panic!("{e}"));
-
+    fn execution_env_does_not_expose_seccomp_artifact_path() {
         let profile = ResolvedProfile {
             id: "generic".to_string(),
             backend: crate::backend::BackendKind::Bwrap,
@@ -677,12 +676,12 @@ mod tests {
             &lease,
             &profile.sidecar_endpoint,
             &BTreeMap::default(),
-            Some(seccomp_path.as_path()),
+            None,
         );
 
-        assert_eq!(
-            env.get("FIRMA_RUN_SECCOMP_BPF_PATH"),
-            Some(&seccomp_path.display().to_string())
+        assert!(
+            env.keys().all(|key| !key.starts_with("FIRMA_RUN_SECCOMP_")),
+            "runtime env must not expose legacy seccomp-path env vars"
         );
     }
 

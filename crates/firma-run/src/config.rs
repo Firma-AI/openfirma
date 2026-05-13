@@ -92,6 +92,12 @@ impl ResolvedProfile {
                     managed.artifact_dir.display()
                 )));
             }
+            if !managed.verify_checksum {
+                return Err(RunError::ConfigValidation(
+                    "seccomp_policy.verify_checksum=false is unsupported; checksum verification is mandatory"
+                        .to_string(),
+                ));
+            }
             if self.backend != BackendKind::Bwrap {
                 return Err(RunError::ConfigValidation(format!(
                     "seccomp_policy is only supported with backend 'bwrap', got '{backend}'",
@@ -194,7 +200,24 @@ pub struct SeccompPolicyConfig {
     pub source_policy_path: PathBuf,
     pub artifact_dir: PathBuf,
     pub verify_checksum: bool,
+    pub runtime_mode: SeccompRuntimeMode,
 }
+
+/// Runtime behavior for managed seccomp artifact selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SeccompRuntimeMode {
+    /// Compile/update managed seccomp artifacts during launch and then load.
+    CompileOnLaunch,
+    /// Require a precompiled managed seccomp artifact; do not compile at launch.
+    PrecompiledOnly,
+}
+
+const DEFAULT_MANAGED_POLICY_FILE: &str = "generic-local-command-v1.toml";
+const MANAGED_POLICY_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_POLICY_PATH";
+const MANAGED_ARTIFACT_DIR_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_ARTIFACT_DIR";
+const MANAGED_RUNTIME_MODE_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_RUNTIME_MODE";
+const MANAGED_DEFAULT_DISABLE_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_DISABLE_DEFAULT";
 
 /// Source for capability material.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -256,6 +279,7 @@ pub(crate) struct SeccompPolicyPatch {
     pub(crate) source_policy_path: PathBuf,
     pub(crate) artifact_dir: PathBuf,
     pub(crate) verify_checksum: Option<bool>,
+    pub(crate) runtime_mode: Option<SeccompRuntimeMode>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -402,6 +426,10 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     let executable_policies =
         resolve_executable_policies(patch.executable_policies, patch.codex_cli);
 
+    let seccomp_policy = patch
+        .seccomp_policy
+        .map(seccomp_policy_from_patch)
+        .or(default_managed_seccomp_policy(&args.profile, backend)?);
     let resolved = ResolvedProfile {
         id: args.profile.clone(),
         backend,
@@ -409,7 +437,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         env_passthrough,
         env_set: patch.env_set,
         mounts,
-        seccomp_policy: patch.seccomp_policy.map(seccomp_policy_from_patch),
+        seccomp_policy,
         allowed_domains: patch.allowed_domains,
         network,
         identity_mode,
@@ -529,7 +557,81 @@ fn seccomp_policy_from_patch(patch: SeccompPolicyPatch) -> SeccompPolicyConfig {
         source_policy_path: patch.source_policy_path,
         artifact_dir: patch.artifact_dir,
         verify_checksum: patch.verify_checksum.unwrap_or(true),
+        runtime_mode: patch
+            .runtime_mode
+            .unwrap_or(SeccompRuntimeMode::CompileOnLaunch),
     }
+}
+
+fn default_managed_seccomp_policy(
+    profile_id: &str,
+    backend: BackendKind,
+) -> Result<Option<SeccompPolicyConfig>, RunError> {
+    if !cfg!(target_os = "linux") || backend != BackendKind::Bwrap || profile_id != "generic" {
+        return Ok(None);
+    }
+
+    if env_truthy(MANAGED_DEFAULT_DISABLE_ENV) {
+        tracing::warn!(
+            profile = profile_id,
+            env = MANAGED_DEFAULT_DISABLE_ENV,
+            "managed static seccomp default disabled by environment override"
+        );
+        return Ok(None);
+    }
+
+    let source_policy_path = std::env::var(MANAGED_POLICY_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("policies")
+                .join(DEFAULT_MANAGED_POLICY_FILE)
+        });
+
+    let artifact_dir = std::env::var(MANAGED_ARTIFACT_DIR_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(default_managed_artifact_dir);
+
+    let runtime_mode = std::env::var(MANAGED_RUNTIME_MODE_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| parse_managed_runtime_mode(&value))
+        .transpose()?
+        .unwrap_or(SeccompRuntimeMode::CompileOnLaunch);
+
+    Ok(Some(SeccompPolicyConfig {
+        source_policy_path,
+        artifact_dir,
+        verify_checksum: true,
+        runtime_mode,
+    }))
+}
+
+fn parse_managed_runtime_mode(value: &str) -> Result<SeccompRuntimeMode, RunError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "compile_on_launch" => Ok(SeccompRuntimeMode::CompileOnLaunch),
+        "precompiled_only" => Ok(SeccompRuntimeMode::PrecompiledOnly),
+        other => Err(RunError::ConfigValidation(format!(
+            "{MANAGED_RUNTIME_MODE_ENV} must be 'compile_on_launch' or 'precompiled_only', got '{other}'"
+        ))),
+    }
+}
+
+fn default_managed_artifact_dir() -> PathBuf {
+    std::env::temp_dir().join("firma").join("seccomp-artifacts")
+}
+
+fn env_truthy(name: &str) -> bool {
+    std::env::var(name).ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
@@ -570,7 +672,8 @@ mod tests {
     use crate::runtime::RunInput;
 
     use super::{
-        BackendKind, CapabilitySource, SandboxIdentityMode, SidecarEndpoint, resolve_profile,
+        BackendKind, CapabilitySource, SandboxIdentityMode, SeccompRuntimeMode, SidecarEndpoint,
+        resolve_profile,
     };
 
     fn args(profile: &str) -> RunInput {
@@ -606,6 +709,24 @@ mod tests {
             }
         );
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::SandboxUser);
+        if cfg!(target_os = "linux")
+            && resolved.backend == BackendKind::Bwrap
+            && !super::env_truthy(super::MANAGED_DEFAULT_DISABLE_ENV)
+        {
+            let managed = resolved
+                .seccomp_policy
+                .as_ref()
+                .unwrap_or_else(|| panic!("missing managed seccomp default"));
+            assert!(managed.verify_checksum);
+            assert_eq!(managed.runtime_mode, SeccompRuntimeMode::CompileOnLaunch);
+            assert!(
+                managed
+                    .source_policy_path
+                    .ends_with("policies/generic-local-command-v1.toml"),
+                "unexpected managed default policy path: {}",
+                managed.source_policy_path.display()
+            );
+        }
     }
 
     #[test]
@@ -808,6 +929,89 @@ artifact_dir = '{}'
         assert!(
             err.to_string()
                 .contains("seccomp_policy is only supported with backend 'bwrap'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn seccomp_policy_runtime_mode_parses_precompiled_only() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
+
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "bwrap"
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+runtime_mode = "precompiled_only"
+"#,
+            policy_path.display(),
+            artifact_dir.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        let seccomp = resolved
+            .seccomp_policy
+            .unwrap_or_else(|| panic!("missing seccomp policy"));
+        assert_eq!(seccomp.runtime_mode, SeccompRuntimeMode::PrecompiledOnly);
+    }
+
+    #[test]
+    fn seccomp_policy_rejects_checksum_disable() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
+
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "bwrap"
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+verify_checksum = false
+"#,
+            policy_path.display(),
+            artifact_dir.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let err = resolve_profile(&run_args).expect_err("expected checksum validation error");
+        assert!(
+            err.to_string()
+                .contains("seccomp_policy.verify_checksum=false is unsupported"),
             "unexpected error: {err}"
         );
     }

@@ -200,21 +200,22 @@ impl SandboxBackend for BwrapBackend {
         }
 
         #[cfg(target_os = "linux")]
-        let _seccomp_file: Option<File> = if let Some(seccomp_path) = launch
-            .env
-            .get("FIRMA_RUN_SECCOMP_BPF_PATH")
-            .filter(|value| !value.trim().is_empty())
-        {
-            let file = File::open(seccomp_path).map_err(|error| RunError::Backend {
+        let mut _seccomp_file: Option<File> = None;
+        #[cfg(target_os = "linux")]
+        let seccomp_path = launch
+            .seccomp_filter_path
+            .as_ref()
+            .map(|path| path.display().to_string());
+        #[cfg(target_os = "linux")]
+        if let Some(seccomp_path) = seccomp_path {
+            let file = File::open(&seccomp_path).map_err(|error| RunError::Backend {
                 backend: BackendKind::Bwrap.to_string(),
                 reason: format!("failed to open seccomp bpf file {seccomp_path}: {error}"),
             })?;
             clear_fd_cloexec(&file)?;
             command.arg("--seccomp").arg(file.as_raw_fd().to_string());
-            Some(file)
-        } else {
-            None
-        };
+            _seccomp_file = Some(file);
+        }
 
         for mount in &handle.mounts {
             if mount.read_only {
@@ -475,7 +476,8 @@ mod tests {
             args: vec![],
             cwd: std::path::PathBuf::from("/tmp"),
             env,
-            identity_mode: crate::config::SandboxIdentityMode::SandboxUser,
+            seccomp_filter_path: None,
+            identity_mode: SandboxIdentityMode::SandboxUser,
         };
         let suffixes = vec![
             ".ssh".to_string(),

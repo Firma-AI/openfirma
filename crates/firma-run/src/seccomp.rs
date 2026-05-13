@@ -1,6 +1,9 @@
 use std::collections::BTreeSet;
 use std::fs;
+use std::fs::File;
 use std::io::{ErrorKind, Write};
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -8,7 +11,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::config::{ResolvedProfile, SeccompPolicyConfig};
+use crate::config::{ResolvedProfile, SeccompPolicyConfig, SeccompRuntimeMode};
 use crate::error::RunError;
 
 const FILTER_CODE_LD_W_ABS: u16 = 0x20;
@@ -21,7 +24,7 @@ const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
 
 const SECCOMP_DATA_NR_OFFSET: u32 = 0;
 const SECCOMP_DATA_ARCH_OFFSET: u32 = 4;
-const COMPILER_VERSION: &str = "managed-seccomp-v1";
+const COMPILER_VERSION: &str = "managed-seccomp-v2";
 const POLICY_SCHEMA_VERSION: u32 = 1;
 const EPERM_ERRNO: u32 = 1;
 
@@ -29,6 +32,8 @@ const EPERM_ERRNO: u32 = 1;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeccompMaterialized {
     pub bpf_path: PathBuf,
+    pub metadata_path: PathBuf,
+    pub metadata: SeccompArtifactMetadata,
 }
 
 /// Resolve the effective seccomp filter for a profile.
@@ -47,11 +52,12 @@ pub fn resolve_effective_seccomp(
         return Ok(None);
     };
 
-    let generated = compile_seccomp_policy(managed)?;
+    let generated = materialize_seccomp_policy(managed)?;
     Ok(Some(generated))
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CedarSubsetPolicyFile {
     policy_id: String,
     policy_version: String,
@@ -64,6 +70,7 @@ struct CedarSubsetPolicyFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SeccompArtifactMetadata {
     pub policy_schema_version: u32,
     pub policy_id: String,
@@ -173,27 +180,82 @@ fn default_policy_action() -> String {
     "allow".to_string()
 }
 
-fn compile_seccomp_policy(managed: &SeccompPolicyConfig) -> Result<SeccompMaterialized, RunError> {
+#[derive(Debug, Clone)]
+struct ParsedPolicy {
+    parsed: CedarSubsetPolicyFile,
+    source_policy_sha256: String,
+}
+
+fn materialize_seccomp_policy(
+    managed: &SeccompPolicyConfig,
+) -> Result<SeccompMaterialized, RunError> {
     if !cfg!(target_os = "linux") {
         return Err(RunError::ConfigValidation(
             "seccomp policy is supported only on Linux hosts".to_string(),
         ));
     }
 
-    let policy_src = fs::read_to_string(&managed.source_policy_path).map_err(|error| {
+    let target_arch = current_target_arch()?;
+    let parsed_policy = parse_policy_source(&managed.source_policy_path)?;
+    validate_policy_source(&parsed_policy.parsed)?;
+    let (syscalls, unsupported_actions) =
+        map_actions_to_syscalls(&parsed_policy.parsed.deny_actions);
+    if !unsupported_actions.is_empty() {
+        return Err(RunError::ConfigValidation(format!(
+            "seccomp policy contains unsupported Cedar actions: {}; supported deny actions are: system.execute, filesystem.delete, credential.write",
+            unsupported_actions.join(", ")
+        )));
+    }
+    let expected_denied_syscalls = expected_denied_syscalls(target_arch, &syscalls);
+    let output_dir = managed.artifact_dir.join(artifact_relative_dir(
+        &parsed_policy.parsed.policy_id,
+        &parsed_policy.parsed.policy_version,
+        target_arch,
+    ));
+    let bpf_path = output_dir.join("policy.bpf");
+    let metadata_path = output_dir.join("policy.metadata.json");
+
+    match managed.runtime_mode {
+        SeccompRuntimeMode::CompileOnLaunch => compile_and_write_artifact(
+            managed,
+            target_arch,
+            parsed_policy,
+            syscalls,
+            expected_denied_syscalls,
+            bpf_path,
+            metadata_path,
+        ),
+        SeccompRuntimeMode::PrecompiledOnly => load_precompiled_artifact(
+            managed,
+            target_arch,
+            parsed_policy,
+            expected_denied_syscalls,
+            bpf_path,
+            metadata_path,
+        ),
+    }
+}
+
+fn parse_policy_source(path: &Path) -> Result<ParsedPolicy, RunError> {
+    let policy_src = fs::read_to_string(path).map_err(|error| {
         RunError::ConfigValidation(format!(
             "failed to read seccomp policy {}: {error}",
-            managed.source_policy_path.display()
+            path.display()
         ))
     })?;
-    let source_policy_sha = sha256_hex(policy_src.as_bytes());
-
     let parsed: CedarSubsetPolicyFile = toml::from_str(&policy_src).map_err(|error| {
         RunError::ConfigValidation(format!(
             "invalid seccomp policy {}: {error}",
-            managed.source_policy_path.display()
+            path.display()
         ))
     })?;
+    Ok(ParsedPolicy {
+        parsed,
+        source_policy_sha256: sha256_hex(policy_src.as_bytes()),
+    })
+}
+
+fn validate_policy_source(parsed: &CedarSubsetPolicyFile) -> Result<(), RunError> {
     if parsed.policy_id.trim().is_empty() {
         return Err(RunError::ConfigValidation(
             "seccomp policy_id must not be empty".to_string(),
@@ -210,52 +272,52 @@ fn compile_seccomp_policy(managed: &SeccompPolicyConfig) -> Result<SeccompMateri
             parsed.default_action
         )));
     }
+    Ok(())
+}
 
-    let target_arch = current_target_arch()?;
-    let (syscalls, unsupported_actions) = map_actions_to_syscalls(&parsed.deny_actions);
-    if !unsupported_actions.is_empty() {
-        return Err(RunError::ConfigValidation(format!(
-            "seccomp policy contains unsupported Cedar actions: {}; supported deny actions are: system.execute, filesystem.delete, credential.write",
-            unsupported_actions.join(", ")
-        )));
-    }
+fn compile_and_write_artifact(
+    managed: &SeccompPolicyConfig,
+    target_arch: TargetArch,
+    parsed_policy: ParsedPolicy,
+    syscalls: Vec<SyscallId>,
+    expected_denied_syscalls: Vec<String>,
+    bpf_path: PathBuf,
+    metadata_path: PathBuf,
+) -> Result<SeccompMaterialized, RunError> {
+    fs::create_dir_all(
+        bpf_path
+            .parent()
+            .ok_or_else(|| RunError::Internal("seccomp artifact parent dir missing".to_string()))?,
+    )
+    .map_err(|error| {
+        RunError::ConfigValidation(format!(
+            "failed to create seccomp artifact dir {}: {error}",
+            bpf_path
+                .parent()
+                .map_or_else(|| "<unknown>".to_string(), |p| p.display().to_string())
+        ))
+    })?;
 
     let (bpf_bytes, effective_syscalls) = emit_bpf_program(target_arch, &syscalls);
     let bpf_sha = sha256_hex(&bpf_bytes);
-
-    let rel_dir = format!(
-        "{}/{}/{}",
-        sanitize_path_segment(&parsed.policy_id),
-        sanitize_path_segment(&parsed.policy_version),
-        target_arch.as_str()
-    );
-    let output_dir = managed.artifact_dir.join(rel_dir);
-    fs::create_dir_all(&output_dir).map_err(|error| {
-        RunError::ConfigValidation(format!(
-            "failed to create seccomp artifact dir {}: {error}",
-            output_dir.display()
-        ))
-    })?;
-    let bpf_path = output_dir.join("policy.bpf");
-    let metadata_path = output_dir.join("policy.metadata.json");
 
     write_atomic(&bpf_path, &bpf_bytes)?;
 
     let metadata = SeccompArtifactMetadata {
         policy_schema_version: POLICY_SCHEMA_VERSION,
-        policy_id: parsed.policy_id,
-        policy_version: parsed.policy_version,
+        policy_id: parsed_policy.parsed.policy_id.clone(),
+        policy_version: parsed_policy.parsed.policy_version.clone(),
         sha256: bpf_sha,
         generated_at: Utc::now().to_rfc3339(),
         compiler_version: COMPILER_VERSION.to_string(),
         target_arch: target_arch.as_str().to_string(),
-        default_action: parsed.default_action,
-        source_policy_refs: if parsed.source_policy_refs.is_empty() {
+        default_action: parsed_policy.parsed.default_action.clone(),
+        source_policy_refs: if parsed_policy.parsed.source_policy_refs.is_empty() {
             vec![managed.source_policy_path.display().to_string()]
         } else {
-            parsed.source_policy_refs
+            parsed_policy.parsed.source_policy_refs.clone()
         },
-        source_policy_sha256: source_policy_sha,
+        source_policy_sha256: parsed_policy.source_policy_sha256.clone(),
         denied_syscalls: effective_syscalls,
     };
     let metadata_bytes = serde_json::to_vec_pretty(&metadata).map_err(|error| {
@@ -263,28 +325,164 @@ fn compile_seccomp_policy(managed: &SeccompPolicyConfig) -> Result<SeccompMateri
     })?;
     write_atomic(&metadata_path, &metadata_bytes)?;
 
-    if managed.verify_checksum {
-        verify_artifact_checksum(&bpf_path, &metadata_path)?;
-    }
+    verify_artifact_trust_paths(managed, &bpf_path, &metadata_path)?;
+    validate_metadata_contract(
+        &metadata,
+        target_arch,
+        &parsed_policy.parsed,
+        &parsed_policy.source_policy_sha256,
+        &expected_denied_syscalls,
+    )?;
+    verify_artifact_checksum(&bpf_path, &metadata)?;
 
-    Ok(SeccompMaterialized { bpf_path })
+    Ok(SeccompMaterialized {
+        bpf_path,
+        metadata_path,
+        metadata,
+    })
 }
 
-fn verify_artifact_checksum(bpf_path: &Path, metadata_path: &Path) -> Result<(), RunError> {
+fn load_precompiled_artifact(
+    managed: &SeccompPolicyConfig,
+    target_arch: TargetArch,
+    parsed_policy: ParsedPolicy,
+    expected_denied_syscalls: Vec<String>,
+    bpf_path: PathBuf,
+    metadata_path: PathBuf,
+) -> Result<SeccompMaterialized, RunError> {
+    let metadata = read_metadata(&metadata_path)?;
+    verify_artifact_trust_paths(managed, &bpf_path, &metadata_path)?;
+    validate_metadata_contract(
+        &metadata,
+        target_arch,
+        &parsed_policy.parsed,
+        &parsed_policy.source_policy_sha256,
+        &expected_denied_syscalls,
+    )?;
+    verify_artifact_checksum(&bpf_path, &metadata)?;
+    Ok(SeccompMaterialized {
+        bpf_path,
+        metadata_path,
+        metadata,
+    })
+}
+
+fn artifact_relative_dir(policy_id: &str, policy_version: &str, target_arch: TargetArch) -> String {
+    format!(
+        "{}/{}/{}",
+        sanitize_path_segment(policy_id),
+        sanitize_path_segment(policy_version),
+        target_arch.as_str()
+    )
+}
+
+fn expected_denied_syscalls(target_arch: TargetArch, syscalls: &[SyscallId]) -> Vec<String> {
+    syscalls
+        .iter()
+        .copied()
+        .filter(|syscall| syscall.number_for_arch(target_arch).is_some())
+        .map(SyscallId::name)
+        .map(str::to_string)
+        .collect()
+}
+
+fn read_metadata(metadata_path: &Path) -> Result<SeccompArtifactMetadata, RunError> {
     let metadata_bytes = fs::read(metadata_path).map_err(|error| {
         RunError::ConfigValidation(format!(
             "failed to read seccomp metadata {}: {error}",
             metadata_path.display()
         ))
     })?;
-    let metadata: SeccompArtifactMetadata =
-        serde_json::from_slice(&metadata_bytes).map_err(|error| {
-            RunError::ConfigValidation(format!(
-                "failed to parse seccomp metadata {}: {error}",
-                metadata_path.display()
-            ))
-        })?;
+    serde_json::from_slice(&metadata_bytes).map_err(|error| {
+        RunError::ConfigValidation(format!(
+            "failed to parse seccomp metadata {}: {error}",
+            metadata_path.display()
+        ))
+    })
+}
 
+fn validate_metadata_contract(
+    metadata: &SeccompArtifactMetadata,
+    target_arch: TargetArch,
+    parsed_policy: &CedarSubsetPolicyFile,
+    source_policy_sha256: &str,
+    expected_denied_syscalls: &[String],
+) -> Result<(), RunError> {
+    if metadata.policy_schema_version != POLICY_SCHEMA_VERSION {
+        return Err(RunError::ConfigValidation(format!(
+            "seccomp metadata policy_schema_version mismatch: expected {}, got {}",
+            POLICY_SCHEMA_VERSION, metadata.policy_schema_version
+        )));
+    }
+    if metadata.policy_id != parsed_policy.policy_id {
+        return Err(RunError::ConfigValidation(format!(
+            "seccomp metadata policy_id mismatch: expected '{}', got '{}'",
+            parsed_policy.policy_id, metadata.policy_id
+        )));
+    }
+    if metadata.policy_version != parsed_policy.policy_version {
+        return Err(RunError::ConfigValidation(format!(
+            "seccomp metadata policy_version mismatch: expected '{}', got '{}'",
+            parsed_policy.policy_version, metadata.policy_version
+        )));
+    }
+    if metadata.default_action != parsed_policy.default_action {
+        return Err(RunError::ConfigValidation(format!(
+            "seccomp metadata default_action mismatch: expected '{}', got '{}'",
+            parsed_policy.default_action, metadata.default_action
+        )));
+    }
+    if metadata.target_arch != target_arch.as_str() {
+        return Err(RunError::ConfigValidation(format!(
+            "seccomp metadata target_arch mismatch: expected '{}', got '{}'",
+            target_arch.as_str(),
+            metadata.target_arch
+        )));
+    }
+    if metadata.compiler_version.trim().is_empty() {
+        return Err(RunError::ConfigValidation(
+            "seccomp metadata compiler_version must not be empty".to_string(),
+        ));
+    }
+    if metadata.generated_at.trim().is_empty() {
+        return Err(RunError::ConfigValidation(
+            "seccomp metadata generated_at must not be empty".to_string(),
+        ));
+    }
+    if metadata.source_policy_refs.is_empty() {
+        return Err(RunError::ConfigValidation(
+            "seccomp metadata source_policy_refs must not be empty".to_string(),
+        ));
+    }
+    if metadata.source_policy_sha256 != source_policy_sha256 {
+        return Err(RunError::ConfigValidation(format!(
+            "seccomp metadata source_policy_sha256 mismatch: expected {}, got {}",
+            source_policy_sha256, metadata.source_policy_sha256
+        )));
+    }
+    if metadata.denied_syscalls != expected_denied_syscalls {
+        return Err(RunError::ConfigValidation(format!(
+            "seccomp metadata denied_syscalls mismatch: expected {:?}, got {:?}",
+            expected_denied_syscalls, metadata.denied_syscalls
+        )));
+    }
+    if !is_valid_sha256_hex(&metadata.sha256) {
+        return Err(RunError::ConfigValidation(format!(
+            "seccomp metadata sha256 is invalid: {}",
+            metadata.sha256
+        )));
+    }
+    Ok(())
+}
+
+fn is_valid_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn verify_artifact_checksum(
+    bpf_path: &Path,
+    metadata: &SeccompArtifactMetadata,
+) -> Result<(), RunError> {
     let file_bytes = fs::read(bpf_path).map_err(|error| {
         RunError::ConfigValidation(format!(
             "failed to read seccomp artifact {}: {error}",
@@ -298,6 +496,112 @@ fn verify_artifact_checksum(bpf_path: &Path, metadata_path: &Path) -> Result<(),
             bpf_path.display(),
             metadata.sha256,
             actual_sha
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn verify_artifact_trust_paths(
+    managed: &SeccompPolicyConfig,
+    bpf_path: &Path,
+    metadata_path: &Path,
+) -> Result<(), RunError> {
+    let leaf_dir = bpf_path.parent().ok_or_else(|| {
+        RunError::ConfigValidation("seccomp artifact leaf directory is missing".to_string())
+    })?;
+    let current_uid = current_runtime_uid()?;
+
+    verify_secure_dir(&managed.artifact_dir, current_uid, "seccomp artifact_dir")?;
+    verify_secure_dir(leaf_dir, current_uid, "seccomp artifact leaf directory")?;
+    verify_secure_file(bpf_path, current_uid, "seccomp artifact")?;
+    verify_secure_file(metadata_path, current_uid, "seccomp metadata")?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn current_runtime_uid() -> Result<u32, RunError> {
+    fs::metadata("/proc/self")
+        .map(|meta| meta.uid())
+        .map_err(|error| {
+            RunError::ConfigValidation(format!(
+                "failed to resolve runtime uid from /proc/self: {error}"
+            ))
+        })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn verify_artifact_trust_paths(
+    _managed: &SeccompPolicyConfig,
+    _bpf_path: &Path,
+    _metadata_path: &Path,
+) -> Result<(), RunError> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn verify_secure_dir(path: &Path, current_uid: u32, label: &str) -> Result<(), RunError> {
+    let meta = read_non_symlink(path, label)?;
+    if !meta.is_dir() {
+        return Err(RunError::ConfigValidation(format!(
+            "{label} must be a directory: {}",
+            path.display()
+        )));
+    }
+    verify_owner_and_mode(path, label, current_uid, meta.uid(), meta.mode())
+}
+
+#[cfg(target_os = "linux")]
+fn verify_secure_file(path: &Path, current_uid: u32, label: &str) -> Result<(), RunError> {
+    let meta = read_non_symlink(path, label)?;
+    if !meta.is_file() {
+        return Err(RunError::ConfigValidation(format!(
+            "{label} must be a regular file: {}",
+            path.display()
+        )));
+    }
+    verify_owner_and_mode(path, label, current_uid, meta.uid(), meta.mode())
+}
+
+#[cfg(target_os = "linux")]
+fn read_non_symlink(path: &Path, label: &str) -> Result<std::fs::Metadata, RunError> {
+    let symlink_meta = fs::symlink_metadata(path).map_err(|error| {
+        RunError::ConfigValidation(format!(
+            "failed to stat {label} {}: {error}",
+            path.display()
+        ))
+    })?;
+    if symlink_meta.file_type().is_symlink() {
+        return Err(RunError::ConfigValidation(format!(
+            "{label} must not be a symlink: {}",
+            path.display()
+        )));
+    }
+    Ok(symlink_meta)
+}
+
+#[cfg(target_os = "linux")]
+fn verify_owner_and_mode(
+    path: &Path,
+    label: &str,
+    current_uid: u32,
+    owner_uid: u32,
+    mode: u32,
+) -> Result<(), RunError> {
+    if owner_uid != current_uid {
+        return Err(RunError::ConfigValidation(format!(
+            "{label} owner mismatch for {}: expected uid {}, got uid {}",
+            path.display(),
+            current_uid,
+            owner_uid
+        )));
+    }
+    let perms = mode & 0o777;
+    if perms & 0o002 != 0 {
+        return Err(RunError::ConfigValidation(format!(
+            "{label} has insecure permissions for {}: mode {:o}; other-write bit is forbidden",
+            path.display(),
+            perms
         )));
     }
     Ok(())
@@ -372,6 +676,14 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), RunError> {
                 path.display()
             )));
         }
+        if let Some(parent) = path.parent()
+            && let Err(error) = sync_parent_dir(parent)
+        {
+            return Err(RunError::ConfigValidation(format!(
+                "failed to sync parent dir {}: {error}",
+                parent.display()
+            )));
+        }
         return Ok(());
     }
 
@@ -380,6 +692,11 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), RunError> {
         path.display(),
         last_err.map_or_else(|| "unknown error".to_string(), |e| e.to_string())
     )))
+}
+
+fn sync_parent_dir(path: &Path) -> Result<(), std::io::Error> {
+    let dir = File::open(path)?;
+    dir.sync_all()
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -485,6 +802,8 @@ fn emit_jump(out: &mut Vec<u8>, code: u16, k: u32, jt: u8, jf: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     #[test]
     fn maps_supported_actions_to_expected_syscalls() {
@@ -528,16 +847,47 @@ deny_actions = ["filesystem.delete", "system.execute"]
             source_policy_path: policy_path,
             artifact_dir: artifacts,
             verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
 
-        let out = compile_seccomp_policy(&managed).unwrap_or_else(|e| panic!("{e}"));
+        let out = materialize_seccomp_policy(&managed).unwrap_or_else(|e| panic!("{e}"));
         assert!(out.bpf_path.is_file());
-        let metadata_path = out
-            .bpf_path
-            .parent()
-            .unwrap_or_else(|| panic!("missing parent"))
-            .join("policy.metadata.json");
-        assert!(metadata_path.is_file());
+        assert!(out.metadata_path.is_file());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn compile_on_launch_is_reproducible_for_same_policy_and_arch() {
+        let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tempdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete", "credential.write"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifacts = tempdir.path().join("artifacts");
+        let managed = SeccompPolicyConfig {
+            source_policy_path: policy_path,
+            artifact_dir: artifacts,
+            verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
+        };
+
+        let out_a = materialize_seccomp_policy(&managed).unwrap_or_else(|e| panic!("{e}"));
+        let bytes_a = fs::read(&out_a.bpf_path).unwrap_or_else(|e| panic!("{e}"));
+        let out_b = materialize_seccomp_policy(&managed).unwrap_or_else(|e| panic!("{e}"));
+        let bytes_b = fs::read(&out_b.bpf_path).unwrap_or_else(|e| panic!("{e}"));
+
+        assert_eq!(bytes_a, bytes_b, "bpf bytes must be deterministic");
+        assert_eq!(
+            out_a.metadata.sha256, out_b.metadata.sha256,
+            "artifact checksums must be deterministic"
+        );
     }
 
     #[test]
@@ -561,17 +911,13 @@ deny_actions = ["filesystem.delete"]
             source_policy_path: policy_path,
             artifact_dir: artifacts,
             verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
 
-        let out = compile_seccomp_policy(&managed).unwrap_or_else(|e| panic!("{e}"));
-        let metadata_path = out
-            .bpf_path
-            .parent()
-            .unwrap_or_else(|| panic!("missing parent"))
-            .join("policy.metadata.json");
+        let out = materialize_seccomp_policy(&managed).unwrap_or_else(|e| panic!("{e}"));
         fs::write(&out.bpf_path, [1_u8, 2, 3, 4]).unwrap_or_else(|e| panic!("{e}"));
 
-        let err = verify_artifact_checksum(&out.bpf_path, &metadata_path)
+        let err = verify_artifact_checksum(&out.bpf_path, &out.metadata)
             .expect_err("expected checksum mismatch");
         assert!(
             err.to_string().contains("seccomp checksum mismatch"),
@@ -587,8 +933,10 @@ deny_actions = ["filesystem.delete"]
             source_policy_path: tempdir.path().join("missing.toml"),
             artifact_dir: tempdir.path().join("artifacts"),
             verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
-        let err = compile_seccomp_policy(&managed).expect_err("expected missing policy failure");
+        let err =
+            materialize_seccomp_policy(&managed).expect_err("expected missing policy failure");
         assert!(
             err.to_string().contains("failed to read seccomp policy"),
             "unexpected error: {err}"
@@ -614,8 +962,10 @@ deny_actions = ["system.install"]
             source_policy_path: policy_path,
             artifact_dir: tempdir.path().join("artifacts"),
             verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
-        let err = compile_seccomp_policy(&managed).expect_err("expected unsupported action error");
+        let err =
+            materialize_seccomp_policy(&managed).expect_err("expected unsupported action error");
         assert!(
             err.to_string()
                 .contains("seccomp policy contains unsupported Cedar actions"),
@@ -642,12 +992,263 @@ deny_actions = ["filesystem.delete"]
             source_policy_path: policy_path,
             artifact_dir: tempdir.path().join("artifacts"),
             verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
-        let err = compile_seccomp_policy(&managed)
+        let err = materialize_seccomp_policy(&managed)
             .expect_err("expected unsupported default_action error");
         assert!(
             err.to_string()
                 .contains("seccomp policy default_action 'deny' is unsupported"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn precompiled_mode_fails_when_artifact_missing() {
+        let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tempdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let managed = SeccompPolicyConfig {
+            source_policy_path: policy_path,
+            artifact_dir: tempdir.path().join("artifacts"),
+            verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::PrecompiledOnly,
+        };
+        let err = materialize_seccomp_policy(&managed)
+            .expect_err("expected missing precompiled artifact");
+        assert!(
+            err.to_string().contains("failed to read seccomp metadata"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn precompiled_mode_fails_on_invalid_metadata_format() {
+        let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tempdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        let arch = current_target_arch().unwrap_or_else(|e| panic!("{e}"));
+        let out_dir =
+            tempdir
+                .path()
+                .join(artifact_relative_dir("generic-local-command", "v1", arch));
+        fs::create_dir_all(&out_dir).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(out_dir.join("policy.bpf"), [0_u8; 16]).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(out_dir.join("policy.metadata.json"), b"{not-json")
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        let managed = SeccompPolicyConfig {
+            source_policy_path: policy_path,
+            artifact_dir: tempdir.path().to_path_buf(),
+            verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::PrecompiledOnly,
+        };
+        let err =
+            materialize_seccomp_policy(&managed).expect_err("expected invalid metadata parse");
+        assert!(
+            err.to_string().contains("failed to parse seccomp metadata"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn precompiled_mode_fails_on_checksum_mismatch() {
+        let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tempdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tempdir.path().join("artifacts");
+
+        let compile_mode = SeccompPolicyConfig {
+            source_policy_path: policy_path.clone(),
+            artifact_dir: artifact_dir.clone(),
+            verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
+        };
+        let compiled = materialize_seccomp_policy(&compile_mode).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&compiled.bpf_path, [9_u8, 8, 7, 6]).unwrap_or_else(|e| panic!("{e}"));
+
+        let precompiled_mode = SeccompPolicyConfig {
+            source_policy_path: policy_path,
+            artifact_dir,
+            verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::PrecompiledOnly,
+        };
+        let err = materialize_seccomp_policy(&precompiled_mode)
+            .expect_err("expected checksum mismatch in precompiled mode");
+        assert!(
+            err.to_string().contains("seccomp checksum mismatch"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn precompiled_mode_fails_on_metadata_contract_mismatch() {
+        let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tempdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tempdir.path().join("artifacts");
+
+        let compile_mode = SeccompPolicyConfig {
+            source_policy_path: policy_path.clone(),
+            artifact_dir: artifact_dir.clone(),
+            verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
+        };
+        let compiled = materialize_seccomp_policy(&compile_mode).unwrap_or_else(|e| panic!("{e}"));
+
+        let mut mutated = compiled.metadata.clone();
+        mutated.denied_syscalls = vec!["openat".to_string()];
+        let mutated_json = serde_json::to_vec_pretty(&mutated).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&compiled.metadata_path, mutated_json).unwrap_or_else(|e| panic!("{e}"));
+
+        let precompiled_mode = SeccompPolicyConfig {
+            source_policy_path: policy_path,
+            artifact_dir,
+            verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::PrecompiledOnly,
+        };
+        let err = materialize_seccomp_policy(&precompiled_mode)
+            .expect_err("expected metadata contract mismatch");
+        assert!(
+            err.to_string()
+                .contains("seccomp metadata denied_syscalls mismatch"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn precompiled_mode_rejects_group_writable_artifact_dir() {
+        let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tempdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tempdir.path().join("artifacts");
+
+        let compile_mode = SeccompPolicyConfig {
+            source_policy_path: policy_path.clone(),
+            artifact_dir: artifact_dir.clone(),
+            verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
+        };
+        let compiled = materialize_seccomp_policy(&compile_mode).unwrap_or_else(|e| panic!("{e}"));
+        let leaf_dir = compiled
+            .bpf_path
+            .parent()
+            .unwrap_or_else(|| panic!("missing artifact leaf dir"));
+
+        fs::set_permissions(leaf_dir, std::fs::Permissions::from_mode(0o777))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let precompiled_mode = SeccompPolicyConfig {
+            source_policy_path: policy_path,
+            artifact_dir,
+            verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::PrecompiledOnly,
+        };
+        let err = materialize_seccomp_policy(&precompiled_mode)
+            .expect_err("expected permissions hardening failure");
+        assert!(
+            err.to_string().contains("insecure permissions"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn precompiled_mode_rejects_symlinked_metadata_file() {
+        let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tempdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let good_artifact_dir = tempdir.path().join("artifacts-good");
+
+        let compile_mode = SeccompPolicyConfig {
+            source_policy_path: policy_path.clone(),
+            artifact_dir: good_artifact_dir.clone(),
+            verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
+        };
+        let compiled = materialize_seccomp_policy(&compile_mode).unwrap_or_else(|e| panic!("{e}"));
+
+        let bad_artifact_dir = tempdir.path().join("artifacts-bad");
+        let arch = current_target_arch().unwrap_or_else(|e| panic!("{e}"));
+        let rel = artifact_relative_dir("generic-local-command", "v1", arch);
+        let bad_leaf = bad_artifact_dir.join(rel);
+        fs::create_dir_all(&bad_leaf).unwrap_or_else(|e| panic!("{e}"));
+        fs::copy(&compiled.bpf_path, bad_leaf.join("policy.bpf")).unwrap_or_else(|e| panic!("{e}"));
+        symlink(
+            &compiled.metadata_path,
+            bad_leaf.join("policy.metadata.json"),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        let precompiled_mode = SeccompPolicyConfig {
+            source_policy_path: policy_path,
+            artifact_dir: bad_artifact_dir,
+            verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::PrecompiledOnly,
+        };
+        let err = materialize_seccomp_policy(&precompiled_mode)
+            .expect_err("expected symlink hardening failure");
+        assert!(
+            err.to_string().contains("must not be a symlink"),
             "unexpected error: {err}"
         );
     }
@@ -667,8 +1268,9 @@ deny_actions = ["filesystem.delete"]
             source_policy_path: PathBuf::from("/tmp/unused.toml"),
             artifact_dir: PathBuf::from("/tmp/artifacts"),
             verify_checksum: true,
+            runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };
-        let err = compile_seccomp_policy(&managed).expect_err("expected non-linux rejection");
+        let err = materialize_seccomp_policy(&managed).expect_err("expected non-linux rejection");
         assert!(
             err.to_string()
                 .contains("seccomp policy is supported only on Linux hosts"),

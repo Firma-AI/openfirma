@@ -216,6 +216,7 @@ mod tests {
             args: vec![],
             cwd: PathBuf::from("/tmp"),
             env,
+            seccomp_filter_path: None,
             identity_mode: SandboxIdentityMode::SandboxUser,
         };
         let profile = super::build_claude_code_sandbox_profile(&launch);
