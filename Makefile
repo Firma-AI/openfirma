@@ -21,9 +21,9 @@ install-system:
 	@corepack enable >/dev/null 2>&1 || echo "warning: 'corepack enable' failed; you may need to run it with sudo"
 
 install-tools:
-	@if ! command -v gitleaks >/dev/null 2>&1; then \
-	  echo "warning: gitleaks not found — install from https://github.com/gitleaks/gitleaks/releases"; \
-	  echo "         (macOS: brew install gitleaks)"; \
+	@if ! command -v trufflehog >/dev/null 2>&1; then \
+	  echo "warning: trufflehog not found — install from https://github.com/trufflesecurity/trufflehog/releases"; \
+	  echo "         (macOS: brew install trufflehog)"; \
 	fi
 	@git config core.hooksPath .githooks
 	@echo "Git hooks wired to .githooks/"
