@@ -7,10 +7,11 @@ if ! command -v trufflehog >/dev/null 2>&1; then
 fi
 
 # Scan only files staged for this commit. `--since-commit HEAD` scans nothing
-# pre-commit (there are no commits past HEAD yet), so we feed the staged blobs
-# through filesystem mode instead. `-z` + null-delimited read handles paths
-# containing newlines; `ACMR` covers added, copied, modified, and renamed
-# entries (renamed-with-edits would slip past plain ACM).
+# pre-commit (there are no commits past HEAD yet), so we materialise the staged
+# blobs into a tmpdir via `git checkout-index` and run filesystem mode there.
+# `-z` keeps the path stream null-delimited so filenames containing newlines or
+# special chars round-trip safely; `ACMR` covers added, copied, modified, and
+# renamed entries (renamed-with-edits would slip past plain ACM).
 if [ -z "$(git diff --cached --name-only --diff-filter=ACMR)" ]; then
     exit 0
 fi
@@ -18,10 +19,7 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-git diff --cached -z --name-only --diff-filter=ACMR | while IFS= read -r -d '' path; do
-    dest="$tmp/$path"
-    mkdir -p "$(dirname "$dest")"
-    git show ":$path" > "$dest" 2>/dev/null || true
-done
+git diff --cached -z --name-only --diff-filter=ACMR \
+    | git checkout-index --stdin -z --prefix="$tmp/"
 
 trufflehog filesystem "$tmp" --no-update --results=verified,unverified,unknown --fail
