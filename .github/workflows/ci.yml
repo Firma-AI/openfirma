@@ -14,9 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall -y cargo-audit
+      - run: cargo audit
 
   deny:
     name: Licenses & Bans
