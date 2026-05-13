@@ -28,7 +28,17 @@ cargo run -p firma -- run --profile generic -- curl https://example.com
 firma stack stop
 ```
 
-For more detail, see the [`firma run` examples](examples/firma-run/README.md), the [CLI reference](docs/cli.md), and the [configuration reference](docs/configuration.md). The intentionally risky demo agents live in [`examples/agents`](examples/agents/README.md).
+The same single command also works without a pre-started Sidecar — `firma run` autostarts a per-run Sidecar on the fly and tears it down when the wrapped process exits:
+
+```bash
+examples/firma-run/local/setup.sh
+FIRMA_SIDECAR_CONFIG_FILE=.local/firma_sidecar.local.toml \
+  cargo run -p firma -- run --profile generic -- curl https://example.com
+```
+
+For CI or production paths where the Sidecar is managed externally, pass `--sidecar=external` (uses the existing endpoint, never spawns) or `--no-autostart` (fails loudly if no Sidecar is reachable).
+
+For more detail, see the [`firma run` examples](examples/firma-run/README.md), the [CLI reference](docs/cli.md) (autostart flags + marker layout under `## firma run`), and the [configuration reference](docs/configuration.md). The intentionally risky demo agents live in [`examples/agents`](examples/agents/README.md).
 
 ## How Firma is structured
 

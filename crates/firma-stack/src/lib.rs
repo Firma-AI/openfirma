@@ -3,6 +3,7 @@
 pub mod config;
 pub mod error;
 pub mod pidfile;
+pub mod runtime_paths;
 pub mod shutdown_event;
 pub mod start;
 pub mod state_dir;
@@ -17,6 +18,7 @@ mod supervisor;
 
 pub use config::{StackConfig, load_stack_config};
 pub use error::StackError;
+pub use runtime_paths::{default_runtime_dir, run_dir_from, run_entry_from};
 pub use start::{StackHandle, StartMode, spawn_stack, start, supervise};
 pub use state_dir::resolve_state_dir;
 pub use status::{ComponentStatus, StackStatus, State, status};
