@@ -143,7 +143,7 @@ pub enum DenialContext {
 ///
 /// `ToolUse` → `Tool`; `Http` / `DbQuery` → `Api`.
 #[must_use]
-pub const fn denial_context_from_params(params: &ActionParams) -> DenialContext {
+pub fn denial_context_from_params(params: &ActionParams) -> DenialContext {
     match params {
         ActionParams::ToolUse(_) => DenialContext::Tool,
         ActionParams::Http(_) | ActionParams::DbQuery(_) => DenialContext::Api,
@@ -315,7 +315,7 @@ impl RequestHandler {
     /// Constructs a request handler from the enforcement pipeline, the
     /// connector registry, and the audit payload channel.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         pipeline: Arc<EnforcementPipeline>,
         connector_registry: Arc<ConnectorRegistry>,
         audit_sink_sender: mpsc::Sender<AuditPayload>,

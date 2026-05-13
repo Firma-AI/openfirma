@@ -252,7 +252,7 @@ impl Connector for GenericHttpConnector {
     }
 }
 
-const fn to_reqwest_method(method: HttpMethod) -> reqwest::Method {
+fn to_reqwest_method(method: HttpMethod) -> reqwest::Method {
     match method {
         HttpMethod::GET => reqwest::Method::GET,
         HttpMethod::POST => reqwest::Method::POST,
@@ -329,7 +329,7 @@ fn reqwest_error_flags(err: &reqwest::Error) -> ReqwestErrorFlags {
 ///
 /// Unknown / all-false combinations fall through to [`Network`] since
 /// the runtime maps `Network` to DENY.
-const fn classify_reqwest_error(flags: ReqwestErrorFlags) -> ConnectorErrorKind {
+fn classify_reqwest_error(flags: ReqwestErrorFlags) -> ConnectorErrorKind {
     if flags.is_timeout {
         ConnectorErrorKind::Timeout
     } else if flags.is_builder {

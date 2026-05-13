@@ -75,22 +75,22 @@ pub enum EnforcementDecision {
 
 impl EnforcementDecision {
     #[must_use]
-    pub const fn is_allow(&self) -> bool {
+    pub fn is_allow(&self) -> bool {
         matches!(self, Self::Allow { .. })
     }
 
     #[must_use]
-    pub const fn is_deny(&self) -> bool {
+    pub fn is_deny(&self) -> bool {
         matches!(self, Self::Deny { .. })
     }
 
     #[must_use]
-    pub const fn is_passthrough(&self) -> bool {
+    pub fn is_passthrough(&self) -> bool {
         matches!(self, Self::Passthrough { .. })
     }
 
     #[must_use]
-    pub const fn deny_reason(&self) -> Option<DenyReason> {
+    pub fn deny_reason(&self) -> Option<DenyReason> {
         match self {
             Self::Deny { reason, .. } => Some(*reason),
             Self::Allow { .. } | Self::Passthrough { .. } => None,
@@ -98,7 +98,7 @@ impl EnforcementDecision {
     }
 
     #[must_use]
-    pub const fn stage(&self) -> Option<EnforcementStage> {
+    pub fn stage(&self) -> Option<EnforcementStage> {
         match self {
             Self::Deny { stage, .. } => Some(*stage),
             Self::Allow { .. } | Self::Passthrough { .. } => None,

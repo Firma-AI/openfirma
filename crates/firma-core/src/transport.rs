@@ -71,7 +71,7 @@ impl TransportView {
     /// Creates a new [`TransportView`] from an envelope and its
     /// injected credentials.
     #[must_use]
-    pub const fn new(envelope: ExecutionEnvelope, credentials: InjectedCredentials) -> Self {
+    pub fn new(envelope: ExecutionEnvelope, credentials: InjectedCredentials) -> Self {
         Self {
             envelope,
             credentials,
@@ -80,13 +80,13 @@ impl TransportView {
 
     /// Returns a reference to the enforced [`ExecutionEnvelope`].
     #[must_use]
-    pub const fn envelope(&self) -> &ExecutionEnvelope {
+    pub fn envelope(&self) -> &ExecutionEnvelope {
         &self.envelope
     }
 
     /// Returns a reference to the [`InjectedCredentials`].
     #[must_use]
-    pub const fn credentials(&self) -> &InjectedCredentials {
+    pub fn credentials(&self) -> &InjectedCredentials {
         &self.credentials
     }
 }

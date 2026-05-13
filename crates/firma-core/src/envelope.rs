@@ -30,7 +30,7 @@ pub struct ExecutionEnvelope {
 impl ExecutionEnvelope {
     /// Constructs a new `ExecutionEnvelope`.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         intent: ExecutionIntent,
         capability: String,
         metadata: ExecutionMetadata,
@@ -46,7 +46,7 @@ impl ExecutionEnvelope {
 
     /// Gets the typed action parameters describing what the agent wants to do.
     #[must_use]
-    pub const fn intent(&self) -> &ExecutionIntent {
+    pub fn intent(&self) -> &ExecutionIntent {
         &self.intent
     }
 
@@ -58,7 +58,7 @@ impl ExecutionEnvelope {
 
     /// Gets the session and runtime metadata for correlation and audit.
     #[must_use]
-    pub const fn metadata(&self) -> &ExecutionMetadata {
+    pub fn metadata(&self) -> &ExecutionMetadata {
         &self.metadata
     }
 

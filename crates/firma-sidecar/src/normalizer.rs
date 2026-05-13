@@ -145,7 +145,7 @@ fn runtime_timestamp() -> DateTime<Utc> {
 
 impl IntentNormalizer {
     #[must_use]
-    pub const fn new(mapping_table: MappingTable) -> Self {
+    pub fn new(mapping_table: MappingTable) -> Self {
         Self { mapping_table }
     }
 

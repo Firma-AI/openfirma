@@ -133,7 +133,7 @@ impl Server {
 
     /// Get the port the server is bound to.
     #[must_use]
-    pub const fn port(&self) -> u16 {
+    pub fn port(&self) -> u16 {
         self.port
     }
 }

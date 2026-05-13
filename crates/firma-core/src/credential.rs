@@ -45,7 +45,7 @@ pub struct InjectedCredentials {
 impl InjectedCredentials {
     /// Creates a new [`InjectedCredentials`] from a header map.
     #[must_use]
-    pub const fn new(headers: HashMap<String, String>) -> Self {
+    pub fn new(headers: HashMap<String, String>) -> Self {
         Self { headers }
     }
 
@@ -59,7 +59,7 @@ impl InjectedCredentials {
 
     /// Returns a reference to the injected headers.
     #[must_use]
-    pub const fn headers(&self) -> &HashMap<String, String> {
+    pub fn headers(&self) -> &HashMap<String, String> {
         &self.headers
     }
 

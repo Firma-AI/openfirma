@@ -13,7 +13,7 @@ use crate::config::{self, InterceptorMode};
 use crate::handler::RequestHandler;
 use crate::interceptor::{self, Interceptor as _};
 
-const fn is_loopback_addr(addr: std::net::SocketAddr) -> bool {
+fn is_loopback_addr(addr: std::net::SocketAddr) -> bool {
     addr.ip().is_loopback()
 }
 

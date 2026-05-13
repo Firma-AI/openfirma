@@ -99,14 +99,14 @@ impl HttpInterceptor {
 
     /// Set the maximum request body size accepted by the interceptor.
     #[must_use]
-    pub const fn with_max_request_body_bytes(mut self, max_request_body_bytes: usize) -> Self {
+    pub fn with_max_request_body_bytes(mut self, max_request_body_bytes: usize) -> Self {
         self.max_request_body_bytes = max_request_body_bytes;
         self
     }
 
     /// Set CONNECT tunnel/MITM relay timeout controls.
     #[must_use]
-    pub const fn with_connect_relay(mut self, connect_relay: ConnectRelayConfig) -> Self {
+    pub fn with_connect_relay(mut self, connect_relay: ConnectRelayConfig) -> Self {
         self.connect_relay = connect_relay;
         self
     }
@@ -868,7 +868,7 @@ struct ConnectRelayLimits {
     session_max: Duration,
 }
 
-const fn connect_relay_limits(config: &ConnectRelayConfig) -> ConnectRelayLimits {
+fn connect_relay_limits(config: &ConnectRelayConfig) -> ConnectRelayLimits {
     ConnectRelayLimits {
         setup_timeout: Duration::from_secs(config.setup_timeout_secs),
         session_max: Duration::from_secs(config.session_max_secs),

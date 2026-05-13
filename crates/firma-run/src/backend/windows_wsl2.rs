@@ -13,7 +13,7 @@ pub struct Wsl2Backend;
 
 impl Wsl2Backend {
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self
     }
 }
