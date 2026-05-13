@@ -5,12 +5,20 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 FIRMA_BIN="${ROOT_DIR}/target/release/firma"
 POLICY_PATH="${ROOT_DIR}/crates/firma-run/policies/generic-local-command-v1.toml"
 ARTIFACT_ROOT="${ROOT_DIR}/.artifacts/firma-local-command-governance"
+DEFAULT_RUNTIME_SOCK_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+if mkdir -p "${DEFAULT_RUNTIME_SOCK_DIR}" >/dev/null 2>&1 && [ -w "${DEFAULT_RUNTIME_SOCK_DIR}" ]; then
+  RUNTIME_SOCK_DIR="${DEFAULT_RUNTIME_SOCK_DIR}"
+else
+  RUNTIME_SOCK_DIR="${ARTIFACT_ROOT}/sockets"
+fi
 SIDECAR_HOST="127.0.0.1"
 SIDECAR_PORT="28992"
-SIDECAR_ENDPOINT="${FIRMA_SHOWCASE_SIDECAR_ENDPOINT:-tcp://${SIDECAR_HOST}:${SIDECAR_PORT}}"
-MEDIATOR_UNIX_PATH="${ARTIFACT_ROOT}/sidecar-tools.sock"
+SIDECAR_UNIX_PATH="${FIRMA_SHOWCASE_SIDECAR_UNIX_PATH:-${RUNTIME_SOCK_DIR}/firma-showcase-sidecar.sock}"
+SIDECAR_ENDPOINT="${FIRMA_SHOWCASE_SIDECAR_ENDPOINT:-unix://${SIDECAR_UNIX_PATH}}"
+MEDIATOR_UNIX_PATH="${FIRMA_SHOWCASE_MEDIATOR_UNIX_PATH:-${RUNTIME_SOCK_DIR}/firma-showcase-sidecar-tools.sock}"
 MEDIATOR_ENDPOINT="${FIRMA_SHOWCASE_MEDIATOR_ENDPOINT:-unix://${MEDIATOR_UNIX_PATH}}"
 mkdir -p "${ARTIFACT_ROOT}"
+mkdir -p "${RUNTIME_SOCK_DIR}" || true
 
 require_tools() {
   command -v python3 >/dev/null 2>&1 || {
@@ -65,7 +73,7 @@ start_mock_sidecar() {
     return 0
   fi
   python3 "${ROOT_DIR}/examples/firma-run/local-command-governance/scripts/mock_sidecar.py" \
-    --host "${SIDECAR_HOST}" --port "${SIDECAR_PORT}" &
+    --unix-path "${SIDECAR_UNIX_PATH}" &
   SIDECAR_PID=$!
   sleep 0.2
 }

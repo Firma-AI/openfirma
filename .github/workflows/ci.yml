@@ -81,10 +81,10 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Clippy
-        run: rustup run stable cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace -- -D warnings
 
       - name: Test
-        run: rustup run stable cargo test --workspace
+        run: cargo test --workspace
 
       - name: Build
-        run: rustup run stable cargo build --workspace
+        run: cargo build --workspace

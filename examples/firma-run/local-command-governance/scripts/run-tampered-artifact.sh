@@ -34,6 +34,9 @@ if [ ! -f "${BPF_PATH}" ]; then
 fi
 
 printf '\n#tampered\n' >> "${BPF_PATH}"
+# Force load-only behavior so runtime cannot recompile and overwrite the tampered artifact.
+sed -i.bak 's/runtime_mode = "compile_on_launch"/runtime_mode = "precompiled_only"/' "${CONFIG_PATH}"
+rm -f "${CONFIG_PATH}.bak"
 start_mock_mediator "allow"
 
 if run_firma "${CONFIG_PATH}" /bin/echo "tampered-artifact"; then
