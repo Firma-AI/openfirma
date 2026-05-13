@@ -2,6 +2,7 @@
 
 pub mod authority;
 pub mod dns_stub;
+pub mod doctor;
 pub mod monitor;
 pub mod proxy_bridge;
 pub mod run;

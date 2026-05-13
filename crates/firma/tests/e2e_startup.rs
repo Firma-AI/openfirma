@@ -104,7 +104,8 @@ fn authority_starts_then_terminates_cleanly() {
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt as _;
-        let pid = nix::unistd::Pid::from_raw(child.id() as i32);
+        let raw_pid = i32::try_from(child.id()).expect("PID fits i32");
+        let pid = nix::unistd::Pid::from_raw(raw_pid);
         nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM).unwrap();
         let status = child.wait().expect("wait child");
         assert!(

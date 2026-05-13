@@ -96,6 +96,19 @@ pub struct SidecarConfig {
 }
 
 impl SidecarConfig {
+    /// Load a sidecar configuration from a TOML file and validate it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read, the TOML is invalid, or
+    /// validation fails.
+    pub fn load_from_path(path: &std::path::Path) -> Result<Self, String> {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let config: Self = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        config.validate()?;
+        Ok(config)
+    }
+
     /// Validate the entire configuration tree.
     ///
     /// Call immediately after deserialization to surface

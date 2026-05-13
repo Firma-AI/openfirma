@@ -29,8 +29,7 @@ jobs:
         run: sudo apt-get install -y jq netcat-openbsd
 
       - name: Build release binaries
-        run: cargo build --release -p firma-authority -p firma-sidecar -p
-          firma-demo-fixture
+        run: cargo build --release -p firma -p firma-demo-fixture
 
       - name: Run demo CI driver
         run: timeout 90 make demo-ci
