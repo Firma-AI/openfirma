@@ -477,7 +477,7 @@ mod tests {
             cwd: std::path::PathBuf::from("/tmp"),
             env,
             seccomp_filter_path: None,
-            identity_mode: SandboxIdentityMode::SandboxUser,
+            identity_mode: crate::config::SandboxIdentityMode::SandboxUser,
         };
         let suffixes = vec![
             ".ssh".to_string(),
