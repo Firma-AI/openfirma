@@ -11,9 +11,9 @@ This document defines the Linux product architecture for local-command governanc
 The model is layered:
 
 1. Kernel-enforced static seccomp as authoritative syscall deny boundary.
-2. Optional userspace command mediator for dynamic pre-exec decisions.
+2. Optional Sidecar local-exec governance endpoint for dynamic pre-exec decisions.
 3. Optional operator-managed kernel hardening extensions (for higher-assurance deployments).
-3. Deterministic fail-closed behavior across policy resolution and runtime checks.
+4. Deterministic fail-closed behavior across policy resolution and runtime checks.
 
 This is the canonical architecture + operations + validation guide for Linux local-command enforcement.
 
@@ -205,7 +205,7 @@ For `generic` profile on Linux + `bwrap`:
 
 1. Managed seccomp default-enabled.
 2. Source policy defaults to bundled `crates/firma-run/policies/generic-local-command-v1.toml`.
-3. Artifact root defaults to `/tmp/firma/seccomp-artifacts`.
+3. Artifact root defaults to `<system-temp>/firma/seccomp-artifacts` (resolved via `std::env::temp_dir()`).
 4. Runtime mode defaults to `compile_on_launch`.
 
 Optional overrides:
@@ -318,20 +318,21 @@ make managed-seccomp-guardrail
 
 ### Step 5: Explicit Mediator Tests
 
-Create `tmp/firma-run.mediator.toml`:
+Create `/tmp/firma-run.mediator.toml`:
 
 ```toml
 [profiles.generic]
 backend = "bwrap"
+sidecar_endpoint = "unix:///tmp/firma-sidecar.sock"
 
 [profiles.generic.seccomp_policy]
 source_policy_path = "/ABS/PATH/TO/crates/firma-run/policies/generic-local-command-v1.toml"
-artifact_dir = "/tmp/firma/seccomp-artifacts"
+artifact_dir = "/ABS/PATH/TO/.artifacts/seccomp-artifacts"
 verify_checksum = true
 runtime_mode = "compile_on_launch"
 
 [profiles.generic.sidecar_local_exec]
-endpoint = "tcp://127.0.0.1:28991"
+endpoint = "unix:///tmp/firma-sidecar-tools.sock"
 timeout_ms = 500
 hitl_mode = "async_token"
 enforce_known_executables = true
@@ -342,11 +343,14 @@ Allow response server example:
 
 ```bash
 python3 - <<'PY'
-import socket
-host, port = "127.0.0.1", 28991
-s = socket.socket()
-s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind((host, port))
+import os, socket
+path = "/tmp/firma-sidecar-tools.sock"
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    pass
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(path)
 s.listen(5)
 while True:
     conn, _ = s.accept()
@@ -366,8 +370,8 @@ Run governed command:
 ```bash
 target/release/firma run \
   --profile generic \
-  --config /ABS/PATH/TO/tmp/firma-run.mediator.toml \
-  --sidecar-endpoint tcp://127.0.0.1:65535 \
+  --config /tmp/firma-run.mediator.toml \
+  --sidecar-endpoint unix:///tmp/firma-sidecar.sock \
   -- /bin/echo mediator-allow
 ```
 
