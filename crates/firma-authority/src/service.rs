@@ -203,13 +203,13 @@ impl AuthorityService for AuthorityServiceImpl {
     ) -> Result<Response<Self::WatchRevocationsStream>, Status> {
         let req = request.into_inner();
 
-        let since = req.since.map_or_else(
-            || Utc::now() - Duration::days(365),
-            |ts| {
+        let since = req
+            .since
+            .map(|ts| {
                 chrono::DateTime::from_timestamp(ts.seconds, ts.nanos.try_into().unwrap_or(0))
                     .unwrap_or_else(Utc::now)
-            },
-        );
+            })
+            .unwrap_or_else(|| Utc::now() - Duration::days(365));
 
         tracing::info!(?since, "sidecar connected to revocation stream");
 
