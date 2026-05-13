@@ -14,6 +14,16 @@ cargo run -p firma -- sidecar -c .local/firma_sidecar.local.toml
 cargo run -p firma -- run --profile generic -- curl https://example.com
 ```
 
+Skip the dedicated Sidecar terminal by relying on autostart — `firma run` spawns a per-run Sidecar as a child and tears it down on exit:
+
+```bash
+examples/firma-run/local/setup.sh
+FIRMA_SIDECAR_CONFIG_FILE=.local/firma_sidecar.local.toml \
+  cargo run -p firma -- run --profile generic -- curl https://example.com
+```
+
+Opt out for CI or production: `--no-autostart` fails loudly if the configured endpoint is unreachable; `--sidecar=external` skips the spawn and only uses an existing Sidecar. See [`docs/cli.md`](../../docs/cli.md) `## firma run` for the full flag list, marker layout, and typed errors.
+
 If you are on Linux and want to verify the structural sandbox path, use the E2E harness:
 
 ```bash

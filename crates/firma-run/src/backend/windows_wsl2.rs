@@ -132,8 +132,17 @@ impl SandboxBackend for Wsl2Backend {
 }
 
 fn command_available(binary: &str) -> bool {
+    // `wsl.exe --help` returns non-zero on several Windows versions and
+    // writes its usage banner to stderr, which previously leaked into
+    // firma run's output and was also misread as "not installed".
+    // `--status` returns 0 when WSL is installed and configured, which
+    // is the actual availability question we need to answer. Silence
+    // stdio so no banner reaches the user.
     Command::new(binary)
-        .arg("--help")
+        .arg("--status")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
 }

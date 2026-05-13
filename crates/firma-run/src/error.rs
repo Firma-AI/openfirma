@@ -29,4 +29,22 @@ pub enum RunError {
 
     #[error("internal runtime error: {0}")]
     Internal(String),
+
+    #[error("sidecar endpoint {endpoint} is unreachable and autostart is disabled ({reason})")]
+    SidecarUnreachable { endpoint: String, reason: String },
+
+    #[error(
+        "sidecar autostart did not emit 'ready' within {timeout_secs}s; see logs at {}",
+        log_path.display()
+    )]
+    SidecarReadyTimeout {
+        timeout_secs: u64,
+        log_path: PathBuf,
+    },
+
+    #[error("sidecar autostart failed: {reason}; see logs at {}", log_path.display())]
+    SidecarStartupFailed { reason: String, log_path: PathBuf },
+
+    #[error("operation not supported on this platform: {reason}")]
+    UnsupportedPlatform { reason: String },
 }

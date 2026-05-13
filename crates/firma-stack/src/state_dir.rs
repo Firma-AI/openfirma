@@ -41,10 +41,12 @@ pub fn resolve_state_dir_from(
     #[cfg(unix)]
     {
         let _ = (local_app_data, temp);
-        if let Some(xdg) = xdg_runtime_dir.filter(|value| !value.is_empty()) {
-            return Ok(PathBuf::from(xdg).join("firma"));
-        }
-        Ok(PathBuf::from(format!("/tmp/firma-{}", unix_uid())))
+        Ok(crate::runtime_paths::default_runtime_dir_from(
+            xdg_runtime_dir,
+            None,
+            None,
+            unix_uid(),
+        ))
     }
 
     #[cfg(windows)]
