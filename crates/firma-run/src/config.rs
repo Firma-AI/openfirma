@@ -1301,6 +1301,11 @@ deny_actions = ["filesystem.delete"]
         .unwrap_or_else(|e| panic!("{e}"));
         let artifact_dir = tmpdir.path().join("artifacts");
         let config_path = tmpdir.path().join("firma-run.toml");
+        let endpoint = if cfg!(target_family = "unix") {
+            "unix:///tmp/sidecar-local-exec.sock"
+        } else {
+            "tcp://127.0.0.1:19090"
+        };
         let toml = format!(
             r#"
 [profiles.generic]
@@ -1313,7 +1318,7 @@ artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
 [profiles.generic.sidecar_local_exec]
-endpoint = "unix:///tmp/sidecar-local-exec.sock"
+endpoint = "{endpoint}"
 timeout_ms = 500
 enforce_known_executables = true
 "#,
@@ -1347,6 +1352,11 @@ deny_actions = ["filesystem.delete"]
         .unwrap_or_else(|e| panic!("{e}"));
         let artifact_dir = tmpdir.path().join("artifacts");
         let config_path = tmpdir.path().join("firma-run.toml");
+        let endpoint = if cfg!(target_family = "unix") {
+            "unix:///tmp/sidecar-local-exec.sock"
+        } else {
+            "tcp://127.0.0.1:19090"
+        };
         let toml = format!(
             r#"
 [profiles.generic]
@@ -1359,7 +1369,7 @@ artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
 [profiles.generic.sidecar_local_exec]
-endpoint = "unix:///tmp/sidecar-local-exec.sock"
+endpoint = "{endpoint}"
 timeout_ms = 800
 hitl_mode = "async_token"
 enforce_known_executables = true
