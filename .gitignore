@@ -57,3 +57,7 @@ audit.jsonl
 /examples/demos/*/.runtime/*
 .claude/
 .cursor/
+
+#fuzzy tests
+fuzz/artifacts/
+fuzz/corpus/

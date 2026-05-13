@@ -1,23 +1,34 @@
 #![no_main]
 
-use firma_core::{AgentId, SessionId};
-use firma_core::token::TokenId;
+use arbitrary::Arbitrary;
+use chrono::Utc;
 use firma_sidecar::config::SeedFile;
 use libfuzzer_sys::fuzz_target;
 
-fuzz_target!(|data: &[u8]| {
-    let Ok(s) = std::str::from_utf8(data) else {
-        return;
-    };
+#[derive(Arbitrary, Debug)]
+struct FuzzSeed {
+    raw_token: String,
+    token_id: String,
+    agent_id: String,
+    session_id: String,
+    action_set: Vec<String>,
+    resource_scope: String,
+    context_hash: String,
+    budget_ceiling: Option<f64>,
+}
 
-    // Exercise the full capability seed loading pipeline:
-    //   1. TOML deserialization of SeedFile (datetime, string, optional fields)
-    //   2. ID parsing — mirrors seed_into_entry in startup/capability.rs
-    let Ok(file) = toml::from_str::<SeedFile>(s) else {
-        return;
+fuzz_target!(|input: FuzzSeed| {
+    let file = SeedFile {
+        raw_token: input.raw_token,
+        token_id: input.token_id,
+        agent_id: input.agent_id,
+        session_id: input.session_id,
+        action_set: input.action_set,
+        resource_scope: input.resource_scope,
+        issued_at: Utc::now(),
+        expiry: Utc::now(),
+        context_hash: input.context_hash,
+        budget_ceiling: input.budget_ceiling,
     };
-
-    let _ = file.token_id.parse::<TokenId>();
-    let _ = file.agent_id.parse::<AgentId>();
-    let _ = file.session_id.parse::<SessionId>();
+    let _ = firma_sidecar::startup::seed_into_entry(&file);
 });

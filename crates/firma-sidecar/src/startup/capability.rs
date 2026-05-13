@@ -37,7 +37,7 @@ pub fn load_capability_map(seed: &CapabilitySeedConfig) -> anyhow::Result<Capabi
     Ok(CapabilityMap::new(entries))
 }
 
-fn seed_into_entry(file: &SeedFile) -> Result<CapabilityEntry, String> {
+pub fn seed_into_entry(file: &SeedFile) -> Result<CapabilityEntry, String> {
     let token_id: TokenId = file
         .token_id
         .parse()
