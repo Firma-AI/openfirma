@@ -14,7 +14,7 @@ pub struct VzBackend;
 
 impl VzBackend {
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self
     }
 }

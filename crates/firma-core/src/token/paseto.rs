@@ -88,7 +88,7 @@ impl PasetoV4Verifier {
     /// By default the verifier allows 10 seconds of leeway. Use this method
     /// to tighten or loosen that window for specific deployment contexts.
     #[must_use]
-    pub const fn with_leeway(mut self, leeway: chrono::Duration) -> Self {
+    pub fn with_leeway(mut self, leeway: chrono::Duration) -> Self {
         self.leeway = leeway;
         self
     }

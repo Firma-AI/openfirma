@@ -65,7 +65,7 @@ impl EnforcementError {
     }
 }
 
-const fn token_error_to_deny_reason(err: &TokenError) -> DenyReason {
+fn token_error_to_deny_reason(err: &TokenError) -> DenyReason {
     match err {
         TokenError::Expired { .. } => DenyReason::TokenExpired,
         TokenError::Revoked { .. } => DenyReason::TokenRevoked,

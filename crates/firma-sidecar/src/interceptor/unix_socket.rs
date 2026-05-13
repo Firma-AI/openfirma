@@ -51,7 +51,7 @@ pub struct UnixSocketInterceptor {
 impl UnixSocketInterceptor {
     /// Create a new [`UnixSocketInterceptor`] with the given socket path.
     #[must_use]
-    pub const fn new(path: PathBuf) -> Self {
+    pub fn new(path: PathBuf) -> Self {
         Self {
             path,
             handler: None,

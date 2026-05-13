@@ -110,7 +110,7 @@ impl EnforcementPipeline {
     /// Any expiry DENYs with `EnforcementTimeout` to preserve fail-closed
     /// behavior under load.
     #[must_use]
-    pub const fn with_stage2_timeout(mut self, stage2_timeout: Duration) -> Self {
+    pub fn with_stage2_timeout(mut self, stage2_timeout: Duration) -> Self {
         self.stage2_timeout = Some(stage2_timeout);
         self
     }

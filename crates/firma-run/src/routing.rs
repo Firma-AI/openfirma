@@ -44,7 +44,7 @@ pub struct NetworkRuntime {
 impl NetworkRuntime {
     /// Returns environment values to merge into wrapped process launch env.
     #[must_use]
-    pub const fn env_overrides(&self) -> &BTreeMap<String, String> {
+    pub fn env_overrides(&self) -> &BTreeMap<String, String> {
         &self.env_overrides
     }
 }

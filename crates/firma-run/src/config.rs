@@ -10,7 +10,7 @@ use crate::error::RunError;
 use crate::profile::{BuiltInProfileId, built_in_profile};
 use crate::runtime::RunInput;
 
-const fn backend_supports_structural_network(backend: BackendKind) -> bool {
+fn backend_supports_structural_network(backend: BackendKind) -> bool {
     matches!(backend, BackendKind::Bwrap)
 }
 
@@ -495,7 +495,7 @@ fn parse_legacy_capability_source(kind: Option<&str>, path: Option<PathBuf>) -> 
     }
 }
 
-const fn default_capability_config() -> CapabilityLeaseConfig {
+fn default_capability_config() -> CapabilityLeaseConfig {
     CapabilityLeaseConfig {
         source: CapabilitySource::Disabled,
         refresh_ratio: 0.60,
