@@ -139,7 +139,7 @@ echo "[demo] starting firma authority"
 (cd "$ROOT" && exec "$TARGET_DIR/firma" authority --config "$DEMO/firma.toml" \
     >"$LOG_DIR/authority.log" 2>&1) &
 AUTH_PID=$!
-poll_tcp "::1" 50051 "authority gRPC :50051"
+poll_tcp "127.0.0.1" 50051 "authority gRPC :50051"
 
 ensure_capability_seed
 
