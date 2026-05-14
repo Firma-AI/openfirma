@@ -169,11 +169,11 @@ impl SidecarConfig {
                     let host = uri.host().ok_or_else(|| {
                         "policy.authority_url with http:// must include a host".to_string()
                     })?;
+                    let host_unbracketed = host.trim_start_matches('[').trim_end_matches(']');
                     let is_loopback = host.eq_ignore_ascii_case("localhost")
-                        || host
+                        || host_unbracketed
                             .parse::<IpAddr>()
-                            .map(|ip| ip.is_loopback())
-                            .unwrap_or(false);
+                            .is_ok_and(|ip| ip.is_loopback());
                     if !is_loopback && !self.authority.allow_insecure_remote_authority {
                         return Err("policy.authority_url uses insecure http:// for a non-loopback host; either switch to https:// or set authority.allow_insecure_remote_authority = true".to_string());
                     }
@@ -1529,6 +1529,13 @@ drain_timeout_secs = 10
     fn authority_http_loopback_allowed_without_opt_in() {
         let mut config = SidecarConfig::default();
         config.policy.authority_url = Some("http://127.0.0.1:50051".to_string());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn authority_http_ipv6_loopback_allowed_without_opt_in() {
+        let mut config = SidecarConfig::default();
+        config.policy.authority_url = Some("http://[::1]:50051".to_string());
         assert!(config.validate().is_ok());
     }
 
