@@ -40,10 +40,7 @@ examples/firma-run/local-command-governance/scripts/run-allow.sh
 
 - `local/` contains setup scripts, config templates, capability renewal helpers, and local runbook docs.
 - `e2e/` contains the Linux end-to-end harness for sandbox routing, audit output, and fail-closed behavior.
-<<<<<<< HEAD
-=======
 - `local-command-governance/` contains focused Linux demos for managed static seccomp + mediator governance behavior.
 - `spikes/` contains focused research harnesses for architecture decisions.
->>>>>>> b294ecc (feat(firma-run): add mediator HITL/allowlist hardening and local governance showcase scenarios)
 
 Each folder keeps its scripts, documentation, and supporting assets together so example-specific material does not live in the main `docs/` tree.

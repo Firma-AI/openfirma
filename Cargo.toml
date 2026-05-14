@@ -80,7 +80,6 @@ reqwest = { version = "0.13", default-features = false, features = [
   "query",
   "rustls",
 ] }
-ctrlc = "3.5"
 rustls = "0.23"
 rustls-pemfile = "2"
 serde = { version = "1", features = ["derive"] }

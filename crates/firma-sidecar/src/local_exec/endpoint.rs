@@ -92,6 +92,20 @@ impl LocalExecEndpoint {
         }
 
         let listener = UnixListener::bind(&self.socket_path)?;
+        #[cfg(target_family = "unix")]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&self.socket_path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| {
+                    io::Error::new(
+                        e.kind(),
+                        format!(
+                            "local-exec: failed to set socket permissions (0600) on {}: {e}",
+                            self.socket_path.display()
+                        ),
+                    )
+                })?;
+        }
         tracing::info!(
             socket = %self.socket_path.display(),
             "local-exec governance endpoint listening"

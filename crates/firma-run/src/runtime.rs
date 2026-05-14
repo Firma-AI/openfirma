@@ -187,7 +187,6 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             &lease,
             &effective_endpoint,
             network_runtime.env_overrides(),
-            effective_seccomp.as_ref().map(|s| s.bpf_path.as_path()),
         );
 
         let executable = args

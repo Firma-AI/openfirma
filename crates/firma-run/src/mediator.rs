@@ -49,7 +49,8 @@ struct MediatorResponse {
     retry_after_ms: Option<u64>,
 }
 
-/// Enforces a mandatory pre-execution mediator decision in fail-closed mode.
+/// Enforces a mandatory pre-execution Sidecar local-exec governance decision in
+/// fail-closed mode.
 ///
 /// For `hitl_mode = "async_token"` this function blocks — sleeping between
 /// retries — until the sidecar returns `allow` or `deny`, or until
@@ -58,8 +59,8 @@ struct MediatorResponse {
 ///
 /// # Errors
 ///
-/// Returns [`RunError::Governance`] when the mediator denies, is unavailable,
-/// times out, or returns invalid/unsupported data.
+/// Returns [`RunError::Governance`] when the local-exec governance endpoint
+/// denies, is unavailable, times out, or returns invalid/unsupported data.
 pub fn enforce_local_command_governance(
     mediator: &CommandMediatorConfig,
     identity: &RunIdentity,
@@ -100,7 +101,7 @@ pub fn enforce_local_command_governance(
                     executable,
                     sandbox_id = %identity.sandbox_id,
                     session_id = %identity.session_id,
-                    "local command mediator: allowed"
+                    "local command governance: allowed"
                 );
                 return Ok(());
             }
@@ -113,7 +114,7 @@ pub fn enforce_local_command_governance(
                     executable,
                     sandbox_id = %identity.sandbox_id,
                     session_id = %identity.session_id,
-                    "local command mediator: denied"
+                    "local command governance: denied"
                 );
                 return Err(RunError::Governance(format!(
                     "governance denied execution: {reason}"
@@ -124,14 +125,14 @@ pub fn enforce_local_command_governance(
             }
             other => {
                 return Err(RunError::Governance(format!(
-                    "mediator returned unsupported decision '{other}'"
+                    "local-exec governance returned unsupported decision '{other}'"
                 )));
             }
         }
     }
 }
 
-/// Build and send one mediator request; return the parsed response.
+/// Build and send one local-exec governance request; return the parsed response.
 #[allow(clippy::too_many_arguments)]
 fn call_mediator(
     mediator: &CommandMediatorConfig,
@@ -160,8 +161,11 @@ fn call_mediator(
         request_fingerprint: fingerprint.to_string(),
         approval_token,
     };
-    let request_json = serde_json::to_string(&payload)
-        .map_err(|e| RunError::Internal(format!("failed to serialize mediator request: {e}")))?;
+    let request_json = serde_json::to_string(&payload).map_err(|e| {
+        RunError::Internal(format!(
+            "failed to serialize local-exec governance request: {e}"
+        ))
+    })?;
     let response_json = match &mediator.endpoint {
         CommandMediatorEndpoint::Tcp { addr } => {
             request_over_tcp(*addr, &request_json, mediator.timeout_ms)
@@ -171,7 +175,9 @@ fn call_mediator(
         }
     }?;
     serde_json::from_str(&response_json).map_err(|e| {
-        RunError::Governance(format!("mediator returned invalid response payload: {e}"))
+        RunError::Governance(format!(
+            "local-exec governance returned invalid response payload: {e}"
+        ))
     })
 }
 
@@ -227,14 +233,18 @@ fn request_over_tcp(
     let timeout = Duration::from_millis(timeout_ms);
     let stream = TcpStream::connect_timeout(&addr, timeout).map_err(|error| {
         RunError::Governance(format!(
-            "mediator unavailable (tcp://{addr}) in fail-closed mode: {error}"
+            "local-exec governance endpoint unavailable (tcp://{addr}) in fail-closed mode: {error}"
         ))
     })?;
     stream.set_read_timeout(Some(timeout)).map_err(|error| {
-        RunError::Internal(format!("failed to set mediator read timeout: {error}"))
+        RunError::Internal(format!(
+            "failed to set local-exec governance read timeout: {error}"
+        ))
     })?;
     stream.set_write_timeout(Some(timeout)).map_err(|error| {
-        RunError::Internal(format!("failed to set mediator write timeout: {error}"))
+        RunError::Internal(format!(
+            "failed to set local-exec governance write timeout: {error}"
+        ))
     })?;
     send_and_receive(stream, request_json)
 }
@@ -248,7 +258,7 @@ fn request_over_unix(
     {
         let _ = (path, request_json, timeout_ms);
         Err(RunError::Governance(
-            "unix mediator endpoint is unsupported on non-unix host".to_string(),
+            "unix local-exec governance endpoint is unsupported on non-unix host".to_string(),
         ))
     }
     #[cfg(target_family = "unix")]
@@ -256,15 +266,19 @@ fn request_over_unix(
         let timeout = Duration::from_millis(timeout_ms);
         let stream = UnixStream::connect(path).map_err(|error| {
             RunError::Governance(format!(
-                "mediator unavailable (unix://{}) in fail-closed mode: {error}",
+                "local-exec governance endpoint unavailable (unix://{}) in fail-closed mode: {error}",
                 path.display()
             ))
         })?;
         stream.set_read_timeout(Some(timeout)).map_err(|error| {
-            RunError::Internal(format!("failed to set mediator read timeout: {error}"))
+            RunError::Internal(format!(
+                "failed to set local-exec governance read timeout: {error}"
+            ))
         })?;
         stream.set_write_timeout(Some(timeout)).map_err(|error| {
-            RunError::Internal(format!("failed to set mediator write timeout: {error}"))
+            RunError::Internal(format!(
+                "failed to set local-exec governance write timeout: {error}"
+            ))
         })?;
         #[cfg(target_os = "linux")]
         validate_unix_peer_credentials(&stream)?;
@@ -279,14 +293,14 @@ fn request_over_unix(
 fn validate_unix_peer_credentials(stream: &UnixStream) -> Result<(), RunError> {
     let creds = getsockopt(stream, PeerCredentials).map_err(|error| {
         RunError::Governance(format!(
-            "mediator unix peer credential validation failed in fail-closed mode: {error}"
+            "local-exec governance unix peer credential validation failed in fail-closed mode: {error}"
         ))
     })?;
     let peer_uid = creds.uid();
     let current_uid = nix::unistd::Uid::current().as_raw();
     if peer_uid != current_uid {
         return Err(RunError::Governance(format!(
-            "mediator unix peer uid mismatch in fail-closed mode: expected uid={current_uid} got uid={peer_uid}"
+            "local-exec governance unix peer uid mismatch in fail-closed mode: expected uid={current_uid} got uid={peer_uid}"
         )));
     }
     Ok(())
@@ -306,7 +320,7 @@ fn send_and_receive<T: Write + std::io::Read>(
         .and_then(|()| stream.flush())
         .map_err(|error| {
             RunError::Governance(format!(
-                "mediator request failed in fail-closed mode: {error}"
+                "local-exec governance request failed in fail-closed mode: {error}"
             ))
         })?;
 
@@ -314,13 +328,13 @@ fn send_and_receive<T: Write + std::io::Read>(
     let mut line = String::new();
     reader.read_line(&mut line).map_err(|error| {
         RunError::Governance(format!(
-            "mediator response failed in fail-closed mode: {error}"
+            "local-exec governance response failed in fail-closed mode: {error}"
         ))
     })?;
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return Err(RunError::Governance(
-            "mediator returned empty response in fail-closed mode".to_string(),
+            "local-exec governance returned empty response in fail-closed mode".to_string(),
         ));
     }
     Ok(trimmed.to_string())

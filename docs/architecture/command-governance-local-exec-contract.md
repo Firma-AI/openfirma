@@ -104,6 +104,9 @@ Optional strict startup gate:
 1. `budget_state_ref` must not be trusted as authoritative budget state by itself.
 2. Governance endpoint should bind decision to `sandbox_id` + `session_id` to reduce replay/confusion.
 3. Audit logs should include decision reason and budget reference usage outcome.
+4. On Linux, local-exec UDS endpoint validates peer UID (`SO_PEERCRED`) and rejects cross-UID callers fail-closed.
+5. Socket file permissions are hardened to owner-only (`0600`) at bind time; operator/CLI access assumes same-UID local control plane.
+6. `approval_token` replay prevention is enforced server-side via token state (`Pending/Approved/Consumed/Expired/Revoked`) and context binding (fingerprint + session/sandbox/agent).
 
 ## Testing Guidance
 

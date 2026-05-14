@@ -1,14 +1,14 @@
 # Local Command Governance Showcase
 
-This folder provides runnable examples for Linux local-command enforcement with managed static seccomp + optional mediator governance.
+This folder provides runnable examples for Linux local-command enforcement with managed static seccomp + optional Sidecar local-exec governance.
 
 These examples are for review/testing/showcase. They are not production runtime components.
 
 ## What You Can Demo
 
-1. Allow path: mediator returns `allow` and command executes.
-2. Deny path: mediator returns `deny` and launch fails closed.
-3. HITL async path: mediator returns `pending_hitl` with token and launch fails closed with retry context.
+1. Allow path: local-exec governance returns `allow` and command executes.
+2. Deny path: local-exec governance returns `deny` and launch fails closed.
+3. HITL async path: local-exec governance returns `pending_hitl` with token and launch fails closed with retry context.
 4. Allowlist anti-bypass: non-allowlisted executable blocked before launch.
 5. Tampered artifact: checksum mismatch blocks launch.
 
@@ -16,7 +16,7 @@ These examples are for review/testing/showcase. They are not production runtime 
 
 1. Linux host.
 2. `cargo` available.
-3. `python3` available for the mock mediator helper only (dev/test utility).
+3. `python3` available for mock Sidecar/local-exec governance helpers only (dev/test utility).
 
 Build once:
 
@@ -84,8 +84,16 @@ endpoint = "unix:///tmp/firma-sidecar-tools.sock"
 timeout_ms = 500
 hitl_mode = "async_token"
 enforce_known_executables = true
-allowed_executables = ["echo", "bash", "sh"]
+allowed_executables = ["/usr/bin/echo", "/usr/bin/bash", "/usr/bin/sh"]
 EOF
+```
+
+If your distro uses different executable locations, resolve canonical paths with:
+
+```bash
+readlink -f /bin/echo
+readlink -f /bin/bash
+readlink -f /bin/sh
 ```
 
 4. Run `firma run` directly:
@@ -101,13 +109,13 @@ cargo run -p firma -- run \
 Expected result:
 
 1. Runtime logs `resolved managed static seccomp artifact ... policy.bpf`.
-2. Runtime logs mediator decision `allow`.
+2. Runtime logs local-exec governance decision `allow`.
 3. Terminal prints `FIRMA_OK`.
 
 Quick fail-closed checks:
 
-1. Change mediator mode to `deny`: command must be blocked.
-2. Change mediator mode to `hitl_async`: command must be blocked with pending-HITL context.
+1. Change governance mode to `deny`: command must be blocked.
+2. Change governance mode to `hitl_async`: command must be blocked with pending-HITL context.
 3. Run `./examples/firma-run/local-command-governance/scripts/run-tampered-artifact.sh`: checksum mismatch must block launch.
 
 ## Notes
