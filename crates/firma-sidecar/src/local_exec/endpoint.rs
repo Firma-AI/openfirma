@@ -31,6 +31,7 @@
 
 use std::io;
 use std::path::PathBuf;
+#[cfg(target_family = "unix")]
 use std::sync::Arc;
 #[cfg(target_family = "unix")]
 use std::time::Duration;
@@ -74,6 +75,7 @@ pub struct LocalExecEndpoint {
 impl LocalExecEndpoint {
     /// Create the endpoint with the given socket path and handler.
     #[must_use]
+    #[cfg_attr(not(target_family = "unix"), allow(clippy::needless_pass_by_value))]
     pub fn new(socket_path: PathBuf, handler: LocalExecHandler) -> Self {
         #[cfg(target_family = "unix")]
         {
