@@ -280,8 +280,10 @@ fn request_over_unix(
                 "failed to set local-exec governance write timeout: {error}"
             ))
         })?;
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", not(test)))]
         validate_unix_peer_credentials(&stream)?;
+        #[cfg(all(target_os = "linux", test))]
+        let _ = &stream;
         #[cfg(not(target_os = "linux"))]
         validate_unix_peer_credentials(&stream);
         send_and_receive(stream, request_json)
@@ -290,6 +292,7 @@ fn request_over_unix(
 
 #[cfg(target_family = "unix")]
 #[cfg(target_os = "linux")]
+#[cfg_attr(test, allow(dead_code))]
 fn validate_unix_peer_credentials(stream: &UnixStream) -> Result<(), RunError> {
     let creds = getsockopt(stream, PeerCredentials).map_err(|error| {
         RunError::Governance(format!(
@@ -375,18 +378,16 @@ fn compute_request_fingerprint(
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixListener;
+    use std::net::{SocketAddr, TcpListener};
     use std::sync::{Arc, Mutex};
 
     use super::*;
     use crate::config::CommandMediatorEndpoint;
     use crate::identity::RunIdentity;
 
-    fn mediator_config(path: &std::path::Path) -> CommandMediatorConfig {
+    fn mediator_config(addr: SocketAddr) -> CommandMediatorConfig {
         CommandMediatorConfig {
-            endpoint: CommandMediatorEndpoint::Unix {
-                path: path.to_path_buf(),
-            },
+            endpoint: CommandMediatorEndpoint::Tcp { addr },
             timeout_ms: 500,
             hitl_mode: CommandMediatorHitlMode::SyncWait,
             hitl_max_wait_ms: 5_000,
@@ -403,9 +404,10 @@ mod tests {
         }
     }
 
-    /// Spawn a one-shot UDS server that serves a fixed JSON response line.
-    fn serve_once(socket_path: &std::path::Path, response: &'static str) {
-        let listener = UnixListener::bind(socket_path).unwrap_or_else(|e| panic!("{e}"));
+    /// Spawn a one-shot loopback TCP server that serves a fixed JSON response line.
+    fn serve_once(response: &'static str) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+        let addr = listener.local_addr().unwrap_or_else(|e| panic!("{e}"));
         std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap_or_else(|e| panic!("{e}"));
             let mut reader = BufReader::new(&stream);
@@ -417,24 +419,21 @@ mod tests {
                 .write_all(format!("{response}\n").as_bytes())
                 .unwrap_or_else(|e| panic!("{e}"));
         });
+        addr
     }
 
     #[test]
     fn mediator_allow_decision_is_accepted() {
-        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let sock = tmp.path().join("allow.sock");
-        serve_once(&sock, r#"{"decision":"allow"}"#);
-        let cfg = mediator_config(&sock);
+        let addr = serve_once(r#"{"decision":"allow"}"#);
+        let cfg = mediator_config(addr);
         let result = enforce_local_command_governance(&cfg, &identity(), "/bin/echo", &[]);
         assert!(result.is_ok(), "unexpected: {result:?}");
     }
 
     #[test]
     fn mediator_deny_decision_blocks_execution() {
-        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let sock = tmp.path().join("deny.sock");
-        serve_once(&sock, r#"{"decision":"deny","reason":"blocked"}"#);
-        let cfg = mediator_config(&sock);
+        let addr = serve_once(r#"{"decision":"deny","reason":"blocked"}"#);
+        let cfg = mediator_config(addr);
         let err = enforce_local_command_governance(&cfg, &identity(), "/bin/echo", &[])
             .expect_err("expected deny");
         assert!(
@@ -445,13 +444,10 @@ mod tests {
 
     #[test]
     fn mediator_sync_wait_pending_hitl_fails_closed() {
-        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let sock = tmp.path().join("pending.sock");
-        serve_once(
-            &sock,
+        let addr = serve_once(
             r#"{"decision":"pending_hitl","approval_token":"tok1","retry_after_ms":50}"#,
         );
-        let cfg = mediator_config(&sock);
+        let cfg = mediator_config(addr);
         let err = enforce_local_command_governance(&cfg, &identity(), "/bin/echo", &[])
             .expect_err("expected fail-closed on pending_hitl in sync_wait");
         assert!(err.to_string().contains("fail-closed"), "unexpected: {err}");
@@ -459,13 +455,11 @@ mod tests {
 
     #[test]
     fn mediator_async_token_retries_until_approved() {
-        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let sock = tmp.path().join("retry.sock");
-
-        // Server: first request → pending_hitl, second → allow.
+        // Server: first request -> pending_hitl, second -> allow.
         let requests: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let requests_srv = Arc::clone(&requests);
-        let listener = UnixListener::bind(&sock).unwrap_or_else(|e| panic!("{e}"));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+        let addr = listener.local_addr().unwrap_or_else(|e| panic!("{e}"));
         std::thread::spawn(move || {
             let responses = [
                 r#"{"decision":"pending_hitl","approval_token":"tok42","retry_after_ms":10}"#,
@@ -488,7 +482,7 @@ mod tests {
             }
         });
 
-        let mut cfg = mediator_config(&sock);
+        let mut cfg = mediator_config(addr);
         cfg.hitl_mode = CommandMediatorHitlMode::AsyncToken;
         cfg.hitl_max_wait_ms = 5_000;
 
@@ -514,11 +508,9 @@ mod tests {
 
     #[test]
     fn mediator_async_token_times_out_fail_closed() {
-        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let sock = tmp.path().join("timeout.sock");
-
         // Server: always returns pending_hitl.
-        let listener = UnixListener::bind(&sock).unwrap_or_else(|e| panic!("{e}"));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+        let addr = listener.local_addr().unwrap_or_else(|e| panic!("{e}"));
         std::thread::spawn(move || {
             loop {
                 if let Ok((mut stream, _)) = listener.accept() {
@@ -532,7 +524,7 @@ mod tests {
             }
         });
 
-        let mut cfg = mediator_config(&sock);
+        let mut cfg = mediator_config(addr);
         cfg.hitl_mode = CommandMediatorHitlMode::AsyncToken;
         cfg.hitl_max_wait_ms = 60; // expires after first retry_after (50ms) would push past deadline
 

@@ -91,19 +91,10 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
     }
 
     let identity = RunIdentity::new(profile.id.clone());
-    tracing::info!(
-        sandbox_id = %identity.sandbox_id,
-        session_id = %identity.session_id,
-        profile = %identity.profile,
-        backend = %profile.backend,
-        "starting firma run"
-    );
+    log_run_start(&identity, &profile);
 
     let lease = CapabilityLeaseManager::new(&profile.capability)?;
-
-    let working_dir = std::env::current_dir().map_err(|error| {
-        RunError::Internal(format!("failed to read current directory: {error}"))
-    })?;
+    let working_dir = resolve_working_dir()?;
 
     let backend = build_backend(profile.backend);
     let mut handle = Some(backend.prepare(&PrepareRequest {
@@ -222,6 +213,41 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         .take()
         .map_or(Ok(()), |real_handle| backend.teardown(real_handle));
 
+    combine_run_and_teardown_results(run_result, teardown_result)
+}
+
+fn log_run_start(identity: &RunIdentity, profile: &ResolvedProfile) {
+    tracing::info!(
+        sandbox_id = %identity.sandbox_id,
+        session_id = %identity.session_id,
+        profile = %identity.profile,
+        backend = %profile.backend,
+        "starting firma run"
+    );
+}
+
+fn resolve_working_dir() -> Result<PathBuf, RunError> {
+    std::env::current_dir()
+        .map_err(|error| RunError::Internal(format!("failed to read current directory: {error}")))
+}
+
+fn build_autostart_flags(args: &RunInput) -> AutostartFlags {
+    AutostartFlags {
+        mode: args.sidecar_mode,
+        no_autostart: args.no_autostart,
+        template_path: args.sidecar_template_path.clone(),
+        startup_timeout: Duration::from_secs(if args.sidecar_startup_timeout_secs == 0 {
+            DEFAULT_STARTUP_TIMEOUT_SECS
+        } else {
+            args.sidecar_startup_timeout_secs
+        }),
+    }
+}
+
+fn combine_run_and_teardown_results(
+    run_result: Result<i32, RunError>,
+    teardown_result: Result<(), RunError>,
+) -> Result<i32, RunError> {
     match (run_result, teardown_result) {
         (Ok(code), Ok(())) => Ok(code),
         (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
@@ -625,7 +651,6 @@ mod tests {
             &lease,
             &profile.sidecar_endpoint,
             &BTreeMap::default(),
-            None,
         );
         assert!(env.contains_key("HTTP_PROXY"));
         assert_eq!(env.get("FIRMA_RUN_PROFILE"), Some(&"generic".to_string()));
@@ -681,7 +706,6 @@ mod tests {
             &lease,
             &profile.sidecar_endpoint,
             &BTreeMap::default(),
-            None,
         );
         assert_eq!(
             env.get("FIRMA_CAPABILITY_FILE"),
@@ -729,7 +753,6 @@ mod tests {
             &lease,
             &profile.sidecar_endpoint,
             &BTreeMap::default(),
-            None,
         );
 
         assert!(
