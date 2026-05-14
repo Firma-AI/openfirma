@@ -363,7 +363,7 @@ fn run_issue_client_cert(config: &AuthorityConfig, args: &IssueClientCertArgs) -
 
 /// Ensure the configured CA certificate and private key correspond to each other.
 ///
-/// We compare SubjectPublicKeyInfo bytes between the configured CA cert and a
+/// We compare `SubjectPublicKeyInfo` bytes between the configured CA cert and a
 /// certificate rebuilt from the configured CA key.
 fn ensure_ca_cert_matches_key(input_ca_cert_pem: &str, rebuilt_ca_cert_pem: &str) -> Result<()> {
     use x509_parser::pem::parse_x509_pem;
