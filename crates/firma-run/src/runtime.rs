@@ -373,23 +373,7 @@ fn enforce_known_executable_policy(
         return Ok(());
     }
 
-    // Primary: full canonical absolute path (symlink-safe).
     if mediator.allowed_executables.contains(canonical) {
-        return Ok(());
-    }
-
-    // Fallback: basename for backward-compatible bare-name entries. Operators
-    // should prefer absolute paths for strict enforcement.
-    let basename = std::path::Path::new(canonical)
-        .file_name()
-        .and_then(std::ffi::OsStr::to_str)
-        .unwrap_or_default(); // safe: `canonical` is already valid UTF-8
-    if !basename.is_empty() && mediator.allowed_executables.contains(basename) {
-        tracing::warn!(
-            executable = canonical,
-            matched_entry = basename,
-            "allowlist matched by basename; use absolute path entry for strict enforcement"
-        );
         return Ok(());
     }
 

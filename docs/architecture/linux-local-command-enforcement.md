@@ -114,7 +114,7 @@ Artifact layout:
 6. Other-write permissions on managed artifact paths are rejected.
 7. Invalid-but-checksummed BPF content still fails closed at runtime load.
 8. Mediated mode is fail-closed on timeout/unavailable/error/invalid response.
-9. When `enforce_known_executables=true`, launch is fail-closed if executable basename is not allowlisted.
+9. When `enforce_known_executables=true`, the runtime canonicalizes the executable path (resolving symlinks, enforcing UTF-8) and checks it against `allowed_executables`. Entries must be absolute canonical paths. Any executable not in the list is fail-closed.
 10. Mediator request includes `sandbox_id` + `session_id` for identity/session binding.
 
 ## Local-Exec Governance Contract
@@ -133,14 +133,14 @@ Optional governance controls:
 
 1. `hitl_mode = "sync_wait" | "async_token"` (default: `sync_wait`).
 2. `enforce_known_executables = true|false` (default: `false`).
-3. `allowed_executables = ["bash", "sh", "python3", ...]` (required when enforcement is enabled).
+3. `allowed_executables = ["/usr/bin/bash", "/bin/sh", "/usr/bin/python3"]` (required when enforcement is enabled; entries must be absolute canonical paths).
 4. If `endpoint` is omitted and sidecar endpoint is unix socket, runtime derives `*-tools.sock` next to sidecar socket.
 5. On Unix hosts, `sidecar_endpoint` must also use `unix://` when `sidecar_local_exec` is enabled.
 
 ### Request (JSON line)
 
 ```json
-{"action":"local.exec","executable":"...","args":[...],"sandbox_id":"...","session_id":"...","profile":"...","hitl_mode":"sync_wait|async_token","budget_state_ref":"optional-ref"}
+{"action":"local.exec","executable":"...","args":[...],"sandbox_id":"...","session_id":"...","agent_id":"optional","profile":"...","hitl_mode":"sync_wait|async_token","budget_state_ref":"optional-ref","request_fingerprint":"optional-sha256hex","approval_token":"optional-token-id"}
 ```
 
 ### Response (JSON line)
@@ -314,10 +314,11 @@ endpoint = "unix:///tmp/firma-sidecar-tools.sock"
 timeout_ms = 500
 hitl_mode = "async_token"
 enforce_known_executables = true
-allowed_executables = ["echo", "bash", "sh"]
+allowed_executables = ["/usr/bin/echo", "/usr/bin/bash", "/bin/sh"]
 ```
 
-Allow response server example:
+Allow response server example (for isolated local testing only; production uses the
+real sidecar `[local_exec]` endpoint — see `docs/configuration.md`):
 
 ```bash
 python3 - <<'PY'

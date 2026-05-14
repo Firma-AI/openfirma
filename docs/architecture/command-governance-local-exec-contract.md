@@ -15,19 +15,22 @@ It focuses on governance semantics that are not kernel-specific, including HITL 
 Runtime sends one JSON line request per launch decision:
 
 ```json
-{"action":"local.exec","executable":"...","args":[...],"sandbox_id":"...","session_id":"...","profile":"...","hitl_mode":"sync_wait|async_token","budget_state_ref":"optional-ref"}
+{"action":"local.exec","executable":"...","args":[...],"sandbox_id":"...","session_id":"...","agent_id":"optional","profile":"...","hitl_mode":"sync_wait|async_token","budget_state_ref":"optional-ref","request_fingerprint":"optional-sha256hex","approval_token":"optional-token-id"}
 ```
 
 Fields:
 
 1. `action`: canonical governance action name (currently `local.exec`).
-2. `executable`: resolved executable path/string the runtime intends to launch.
+2. `executable`: resolved, canonicalized executable path.
 3. `args`: launch argument vector.
-4. `sandbox_id`: runtime sandbox identity for traceability and binding.
-5. `session_id`: runtime session identity for traceability and binding.
-6. `profile`: runtime profile name.
-7. `hitl_mode`: requested HITL behavior (`sync_wait` or `async_token`).
-8. `budget_state_ref`: optional budget context reference forwarded by runtime.
+4. `sandbox_id`: runtime sandbox identity for traceability and token binding.
+5. `session_id`: runtime session identity for traceability and token binding.
+6. `agent_id`: optional agent identity string for token context binding.
+7. `profile`: runtime profile name.
+8. `hitl_mode`: requested HITL behavior (`sync_wait` or `async_token`).
+9. `budget_state_ref`: optional budget context reference forwarded by runtime.
+10. `request_fingerprint`: optional SHA-256 hex digest of the request context (executable + args + session + sandbox + agent). When present, the sidecar independently recomputes and verifies it (defense-in-depth; mismatch → deny).
+11. `approval_token`: present only on retry attempts — the opaque token ID issued in a prior `pending_hitl` response.
 
 ## Response Contract
 
