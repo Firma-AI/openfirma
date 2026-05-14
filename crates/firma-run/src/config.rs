@@ -240,6 +240,11 @@ pub struct CommandMediatorConfig {
     pub endpoint: CommandMediatorEndpoint,
     pub timeout_ms: u64,
     pub hitl_mode: CommandMediatorHitlMode,
+    /// Maximum total wall-clock time `firma-run` will block waiting for a
+    /// human to approve a `pending_hitl` token. Applies only when
+    /// `hitl_mode = "async_token"`. Fail-closed once exceeded.
+    /// Default: 300 000 ms (5 minutes).
+    pub hitl_max_wait_ms: u64,
     pub enforce_known_executables: bool,
     pub allowed_executables: BTreeSet<String>,
 }
@@ -375,6 +380,7 @@ pub(crate) struct CommandMediatorPatch {
     pub(crate) endpoint: Option<String>,
     pub(crate) timeout_ms: Option<u64>,
     pub(crate) hitl_mode: Option<CommandMediatorHitlMode>,
+    pub(crate) hitl_max_wait_ms: Option<u64>,
     pub(crate) enforce_known_executables: Option<bool>,
     #[serde(default)]
     pub(crate) allowed_executables: Vec<String>,
@@ -664,6 +670,7 @@ fn sidecar_local_exec_from_patch(
         endpoint,
         timeout_ms: patch.timeout_ms.unwrap_or(500),
         hitl_mode: patch.hitl_mode.unwrap_or(CommandMediatorHitlMode::SyncWait),
+        hitl_max_wait_ms: patch.hitl_max_wait_ms.unwrap_or(300_000),
         enforce_known_executables: patch.enforce_known_executables.unwrap_or(false),
         allowed_executables,
     })

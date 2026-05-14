@@ -33,6 +33,11 @@ struct MediatorRequest<'a> {
     /// The sidecar binds approval tokens to this fingerprint so a token issued for
     /// one command cannot authorize a different command in the same session.
     request_fingerprint: String,
+    /// Token ID from a prior `pending_hitl` response. Absent on the first
+    /// attempt; present on every retry so the sidecar can advance the token
+    /// state machine (`Pending` → polled, `Approved` → `Consumed`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_token: Option<&'a str>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,6 +50,11 @@ struct MediatorResponse {
 }
 
 /// Enforces a mandatory pre-execution mediator decision in fail-closed mode.
+///
+/// For `hitl_mode = "async_token"` this function blocks — sleeping between
+/// retries — until the sidecar returns `allow` or `deny`, or until
+/// `hitl_max_wait_ms` is exceeded (fail-closed). The operator approves the
+/// pending token out-of-band via `firma token approve <token-id>`.
 ///
 /// # Errors
 ///
@@ -59,39 +69,99 @@ pub fn enforce_local_command_governance(
     let agent_id = std::env::var("FIRMA_AGENT_ID")
         .ok()
         .filter(|v| !v.trim().is_empty());
-
-    let request_fingerprint = compute_request_fingerprint(
+    let fingerprint = compute_request_fingerprint(
         executable,
         args,
         &identity.session_id,
         &identity.sandbox_id,
         agent_id.as_deref(),
     );
+    let budget_state_ref = std::env::var("FIRMA_BUDGET_STATE_REF")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let deadline = std::time::Instant::now() + Duration::from_millis(mediator.hitl_max_wait_ms);
 
+    let mut approval_token: Option<String> = None;
+    loop {
+        let response = call_mediator(
+            mediator,
+            identity,
+            executable,
+            args,
+            agent_id.as_deref(),
+            &fingerprint,
+            budget_state_ref.as_deref(),
+            approval_token.as_deref(),
+        )?;
+
+        match response.decision.as_str() {
+            "allow" => {
+                tracing::info!(
+                    executable,
+                    sandbox_id = %identity.sandbox_id,
+                    session_id = %identity.session_id,
+                    "local command mediator: allowed"
+                );
+                return Ok(());
+            }
+            "deny" => {
+                let reason = response
+                    .reason
+                    .unwrap_or_else(|| "policy denied execution".to_string());
+                tracing::warn!(
+                    reason = %reason,
+                    executable,
+                    sandbox_id = %identity.sandbox_id,
+                    session_id = %identity.session_id,
+                    "local command mediator: denied"
+                );
+                return Err(RunError::Governance(format!(
+                    "governance denied execution: {reason}"
+                )));
+            }
+            "pending_hitl" => {
+                approval_token = handle_pending_hitl(mediator, executable, &response, deadline)?;
+            }
+            other => {
+                return Err(RunError::Governance(format!(
+                    "mediator returned unsupported decision '{other}'"
+                )));
+            }
+        }
+    }
+}
+
+/// Build and send one mediator request; return the parsed response.
+#[allow(clippy::too_many_arguments)]
+fn call_mediator(
+    mediator: &CommandMediatorConfig,
+    identity: &RunIdentity,
+    executable: &str,
+    args: &[String],
+    agent_id: Option<&str>,
+    fingerprint: &str,
+    budget_state_ref: Option<&str>,
+    approval_token: Option<&str>,
+) -> Result<MediatorResponse, RunError> {
+    let hitl_mode_str = match mediator.hitl_mode {
+        CommandMediatorHitlMode::SyncWait => "sync_wait",
+        CommandMediatorHitlMode::AsyncToken => "async_token",
+    };
     let payload = MediatorRequest {
         action: "local.exec",
         executable,
         args,
         sandbox_id: &identity.sandbox_id,
         session_id: &identity.session_id,
-        agent_id,
+        agent_id: agent_id.map(ToOwned::to_owned),
         profile: &identity.profile,
-        hitl_mode: match mediator.hitl_mode {
-            CommandMediatorHitlMode::SyncWait => "sync_wait",
-            CommandMediatorHitlMode::AsyncToken => "async_token",
-        },
-        // `FIRMA_BUDGET_STATE_REF` is forwarded to mediator for cross-platform
-        // governance decisions; local runtime does not parse or validate it.
-        budget_state_ref: std::env::var("FIRMA_BUDGET_STATE_REF")
-            .ok()
-            .filter(|value| !value.trim().is_empty()),
-        request_fingerprint,
+        hitl_mode: hitl_mode_str,
+        budget_state_ref: budget_state_ref.map(ToOwned::to_owned),
+        request_fingerprint: fingerprint.to_string(),
+        approval_token,
     };
-
-    let request_json = serde_json::to_string(&payload).map_err(|error| {
-        RunError::Internal(format!("failed to serialize mediator request: {error}"))
-    })?;
-
+    let request_json = serde_json::to_string(&payload)
+        .map_err(|e| RunError::Internal(format!("failed to serialize mediator request: {e}")))?;
     let response_json = match &mediator.endpoint {
         CommandMediatorEndpoint::Tcp { addr } => {
             request_over_tcp(*addr, &request_json, mediator.timeout_ms)
@@ -100,77 +170,53 @@ pub fn enforce_local_command_governance(
             request_over_unix(path, &request_json, mediator.timeout_ms)
         }
     }?;
-
-    let response: MediatorResponse = serde_json::from_str(&response_json).map_err(|error| {
-        RunError::Governance(format!(
-            "mediator returned invalid response payload: {error}"
-        ))
-    })?;
-
-    apply_mediator_decision(mediator, &response, identity, executable)
+    serde_json::from_str(&response_json).map_err(|e| {
+        RunError::Governance(format!("mediator returned invalid response payload: {e}"))
+    })
 }
 
-fn apply_mediator_decision(
+/// Handle a `pending_hitl` response. Returns the token to carry into the next
+/// retry, or an error if the mode is `sync_wait`, the token is missing, or the
+/// deadline is exceeded.
+fn handle_pending_hitl(
     mediator: &CommandMediatorConfig,
-    response: &MediatorResponse,
-    identity: &RunIdentity,
     executable: &str,
-) -> Result<(), RunError> {
-    match response.decision.as_str() {
-        "allow" => {
-            tracing::info!(
-                decision = "allow",
-                executable = executable,
-                sandbox_id = %identity.sandbox_id,
-                session_id = %identity.session_id,
-                "local command mediator decision"
-            );
-            Ok(())
-        }
-        "deny" => {
-            let reason = response
-                .reason
-                .clone()
-                .unwrap_or_else(|| "policy denied execution".to_string());
-            tracing::warn!(
-                decision = %response.decision,
-                reason = %reason,
-                executable = executable,
-                sandbox_id = %identity.sandbox_id,
-                session_id = %identity.session_id,
-                "local command mediator blocked execution"
-            );
-            Err(RunError::Governance(format!(
-                "decision={} reason={reason}",
-                response.decision
-            )))
-        }
-        "pending_hitl" => match mediator.hitl_mode {
-            CommandMediatorHitlMode::SyncWait => Err(RunError::Governance(
-                "decision=pending_hitl reason=approval required (sync_wait mode fail-closed)"
-                    .to_string(),
-            )),
-            CommandMediatorHitlMode::AsyncToken => {
-                let token = response
-                    .approval_token
-                    .clone()
-                    .filter(|value| !value.trim().is_empty())
-                    .ok_or_else(|| {
-                        RunError::Governance(
-                            "decision=pending_hitl reason=missing approval_token in async_token mode"
-                                .to_string(),
-                        )
-                    })?;
-                let retry_after_ms = response.retry_after_ms.unwrap_or(0);
-                Err(RunError::Governance(format!(
-                    "decision=pending_hitl approval_token={token} retry_after_ms={retry_after_ms}"
-                )))
-            }
-        },
-        other => Err(RunError::Governance(format!(
-            "mediator returned unsupported decision '{other}'"
-        ))),
+    response: &MediatorResponse,
+    deadline: std::time::Instant,
+) -> Result<Option<String>, RunError> {
+    if mediator.hitl_mode == CommandMediatorHitlMode::SyncWait {
+        return Err(RunError::Governance(
+            "governance denied execution: approval required (sync_wait mode fail-closed)"
+                .to_string(),
+        ));
     }
+    let token = response
+        .approval_token
+        .clone()
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| {
+            RunError::Governance(
+                "governance denied execution: \
+                 missing approval_token in pending_hitl response"
+                    .to_string(),
+            )
+        })?;
+    let retry_after = Duration::from_millis(response.retry_after_ms.unwrap_or(500));
+    if std::time::Instant::now() + retry_after >= deadline {
+        return Err(RunError::Governance(format!(
+            "governance denied execution: HITL approval wait exceeded \
+             hitl_max_wait_ms={} (fail-closed)",
+            mediator.hitl_max_wait_ms
+        )));
+    }
+    tracing::info!(
+        approval_token = %token,
+        retry_after_ms = response.retry_after_ms.unwrap_or(500),
+        executable,
+        "local command pending HITL approval — run: firma token approve {token}",
+    );
+    std::thread::sleep(retry_after);
+    Ok(Some(token))
 }
 
 fn request_over_tcp(
@@ -314,100 +360,173 @@ fn compute_request_fingerprint(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    use std::sync::{Arc, Mutex};
 
-    #[test]
-    fn mediator_allow_decision_is_accepted() {
-        let identity = RunIdentity {
+    use super::*;
+    use crate::config::CommandMediatorEndpoint;
+    use crate::identity::RunIdentity;
+
+    fn mediator_config(path: &std::path::Path) -> CommandMediatorConfig {
+        CommandMediatorConfig {
+            endpoint: CommandMediatorEndpoint::Unix {
+                path: path.to_path_buf(),
+            },
+            timeout_ms: 500,
+            hitl_mode: CommandMediatorHitlMode::SyncWait,
+            hitl_max_wait_ms: 5_000,
+            enforce_known_executables: false,
+            allowed_executables: Default::default(),
+        }
+    }
+
+    fn identity() -> RunIdentity {
+        RunIdentity {
             sandbox_id: "sbx".to_string(),
             session_id: "sess".to_string(),
             profile: "generic".to_string(),
-        };
-        let out = apply_mediator_decision(
-            &CommandMediatorConfig {
-                endpoint: CommandMediatorEndpoint::Tcp {
-                    addr: "127.0.0.1:1".parse().unwrap_or_else(|e| panic!("{e}")),
-                },
-                timeout_ms: 500,
-                hitl_mode: CommandMediatorHitlMode::SyncWait,
-                enforce_known_executables: false,
-                allowed_executables: Default::default(),
-            },
-            &MediatorResponse {
-                decision: "allow".to_string(),
-                reason: Some("ok".to_string()),
-                approval_token: None,
-                retry_after_ms: None,
-            },
-            &identity,
-            "/bin/echo",
-        );
-        assert!(out.is_ok(), "unexpected result: {out:?}");
+        }
+    }
+
+    /// Spawn a one-shot UDS server that serves a fixed JSON response line.
+    fn serve_once(socket_path: &std::path::Path, response: &'static str) {
+        let listener = UnixListener::bind(socket_path).unwrap_or_else(|e| panic!("{e}"));
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap_or_else(|e| panic!("{e}"));
+            let mut reader = BufReader::new(&stream);
+            let mut line = String::new();
+            reader
+                .read_line(&mut line)
+                .unwrap_or_else(|e| panic!("{e}"));
+            stream
+                .write_all(format!("{response}\n").as_bytes())
+                .unwrap_or_else(|e| panic!("{e}"));
+        });
+    }
+
+    #[test]
+    fn mediator_allow_decision_is_accepted() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let sock = tmp.path().join("allow.sock");
+        serve_once(&sock, r#"{"decision":"allow"}"#);
+        let cfg = mediator_config(&sock);
+        let result = enforce_local_command_governance(&cfg, &identity(), "/bin/echo", &[]);
+        assert!(result.is_ok(), "unexpected: {result:?}");
     }
 
     #[test]
     fn mediator_deny_decision_blocks_execution() {
-        let identity = RunIdentity {
-            sandbox_id: "sbx".to_string(),
-            session_id: "sess".to_string(),
-            profile: "generic".to_string(),
-        };
-        let err = apply_mediator_decision(
-            &CommandMediatorConfig {
-                endpoint: CommandMediatorEndpoint::Tcp {
-                    addr: "127.0.0.1:1".parse().unwrap_or_else(|e| panic!("{e}")),
-                },
-                timeout_ms: 500,
-                hitl_mode: CommandMediatorHitlMode::SyncWait,
-                enforce_known_executables: false,
-                allowed_executables: Default::default(),
-            },
-            &MediatorResponse {
-                decision: "deny".to_string(),
-                reason: Some("blocked".to_string()),
-                approval_token: None,
-                retry_after_ms: None,
-            },
-            &identity,
-            "/bin/echo",
-        )
-        .expect_err("expected deny");
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let sock = tmp.path().join("deny.sock");
+        serve_once(&sock, r#"{"decision":"deny","reason":"blocked"}"#);
+        let cfg = mediator_config(&sock);
+        let err = enforce_local_command_governance(&cfg, &identity(), "/bin/echo", &[])
+            .expect_err("expected deny");
         assert!(
             err.to_string().contains("governance denied execution"),
-            "unexpected error: {err}"
+            "unexpected: {err}"
         );
     }
 
     #[test]
-    fn mediator_pending_hitl_async_token_requires_token() {
-        let identity = RunIdentity {
-            sandbox_id: "sbx".to_string(),
-            session_id: "sess".to_string(),
-            profile: "generic".to_string(),
-        };
-        let err = apply_mediator_decision(
-            &CommandMediatorConfig {
-                endpoint: CommandMediatorEndpoint::Tcp {
-                    addr: "127.0.0.1:1".parse().unwrap_or_else(|e| panic!("{e}")),
-                },
-                timeout_ms: 500,
-                hitl_mode: CommandMediatorHitlMode::AsyncToken,
-                enforce_known_executables: false,
-                allowed_executables: Default::default(),
-            },
-            &MediatorResponse {
-                decision: "pending_hitl".to_string(),
-                reason: Some("needs-approval".to_string()),
-                approval_token: None,
-                retry_after_ms: Some(1200),
-            },
-            &identity,
-            "/bin/echo",
-        )
-        .expect_err("expected missing approval token error");
+    fn mediator_sync_wait_pending_hitl_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let sock = tmp.path().join("pending.sock");
+        serve_once(
+            &sock,
+            r#"{"decision":"pending_hitl","approval_token":"tok1","retry_after_ms":50}"#,
+        );
+        let cfg = mediator_config(&sock);
+        let err = enforce_local_command_governance(&cfg, &identity(), "/bin/echo", &[])
+            .expect_err("expected fail-closed on pending_hitl in sync_wait");
+        assert!(err.to_string().contains("fail-closed"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn mediator_async_token_retries_until_approved() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let sock = tmp.path().join("retry.sock");
+
+        // Server: first request → pending_hitl, second → allow.
+        let requests: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let requests_srv = Arc::clone(&requests);
+        let listener = UnixListener::bind(&sock).unwrap_or_else(|e| panic!("{e}"));
+        std::thread::spawn(move || {
+            let responses = [
+                r#"{"decision":"pending_hitl","approval_token":"tok42","retry_after_ms":10}"#,
+                r#"{"decision":"allow"}"#,
+            ];
+            for response in &responses {
+                let (mut stream, _) = listener.accept().unwrap_or_else(|e| panic!("{e}"));
+                let mut reader = BufReader::new(&stream);
+                let mut line = String::new();
+                reader
+                    .read_line(&mut line)
+                    .unwrap_or_else(|e| panic!("{e}"));
+                requests_srv
+                    .lock()
+                    .unwrap_or_else(|e| panic!("{e}"))
+                    .push(line.trim().to_string());
+                stream
+                    .write_all(format!("{response}\n").as_bytes())
+                    .unwrap_or_else(|e| panic!("{e}"));
+            }
+        });
+
+        let mut cfg = mediator_config(&sock);
+        cfg.hitl_mode = CommandMediatorHitlMode::AsyncToken;
+        cfg.hitl_max_wait_ms = 5_000;
+
+        let result = enforce_local_command_governance(&cfg, &identity(), "/bin/echo", &[]);
+        assert!(result.is_ok(), "unexpected: {result:?}");
+
+        let reqs = requests.lock().unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(reqs.len(), 2, "expected exactly 2 requests");
+        let first: serde_json::Value =
+            serde_json::from_str(&reqs[0]).unwrap_or_else(|e| panic!("{e}"));
+        let second: serde_json::Value =
+            serde_json::from_str(&reqs[1]).unwrap_or_else(|e| panic!("{e}"));
         assert!(
-            err.to_string().contains("missing approval_token"),
-            "unexpected error: {err}"
+            first.get("approval_token").is_none(),
+            "first request must not include approval_token"
+        );
+        assert_eq!(
+            second.get("approval_token").and_then(|v| v.as_str()),
+            Some("tok42"),
+            "second request must carry the token from the pending_hitl response"
+        );
+    }
+
+    #[test]
+    fn mediator_async_token_times_out_fail_closed() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let sock = tmp.path().join("timeout.sock");
+
+        // Server: always returns pending_hitl.
+        let listener = UnixListener::bind(&sock).unwrap_or_else(|e| panic!("{e}"));
+        std::thread::spawn(move || {
+            loop {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let mut reader = BufReader::new(&stream);
+                    let mut line = String::new();
+                    let _ = reader.read_line(&mut line);
+                    let _ = stream.write_all(
+                    b"{\"decision\":\"pending_hitl\",\"approval_token\":\"t\",\"retry_after_ms\":50}\n",
+                );
+                }
+            }
+        });
+
+        let mut cfg = mediator_config(&sock);
+        cfg.hitl_mode = CommandMediatorHitlMode::AsyncToken;
+        cfg.hitl_max_wait_ms = 60; // expires after first retry_after (50ms) would push past deadline
+
+        let err = enforce_local_command_governance(&cfg, &identity(), "/bin/echo", &[])
+            .expect_err("expected timeout fail-closed");
+        assert!(
+            err.to_string().contains("hitl_max_wait_ms"),
+            "unexpected: {err}"
         );
     }
 }
