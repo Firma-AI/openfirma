@@ -1533,6 +1533,7 @@ dependencies = [
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "tokio-util",
  "toml",
@@ -1540,6 +1541,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "windows-sys 0.59.0",
+ "x509-parser",
 ]
 
 [[package]]
@@ -1556,18 +1558,23 @@ dependencies = [
  "notify",
  "pasetors",
  "prost-types",
+ "rcgen",
+ "rustls",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "toml",
  "tonic",
  "tonic-health",
  "tracing",
  "tracing-subscriber",
+ "x509-parser",
 ]
 
 [[package]]

@@ -36,6 +36,8 @@ pub async fn run_preflight(
     config: &PreflightConfig,
     authority_url: &str,
     ca_cert_pem: Option<&[u8]>,
+    client_cert_pem: Option<&[u8]>,
+    client_key_pem: Option<&[u8]>,
 ) -> Result<PreflightResult> {
     // Load authority public key (32-byte Ed25519 public key).
     let pub_key_bytes = std::fs::read(&config.authority_pub_key_path).with_context(|| {
@@ -53,6 +55,8 @@ pub async fn run_preflight(
         authority_url,
         std::time::Duration::from_secs(10),
         ca_cert_pem,
+        client_cert_pem,
+        client_key_pem,
     )
     .context("failed to build authority gRPC channel")?;
     let mut client = AuthorityServiceClient::new(channel);

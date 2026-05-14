@@ -19,7 +19,9 @@ use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SanType,
 };
 
-use crate::args::authority::{Args, Commands, IssueArgs, RevocationsCommand};
+use crate::args::authority::{
+    Args, Commands, GenerateClientCaArgs, IssueArgs, IssueClientCertArgs, RevocationsCommand,
+};
 use crate::signal::shutdown_future;
 
 /// Run the authority subcommand.
@@ -70,6 +72,8 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         Some(Commands::GenerateKey { output }) => run_generate_key(&output)?,
         Some(Commands::InitTls { out_dir, hosts }) => run_bootstrap_tls(&out_dir, &hosts)?,
         Some(Commands::Issue(iargs)) => run_issue(&config, &iargs).await?,
+        Some(Commands::IssueClientCert(iargs)) => run_issue_client_cert(&config, &iargs)?,
+        Some(Commands::GenerateClientCa(gargs)) => run_generate_client_ca(&gargs)?,
     }
 
     Ok(ExitCode::SUCCESS)
@@ -278,4 +282,193 @@ async fn run_issue(config: &AuthorityConfig, args: &IssueArgs) -> Result<()> {
         .with_context(|| format!("failed to write {}", args.output.display()))?;
     println!("issued capability to {}", args.output.display());
     Ok(())
+}
+
+fn run_issue_client_cert(config: &AuthorityConfig, args: &IssueClientCertArgs) -> Result<()> {
+    use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SanType};
+
+    let ca_cert_path = config.mtls_client_ca_cert_path.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "mtls_client_ca_cert_path is not set in the Authority config; \
+             run `firma authority generate-client-ca` first"
+        )
+    })?;
+    let ca_key_path = config.mtls_client_ca_key_path.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("mtls_client_ca_key_path is not set in the Authority config")
+    })?;
+
+    // Load CA key.
+    let ca_key_pem = std::fs::read_to_string(ca_key_path)
+        .with_context(|| format!("failed to read client CA key {}", ca_key_path.display()))?;
+    let ca_key = KeyPair::from_pem(&ca_key_pem).context("failed to parse client CA private key")?;
+
+    // Load CA cert params (for signing authority).
+    let ca_cert_pem = std::fs::read_to_string(ca_cert_path)
+        .with_context(|| format!("failed to read client CA cert {}", ca_cert_path.display()))?;
+    let ca_params = CertificateParams::from_ca_cert_pem(&ca_cert_pem)
+        .context("failed to parse client CA certificate")?;
+    let ca_cert = ca_params
+        .self_signed(&ca_key)
+        .context("failed to reconstruct client CA for signing")?;
+    ensure_ca_cert_matches_key(&ca_cert_pem, &ca_cert.pem())
+        .context("configured mtls_client_ca_cert_path does not match mtls_client_ca_key_path")?;
+
+    // Build client cert params.
+    let client_key = KeyPair::generate().context("failed to generate client key pair")?;
+    let mut client_params = CertificateParams::default();
+    client_params.is_ca = IsCa::NoCa;
+
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, args.cn.clone());
+    client_params.distinguished_name = dn;
+
+    if let Some(ref san) = args.san {
+        let san_name: rcgen::Ia5String = san
+            .as_str()
+            .try_into()
+            .with_context(|| format!("invalid DNS SAN value: {san}"))?;
+        client_params.subject_alt_names = vec![SanType::DnsName(san_name)];
+    }
+
+    client_params.not_before = rcgen::date_time_ymd(1975, 1, 1);
+    client_params.not_after = days_from_now(args.days)?;
+
+    let client_cert = client_params
+        .signed_by(&client_key, &ca_cert, &ca_key)
+        .context("failed to sign client certificate")?;
+
+    // Write cert and key.
+    write_pem_secret(&args.key_out, client_key.serialize_pem().as_bytes())
+        .with_context(|| format!("failed to write client key {}", args.key_out.display()))?;
+    write_pem_public(&args.cert_out, client_cert.pem().as_bytes())
+        .with_context(|| format!("failed to write client cert {}", args.cert_out.display()))?;
+
+    let identity = args.san.as_deref().unwrap_or(&args.cn);
+    println!("issued mTLS client certificate:");
+    println!("  cert: {}", args.cert_out.display());
+    println!("  key:  {}", args.key_out.display());
+    println!("  identity (CN/SAN): {identity}");
+    println!();
+    println!(
+        "Add the following entry to your authorized_clients_path TOML file to authorize this Sidecar:"
+    );
+    println!("  [[authorized]]");
+    if args.san.is_some() {
+        println!("  san = \"{identity}\"");
+    } else {
+        println!("  cn = \"{identity}\"");
+    }
+    Ok(())
+}
+
+/// Ensure the configured CA certificate and private key correspond to each other.
+///
+/// We compare SubjectPublicKeyInfo bytes between the configured CA cert and a
+/// certificate rebuilt from the configured CA key.
+fn ensure_ca_cert_matches_key(input_ca_cert_pem: &str, rebuilt_ca_cert_pem: &str) -> Result<()> {
+    use x509_parser::pem::parse_x509_pem;
+    use x509_parser::prelude::*;
+
+    let (_, input_pem) = parse_x509_pem(input_ca_cert_pem.as_bytes())
+        .map_err(|e| anyhow::anyhow!("failed to parse configured CA cert PEM: {e}"))?;
+    let (_, rebuilt_pem) = parse_x509_pem(rebuilt_ca_cert_pem.as_bytes())
+        .map_err(|e| anyhow::anyhow!("failed to parse rebuilt CA cert PEM: {e}"))?;
+
+    let (_, input_cert) = X509Certificate::from_der(input_pem.contents.as_slice())
+        .map_err(|e| anyhow::anyhow!("failed to decode configured CA cert DER: {e}"))?;
+    let (_, rebuilt_cert) = X509Certificate::from_der(rebuilt_pem.contents.as_slice())
+        .map_err(|e| anyhow::anyhow!("failed to decode rebuilt CA cert DER: {e}"))?;
+
+    if input_cert.tbs_certificate.subject_pki.raw == rebuilt_cert.tbs_certificate.subject_pki.raw {
+        Ok(())
+    } else {
+        anyhow::bail!("CA cert public key does not match CA private key")
+    }
+}
+
+fn run_generate_client_ca(args: &GenerateClientCaArgs) -> Result<()> {
+    use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
+
+    let ca_key = KeyPair::generate().context("failed to generate CA key pair")?;
+    let mut ca_params = CertificateParams::default();
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, args.cn.clone());
+    ca_params.distinguished_name = dn;
+
+    ca_params.not_before = rcgen::date_time_ymd(1975, 1, 1);
+    ca_params.not_after = days_from_now(args.days)?;
+
+    let ca_cert = ca_params
+        .self_signed(&ca_key)
+        .context("failed to self-sign CA certificate")?;
+
+    write_pem_secret(&args.key_out, ca_key.serialize_pem().as_bytes())
+        .with_context(|| format!("failed to write CA key {}", args.key_out.display()))?;
+    write_pem_public(&args.cert_out, ca_cert.pem().as_bytes())
+        .with_context(|| format!("failed to write CA cert {}", args.cert_out.display()))?;
+
+    println!("generated mTLS client CA:");
+    println!("  cert: {}", args.cert_out.display());
+    println!(
+        "  key:  {} (keep offline after signing)",
+        args.key_out.display()
+    );
+    println!();
+    println!("Set in firma-authority.toml:");
+    println!(
+        "  mtls_client_ca_cert_path = \"{}\"",
+        args.cert_out.display()
+    );
+    println!(
+        "  mtls_client_ca_key_path  = \"{}\"",
+        args.key_out.display()
+    );
+    Ok(())
+}
+
+/// Compute the certificate `not_after` date `days` from today.
+fn days_from_now(days: u32) -> Result<time::OffsetDateTime> {
+    use chrono::{Datelike, Duration, Utc};
+
+    let expiry = Utc::now()
+        .checked_add_signed(Duration::days(i64::from(days)))
+        .ok_or_else(|| anyhow::anyhow!("certificate validity period overflows"))?;
+    let month = u8::try_from(expiry.month())
+        .map_err(|_| anyhow::anyhow!("invalid month value from chrono"))?;
+    let day =
+        u8::try_from(expiry.day()).map_err(|_| anyhow::anyhow!("invalid day value from chrono"))?;
+    Ok(rcgen::date_time_ymd(expiry.year(), month, day))
+}
+
+/// Write a PEM file with restrictive permissions (owner-read only on Unix).
+fn write_pem_secret(path: &std::path::Path, pem: &[u8]) -> Result<()> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts
+        .open(path)
+        .with_context(|| format!("failed to create {}", path.display()))?;
+    std::io::Write::write_all(&mut f, pem)
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
+/// Write a PEM file with public permissions (world-readable on Unix).
+fn write_pem_public(path: &std::path::Path, pem: &[u8]) -> Result<()> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o644);
+    }
+    let mut f = opts
+        .open(path)
+        .with_context(|| format!("failed to create {}", path.display()))?;
+    std::io::Write::write_all(&mut f, pem)
+        .with_context(|| format!("failed to write {}", path.display()))
 }
