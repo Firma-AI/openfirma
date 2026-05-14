@@ -3,8 +3,11 @@
 //! The [`TokenStore`] trait defines the contract. Tokens go through:
 //!
 //! ```text
-//! Pending → Consumed  (single successful validate_and_consume call)
-//! Pending → Expired   (TTL elapsed before consumption)
+//! Pending  → Approved   (operator explicitly approves via management API)
+//! Pending  → Revoked    (operator explicitly revokes via management API)
+//! Pending  → Expired    (TTL elapsed before operator decision)
+//! Approved → Consumed   (single successful validate_and_consume call)
+//! Approved → Expired    (TTL elapsed before firma-run retried after approval)
 //! ```
 //!
 //! Every property listed in the architecture spec is enforced:
@@ -16,10 +19,13 @@
 //!   `sandbox_id`, and optionally `agent_id` that were present at issuance.
 //!   Any mismatch returns [`TokenValidationResult::ContextMismatch`] or
 //!   [`TokenValidationResult::FingerprintMismatch`].
+//! - **Operator-gated**: `Pending` tokens return [`TokenValidationResult::Pending`]
+//!   on retry until an operator explicitly approves them. Only
+//!   [`TokenState::Approved`] tokens are consumable.
 //!
 //! The default implementation is [`InMemoryTokenStore`]. Alternative backends
-//! (Redis, distributed store, test doubles) implement [`TokenStore`] and are
-//! injected into [`super::handler::LocalExecHandler`] via
+//! (Redis, distributed stores, test doubles) implement [`TokenStore`] and are
+//! passed to [`super::handler::LocalExecHandler`] via
 //! [`super::handler::LocalExecHandler::with_store`].
 
 use std::collections::HashMap;
@@ -34,12 +40,16 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenState {
-    /// Issued and awaiting consumption — the only state that can transition to `Consumed`.
+    /// Issued and awaiting operator approval — not yet consumable by `firma-run`.
     Pending,
+    /// Operator approved; ready for a single consumption by `firma-run`.
+    Approved,
     /// Successfully consumed by a `validate_and_consume` call. Terminal.
     Consumed,
     /// TTL elapsed before consumption. Terminal.
     Expired,
+    /// Explicitly revoked by an operator before consumption. Terminal.
+    Revoked,
 }
 
 // ---------------------------------------------------------------------------
@@ -63,18 +73,54 @@ struct HitlToken {
 /// Outcome of a [`TokenStore::validate_and_consume`] call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenValidationResult {
-    /// Token is valid; has been atomically consumed. Caller may proceed.
+    /// Token is approved, valid, and has been atomically consumed. Caller may proceed.
     Valid,
     /// Token ID not found in the store (unknown or already pruned).
     Unknown,
+    /// Token exists but has not yet been approved by an operator. Caller should retry later.
+    Pending,
     /// Token TTL elapsed before this call.
     Expired,
     /// Token was already consumed by a prior call (replay attempt).
     AlreadyConsumed,
+    /// Token was explicitly revoked by an operator.
+    Revoked,
     /// The request fingerprint does not match the one bound at issuance.
     FingerprintMismatch,
     /// `session_id`, `sandbox_id`, or `agent_id` do not match the bound values.
     ContextMismatch,
+}
+
+// ---------------------------------------------------------------------------
+// Approve / revoke results
+// ---------------------------------------------------------------------------
+
+/// Outcome of a [`TokenStore::approve`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApproveResult {
+    /// Token transitioned to `Approved` (or was already `Approved` — idempotent).
+    Ok,
+    /// Token ID not found.
+    NotFound,
+    /// Token was already consumed before the approval arrived.
+    AlreadyConsumed,
+    /// Token was already revoked.
+    AlreadyRevoked,
+    /// Token expired before the approval arrived.
+    Expired,
+}
+
+/// Outcome of a [`TokenStore::revoke`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevokeResult {
+    /// Token transitioned to `Revoked` (or was already `Revoked` — idempotent).
+    Ok,
+    /// Token ID not found.
+    NotFound,
+    /// Token was already consumed; revocation has no further effect.
+    AlreadyConsumed,
+    /// Token already expired.
+    Expired,
 }
 
 // ---------------------------------------------------------------------------
@@ -90,8 +136,10 @@ pub enum TokenValidationResult {
 /// (Redis, distributed stores, test doubles) implement this trait and are
 /// passed to [`super::handler::LocalExecHandler::with_store`].
 pub trait TokenStore: Send + Sync {
-    /// Issue a new approval token bound to the given context and return its
-    /// opaque ID.
+    /// Issue a new approval token in [`TokenState::Pending`] state and return
+    /// its opaque ID.
+    ///
+    /// The token is not consumable until an operator calls [`approve`](Self::approve).
     fn issue(
         &self,
         fingerprint: String,
@@ -102,7 +150,9 @@ pub trait TokenStore: Send + Sync {
 
     /// Validate and atomically consume a token.
     ///
-    /// Returns [`TokenValidationResult::Valid`] exactly once for a given token.
+    /// Returns [`TokenValidationResult::Valid`] exactly once for a given token,
+    /// and only after an operator has approved it. Returns
+    /// [`TokenValidationResult::Pending`] while awaiting operator approval.
     /// Every other outcome is a fail-closed denial.
     fn validate_and_consume(
         &self,
@@ -113,11 +163,22 @@ pub trait TokenStore: Send + Sync {
         agent_id: Option<&str>,
     ) -> TokenValidationResult;
 
+    /// Approve a pending token, making it consumable by `firma-run`.
+    ///
+    /// Idempotent: approving an already-[`TokenState::Approved`] token returns
+    /// [`ApproveResult::Ok`].
+    fn approve(&self, token_id: &str) -> ApproveResult;
+
+    /// Revoke a pending or approved token, preventing any future consumption.
+    ///
+    /// Idempotent: revoking an already-[`TokenState::Revoked`] token returns
+    /// [`RevokeResult::Ok`].
+    fn revoke(&self, token_id: &str) -> RevokeResult;
+
     /// Remove records past their expiry grace window.
     ///
     /// Called periodically by the background pruning task. Backends with
-    /// native TTL support (e.g. Redis) may leave this as a no-op; the default
-    /// implementation does nothing.
+    /// native TTL support (e.g. Redis `EXPIRE`) may leave this as a no-op.
     fn prune_expired(&self) {}
 }
 
@@ -161,10 +222,7 @@ impl InMemoryTokenStore {
         }
     }
 
-    /// Issue a new approval token bound to the given context.
-    ///
-    /// Returns the opaque token ID string to be sent to the caller. The token
-    /// is `Pending` and valid for `ttl` seconds from now.
+    /// Issue a new approval token in [`TokenState::Pending`] state.
     pub fn issue(
         &self,
         fingerprint: String,
@@ -188,9 +246,11 @@ impl InMemoryTokenStore {
 
     /// Validate and atomically consume a token.
     ///
-    /// On [`TokenValidationResult::Valid`] the token transitions to `Consumed`
-    /// and the caller may proceed with execution. Every other result is a
-    /// fail-closed denial.
+    /// Only [`TokenState::Approved`] tokens can be consumed.
+    /// [`TokenState::Pending`] tokens return [`TokenValidationResult::Pending`]
+    /// so `firma-run` knows to keep polling until the operator approves or the
+    /// TTL expires. Context binding is checked for both `Pending` and `Approved`
+    /// tokens to fail-close on mismatched retries.
     pub fn validate_and_consume(
         &self,
         token_id: &str,
@@ -205,8 +265,12 @@ impl InMemoryTokenStore {
             return TokenValidationResult::Unknown;
         };
 
-        if token.state == TokenState::Consumed {
-            return TokenValidationResult::AlreadyConsumed;
+        // Terminal states — no further transition possible.
+        match token.state {
+            TokenState::Consumed => return TokenValidationResult::AlreadyConsumed,
+            TokenState::Revoked => return TokenValidationResult::Revoked,
+            TokenState::Expired => return TokenValidationResult::Expired,
+            TokenState::Pending | TokenState::Approved => {}
         }
 
         if Instant::now() >= token.expires_at {
@@ -214,7 +278,7 @@ impl InMemoryTokenStore {
             return TokenValidationResult::Expired;
         }
 
-        // Context binding — all must match exactly.
+        // Context binding checked for both Pending and Approved.
         if token.fingerprint != fingerprint {
             return TokenValidationResult::FingerprintMismatch;
         }
@@ -227,27 +291,75 @@ impl InMemoryTokenStore {
             }
         }
 
-        // Atomic single-use consumption.
+        if token.state == TokenState::Pending {
+            return TokenValidationResult::Pending;
+        }
+
+        // Approved → Consumed (atomic single-use).
         token.state = TokenState::Consumed;
         TokenValidationResult::Valid
     }
 
-    /// Remove records that are past their expiry grace window.
+    /// Approve a pending token, making it consumable by `firma-run`.
     ///
-    /// Safe to call from a background task at any interval; the mutex is held
-    /// only during the retain scan.
+    /// Idempotent on [`TokenState::Approved`].
+    pub fn approve(&self, token_id: &str) -> ApproveResult {
+        let mut guard = lock_or_recover(&self.tokens);
+
+        let Some(token) = guard.get_mut(token_id) else {
+            return ApproveResult::NotFound;
+        };
+
+        match token.state {
+            TokenState::Pending => {
+                if Instant::now() >= token.expires_at {
+                    token.state = TokenState::Expired;
+                    return ApproveResult::Expired;
+                }
+                token.state = TokenState::Approved;
+                ApproveResult::Ok
+            }
+            TokenState::Approved => ApproveResult::Ok,
+            TokenState::Consumed => ApproveResult::AlreadyConsumed,
+            TokenState::Revoked => ApproveResult::AlreadyRevoked,
+            TokenState::Expired => ApproveResult::Expired,
+        }
+    }
+
+    /// Revoke a pending or approved token, preventing any future consumption.
+    ///
+    /// Idempotent on [`TokenState::Revoked`].
+    pub fn revoke(&self, token_id: &str) -> RevokeResult {
+        let mut guard = lock_or_recover(&self.tokens);
+
+        let Some(token) = guard.get_mut(token_id) else {
+            return RevokeResult::NotFound;
+        };
+
+        match token.state {
+            TokenState::Pending | TokenState::Approved => {
+                if Instant::now() >= token.expires_at {
+                    token.state = TokenState::Expired;
+                    return RevokeResult::Expired;
+                }
+                token.state = TokenState::Revoked;
+                RevokeResult::Ok
+            }
+            TokenState::Revoked => RevokeResult::Ok,
+            TokenState::Consumed => RevokeResult::AlreadyConsumed,
+            TokenState::Expired => RevokeResult::Expired,
+        }
+    }
+
+    /// Remove records that are past their expiry grace window.
     pub fn prune_expired(&self) {
         let now = Instant::now();
         let mut guard = lock_or_recover(&self.tokens);
-        // Retain tokens that are still within the expiry grace window.
-        // `saturating_duration_since` returns 0 for unexpired tokens, so
-        // they are always kept; expired tokens are kept until the grace
-        // window elapses to allow `Expired` to be returned instead of `Unknown`.
-        guard.retain(|_, token| now.saturating_duration_since(token.expires_at) < self.expiry_grace);
+        guard
+            .retain(|_, token| now.saturating_duration_since(token.expires_at) < self.expiry_grace);
     }
 
-    /// Return the number of live (non-pruned) records. Intended for tests and
-    /// metrics.
+    /// Return the number of live (non-pruned) records. Intended for tests and metrics.
     #[cfg(test)]
     pub fn len(&self) -> usize {
         lock_or_recover(&self.tokens).len()
@@ -274,6 +386,14 @@ impl TokenStore for InMemoryTokenStore {
         agent_id: Option<&str>,
     ) -> TokenValidationResult {
         self.validate_and_consume(token_id, fingerprint, session_id, sandbox_id, agent_id)
+    }
+
+    fn approve(&self, token_id: &str) -> ApproveResult {
+        self.approve(token_id)
+    }
+
+    fn revoke(&self, token_id: &str) -> RevokeResult {
+        self.revoke(token_id)
     }
 
     fn prune_expired(&self) {
@@ -304,16 +424,85 @@ mod tests {
     }
 
     #[test]
-    fn valid_token_consumed_once() {
+    fn pending_token_not_consumable_without_approval() {
         let s = store();
         let id = issue_token(&s);
+        let result = s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
+        assert_eq!(result, TokenValidationResult::Pending);
+    }
+
+    #[test]
+    fn approved_token_consumed_once() {
+        let s = store();
+        let id = issue_token(&s);
+        assert_eq!(s.approve(&id), ApproveResult::Ok);
 
         let result = s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
         assert_eq!(result, TokenValidationResult::Valid);
 
-        // Second call must be rejected — single-use.
         let result = s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
         assert_eq!(result, TokenValidationResult::AlreadyConsumed);
+    }
+
+    #[test]
+    fn approve_is_idempotent() {
+        let s = store();
+        let id = issue_token(&s);
+        assert_eq!(s.approve(&id), ApproveResult::Ok);
+        assert_eq!(s.approve(&id), ApproveResult::Ok);
+    }
+
+    #[test]
+    fn revoked_pending_token_denied() {
+        let s = store();
+        let id = issue_token(&s);
+        assert_eq!(s.revoke(&id), RevokeResult::Ok);
+        let result = s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
+        assert_eq!(result, TokenValidationResult::Revoked);
+    }
+
+    #[test]
+    fn revoked_approved_token_denied() {
+        let s = store();
+        let id = issue_token(&s);
+        assert_eq!(s.approve(&id), ApproveResult::Ok);
+        assert_eq!(s.revoke(&id), RevokeResult::Ok);
+        let result = s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
+        assert_eq!(result, TokenValidationResult::Revoked);
+    }
+
+    #[test]
+    fn revoke_is_idempotent() {
+        let s = store();
+        let id = issue_token(&s);
+        assert_eq!(s.revoke(&id), RevokeResult::Ok);
+        assert_eq!(s.revoke(&id), RevokeResult::Ok);
+    }
+
+    #[test]
+    fn revoke_consumed_token_returns_already_consumed() {
+        let s = store();
+        let id = issue_token(&s);
+        s.approve(&id);
+        s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
+        assert_eq!(s.revoke(&id), RevokeResult::AlreadyConsumed);
+    }
+
+    #[test]
+    fn approve_consumed_token_returns_already_consumed() {
+        let s = store();
+        let id = issue_token(&s);
+        s.approve(&id);
+        s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
+        assert_eq!(s.approve(&id), ApproveResult::AlreadyConsumed);
+    }
+
+    #[test]
+    fn approve_revoked_token_returns_already_revoked() {
+        let s = store();
+        let id = issue_token(&s);
+        s.revoke(&id);
+        assert_eq!(s.approve(&id), ApproveResult::AlreadyRevoked);
     }
 
     #[test]
@@ -324,12 +513,21 @@ mod tests {
     }
 
     #[test]
+    fn unknown_token_approve_returns_not_found() {
+        let s = store();
+        assert_eq!(s.approve("no-such-token"), ApproveResult::NotFound);
+    }
+
+    #[test]
+    fn unknown_token_revoke_returns_not_found() {
+        let s = store();
+        assert_eq!(s.revoke("no-such-token"), RevokeResult::NotFound);
+    }
+
+    #[test]
     fn expired_token_rejected() {
         let s = InMemoryTokenStore::new(Duration::ZERO);
         let id = issue_token(&s);
-        // Even with zero TTL the token expires at Instant::now() + ZERO, which
-        // may already be in the past by the time validate_and_consume runs.
-        // Sleep 1ms to ensure expiry.
         std::thread::sleep(Duration::from_millis(1));
         let result = s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
         assert_eq!(result, TokenValidationResult::Expired);
@@ -376,6 +574,7 @@ mod tests {
             "sbx".to_string(),
             None,
         );
+        s.approve(&id);
         let result = s.validate_and_consume(&id, "fp", "sess", "sbx", None);
         assert_eq!(result, TokenValidationResult::Valid);
     }
@@ -383,7 +582,7 @@ mod tests {
     #[test]
     fn prune_removes_fully_expired_records() {
         let s = InMemoryTokenStore {
-            tokens: Mutex::new(HashMap::new()),
+            tokens: std::sync::Mutex::new(HashMap::new()),
             ttl: Duration::ZERO,
             expiry_grace: Duration::ZERO,
         };

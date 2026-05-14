@@ -1,14 +1,23 @@
 //! Local-exec governance request handler.
 //!
-//! [`LocalExecHandler::decide`] is the single entry point for local-exec
-//! governance decisions. It enforces the full token lifecycle:
+//! [`LocalExecHandler::decide`] is the entry point for governance decisions:
 //!
 //! - **Fresh request** (no `approval_token`): apply the configured
 //!   [`DefaultAction`] and, when the action is `PendingHitl`, issue a new
-//!   approval token bound to the request context.
-//! - **Retry with token** (`approval_token` present): validate the token
-//!   against the store. Only [`TokenValidationResult::Valid`] produces an
-//!   `allow`; every other state is a fail-closed `deny`.
+//!   approval token in [`TokenState::Pending`](super::token_store::TokenState)
+//!   state bound to the request context.
+//! - **Retry with token** (`approval_token` present): validate the token against
+//!   the store. [`TokenValidationResult::Valid`] produces `allow`;
+//!   [`TokenValidationResult::Pending`] produces `pending_hitl` (keep polling);
+//!   every other state is a fail-closed `deny`.
+//!
+//! [`LocalExecHandler::decide_management`] handles operator approval and
+//! revocation commands over the same UDS endpoint:
+//!
+//! - `local.exec.approve` — transitions a `Pending` token to `Approved`,
+//!   making it consumable by the next `firma-run` retry.
+//! - `local.exec.revoke` — transitions a `Pending` or `Approved` token to
+//!   `Revoked`, permanently blocking the corresponding execution.
 //!
 //! All deny paths include a human-readable `reason` string so operators can
 //! diagnose why a launch was blocked.
@@ -19,16 +28,15 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
-use super::token_store::{InMemoryTokenStore, TokenStore, TokenValidationResult};
+use super::token_store::{
+    ApproveResult, InMemoryTokenStore, RevokeResult, TokenStore, TokenValidationResult,
+};
 
 // ---------------------------------------------------------------------------
-// Wire types
+// Governance wire types
 // ---------------------------------------------------------------------------
 
 /// JSON request received from `firma-run` over the local-exec UDS endpoint.
-///
-/// Mirrors `MediatorRequest` on the client side. All fields that `firma-run`
-/// always serializes are required; optional fields use `Option`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LocalExecRequest {
     pub action: String,
@@ -44,11 +52,10 @@ pub struct LocalExecRequest {
     #[serde(default)]
     pub budget_state_ref: Option<String>,
     /// SHA-256 fingerprint computed by `firma-run`. The sidecar recomputes
-    /// the same fingerprint independently and checks both match before issuing
-    /// or consuming a token.
+    /// independently and checks both match before issuing or consuming a token.
     #[serde(default)]
     pub request_fingerprint: Option<String>,
-    /// Present only on retry attempts — the token originally issued in a prior
+    /// Present only on retry attempts — the token ID issued in a prior
     /// `pending_hitl` response.
     #[serde(default)]
     pub approval_token: Option<String>,
@@ -73,6 +80,40 @@ pub struct LocalExecResponse {
     pub approval_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retry_after_ms: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
+// Management wire types
+// ---------------------------------------------------------------------------
+
+/// JSON request sent by an operator (or `firma token` CLI) to approve or
+/// revoke a pending approval token.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LocalExecManagementRequest {
+    /// `"local.exec.approve"` or `"local.exec.revoke"`.
+    pub action: String,
+    /// Opaque token ID returned in the original `pending_hitl` response.
+    pub token_id: String,
+}
+
+/// Outcome of a management operation, serialized as a `snake_case` string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagementOutcome {
+    Ok,
+    NotFound,
+    AlreadyConsumed,
+    AlreadyRevoked,
+    Expired,
+    UnsupportedAction,
+}
+
+/// JSON response sent back to the operator after a management command.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LocalExecManagementResponse {
+    pub outcome: ManagementOutcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +148,7 @@ pub struct LocalExecHandlerConfig {
 // Handler
 // ---------------------------------------------------------------------------
 
-/// Stateful handler for local-exec governance requests.
+/// Stateful handler for local-exec governance and management requests.
 ///
 /// Holds an `Arc<dyn `[`TokenStore`]`>` and is safe to share across
 /// connections. The default store is [`InMemoryTokenStore`]; alternative
@@ -130,9 +171,6 @@ impl LocalExecHandler {
     }
 
     /// Build a handler with a custom token store.
-    ///
-    /// Use this to inject an alternative backend (Redis, distributed store,
-    /// test double) without changing any other call sites.
     #[must_use]
     pub fn with_store(config: LocalExecHandlerConfig, store: Arc<dyn TokenStore>) -> Self {
         Self {
@@ -151,10 +189,7 @@ impl LocalExecHandler {
     }
 
     /// Produce a governance decision for one local-exec request.
-    ///
-    /// This is the only entry point; it is synchronous and has no I/O.
     pub fn decide(&self, request: &LocalExecRequest) -> LocalExecResponse {
-        // Validate action field: only "local.exec" is accepted.
         if request.action != "local.exec" {
             tracing::warn!(
                 action = %request.action,
@@ -171,8 +206,48 @@ impl LocalExecHandler {
         self.handle_fresh_request(request)
     }
 
+    /// Process an operator management command (approve or revoke).
+    pub fn decide_management(
+        &self,
+        request: &LocalExecManagementRequest,
+    ) -> LocalExecManagementResponse {
+        match request.action.as_str() {
+            "local.exec.approve" => {
+                let result = self.token_store.approve(&request.token_id);
+                tracing::info!(
+                    token_id = %request.token_id,
+                    result = ?result,
+                    "local-exec management: approve"
+                );
+                management_response_from_approve(result)
+            }
+            "local.exec.revoke" => {
+                let result = self.token_store.revoke(&request.token_id);
+                tracing::info!(
+                    token_id = %request.token_id,
+                    result = ?result,
+                    "local-exec management: revoke"
+                );
+                management_response_from_revoke(result)
+            }
+            _ => {
+                tracing::warn!(
+                    action = %request.action,
+                    "local-exec management: unsupported action"
+                );
+                LocalExecManagementResponse {
+                    outcome: ManagementOutcome::UnsupportedAction,
+                    reason: Some(format!(
+                        "unsupported management action '{}'",
+                        request.action
+                    )),
+                }
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------
-    // Internal decision paths
+    // Internal governance decision paths
     // -----------------------------------------------------------------------
 
     fn handle_fresh_request(&self, request: &LocalExecRequest) -> LocalExecResponse {
@@ -212,7 +287,8 @@ impl LocalExecHandler {
                     executable = %request.executable,
                     session_id = %request.session_id,
                     sandbox_id = %request.sandbox_id,
-                    "local-exec pending HITL approval; token issued"
+                    token_id = %token_id,
+                    "local-exec pending HITL approval; token issued — operator must approve"
                 );
                 LocalExecResponse {
                     decision: LocalExecDecision::PendingHitl,
@@ -227,8 +303,6 @@ impl LocalExecHandler {
     fn handle_token_retry(&self, request: &LocalExecRequest, token_id: &str) -> LocalExecResponse {
         let fingerprint = compute_fingerprint(request);
 
-        // If the client supplied a pre-computed fingerprint, verify it matches
-        // our independent computation (defense-in-depth; mismatch = tamper).
         if let Some(client_fp) = &request.request_fingerprint {
             if *client_fp != fingerprint {
                 tracing::warn!(
@@ -263,39 +337,45 @@ impl LocalExecHandler {
                     retry_after_ms: None,
                 }
             }
-            TokenValidationResult::Unknown => {
+            TokenValidationResult::Pending => {
+                tracing::info!(
+                    session_id = %request.session_id,
+                    token_id = %token_id,
+                    "local-exec token retry: awaiting operator approval"
+                );
+                LocalExecResponse {
+                    decision: LocalExecDecision::PendingHitl,
+                    reason: Some("awaiting operator approval".to_string()),
+                    approval_token: Some(token_id.to_string()),
+                    retry_after_ms: Some(self.config.retry_after_ms),
+                }
+            }
+            TokenValidationResult::Revoked => {
                 tracing::warn!(
                     session_id = %request.session_id,
-                    "local-exec token retry: token unknown"
+                    token_id = %token_id,
+                    "local-exec token retry: token revoked by operator"
                 );
+                deny("approval token revoked by operator")
+            }
+            TokenValidationResult::Unknown => {
+                tracing::warn!(session_id = %request.session_id, "local-exec token retry: token unknown");
                 deny("approval token not found")
             }
             TokenValidationResult::Expired => {
-                tracing::warn!(
-                    session_id = %request.session_id,
-                    "local-exec token retry: token expired"
-                );
+                tracing::warn!(session_id = %request.session_id, "local-exec token retry: token expired");
                 deny("approval token expired")
             }
             TokenValidationResult::AlreadyConsumed => {
-                tracing::warn!(
-                    session_id = %request.session_id,
-                    "local-exec token retry: replay attempt on consumed token"
-                );
+                tracing::warn!(session_id = %request.session_id, "local-exec token retry: replay attempt on consumed token");
                 deny("approval token already consumed (single-use enforcement)")
             }
             TokenValidationResult::FingerprintMismatch => {
-                tracing::warn!(
-                    session_id = %request.session_id,
-                    "local-exec token retry: fingerprint mismatch"
-                );
+                tracing::warn!(session_id = %request.session_id, "local-exec token retry: fingerprint mismatch");
                 deny("approval token fingerprint mismatch — request context changed")
             }
             TokenValidationResult::ContextMismatch => {
-                tracing::warn!(
-                    session_id = %request.session_id,
-                    "local-exec token retry: context mismatch (session/sandbox/agent)"
-                );
+                tracing::warn!(session_id = %request.session_id, "local-exec token retry: context mismatch (session/sandbox/agent)");
                 deny("approval token context mismatch (session, sandbox, or agent)")
             }
         }
@@ -315,10 +395,45 @@ fn deny(reason: &str) -> LocalExecResponse {
     }
 }
 
-/// Compute the canonical request fingerprint from the fields that uniquely
-/// identify a local-exec call within a session/sandbox/agent context.
+fn management_response_from_approve(result: ApproveResult) -> LocalExecManagementResponse {
+    let (outcome, reason) = match result {
+        ApproveResult::Ok => (ManagementOutcome::Ok, None),
+        ApproveResult::NotFound => (ManagementOutcome::NotFound, Some("token not found")),
+        ApproveResult::AlreadyConsumed => (
+            ManagementOutcome::AlreadyConsumed,
+            Some("token was already consumed by firma-run"),
+        ),
+        ApproveResult::AlreadyRevoked => (
+            ManagementOutcome::AlreadyRevoked,
+            Some("token was already revoked"),
+        ),
+        ApproveResult::Expired => (ManagementOutcome::Expired, Some("token has expired")),
+    };
+    LocalExecManagementResponse {
+        outcome,
+        reason: reason.map(str::to_string),
+    }
+}
+
+fn management_response_from_revoke(result: RevokeResult) -> LocalExecManagementResponse {
+    let (outcome, reason) = match result {
+        RevokeResult::Ok => (ManagementOutcome::Ok, None),
+        RevokeResult::NotFound => (ManagementOutcome::NotFound, Some("token not found")),
+        RevokeResult::AlreadyConsumed => (
+            ManagementOutcome::AlreadyConsumed,
+            Some("token was already consumed by firma-run"),
+        ),
+        RevokeResult::Expired => (ManagementOutcome::Expired, Some("token has expired")),
+    };
+    LocalExecManagementResponse {
+        outcome,
+        reason: reason.map(str::to_string),
+    }
+}
+
+/// Compute the canonical request fingerprint.
 ///
-/// This must stay in sync with `compute_request_fingerprint` in
+/// Must stay in sync with `compute_request_fingerprint` in
 /// `firma-run/src/mediator.rs` — both sides must produce the same hash for the
 /// same logical request.
 fn compute_fingerprint(request: &LocalExecRequest) -> String {
@@ -396,11 +511,32 @@ mod tests {
     }
 
     #[test]
-    fn token_retry_succeeds_once() {
+    fn token_retry_pending_until_approved() {
         let h = LocalExecHandler::new(config(DefaultAction::PendingHitl));
         let pending = h.decide(&request());
-        assert_eq!(pending.decision, LocalExecDecision::PendingHitl);
         let token = pending.approval_token.unwrap();
+
+        // Retry before approval — still pending.
+        let mut retry = request();
+        retry.approval_token = Some(token.clone());
+        let resp = h.decide(&retry);
+        assert_eq!(resp.decision, LocalExecDecision::PendingHitl);
+        assert_eq!(resp.approval_token.as_deref(), Some(token.as_str()));
+
+        // Operator approves.
+        h.token_store().approve(&token);
+
+        // Retry after approval — allowed.
+        let resp = h.decide(&retry);
+        assert_eq!(resp.decision, LocalExecDecision::Allow);
+    }
+
+    #[test]
+    fn token_retry_succeeds_once_after_approval() {
+        let h = LocalExecHandler::new(config(DefaultAction::PendingHitl));
+        let pending = h.decide(&request());
+        let token = pending.approval_token.unwrap();
+        h.token_store().approve(&token);
 
         let mut retry = request();
         retry.approval_token = Some(token);
@@ -413,21 +549,26 @@ mod tests {
         let h = LocalExecHandler::new(config(DefaultAction::PendingHitl));
         let pending = h.decide(&request());
         let token = pending.approval_token.unwrap();
+        h.token_store().approve(&token);
 
         let mut retry = request();
         retry.approval_token = Some(token.clone());
-        let first = h.decide(&retry);
-        assert_eq!(first.decision, LocalExecDecision::Allow);
+        assert_eq!(h.decide(&retry).decision, LocalExecDecision::Allow);
+        assert_eq!(h.decide(&retry).decision, LocalExecDecision::Deny);
+    }
 
+    #[test]
+    fn revoked_token_denied() {
+        let h = LocalExecHandler::new(config(DefaultAction::PendingHitl));
+        let pending = h.decide(&request());
+        let token = pending.approval_token.unwrap();
+        h.token_store().revoke(&token);
+
+        let mut retry = request();
         retry.approval_token = Some(token);
-        let second = h.decide(&retry);
-        assert_eq!(second.decision, LocalExecDecision::Deny);
-        assert!(
-            second
-                .reason
-                .unwrap_or_default()
-                .contains("already consumed")
-        );
+        let resp = h.decide(&retry);
+        assert_eq!(resp.decision, LocalExecDecision::Deny);
+        assert!(resp.reason.unwrap_or_default().contains("revoked"));
     }
 
     #[test]
@@ -439,8 +580,7 @@ mod tests {
         let mut retry = request();
         retry.approval_token = Some(token);
         retry.sandbox_id = "sbx_OTHER".to_string();
-        let resp = h.decide(&retry);
-        assert_eq!(resp.decision, LocalExecDecision::Deny);
+        assert_eq!(h.decide(&retry).decision, LocalExecDecision::Deny);
     }
 
     #[test]
@@ -452,8 +592,7 @@ mod tests {
         let mut retry = request();
         retry.approval_token = Some(token);
         retry.request_fingerprint = Some("deadbeef".to_string());
-        let resp = h.decide(&retry);
-        assert_eq!(resp.decision, LocalExecDecision::Deny);
+        assert_eq!(h.decide(&retry).decision, LocalExecDecision::Deny);
     }
 
     #[test]
@@ -461,7 +600,60 @@ mod tests {
         let h = LocalExecHandler::new(config(DefaultAction::Allow));
         let mut req = request();
         req.action = "network.connect".to_string();
-        let resp = h.decide(&req);
-        assert_eq!(resp.decision, LocalExecDecision::Deny);
+        assert_eq!(h.decide(&req).decision, LocalExecDecision::Deny);
+    }
+
+    #[test]
+    fn management_approve_ok() {
+        let h = LocalExecHandler::new(config(DefaultAction::PendingHitl));
+        let pending = h.decide(&request());
+        let token = pending.approval_token.unwrap();
+
+        let mgmt = LocalExecManagementRequest {
+            action: "local.exec.approve".to_string(),
+            token_id: token,
+        };
+        let resp = h.decide_management(&mgmt);
+        assert_eq!(resp.outcome, ManagementOutcome::Ok);
+    }
+
+    #[test]
+    fn management_revoke_ok() {
+        let h = LocalExecHandler::new(config(DefaultAction::PendingHitl));
+        let pending = h.decide(&request());
+        let token = pending.approval_token.unwrap();
+
+        let mgmt = LocalExecManagementRequest {
+            action: "local.exec.revoke".to_string(),
+            token_id: token,
+        };
+        let resp = h.decide_management(&mgmt);
+        assert_eq!(resp.outcome, ManagementOutcome::Ok);
+    }
+
+    #[test]
+    fn management_approve_not_found() {
+        let h = LocalExecHandler::new(config(DefaultAction::PendingHitl));
+        let mgmt = LocalExecManagementRequest {
+            action: "local.exec.approve".to_string(),
+            token_id: "no-such-token".to_string(),
+        };
+        assert_eq!(
+            h.decide_management(&mgmt).outcome,
+            ManagementOutcome::NotFound
+        );
+    }
+
+    #[test]
+    fn management_unsupported_action() {
+        let h = LocalExecHandler::new(config(DefaultAction::Allow));
+        let mgmt = LocalExecManagementRequest {
+            action: "local.exec.delete".to_string(),
+            token_id: "tok".to_string(),
+        };
+        assert_eq!(
+            h.decide_management(&mgmt).outcome,
+            ManagementOutcome::UnsupportedAction
+        );
     }
 }

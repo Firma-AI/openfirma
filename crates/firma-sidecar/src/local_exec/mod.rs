@@ -10,17 +10,24 @@
 //!
 //! # Sub-modules
 //!
-//! - [`token_store`] — Approval token state machine (pending → consumed /
-//!   expired). Enforces single-use, short-lived, context-bound tokens.
-//! - [`handler`] — Stateless decision logic. Processes one
-//!   [`handler::LocalExecRequest`] and returns a [`handler::LocalExecResponse`].
+//! - [`token_store`] — Approval token state machine (`Pending → Approved →
+//!   Consumed / Expired / Revoked`). Enforces single-use, short-lived,
+//!   context-bound tokens; operator must explicitly approve before a token can
+//!   be consumed.
+//! - [`handler`] — Decision logic. Processes one [`handler::LocalExecRequest`]
+//!   and returns a [`handler::LocalExecResponse`], and processes management
+//!   commands ([`handler::LocalExecManagementRequest`]) via `decide_management`.
 //! - [`endpoint`] — Async UDS listener. Binds the socket, accepts connections,
-//!   dispatches to the handler, and manages the pruning task lifecycle.
+//!   dispatches to the handler (governance or management), and manages the
+//!   pruning task lifecycle.
 
 pub mod endpoint;
 pub mod handler;
 pub mod token_store;
 
 pub use self::endpoint::LocalExecEndpoint;
-pub use self::handler::{DefaultAction, LocalExecDecision, LocalExecHandler, LocalExecHandlerConfig};
-pub use self::token_store::TokenStore;
+pub use self::handler::{
+    DefaultAction, LocalExecDecision, LocalExecHandler, LocalExecHandlerConfig,
+    LocalExecManagementRequest, LocalExecManagementResponse, ManagementOutcome,
+};
+pub use self::token_store::{ApproveResult, RevokeResult, TokenStore};

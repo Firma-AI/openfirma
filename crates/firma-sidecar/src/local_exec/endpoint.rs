@@ -1,14 +1,19 @@
 //! Local-exec governance UDS endpoint.
 //!
 //! [`LocalExecEndpoint::run`] binds a Unix domain socket, accepts connections
-//! from `firma-run` clients, and dispatches each request through the
-//! [`LocalExecHandler`].
+//! from `firma-run` clients and operator management tools, and dispatches each
+//! request through the [`LocalExecHandler`].
 //!
 //! # Protocol
 //!
 //! One newline-terminated JSON object per connection (request then response).
-//! The client writes one `LocalExecRequest` JSON line; the server responds
-//! with one `LocalExecResponse` JSON line and closes the connection.
+//! Requests are dispatched by the `action` field:
+//!
+//! - `"local.exec"` — governance request from `firma-run`; responds with
+//!   [`LocalExecResponse`].
+//! - `"local.exec.approve"` / `"local.exec.revoke"` — management commands from
+//!   an operator or the `firma token` CLI; responds with
+//!   [`LocalExecManagementResponse`].
 //!
 //! # Security
 //!
@@ -29,18 +34,22 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio_util::sync::CancellationToken;
 
-use super::handler::{LocalExecDecision, LocalExecHandler, LocalExecRequest, LocalExecResponse};
+use super::handler::{
+    LocalExecDecision, LocalExecHandler, LocalExecManagementRequest, LocalExecManagementResponse,
+    LocalExecRequest, LocalExecResponse, ManagementOutcome,
+};
 
 /// Hard cap on incoming request line length. Protects against memory exhaustion
 /// from a misbehaving same-UID process sending an unbounded line.
 const MAX_REQUEST_LINE_BYTES: usize = 64 * 1024;
 
-/// Per-connection read timeout. Local UDS governance requests must complete
-/// within this window; connections that stall are closed fail-closed.
+/// Per-connection read timeout. Requests must complete within this window;
+/// connections that stall are closed fail-closed.
 const CONNECTION_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 // ---------------------------------------------------------------------------
@@ -70,7 +79,6 @@ impl LocalExecEndpoint {
     ///
     /// Returns an error when the socket cannot be bound (permissions, path).
     pub async fn run(self, cancel: CancellationToken) -> io::Result<()> {
-        // Remove stale socket from a previous run.
         if self.socket_path.exists() {
             std::fs::remove_file(&self.socket_path).map_err(|e| {
                 io::Error::new(
@@ -102,7 +110,6 @@ impl LocalExecEndpoint {
             }
         });
 
-        // Accept loop.
         loop {
             tokio::select! {
                 () = cancel.cancelled() => {
@@ -139,6 +146,12 @@ impl LocalExecEndpoint {
 // Per-connection handler
 // ---------------------------------------------------------------------------
 
+/// Peek at the `action` field without fully deserializing the request.
+#[derive(Deserialize)]
+struct ActionPeek {
+    action: String,
+}
+
 async fn handle_connection(stream: UnixStream, handler: &LocalExecHandler) -> io::Result<()> {
     #[cfg(target_os = "linux")]
     validate_peer_uid(&stream)?;
@@ -172,32 +185,87 @@ async fn handle_connection(stream: UnixStream, handler: &LocalExecHandler) -> io
         ));
     }
 
-    let request: LocalExecRequest = match serde_json::from_str(trimmed) {
-        Ok(r) => r,
+    // Peek at the action field to determine the dispatch path.
+    let action = match serde_json::from_str::<ActionPeek>(trimmed) {
+        Ok(p) => p.action,
         Err(e) => {
-            tracing::warn!(error = %e, "local-exec: malformed request; failing closed");
+            tracing::warn!(error = %e, "local-exec: malformed request (no action field); failing closed");
             let response = LocalExecResponse {
                 decision: LocalExecDecision::Deny,
                 reason: Some(format!("malformed request: {e}")),
                 approval_token: None,
                 retry_after_ms: None,
             };
-            send_response(reader.into_inner(), &response).await?;
-            return Ok(());
+            return send_governance_response(reader.into_inner(), &response).await;
         }
     };
 
-    let response = handler.decide(&request);
-    send_response(reader.into_inner(), &response).await
+    match action.as_str() {
+        "local.exec" => {
+            let request = match serde_json::from_str::<LocalExecRequest>(trimmed) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(error = %e, "local-exec: malformed governance request; failing closed");
+                    let response = LocalExecResponse {
+                        decision: LocalExecDecision::Deny,
+                        reason: Some(format!("malformed request: {e}")),
+                        approval_token: None,
+                        retry_after_ms: None,
+                    };
+                    return send_governance_response(reader.into_inner(), &response).await;
+                }
+            };
+            let response = handler.decide(&request);
+            send_governance_response(reader.into_inner(), &response).await
+        }
+        "local.exec.approve" | "local.exec.revoke" => {
+            let request = match serde_json::from_str::<LocalExecManagementRequest>(trimmed) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(error = %e, "local-exec: malformed management request");
+                    let response = LocalExecManagementResponse {
+                        outcome: ManagementOutcome::UnsupportedAction,
+                        reason: Some(format!("malformed management request: {e}")),
+                    };
+                    return send_management_response(reader.into_inner(), &response).await;
+                }
+            };
+            let response = handler.decide_management(&request);
+            send_management_response(reader.into_inner(), &response).await
+        }
+        other => {
+            tracing::warn!(action = %other, "local-exec: unknown action; failing closed");
+            let response = LocalExecResponse {
+                decision: LocalExecDecision::Deny,
+                reason: Some(format!("unknown action '{other}'")),
+                approval_token: None,
+                retry_after_ms: None,
+            };
+            send_governance_response(reader.into_inner(), &response).await
+        }
+    }
 }
 
-async fn send_response(mut stream: UnixStream, response: &LocalExecResponse) -> io::Result<()> {
+async fn send_governance_response(
+    mut stream: UnixStream,
+    response: &LocalExecResponse,
+) -> io::Result<()> {
     let mut payload = serde_json::to_vec(response)
         .map_err(|e| io::Error::other(format!("local-exec: failed to serialize response: {e}")))?;
     payload.push(b'\n');
     stream.write_all(&payload).await?;
-    stream.flush().await?;
-    Ok(())
+    stream.flush().await
+}
+
+async fn send_management_response(
+    mut stream: UnixStream,
+    response: &LocalExecManagementResponse,
+) -> io::Result<()> {
+    let mut payload = serde_json::to_vec(response)
+        .map_err(|e| io::Error::other(format!("local-exec: failed to serialize response: {e}")))?;
+    payload.push(b'\n');
+    stream.write_all(&payload).await?;
+    stream.flush().await
 }
 
 // ---------------------------------------------------------------------------
@@ -261,12 +329,11 @@ mod tests {
         tokio::spawn(async move {
             endpoint.run(cancel_clone).await.expect("endpoint failed");
         });
-        // Give the task a moment to bind.
         tokio::time::sleep(Duration::from_millis(20)).await;
         (socket_path, cancel)
     }
 
-    async fn send_request(socket_path: &PathBuf, req: &LocalExecRequest) -> LocalExecResponse {
+    async fn send_governance(socket_path: &PathBuf, req: &LocalExecRequest) -> LocalExecResponse {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         let mut stream = tokio::net::UnixStream::connect(socket_path)
             .await
@@ -279,7 +346,26 @@ mod tests {
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
         reader.read_line(&mut line).await.expect("read");
-        serde_json::from_str(line.trim()).expect("deserialize response")
+        serde_json::from_str(line.trim()).expect("deserialize governance response")
+    }
+
+    async fn send_management(
+        socket_path: &PathBuf,
+        req: &LocalExecManagementRequest,
+    ) -> LocalExecManagementResponse {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let mut stream = tokio::net::UnixStream::connect(socket_path)
+            .await
+            .expect("connect");
+        let payload = serde_json::to_string(req).expect("serialize");
+        stream
+            .write_all(format!("{payload}\n").as_bytes())
+            .await
+            .expect("write");
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.expect("read");
+        serde_json::from_str(line.trim()).expect("deserialize management response")
     }
 
     fn base_request() -> LocalExecRequest {
@@ -302,7 +388,7 @@ mod tests {
     async fn endpoint_allow_policy() {
         let tmp = tempfile::tempdir().unwrap();
         let (path, cancel) = start_endpoint(&tmp, DefaultAction::Allow).await;
-        let resp = send_request(&path, &base_request()).await;
+        let resp = send_governance(&path, &base_request()).await;
         assert_eq!(resp.decision, LocalExecDecision::Allow);
         cancel.cancel();
     }
@@ -311,32 +397,72 @@ mod tests {
     async fn endpoint_deny_policy() {
         let tmp = tempfile::tempdir().unwrap();
         let (path, cancel) = start_endpoint(&tmp, DefaultAction::Deny).await;
-        let resp = send_request(&path, &base_request()).await;
+        let resp = send_governance(&path, &base_request()).await;
         assert_eq!(resp.decision, LocalExecDecision::Deny);
         cancel.cancel();
     }
 
     #[tokio::test]
-    async fn endpoint_hitl_token_roundtrip() {
+    async fn endpoint_hitl_full_approve_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
         let (path, cancel) = start_endpoint(&tmp, DefaultAction::PendingHitl).await;
 
-        // Fresh request — should return pending_hitl with a token.
-        let pending = send_request(&path, &base_request()).await;
+        // Fresh request — pending, token issued.
+        let pending = send_governance(&path, &base_request()).await;
         assert_eq!(pending.decision, LocalExecDecision::PendingHitl);
         let token = pending.approval_token.unwrap();
 
-        // Retry with the issued token — should return allow.
+        // Retry before approval — still pending, same token returned.
         let mut retry = base_request();
         retry.approval_token = Some(token.clone());
-        let allowed = send_request(&path, &retry).await;
+        let still_pending = send_governance(&path, &retry).await;
+        assert_eq!(still_pending.decision, LocalExecDecision::PendingHitl);
+        assert_eq!(
+            still_pending.approval_token.as_deref(),
+            Some(token.as_str())
+        );
+
+        // Operator approves via management command.
+        let approve = LocalExecManagementRequest {
+            action: "local.exec.approve".to_string(),
+            token_id: token.clone(),
+        };
+        let mgmt_resp = send_management(&path, &approve).await;
+        assert_eq!(mgmt_resp.outcome, ManagementOutcome::Ok);
+
+        // Retry after approval — allowed and token consumed.
+        let allowed = send_governance(&path, &retry).await;
         assert_eq!(allowed.decision, LocalExecDecision::Allow);
 
-        // Second retry — token already consumed, should deny.
-        let mut replay = base_request();
-        replay.approval_token = Some(token);
-        let denied = send_request(&path, &replay).await;
+        // Replay — denied (already consumed).
+        let denied = send_governance(&path, &retry).await;
         assert_eq!(denied.decision, LocalExecDecision::Deny);
+
+        cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn endpoint_hitl_revoke_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (path, cancel) = start_endpoint(&tmp, DefaultAction::PendingHitl).await;
+
+        let pending = send_governance(&path, &base_request()).await;
+        let token = pending.approval_token.unwrap();
+
+        // Operator revokes.
+        let revoke = LocalExecManagementRequest {
+            action: "local.exec.revoke".to_string(),
+            token_id: token.clone(),
+        };
+        let mgmt_resp = send_management(&path, &revoke).await;
+        assert_eq!(mgmt_resp.outcome, ManagementOutcome::Ok);
+
+        // Retry after revocation — denied.
+        let mut retry = base_request();
+        retry.approval_token = Some(token);
+        let denied = send_governance(&path, &retry).await;
+        assert_eq!(denied.decision, LocalExecDecision::Deny);
+        assert!(denied.reason.unwrap_or_default().contains("revoked"));
 
         cancel.cancel();
     }

@@ -75,6 +75,8 @@ pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
     tracing::debug!(mode = %config.interceptor.mode, "starting interceptor");
     let interceptor_handle = startup::spawn_interceptor(&config, handler, exit.clone())?;
 
+    let local_exec_handle = startup::spawn_local_exec_endpoint(&config, exit.clone())?;
+
     emit_ready_sequence(
         &args.config_file,
         &config,
@@ -87,12 +89,18 @@ pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
             let _ = tokio::join!(handle.policy_task, handle.revocation_task);
         }
     };
+    let local_exec_task = async {
+        if let Some(handle) = local_exec_handle {
+            let _ = handle.await;
+        }
+    };
     let _ = tokio::join!(
         audit_sink,
         health_server,
         interceptor_handle,
         shutdown_handler,
-        authority_stream_tasks
+        authority_stream_tasks,
+        local_exec_task
     );
     tracing::debug!("firma sidecar exiting");
 
