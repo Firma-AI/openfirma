@@ -203,10 +203,8 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         let launch_args =
             maybe_apply_claude_settings(handle_ref, &profile, &executable, launch_args)?;
         if let Some(mediator) = &profile.sidecar_local_exec {
-            let canonical = canonicalize_executable(&executable)?;
-            enforce_known_executable_policy(mediator, &canonical)?;
-            let canonical_str = canonical.to_string_lossy().into_owned();
-            enforce_local_command_governance(mediator, &identity, &canonical_str, &launch_args)?;
+            let canonical = resolve_governed_executable(mediator, &executable)?;
+            enforce_local_command_governance(mediator, &identity, &canonical, &launch_args)?;
         }
         let launch = LaunchSpec {
             executable,
@@ -338,47 +336,57 @@ fn config_item_matches_key(item: &str, key: &str) -> bool {
     item.split_once('=').is_some_and(|(k, _)| k.trim() == key)
 }
 
-/// Resolve `executable` to its canonical absolute path, following all symlinks.
+/// Resolve `executable` to its canonical UTF-8 path, enforce the configured
+/// allowlist policy, and return the canonical string.
 ///
-/// Fail-closed: if the path does not exist or cannot be resolved, the launch
-/// is blocked rather than proceeding with an unverified path.
-fn canonicalize_executable(executable: &str) -> Result<std::path::PathBuf, RunError> {
-    std::fs::canonicalize(executable).map_err(|error| {
+/// Combines canonicalization, UTF-8 validation, and allowlist enforcement into
+/// a single fail-closed step so no intermediate non-canonical or lossy path
+/// can reach the governance call.
+fn resolve_governed_executable(
+    mediator: &crate::config::CommandMediatorConfig,
+    executable: &str,
+) -> Result<String, RunError> {
+    let canonical_path = std::fs::canonicalize(executable).map_err(|error| {
         RunError::Governance(format!(
             "executable '{executable}' could not be resolved (fail-closed): {error}"
         ))
-    })
+    })?;
+
+    // OsString::into_string fails (returns Err(OsString)) on non-UTF-8 paths.
+    // to_string_lossy would silently mangle the path — unacceptable on a
+    // security boundary.
+    let canonical = canonical_path.into_os_string().into_string().map_err(|_| {
+        RunError::Governance(
+            "executable canonical path is not valid UTF-8 (fail-closed)".to_string(),
+        )
+    })?;
+
+    enforce_known_executable_policy(mediator, &canonical)?;
+    Ok(canonical)
 }
 
 fn enforce_known_executable_policy(
     mediator: &crate::config::CommandMediatorConfig,
-    canonical: &std::path::Path,
+    canonical: &str,
 ) -> Result<(), RunError> {
     if !mediator.enforce_known_executables {
         return Ok(());
     }
 
-    let canonical_str = canonical.to_str().ok_or_else(|| {
-        RunError::Governance(
-            "executable canonical path is not valid UTF-8 in fail-closed mode".to_string(),
-        )
-    })?;
-
-    // Primary check: full canonical absolute path (symlink-safe).
-    if mediator.allowed_executables.contains(canonical_str) {
+    // Primary: full canonical absolute path (symlink-safe).
+    if mediator.allowed_executables.contains(canonical) {
         return Ok(());
     }
 
-    // Fallback: canonical basename for backward-compatible bare-name allowlist
-    // entries. Bare names allow any binary with that name at any location on the
-    // filesystem; operators should prefer absolute paths for strict enforcement.
-    let basename = canonical
+    // Fallback: basename for backward-compatible bare-name entries. Operators
+    // should prefer absolute paths for strict enforcement.
+    let basename = std::path::Path::new(canonical)
         .file_name()
         .and_then(std::ffi::OsStr::to_str)
-        .unwrap_or_default();
+        .unwrap_or_default(); // safe: `canonical` is already valid UTF-8
     if !basename.is_empty() && mediator.allowed_executables.contains(basename) {
         tracing::warn!(
-            executable = canonical_str,
+            executable = canonical,
             matched_entry = basename,
             "allowlist matched by basename; use absolute path entry for strict enforcement"
         );
@@ -386,7 +394,7 @@ fn enforce_known_executable_policy(
     }
 
     Err(RunError::Governance(format!(
-        "executable '{canonical_str}' is not in sidecar_local_exec.allowed_executables"
+        "executable '{canonical}' is not in sidecar_local_exec.allowed_executables"
     )))
 }
 

@@ -23,3 +23,4 @@ pub mod token_store;
 
 pub use self::endpoint::LocalExecEndpoint;
 pub use self::handler::{DefaultAction, LocalExecDecision, LocalExecHandler, LocalExecHandlerConfig};
+pub use self::token_store::TokenStore;

@@ -22,7 +22,7 @@
 //!
 //! The endpoint removes any stale socket file before binding and removes it
 //! again on shutdown (cancel signal). The background token-pruning task runs
-//! on the same cancellation token and shares the `Arc<InMemoryTokenStore>`.
+//! on the same cancellation token and shares the `Arc<dyn TokenStore>`.
 
 use std::io;
 use std::path::PathBuf;
@@ -34,7 +34,6 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio_util::sync::CancellationToken;
 
 use super::handler::{LocalExecDecision, LocalExecHandler, LocalExecRequest, LocalExecResponse};
-use super::token_store::InMemoryTokenStore;
 
 /// Hard cap on incoming request line length. Protects against memory exhaustion
 /// from a misbehaving same-UID process sending an unbounded line.
@@ -91,7 +90,7 @@ impl LocalExecEndpoint {
         );
 
         // Background task: prune expired tokens every 60 seconds.
-        let store_for_pruner: Arc<InMemoryTokenStore> = self.handler.token_store();
+        let store_for_pruner = self.handler.token_store();
         let prune_cancel = cancel.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));

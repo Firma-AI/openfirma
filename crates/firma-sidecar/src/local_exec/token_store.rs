@@ -1,6 +1,6 @@
 //! Approval token state machine for HITL local-exec governance.
 //!
-//! A token issued by [`InMemoryTokenStore::issue`] goes through these states:
+//! The [`TokenStore`] trait defines the contract. Tokens go through:
 //!
 //! ```text
 //! Pending → Consumed  (single successful validate_and_consume call)
@@ -8,15 +8,19 @@
 //! ```
 //!
 //! Every property listed in the architecture spec is enforced:
-//! - **Short-lived**: tokens carry an absolute `expires_at` instant.
-//! - **Single-use**: the state transition to `Consumed` is atomic under the
-//!   store's internal mutex; a second call on the same token returns
+//! - **Short-lived**: tokens carry an absolute expiry.
+//! - **Single-use**: the `Consumed` transition is atomic; a second call returns
 //!   [`TokenValidationResult::AlreadyConsumed`].
-//! - **Server-side tracked**: state lives in process memory, never on the wire.
+//! - **Server-side tracked**: state lives in the store, never on the wire.
 //! - **Context-bound**: each token is bound to the fingerprint, `session_id`,
-//!   `sandbox_id`, and optionally `agent_id` that were present at issuance time.
+//!   `sandbox_id`, and optionally `agent_id` that were present at issuance.
 //!   Any mismatch returns [`TokenValidationResult::ContextMismatch`] or
 //!   [`TokenValidationResult::FingerprintMismatch`].
+//!
+//! The default implementation is [`InMemoryTokenStore`]. Alternative backends
+//! (Redis, distributed store, test doubles) implement [`TokenStore`] and are
+//! injected into [`super::handler::LocalExecHandler`] via
+//! [`super::handler::LocalExecHandler::with_store`].
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -30,8 +34,11 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenState {
+    /// Issued and awaiting consumption — the only state that can transition to `Consumed`.
     Pending,
+    /// Successfully consumed by a `validate_and_consume` call. Terminal.
     Consumed,
+    /// TTL elapsed before consumption. Terminal.
     Expired,
 }
 
@@ -53,7 +60,7 @@ struct HitlToken {
 // Validation result
 // ---------------------------------------------------------------------------
 
-/// Outcome of a [`InMemoryTokenStore::validate_and_consume`] call.
+/// Outcome of a [`TokenStore::validate_and_consume`] call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenValidationResult {
     /// Token is valid; has been atomically consumed. Caller may proceed.
@@ -71,7 +78,51 @@ pub enum TokenValidationResult {
 }
 
 // ---------------------------------------------------------------------------
-// Store
+// Token store trait
+// ---------------------------------------------------------------------------
+
+/// Contract for an approval token store.
+///
+/// Implementations must be `Send + Sync` so they can be shared behind an
+/// [`Arc`](std::sync::Arc) across connection-handler tasks.
+///
+/// The default implementation is [`InMemoryTokenStore`]. Custom backends
+/// (Redis, distributed stores, test doubles) implement this trait and are
+/// passed to [`super::handler::LocalExecHandler::with_store`].
+pub trait TokenStore: Send + Sync {
+    /// Issue a new approval token bound to the given context and return its
+    /// opaque ID.
+    fn issue(
+        &self,
+        fingerprint: String,
+        session_id: String,
+        sandbox_id: String,
+        agent_id: Option<String>,
+    ) -> String;
+
+    /// Validate and atomically consume a token.
+    ///
+    /// Returns [`TokenValidationResult::Valid`] exactly once for a given token.
+    /// Every other outcome is a fail-closed denial.
+    fn validate_and_consume(
+        &self,
+        token_id: &str,
+        fingerprint: &str,
+        session_id: &str,
+        sandbox_id: &str,
+        agent_id: Option<&str>,
+    ) -> TokenValidationResult;
+
+    /// Remove records past their expiry grace window.
+    ///
+    /// Called periodically by the background pruning task. Backends with
+    /// native TTL support (e.g. Redis) may leave this as a no-op; the default
+    /// implementation does nothing.
+    fn prune_expired(&self) {}
+}
+
+// ---------------------------------------------------------------------------
+// In-memory implementation
 // ---------------------------------------------------------------------------
 
 /// In-memory, mutex-protected approval token store.
@@ -79,10 +130,10 @@ pub enum TokenValidationResult {
 /// Tokens are identified by UUID v4 strings. All state transitions are atomic
 /// under the internal [`Mutex`]. There is no external database dependency.
 ///
-/// Call [`InMemoryTokenStore::prune_expired`] periodically (e.g., from a
-/// background task) to reclaim memory. Tokens are retained for a brief grace
-/// window after expiry so that the store can distinguish `Expired` from
-/// `Unknown` on a late retry.
+/// Call [`TokenStore::prune_expired`] periodically (e.g., from a background
+/// task) to reclaim memory. Tokens are retained for a brief grace window after
+/// expiry so that the store can distinguish `Expired` from `Unknown` on a late
+/// retry.
 pub struct InMemoryTokenStore {
     tokens: Mutex<HashMap<String, HitlToken>>,
     ttl: Duration,
@@ -91,6 +142,7 @@ pub struct InMemoryTokenStore {
     expiry_grace: Duration,
 }
 
+/// Lock a mutex, recovering from a poisoned guard rather than panicking.
 fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
@@ -199,6 +251,33 @@ impl InMemoryTokenStore {
     #[cfg(test)]
     pub fn len(&self) -> usize {
         lock_or_recover(&self.tokens).len()
+    }
+}
+
+impl TokenStore for InMemoryTokenStore {
+    fn issue(
+        &self,
+        fingerprint: String,
+        session_id: String,
+        sandbox_id: String,
+        agent_id: Option<String>,
+    ) -> String {
+        self.issue(fingerprint, session_id, sandbox_id, agent_id)
+    }
+
+    fn validate_and_consume(
+        &self,
+        token_id: &str,
+        fingerprint: &str,
+        session_id: &str,
+        sandbox_id: &str,
+        agent_id: Option<&str>,
+    ) -> TokenValidationResult {
+        self.validate_and_consume(token_id, fingerprint, session_id, sandbox_id, agent_id)
+    }
+
+    fn prune_expired(&self) {
+        self.prune_expired();
     }
 }
 

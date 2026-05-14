@@ -19,7 +19,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
-use super::token_store::{InMemoryTokenStore, TokenValidationResult};
+use super::token_store::{InMemoryTokenStore, TokenStore, TokenValidationResult};
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -94,7 +94,9 @@ pub enum DefaultAction {
 /// Construction arguments for [`LocalExecHandler`].
 pub struct LocalExecHandlerConfig {
     pub default_action: DefaultAction,
-    /// Time-to-live for issued approval tokens.
+    /// Time-to-live for issued approval tokens. Only used by
+    /// [`LocalExecHandler::new`] when constructing the default
+    /// [`InMemoryTokenStore`]; ignored when using [`LocalExecHandler::with_store`].
     pub token_ttl: Duration,
     /// Suggested retry interval returned to `firma-run` in `pending_hitl`
     /// responses (milliseconds).
@@ -107,15 +109,17 @@ pub struct LocalExecHandlerConfig {
 
 /// Stateful handler for local-exec governance requests.
 ///
-/// The handler owns the [`InMemoryTokenStore`] and is safe to share across
-/// connections via [`Arc`].
+/// Holds an `Arc<dyn `[`TokenStore`]`>` and is safe to share across
+/// connections. The default store is [`InMemoryTokenStore`]; alternative
+/// backends (Redis, distributed stores, test doubles) are injected via
+/// [`LocalExecHandler::with_store`].
 pub struct LocalExecHandler {
     config: LocalExecHandlerConfig,
-    token_store: Arc<InMemoryTokenStore>,
+    token_store: Arc<dyn TokenStore>,
 }
 
 impl LocalExecHandler {
-    /// Build a handler from the given config.
+    /// Build a handler using the default [`InMemoryTokenStore`].
     #[must_use]
     pub fn new(config: LocalExecHandlerConfig) -> Self {
         let store = InMemoryTokenStore::new(config.token_ttl);
@@ -125,12 +129,24 @@ impl LocalExecHandler {
         }
     }
 
-    /// Return a reference to the underlying token store.
+    /// Build a handler with a custom token store.
+    ///
+    /// Use this to inject an alternative backend (Redis, distributed store,
+    /// test double) without changing any other call sites.
+    #[must_use]
+    pub fn with_store(config: LocalExecHandlerConfig, store: Arc<dyn TokenStore>) -> Self {
+        Self {
+            config,
+            token_store: store,
+        }
+    }
+
+    /// Return a shared reference to the token store.
     ///
     /// Exposed so the background pruning task can hold an `Arc` to the same
     /// store without cloning the handler.
     #[must_use]
-    pub fn token_store(&self) -> Arc<InMemoryTokenStore> {
+    pub fn token_store(&self) -> Arc<dyn TokenStore> {
         Arc::clone(&self.token_store)
     }
 
