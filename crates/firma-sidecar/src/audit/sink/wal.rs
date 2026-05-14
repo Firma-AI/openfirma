@@ -562,13 +562,13 @@ mod tests {
         let wal_path = dir.path().join("compact.jsonl");
 
         // Use a tiny cap so compaction triggers quickly.
-        let event = sample_event("evt-compact");
+        let event = sample_event("a");
         let line = serde_json::to_string(&event).unwrap_or_else(|e| panic!("serialize: {e}"));
         let line_len = (line.len() + 1) as u64; // +1 for newline
 
-        // Cap = 2.5 lines → after 3 appends, compaction triggers on
-        // the 3rd append to make room.
-        let cap = line_len * 2 + line_len / 2;
+        // Cap = exactly 2 lines → the 3rd append must trigger
+        // compaction to make room.
+        let cap = line_len * 2;
 
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
