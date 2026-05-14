@@ -4,6 +4,8 @@ use std::net::{SocketAddr, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
+use sha2::Digest as _;
+
 #[cfg(target_os = "linux")]
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use serde::{Deserialize, Serialize};
@@ -19,10 +21,18 @@ struct MediatorRequest<'a> {
     args: &'a [String],
     sandbox_id: &'a str,
     session_id: &'a str,
+    /// Agent identity forwarded from `FIRMA_AGENT_ID` env var when present.
+    /// Used by the sidecar to bind approval tokens to the issuing agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_id: Option<String>,
     profile: &'a str,
     hitl_mode: &'static str,
     // Optional governance context pass-through. Runtime does not enforce budget semantics.
     budget_state_ref: Option<String>,
+    /// SHA-256 fingerprint of (`canonical_executable` ‖ argv ‖ `session_id` ‖ `sandbox_id` ‖ `agent_id`).
+    /// The sidecar binds approval tokens to this fingerprint so a token issued for
+    /// one command cannot authorize a different command in the same session.
+    request_fingerprint: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,12 +56,25 @@ pub fn enforce_local_command_governance(
     executable: &str,
     args: &[String],
 ) -> Result<(), RunError> {
+    let agent_id = std::env::var("FIRMA_AGENT_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+
+    let request_fingerprint = compute_request_fingerprint(
+        executable,
+        args,
+        &identity.session_id,
+        &identity.sandbox_id,
+        agent_id.as_deref(),
+    );
+
     let payload = MediatorRequest {
         action: "local.exec",
         executable,
         args,
         sandbox_id: &identity.sandbox_id,
         session_id: &identity.session_id,
+        agent_id,
         profile: &identity.profile,
         hitl_mode: match mediator.hitl_mode {
             CommandMediatorHitlMode::SyncWait => "sync_wait",
@@ -62,6 +85,7 @@ pub fn enforce_local_command_governance(
         budget_state_ref: std::env::var("FIRMA_BUDGET_STATE_REF")
             .ok()
             .filter(|value| !value.trim().is_empty()),
+        request_fingerprint,
     };
 
     let request_json = serde_json::to_string(&payload).map_err(|error| {
@@ -254,6 +278,38 @@ fn send_and_receive<T: Write + std::io::Read>(
         ));
     }
     Ok(trimmed.to_string())
+}
+
+/// Compute a deterministic SHA-256 fingerprint over the key fields of a
+/// local-exec request. The sidecar binds approval tokens to this fingerprint
+/// so that a token issued for one command cannot be replayed for a different
+/// command, even within the same session.
+///
+/// Fields included: canonical executable path, each arg (NUL-delimited),
+/// `session_id`, `sandbox_id`, and `agent_id` when present.
+/// `env` is intentionally excluded — it is too large and unstable for V1.
+fn compute_request_fingerprint(
+    executable: &str,
+    args: &[String],
+    session_id: &str,
+    sandbox_id: &str,
+    agent_id: Option<&str>,
+) -> String {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(executable.as_bytes());
+    hasher.update(b"\0");
+    for arg in args {
+        hasher.update(arg.as_bytes());
+        hasher.update(b"\0");
+    }
+    hasher.update(session_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(sandbox_id.as_bytes());
+    hasher.update(b"\0");
+    if let Some(aid) = agent_id {
+        hasher.update(aid.as_bytes());
+    }
+    hex::encode(hasher.finalize())
 }
 
 #[cfg(test)]
