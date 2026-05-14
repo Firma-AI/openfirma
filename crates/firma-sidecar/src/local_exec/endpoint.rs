@@ -32,10 +32,14 @@
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(target_family = "unix")]
 use std::time::Duration;
 
+#[cfg(target_family = "unix")]
 use serde::Deserialize;
+#[cfg(target_family = "unix")]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(target_family = "unix")]
 use tokio::net::{UnixListener, UnixStream};
 use tokio_util::sync::CancellationToken;
 
@@ -46,10 +50,12 @@ use super::handler::{
 
 /// Hard cap on incoming request line length. Protects against memory exhaustion
 /// from a misbehaving same-UID process sending an unbounded line.
+#[cfg(target_family = "unix")]
 const MAX_REQUEST_LINE_BYTES: usize = 64 * 1024;
 
 /// Per-connection read timeout. Requests must complete within this window;
 /// connections that stall are closed fail-closed.
+#[cfg(target_family = "unix")]
 const CONNECTION_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 // ---------------------------------------------------------------------------
@@ -78,6 +84,7 @@ impl LocalExecEndpoint {
     /// # Errors
     ///
     /// Returns an error when the socket cannot be bound (permissions, path).
+    #[cfg(target_family = "unix")]
     pub async fn run(self, cancel: CancellationToken) -> io::Result<()> {
         if self.socket_path.exists() {
             std::fs::remove_file(&self.socket_path).map_err(|e| {
@@ -154,6 +161,17 @@ impl LocalExecEndpoint {
         let _ = std::fs::remove_file(&self.socket_path);
         Ok(())
     }
+
+    #[cfg(not(target_family = "unix"))]
+    pub async fn run(self, _cancel: CancellationToken) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "local-exec endpoint requires unix domain sockets; unsupported on this platform (path={})",
+                self.socket_path.display()
+            ),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -161,11 +179,13 @@ impl LocalExecEndpoint {
 // ---------------------------------------------------------------------------
 
 /// Peek at the `action` field without fully deserializing the request.
+#[cfg(target_family = "unix")]
 #[derive(Deserialize)]
 struct ActionPeek {
     action: String,
 }
 
+#[cfg(target_family = "unix")]
 async fn handle_connection(stream: UnixStream, handler: &LocalExecHandler) -> io::Result<()> {
     #[cfg(target_os = "linux")]
     validate_peer_uid(&stream)?;
@@ -260,6 +280,7 @@ async fn handle_connection(stream: UnixStream, handler: &LocalExecHandler) -> io
     }
 }
 
+#[cfg(target_family = "unix")]
 async fn send_governance_response(
     mut stream: UnixStream,
     response: &LocalExecResponse,
@@ -271,6 +292,7 @@ async fn send_governance_response(
     stream.flush().await
 }
 
+#[cfg(target_family = "unix")]
 async fn send_management_response(
     mut stream: UnixStream,
     response: &LocalExecManagementResponse,
@@ -320,6 +342,7 @@ fn validate_peer_uid(stream: &UnixStream) -> io::Result<()> {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[cfg(target_family = "unix")]
 mod tests {
     use std::time::Duration;
 
