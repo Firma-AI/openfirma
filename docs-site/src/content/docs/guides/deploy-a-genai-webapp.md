@@ -185,6 +185,7 @@ paths = []                                   # capabilities arrive via gRPC, not
 
 [sidecar.authority]
 public_key_path = "/etc/firma/firma-authority.pub"
+ca_cert_path    = "/etc/firma/authority-ca.crt"
 
 [sidecar.connector]
 default_timeout_ms = 30000
@@ -232,6 +233,7 @@ level = "info"
 A few things worth highlighting:
 
 - **`default_protected = true`** — anything not in mapping rules denies. Production posture.
+- **`authority_url` uses `https://` + `authority.ca_cert_path`** — sidecar verifies Authority identity before trusting streamed bundles/revocations.
 - **`grpc` audit sink** — events go to a centralized collector, not to a local file. Multiple Sidecars feed one collector.
 - **Vault for credentials** — no API keys on disk. The Sidecar pulls them on first use and caches in memory.
 - **`strict_hosts` on the vendor** — if MITM fails (e.g. cert mismatch), the call denies rather than falling back to weaker CONNECT-only policy.

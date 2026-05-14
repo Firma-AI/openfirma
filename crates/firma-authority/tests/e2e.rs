@@ -57,6 +57,8 @@ impl TestServer {
             max_ttl_seconds: 3600,
             log_level: "info".to_string(),
             bundle_ttl_seconds: 30,
+            tls_cert_path: None,
+            tls_key_path: None,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();

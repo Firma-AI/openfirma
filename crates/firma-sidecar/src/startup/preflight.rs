@@ -35,6 +35,7 @@ pub struct PreflightResult {
 pub async fn run_preflight(
     config: &PreflightConfig,
     authority_url: &str,
+    ca_cert_pem: Option<&[u8]>,
 ) -> Result<PreflightResult> {
     // Load authority public key (32-byte Ed25519 public key).
     let pub_key_bytes = std::fs::read(&config.authority_pub_key_path).with_context(|| {
@@ -48,8 +49,12 @@ pub async fn run_preflight(
         PasetoV4Verifier::try_new(&pub_key_bytes).context("invalid authority public key")?;
 
     // Connect to authority gRPC endpoint.
-    let channel = build_channel(authority_url, std::time::Duration::from_secs(10))
-        .context("failed to build authority gRPC channel")?;
+    let channel = build_channel(
+        authority_url,
+        std::time::Duration::from_secs(10),
+        ca_cert_pem,
+    )
+    .context("failed to build authority gRPC channel")?;
     let mut client = AuthorityServiceClient::new(channel);
 
     tracing::info!(

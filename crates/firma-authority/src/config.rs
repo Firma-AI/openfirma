@@ -41,6 +41,13 @@ pub struct AuthorityConfig {
     pub log_level: String,
     /// Policy bundle TTL advertised to sidecars in seconds (default: 30).
     pub bundle_ttl_seconds: u32,
+    /// Path to the TLS certificate file (PEM). When set together with
+    /// `tls_key_path`, the gRPC listener is TLS-only. Both fields must be
+    /// set or neither.
+    pub tls_cert_path: Option<PathBuf>,
+    /// Path to the TLS private key file (PEM). Must be set together with
+    /// `tls_cert_path`.
+    pub tls_key_path: Option<PathBuf>,
 }
 
 impl AuthorityConfig {
@@ -110,6 +117,12 @@ impl AuthorityConfig {
         {
             config.bundle_ttl_seconds = n;
         }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_TLS_CERT_PATH") {
+            config.tls_cert_path = Some(PathBuf::from(v));
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_TLS_KEY_PATH") {
+            config.tls_key_path = Some(PathBuf::from(v));
+        }
     }
 
     /// Parse a resolved config file (flat or `[authority]`-sectioned via
@@ -169,6 +182,8 @@ impl Default for AuthorityConfig {
             key_file: PathBuf::from(DEFAULT_KEY_FILE),
             log_level: "info".to_string(),
             bundle_ttl_seconds: 30,
+            tls_cert_path: None,
+            tls_key_path: None,
         }
     }
 }

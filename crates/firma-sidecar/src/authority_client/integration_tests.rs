@@ -23,7 +23,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
-use tonic::transport::Server;
+use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tonic::{Request, Response, Status};
 
 use super::channel::build_channel;
@@ -189,6 +189,91 @@ async fn spawn_mock_authority() -> anyhow::Result<MockAuthorityServer> {
     })
 }
 
+/// Spawn a TLS-enabled mock authority. The server uses `cert_pem`/`key_pem`
+/// as its identity; clients must present a CA that signed the server cert.
+/// The returned URL uses `https://localhost:<port>`.
+async fn spawn_mock_authority_tls(
+    cert_pem: &[u8],
+    key_pem: &[u8],
+) -> anyhow::Result<MockAuthorityServer> {
+    let addr = {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        listener.local_addr()?
+    };
+    let port = addr.port();
+    let url = format!("https://localhost:{port}");
+
+    let (bundle_tx, _) = broadcast::channel(16);
+    let (revoc_tx, _) = broadcast::channel(64);
+    let state = Arc::new(MockAuthorityState {
+        bundle_tx,
+        revoc_tx,
+        initial_bundle: Mutex::new(None),
+    });
+    let service = MockAuthority {
+        state: Arc::clone(&state),
+    };
+
+    let identity = Identity::from_pem(cert_pem, key_pem);
+    let tls = ServerTlsConfig::new().identity(identity);
+
+    let shutdown = CancellationToken::new();
+    let shutdown_signal = shutdown.clone();
+    let join = tokio::spawn(async move {
+        let _ = Server::builder()
+            .tls_config(tls)
+            .expect("valid TLS config in test")
+            .add_service(AuthorityServiceServer::new(service))
+            .serve_with_shutdown(addr, async move {
+                shutdown_signal.cancelled().await;
+            })
+            .await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    Ok(MockAuthorityServer {
+        url,
+        handle: MockAuthorityHandle { state },
+        shutdown,
+        join,
+    })
+}
+
+// -----------------------------------------------------------------------------
+// TLS certificate helpers
+// -----------------------------------------------------------------------------
+
+struct TlsCerts {
+    ca_cert_pem: Vec<u8>,
+    server_cert_pem: Vec<u8>,
+    server_key_pem: Vec<u8>,
+}
+
+fn generate_test_tls_certs() -> anyhow::Result<TlsCerts> {
+    use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
+
+    // Self-signed CA
+    let ca_key = KeyPair::generate()?;
+    let mut ca_params = CertificateParams::default();
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, "Test CA");
+    ca_params.distinguished_name = dn;
+    let ca_cert = ca_params.self_signed(&ca_key)?;
+
+    // Server cert with DNS SAN "localhost", signed by the test CA
+    let server_key = KeyPair::generate()?;
+    let server_params = CertificateParams::new(vec!["localhost".to_string()])?;
+    let server_cert = server_params.signed_by(&server_key, &ca_cert, &ca_key)?;
+
+    Ok(TlsCerts {
+        ca_cert_pem: ca_cert.pem().into_bytes(),
+        server_cert_pem: server_cert.pem().into_bytes(),
+        server_key_pem: server_key.serialize_pem().into_bytes(),
+    })
+}
+
 // -----------------------------------------------------------------------------
 // Sidecar client wiring helpers
 // -----------------------------------------------------------------------------
@@ -208,8 +293,16 @@ impl SidecarHarness {
     }
 }
 
-fn spawn_sidecar(url: &str, config: AuthorityConfig) -> anyhow::Result<SidecarHarness> {
-    let channel = build_channel(url, Duration::from_secs(config.connect_timeout_secs))?;
+fn spawn_sidecar(
+    url: &str,
+    config: AuthorityConfig,
+    ca_cert_pem: Option<&[u8]>,
+) -> anyhow::Result<SidecarHarness> {
+    let channel = build_channel(
+        url,
+        Duration::from_secs(config.connect_timeout_secs),
+        ca_cert_pem,
+    )?;
     let revocation_store = Arc::new(BloomLruRevocationStore::new(RevocationConfig {
         capacity: 1_024,
         fpr: 0.001,
@@ -308,6 +401,8 @@ fn test_config() -> AuthorityConfig {
         revocation_readiness_grace_ms: 100,
         revocation_fail_closed_on_disconnect: false,
         public_key_path: None,
+        ca_cert_path: None,
+        allow_insecure_remote_authority: false,
     }
 }
 
@@ -336,7 +431,7 @@ async fn readiness_flips_after_initial_bundle_and_revocation_grace() -> anyhow::
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config())?;
+    let harness = spawn_sidecar(&server.url, test_config(), None)?;
 
     let policy_ready = wait_for(Duration::from_secs(2), || {
         harness.readiness_view.snapshot().policy_bundle_ready
@@ -367,7 +462,7 @@ async fn revocation_event_propagates_to_store_within_one_second() -> anyhow::Res
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config())?;
+    let harness = spawn_sidecar(&server.url, test_config(), None)?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -406,7 +501,7 @@ async fn ttl_expiry_marks_policy_stale_after_authority_disappears() -> anyhow::R
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v-ttl", 1));
-    let harness = spawn_sidecar(&server.url, test_config())?;
+    let harness = spawn_sidecar(&server.url, test_config(), None)?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -441,7 +536,7 @@ async fn reconnect_applies_new_bundle_version() -> anyhow::Result<()> {
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config())?;
+    let harness = spawn_sidecar(&server.url, test_config(), None)?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -471,7 +566,7 @@ async fn malformed_bundle_retains_previous_version() -> anyhow::Result<()> {
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config())?;
+    let harness = spawn_sidecar(&server.url, test_config(), None)?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -511,7 +606,7 @@ async fn invalid_cedar_bundle_retains_previous_snapshot() -> anyhow::Result<()> 
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config())?;
+    let harness = spawn_sidecar(&server.url, test_config(), None)?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -545,7 +640,7 @@ async fn sequential_valid_bundles_swap_observed_by_evaluate() -> anyhow::Result<
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v1", 60));
-    let harness = spawn_sidecar(&server.url, test_config())?;
+    let harness = spawn_sidecar(&server.url, test_config(), None)?;
 
     assert!(
         wait_for(Duration::from_secs(2), || harness
@@ -600,7 +695,7 @@ async fn cold_boot_without_bundle_stays_not_ready() -> anyhow::Result<()> {
     // that reaches the pipeline is denied with `PolicyBundleNotReady`.
     let server = spawn_mock_authority().await?;
     // Intentionally no set_initial_bundle / push_bundle.
-    let harness = spawn_sidecar(&server.url, test_config())?;
+    let harness = spawn_sidecar(&server.url, test_config(), None)?;
 
     // Give the stream client a window to settle.
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -626,6 +721,94 @@ async fn cold_boot_without_bundle_stays_not_ready() -> anyhow::Result<()> {
         .evaluate(&agent, "test.action", "resource", &ctx)
         .expect("sentinel evaluator returns Ok(false)");
     assert!(!allowed, "sentinel DenyAll must refuse every evaluate()");
+
+    harness.shutdown().await;
+    server.stop().await;
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// TLS tests
+// -----------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tls_handshake_succeeds_and_policy_streams_over_tls() -> anyhow::Result<()> {
+    let certs = generate_test_tls_certs()?;
+    let server = spawn_mock_authority_tls(&certs.server_cert_pem, &certs.server_key_pem).await?;
+    server
+        .handle
+        .set_initial_bundle(valid_bundle_update("v-tls", 60));
+
+    let harness = spawn_sidecar(&server.url, test_config(), Some(&certs.ca_cert_pem))?;
+
+    let policy_ready = wait_for(Duration::from_secs(5), || {
+        harness.readiness_view.snapshot().policy_bundle_ready
+    })
+    .await;
+    assert!(
+        policy_ready,
+        "policy bundle readiness never flipped over TLS"
+    );
+
+    assert_eq!(
+        harness.swappable_policy.version().as_deref(),
+        Some("v-tls"),
+        "TLS-delivered bundle version should be applied"
+    );
+
+    harness.shutdown().await;
+    server.stop().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tls_handshake_fails_with_wrong_ca_cert_stays_not_ready() -> anyhow::Result<()> {
+    // Server uses a cert signed by CA-1.
+    // Client trusts CA-2 only — the handshake must be rejected and
+    // policy_bundle_ready must remain false (fail-closed).
+    let server_certs = generate_test_tls_certs()?;
+    let wrong_ca_certs = generate_test_tls_certs()?; // independent CA
+
+    let server =
+        spawn_mock_authority_tls(&server_certs.server_cert_pem, &server_certs.server_key_pem)
+            .await?;
+    server
+        .handle
+        .set_initial_bundle(valid_bundle_update("v-should-not-arrive", 60));
+
+    // Connect with the wrong CA — TLS verification will fail.
+    let harness = spawn_sidecar(
+        &server.url,
+        test_config(),
+        Some(&wrong_ca_certs.ca_cert_pem),
+    )?;
+
+    // Allow several reconnect attempts; readiness must stay false.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    assert!(
+        !harness.readiness_view.snapshot().policy_bundle_ready,
+        "policy_bundle_ready must stay false when TLS cert is untrusted"
+    );
+    assert_eq!(
+        harness.swappable_policy.version(),
+        None,
+        "no bundle should be installed when TLS handshake fails"
+    );
+    assert!(
+        !harness.swappable_policy.is_fresh(),
+        "when TLS handshake fails, policy state must stay stale and fail-closed"
+    );
+    let agent: AgentId = "agent-tls-mismatch".parse().expect("literal agent id");
+    let ctx = serde_json::json!({});
+    let allowed = harness
+        .swappable_policy
+        .evaluate(&agent, "test.action", "resource", &ctx)
+        .expect("sentinel evaluator returns Ok(false)");
+    assert!(
+        !allowed,
+        "TLS handshake failure must result in deny semantics (no policy bundle installed)"
+    );
 
     harness.shutdown().await;
     server.stop().await;
