@@ -43,9 +43,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio_util::sync::CancellationToken;
 
+use super::handler::LocalExecHandler;
+#[cfg(target_family = "unix")]
 use super::handler::{
-    LocalExecDecision, LocalExecHandler, LocalExecManagementRequest, LocalExecManagementResponse,
-    LocalExecRequest, LocalExecResponse, ManagementOutcome,
+    LocalExecDecision, LocalExecManagementRequest, LocalExecManagementResponse, LocalExecRequest,
+    LocalExecResponse, ManagementOutcome,
 };
 
 /// Hard cap on incoming request line length. Protects against memory exhaustion
@@ -65,6 +67,7 @@ const CONNECTION_READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// The local-exec governance UDS endpoint.
 pub struct LocalExecEndpoint {
     socket_path: PathBuf,
+    #[cfg(target_family = "unix")]
     handler: Arc<LocalExecHandler>,
 }
 
@@ -72,9 +75,17 @@ impl LocalExecEndpoint {
     /// Create the endpoint with the given socket path and handler.
     #[must_use]
     pub fn new(socket_path: PathBuf, handler: LocalExecHandler) -> Self {
-        Self {
-            socket_path,
-            handler: Arc::new(handler),
+        #[cfg(target_family = "unix")]
+        {
+            Self {
+                socket_path,
+                handler: Arc::new(handler),
+            }
+        }
+        #[cfg(not(target_family = "unix"))]
+        {
+            let _ = handler;
+            Self { socket_path }
         }
     }
 
@@ -163,7 +174,13 @@ impl LocalExecEndpoint {
     }
 
     #[cfg(not(target_family = "unix"))]
+    ///
+    /// # Errors
+    ///
+    /// Always returns `io::ErrorKind::Unsupported` because the local-exec
+    /// endpoint requires Unix domain sockets.
     pub async fn run(self, _cancel: CancellationToken) -> io::Result<()> {
+        tokio::task::yield_now().await;
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             format!(
