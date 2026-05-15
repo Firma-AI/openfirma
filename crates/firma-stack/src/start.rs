@@ -88,19 +88,19 @@ pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
 fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
     let group = SystemPlatform::new_group()?;
     let exe = cfg.firma_bin.as_deref();
-    debug!(config = %cfg.authority_config.display(), exe = ?exe, "spawning authority");
-    let auth = spawn_with_config(&group, state_dir, "authority", &cfg.authority_config, exe)?;
+    debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning authority");
+    let auth = spawn_with_config(&group, state_dir, "authority", &cfg.config_file, exe)?;
     info!(pid = auth.pid, "authority spawned");
-    let auth_addr = read_authority_listen_addr(&cfg.authority_config)?;
+    let auth_addr = read_authority_listen_addr(&cfg.config_file)?;
     std::fs::write(state_dir.join("authority.listen"), format!("{auth_addr}\n"))?;
     debug!(addr = %auth_addr, "waiting for authority TCP listen");
     wait_for_tcp("authority", auth_addr, Duration::from_secs(60))?;
     info!(addr = %auth_addr, "authority listening");
 
-    debug!(config = %cfg.sidecar_config.display(), exe = ?exe, "spawning sidecar");
-    let side = spawn_with_config(&group, state_dir, "sidecar", &cfg.sidecar_config, exe)?;
+    debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning sidecar");
+    let side = spawn_with_config(&group, state_dir, "sidecar", &cfg.config_file, exe)?;
     info!(pid = side.pid, "sidecar spawned");
-    let side_addr = read_sidecar_listen_addr(&cfg.sidecar_config)?;
+    let side_addr = read_sidecar_listen_addr(&cfg.config_file)?;
     std::fs::write(state_dir.join("sidecar.listen"), format!("{side_addr}\n"))?;
     debug!(addr = %side_addr, "waiting for sidecar TCP listen");
     wait_for_tcp("sidecar", side_addr, Duration::from_secs(60))?;
@@ -215,7 +215,7 @@ fn spawn_with_config(
         .ok_or_else(|| StackError::Platform("non-utf8 config path".into()))?;
     let subcmd = match name {
         "authority" => vec!["authority", "--config", cfg_str],
-        "sidecar" => vec!["sidecar", "--config-file", cfg_str],
+        "sidecar" => vec!["sidecar", "--config", cfg_str],
         other => return Err(StackError::Platform(format!("unknown component '{other}'"))),
     };
     spawn_component(

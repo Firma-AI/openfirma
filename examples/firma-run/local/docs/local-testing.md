@@ -63,14 +63,14 @@ pwsh ./examples/firma-run/local/setup.ps1 --observability
 The script creates:
 
 - `.local/mapping-rules.toml`
-- `.local/firma_sidecar.local.toml`
+- `.local/firma.toml`
 - `.local/audit-key.pem`
 
 Templates used:
 
 - `examples/firma-run/local/assets/mapping-rules.local.example.toml`
-- `examples/firma-run/local/assets/firma_sidecar.local.example.toml`
-- `examples/firma-run/local/assets/firma_sidecar.local.observability.example.toml` (opt-in diagnostics profile)
+- `examples/firma-run/local/assets/firma.local.example.toml`
+- `examples/firma-run/local/assets/firma.local.observability.example.toml` (opt-in diagnostics profile)
 
 ## Environment Variables
 
@@ -119,7 +119,7 @@ This prevents `UnknownCA` failures for managed HTTPS MITM targets.
 Terminal A:
 
 ```bash
-cargo run -p firma -- sidecar -c .local/firma_sidecar.local.toml
+cargo run -p firma -- sidecar -c .local/firma.toml
 ```
 
 When sidecar starts in `http_proxy` mode, it now prints an explicit routing

@@ -13,7 +13,7 @@ live stack.
 ```bash
 firma doctor                                    # pretty, all checks
 firma doctor --json | jq .                      # machine-readable
-firma doctor --config firma-stack.toml          # explicit stack config
+firma doctor --config /etc/firma/firma.toml     # explicit unified config
 firma doctor --state-dir /run/user/1000/firma   # explicit state dir
 firma doctor --timeout-ms 1500                  # slower network probe
 ```
@@ -21,7 +21,7 @@ firma doctor --timeout-ms 1500                  # slower network probe
 ## Surface
 
 ```text
-firma doctor [--config <stack.toml>]
+firma doctor [--config <firma.toml>]
              [--state-dir <dir>]
              [--json]
              [--timeout-ms <ms>]
@@ -29,12 +29,17 @@ firma doctor [--config <stack.toml>]
 
 ## Flags
 
-| Flag           | Env                  | Default  | Description                                                    |
-| -------------- | -------------------- | -------- | -------------------------------------------------------------- |
-| `--config`     | `FIRMA_STACK_CONFIG` | _unset_  | Explicit stack config path. Otherwise walked up from cwd.      |
-| `--state-dir`  | `FIRMA_STATE_DIR`    | resolved | Override the runtime state directory.                          |
-| `--json`       | —                    | _off_    | Emit a single JSON object instead of pretty text.              |
-| `--timeout-ms` | —                    | `500`    | Per-probe network timeout (TCP / UDS connect) in milliseconds. |
+| Flag           | Env               | Default    | Description                                                    |
+| -------------- | ----------------- | ---------- | -------------------------------------------------------------- |
+| `--config`     | —                 | discovered | Unified `firma.toml` to inspect. Otherwise auto-discovered.    |
+| `--state-dir`  | `FIRMA_STATE_DIR` | resolved   | Override the runtime state directory.                          |
+| `--json`       | —                 | _off_      | Emit a single JSON object instead of pretty text.              |
+| `--timeout-ms` | —                 | `500`      | Per-probe network timeout (TCP / UDS connect) in milliseconds. |
+
+`firma doctor` resolves the shared `firma.toml` via the same Config
+Discovery precedence as every other subcommand (see
+[`docs/cli.md`](../cli.md)). It actively consumes `--config` to locate that
+unified file. `state_dir` is never a config-file key.
 
 ## Status taxonomy
 
@@ -57,9 +62,9 @@ the operator already declared and that is now misbehaving.
 | `sandbox vz`          | macOS Virtualization.framework. `WARN` (no CLI probe).                           |
 | `sandbox wsl2`        | `wsl.exe --version`. Windows only; `WARN` elsewhere.                             |
 | `sandbox firecracker` | `firecracker --version`. Linux only; `WARN` elsewhere.                           |
-| `sidecar reachable`   | TCP / UDS connect to the address resolved from `[interceptor]` in sidecar.toml.  |
-| `authority reachable` | TCP connect to `listen_addr` in authority.toml.                                  |
-| `config parsed`       | Walks up from cwd for `firma-stack.toml`, parses via `firma_stack`.              |
+| `sidecar reachable`   | TCP / UDS connect to the address from `[sidecar.interceptor]` in `firma.toml`.   |
+| `authority reachable` | TCP connect to `listen_addr` in `[authority]` of `firma.toml`.                   |
+| `config parsed`       | Resolves the unified `firma.toml`; parses `[authority]` + `[sidecar]` sections.  |
 | `capability seed`     | `<state_dir>/capabilities/` non-empty.                                           |
 | `state dir`           | Existence + mode `0700` (Unix) of the resolved state dir.                        |
 | `data dir`            | Existence + mode `0700` (Unix) of `$XDG_DATA_HOME/firma` (or platform fallback). |
@@ -82,7 +87,7 @@ firma doctor
 [OK]   sandbox firecracker    Firecracker v1.7.0 available
 [OK]   sidecar reachable      127.0.0.1:8080
 [FAIL] authority reachable    127.0.0.1:50051: connection refused
-[OK]   config parsed          ./firma-stack.toml
+[OK]   config parsed          ~/.config/firma/firma.toml
 [WARN] capability seed        /run/user/1000/firma/capabilities: directory does not exist
 [OK]   state dir              /run/user/1000/firma: mode 0700
 [WARN] data dir               could not resolve XDG_DATA_HOME / fallback
@@ -138,9 +143,10 @@ without a major-version bump.
 
 For each of `sidecar reachable` and `authority reachable`:
 
-1. Look up the child config path from the resolved stack config.
-2. If no stack config is loadable, or the child config can't be parsed,
-   or the endpoint field is empty → `WARN("not configured")`.
+1. Read the endpoint from the resolved unified `firma.toml`
+   (`[sidecar.interceptor]` / `[authority]`).
+2. If no `firma.toml` is loadable, or the section can't be parsed, or the
+   endpoint field is empty → `WARN("not configured")`.
 3. Otherwise, attempt one TCP (or UDS) connect with a `--timeout-ms`
    deadline. Success → `OK`. Any error → `FAIL` with the underlying
    error text.
@@ -154,10 +160,10 @@ connecting. Otherwise the connect would always fail on macOS.
 
 ## State / data directory resolution
 
-| Directory   | Resolution order                                                                                                                                                                              |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `state_dir` | `--state-dir` → `FIRMA_STATE_DIR` → `state_dir` field in stack config → `$XDG_RUNTIME_DIR/firma` (or `/tmp/firma-$UID` on Unix; `%LOCALAPPDATA%\firma\runtime` or `%TEMP%\firma` on Windows). |
-| `data_dir`  | `$XDG_DATA_HOME/firma` → `~/.local/share/firma` (Linux), `~/Library/Application Support/firma` (macOS), `%APPDATA%\firma\data` (Windows).                                                     |
+| Directory   | Resolution order                                                                                                                                                                                          |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `state_dir` | `--state-dir` → `FIRMA_STATE_DIR` → `$XDG_RUNTIME_DIR/firma` (or `/tmp/firma-$UID` on Unix; `%LOCALAPPDATA%\firma\runtime` or `%TEMP%\firma` on Windows). `state_dir` is never read from the config file. |
+| `data_dir`  | `$XDG_DATA_HOME/firma` → `~/.local/share/firma` (Linux), `~/Library/Application Support/firma` (macOS), `%APPDATA%\firma\data` (Windows).                                                                 |
 
 On Unix, both directories are required to exist with mode `0700` (per
 Hardening Issue 5: keep sockets and audit material out of other users'

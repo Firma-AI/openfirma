@@ -1,0 +1,21 @@
+[package]
+name = "firma-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Platform config-path discovery for the firma CLI"
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+dirs = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

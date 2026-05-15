@@ -38,8 +38,7 @@ examples/
     │       ├── enforcement.py
     │       └── github.py
     ├── demo0/               # Fragmented enforcement across four systems
-    │   ├── authority.toml
-    │   ├── sidecar.toml
+    │   ├── firma.toml          # unified [authority] + [sidecar.*]
     │   ├── mapping-rules.toml
     │   ├── description.md
     │   ├── agent.py         # Scripted call sequence
@@ -102,12 +101,12 @@ If `examples/demos/.env.sample` exists, the TUI presents each key as an editable
 
 3. remove stale .runtime/generated-firma-ca/{firma-ca.crt,firma-ca.key}
 
-4. cargo run --bin firma-authority -- --config authority.toml
+4. cargo run -p firma -- authority --config firma.toml
    wait: TCP connect to authority listen_addr (timeout 60 s)
 
 5. truncate .runtime/audit.jsonl
 
-6. cargo run --bin firma-sidecar -- --config-file sidecar.toml
+6. cargo run -p firma -- sidecar --config firma.toml
    wait: .runtime/generated-firma-ca/firma-ca.crt + firma-ca.key exist (timeout 60 s)
    (sidecar generates MITM CA material on first startup)
 ```
@@ -118,9 +117,10 @@ Each `cargo run` child is wrapped in `ManagedProcess`: stdout + stderr are piped
 
 ## Authority Config (per demo)
 
-Each demo provides `demoX/authority.toml` which maps directly to `AuthorityConfig`:
+Each demo provides a single `demoX/firma.toml`; its `[authority]` table maps directly to `AuthorityConfig`:
 
 ```toml
+[authority]
 listen_addr        = "127.0.0.1:50051"
 policy_dir         = "examples/demos/demo0/policies"   # note: policies/ subdir
 revocation_file    = "examples/demos/demo0/.runtime/revocations.txt"
@@ -134,7 +134,7 @@ log_level          = "info"
 Config resolution order (highest to lowest priority):
 
 1. Environment variables (`FIRMA_AUTHORITY_POLICY_DIR`, `FIRMA_AUTHORITY_SCHEMA_PATH`, `FIRMA_AUTHORITY_KEY_FILE`)
-2. `demoX/authority.toml`
+2. `[authority]` in `demoX/firma.toml`
 3. `AuthorityConfig` defaults
 
 Each demo is a **self-contained policy universe** — `policy_dir` points into the demo's `policies/` subdirectory.
@@ -143,51 +143,51 @@ Each demo is a **self-contained policy universe** — `policy_dir` points into t
 
 ## Sidecar Config (per demo)
 
-`demoX/sidecar.toml` mirrors the existing `examples/e2e/sidecar.toml` shape:
+The `[sidecar.*]` tables in `demoX/firma.toml` mirror the `examples/e2e/firma.toml` shape:
 
 ```toml
-[interceptor]
+[sidecar.interceptor]
 mode               = "http_proxy"
 listen_addr        = "127.0.0.1:8080"
 drain_timeout_secs = 30
 
-[policy]
+[sidecar.policy]
 dir           = "examples/demos/demo0"
 authority_url = "http://127.0.0.1:50051"
 
-[ca]
+[sidecar.ca]
 dir = "examples/demos/demo0/.runtime/generated-firma-ca"
 
-[log]
+[sidecar.log]
 level = "info"
 
-[mapping]
+[sidecar.mapping]
 rules_path        = "examples/demos/demo0/mapping-rules.toml"
 default_protected = true   # demos default to fail-closed
 
-[capability_validation]
+[sidecar.capability_validation]
 clock_skew_tolerance_seconds = 0
 
-[constraint_enforcement]
+[sidecar.constraint_enforcement]
 bundle_ttl_seconds     = 3600
 enforcement_timeout_ms = 50
 
-[connector]
+[sidecar.connector]
 default_timeout_ms = 10000
 
-[audit]
+[sidecar.audit]
 sink             = "file"
 file_path        = "examples/demos/demo0/.runtime/audit.jsonl"
 signing_key_path = "examples/demos/demo0/.runtime/audit.key"
 
-[authority]
+[sidecar.authority]
 connect_timeout_secs                 = 10
 reconnect_min_backoff_ms             = 250
 reconnect_max_backoff_secs           = 30
 revocation_readiness_grace_ms        = 500
 revocation_fail_closed_on_disconnect = false
 
-[preflight]
+[sidecar.preflight]
 agent_id               = "demo0-agent"
 session_id             = "demo0-session-001"
 requested_actions      = ["code.review.read", "filesystem.read"]
@@ -296,9 +296,9 @@ cargo build -p firma-authority -p firma-sidecar  (skipped with --no-build)
   ↓
 mkdir .runtime/  •  generate authority.key if absent  •  write audit.key
   ↓
-start firma-authority --config authority.toml
+start firma authority --config firma.toml
   ↓
-start firma-sidecar --config-file sidecar.toml
+start firma sidecar --config firma.toml
   ↓
 wait for .runtime/generated-firma-ca/firma-ca.crt
   ↓
@@ -306,7 +306,7 @@ uv run demo0/agent.py                    (skipped with --no-script)
   HTTP_PROXY=http://127.0.0.1:8080
   HTTPS_PROXY=http://127.0.0.1:8080
   SSL_CERT_FILE=.runtime/generated-firma-ca/firma-ca.crt
-  FIRMA_SESSION_ID=<from sidecar.toml [preflight]>
+  FIRMA_SESSION_ID=<from [sidecar.preflight] in firma.toml>
 ```
 
 ## Runtime Loop

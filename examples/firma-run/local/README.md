@@ -10,7 +10,7 @@ From the repository root:
 
 ```bash
 examples/firma-run/local/setup.sh
-cargo run -p firma -- sidecar -c .local/firma_sidecar.local.toml
+cargo run -p firma -- sidecar -c .local/firma.toml
 examples/firma-run/local/run.sh -- curl https://example.com
 ```
 
@@ -37,6 +37,12 @@ available:
 - `run.sh` / `run.ps1` run any command through `firma run`.
 - `preflight.sh` / `preflight.ps1` check whether the host has the expected backend tools.
 - `renew-capability.sh` / `renew-capability.ps1` issue a fresh capability seed with `firma-authority`.
+
+> Note: the generated `.local/firma.toml` is a sidecar-only template — it
+> has no `[authority]` section. Renewing a capability runs `firma
+> authority`, which needs a config containing `[authority]`; point its
+> `--authority-config` at a file that has one (e.g. append an `[authority]`
+> section to `.local/firma.toml`).
 
 ## More detail
 

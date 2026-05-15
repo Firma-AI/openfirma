@@ -57,12 +57,12 @@ capability claims.
 
 Codex:
 
-- `examples/firma-run/local/assets/firma_sidecar.local.codex.example.toml`
+- `examples/firma-run/local/assets/firma.local.codex.example.toml`
 - `examples/firma-run/local/assets/mapping-rules.codex.local.example.toml`
 
 Claude:
 
-- `examples/firma-run/local/assets/firma_sidecar.local.claude.example.toml`
+- `examples/firma-run/local/assets/firma.local.claude.example.toml`
 - `examples/firma-run/local/assets/mapping-rules.claude.local.example.toml`
 
 Note: the Claude mapping sample includes both:
@@ -74,7 +74,7 @@ This is required when `https_mitm.enabled = true` and `default_protected = true`
 
 Recommended local destinations:
 
-- `.local/firma_sidecar.local.toml`
+- `.local/firma.toml`
 - `.local/mapping-rules.toml`
 
 ## 1) Bootstrap local artifacts
@@ -88,7 +88,7 @@ This creates `.local/` scaffolding, including audit key material.
 ## 2) Start authority (required for fail-closed stream mode)
 
 ```bash
-cargo run -p firma -- authority --config .local/authority.toml
+cargo run -p firma -- authority --config .local/firma.toml
 ```
 
 Keep this running in its own terminal.
@@ -99,11 +99,11 @@ Copy one sidecar sample and one mapping sample into `.local/`:
 
 ```bash
 # Codex track
-cp examples/firma-run/local/assets/firma_sidecar.local.codex.example.toml .local/firma_sidecar.local.toml
+cp examples/firma-run/local/assets/firma.local.codex.example.toml .local/firma.toml
 cp examples/firma-run/local/assets/mapping-rules.codex.local.example.toml .local/mapping-rules.toml
 
 # Claude track
-# cp examples/firma-run/local/assets/firma_sidecar.local.claude.example.toml .local/firma_sidecar.local.toml
+# cp examples/firma-run/local/assets/firma.local.claude.example.toml .local/firma.toml
 # cp examples/firma-run/local/assets/mapping-rules.claude.local.example.toml .local/mapping-rules.toml
 ```
 
@@ -130,7 +130,7 @@ examples/firma-run/local/renew-capability.sh \
 ## 5) Start sidecar
 
 ```bash
-cargo run -p firma -- sidecar -c .local/firma_sidecar.local.toml
+cargo run -p firma -- sidecar -c .local/firma.toml
 ```
 
 Verify startup includes:

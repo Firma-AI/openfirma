@@ -84,8 +84,7 @@ These files are generated locally and are not committed.
 ```text
 examples/demo/
 ├── run.sh              Starts the local Authority, Sidecar, and selected driver.
-├── authority.toml      Local Authority configuration.
-├── sidecar.toml        Local Sidecar configuration.
+├── firma.toml          Unified config ([authority] + [sidecar.*]).
 ├── mapping-rules.toml  Request-to-action mappings used by the demo.
 ├── policies/           Cedar policies streamed by the Authority.
 ├── .env.sample         Environment template for LLM-backed modes.
@@ -98,7 +97,7 @@ If an expected ALLOW returns `403`, check `examples/demo/logs/sidecar.log`. The 
 
 If the Authority refuses to start after local experimentation, delete `examples/demo/firma-authority.key` and `examples/demo/firma-authority.pub`, then rerun the demo. The runner will regenerate them.
 
-If the demo pauses for a long time in a debugger, the Sidecar can treat the policy bundle as stale. Increase `bundle_ttl_seconds` in `sidecar.toml` while debugging.
+If the demo pauses for a long time in a debugger, the Sidecar can treat the policy bundle as stale. Increase `bundle_ttl_seconds` under `[sidecar.constraint_enforcement]` in `firma.toml` while debugging.
 
 ## Startup signal
 

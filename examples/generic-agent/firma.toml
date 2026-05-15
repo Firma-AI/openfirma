@@ -1,8 +1,27 @@
-# Generic agent — sidecar config.
-# HTTP proxy on :7474. All unmapped hosts DENY (fail-closed).
-# Run from repo root: ./target/debug/firma-sidecar --config examples/generic-agent/sidecar.toml
+# Generic agent — unified sectioned config.
+# Run from repo root: ./target/debug/firma sidecar --config examples/generic-agent/firma.toml
+#
+# NOT FOR PRODUCTION USE. Local dev/testing only.
 
-[interceptor]
+# ── Mini Authority ───────────────────────────────────────────────────────────
+
+[authority]
+listen_addr = "127.0.0.1:50051"
+policy_dir = "policies/"
+issuance_policy_dir = "issuance-policies/"
+revocation_file = "examples/generic-agent/.runtime/revocations.txt"
+key_file = ".runtime/authority.key"
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 30
+log_level = "info"
+
+# schema_path is optional. Omit to use the schema embedded in the binary.
+# schema_path = "examples/generic-agent/policies/schema.cedarschema"
+
+# ── Sidecar ──────────────────────────────────────────────────────────────────
+# HTTP proxy on :7474. All unmapped hosts DENY (fail-closed).
+
+[sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:7474"
 drain_timeout_secs = 30
@@ -10,57 +29,57 @@ drain_timeout_secs = 30
 # HTTPS MITM — intercept GitHub and Gmail so the sidecar can inspect L7 traffic.
 # The agent's LLM traffic (api.openai.com, api.anthropic.com) tunnels through
 # untouched; the LLM SDK does not need to trust the generated firma-ca.
-[interceptor.https_mitm]
+[sidecar.interceptor.https_mitm]
 intercept_hosts = ["api.github.com", "gmail.googleapis.com", "pypi.org"]
 # Strict-MITM: the bare CONNECT is auto-authorized once the TLS preflight
 # succeeds; inner L7 requests (which carry x-firma-session-id) are then
 # evaluated individually.
 strict_hosts = ["api.github.com", "gmail.googleapis.com", "pypi.org"]
 
-[policy]
-dir = "examples/generic-agent"
+[sidecar.policy]
+dir = "."
 authority_url = "http://127.0.0.1:50051"
 
-[ca]
+[sidecar.ca]
 dir = "examples/generic-agent/.runtime/generated-firma-ca"
 
-[log]
+[sidecar.log]
 level = "info"
 
-[mapping]
+[sidecar.mapping]
 # Supplemental rules (CONNECT tunnels, package managers, localhost).
-rules_path = "examples/generic-agent/mapping-rules.toml"
+rules_path = "mapping-rules.toml"
 # Shipped provider-specific rules merged on top.
 rules_paths = [
-  "crates/firma-sidecar/config/mappings/github.toml",
-  "crates/firma-sidecar/config/mappings/gmail.toml",
+  "../../crates/firma-sidecar/config/mappings/github.toml",
+  "../../crates/firma-sidecar/config/mappings/gmail.toml",
 ]
 # Fail-closed: any host not covered by a mapping rule is DENIED.
 default_protected = true
 
-[capability_validation]
+[sidecar.capability_validation]
 clock_skew_tolerance_seconds = 0
 
-[constraint_enforcement]
+[sidecar.constraint_enforcement]
 bundle_ttl_seconds = 3600
 enforcement_timeout_ms = 50
 
-[connector]
+[sidecar.connector]
 default_timeout_ms = 120000 # 2 min — covers LLM first-token latency
 
-[audit]
+[sidecar.audit]
 sink = "file"
-file_path = "examples/generic-agent/.runtime/audit.jsonl"
-signing_key_path = "examples/generic-agent/.runtime/audit.key"
+file_path = ".runtime/audit.jsonl"
+signing_key_path = ".runtime/audit.key"
 
-[authority]
+[sidecar.authority]
 connect_timeout_secs = 10
 reconnect_min_backoff_ms = 250
 reconnect_max_backoff_secs = 30
 revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false
 
-[preflight]
+[sidecar.preflight]
 agent_id = "generic-agent"
 session_id = "preflight-session"
 requested_actions = [

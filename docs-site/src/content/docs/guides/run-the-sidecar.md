@@ -7,7 +7,7 @@ This guide walks you through running the Sidecar as a standalone process, pointi
 
 By the end you will have:
 
-- A working `firma_sidecar.toml` you understand line by line.
+- A working `firma.toml` you understand line by line.
 - A running Sidecar that audits every outbound call to the configured destinations.
 - A simple agent (just `curl`) routed through it, producing ALLOW and DENY decisions.
 
@@ -109,44 +109,45 @@ cp $(pwd)/../../path/to/firma-oss/examples/demo/policies/schema.cedarschema \
 
 ## Step 5: Write the sidecar config
 
-Create `/tmp/firma-standalone/config/firma_sidecar.toml`:
+Create `/tmp/firma-standalone/config/firma.toml`. Every subcommand reads
+one shared, sectioned `firma.toml`; the Sidecar reads `[sidecar.*]`:
 
 ```toml
-[interceptor]
+[sidecar.interceptor]
 mode               = "http_proxy"
 listen_addr        = "127.0.0.1:8080"
 drain_timeout_secs = 5
 
-[mapping]
+[sidecar.mapping]
 rules_path        = "/tmp/firma-standalone/config/mapping-rules.toml"
 default_protected = false
 
-[policy]
+[sidecar.policy]
 dir = "/tmp/firma-standalone/config/policies"
 
-[constraint_enforcement]
+[sidecar.constraint_enforcement]
 bundle_ttl_seconds     = 3600
 enforcement_timeout_ms = 50
 
-[audit]
+[sidecar.audit]
 sink             = "file"
 file_path        = "/tmp/firma-standalone/logs/audit.jsonl"
 signing_key_path = "/tmp/firma-standalone/audit.key"
 
-[log]
+[sidecar.log]
 level = "info"
 ```
 
 A few notes on what's *not* here:
 
-- No `[authority]` section. With no Authority configured, the Sidecar runs in **policy-only** mode — Stage 1 (capability validation) is effectively bypassed for unmapped/protected actions. We use `default_protected = false` so unmapped traffic passes through, and we will only see Stage 2 decisions for the mapped routes. This is fine for first-touch experimentation; production workloads should run with an Authority and `default_protected = true`.
-- No `[ca]` section. We're not using HTTPS MITM. CONNECT-style HTTPS will pass through but we won't see L7 details for it. See [Enable HTTPS MITM](../https-mitm/) when you're ready.
+- No `[sidecar.policy].authority_url`. With no Authority configured, the Sidecar runs in **policy-only** mode — Stage 1 (capability validation) is effectively bypassed for unmapped/protected actions. We use `default_protected = false` so unmapped traffic passes through, and we will only see Stage 2 decisions for the mapped routes. This is fine for first-touch experimentation; production workloads should run with an Authority and `default_protected = true`.
+- No `[sidecar.ca]` section. We're not using HTTPS MITM. CONNECT-style HTTPS will pass through but we won't see L7 details for it. See [Enable HTTPS MITM](../https-mitm/) when you're ready.
 - `bundle_ttl_seconds = 3600` is generous; without an Authority pushing fresh bundles, you don't want the bundle to go stale.
 
 ## Step 6: Start the Sidecar
 
 ```bash
-firma sidecar -c /tmp/firma-standalone/config/firma_sidecar.toml
+firma sidecar -c /tmp/firma-standalone/config/firma.toml
 ```
 
 Expected output (lightly trimmed):

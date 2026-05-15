@@ -13,10 +13,10 @@ firma sidecar [OPTIONS]
 
 ### Options
 
-| Flag                 | Short | Env var                          | Default              | Description               |
-| -------------------- | ----- | -------------------------------- | -------------------- | ------------------------- |
-| `--config-file`      | `-c`  | `FIRMA_SIDECAR_CONFIG_FILE`      | `firma_sidecar.toml` | TOML configuration file   |
-| `--health-bind-addr` |       | `FIRMA_SIDECAR_HEALTH_BIND_ADDR` | `127.0.0.1:9000`     | Health check bind address |
+| Flag                 | Short | Env var                          | Default                                                | Description               |
+| -------------------- | ----- | -------------------------------- | ------------------------------------------------------ | ------------------------- |
+| `--config`           | `-c`  | `FIRMA_SIDECAR_CONFIG_FILE`      | discovered (see [Config Discovery](#config-discovery)) | TOML configuration file   |
+| `--health-bind-addr` |       | `FIRMA_SIDECAR_HEALTH_BIND_ADDR` | `127.0.0.1:9000`                                       | Health check bind address |
 
 Log-level flags are global (placed **before** the subcommand):
 
@@ -41,7 +41,7 @@ firma sidecar
 Specify a config file and debug logging:
 
 ```bash
-firma --log-filter debug sidecar -c /etc/firma/sidecar.toml
+firma --log-filter debug sidecar -c /etc/firma/firma.toml
 ```
 
 Log to a file with a filter:
@@ -53,7 +53,7 @@ firma --log-file /var/log/firma.log --log-filter "firma_sidecar=debug,tower=warn
 Use environment variables:
 
 ```bash
-export FIRMA_SIDECAR_CONFIG_FILE=/etc/firma/sidecar.toml
+export FIRMA_SIDECAR_CONFIG_FILE=/etc/firma/firma.toml
 export FIRMA_LOG_FILTER=debug
 firma sidecar
 ```
@@ -100,6 +100,58 @@ endpoint is reported as `(disabled)`.
 | `0`  | Graceful shutdown after `SIGINT` / `SIGTERM`.                    |
 | `1`  | Configuration parse error, validation error, or startup failure. |
 
+## Config Discovery
+
+When `--config` is **omitted**, every subcommand — `sidecar`, `authority`,
+`run`, `stack` (`init`/`start`/`stop`/`status`), `monitor`, and `doctor` —
+discovers the same single shared `firma.toml` from platform-standard
+directories. That one file holds top-level `[sidecar]` / `[authority]` /
+`[run]` sections; each subcommand reads only its own section. The first
+existing file wins:
+
+1. `--config <path>` flag — unchanged precedence, always wins. It only
+   relocates the file; the file still uses the sectioned schema.
+2. `$FIRMA_CONFIG_DIR/firma.toml` if the env var is set.
+3. User config dir (first existing wins):
+   - Linux: `$XDG_CONFIG_HOME/firma` → `~/.config/firma`
+   - macOS: `$XDG_CONFIG_HOME/firma` → `~/.config/firma` →
+     `~/Library/Application Support/firma`
+   - Windows: `%XDG_CONFIG_HOME%\firma` (if set) →
+     `%USERPROFILE%\.firma` → `%APPDATA%\Roaming\firma`
+4. System-wide config dir:
+   - Linux: `/etc/firma/firma.toml`
+   - macOS: `/Library/Application Support/firma/firma.toml`
+   - Windows: `%PROGRAMDATA%\firma\firma.toml`
+5. CWD-relative `firma.toml` — last fallback.
+6. None found and config is required → exit non-zero with a message listing
+   every directory searched.
+
+On macOS the user tier is a dual path: `$XDG_CONFIG_HOME/firma` is tried
+first, then `~/.config/firma` (CLI/dev-tool convention, preferred), then
+`~/Library/Application Support/firma`. On Linux `~/.config/firma` and the
+platform default coincide and are de-duplicated. On Windows the
+home-convention tier is the bare `%USERPROFILE%\.firma` dotdir (matching
+agent/dev CLIs such as `.claude` and `.codex`), distinct from the
+`%APPDATA%\Roaming\firma` platform tier tried after it.
+
+The resolved path and its source are emitted on startup as a single
+`config resolved` INFO line (with `path` and `source` fields) so operators
+can confirm which file actually loaded.
+
+There is exactly **one** schema: the sectioned `firma.toml`. A file passed
+via explicit `--config` uses the same sectioned shape — the flag only
+overrides the file location. The needed `[section]` must be present;
+section extraction is fail-closed (a missing required section is a hard
+error). Relative resource paths re-base under the resolved config
+directory (see [Configuration Reference](configuration.md) for the
+config-relative resource table).
+
+`state_dir` is **never** a config-file key. The runtime state directory is
+resolved only from `--state-dir`, then `FIRMA_STATE_DIR`, then
+`$XDG_RUNTIME_DIR/firma` (with a `/tmp/firma-$UID` fallback) — independent
+of config discovery. The `--config` flag on `stack stop`/`status`,
+`monitor`, and `doctor` is accepted for compatibility; only `doctor`
+actively consumes it to locate the unified file.
 
 ## `firma authority`
 
@@ -116,7 +168,7 @@ wires the gRPC `IssueCapability` client; not intended for
 production traffic.
 
 ```bash
-firma authority --config authority.toml issue \
+firma authority --config firma.toml issue \
   --agent-id demo-agent \
   --session-id demo-session \
   --action communication.external.send \
@@ -165,8 +217,10 @@ When autostart fires, `firma run`:
 1. Resolves the per-sandbox marker directory under
    `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/` (Linux), `/tmp/firma-$UID/firma/run/<sandbox_id>/` (macOS fallback), or `%LOCALAPPDATA%\firma\runtime\run\<sandbox_id>\` (Windows; see platform caveat below).
 2. Synthesizes a sidecar TOML by inheriting the operator template
-   (`--sidecar-config` → `FIRMA_SIDECAR_CONFIG_FILE` → `./firma_sidecar.toml` → minimal) and overriding the `[interceptor]` section to bind a Unix-domain socket at `<marker_dir>/sidecar.sock`.
-3. Spawns `firma sidecar --config-file <marker_dir>/sidecar.toml` as a
+   (`--sidecar-config` → `FIRMA_SIDECAR_CONFIG_FILE` → the discovered
+   `firma.toml` → minimal) and overriding the `[interceptor]` section to
+   bind a Unix-domain socket at `<marker_dir>/sidecar.sock`.
+3. Spawns `firma sidecar --config <marker_dir>/sidecar.toml` as a
    child process with stderr piped.
 4. Reads stderr line by line and waits for the seven-line ready log
    contract documented under [`firma sidecar`](#firma-sidecar). The third
@@ -185,21 +239,21 @@ stale entries).
 
 ### Flags
 
-| Flag | Default | Description |
-| ---- | ------- | ----------- |
-| `--sidecar <auto\|external>` | `auto` | `auto` autostarts when unreachable; `external` requires an already-running sidecar at `--sidecar-endpoint`. |
-| `--no-autostart` | off | Fail with a typed error if the endpoint is unreachable. CI safety net. Mutually exclusive with `--sidecar`. |
-| `--sidecar-config <path>` | — | Sidecar TOML template for autostart. Overrides `FIRMA_SIDECAR_CONFIG_FILE` and the CWD fallback. |
-| `--sidecar-startup-timeout-secs <int>` | `10` | Maximum wait for the `ready` line. `0` reverts to the built-in default. |
+| Flag                                   | Default | Description                                                                                                 |
+| -------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------- |
+| `--sidecar <auto\|external>`           | `auto`  | `auto` autostarts when unreachable; `external` requires an already-running sidecar at `--sidecar-endpoint`. |
+| `--no-autostart`                       | off     | Fail with a typed error if the endpoint is unreachable. CI safety net. Mutually exclusive with `--sidecar`. |
+| `--sidecar-config <path>`              | —       | Sidecar TOML template for autostart. Overrides `FIRMA_SIDECAR_CONFIG_FILE` and the CWD fallback.            |
+| `--sidecar-startup-timeout-secs <int>` | `10`    | Maximum wait for the `ready` line. `0` reverts to the built-in default.                                     |
 
 ### Typed errors
 
-| Error | Trigger |
-| ----- | ------- |
-| `SidecarUnreachable` | Endpoint unreachable and autostart disabled (`--no-autostart` or `--sidecar=external`). |
-| `SidecarReadyTimeout` | Spawned sidecar did not emit `ready` within the configured budget. Error message points to `<marker_dir>/sidecar.log`. |
-| `SidecarStartupFailed` | Spawn or stderr-pipe setup failed; or stderr closed before `ready`. |
-| `UnsupportedPlatform` | Autostart requested on a platform that does not support a UDS interceptor (e.g. Windows). Use `--sidecar=external` instead. |
+| Error                  | Trigger                                                                                                                     |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `SidecarUnreachable`   | Endpoint unreachable and autostart disabled (`--no-autostart` or `--sidecar=external`).                                     |
+| `SidecarReadyTimeout`  | Spawned sidecar did not emit `ready` within the configured budget. Error message points to `<marker_dir>/sidecar.log`.      |
+| `SidecarStartupFailed` | Spawn or stderr-pipe setup failed; or stderr closed before `ready`.                                                         |
+| `UnsupportedPlatform`  | Autostart requested on a platform that does not support a UDS interceptor (e.g. Windows). Use `--sidecar=external` instead. |
 
 ### Operator caveats
 
@@ -219,9 +273,9 @@ stale entries).
 launches the per-run Sidecar. Decision precedence:
 
 1. `--authority local` or `--authority <url>` — skip the prompt entirely.
-2. Persisted `[authority]` table in `$XDG_CONFIG_HOME/firma/firma.toml`
-   (Linux), `~/Library/Application Support/firma/firma.toml` (macOS),
-   `%APPDATA%\firma\firma.toml` (Windows) — skip the prompt.
+2. Persisted `[authority]` table in the discovered `firma.toml`
+   (`~/.config/firma/firma.toml` on Linux/macOS,
+   `%USERPROFILE%\.firma\firma.toml` on Windows) — skip the prompt.
 3. Neither set, stdin is a TTY — print a single y/N prompt:
 
    ```text
@@ -247,9 +301,9 @@ on `firma run` exit (`SIGTERM` then `SIGKILL` after a 5s grace).
 
 ### Authority flags
 
-| Flag | Default | Description |
-| ---- | ------- | ----------- |
-| `--authority <local\|url>` | unset | Skip the y/N prompt. `local` autostarts on `[::1]:50051`; any other value is treated as a remote Authority URL. |
+| Flag                         | Default     | Description                                                                                                                                      |
+| ---------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--authority <local\|url>`   | unset       | Skip the y/N prompt. `local` autostarts on `[::1]:50051`; any other value is treated as a remote Authority URL.                                  |
 | `--authority-profile <name>` | `developer` | Profile materialised by the autostarted Mini Authority. Currently only `developer` ships. Ignored when Authority is remote or already reachable. |
 
 The `--no-autostart` flag also suppresses Authority autostart. With
@@ -258,12 +312,12 @@ typed argument-conflict error.
 
 ### Authority typed errors
 
-| Error | Trigger |
-| ----- | ------- |
-| `MissingAuthority` | `--no-autostart` and nothing configured. |
-| `AuthorityDeclined` | User answered `n` (or empty / garbage) at the prompt. |
-| `AuthorityPromptNoTty` | No config, no CLI flag, stdin is not a TTY. |
-| `AuthorityStartupFailed` | Spawn or stderr-pipe setup failed; stderr closed before `ready`. |
-| `AuthorityReadyTimeout` | Spawned authority did not emit `ready` within the budget. |
-| `AuthorityUnreachable` | Remote URL did not answer a TCP connect probe. |
-| `AuthorityUnknownProfile` | `--authority-profile` is not a registered profile. |
+| Error                     | Trigger                                                          |
+| ------------------------- | ---------------------------------------------------------------- |
+| `MissingAuthority`        | `--no-autostart` and nothing configured.                         |
+| `AuthorityDeclined`       | User answered `n` (or empty / garbage) at the prompt.            |
+| `AuthorityPromptNoTty`    | No config, no CLI flag, stdin is not a TTY.                      |
+| `AuthorityStartupFailed`  | Spawn or stderr-pipe setup failed; stderr closed before `ready`. |
+| `AuthorityReadyTimeout`   | Spawned authority did not emit `ready` within the budget.        |
+| `AuthorityUnreachable`    | Remote URL did not answer a TCP connect probe.                   |
+| `AuthorityUnknownProfile` | `--authority-profile` is not a registered profile.               |

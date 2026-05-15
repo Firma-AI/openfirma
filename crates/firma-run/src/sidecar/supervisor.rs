@@ -128,7 +128,7 @@ impl SidecarSupervisor {
         })?;
 
         let mut child = std::process::Command::new(&req.firma_exe)
-            .args(["sidecar", "--config-file"])
+            .args(["sidecar", "--config"])
             .arg(&cfg_path)
             // Tracing on the spawned sidecar must stay on stderr; opting
             // into FIRMA_LOG_FILE would silence the scraper.

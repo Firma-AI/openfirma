@@ -40,7 +40,7 @@ fn top_level_help_lists_subcommands() {
 
 #[test]
 fn sidecar_help_ok() {
-    assert_help(&["sidecar", "--help"], &["--config-file", "FIRMA_SIDECAR"]);
+    assert_help(&["sidecar", "--help"], &["--config", "FIRMA_SIDECAR"]);
 }
 
 #[test]

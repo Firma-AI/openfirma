@@ -1,6 +1,5 @@
 //! End-to-end stack lifecycle smoke test.
 
-use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -8,31 +7,30 @@ fn firma() -> Command {
     Command::new(env!("CARGO_BIN_EXE_firma"))
 }
 
-fn fixture_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../firma-demo-fixture")
-}
-
 #[test]
 #[ignore = "requires demo fixtures and ports"]
 fn lifecycle_detached() {
     let tmp = tempfile::tempdir().expect("tmp");
-    let state_dir = tmp.path();
-    let cfg_path = state_dir.join("firma-stack.toml");
-    std::fs::write(
-        &cfg_path,
-        format!(
-            "authority_config = {:?}\nsidecar_config = {:?}\n",
-            fixture_dir().join("authority.toml"),
-            fixture_dir().join("sidecar.toml"),
-        ),
-    )
-    .expect("cfg");
+    let config_dir = tmp.path().join("cfg");
+    let state_dir = tmp.path().join("state");
+
+    // Scaffold the unified `firma.toml` (single sectioned config).
+    let init = firma()
+        .args(["stack", "init", "--config-dir"])
+        .arg(&config_dir)
+        .args(["--state-dir"])
+        .arg(&state_dir)
+        .output()
+        .expect("init");
+    assert!(init.status.success(), "init failed: {init:?}");
+    let cfg_path = config_dir.join("firma.toml");
+    assert!(cfg_path.is_file(), "scaffolded firma.toml missing");
 
     let out = firma()
         .args(["stack", "start", "--detach", "--config"])
         .arg(&cfg_path)
         .args(["--state-dir"])
-        .arg(state_dir)
+        .arg(&state_dir)
         .output()
         .expect("start");
     assert!(out.status.success(), "start failed: {out:?}");
@@ -44,7 +42,7 @@ fn lifecycle_detached() {
 
     let status_out = firma()
         .args(["stack", "status", "--json", "--state-dir"])
-        .arg(state_dir)
+        .arg(&state_dir)
         .output()
         .expect("status");
     let stdout = String::from_utf8_lossy(&status_out.stdout);
@@ -52,7 +50,7 @@ fn lifecycle_detached() {
 
     let stop_out = firma()
         .args(["stack", "stop", "--state-dir"])
-        .arg(state_dir)
+        .arg(&state_dir)
         .output()
         .expect("stop");
     assert!(stop_out.status.success());

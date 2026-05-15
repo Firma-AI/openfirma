@@ -45,6 +45,23 @@ impl EnforcementConfig {
         }
         Ok(())
     }
+
+    /// Re-base every relative mapping path (`rules_path` and each entry
+    /// of `rules_paths`) against `config_dir`; absolute paths untouched.
+    /// No default-name sentinel check — relative consistently means
+    /// "relative to the config file's directory".
+    pub fn rebase_defaults(&mut self, config_dir: &std::path::Path) {
+        let rebase = |p: &mut String| {
+            // Empty is left for the validator to reject.
+            if !p.is_empty() && std::path::Path::new(p.as_str()).is_relative() {
+                *p = config_dir.join(p.as_str()).to_string_lossy().into_owned();
+            }
+        };
+        rebase(&mut self.mapping.rules_path);
+        for p in &mut self.mapping.rules_paths {
+            rebase(p);
+        }
+    }
 }
 
 /// Mapping rules configuration.
@@ -213,8 +230,11 @@ impl CapabilityManifestEntry {
 // Defaults
 // ---------------------------------------------------------------------------
 
+/// Sentinel: unset `mapping.rules_path`.
+pub const DEFAULT_MAPPING_PATH: &str = "mapping-rules.toml";
+
 fn default_mapping_path() -> String {
-    "mapping-rules.toml".to_string()
+    DEFAULT_MAPPING_PATH.to_string()
 }
 
 const fn default_true() -> bool {

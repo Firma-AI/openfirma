@@ -28,17 +28,17 @@ value source:   $OPENAI_API_KEY
 
 ## Step 2: Configure with `basic` mode (env-var-backed)
 
-Add `[[credentials]]` blocks to `firma_sidecar.toml`:
+Add `[[sidecar.credentials]]` blocks to `firma.toml`:
 
 ```toml
-[[credentials]]
+[[sidecar.credentials]]
 host           = "api.openai.com"
 mode           = "basic"
 header         = "Authorization"
 value_from_env = "OPENAI_API_KEY"
 prefix         = "Bearer "
 
-[[credentials]]
+[[sidecar.credentials]]
 host           = "api.anthropic.com"
 mode           = "basic"
 header         = "x-api-key"
@@ -58,7 +58,7 @@ Set the env var when launching the Sidecar:
 ```bash
 OPENAI_API_KEY=sk-... \
 ANTHROPIC_API_KEY=sk-ant-... \
-firma sidecar -c firma_sidecar.toml
+firma sidecar -c firma.toml
 ```
 
 Restart, then check that injection happens. With MITM enabled for these hosts, you should be able to make calls from the agent without setting any local API key:
@@ -77,7 +77,7 @@ The Sidecar attached `Authorization: Bearer sk-...` after Stage 2 allowed the ca
 For production, env vars on the Sidecar host are still secrets-on-disk that an attacker with shell could read. `vault` mode keeps the secret in HashiCorp Vault and the Sidecar fetches it lazily.
 
 ```toml
-[[credentials]]
+[[sidecar.credentials]]
 host        = "api.openai.com"
 mode        = "vault"
 header      = "Authorization"
@@ -86,10 +86,10 @@ secret_path = "secret/data/openai/api-key"
 secret_key  = "value"
 ```
 
-Plus a `[credentials.vault]` block for connection details:
+Plus a `[sidecar.credentials.vault]` block for connection details:
 
 ```toml
-[credentials.vault]
+[sidecar.credentials.vault]
 addr     = "https://vault.internal:8200"
 token    = "<vault-token>"   # or AppRole auth via separate config
 namespace = "agents"          # optional, for Vault Enterprise
@@ -157,7 +157,7 @@ If you genuinely need different credentials per *call* (e.g. multi-tenant agent 
 
 For a production deployment:
 
-- [ ] Every host that requires a credential has an `[[credentials]]` block.
+- [ ] Every host that requires a credential has a `[[sidecar.credentials]]` block.
 - [ ] No production host uses `mode = "basic"`. Vault for everything sensitive.
 - [ ] The Sidecar process has *only* the env vars it needs — no inherited shell env.
 - [ ] The Sidecar host has filesystem permissions tight enough that a shell on it can't read the credentials cache.

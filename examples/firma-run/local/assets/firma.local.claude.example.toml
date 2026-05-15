@@ -1,0 +1,40 @@
+[sidecar.interceptor]
+mode = "http_proxy"
+listen_addr = "127.0.0.1:8080"
+drain_timeout_secs = 5
+
+[sidecar.interceptor.connect_relay]
+setup_timeout_secs = 10
+session_max_secs = 1200
+
+[sidecar.interceptor.https_mitm]
+enabled = true
+intercept_hosts = [
+  "api.anthropic.com",
+  "platform.claude.com",
+  "claude.ai",
+  "console.anthropic.com",
+]
+bypass_hosts = []
+
+[sidecar.mapping]
+rules_path = "mapping-rules.toml"
+default_protected = true
+
+[sidecar.policy]
+dir = "../examples/policies"
+authority_url = "http://127.0.0.1:50051"
+
+[sidecar.authority]
+public_key_path = "firma-authority.pub"
+
+[sidecar.capability_seed]
+paths = ["capability-claude.toml"]
+
+[sidecar.audit]
+sink = "file"
+file_path = "audit.jsonl"
+signing_key_path = "audit-key.pem"
+
+[sidecar.log]
+level = "info"

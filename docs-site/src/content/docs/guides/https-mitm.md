@@ -18,10 +18,10 @@ For the conceptual background see [Concepts: Interception](../../concepts/interc
 
 ## Step 1: Bootstrap the CA
 
-Add a `[ca]` section to `firma_sidecar.toml`:
+Add a `[sidecar.ca]` section to `firma.toml`:
 
 ```toml
-[ca]
+[sidecar.ca]
 dir = "/tmp/firma-standalone/firma-ca"
 ```
 
@@ -46,10 +46,10 @@ In production, treat the CA directory as immutable infrastructure: provision it 
 
 ## Step 2: Configure MITM hosts
 
-Add an `[interceptor.https_mitm]` block to `firma_sidecar.toml`:
+Add a `[sidecar.interceptor.https_mitm]` block to `firma.toml`:
 
 ```toml
-[interceptor.https_mitm]
+[sidecar.interceptor.https_mitm]
 enabled         = true
 intercept_hosts = [
   "api.openai.com",

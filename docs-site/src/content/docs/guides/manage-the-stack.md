@@ -15,9 +15,13 @@ This guide covers a typical operator flow: scaffold a deployment, boot it, obser
 
 ## Scaffold a deployment
 
-`firma stack init` writes a fresh deployment into two separate directories — one for configs and keys, one for mutable runtime state:
+`firma stack init` writes a fresh deployment into two separate directories — one for configs and keys, one for mutable runtime state. Both directories are optional and default sensibly:
 
 ```bash
+# Defaults: config dir = XDG/platform config dir, state dir = XDG runtime.
+firma stack init
+
+# Or pin both explicitly.
 firma stack init \
   --config-dir /etc/firma \
   --state-dir  /var/run/firma
@@ -27,9 +31,8 @@ Layout written:
 
 ```text
 /etc/firma/
-  firma-stack.toml      authority.toml      sidecar.toml
-  mapping-rules.toml    authority.key       authority.pub      audit.key
-  policies/             issuance-policies/
+  firma.toml            authority.key       audit.key
+  mapping-rules.toml    policies/           issuance-policies/
 
 /var/run/firma/
   revocations.txt
@@ -39,17 +42,21 @@ Layout written:
   # *.listen, audit.jsonl
 ```
 
-The generated `firma-stack.toml` embeds `state_dir = "/var/run/firma"` so subsequent `start` / `stop` / `status` / `monitor` invocations only need `--config`. Pass `--state-dir` to override at any point.
+`init` writes a single sectioned `firma.toml` (`[authority]` +
+`[sidecar.*]`); there is no `firma-stack.toml`, `authority.toml`, or
+`sidecar.toml`. On success it prints a `next:` hint of `firma stack start`.
+`state_dir` is not embedded in the config — it is always resolved from
+`--state-dir` / `FIRMA_STATE_DIR` / XDG.
 
 `init` flags:
 
-| Flag                 | Default           | Description                                  |
-| -------------------- | ----------------- | -------------------------------------------- |
-| `--config-dir`       | _required_        | Where to write TOMLs, keys, policy dirs.     |
-| `--state-dir`        | _required_        | Where to write `revocations.txt` and CA dir. |
-| `--force`            | _off_             | Overwrite existing files.                    |
-| `--authority-listen` | `127.0.0.1:50051` | Authority gRPC listen address.               |
-| `--sidecar-listen`   | `127.0.0.1:8080`  | Sidecar HTTP proxy listen.                   |
+| Flag                 | Default               | Description                                     |
+| -------------------- | --------------------- | ----------------------------------------------- |
+| `--config-dir`       | XDG/platform config   | Where to write `firma.toml`, keys, policy dirs. |
+| `--state-dir`        | `FIRMA_STATE_DIR`/XDG | Where to write `revocations.txt` and CA dir.    |
+| `--force`            | _off_                 | Overwrite existing files.                       |
+| `--authority-listen` | `127.0.0.1:50051`     | Authority gRPC listen address.                  |
+| `--sidecar-listen`   | `127.0.0.1:8080`      | Sidecar HTTP proxy listen.                      |
 
 Existing files are preserved unless `--force` is set; safe to re-run after editing one config by hand.
 
@@ -57,10 +64,11 @@ Existing files are preserved unless `--force` is set; safe to re-run after editi
 
 ```bash
 # Foreground. Ctrl-C cleanly tears both children down.
-firma stack start --config /etc/firma/firma-stack.toml
+# --config defaults to the discovered firma.toml.
+firma stack start
 
 # Detached. Forks a supervisor process after readiness probes pass.
-firma stack start --config /etc/firma/firma-stack.toml --detach
+firma stack start --detach
 ```
 
 What `start` does, in order:
@@ -76,17 +84,19 @@ If readiness fails at any step, `start` rolls back — every spawned child is si
 
 `start` flags:
 
-| Flag          | Env                  | Default                                           |
-| ------------- | -------------------- | ------------------------------------------------- |
-| `--config`    | `FIRMA_STACK_CONFIG` | `./firma-stack.toml`                              |
-| `--state-dir` | `FIRMA_STATE_DIR`    | `state_dir` from `--config` then platform default |
-| `--detach`    | —                    | _off_                                             |
+| Flag          | Env               | Default                                      |
+| ------------- | ----------------- | -------------------------------------------- |
+| `--config`    | —                 | discovered `firma.toml`                      |
+| `--state-dir` | `FIRMA_STATE_DIR` | `$XDG_RUNTIME_DIR/firma` → `/tmp/firma-$UID` |
+| `--detach`    | —                 | _off_                                        |
+
+`start` resolves `firma.toml` via the shared [Config Discovery](../../../docs/cli.md) precedence and passes that exact file to both children with `--config`. `state_dir` is never a config-file key.
 
 ## Check status
 
 ```bash
-firma stack status --config /etc/firma/firma-stack.toml
-firma stack status --config /etc/firma/firma-stack.toml --json
+firma stack status --state-dir /var/run/firma
+firma stack status --state-dir /var/run/firma --json
 ```
 
 Reports per-component pid, listen address, state (running / stopped / unhealthy), and uptime. Exit codes:
@@ -102,8 +112,8 @@ Wire the `0`/`1` split into a healthcheck: cron, systemd `ExecStartPre`, contain
 ## Stop the stack
 
 ```bash
-firma stack stop --config /etc/firma/firma-stack.toml
-firma stack stop --config /etc/firma/firma-stack.toml --timeout 10
+firma stack stop --state-dir /var/run/firma
+firma stack stop --state-dir /var/run/firma --timeout 10
 ```
 
 Stop order is intentional: the Sidecar is soft-signalled first so the Authority's tonic graceful shutdown isn't blocked on long-lived gRPC streams. The supervisor and Authority follow. Survivors past `--timeout` (default 2s) are hard-killed; children are reaped via `waitpid(WNOHANG)` so zombies aren't mistaken for live processes.
@@ -116,18 +126,18 @@ Exit codes: `0` on success (graceful or hard-kill fallback), `2` on error.
 
 ```bash
 # Everything: audit events plus authority + sidecar logs.
-firma monitor --config /etc/firma/firma-stack.toml
+firma monitor --state-dir /var/run/firma
 
 # Just denials, last 15 minutes, JSON output for piping into jq or a collector.
-firma monitor --config /etc/firma/firma-stack.toml \
+firma monitor --state-dir /var/run/firma \
   --source audit --decision deny --since 15m --format json
 
 # Authority logs only, one shot (no follow).
-firma monitor --config /etc/firma/firma-stack.toml \
+firma monitor --state-dir /var/run/firma \
   --source authority --no-follow
 
 # Filter by action class.
-firma monitor --config /etc/firma/firma-stack.toml \
+firma monitor --state-dir /var/run/firma \
   --source audit --action-class communication.external.send
 ```
 
@@ -135,7 +145,7 @@ firma monitor --config /etc/firma/firma-stack.toml \
 
 | Flag             | Default  | Description                                              |
 | ---------------- | -------- | -------------------------------------------------------- |
-| `--config`       | _unset_  | Stack config; `state_dir` read from it when set.         |
+| `--config`       | _unset_  | Accepted for compatibility; not used to resolve state.   |
 | `--state-dir`    | resolved | State dir override.                                      |
 | `--source`       | `all`    | `audit`, `authority`, `sidecar`, or `all`.               |
 | `--no-follow`    | _off_    | Read once and exit; default is to follow tail.           |
@@ -161,11 +171,11 @@ For everything you can do with the underlying audit JSONL — signature verifica
   generated-firma-ca/
 ```
 
-Resolution order: `--state-dir` flag → `FIRMA_STATE_DIR` env → `state_dir` field in `--config` → platform default. The Unix default is `$XDG_RUNTIME_DIR/firma`, falling back to `/tmp/firma-$UID`. Windows uses `%LOCALAPPDATA%\firma\runtime` then `%TEMP%\firma`.
+Resolution order: `--state-dir` flag → `FIRMA_STATE_DIR` env → platform default. The Unix default is `$XDG_RUNTIME_DIR/firma`, falling back to `/tmp/firma-$UID`. Windows uses `%LOCALAPPDATA%\firma\runtime` then `%TEMP%\firma`. `state_dir` is never read from the config file.
 
 ## Common gotchas
 
-**`stack start` exits 2 with "address in use".** Another sidecar or authority is bound to the listen address — most often a previous foreground run that wasn't fully reaped. Run `firma stack stop --config ...` first, or pick different addresses with `--authority-listen` / `--sidecar-listen` at `init` time.
+**`stack start` exits 2 with "address in use".** Another sidecar or authority is bound to the listen address — most often a previous foreground run that wasn't fully reaped. Run `firma stack stop --state-dir ...` first, or pick different addresses with `--authority-listen` / `--sidecar-listen` at `init` time.
 
 **`stack status` reports "stopped" but the pidfile exists.** The process is gone but the file wasn't cleaned up (sigkill from outside, OOM, host reboot). `stack start` will not refuse to boot in this case; the stale pidfile is overwritten once the new process registers. If in doubt, `stack stop` first.
 

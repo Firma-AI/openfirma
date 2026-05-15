@@ -30,8 +30,7 @@ syscall rules — those belong to firma-run / bwrap / seccomp.
 
 | File | Purpose |
 |------|---------|
-| `authority.toml` | firma-authority config — points to `policies/` and `issuance-policies/` |
-| `sidecar.toml` | firma-sidecar config — HTTP proxy on `:7474`, MITM for github / gmail / pypi, `default_protected = true` |
+| `firma.toml` | unified config — `[authority]` points to `policies/` and `issuance-policies/`; `[sidecar.*]` is the HTTP proxy on `:7474`, MITM for github / gmail / pypi, `default_protected = true` |
 | `policies/llm-agent.cedar` | enforcement policy bundle streamed to the sidecar |
 | `issuance-policies/issuance.cedar` | gates capability token issuance at the Authority |
 | `mapping-rules.toml` | supplemental host/method/path → action class rules (CONNECT tunnels, package managers, localhost) |
@@ -39,7 +38,7 @@ syscall rules — those belong to firma-run / bwrap / seccomp.
 
 The shipped provider mappings in `crates/firma-sidecar/config/mappings/`
 (`github.toml`, `gmail.toml`) are merged on top — see
-`sidecar.toml [mapping] rules_paths`.
+`firma.toml [sidecar.mapping] rules_paths`.
 
 ## Issuance vs enforcement
 

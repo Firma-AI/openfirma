@@ -141,7 +141,7 @@ permit (
 );
 
 // Outbound HTTP — only hosts classified by the mapping TOML reach Cedar.
-// default_protected = true in sidecar.toml ensures unclassified hosts are
+// default_protected = true in [sidecar.mapping] ensures unclassified hosts are
 // denied before this rule fires.
 permit (
     principal,

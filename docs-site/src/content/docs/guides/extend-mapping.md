@@ -64,10 +64,10 @@ For wildcards, prefer specificity. `path = "*"` matches everything; `path = "/ap
 
 ## Step 3: Merge the file into the Sidecar config
 
-In `firma_sidecar.toml`:
+In `firma.toml`:
 
 ```toml
-[mapping]
+[sidecar.mapping]
 rules_path        = "/path/to/default-mapping.toml"
 rules_paths       = [
   "/path/to/acme-saas.toml",
@@ -139,7 +139,7 @@ The repo includes three large vendor files under `crates/firma-sidecar/config/ma
 Add them to `rules_paths`:
 
 ```toml
-[mapping]
+[sidecar.mapping]
 rules_paths = [
   "crates/firma-sidecar/config/mappings/github.toml",
   "crates/firma-sidecar/config/mappings/stripe.toml",

@@ -1,0 +1,16 @@
+[sidecar.interceptor]
+mode = "http_proxy"
+listen_addr = "127.0.0.1:8080"
+drain_timeout_secs = 5
+
+[sidecar.mapping]
+rules_path = "mapping-rules.toml"
+default_protected = false
+
+[sidecar.audit]
+sink = "file"
+file_path = "audit.jsonl"
+signing_key_path = "audit-key.pem"
+
+[sidecar.log]
+level = "info"
