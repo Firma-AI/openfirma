@@ -6,6 +6,7 @@
 
 use std::path::Path;
 
+use anyhow::Context;
 use firma_core::token::paseto::PasetoV4Verifier;
 use firma_core::{AgentId, CapabilityClaims, SessionId, TokenError, TokenId, TokenVerifier};
 
@@ -17,9 +18,13 @@ use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
 ///
 /// # Errors
 ///
-/// Returns an error when a seed file cannot be read, parsed, or
-/// converted into a [`CapabilityClaims`] value.
-pub fn load_capability_map(seed: &CapabilitySeedConfig) -> anyhow::Result<CapabilityMap> {
+/// Returns an error when a seed file cannot be read, parsed, converted
+/// into a [`CapabilityClaims`] value, or when its `raw_token` fails
+/// PASETO verification.
+pub fn load_capability_map(
+    seed: &CapabilitySeedConfig,
+    verifier: &dyn TokenVerifier,
+) -> anyhow::Result<CapabilityMap> {
     let mut entries: Vec<CapabilityEntry> = Vec::with_capacity(seed.paths.len());
     for path in &seed.paths {
         let body = std::fs::read_to_string(path).map_err(|e| {
@@ -29,7 +34,7 @@ pub fn load_capability_map(seed: &CapabilitySeedConfig) -> anyhow::Result<Capabi
             anyhow::anyhow!("failed to parse capability seed '{}': {e}", path.display())
         })?;
         entries.push(
-            seed_into_entry(&file).map_err(|e| {
+            seed_into_entry(&file, verifier).map_err(|e| {
                 anyhow::anyhow!("invalid capability seed '{}': {e}", path.display())
             })?,
         );
@@ -42,34 +47,41 @@ pub fn load_capability_map(seed: &CapabilitySeedConfig) -> anyhow::Result<Capabi
 /// # Errors
 ///
 /// Returns a descriptive error string when any identifier (token, agent, or
-/// session) fails to parse.
-pub fn seed_into_entry(file: &SeedFile) -> Result<CapabilityEntry, String> {
-    let token_id: TokenId = file
-        .token_id
-        .parse()
-        .map_err(|e| format!("invalid token_id: {e}"))?;
-    let agent_id: AgentId = file
-        .agent_id
-        .parse()
-        .map_err(|e| format!("invalid agent_id: {e}"))?;
-    let session_id: SessionId = file
-        .session_id
-        .parse()
-        .map_err(|e| format!("invalid session_id: {e}"))?;
+/// session) fails to parse or when the token fails verification.
+pub fn seed_into_entry(
+    file: &SeedFile,
+    verifier: &dyn TokenVerifier,
+) -> anyhow::Result<CapabilityEntry> {
+    let seed_claims = seed_claims(file).context("invalid seed file")?;
+    let verified_claims = verifier
+        .verify(&file.raw_token)
+        .context("raw_token failed PASETO verification")?;
+
+    if seed_claims != verified_claims {
+        anyhow::bail!("raw_token claims do not match seed claims");
+    }
 
     Ok(CapabilityEntry {
         raw_token: file.raw_token.clone(),
-        claims: CapabilityClaims {
-            token_id,
-            agent_id,
-            session_id,
-            action_set: file.action_set.clone(),
-            resource_scope: file.resource_scope.clone(),
-            issued_at: file.issued_at,
-            expiry: file.expiry,
-            context_hash: file.context_hash.clone(),
-            budget_ceiling: file.budget_ceiling,
-        },
+        claims: verified_claims,
+    })
+}
+
+fn seed_claims(file: &SeedFile) -> anyhow::Result<CapabilityClaims> {
+    let token_id: TokenId = file.token_id.parse().context("invalid token_id")?;
+    let agent_id: AgentId = file.agent_id.parse().context("invalid agent_id")?;
+    let session_id: SessionId = file.session_id.parse().context("invalid session_id")?;
+
+    Ok(CapabilityClaims {
+        token_id,
+        agent_id,
+        session_id,
+        action_set: file.action_set.clone(),
+        resource_scope: file.resource_scope.clone(),
+        issued_at: file.issued_at,
+        expiry: file.expiry,
+        context_hash: file.context_hash.clone(),
+        budget_ceiling: file.budget_ceiling,
     })
 }
 
@@ -125,12 +137,17 @@ impl TokenVerifier for RejectAllVerifier {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use firma_core::TokenSigner;
+    use firma_core::token::paseto::PasetoV4Signer;
+    use pasetors::keys::{AsymmetricKeyPair, Generate};
+    use pasetors::version4::V4;
     use std::path::PathBuf;
 
     #[test]
     fn empty_seed_yields_empty_map() {
         let seed = CapabilitySeedConfig::default();
-        let map = load_capability_map(&seed).unwrap();
+        let verifier = build_token_verifier(None).unwrap();
+        let map = load_capability_map(&seed, verifier.as_ref()).unwrap();
         // `CapabilityMap::select` returns `Err(EnforcementDecision)`
         // when no entry matches; the empty map must always deny.
         let result = map.select("sess", "communication.external.send", "wttr.in");
@@ -142,7 +159,10 @@ mod tests {
         let seed = CapabilitySeedConfig {
             paths: vec![PathBuf::from("/definitely/not/here.toml")],
         };
-        let err = load_capability_map(&seed).unwrap_err().to_string();
+        let verifier = build_token_verifier(None).unwrap();
+        let err = load_capability_map(&seed, verifier.as_ref())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("/definitely/not/here.toml"));
     }
 
@@ -153,5 +173,89 @@ mod tests {
             .verify("v4.public.anything")
             .expect_err("RejectAllVerifier must always deny");
         assert!(matches!(err, TokenError::SignatureInvalid { .. }));
+    }
+
+    #[test]
+    fn seed_load_rejects_unverified_raw_token() {
+        let (_sk, pk) = generate_keypair();
+        let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
+        let claims = sample_claims();
+        let mut file = seed_file_from_claims(&claims);
+        file.raw_token = "v4.public.not-a-real-token".to_string();
+
+        let err = seed_into_entry(&file, &verifier).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("raw_token failed PASETO verification")
+        );
+    }
+
+    #[test]
+    fn seed_load_rejects_claims_that_do_not_match_raw_token() {
+        let (sk, pk) = generate_keypair();
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
+        let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
+        let claims = sample_claims();
+        let raw_token = signer.sign(&claims).unwrap();
+        let mut file = seed_file_from_claims(&claims);
+        file.raw_token = raw_token;
+        file.action_set = vec!["github.repo.write".to_string()];
+
+        let err = seed_into_entry(&file, &verifier).unwrap_err();
+        let err = err.to_string();
+
+        assert!(err.contains("raw_token claims do not match seed claims"));
+    }
+
+    #[test]
+    fn seed_load_uses_verified_token_claims() {
+        let (sk, pk) = generate_keypair();
+        let signer = PasetoV4Signer::try_new(&sk).unwrap();
+        let verifier = PasetoV4Verifier::try_new(&pk).unwrap();
+        let claims = sample_claims();
+        let raw_token = signer.sign(&claims).unwrap();
+        let mut file = seed_file_from_claims(&claims);
+        file.raw_token = raw_token.clone();
+
+        let entry = seed_into_entry(&file, &verifier).unwrap();
+
+        assert_eq!(entry.raw_token, raw_token);
+        assert_eq!(entry.claims, claims);
+    }
+
+    fn generate_keypair() -> (Vec<u8>, Vec<u8>) {
+        let kp = AsymmetricKeyPair::<V4>::generate().unwrap();
+        (kp.secret.as_bytes().to_vec(), kp.public.as_bytes().to_vec())
+    }
+
+    fn sample_claims() -> CapabilityClaims {
+        let now = chrono::Utc::now();
+        CapabilityClaims {
+            token_id: TokenId::new(),
+            agent_id: "agent_abc".parse().unwrap(),
+            session_id: "sess_xyz".parse().unwrap(),
+            action_set: vec!["communication.external.send".to_string()],
+            resource_scope: "https://api.example.com/*".to_string(),
+            issued_at: now,
+            expiry: now + chrono::Duration::minutes(10),
+            context_hash: "abcdef1234567890".to_string(),
+            budget_ceiling: Some(10.0),
+        }
+    }
+
+    fn seed_file_from_claims(claims: &CapabilityClaims) -> SeedFile {
+        SeedFile {
+            raw_token: String::new(),
+            token_id: claims.token_id.to_string(),
+            agent_id: claims.agent_id.to_string(),
+            session_id: claims.session_id.to_string(),
+            action_set: claims.action_set.clone(),
+            resource_scope: claims.resource_scope.clone(),
+            issued_at: claims.issued_at,
+            expiry: claims.expiry,
+            context_hash: claims.context_hash.clone(),
+            budget_ceiling: claims.budget_ceiling,
+        }
     }
 }
