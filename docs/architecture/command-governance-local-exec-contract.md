@@ -45,7 +45,7 @@ Decision behavior:
 1. `allow`: runtime proceeds with launch.
 2. `deny`: runtime blocks launch (fail-closed).
 3. `pending_hitl` + `sync_wait`: runtime blocks launch (fail-closed pending).
-4. `pending_hitl` + `async_token`: runtime blocks current launch attempt and expects non-empty `approval_token`.
+4. `pending_hitl` + `async_token`: runtime expects non-empty `approval_token`, then retries internally (same launch attempt) until `allow|deny` or `hitl_max_wait_ms` timeout.
 5. Missing required fields or unsupported decision value: runtime blocks launch (fail-closed).
 
 ## `FIRMA_BUDGET_STATE_REF`
@@ -92,7 +92,8 @@ For governed mode, runtime remains fail-closed:
 1. Governance endpoint unavailable/timeout -> deny launch.
 2. Invalid response schema -> deny launch.
 3. `pending_hitl` async without token -> deny launch.
-4. Missing `budget_state_ref` can be denied by governance policy where required.
+4. Repeated `pending_hitl` past runtime `hitl_max_wait_ms` -> deny launch.
+5. Missing `budget_state_ref` can be denied by governance policy where required.
 
 Optional strict startup gate:
 
