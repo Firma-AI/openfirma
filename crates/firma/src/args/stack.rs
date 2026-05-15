@@ -30,14 +30,14 @@ pub enum StackCommand {
 /// Parsed `firma stack init` arguments.
 #[derive(Debug, Args)]
 pub struct InitArgs {
-    /// Config directory. Scaffolded with TOML configs, keys, policy dirs.
-    /// Immutable in normal operation.
+    /// Config directory (TOML config, keys, policy dirs). When unset,
+    /// resolves to the platform config dir (`~/.config/firma` etc.).
     #[arg(long)]
-    pub config_dir: PathBuf,
-    /// Runtime state directory. Scaffolded with revocations and generated-CA
-    /// dirs. Holds mutable pids/logs/audit.jsonl at runtime.
-    #[arg(long)]
-    pub state_dir: PathBuf,
+    pub config_dir: Option<PathBuf>,
+    /// Runtime state directory (revocations, generated-CA, pids/logs).
+    /// When unset, resolves via `FIRMA_STATE_DIR` / `$XDG_RUNTIME_DIR`.
+    #[arg(long, env = "FIRMA_STATE_DIR")]
+    pub state_dir: Option<PathBuf>,
     /// Overwrite existing files instead of preserving them.
     #[arg(long)]
     pub force: bool,
@@ -66,8 +66,8 @@ pub struct StartArgs {
 /// Parsed `firma stack stop` arguments.
 #[derive(Debug, Args)]
 pub struct StopArgs {
-    /// Stack config file. Used to read `state_dir` when `--state-dir` is
-    /// not set.
+    /// Accepted for compatibility; `state_dir` is resolved from
+    /// `--state-dir` / `FIRMA_STATE_DIR` / XDG.
     #[arg(long, env = "FIRMA_STACK_CONFIG")]
     pub config: Option<PathBuf>,
     /// State dir override.
@@ -81,8 +81,8 @@ pub struct StopArgs {
 /// Parsed `firma stack status` arguments.
 #[derive(Debug, Args)]
 pub struct StatusArgs {
-    /// Stack config file. Used to read `state_dir` when `--state-dir` is
-    /// not set.
+    /// Accepted for compatibility; `state_dir` is resolved from
+    /// `--state-dir` / `FIRMA_STATE_DIR` / XDG.
     #[arg(long, env = "FIRMA_STACK_CONFIG")]
     pub config: Option<PathBuf>,
     /// State dir override.

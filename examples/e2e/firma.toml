@@ -1,0 +1,85 @@
+# Firma OSS — E2E example unified sectioned config.
+# Run from repo root: ./target/debug/firma sidecar --config examples/e2e/firma.toml
+#
+# NOT FOR PRODUCTION USE. Local dev/testing only.
+#
+# Interceptor: HTTP forward proxy on :8080
+# Enforcement: policy bundle streamed from Authority on :50051
+# Default: unlisted hosts PASSTHROUGH (default_protected = false)
+
+# ── Mini Authority ───────────────────────────────────────────────────────────
+
+[authority]
+listen_addr = "127.0.0.1:50051"
+policy_dir = "../policies/"
+issuance_policy_dir = "issuance-policies/"
+revocation_file = "examples/e2e/revocations.txt"
+key_file = "authority.key"
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 30
+log_level = "info"
+
+# schema_path is optional. Omit to use the schema embedded in the binary.
+# Set to override with a custom schema (e.g. to add action classes or context fields):
+# schema_path = "examples/policies/schema.cedarschema"
+
+# ── Sidecar ──────────────────────────────────────────────────────────────────
+
+[sidecar.interceptor]
+mode = "http_proxy"
+listen_addr = "127.0.0.1:8080"
+drain_timeout_secs = 30
+
+[sidecar.interceptor.https_mitm]
+enabled = true
+intercept_hosts = ["paste.rs"]
+
+[sidecar.policy]
+dir = "../policies"
+authority_url = "http://127.0.0.1:50051"
+
+[sidecar.ca]
+dir = "examples/e2e/firma-ca"
+
+[sidecar.log]
+level = "info"
+
+[sidecar.mapping]
+rules_path = "mapping-rules.toml"
+default_protected = false
+
+[sidecar.capability_validation]
+clock_skew_tolerance_seconds = 0
+
+[sidecar.constraint_enforcement]
+bundle_ttl_seconds = 30
+enforcement_timeout_ms = 50
+
+[sidecar.connector]
+default_timeout_ms = 120000
+
+# Local agent configuration (lm-studio)
+[[sidecar.connector.hosts]]
+host = "localhost:1234"
+rps = 10
+burst = 5
+timeout_ms = 300000
+
+[sidecar.audit]
+sink = "stdout"
+signing_key_path = "audit.key"
+
+[sidecar.authority]
+connect_timeout_secs = 10
+reconnect_min_backoff_ms = 250
+reconnect_max_backoff_secs = 30
+revocation_readiness_grace_ms = 500
+revocation_fail_closed_on_disconnect = false
+
+[sidecar.preflight]
+agent_id = "demo-agent"
+session_id = "demo-session-001"
+requested_actions = ["communication.external.send"]
+resource_scope = "*"
+authority_pub_key_path = "examples/e2e/authority.pub"
+ttl_seconds = 3600

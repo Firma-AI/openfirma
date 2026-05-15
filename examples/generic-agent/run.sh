@@ -42,13 +42,13 @@ echo "      Done."
 
 # ── Start Authority ───────────────────────────────────────────────────────────
 echo "[3/4] Starting firma-authority on 127.0.0.1:50051..."
-"$AUTHORITY_BIN" --config "$DIR/authority.toml" &
+"$AUTHORITY_BIN" --config "$DIR/firma.toml" &
 AUTHORITY_PID=$!
 sleep 1
 
 # ── Start Sidecar ─────────────────────────────────────────────────────────────
 echo "[4/4] Starting firma-sidecar on 127.0.0.1:7474..."
-"$SIDECAR_BIN" --config-file "$DIR/sidecar.toml" &
+"$SIDECAR_BIN" --config "$DIR/firma.toml" &
 SIDECAR_PID=$!
 sleep 2
 
@@ -66,7 +66,7 @@ cat <<EOF
 
 Smoke tests — run in another terminal.
 The x-firma-session-id header binds the request to the preflight token's
-session_id (see [preflight] in sidecar.toml). Without it the sidecar cannot
+session_id (see [sidecar.preflight] in firma.toml). Without it the sidecar cannot
 select the pre-issued capability.
 
   SESSION="x-firma-session-id: preflight-session"

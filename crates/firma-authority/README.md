@@ -43,9 +43,13 @@ This writes two files:
 - `firma-authority.key`, the private signing key. Keep this secret.
 - `firma-authority.pub`, the public verification key. Give this to Sidecars.
 
-Create a config file:
+Create a `firma.toml`. Every subcommand reads one shared, sectioned
+`firma.toml`; the Authority reads the `[authority]` section. See the Config
+Discovery section in [`docs/cli.md`](../../docs/cli.md) for the discovery
+precedence; `--config <path>` only relocates the file.
 
 ```toml
+[authority]
 listen_addr        = "[::1]:50051"
 policy_dir         = "examples/policies"
 revocation_file    = "revocations.txt"
@@ -55,10 +59,10 @@ bundle_ttl_seconds = 30
 log_level          = "info"
 ```
 
-Start the Authority:
+Start the Authority (discovers `firma.toml`, or pass `--config`):
 
 ```bash
-cargo run -p firma-authority -- --config authority.toml
+cargo run -p firma-authority -- --config firma.toml
 ```
 
 `policy_dir` must contain at least one `.cedar` policy. The binary includes the default schema, so a `schema.cedarschema` file is optional unless you want to override it.
@@ -68,23 +72,23 @@ cargo run -p firma-authority -- --config authority.toml
 For local demos, you can issue a token into a seed file that the Sidecar loads at startup:
 
 ```bash
-cargo run -p firma-authority -- --config authority.toml issue   --agent-id demo-agent   --session-id demo-session   --action communication.external.send   --resource-scope '*'   --ttl-seconds 3600   --output capability-demo-agent.toml
+cargo run -p firma-authority -- --config firma.toml issue   --agent-id demo-agent   --session-id demo-session   --action communication.external.send   --resource-scope '*'   --ttl-seconds 3600   --output capability-demo-agent.toml
 ```
 
 The output file contains the signed token and matching claims. Configure the Sidecar with the Authority public key and list the seed file under `[capability_seed].paths`.
 
 ## Configuration
 
-| Key | Default | Purpose |
-| --- | --- | --- |
-| `listen_addr` | `[::1]:50051` | gRPC address for the Authority service. |
-| `policy_dir` | `policies` | Directory containing `.cedar` policy files. |
-| `schema_path` | unset | Optional schema override. |
-| `revocation_file` | `revocations.txt` | File containing revoked token IDs. |
-| `key_file` | `firma-authority.key` | Authority private signing key. |
-| `max_ttl_seconds` | `3600` | Maximum token lifetime. |
-| `bundle_ttl_seconds` | `30` | TTL advertised with streamed policy bundles. |
-| `log_level` | `info` | Logging filter. |
+| Key                  | Default               | Purpose                                      |
+| -------------------- | --------------------- | -------------------------------------------- |
+| `listen_addr`        | `[::1]:50051`         | gRPC address for the Authority service.      |
+| `policy_dir`         | `policies`            | Directory containing `.cedar` policy files.  |
+| `schema_path`        | unset                 | Optional schema override.                    |
+| `revocation_file`    | `revocations.txt`     | File containing revoked token IDs.           |
+| `key_file`           | `firma-authority.key` | Authority private signing key.               |
+| `max_ttl_seconds`    | `3600`                | Maximum token lifetime.                      |
+| `bundle_ttl_seconds` | `30`                  | TTL advertised with streamed policy bundles. |
+| `log_level`          | `info`                | Logging filter.                              |
 
 Every key can be overridden with a `FIRMA_AUTHORITY_` environment variable. For example, `FIRMA_AUTHORITY_LISTEN_ADDR` overrides `listen_addr`.
 
@@ -96,11 +100,11 @@ Example policies live in `examples/policies/`.
 
 Entity identifiers follow this shape:
 
-| Role | Format |
-| --- | --- |
-| Principal | `Firma::Agent::"<agent_id>"` |
-| Action | `Firma::Action::"<action_class>"` |
-| Resource | `Firma::Resource::"<resource_uri>"` |
+| Role      | Format                              |
+| --------- | ----------------------------------- |
+| Principal | `Firma::Agent::"<agent_id>"`        |
+| Action    | `Firma::Action::"<action_class>"`   |
+| Resource  | `Firma::Resource::"<resource_uri>"` |
 
 The Sidecar supplies request context such as session ID, timestamp, serialized parameters, budget state, risk score, and action count when it evaluates policy.
 
@@ -117,7 +121,7 @@ The Sidecar supplies request context such as session ID, timestamp, serialized p
 ## Revoke a token
 
 ```bash
-cargo run -p firma-authority -- --config authority.toml revocations add <token-id> --reason "session-terminated"
+cargo run -p firma-authority -- --config firma.toml revocations add <token-id> --reason "session-terminated"
 ```
 
 A connected Sidecar receives the revocation on the stream and denies later requests that use the revoked token.
@@ -125,7 +129,7 @@ A connected Sidecar receives the revocation on the stream and denies later reque
 To compact expired revocation entries:
 
 ```bash
-cargo run -p firma-authority -- --config authority.toml revocations compact
+cargo run -p firma-authority -- --config firma.toml revocations compact
 ```
 
 ## Docker

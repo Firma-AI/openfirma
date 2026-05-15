@@ -58,7 +58,8 @@ This guide uses `agent_id = <tenant_id>` and `session_id = <user-session-uuid>`.
 **One Authority** for the whole deployment. It signs every capability your app mints, streams policy bundles, broadcasts revocations.
 
 ```toml
-# /etc/firma/authority.toml
+# /etc/firma/firma.toml — the [authority] section
+[authority]
 listen_addr         = "0.0.0.0:50051"   # or behind an internal load balancer
 policy_dir          = "/etc/firma/policies"
 issuance_policy_dir = "/etc/firma/issuance"
@@ -152,55 +153,55 @@ forbid (
 Each app pod runs a Sidecar with this config:
 
 ```toml
-# /etc/firma/sidecar.toml
-[interceptor]
+# /etc/firma/firma.toml — the [sidecar.*] sections
+[sidecar.interceptor]
 mode               = "http_proxy"
 listen_addr        = "127.0.0.1:8080"
 drain_timeout_secs = 30
 
-[interceptor.https_mitm]
+[sidecar.interceptor.https_mitm]
 enabled         = true
 intercept_hosts = ["api.openai.com", "api.acme-vendor.com"]
 strict_hosts    = ["api.acme-vendor.com"]    # never fall back to CONNECT here
 
-[ca]
+[sidecar.ca]
 dir = "/etc/firma/firma-ca"
 
-[mapping]
+[sidecar.mapping]
 rules_path  = "/etc/firma/mapping-rules.toml"
 rules_paths = []
 default_protected = true                      # production!
 
-[policy]
+[sidecar.policy]
 dir           = "/etc/firma/cache/policies"   # populated by Authority stream
 authority_url = "https://firma-authority.internal:50051"
 
-[constraint_enforcement]
+[sidecar.constraint_enforcement]
 bundle_ttl_seconds     = 90
 enforcement_timeout_ms = 50
 
-[capability_seed]
+[sidecar.capability_seed]
 paths = []                                   # capabilities arrive via gRPC, not seed files
 
-[authority]
+[sidecar.authority]
 public_key_path = "/etc/firma/firma-authority.pub"
 
-[connector]
+[sidecar.connector]
 default_timeout_ms = 30000
 
-[[connector.hosts]]
+[[sidecar.connector.hosts]]
 host       = "api.openai.com"
 rps        = 100
 burst      = 20
 timeout_ms = 30000
 
-[[connector.hosts]]
+[[sidecar.connector.hosts]]
 host       = "api.acme-vendor.com"
 rps        = 50
 burst      = 10
 timeout_ms = 15000
 
-[[credentials]]
+[[sidecar.credentials]]
 host           = "api.openai.com"
 mode           = "vault"
 header         = "Authorization"
@@ -208,23 +209,23 @@ prefix         = "Bearer "
 secret_path    = "secret/data/openai/api-key"
 secret_key     = "value"
 
-[[credentials]]
+[[sidecar.credentials]]
 host           = "api.acme-vendor.com"
 mode           = "vault"
 header         = "x-api-key"
 secret_path    = "secret/data/acme-vendor/api-key"
 secret_key     = "value"
 
-[credentials.vault]
+[sidecar.credentials.vault]
 addr = "https://vault.internal:8200"
 # token via AppRole, configured via env
 
-[audit]
+[sidecar.audit]
 sink             = "grpc"
 grpc_url         = "https://audit-collector.internal:9090"
 signing_key_path = "/etc/firma/audit.key"
 
-[log]
+[sidecar.log]
 level = "info"
 ```
 

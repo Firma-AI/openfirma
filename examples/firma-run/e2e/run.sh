@@ -151,7 +151,7 @@ SIDECAR_PORT="$((RANDOM % 5000 + 18080))"
 HEALTH_PORT="$((RANDOM % 5000 + 23080))"
 HEALTH_ADDR="127.0.0.1:${HEALTH_PORT}"
 
-SIDECAR_CONFIG="${WORKDIR}/sidecar.toml"
+SIDECAR_CONFIG="${WORKDIR}/firma.toml"
 MAPPING_RULES="${WORKDIR}/mapping-rules.toml"
 AUDIT_FILE="${WORKDIR}/audit.jsonl"
 SIDECAR_LOG="${WORKDIR}/sidecar.log"
@@ -198,21 +198,21 @@ EOF
 fi
 
 cat >"$SIDECAR_CONFIG" <<EOF
-[interceptor]
+[sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:${SIDECAR_PORT}"
 drain_timeout_secs = 5
 
-[mapping]
+[sidecar.mapping]
 rules_path = "${MAPPING_RULES}"
 default_protected = $([[ "$CLAUDE_ACCEPTANCE" -eq 1 ]] && echo "true" || echo "false")
 
-[audit]
+[sidecar.audit]
 sink = "file"
 file_path = "${AUDIT_FILE}"
 signing_key_path = "${AUDIT_KEY}"
 
-[log]
+[sidecar.log]
 level = "info"
 EOF
 

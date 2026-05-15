@@ -1,14 +1,28 @@
-# Demo 2 — sidecar config.
+# Demo 2 — unified sectioned config.
 # Runtime enforcement under compromise.
 
-[interceptor]
+# ── Mini Authority ───────────────────────────────────────────────────────────
+
+[authority]
+listen_addr = "127.0.0.1:50051"
+policy_dir = "policies/"
+issuance_policy_dir = "issuance-policies/"
+revocation_file = "examples/demos/demo2/.runtime/revocations.txt"
+key_file = ".runtime/authority.key"
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 30
+log_level = "info"
+
+# ── Sidecar ──────────────────────────────────────────────────────────────────
+
+[sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
 drain_timeout_secs = 30
 
 # Override the built-in HTTPS MITM allowlist so the policy can see plaintext
 # requests on the two demo targets.
-[interceptor.https_mitm]
+[sidecar.interceptor.https_mitm]
 intercept_hosts = ["api.github.com", "httpbin.org"]
 # Strict-MITM these hosts so the CONNECT preface is auto-authorized once the
 # TLS preflight succeeds — inner L7 requests (which carry the
@@ -16,14 +30,14 @@ intercept_hosts = ["api.github.com", "httpbin.org"]
 # the bare CONNECT (no session header, no L7 path) would fail Stage 1.
 strict_hosts = ["api.github.com", "httpbin.org"]
 
-[policy]
-dir = "examples/demos/demo2"
+[sidecar.policy]
+dir = "."
 authority_url = "http://127.0.0.1:50051"
 
-[ca]
+[sidecar.ca]
 dir = "examples/demos/demo2/.runtime/generated-firma-ca"
 
-[log]
+[sidecar.log]
 level = "info"
 
 # Credential injection. The real GitHub token lives only here, in the sidecar.
@@ -31,40 +45,40 @@ level = "info"
 # and never sets an Authorization header. After an ALLOW decision, the sidecar
 # attaches the header on the way out — so a compromised agent has nothing to
 # leak.
-[credentials.github]
+[sidecar.credentials.github]
 mode = "basic"
 target_host = "api.github.com"
 header = "Authorization"
 prefix = "Bearer "
 value_from_env = "GITHUB_TOKEN"
 
-[mapping]
-rules_path = "examples/demos/demo2/mapping-rules.toml"
+[sidecar.mapping]
+rules_path = "mapping-rules.toml"
 default_protected = true
 
-[capability_validation]
+[sidecar.capability_validation]
 clock_skew_tolerance_seconds = 0
 
-[constraint_enforcement]
+[sidecar.constraint_enforcement]
 bundle_ttl_seconds = 3600
 enforcement_timeout_ms = 50
 
-[connector]
+[sidecar.connector]
 default_timeout_ms = 10000
 
-[audit]
+[sidecar.audit]
 sink = "file"
-file_path = "examples/demos/demo2/.runtime/audit.jsonl"
-signing_key_path = "examples/demos/demo2/.runtime/audit.key"
+file_path = ".runtime/audit.jsonl"
+signing_key_path = ".runtime/audit.key"
 
-[authority]
+[sidecar.authority]
 connect_timeout_secs = 10
 reconnect_min_backoff_ms = 250
 reconnect_max_backoff_secs = 30
 revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false
 
-[preflight]
+[sidecar.preflight]
 agent_id = "demo2-agent"
 session_id = "demo2-session-001"
 requested_actions = ["code.review.read", "issue.write"]

@@ -1,6 +1,7 @@
 # Generic agent — supplemental mapping rules.
 # Provider-specific rules (GitHub, Gmail) are loaded from the shipped mapping
-# files via rules_paths in sidecar.toml. This file covers supplemental rules:
+# files via rules_paths in [sidecar.mapping] in firma.toml. This file covers
+# supplemental rules:
 # LLM APIs, HTTPS CONNECT tunnels, package managers, and localhost fallthrough.
 #
 # Hosts NOT listed here are DENIED before Cedar (default_protected = true).

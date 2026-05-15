@@ -5,7 +5,6 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use firma_sidecar::{config, handler, health, startup};
-use tokio::io::AsyncReadExt as _;
 use tokio_util::sync::CancellationToken;
 
 use crate::args::sidecar::Args;
@@ -20,8 +19,14 @@ use crate::signal::wait_for_shutdown;
 pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
     tracing::debug!("firma sidecar starting");
 
-    tracing::debug!("loading configuration from {}", args.config_file.display());
-    let config = read_config(&args.config_file).await?;
+    let resolved =
+        firma_config::resolve_config("sidecar", args.config.as_deref(), &firma_config::SystemDirs)?;
+    tracing::info!(
+        path = %resolved.config_file.display(),
+        source = ?resolved.source,
+        "config resolved"
+    );
+    let config = read_config(&resolved)?;
     tracing::debug!("configuration loaded successfully");
 
     let exit = CancellationToken::new();
@@ -78,7 +83,7 @@ pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
     let local_exec_handle = startup::spawn_local_exec_endpoint(&config, exit.clone())?;
 
     emit_ready_sequence(
-        &args.config_file,
+        &resolved.config_file,
         &config,
         pipeline_runtime.mapping_rules_loaded,
     );
@@ -156,11 +161,11 @@ fn emit_operator_routing_hints(config: &config::SidecarConfig) {
     }
 }
 
-async fn read_config(path: &Path) -> anyhow::Result<config::SidecarConfig> {
-    let mut f = tokio::fs::File::open(path).await?;
-    let mut content = String::new();
-    f.read_to_string(&mut content).await?;
-    let config: config::SidecarConfig = toml::from_str(&content)?;
+fn read_config(resolved: &firma_config::ResolvedConfig) -> anyhow::Result<config::SidecarConfig> {
+    let body = firma_config::load_section(&resolved.config_file, "sidecar")
+        .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;
+    let mut config: config::SidecarConfig = toml::from_str(&body)?;
+    config.rebase_defaults(&resolved.config_dir);
     config
         .validate()
         .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;

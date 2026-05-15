@@ -6,13 +6,11 @@ use std::path::PathBuf;
 #[derive(Debug, clap::Args)]
 pub struct Args {
     /// The path to the configuration file for the sidecar.
-    #[clap(
-        long,
-        short = 'c',
-        env = "FIRMA_SIDECAR_CONFIG_FILE",
-        default_value = "firma_sidecar.toml"
-    )]
-    pub config_file: PathBuf,
+    ///
+    /// When unset, `firma.toml` is discovered from platform config
+    /// dirs (see docs/cli.md).
+    #[clap(long, short = 'c', env = "FIRMA_SIDECAR_CONFIG_FILE")]
+    pub config: Option<PathBuf>,
     /// Health check binding address.
     #[clap(
         long,

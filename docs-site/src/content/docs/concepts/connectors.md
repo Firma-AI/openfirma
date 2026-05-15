@@ -32,25 +32,25 @@ Conversely, an `ALLOW` means the request is forwarded **as the agent submitted i
 
 ## Configuring per-host limits
 
-Default timeout and per-host overrides live under `[connector]` in `sidecar.toml`. The demo's config is a useful template:
+Default timeout and per-host overrides live under `[sidecar.connector]` in `firma.toml`. The demo's config is a useful template:
 
 ```toml
-[connector]
+[sidecar.connector]
 default_timeout_ms = 30000
 
-[[connector.hosts]]
+[[sidecar.connector.hosts]]
 host       = "wttr.in"
 rps        = 60
 burst      = 10
 timeout_ms = 30000
 
-[[connector.hosts]]
+[[sidecar.connector.hosts]]
 host       = "paste.rs"
 rps        = 60
 burst      = 10
 timeout_ms = 30000
 
-[[connector.hosts]]
+[[sidecar.connector.hosts]]
 host       = "127.0.0.1:9100"
 rps        = 200
 burst      = 50

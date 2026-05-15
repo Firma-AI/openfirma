@@ -5,7 +5,7 @@ ok() { printf '[ok] %s\n' "$1"; }
 warn() { printf '[warn] %s\n' "$1"; }
 fail() { printf '[fail] %s\n' "$1"; exit 1; }
 
-AUTHORITY_CONFIG="${AUTHORITY_CONFIG:-.local/authority.toml}"
+AUTHORITY_CONFIG="${AUTHORITY_CONFIG:-.local/firma.toml}"
 AGENT_ID="${AGENT_ID:-example-agent}"
 SESSION_ID="${SESSION_ID:-${FIRMA_RUN_SESSION_ID:-demo-session}}"
 ACTION="${ACTION:-communication.external.send}"
@@ -28,7 +28,7 @@ while [[ $# -gt 0 ]]; do
 Usage: examples/firma-run/local/renew-capability.sh [options]
 
 Options:
-  --authority-config <path>  Authority config TOML (default: .local/authority.toml)
+  --authority-config <path>  Unified firma.toml with an [authority] table (default: .local/firma.toml)
   --agent-id <id>            Agent id (default: example-agent)
   --session-id <id>          Session id (default: FIRMA_RUN_SESSION_ID or demo-session)
   --action <action>          Requested action (default: communication.external.send)

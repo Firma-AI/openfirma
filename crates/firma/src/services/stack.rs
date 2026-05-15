@@ -26,53 +26,82 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 ";
 
 fn run_init(args: &InitArgs) -> ExitCode {
-    match init_scaffold(args) {
+    let Some(config_dir) = args
+        .config_dir
+        .clone()
+        .or_else(|| firma_config::default_config_dir(&firma_config::SystemDirs))
+    else {
+        return fail("init: cannot resolve a default config dir; pass --config-dir");
+    };
+    let state_dir = match args
+        .state_dir
+        .clone()
+        .map_or_else(|| firma_stack::resolve_state_dir(None), Ok)
+    {
+        Ok(d) => d,
+        Err(error) => return fail(&format!("init: state_dir: {error}")),
+    };
+    match init_scaffold_at(
+        &config_dir,
+        &state_dir,
+        args.force,
+        &args.authority_listen,
+        &args.sidecar_listen,
+    ) {
         Ok(()) => {
             println!(
                 "firma stack initialized\n  config_dir: {}\n  state_dir:  {}",
-                args.config_dir.display(),
-                args.state_dir.display(),
+                config_dir.display(),
+                state_dir.display(),
             );
-            println!("next:");
-            #[cfg(unix)]
-            println!(
-                "  firma stack start --config {}/firma-stack.toml",
-                args.config_dir.display(),
-            );
-            #[cfg(windows)]
-            println!(
-                "  firma stack start --config {}\\firma-stack.toml",
-                args.config_dir.display(),
-            );
+            println!("next:\n  firma stack start");
             ExitCode::SUCCESS
         }
         Err(error) => fail(&format!("init: {error}")),
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[cfg(test)]
 fn init_scaffold(args: &InitArgs) -> Result<(), String> {
+    let config_dir = args
+        .config_dir
+        .clone()
+        .ok_or("config_dir required in test")?;
+    let state_dir = args.state_dir.clone().ok_or("state_dir required in test")?;
+    init_scaffold_at(
+        &config_dir,
+        &state_dir,
+        args.force,
+        &args.authority_listen,
+        &args.sidecar_listen,
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+fn init_scaffold_at(
+    config_dir: &Path,
+    state_dir: &Path,
+    force: bool,
+    authority_listen: &str,
+    sidecar_listen: &str,
+) -> Result<(), String> {
     // Absolutize the user-supplied paths once. Relative paths get re-joined
-    // by `load_stack_config` (against the stack TOML's parent dir) and by the
-    // spawned children (against their CWD), which leads to surprising
-    // double-joining like `..\test\config\..\test\config\authority.toml`.
-    // Writing absolute paths into every generated TOML keeps resolution
-    // unambiguous regardless of where `firma stack start` is invoked from.
-    let config_dir = absolutize(&args.config_dir)
-        .map_err(|e| format!("resolve config_dir {}: {e}", args.config_dir.display()))?;
-    let state_dir = absolutize(&args.state_dir)
-        .map_err(|e| format!("resolve state_dir {}: {e}", args.state_dir.display()))?;
+    // by the spawned children (against their CWD), which leads to surprising
+    // double-joining. Writing absolute paths into the generated TOML keeps
+    // resolution unambiguous regardless of where `firma stack start` runs.
+    let config_dir = absolutize(config_dir)
+        .map_err(|e| format!("resolve config_dir {}: {e}", config_dir.display()))?;
+    let state_dir = absolutize(state_dir)
+        .map_err(|e| format!("resolve state_dir {}: {e}", state_dir.display()))?;
     let config_dir = &config_dir;
     let state_dir = &state_dir;
     info!(
         config_dir = %config_dir.display(),
         state_dir = %state_dir.display(),
-        force = args.force,
+        force,
         "scaffolding firma stack"
     );
 
-    // Config dir: TOMLs, keys, policy dirs. Tight perms because
-    // `authority.key` + `audit.key` live here.
     for sub in ["", "policies", "issuance-policies"] {
         let path = config_dir.join(sub);
         debug!(path = %path.display(), "mkdir config subdir");
@@ -80,9 +109,6 @@ fn init_scaffold(args: &InitArgs) -> Result<(), String> {
         #[cfg(unix)]
         set_dir_mode_0700(&path)?;
     }
-    // State dir: revocations + generated-CA. Sockets, audit log, and
-    // CA private key live under here — must be 0700 on Unix to keep
-    // other local UIDs out (Hardening Issue 5; see firma_doctor).
     for sub in ["", "generated-firma-ca"] {
         let path = state_dir.join(sub);
         debug!(path = %path.display(), "mkdir state subdir");
@@ -92,16 +118,16 @@ fn init_scaffold(args: &InitArgs) -> Result<(), String> {
     }
 
     debug!("writing revocations.txt");
-    write_if_absent(&state_dir.join("revocations.txt"), b"", args.force)?;
+    write_if_absent(&state_dir.join("revocations.txt"), b"", force)?;
     debug!("writing audit.key");
     write_if_absent(
         &config_dir.join("audit.key"),
         DEMO_AUDIT_KEY_PEM.as_bytes(),
-        args.force,
+        force,
     )?;
 
     let authority_key = config_dir.join("authority.key");
-    if args.force || !authority_key.exists() {
+    if force || !authority_key.exists() {
         info!(path = %authority_key.display(), "generating authority signing key");
         crate::services::authority::run_generate_key(&authority_key)
             .map_err(|e| format!("generate-key: {e}"))?;
@@ -109,57 +135,6 @@ fn init_scaffold(args: &InitArgs) -> Result<(), String> {
         debug!(path = %authority_key.display(), "authority key already exists; preserving");
     }
 
-    let authority_toml = format!(
-        r#"listen_addr         = "{listen}"
-policy_dir          = '{policy_dir}'
-issuance_policy_dir = '{issuance_dir}'
-revocation_file     = '{revocation_file}'
-key_file            = '{key_file}'
-max_ttl_seconds     = 3600
-bundle_ttl_seconds  = 30
-"#,
-        listen = args.authority_listen,
-        policy_dir = config_dir.join("policies").display(),
-        issuance_dir = config_dir.join("issuance-policies").display(),
-        revocation_file = state_dir.join("revocations.txt").display(),
-        key_file = config_dir.join("authority.key").display(),
-    );
-    debug!("writing authority.toml");
-    write_if_absent(
-        &config_dir.join("authority.toml"),
-        authority_toml.as_bytes(),
-        args.force,
-    )?;
-
-    let sidecar_toml = format!(
-        r#"[interceptor]
-mode        = "http_proxy"
-listen_addr = "{listen}"
-
-[policy]
-authority_url = "http://{authority}"
-
-[ca]
-dir = '{ca_dir}'
-
-[audit]
-signing_key_path = '{audit_key}'
-
-[mapping]
-rules_path = '{rules_path}'
-"#,
-        listen = args.sidecar_listen,
-        authority = args.authority_listen,
-        ca_dir = state_dir.join("generated-firma-ca").display(),
-        audit_key = config_dir.join("audit.key").display(),
-        rules_path = config_dir.join("mapping-rules.toml").display(),
-    );
-    debug!("writing sidecar.toml");
-    write_if_absent(
-        &config_dir.join("sidecar.toml"),
-        sidecar_toml.as_bytes(),
-        args.force,
-    )?;
     debug!("writing mapping-rules.toml");
     write_if_absent(
         &config_dir.join("mapping-rules.toml"),
@@ -167,24 +142,45 @@ rules_path = '{rules_path}'
           [[rules]]\n\
           host = \"example.invalid\"\n\
           action_class = \"filesystem.read\"\n",
-        args.force,
+        force,
     )?;
 
-    let stack_toml = format!(
-        r"state_dir        = '{state_dir}'
-authority_config = '{authority_config}'
-sidecar_config   = '{sidecar_config}'
-",
-        state_dir = state_dir.display(),
-        authority_config = config_dir.join("authority.toml").display(),
-        sidecar_config = config_dir.join("sidecar.toml").display(),
+    let firma_toml = format!(
+        r#"[authority]
+listen_addr         = "{authority_listen}"
+policy_dir          = '{policy_dir}'
+issuance_policy_dir = '{issuance_dir}'
+revocation_file     = '{revocation_file}'
+key_file            = '{key_file}'
+max_ttl_seconds     = 3600
+bundle_ttl_seconds  = 30
+
+[sidecar.interceptor]
+mode        = "http_proxy"
+listen_addr = "{sidecar_listen}"
+
+[sidecar.policy]
+authority_url = "http://{authority_listen}"
+
+[sidecar.ca]
+dir = '{ca_dir}'
+
+[sidecar.audit]
+signing_key_path = '{audit_key}'
+
+[sidecar.mapping]
+rules_path = '{rules_path}'
+"#,
+        policy_dir = config_dir.join("policies").display(),
+        issuance_dir = config_dir.join("issuance-policies").display(),
+        revocation_file = state_dir.join("revocations.txt").display(),
+        key_file = config_dir.join("authority.key").display(),
+        ca_dir = state_dir.join("generated-firma-ca").display(),
+        audit_key = config_dir.join("audit.key").display(),
+        rules_path = config_dir.join("mapping-rules.toml").display(),
     );
-    debug!("writing firma-stack.toml");
-    write_if_absent(
-        &config_dir.join("firma-stack.toml"),
-        stack_toml.as_bytes(),
-        args.force,
-    )?;
+    debug!("writing firma.toml");
+    write_if_absent(&config_dir.join("firma.toml"), firma_toml.as_bytes(), force)?;
 
     info!("scaffold complete");
     Ok(())
@@ -218,15 +214,12 @@ fn set_dir_mode_0700(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Resolve `state_dir` for stop/status/monitor.
+/// Resolve `state_dir` for stop/status/monitor/doctor.
 ///
-/// Order: explicit `--state-dir` (or `FIRMA_STATE_DIR` env) → `state_dir` field
-/// from the stack config file at `config_path` if set → XDG/platform default
-/// via [`firma_stack::resolve_state_dir`].
-pub fn resolve_state_dir(
-    flag: Option<PathBuf>,
-    config_path: Option<&Path>,
-) -> Result<PathBuf, String> {
+/// Order: explicit `--state-dir` (or `FIRMA_STATE_DIR`) → XDG/platform
+/// default via [`firma_stack::resolve_state_dir`]. State is never read
+/// from the config file.
+pub fn resolve_state_dir(flag: Option<PathBuf>) -> Result<PathBuf, String> {
     if let Some(path) = flag {
         return Ok(path);
     }
@@ -234,16 +227,6 @@ pub fn resolve_state_dir(
         && !env.is_empty()
     {
         return Ok(PathBuf::from(env));
-    }
-    if let Some(path) = config_path {
-        match firma_stack::load_stack_config(path) {
-            Ok(cfg) => {
-                if let Some(state_dir) = cfg.state_dir {
-                    return Ok(state_dir);
-                }
-            }
-            Err(error) => return Err(format!("config: {error}")),
-        }
     }
     firma_stack::resolve_state_dir(None).map_err(|error| format!("state_dir: {error}"))
 }
@@ -255,17 +238,13 @@ fn run_start(args: StartArgs) -> ExitCode {
         state_dir = ?args.state_dir,
         "firma stack start invoked"
     );
-    let cfg_path = args
-        .config
-        .unwrap_or_else(|| PathBuf::from("firma-stack.toml"));
-    let cfg = match firma_stack::load_stack_config(&cfg_path) {
+    let cfg = match firma_stack::resolve_stack_config(args.config.as_deref()) {
         Ok(cfg) => cfg,
         Err(error) => return fail(&format!("config: {error}")),
     };
-    let state_flag = args.state_dir.or_else(|| cfg.state_dir.clone());
-    let state_dir = match firma_stack::resolve_state_dir(state_flag) {
+    let state_dir = match resolve_state_dir(args.state_dir) {
         Ok(path) => path,
-        Err(error) => return fail(&format!("state_dir: {error}")),
+        Err(error) => return fail(&error),
     };
     let mode = if args.detach {
         firma_stack::StartMode::Detached
@@ -285,7 +264,7 @@ fn run_start(args: StartArgs) -> ExitCode {
 
 fn run_stop(args: StopArgs) -> ExitCode {
     info!(timeout = args.timeout, "firma stack stop invoked");
-    let state_dir = match resolve_state_dir(args.state_dir, args.config.as_deref()) {
+    let state_dir = match resolve_state_dir(args.state_dir) {
         Ok(path) => path,
         Err(error) => return fail(&error),
     };
@@ -301,7 +280,7 @@ fn run_stop(args: StopArgs) -> ExitCode {
 
 fn run_status(args: StatusArgs) -> ExitCode {
     info!(json = args.json, "firma stack status invoked");
-    let state_dir = match resolve_state_dir(args.state_dir, args.config.as_deref()) {
+    let state_dir = match resolve_state_dir(args.state_dir) {
         Ok(path) => path,
         Err(error) => return fail(&error),
     };
@@ -371,4 +350,55 @@ fn classify(status: &firma_stack::StackStatus) -> ExitCode {
 fn fail(msg: &str) -> ExitCode {
     eprintln!("firma stack: {msg}");
     ExitCode::from(2)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use crate::args::stack::InitArgs;
+    use tempfile::tempdir;
+
+    fn init_args(cfg: &Path, state: &Path) -> InitArgs {
+        InitArgs {
+            config_dir: Some(cfg.to_path_buf()),
+            state_dir: Some(state.to_path_buf()),
+            force: true,
+            authority_listen: "127.0.0.1:50051".into(),
+            sidecar_listen: "127.0.0.1:8080".into(),
+        }
+    }
+
+    #[test]
+    fn scaffolds_one_sectioned_firma_toml() {
+        let cfg = tempdir().unwrap();
+        let state = tempdir().unwrap();
+        init_scaffold(&init_args(cfg.path(), state.path())).unwrap();
+
+        let firma_toml = cfg.path().join("firma.toml");
+        assert!(firma_toml.is_file(), "firma.toml created");
+        assert!(!cfg.path().join("authority.toml").exists());
+        assert!(!cfg.path().join("sidecar.toml").exists());
+        assert!(!cfg.path().join("firma-stack.toml").exists());
+
+        let text = std::fs::read_to_string(&firma_toml).unwrap();
+        let t: toml::Table = text.parse().unwrap();
+        let auth = t.get("authority").and_then(toml::Value::as_table).unwrap();
+        assert_eq!(
+            auth.get("listen_addr").and_then(toml::Value::as_str),
+            Some("127.0.0.1:50051")
+        );
+        let side = t.get("sidecar").and_then(toml::Value::as_table).unwrap();
+        assert!(
+            side.get("interceptor")
+                .and_then(toml::Value::as_table)
+                .is_some()
+        );
+        assert!(side.get("policy").and_then(toml::Value::as_table).is_some());
+
+        let abody = firma_config::load_section(&firma_toml, "authority").unwrap();
+        let _: firma_authority::AuthorityConfig = toml::from_str(&abody).unwrap();
+        let sbody = firma_config::load_section(&firma_toml, "sidecar").unwrap();
+        let _: firma_sidecar::config::SidecarConfig = toml::from_str(&sbody).unwrap();
+    }
 }

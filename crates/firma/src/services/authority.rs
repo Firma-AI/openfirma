@@ -24,7 +24,30 @@ use crate::signal::shutdown_future;
 /// Propagates any error from configuration loading or subcommand
 /// execution.
 pub async fn run(args: Args) -> Result<ExitCode> {
-    let config = AuthorityConfig::load(args.config.as_ref())
+    // `generate-key` writes a keypair to an explicit `-o` path and never
+    // reads config. Short-circuit before resolution so it works in a
+    // bare environment with no discoverable firma.toml.
+    if let Some(Commands::GenerateKey { output }) = &args.command {
+        run_generate_key(output)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let resolved = firma_config::resolve_config(
+        "authority",
+        args.config.as_deref(),
+        &firma_config::SystemDirs,
+    )?;
+    tracing::info!(
+        path = %resolved.config_file.display(),
+        source = ?resolved.source,
+        "config resolved"
+    );
+    let body = firma_config::load_section(&resolved.config_file, "authority")
+        .map_err(|e| anyhow::anyhow!("failed to load authority configuration: {e}"))?;
+    let tmp_dir = tempfile::tempdir().context("tempdir for authority config")?;
+    let tmp_cfg = tmp_dir.path().join("authority.toml");
+    std::fs::write(&tmp_cfg, body).context("stage authority config")?;
+    let config = AuthorityConfig::load_resolved(&tmp_cfg, &resolved.config_dir)
         .context("failed to load authority configuration")?;
 
     match args.command {

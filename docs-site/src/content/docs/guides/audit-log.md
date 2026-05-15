@@ -9,7 +9,7 @@ You should already have a Sidecar running with the `[audit]` block configured ([
 
 ## Sink choices
 
-The `[audit]` block in `firma_sidecar.toml` selects a sink:
+The `[sidecar.audit]` block in `firma.toml` selects a sink:
 
 | Sink     | Configuration                                            | Use when                                                            |
 | -------- | -------------------------------------------------------- | ------------------------------------------------------------------- |
@@ -79,7 +79,7 @@ Field-by-field:
 If the Sidecar is running under [`firma stack`](../manage-the-stack/), use `firma monitor` — it knows the state-dir layout and adds filtering by decision, action class, and time window:
 
 ```bash
-firma monitor --config /etc/firma/firma-stack.toml --source audit --decision deny
+firma monitor --state-dir /var/run/firma --source audit --decision deny
 ```
 
 For ad-hoc inspection of a raw `audit.jsonl`:

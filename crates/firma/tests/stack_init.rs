@@ -1,9 +1,10 @@
 //! Tests for `firma stack init`.
 //!
-//! Verifies that scaffolded TOML configs are syntactically valid and that
-//! `firma-stack` can load the generated `firma-stack.toml`. Regression guard
-//! for Windows path serialization: backslash-bearing paths must not be
-//! emitted into TOML basic strings (where `\t`, `\s`, etc. are invalid
+//! Verifies that the scaffolded unified `firma.toml` is syntactically
+//! valid, round-trips through the strict section loader, and that both
+//! component config types deserialize from their sections. Regression
+//! guard for Windows path serialization: backslash-bearing paths must not
+//! be emitted into TOML basic strings (where `\t`, `\s`, etc. are invalid
 //! escape sequences).
 
 #![allow(
@@ -36,47 +37,44 @@ fn run_init(config_dir: &Path, state_dir: &Path) {
     );
 }
 
+fn assert_unified_config_parses(firma_toml: &Path) {
+    // The single firma.toml must parse as TOML — the regression we are
+    // guarding against is unescaped backslashes inside basic strings on
+    // Windows (e.g. `key_file = "C:\Users\..."` choking on `\U`).
+    let text = std::fs::read_to_string(firma_toml)
+        .unwrap_or_else(|e| panic!("read {}: {e}", firma_toml.display()));
+    toml::from_str::<toml::Value>(&text)
+        .unwrap_or_else(|e| panic!("parse {}: {e}\n---\n{text}", firma_toml.display()));
+
+    // Both sections must round-trip through the strict loader and
+    // deserialize into their component config types.
+    let abody = firma_config::load_section(firma_toml, "authority")
+        .unwrap_or_else(|e| panic!("[authority] section: {e}"));
+    toml::from_str::<firma_authority::AuthorityConfig>(&abody)
+        .unwrap_or_else(|e| panic!("[authority] deserialize: {e}\n---\n{abody}"));
+
+    let sbody = firma_config::load_section(firma_toml, "sidecar")
+        .unwrap_or_else(|e| panic!("[sidecar] section: {e}"));
+    toml::from_str::<firma_sidecar::config::SidecarConfig>(&sbody)
+        .unwrap_or_else(|e| panic!("[sidecar] deserialize: {e}\n---\n{sbody}"));
+}
+
 #[test]
-fn init_writes_parseable_configs() {
+fn init_writes_parseable_config() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let config_dir = tmp.path().join("config");
     let state_dir = tmp.path().join("state");
 
     run_init(&config_dir, &state_dir);
 
-    // All three TOML files must parse as TOML — the regression we are
-    // guarding against is unescaped backslashes inside basic strings on
-    // Windows (e.g. `state_dir = "C:\Users\..."` choking on `\U`).
-    for name in ["firma-stack.toml", "authority.toml", "sidecar.toml"] {
-        let path = config_dir.join(name);
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        toml::from_str::<toml::Value>(&text)
-            .unwrap_or_else(|e| panic!("parse {}: {e}\n---\n{text}", path.display()));
-    }
+    let firma_toml = config_dir.join("firma.toml");
+    assert!(firma_toml.is_file(), "firma.toml created");
+    // No legacy files.
+    assert!(!config_dir.join("authority.toml").exists());
+    assert!(!config_dir.join("sidecar.toml").exists());
+    assert!(!config_dir.join("firma-stack.toml").exists());
 
-    // Deeper check: firma-stack's own loader must accept the file and
-    // resolve the embedded paths.
-    let stack_cfg_path = config_dir.join("firma-stack.toml");
-    let cfg = firma_stack::load_stack_config(&stack_cfg_path)
-        .unwrap_or_else(|e| panic!("load_stack_config({}): {e}", stack_cfg_path.display()));
-
-    assert_eq!(
-        cfg.state_dir.as_deref(),
-        Some(state_dir.as_path()),
-        "state_dir round-trip mismatch",
-    );
-    assert_eq!(cfg.authority_config, config_dir.join("authority.toml"));
-    assert_eq!(cfg.sidecar_config, config_dir.join("sidecar.toml"));
-
-    // The sidecar.toml emitted by init must pass `SidecarConfig`'s own
-    // validation — regression guard for the case where the default
-    // `InterceptorMode` flips (e.g. to `unix_socket` on Unix) and the
-    // scaffolder still writes only `listen_addr`, which then fails
-    // validation at sidecar startup with
-    // `interceptor.socket_path is required when mode is unix_socket`.
-    firma_sidecar::config::SidecarConfig::load_from_path(&cfg.sidecar_config)
-        .unwrap_or_else(|e| panic!("sidecar.toml fails validation: {e}"));
+    assert_unified_config_parses(&firma_toml);
 }
 
 #[test]
@@ -107,52 +105,28 @@ fn init_handles_relative_paths() {
         String::from_utf8_lossy(&output.stderr),
     );
 
-    let stack_cfg_path = work.join("../config/firma-stack.toml");
-    let cfg = firma_stack::load_stack_config(&stack_cfg_path).unwrap_or_else(|e| {
-        let text = std::fs::read_to_string(&stack_cfg_path).unwrap_or_default();
-        panic!(
-            "load_stack_config({}): {e}\n---\n{text}",
-            stack_cfg_path.display(),
-        );
-    });
-
-    // Regression: when `--config-dir`/`--state-dir` are relative, the paths
-    // written into firma-stack.toml must NOT be relative. Otherwise
-    // `load_stack_config` re-joins them against the stack TOML's parent dir,
-    // producing a doubled path (`..\config\..\config\authority.toml`) that
-    // does not exist on disk.
+    let firma_toml = work.join("../config/firma.toml");
     assert!(
-        cfg.authority_config.is_absolute(),
-        "authority_config must be absolute, got {}",
-        cfg.authority_config.display(),
-    );
-    assert!(
-        cfg.sidecar_config.is_absolute(),
-        "sidecar_config must be absolute, got {}",
-        cfg.sidecar_config.display(),
-    );
-    let state_dir = cfg.state_dir.as_deref().expect("state_dir set by init");
-    assert!(
-        state_dir.is_absolute(),
-        "state_dir must be absolute, got {}",
-        state_dir.display(),
+        firma_toml.is_file(),
+        "firma.toml does not exist on disk: {}",
+        firma_toml.display(),
     );
 
-    // And the resolved paths must actually point to the scaffolded files.
+    // Regression: when `--config-dir`/`--state-dir` are relative, the
+    // paths written into firma.toml must be absolute so they resolve from
+    // any working directory; and the file must still parse / deserialize.
+    assert_unified_config_parses(&firma_toml);
+
+    let text = std::fs::read_to_string(&firma_toml).unwrap();
+    let value: toml::Value = toml::from_str(&text).unwrap();
+    let key_file = value
+        .get("authority")
+        .and_then(|a| a.get("key_file"))
+        .and_then(toml::Value::as_str)
+        .expect("authority.key_file present");
     assert!(
-        cfg.authority_config.is_file(),
-        "authority_config does not exist on disk: {}",
-        cfg.authority_config.display(),
-    );
-    assert!(
-        cfg.sidecar_config.is_file(),
-        "sidecar_config does not exist on disk: {}",
-        cfg.sidecar_config.display(),
-    );
-    assert!(
-        state_dir.is_dir(),
-        "state_dir does not exist on disk: {}",
-        state_dir.display(),
+        Path::new(key_file).is_absolute(),
+        "authority.key_file must be absolute, got {key_file}",
     );
 }
 

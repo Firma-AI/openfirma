@@ -1,7 +1,22 @@
-# Demo 0 — sidecar config.
+# Demo 0 — unified sectioned config.
+# Run from repo root. Keys generated automatically by firma-demo-tui on first boot.
+
+# ── Mini Authority ───────────────────────────────────────────────────────────
+
+[authority]
+listen_addr = "127.0.0.1:50051"
+policy_dir = "policies/"
+issuance_policy_dir = "issuance-policies/"
+revocation_file = "examples/demos/demo0/.runtime/revocations.txt"
+key_file = ".runtime/authority.key"
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 30
+log_level = "debug"
+
+# ── Sidecar ──────────────────────────────────────────────────────────────────
 # HTTP proxy on :8080. All unmapped hosts DENY (fail-closed demo).
 
-[interceptor]
+[sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
 drain_timeout_secs = 30
@@ -10,7 +25,7 @@ drain_timeout_secs = 30
 # providers are MITM'd so the policy can see plaintext requests; the
 # agent's own LLM traffic (api.openai.com) tunnels through untouched
 # so the OpenAI SDK doesn't have to trust the generated firma-ca.
-[interceptor.https_mitm]
+[sidecar.interceptor.https_mitm]
 intercept_hosts = ["api.github.com", "gmail.googleapis.com", "httpbin.org"]
 # Strict-MITM the demo targets so the CONNECT preface is auto-authorized once
 # the TLS preflight succeeds — inner L7 requests (which carry the
@@ -18,43 +33,43 @@ intercept_hosts = ["api.github.com", "gmail.googleapis.com", "httpbin.org"]
 # the bare CONNECT (no session header, no L7 path) would fail Stage 1.
 strict_hosts = ["api.github.com", "gmail.googleapis.com", "httpbin.org"]
 
-[policy]
-dir = "examples/demos/demo0"
+[sidecar.policy]
+dir = "."
 authority_url = "http://127.0.0.1:50051"
 
-[ca]
+[sidecar.ca]
 dir = "examples/demos/demo0/.runtime/generated-firma-ca"
 
-[log]
+[sidecar.log]
 level = "info"
 
-[mapping]
-rules_path = "examples/demos/demo0/mapping-rules.toml"
+[sidecar.mapping]
+rules_path = "mapping-rules.toml"
 default_protected = true
 
-[capability_validation]
+[sidecar.capability_validation]
 clock_skew_tolerance_seconds = 0
 
-[constraint_enforcement]
+[sidecar.constraint_enforcement]
 bundle_ttl_seconds = 3600
 enforcement_timeout_ms = 50
 
-[connector]
+[sidecar.connector]
 default_timeout_ms = 10000
 
-[audit]
+[sidecar.audit]
 sink = "file"
-file_path = "examples/demos/demo0/.runtime/audit.jsonl"
-signing_key_path = "examples/demos/demo0/.runtime/audit.key"
+file_path = ".runtime/audit.jsonl"
+signing_key_path = ".runtime/audit.key"
 
-[authority]
+[sidecar.authority]
 connect_timeout_secs = 10
 reconnect_min_backoff_ms = 250
 reconnect_max_backoff_secs = 30
 revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false
 
-[preflight]
+[sidecar.preflight]
 agent_id = "demo0-agent"
 session_id = "demo0-session-001"
 requested_actions = ["code.review.read", "filesystem.read"]

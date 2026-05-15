@@ -79,18 +79,11 @@ mkdir -p "$ca_dir"
 # 5. Reset audit log so the run is observable from scratch.
 : > "$runtime_dir/audit.jsonl"
 
-# 6. Generate a stack config pointing at this demo's authority/sidecar configs.
-stack_cfg="$runtime_dir/firma-stack.toml"
-cat >"$stack_cfg" <<EOF
-authority_config = "$demo_dir/authority.toml"
-sidecar_config = "$demo_dir/sidecar.toml"
-EOF
-
-# 7. Start the stack (detached). `start` blocks until both components are
-#    listening and the sidecar has produced CA material, then forks a
-#    supervisor and returns. On any error, stack start tears down what it
-#    spawned and exits non-zero — fail-closed.
-firma stack start --detach --state-dir "$runtime_dir" --config "$stack_cfg"
+# 6. Start the stack (detached) from this demo's unified `firma.toml`.
+#    `start` blocks until both components are listening and the sidecar has
+#    produced CA material, then forks a supervisor and returns. On any error,
+#    stack start tears down what it spawned and exits non-zero — fail-closed.
+firma stack start --detach --state-dir "$runtime_dir" --config "$demo_dir/firma.toml"
 
 cleanup() {
     firma stack stop --state-dir "$runtime_dir" --timeout 10 || true
@@ -102,17 +95,17 @@ trap cleanup EXIT INT TERM
 # and is denied with RevocationCacheNotReady.
 sleep 2
 
-# 8. Read session_id from sidecar.toml so the script can attach
-#    `x-firma-session-id` and Stage 1 (capability validation) can match
-#    the pre-flight token.
-session_id="$(awk -F'=' '/^session_id/ {gsub(/[" ]/,"",$2); print $2; exit}' "$demo_dir/sidecar.toml")"
+# 7. Read session_id from the [sidecar.preflight] table in firma.toml so the
+#    script can attach `x-firma-session-id` and Stage 1 (capability
+#    validation) can match the pre-flight token.
+session_id="$(awk -F'=' '/^session_id/ {gsub(/[" ]/,"",$2); print $2; exit}' "$demo_dir/firma.toml")"
 
 if [[ $run_script -eq 0 ]]; then
     echo "skipping demo script (--no-script). Tailing audit log; Ctrl-C to stop." >&2
     exec firma monitor --state-dir "$runtime_dir" --source audit
 fi
 
-# 9. Pre-sync Python deps before exporting the proxy. `uv run` would
+# 8. Pre-sync Python deps before exporting the proxy. `uv run` would
 #    otherwise try to fetch hatchling/etc. through the sidecar, which has
 #    no policy for pypi.org and denies the request.
 (cd "$demos_dir" && uv sync --quiet)

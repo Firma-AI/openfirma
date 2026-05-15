@@ -160,6 +160,37 @@ impl SidecarConfig {
         }
         Ok(())
     }
+
+    /// Re-base every relative resource path against `config_dir`;
+    /// absolute paths are left untouched. No default-name sentinel
+    /// check — relative always means "relative to the config file's
+    /// directory" for consistency.
+    ///
+    /// `ca.dir` is intentionally excluded — it is state-managed (its
+    /// location is owned by the state dir / env override, not the
+    /// config file).
+    pub fn rebase_defaults(&mut self, config_dir: &std::path::Path) {
+        // Empty is left for the validator to reject (not a path to re-base).
+        let rebase = |p: &mut PathBuf| {
+            if !p.as_os_str().is_empty() && p.is_relative() {
+                *p = config_dir.join(&*p);
+            }
+        };
+        rebase(&mut self.policy.dir);
+        if let Some(p) = self.authority.public_key_path.as_mut() {
+            rebase(p);
+        }
+        if let Some(p) = self.audit.signing_key_path.as_mut() {
+            rebase(p);
+        }
+        if let Some(p) = self.audit.file_path.as_mut() {
+            rebase(p);
+        }
+        for p in &mut self.capability_seed.paths {
+            rebase(p);
+        }
+        self.enforcement.rebase_defaults(config_dir);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -693,12 +724,17 @@ fn default_https_mitm_intercept_hosts() -> Vec<String> {
     ]
 }
 
+/// Sentinel: unset `policy.dir`.
+pub(crate) const DEFAULT_POLICY_DIR: &str = "./policies/";
+/// Sentinel: unset `ca.dir` (state-managed; never re-based).
+pub(crate) const DEFAULT_CA_DIR: &str = "./firma-ca/";
+
 fn default_policy_dir() -> PathBuf {
-    PathBuf::from("./policies/")
+    PathBuf::from(DEFAULT_POLICY_DIR)
 }
 
 fn default_ca_dir() -> PathBuf {
-    PathBuf::from("./firma-ca/")
+    PathBuf::from(DEFAULT_CA_DIR)
 }
 
 fn default_log_level() -> String {
@@ -867,6 +903,32 @@ mod tests {
     use super::*;
 
     // -- SidecarConfig ------------------------------------------------------
+
+    #[test]
+    fn rebase_rewrites_default_policy_dir_only() {
+        use std::path::PathBuf;
+        let mut c = SidecarConfig::default();
+        c.rebase_defaults(&PathBuf::from("/cfg"));
+        assert_eq!(c.policy.dir, PathBuf::from("/cfg/policies"));
+    }
+
+    #[test]
+    fn rebase_preserves_explicit_policy_dir() {
+        use std::path::PathBuf;
+        let mut c = SidecarConfig::default();
+        c.policy.dir = PathBuf::from("/explicit/policies");
+        c.rebase_defaults(&PathBuf::from("/cfg"));
+        assert_eq!(c.policy.dir, PathBuf::from("/explicit/policies"));
+    }
+
+    #[test]
+    fn rebase_leaves_ca_dir_alone() {
+        use std::path::PathBuf;
+        let mut c = SidecarConfig::default();
+        let before = c.ca.dir.clone();
+        c.rebase_defaults(&PathBuf::from("/cfg"));
+        assert_eq!(c.ca.dir, before);
+    }
 
     #[test]
     fn test_sidecar_config_defaults_valid() {

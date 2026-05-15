@@ -6,8 +6,8 @@ use clap::Args as ClapArgs;
 
 /// Parsed `firma doctor` arguments.
 ///
-/// `--config` is the stack config file (`firma-stack.toml`). It's optional;
-/// when unset, `doctor` walks up from cwd looking for it.
+/// `--config` is the unified `firma.toml`. It's optional; when unset,
+/// `doctor` resolves it via the standard config discovery precedence.
 ///
 /// `--state-dir` overrides the resolved state directory.
 ///
@@ -18,7 +18,8 @@ use clap::Args as ClapArgs;
 /// already report unreachable as a structured `FAIL`, not a hang.
 #[derive(Debug, ClapArgs)]
 pub struct Args {
-    /// Stack config file.
+    /// Unified `firma.toml`. When unset, resolved via standard config
+    /// discovery (`--config` / `FIRMA_CONFIG` / XDG).
     #[arg(long, env = "FIRMA_STACK_CONFIG")]
     pub config: Option<PathBuf>,
     /// State dir override.

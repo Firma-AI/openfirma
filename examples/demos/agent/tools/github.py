@@ -16,7 +16,7 @@ the sidecar intercepts:
 
 Note: no Authorization header is set here. The sidecar holds the real
 GitHub token and injects it only after an ALLOW decision (see
-[credentials.github] in demo2/sidecar.toml). The agent process has nothing
+[sidecar.credentials.github] in demo2/firma.toml). The agent process has nothing
 to leak.
 """
 import os

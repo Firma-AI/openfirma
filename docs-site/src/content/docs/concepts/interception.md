@@ -31,10 +31,10 @@ The default. The Sidecar listens on a TCP port (default `127.0.0.1:8080`) and th
 
 This is the right mode for almost every starting workload. It works without code changes, and you don't have to rebuild the agent to put it behind enforcement.
 
-Configured in `sidecar.toml` as:
+Configured in `firma.toml` as:
 
 ```toml
-[interceptor]
+[sidecar.interceptor]
 mode               = "http_proxy"
 listen_addr        = "127.0.0.1:8080"
 drain_timeout_secs = 5
@@ -94,10 +94,10 @@ MITM is the right choice for hosts you control or whose terms permit inspection 
 
 ### Configuring per-host
 
-`sidecar.toml` controls MITM scope with three lists:
+`firma.toml` controls MITM scope with three lists:
 
 ```toml
-[interceptor.https_mitm]
+[sidecar.interceptor.https_mitm]
 enabled         = true
 intercept_hosts = ["api.openai.com", "api.anthropic.com", "api.stripe.com"]
 bypass_hosts    = ["self-signed.internal"]

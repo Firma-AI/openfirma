@@ -1,10 +1,24 @@
-# Firma Sidecar — release demo configuration.
+# Firma OSS — release demo configuration (unified sectioned config).
 #
 # Run from the repo root via `make demo` / `make demo-ci`. The
 # orchestrator (`examples/demo/run.sh`) bootstraps the keys, the audit key,
-# and the capability seed before launching the binary.
+# and the capability seed before launching the binaries.
 
-[interceptor]
+# ── Mini Authority ───────────────────────────────────────────────────────────
+
+[authority]
+listen_addr = "[::1]:50051"
+policy_dir = "policies/"
+issuance_policy_dir = "issuance-policies/"
+revocation_file = "examples/demo/revocations.txt"
+key_file = "firma-authority.key"
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 30
+log_level = "debug"
+
+# ── Sidecar ──────────────────────────────────────────────────────────────────
+
+[sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:7474"
 drain_timeout_secs = 30
@@ -20,62 +34,62 @@ drain_timeout_secs = 30
 # Setting `intercept_hosts` here replaces the built-in default list
 # (see HttpsMitmConfig::default_https_mitm_intercept_hosts), so we
 # enumerate every host the demo actually contacts.
-[interceptor.https_mitm]
+[sidecar.interceptor.https_mitm]
 intercept_hosts = ["wttr.in", "paste.rs", "api.openai.com"]
 
-[policy]
-dir = "examples/demo/policies"
+[sidecar.policy]
+dir = "policies"
 authority_url = "http://[::1]:50051"
 
-[ca]
+[sidecar.ca]
 dir = "examples/demo/firma-ca"
 
-[log]
+[sidecar.log]
 level = "info"
 
-[mapping]
-rules_path = "examples/demo/mapping-rules.toml"
+[sidecar.mapping]
+rules_path = "mapping-rules.toml"
 default_protected = false
 
-[capability_validation]
+[sidecar.capability_validation]
 clock_skew_tolerance_seconds = 5
 
-[constraint_enforcement]
+[sidecar.constraint_enforcement]
 bundle_ttl_seconds = 60
 enforcement_timeout_ms = 50
 
-[revocation]
+[sidecar.revocation]
 capacity = 100000
 fpr = 0.001
 lru_capacity = 10000
 
-[connector]
+[sidecar.connector]
 default_timeout_ms = 30000
 
-[[connector.hosts]]
+[[sidecar.connector.hosts]]
 host = "wttr.in"
 rps = 60
 burst = 10
 timeout_ms = 30000
 
-[[connector.hosts]]
+[[sidecar.connector.hosts]]
 host = "paste.rs"
 rps = 60
 burst = 10
 timeout_ms = 30000
 
-[[connector.hosts]]
+[[sidecar.connector.hosts]]
 host = "127.0.0.1:9100"
 rps = 200
 burst = 50
 timeout_ms = 30000
 
-[authority]
-public_key_path = "examples/demo/firma-authority.pub"
+[sidecar.authority]
+public_key_path = "firma-authority.pub"
 
-[capability_seed]
-paths = ["examples/demo/capability-demo-agent.toml"]
+[sidecar.capability_seed]
+paths = ["capability-demo-agent.toml"]
 
-[audit]
+[sidecar.audit]
 sink = "stdout"
-signing_key_path = "examples/demo/audit.key"
+signing_key_path = "audit.key"

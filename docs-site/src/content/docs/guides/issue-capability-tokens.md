@@ -75,9 +75,13 @@ forbid (
 
 ## Step 3: Write the Authority config
 
-Create `/tmp/firma-standalone/authority.toml`:
+Every subcommand reads one shared, sectioned `firma.toml`. Add an
+`[authority]` section to `/tmp/firma-standalone/config/firma.toml`
+(alongside the `[sidecar.*]` tables from
+[Run the sidecar standalone](../run-the-sidecar/)):
 
 ```toml
+[authority]
 listen_addr         = "[::1]:50051"
 policy_dir          = "/tmp/firma-standalone/config/policies"
 issuance_policy_dir = "/tmp/firma-standalone/issuance"
@@ -94,7 +98,7 @@ Notable fields:
 - `issuance_policy_dir` — the issuance bundle from Step 2.
 - `revocation_file` — append-only file. Each line is a `token_id` to revoke. The Authority broadcasts revocations to connected Sidecars over gRPC.
 - `max_ttl_seconds` — clamps `--ttl-seconds` requests. Even if a CLI invocation asks for a year, the Authority issues at most this much.
-- `bundle_ttl_seconds` — how often the Authority pushes a bundle update to Sidecars (independent of the Sidecar's `[constraint_enforcement].bundle_ttl_seconds` which is its staleness deadline).
+- `bundle_ttl_seconds` — how often the Authority pushes a bundle update to Sidecars (independent of the Sidecar's `[sidecar.constraint_enforcement].bundle_ttl_seconds` which is its staleness deadline).
 
 Touch the revocations file so the Authority finds it:
 
@@ -107,7 +111,7 @@ touch /tmp/firma-standalone/revocations.txt
 In a dedicated terminal:
 
 ```bash
-firma authority -c /tmp/firma-standalone/authority.toml
+firma authority -c /tmp/firma-standalone/config/firma.toml
 ```
 
 Expected output:
@@ -126,7 +130,7 @@ Leave it running. The next steps are CLI commands that don't need it (CLI issuan
 The CLI subcommand:
 
 ```bash
-firma authority -c /tmp/firma-standalone/authority.toml issue \
+firma authority -c /tmp/firma-standalone/config/firma.toml issue \
   --agent-id support-agent \
   --session-id session-001 \
   --action communication.external.send \
@@ -155,17 +159,17 @@ Note: `--action` can be repeated. `--resource-scope '*'` is the loosest scope �
 
 ## Step 6: Wire the capability into the Sidecar
 
-Edit `firma_sidecar.toml` to add:
+Edit the `[sidecar.*]` tables in `firma.toml` to add:
 
 ```toml
-[authority]
+[sidecar.authority]
 public_key_path = "/tmp/firma-standalone/firma-authority.pub"
 
-[capability_seed]
+[sidecar.capability_seed]
 paths = ["/tmp/firma-standalone/capability-support.toml"]
 ```
 
-`[authority].public_key_path` is what Stage 1 verifies signatures against. `[capability_seed].paths` is a list — you can ship multiple capabilities, one per session, and the Sidecar will populate its `CapabilityMap` from all of them.
+`[sidecar.authority].public_key_path` is what Stage 1 verifies signatures against. `[sidecar.capability_seed].paths` is a list — you can ship multiple capabilities, one per session, and the Sidecar will populate its `CapabilityMap` from all of them.
 
 Restart the Sidecar. In its startup log:
 
@@ -207,7 +211,7 @@ If you delete the capability seed file and restart, the same call returns a 403 
 To kill a specific capability immediately:
 
 ```bash
-firma authority -c /tmp/firma-standalone/authority.toml revocations add 79dd9ffb-ebc8-4883-8f1e-72eb74a26e33
+firma authority -c /tmp/firma-standalone/config/firma.toml revocations add 79dd9ffb-ebc8-4883-8f1e-72eb74a26e33
 ```
 
 The Authority appends the `token_id` to `revocations.txt` and broadcasts it on its gRPC stream. Connected Sidecars update their bloom filter + LRU cache within seconds. The next attempt by that capability gets `CapabilityRevoked`.
@@ -215,7 +219,7 @@ The Authority appends the `token_id` to `revocations.txt` and broadcasts it on i
 For housekeeping, clean expired entries periodically:
 
 ```bash
-firma authority -c /tmp/firma-standalone/authority.toml revocations compact
+firma authority -c /tmp/firma-standalone/config/firma.toml revocations compact
 ```
 
 ## Common gotchas

@@ -47,6 +47,5 @@ Ask the agent for normal outbound work, then ask it to exfiltrate text to a past
 ## Files
 
 - `run.sh` builds and starts the local stack.
-- `authority.toml` configures the local Authority.
-- `sidecar.toml` configures the local Sidecar.
+- `firma.toml` is the unified config: `[authority]` configures the local Authority and `[sidecar.*]` configures the local Sidecar.
 - `mapping-rules.toml` maps selected outbound requests to Firma action classes.

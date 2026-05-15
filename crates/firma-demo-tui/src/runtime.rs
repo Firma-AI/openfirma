@@ -31,8 +31,7 @@ pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
 
     let cfg = StackConfig {
         state_dir: Some(state_dir.clone()),
-        authority_config: manifest.authority_config.clone(),
-        sidecar_config: manifest.sidecar_config.clone(),
+        config_file: manifest.config_file.clone(),
         firma_bin: Some(resolve_firma_bin()?),
     };
     spawn_stack(&cfg, &state_dir).context("firma_stack::spawn_stack")?;

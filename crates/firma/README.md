@@ -44,13 +44,17 @@ The resulting binary is named `firma`.
 Run the enforcement proxy.
 
 ```bash
-firma sidecar --config-file /etc/firma/sidecar.toml
+firma sidecar --config /etc/firma/firma.toml
 ```
 
-| Flag                 | Env                              | Default              |
-| -------------------- | -------------------------------- | -------------------- |
-| `-c, --config-file`  | `FIRMA_SIDECAR_CONFIG_FILE`      | `firma_sidecar.toml` |
-| `--health-bind-addr` | `FIRMA_SIDECAR_HEALTH_BIND_ADDR` | `127.0.0.1:9000`     |
+| Flag                 | Env                              | Default          |
+| -------------------- | -------------------------------- | ---------------- |
+| `-c, --config`       | `FIRMA_SIDECAR_CONFIG_FILE`      | discovered       |
+| `--health-bind-addr` | `FIRMA_SIDECAR_HEALTH_BIND_ADDR` | `127.0.0.1:9000` |
+
+When `--config` is omitted, a shared `firma.toml` is discovered from
+platform-standard directories — see the Config Discovery section in
+`docs/cli.md`.
 
 Config schema: see `crates/firma-sidecar/src/config.rs`.
 
@@ -60,7 +64,7 @@ Run the mini-Authority dev server (no subcommand) or manage on-disk
 state. Pre-flight only — not on the hot path.
 
 ```bash
-firma authority --config /etc/firma/authority.toml          # serve gRPC
+firma authority --config /etc/firma/firma.toml              # serve gRPC
 firma authority generate-key -o auth.key                    # signing key
 firma authority issue --agent-id ... --output seed.toml     # issue token
 firma authority revocations add <token-id>                  # revoke
@@ -135,12 +139,15 @@ Wrapped command and args after `--`.
 Supervise the full stack (authority + sidecar) as one unit. Plug and play:
 
 ```bash
-# Scaffold two separate dirs: configs/keys vs. mutable runtime state.
-firma stack init --config-dir /etc/firma --state-dir /var/run/firma
+# Scaffold one sectioned firma.toml + keys. Both dirs default when omitted
+# (config = XDG/platform config dir; state = FIRMA_STATE_DIR / $XDG_RUNTIME_DIR).
+firma stack init
+firma stack init --config-dir /etc/firma --state-dir /var/run/firma  # explicit
 
-# Boot. State dir is read from firma-stack.toml unless --state-dir overrides.
-firma stack start --config /etc/firma/firma-stack.toml             # foreground
-firma stack start --config /etc/firma/firma-stack.toml --detach    # daemon
+# Boot. --config defaults to the discovered firma.toml; it is passed to
+# both children. State dir resolves from --state-dir / FIRMA_STATE_DIR / XDG.
+firma stack start                                                  # foreground
+firma stack start --detach                                         # daemon
 
 # Observe.
 firma stack status --state-dir /var/run/firma
@@ -154,9 +161,8 @@ Layout written by `init`:
 
 ```text
 <config_dir>/
-  firma-stack.toml      authority.toml      sidecar.toml
-  mapping-rules.toml    authority.key       authority.pub      audit.key
-  policies/             issuance-policies/
+  firma.toml            authority.key       audit.key
+  mapping-rules.toml    policies/           issuance-policies/
 
 <state_dir>/
   revocations.txt
@@ -164,6 +170,10 @@ Layout written by `init`:
   # populated by start: authority.pid, sidecar.pid, stack.pid, stack.lock,
   # authority.log, sidecar.log, supervisor.log, *.listen, audit.jsonl
 ```
+
+`init` writes a single sectioned `firma.toml` (`[authority]` +
+`[sidecar.*]`); there is no `firma-stack.toml`, `authority.toml`, or
+`sidecar.toml`. The post-init `next:` hint is just `firma stack start`.
 
 Subcommands:
 
@@ -176,31 +186,32 @@ Subcommands:
 
 `init` flags:
 
-| Flag                 | Default           | Description                                |
-| -------------------- | ----------------- | ------------------------------------------ |
-| `--config-dir`       | _required_        | Where to write TOMLs, keys, policy dirs.   |
-| `--state-dir`        | _required_        | Where to write `revocations.txt` + CA dir. |
-| `--force`            | _off_             | Overwrite existing files.                  |
-| `--authority-listen` | `127.0.0.1:50051` | Authority gRPC listen address.             |
-| `--sidecar-listen`   | `127.0.0.1:8080`  | Sidecar HTTP proxy listen.                 |
+| Flag                 | Default               | Description                                     |
+| -------------------- | --------------------- | ----------------------------------------------- |
+| `--config-dir`       | XDG/platform config   | Where to write `firma.toml`, keys, policy dirs. |
+| `--state-dir`        | `FIRMA_STATE_DIR`/XDG | Where to write `revocations.txt` + CA dir.      |
+| `--force`            | _off_                 | Overwrite existing files.                       |
+| `--authority-listen` | `127.0.0.1:50051`     | Authority gRPC listen address.                  |
+| `--sidecar-listen`   | `127.0.0.1:8080`      | Sidecar HTTP proxy listen.                      |
 
 `start` / `stop` / `status` flags:
 
-| Flag          | Env                  | Default                                    |
-| ------------- | -------------------- | ------------------------------------------ |
-| `--config`    | `FIRMA_STACK_CONFIG` | `./firma-stack.toml` (`start` only)        |
-| `--state-dir` | `FIRMA_STATE_DIR`    | `state_dir` from `--config` → XDG fallback |
-| `--detach`    | —                    | _off_ (`start` only)                       |
-| `--timeout`   | —                    | `2` seconds (`stop` only)                  |
-| `--json`      | —                    | _off_ (`status` only)                      |
+| Flag          | Env               | Default                                      |
+| ------------- | ----------------- | -------------------------------------------- |
+| `--config`    | —                 | discovered `firma.toml` (`start` only)       |
+| `--state-dir` | `FIRMA_STATE_DIR` | `$XDG_RUNTIME_DIR/firma` → `/tmp/firma-$UID` |
+| `--detach`    | —                 | _off_ (`start` only)                         |
+| `--timeout`   | —                 | `2` seconds (`stop` only)                    |
+| `--json`      | —                 | _off_ (`status` only)                        |
 
-All three subcommands accept `--config` and read `state_dir` from the stack
-config when `--state-dir` is not given. The intuitive path is to pass only
-`--config` everywhere; pass `--state-dir` to override.
+`start` resolves `firma.toml` via the shared Config Discovery precedence
+(see `docs/cli.md`) and passes that exact file to both children with
+`--config`. `--config` on `stop`/`status` is accepted for compatibility but
+not used to resolve state. `state_dir` is **never** a config-file key.
 
 State-dir resolution order: `--state-dir` flag → `FIRMA_STATE_DIR` env →
-`state_dir` field in `--config` → `$XDG_RUNTIME_DIR/firma` → `/tmp/firma-$UID`
-on Unix; `%LOCALAPPDATA%\firma\runtime` → `%TEMP%\firma` on Windows.
+`$XDG_RUNTIME_DIR/firma` → `/tmp/firma-$UID` on Unix;
+`%LOCALAPPDATA%\firma\runtime` → `%TEMP%\firma` on Windows.
 
 Exit codes:
 - `status`: `0` all running, `1` any unhealthy/stopped, `2` internal error.
@@ -222,12 +233,12 @@ firma doctor --timeout-ms 1500        # slower network probe
 
 Flags:
 
-| Flag           | Env                  | Default  | Description                                               |
-| -------------- | -------------------- | -------- | --------------------------------------------------------- |
-| `--config`     | `FIRMA_STACK_CONFIG` | _unset_  | Explicit stack config path. Otherwise walked up from cwd. |
-| `--state-dir`  | `FIRMA_STATE_DIR`    | resolved | Override the runtime state directory.                     |
-| `--json`       | —                    | _off_    | Emit a single JSON object instead of pretty text.         |
-| `--timeout-ms` | —                    | `500`    | Per-probe network timeout (TCP / UDS connect).            |
+| Flag           | Env               | Default    | Description                                                 |
+| -------------- | ----------------- | ---------- | ----------------------------------------------------------- |
+| `--config`     | —                 | discovered | Unified `firma.toml` to inspect. Otherwise auto-discovered. |
+| `--state-dir`  | `FIRMA_STATE_DIR` | resolved   | Override the runtime state directory.                       |
+| `--json`       | —                 | _off_      | Emit a single JSON object instead of pretty text.           |
+| `--timeout-ms` | —                 | `500`      | Per-probe network timeout (TCP / UDS connect).              |
 
 Each check is `OK` / `WARN` / `FAIL` with a one-line reason. Categories
 that don't apply to the current OS report `WARN`, never `FAIL`.
@@ -255,20 +266,20 @@ firma monitor --source all --no-follow                 # one-shot, all sources
 
 Flags:
 
-| Flag             | Env                  | Default  | Description                                      |
-| ---------------- | -------------------- | -------- | ------------------------------------------------ |
-| `--config`       | `FIRMA_STACK_CONFIG` | _unset_  | Stack config; `state_dir` read from it when set. |
-| `--state-dir`    | `FIRMA_STATE_DIR`    | resolved | State dir override.                              |
-| `--source`       | —                    | `audit`  | `audit`, `authority`, `sidecar`, or `all`.       |
-| `--decision`     | —                    | _unset_  | Audit filter: `allow`, `deny`, `passthrough`.    |
-| `--only-deny`    | —                    | _off_    | Shortcut for `--decision deny`.                  |
-| `--action-class` | —                    | _unset_  | Audit filter: exact match on `action`.           |
-| `--agent`        | —                    | _unset_  | Audit filter: exact match on `agent_id`.         |
-| `--since`        | —                    | _unset_  | Backfill: `15m`, `2h`, RFC3339 timestamp.        |
-| `--format`       | —                    | `pretty` | `pretty` or `json` (byte-for-byte pass-through). |
-| `--json`         | —                    | _off_    | Shortcut for `--format json`.                    |
-| `--tail`         | —                    | _off_    | Force follow even when piped.                    |
-| `--no-follow`    | —                    | _off_    | Read once and exit (overrides TTY auto-tail).    |
+| Flag             | Env               | Default  | Description                                            |
+| ---------------- | ----------------- | -------- | ------------------------------------------------------ |
+| `--config`       | —                 | _unset_  | Accepted for compatibility; not used to resolve state. |
+| `--state-dir`    | `FIRMA_STATE_DIR` | resolved | State dir override.                                    |
+| `--source`       | —                 | `audit`  | `audit`, `authority`, `sidecar`, or `all`.             |
+| `--decision`     | —                 | _unset_  | Audit filter: `allow`, `deny`, `passthrough`.          |
+| `--only-deny`    | —                 | _off_    | Shortcut for `--decision deny`.                        |
+| `--action-class` | —                 | _unset_  | Audit filter: exact match on `action`.                 |
+| `--agent`        | —                 | _unset_  | Audit filter: exact match on `agent_id`.               |
+| `--since`        | —                 | _unset_  | Backfill: `15m`, `2h`, RFC3339 timestamp.              |
+| `--format`       | —                 | `pretty` | `pretty` or `json` (byte-for-byte pass-through).       |
+| `--json`         | —                 | _off_    | Shortcut for `--format json`.                          |
+| `--tail`         | —                 | _off_    | Force follow even when piped.                          |
+| `--no-follow`    | —                 | _off_    | Read once and exit (overrides TTY auto-tail).          |
 
 Auto-tail: follows when stdout is a TTY; one-shot when piped, unless
 `--tail` or `--no-follow` is set. Ctrl-C exits with code 0.
