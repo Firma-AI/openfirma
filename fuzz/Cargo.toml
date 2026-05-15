@@ -1,0 +1,45 @@
+[package]
+name = "firma-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# cargo-fuzz requires nightly; this crate is intentionally excluded from the
+# workspace so that stable builds are unaffected. The [workspace] table below
+# prevents Cargo from merging this into the root workspace.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+chrono = "0.4"
+firma-core = { path = "../crates/firma-core" }
+firma-sidecar = { path = "../crates/firma-sidecar" }
+libfuzzer-sys = "0.4"
+toml = "0.8"
+
+[[bin]]
+name = "normalizer"
+path = "fuzz_targets/normalizer.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "paseto_verify"
+path = "fuzz_targets/paseto_verify.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "capability_seed"
+path = "fuzz_targets/capability_seed.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "capability_seed_toml"
+path = "fuzz_targets/capability_seed_toml.rs"
+test = false
+doc = false

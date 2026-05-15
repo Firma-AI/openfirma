@@ -588,10 +588,9 @@ mod tests {
             if let Some(val) = line
                 .strip_prefix("content-length: ")
                 .or_else(|| line.strip_prefix("Content-Length: "))
+                && let Ok(expected) = val.trim().parse::<usize>()
             {
-                if let Ok(expected) = val.trim().parse::<usize>() {
-                    return body.len() >= expected;
-                }
+                return body.len() >= expected;
             }
         }
         // No content-length — assume body is complete (transfer-encoding

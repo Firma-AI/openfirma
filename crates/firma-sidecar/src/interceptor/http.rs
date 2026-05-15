@@ -509,30 +509,31 @@ struct TunnelRelayStats {
 }
 
 fn connect_target_info(host: &str) -> ConnectTargetInfo {
-    if let Ok(authority) = host.parse::<hyper::http::uri::Authority>() {
-        let parsed_host = authority
-            .host()
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .to_ascii_lowercase();
-        let port = authority.port_u16().unwrap_or(443);
-        let authority = if parsed_host.contains(':') {
-            format!("[{parsed_host}]:{port}")
-        } else {
-            format!("{parsed_host}:{port}")
-        };
-        ConnectTargetInfo {
-            host: parsed_host,
-            port,
-            authority,
-        }
-    } else {
-        ConnectTargetInfo {
+    host.parse::<hyper::http::uri::Authority>().map_or_else(
+        |_| ConnectTargetInfo {
             host: host.to_ascii_lowercase(),
             port: 443,
             authority: host.to_string(),
-        }
-    }
+        },
+        |authority| {
+            let parsed_host = authority
+                .host()
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .to_ascii_lowercase();
+            let port = authority.port_u16().unwrap_or(443);
+            let auth_str = if parsed_host.contains(':') {
+                format!("[{parsed_host}]:{port}")
+            } else {
+                format!("{parsed_host}:{port}")
+            };
+            ConnectTargetInfo {
+                host: parsed_host,
+                port,
+                authority: auth_str,
+            }
+        },
+    )
 }
 
 async fn relay_connect_tunnel(
@@ -1445,20 +1446,21 @@ fn host_with_default_port(req: &Request<Incoming>, is_connect: bool) -> String {
 }
 
 fn connect_target(host: &str) -> String {
-    if let Ok(authority) = host.parse::<hyper::http::uri::Authority>() {
-        let host = authority
-            .host()
-            .trim_start_matches('[')
-            .trim_end_matches(']');
-        let port = authority.port_u16().unwrap_or(443);
-        if host.contains(':') {
-            format!("[{host}]:{port}")
-        } else {
-            format!("{host}:{port}")
-        }
-    } else {
-        host.to_string()
-    }
+    host.parse::<hyper::http::uri::Authority>().map_or_else(
+        |_| host.to_string(),
+        |authority| {
+            let h = authority
+                .host()
+                .trim_start_matches('[')
+                .trim_end_matches(']');
+            let port = authority.port_u16().unwrap_or(443);
+            if h.contains(':') {
+                format!("[{h}]:{port}")
+            } else {
+                format!("{h}:{port}")
+            }
+        },
+    )
 }
 
 fn dispatched_response(response: DispatchedResponse) -> Response<Full<Bytes>> {
@@ -1493,13 +1495,13 @@ fn deny_json_response(status: StatusCode, body: Vec<u8>) -> Response<Full<Bytes>
 /// For absolute-form proxy requests (`http://host/path`), strips the scheme
 /// and authority to return just the path (e.g. `/path`). For origin-form
 /// requests (`/path`), returns the value unchanged.
+#[allow(clippy::option_if_let_else)]
 fn extract_path(raw_path: &[u8]) -> String {
     let s = String::from_utf8_lossy(raw_path);
     if let Some(rest) = s
         .strip_prefix("http://")
         .or_else(|| s.strip_prefix("https://"))
     {
-        // Find the first '/' after the authority.
         rest.find('/')
             .map_or_else(|| "/".to_string(), |i| rest[i..].to_string())
     } else {

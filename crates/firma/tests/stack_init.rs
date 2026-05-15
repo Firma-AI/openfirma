@@ -13,7 +13,7 @@
     reason = "test code: panics are acceptable test failures"
 )]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 fn firma() -> Command {
@@ -61,10 +61,9 @@ fn init_writes_parseable_configs() {
     let cfg = firma_stack::load_stack_config(&stack_cfg_path)
         .unwrap_or_else(|e| panic!("load_stack_config({}): {e}", stack_cfg_path.display()));
 
-    let expected_state: PathBuf = state_dir.clone();
     assert_eq!(
         cfg.state_dir.as_deref(),
-        Some(expected_state.as_path()),
+        Some(state_dir.as_path()),
         "state_dir round-trip mismatch",
     );
     assert_eq!(cfg.authority_config, config_dir.join("authority.toml"));

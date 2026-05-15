@@ -152,7 +152,7 @@ pub fn run(demos_dir: &Path, initial_demo: Option<&Path>) -> Result<()> {
     let _ = execute!(io::stdout(), LeaveAlternateScreen);
     let _ = terminal.show_cursor();
 
-    if let Some(mut rt) = app.runtime.take() {
+    if let Some(rt) = app.runtime.take() {
         rt.shutdown();
     }
     if let Some(mut ag) = app.agent.take() {
@@ -164,16 +164,16 @@ pub fn run(demos_dir: &Path, initial_demo: Option<&Path>) -> Result<()> {
 
 fn event_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> Result<()> {
     loop {
-        if let Phase::Running = app.phase {
+        if matches!(app.phase, Phase::Running) {
             drain_channels(app);
         }
 
         terminal.draw(|f| layout::render(f, app))?;
 
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                handle_key(app, key)?;
-            }
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+        {
+            handle_key(app, key)?;
         }
 
         if app.should_quit {

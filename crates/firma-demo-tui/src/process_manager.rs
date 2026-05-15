@@ -4,7 +4,7 @@
 //! retains only the `kill_tree` primitive needed by `crate::agent_bridge`,
 //! which spawns demo agent processes outside the firma stack.
 
-pub(crate) fn kill_tree_pub(pid: u32) {
+pub fn kill_tree_pub(pid: u32) {
     kill_tree(pid);
 }
 

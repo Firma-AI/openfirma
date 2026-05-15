@@ -218,10 +218,9 @@ impl Connector for GenericHttpConnector {
 
         let started = Instant::now();
         let inner = self.dispatch_inner(view, intent, http);
-        let result = match tokio::time::timeout(self.timeout, inner).await {
-            Ok(inner_result) => inner_result,
-            Err(_) => Err(ConnectorError::Timeout(self.timeout)),
-        };
+        let result = tokio::time::timeout(self.timeout, inner)
+            .await
+            .unwrap_or(Err(ConnectorError::Timeout(self.timeout)));
         let elapsed = started.elapsed();
         let elapsed_micros = duration_to_u64_micros(elapsed);
 
@@ -426,6 +425,7 @@ mod tests {
                 .lock()
                 .expect("capture mutex must not be poisoned in tests");
             guard.extend_from_slice(data);
+            drop(guard);
             Ok(data.len())
         }
 
@@ -435,7 +435,7 @@ mod tests {
     }
 
     impl<'a> MakeWriter<'a> for CapturingWriter {
-        type Writer = CapturingWriter;
+        type Writer = Self;
 
         fn make_writer(&'a self) -> Self::Writer {
             self.clone()

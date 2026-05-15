@@ -150,6 +150,8 @@ impl RevocationStore {
             count += 1;
         }
 
+        drop(entries);
+        drop(log);
         count
     }
 
@@ -252,6 +254,8 @@ impl RevocationStore {
             new_entries.push(entry);
         }
 
+        drop(entries);
+        drop(log);
         Ok(new_entries)
     }
 
@@ -321,37 +325,34 @@ impl RevocationStore {
         let (tx_broadcast, _) = broadcast::channel(1024);
         let tx_for_task = tx_broadcast.clone();
 
-        let watch_path = path.clone();
         // macOS FSEvents reports canonical paths (e.g. `/private/var/...`) while
         // the user-supplied path may be the symlinked form (`/var/...`). Match by
         // file name within the watched directory; `RecursiveMode::NonRecursive`
         // limits events to direct children, so this stays unambiguous.
-        let watch_file_name = watch_path.file_name().map(std::ffi::OsString::from);
-        let mut watcher = notify::recommended_watcher(
-            move |res: notify::Result<notify::Event>| match res {
+        let watch_file_name = path.file_name().map(std::ffi::OsString::from);
+        let mut watcher =
+            notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
                 Ok(event)
                     if matches!(
                         event.kind,
-                        notify::event::EventKind::Modify(_)
-                            | notify::event::EventKind::Create(_)
+                        notify::event::EventKind::Modify(_) | notify::event::EventKind::Create(_)
                     ) =>
                 {
                     let matches_target = event.paths.iter().any(|event_path| {
-                        event_path == &watch_path
+                        event_path == &path
                             || (watch_file_name.is_some()
                                 && event_path.file_name() == watch_file_name.as_deref())
                     });
                     if !matches_target {
                         return;
                     }
-                    tracing::info!(path = %watch_path.display(), "revocation file changed; reloading");
+                    tracing::info!(path = %path.display(), "revocation file changed; reloading");
                     let _ = tx_signal.try_send(());
                 }
                 Err(error) => tracing::error!(?error, "revocation file watch error"),
                 _ => {}
-            },
-        )
-        .context("failed to create revocation file watcher")?;
+            })
+            .context("failed to create revocation file watcher")?;
 
         watcher
             .watch(&watch_root, notify::RecursiveMode::NonRecursive)
@@ -464,9 +465,11 @@ mod tests {
         std::fs::write(&file, format!("{id}\t{ts}\texplicit reason\n")).unwrap();
 
         let s = store(&file);
-        let entries = s.entries.blocking_read();
-        let entry = entries.get(&id).unwrap();
-        assert_eq!(entry.reason, "explicit reason");
+        let reason = {
+            let entries = s.entries.blocking_read();
+            entries.get(&id).unwrap().reason.clone()
+        };
+        assert_eq!(reason, "explicit reason");
     }
 
     #[test]

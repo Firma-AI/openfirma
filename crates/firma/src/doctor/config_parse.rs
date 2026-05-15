@@ -21,10 +21,9 @@ pub fn find_stack_config(start: &Path) -> Option<PathBuf> {
 /// Run the check with an optional explicit path override (`--config`).
 #[must_use]
 pub fn check(explicit: Option<&Path>, cwd: &Path) -> Check {
-    let path = match explicit {
-        Some(p) => Some(p.to_path_buf()),
-        None => find_stack_config(cwd),
-    };
+    let path = explicit
+        .map(Path::to_path_buf)
+        .or_else(|| find_stack_config(cwd));
     let Some(path) = path else {
         return Check::warn(
             "config parsed",

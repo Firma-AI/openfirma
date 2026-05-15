@@ -677,7 +677,7 @@ pub(crate) mod tests {
         MappingTable, PipelineArgs,
     };
 
-    pub(crate) fn test_connector_registry() -> Arc<ConnectorRegistry> {
+    pub fn test_connector_registry() -> Arc<ConnectorRegistry> {
         let default = crate::connector::provider::GenericHttpConnector::default_for_unconfigured()
             .expect("default connector should build in tests");
         Arc::new(ConnectorRegistry::new(Arc::new(default)))

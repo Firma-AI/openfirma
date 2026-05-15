@@ -234,7 +234,7 @@ impl CommandProber {
 /// payloads). Falls back to `String::from_utf8_lossy` otherwise.
 fn decode_console_output(bytes: &[u8]) -> String {
     let payload = bytes.strip_prefix(&[0xFF, 0xFE]).unwrap_or(bytes);
-    if payload.len() >= 2 && payload.len() % 2 == 0 && looks_like_utf16_le(payload) {
+    if payload.len() >= 2 && payload.len().is_multiple_of(2) && looks_like_utf16_le(payload) {
         let units: Vec<u16> = payload
             .chunks_exact(2)
             .map(|c| u16::from_le_bytes([c[0], c[1]]))

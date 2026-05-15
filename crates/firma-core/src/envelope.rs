@@ -75,7 +75,7 @@ impl ExecutionEnvelope {
 /// `params`, `raw_transport`, and `raw_action_ref`. The `action_class` is
 /// the canonical class from the v0.1 Action Class Registry, set by the
 /// Sidecar's intent normalizer after mapping the raw intercepted request.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionIntent {
     /// Canonical action class from the v0.1 registry (e.g.,
     /// `"communication.external.send"`, `"filesystem.read"`). Set by the
@@ -129,10 +129,9 @@ impl ExecutionIntent {
             .strip_prefix("https://")
             .or_else(|| host_path.strip_prefix("http://"))
             .unwrap_or(host_path);
-        let (host, path) = match stripped.find('/') {
-            Some(i) => (&stripped[..i], &stripped[i..]),
-            None => (stripped, ""),
-        };
+        let (host, path) = stripped
+            .find('/')
+            .map_or((stripped, ""), |i| (&stripped[..i], &stripped[i..]));
         let mut m = BTreeMap::new();
         m.insert("host".to_string(), host.to_string());
         m.insert("path".to_string(), path.to_string());
@@ -143,7 +142,7 @@ impl ExecutionIntent {
 /// Typed action parameters (maps to the proto `oneof params`).
 ///
 /// Uses an enum with typed variants to prevent injection via untyped maps.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActionParams {
     /// Outbound HTTP request.
     Http(HttpParams),
@@ -195,7 +194,7 @@ impl fmt::Display for HttpMethod {
 ///
 /// The target URL lives on `ExecutionIntent.resource`, not here —
 /// matching the proto where `HttpParams` carries method, headers, body, and query.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HttpParams {
     /// HTTP method.
     pub method: HttpMethod,
@@ -212,7 +211,7 @@ pub struct HttpParams {
 /// Uses a named query plus bindings instead of a raw SQL statement,
 /// aligning with the intent-003 proto definition and preventing
 /// raw SQL injection at the type level.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DbQueryParams {
     /// Registered query name (looked up in a query registry).
     pub query_name: String,
@@ -229,7 +228,7 @@ pub struct DbQueryParams {
 /// Input is a flat `String → String` map (scalar values only),
 /// schema-validated against the tool registry. Aligns with the
 /// intent-003 proto definition and keeps the core→proto conversion trivial.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolUseParams {
     /// Name of the tool to invoke.
     pub tool_name: String,
@@ -261,7 +260,7 @@ pub struct ExecutionMetadata {
 /// Built from `ExecutionEnvelope` fields plus Sidecar-local state.
 /// The derivation of `action` and `resource` from the envelope's intent
 /// is Sidecar-specific logic (added in intent 006).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionContext {
     /// Agent identity, from envelope metadata.
     pub agent_id: AgentId,

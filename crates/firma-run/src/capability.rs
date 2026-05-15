@@ -126,9 +126,7 @@ mod tests {
         fs::write(&token_path, "token-v1\n").unwrap_or_else(|e| panic!("{e}"));
 
         let manager = CapabilityLeaseManager::new(&CapabilityLeaseConfig {
-            source: CapabilitySource::File {
-                path: token_path.clone(),
-            },
+            source: CapabilitySource::File { path: token_path },
             refresh_ratio: 0.60,
             grace_seconds: 30,
         })

@@ -86,11 +86,11 @@ pub enum AuditSinkError {
     ServerError(String),
 }
 
-/// Lightweight audit payload sent from the pipeline hot path through
-/// the channel. Contains only the fields extracted from the enforcement
-/// decision — no signing, no UUID generation. The [`EventBuilder`](builder::EventBuilder)
-/// on the sink side converts this into a fully populated, signed
-/// [`ExecutionEvent`].
+/// Lightweight audit payload sent from the pipeline hot path through the channel.
+///
+/// Contains only the fields extracted from the enforcement decision — no signing,
+/// no UUID generation. The [`EventBuilder`](builder::EventBuilder) on the sink side
+/// converts this into a fully populated, signed [`ExecutionEvent`].
 #[derive(Debug, Clone)]
 pub struct AuditPayload {
     /// Session that produced this event.

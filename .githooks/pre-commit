@@ -1,0 +1,25 @@
+#!/usr/bin/env sh
+set -e
+
+if ! command -v trufflehog >/dev/null 2>&1; then
+    echo "warning: trufflehog not found — secret scan skipped (run 'make install-tools' to install)" >&2
+    exit 0
+fi
+
+# Scan only files staged for this commit. `--since-commit HEAD` scans nothing
+# pre-commit (there are no commits past HEAD yet), so we materialise the staged
+# blobs into a tmpdir via `git checkout-index` and run filesystem mode there.
+# `-z` keeps the path stream null-delimited so filenames containing newlines or
+# special chars round-trip safely; `ACMR` covers added, copied, modified, and
+# renamed entries (renamed-with-edits would slip past plain ACM).
+if [ -z "$(git diff --cached --name-only --diff-filter=ACMR)" ]; then
+    exit 0
+fi
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+git diff --cached -z --name-only --diff-filter=ACMR \
+    | git checkout-index --stdin -z --prefix="$tmp/"
+
+trufflehog filesystem "$tmp" --no-update --results=verified,unverified,unknown --fail

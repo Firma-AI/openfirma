@@ -9,6 +9,35 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cargo-bins/cargo-binstall@v1.19.1
+      - run: cargo binstall -y cargo-audit
+      - run: cargo audit --deny warnings
+
+  deny:
+    name: Licenses & Bans
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans sources
+
+  trufflehog:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: trufflesecurity/trufflehog@v3.95.3
+        with:
+          extra_args: --results=verified,unverified,unknown
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
@@ -52,10 +81,10 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --all-features --all-targets
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --all-features --all-targets
 
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --all-features --all-targets

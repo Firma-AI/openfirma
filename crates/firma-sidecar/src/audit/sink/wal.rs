@@ -83,10 +83,11 @@ impl WalAuditSink {
         let line_len = line.len() as u64;
 
         // Compact if this append would exceed the cap.
-        let mut dropped = 0u64;
-        if *wal_size + line_len > wal_max_bytes {
-            dropped = Self::wal_compact(file, wal_size, wal_max_bytes / 2).await;
-        }
+        let dropped = if *wal_size + line_len > wal_max_bytes {
+            Self::wal_compact(file, wal_size, wal_max_bytes / 2).await
+        } else {
+            0u64
+        };
 
         match file.write_all(line.as_bytes()).await {
             Ok(()) => *wal_size += line_len,

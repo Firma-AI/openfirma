@@ -388,9 +388,7 @@ mod tests {
 
         let validator = CapabilityValidator::new(
             test_capability_map(),
-            Box::new(MockVerifier {
-                claims: claims.clone(),
-            }),
+            Box::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
         );
