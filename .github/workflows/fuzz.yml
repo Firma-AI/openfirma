@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [normalizer, paseto_verify, capability_seed]
+        target: [normalizer, paseto_verify, capability_seed, capability_seed_toml]
     steps:
       - uses: actions/checkout@v4
 
