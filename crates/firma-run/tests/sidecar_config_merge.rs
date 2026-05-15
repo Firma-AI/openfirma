@@ -144,7 +144,7 @@ fn priority_order_explicit_over_env_over_cwd() {
         authority_url: None,
     })
     .expect("synthesize");
-    assert_eq!(source, TemplateSource::Explicit(explicit.clone()));
+    assert_eq!(source, TemplateSource::Explicit(explicit));
 
     let source = synthesize(SynthesizeRequest {
         explicit_template: None,

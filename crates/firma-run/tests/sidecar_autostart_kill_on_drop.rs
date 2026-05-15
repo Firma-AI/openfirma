@@ -95,7 +95,7 @@ fn marker_files_present_between_ready_and_drop() {
         sandbox_id: "sandbox-2",
         agent_id: "claude-code",
         session_id: "session-7",
-        marker_dir: marker.clone(),
+        marker_dir: marker,
         template_path: None,
         env_template: None,
         cwd_template: None,

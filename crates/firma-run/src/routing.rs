@@ -352,10 +352,9 @@ fn probe_authority_url(url_str: &str) -> Result<(), RunError> {
 }
 
 fn parse_host_port(url_str: &str) -> Option<(String, u16)> {
-    let (scheme, rest) = match url_str.find("://") {
-        Some(i) => (Some(&url_str[..i]), &url_str[i + 3..]),
-        None => (None, url_str),
-    };
+    let (scheme, rest) = url_str.find("://").map_or((None, url_str), |i| {
+        (Some(&url_str[..i]), &url_str[i + 3..])
+    });
     let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     let (host, port_str) = match authority.rfind(':') {
         Some(i) if !authority[..i].contains(']') || authority.starts_with('[') => (
@@ -379,45 +378,6 @@ fn parse_host_port(url_str: &str) -> Option<(String, u16)> {
         return None;
     }
     Some((host.to_string(), port))
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-mod parse_host_port_tests {
-    use super::parse_host_port;
-
-    #[test]
-    fn parses_http_with_port() {
-        assert_eq!(
-            parse_host_port("http://localhost:50051").unwrap(),
-            ("localhost".to_string(), 50051)
-        );
-    }
-    #[test]
-    fn parses_https_without_port() {
-        assert_eq!(
-            parse_host_port("https://authority.example.invariant").unwrap(),
-            ("authority.example.invariant".to_string(), 443)
-        );
-    }
-    #[test]
-    fn parses_ipv6_bracketed() {
-        assert_eq!(
-            parse_host_port("http://[::1]:50051/").unwrap(),
-            ("::1".to_string(), 50051)
-        );
-    }
-    #[test]
-    fn parses_bare_host_port() {
-        assert_eq!(
-            parse_host_port("localhost:50051").unwrap(),
-            ("localhost".to_string(), 50051)
-        );
-    }
-    #[test]
-    fn rejects_empty() {
-        assert!(parse_host_port("").is_none());
-    }
 }
 
 fn format_endpoint(endpoint: &SidecarEndpoint) -> String {
@@ -597,4 +557,43 @@ fn relay_unix_to_unix(client: &UnixStream, target: &UnixStream) -> io::Result<()
         .join()
         .map_err(|_| io::Error::other("relay panic"))??;
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod parse_host_port_tests {
+    use super::parse_host_port;
+
+    #[test]
+    fn parses_http_with_port() {
+        assert_eq!(
+            parse_host_port("http://localhost:50051").unwrap(),
+            ("localhost".to_string(), 50051)
+        );
+    }
+    #[test]
+    fn parses_https_without_port() {
+        assert_eq!(
+            parse_host_port("https://authority.example.invariant").unwrap(),
+            ("authority.example.invariant".to_string(), 443)
+        );
+    }
+    #[test]
+    fn parses_ipv6_bracketed() {
+        assert_eq!(
+            parse_host_port("http://[::1]:50051/").unwrap(),
+            ("::1".to_string(), 50051)
+        );
+    }
+    #[test]
+    fn parses_bare_host_port() {
+        assert_eq!(
+            parse_host_port("localhost:50051").unwrap(),
+            ("localhost".to_string(), 50051)
+        );
+    }
+    #[test]
+    fn rejects_empty() {
+        assert!(parse_host_port("").is_none());
+    }
 }
