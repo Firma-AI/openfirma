@@ -15,6 +15,7 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "MIT",
     "MIT-0",
+    "MPL-2.0",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "BSD-1-Clause",
@@ -31,9 +32,7 @@ allow = [
 # r-efi: UEFI support library pulled in via getrandom → cc (build dep only).
 # Not linked into the Firma binary; no LGPL linking obligation.
 # Scoped exception so any future runtime LGPL dep still trips the allowlist.
-exceptions = [
-    { allow = ["LGPL-2.1-or-later"], crate = "r-efi" },
-]
+exceptions = [{ allow = ["LGPL-2.1-or-later"], crate = "r-efi" }]
 
 # ---------------------------------------------------------------------------
 # Banned crates
