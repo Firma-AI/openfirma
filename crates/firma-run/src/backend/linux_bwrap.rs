@@ -200,6 +200,7 @@ impl SandboxBackend for BwrapBackend {
         }
 
         #[cfg(target_os = "linux")]
+        #[allow(clippy::collection_is_never_read)]
         let mut _seccomp_file: Option<File> = None;
         #[cfg(target_os = "linux")]
         let seccomp_path = launch

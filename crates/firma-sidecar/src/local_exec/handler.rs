@@ -150,7 +150,7 @@ pub struct LocalExecHandlerConfig {
 
 /// Stateful handler for local-exec governance and management requests.
 ///
-/// Holds an `Arc<dyn `[`TokenStore`]`>` and is safe to share across
+/// Holds an <code>Arc&lt;dyn [TokenStore]&gt;</code> and is safe to share across
 /// connections. The default store is [`InMemoryTokenStore`]; alternative
 /// backends (Redis, distributed stores, test doubles) are injected via
 /// [`LocalExecHandler::with_store`].
@@ -303,15 +303,15 @@ impl LocalExecHandler {
     fn handle_token_retry(&self, request: &LocalExecRequest, token_id: &str) -> LocalExecResponse {
         let fingerprint = compute_fingerprint(request);
 
-        if let Some(client_fp) = &request.request_fingerprint {
-            if *client_fp != fingerprint {
-                tracing::warn!(
-                    session_id = %request.session_id,
-                    sandbox_id = %request.sandbox_id,
-                    "local-exec token retry: client fingerprint mismatch; failing closed"
-                );
-                return deny("request fingerprint mismatch on token retry");
-            }
+        if let Some(client_fp) = &request.request_fingerprint
+            && *client_fp != fingerprint
+        {
+            tracing::warn!(
+                session_id = %request.session_id,
+                sandbox_id = %request.sandbox_id,
+                "local-exec token retry: client fingerprint mismatch; failing closed"
+            );
+            return deny("request fingerprint mismatch on token retry");
         }
 
         let result = self.token_store.validate_and_consume(

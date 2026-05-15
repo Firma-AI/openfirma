@@ -231,19 +231,6 @@ fn resolve_working_dir() -> Result<PathBuf, RunError> {
         .map_err(|error| RunError::Internal(format!("failed to read current directory: {error}")))
 }
 
-fn build_autostart_flags(args: &RunInput) -> AutostartFlags {
-    AutostartFlags {
-        mode: args.sidecar_mode,
-        no_autostart: args.no_autostart,
-        template_path: args.sidecar_template_path.clone(),
-        startup_timeout: Duration::from_secs(if args.sidecar_startup_timeout_secs == 0 {
-            DEFAULT_STARTUP_TIMEOUT_SECS
-        } else {
-            args.sidecar_startup_timeout_secs
-        }),
-    }
-}
-
 fn combine_run_and_teardown_results(
     run_result: Result<i32, RunError>,
     teardown_result: Result<(), RunError>,

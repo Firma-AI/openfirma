@@ -730,11 +730,10 @@ fn derive_sidecar_local_exec_endpoint(
                         path.display()
                     ))
                 })?;
-            let derived_file_name = if let Some(base) = file_name.strip_suffix(".sock") {
-                format!("{base}-tools.sock")
-            } else {
-                format!("{file_name}-tools.sock")
-            };
+            let derived_file_name = file_name.strip_suffix(".sock").map_or_else(
+                || format!("{file_name}-tools.sock"),
+                |base| format!("{base}-tools.sock"),
+            );
             let derived_path = parent.join(derived_file_name);
             Ok(CommandMediatorEndpoint::Unix { path: derived_path })
         }

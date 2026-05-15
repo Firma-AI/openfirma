@@ -251,6 +251,7 @@ impl InMemoryTokenStore {
     /// so `firma-run` knows to keep polling until the operator approves or the
     /// TTL expires. Context binding is checked for both `Pending` and `Approved`
     /// tokens to fail-close on mismatched retries.
+    #[allow(clippy::significant_drop_tightening)]
     pub fn validate_and_consume(
         &self,
         token_id: &str,
@@ -259,50 +260,53 @@ impl InMemoryTokenStore {
         sandbox_id: &str,
         agent_id: Option<&str>,
     ) -> TokenValidationResult {
-        let mut guard = lock_or_recover(&self.tokens);
+        {
+            let mut guard = lock_or_recover(&self.tokens);
 
-        let Some(token) = guard.get_mut(token_id) else {
-            return TokenValidationResult::Unknown;
-        };
+            let Some(token) = guard.get_mut(token_id) else {
+                return TokenValidationResult::Unknown;
+            };
 
-        // Terminal states — no further transition possible.
-        match token.state {
-            TokenState::Consumed => return TokenValidationResult::AlreadyConsumed,
-            TokenState::Revoked => return TokenValidationResult::Revoked,
-            TokenState::Expired => return TokenValidationResult::Expired,
-            TokenState::Pending | TokenState::Approved => {}
-        }
+            // Terminal states — no further transition possible.
+            match token.state {
+                TokenState::Consumed => return TokenValidationResult::AlreadyConsumed,
+                TokenState::Revoked => return TokenValidationResult::Revoked,
+                TokenState::Expired => return TokenValidationResult::Expired,
+                TokenState::Pending | TokenState::Approved => {}
+            }
 
-        if Instant::now() >= token.expires_at {
-            token.state = TokenState::Expired;
-            return TokenValidationResult::Expired;
-        }
+            if Instant::now() >= token.expires_at {
+                token.state = TokenState::Expired;
+                return TokenValidationResult::Expired;
+            }
 
-        // Context binding checked for both Pending and Approved.
-        if token.fingerprint != fingerprint {
-            return TokenValidationResult::FingerprintMismatch;
-        }
-        if token.session_id != session_id || token.sandbox_id != sandbox_id {
-            return TokenValidationResult::ContextMismatch;
-        }
-        if let Some(stored_agent) = &token.agent_id {
-            if agent_id != Some(stored_agent.as_str()) {
+            // Context binding checked for both Pending and Approved.
+            if token.fingerprint != fingerprint {
+                return TokenValidationResult::FingerprintMismatch;
+            }
+            if token.session_id != session_id || token.sandbox_id != sandbox_id {
                 return TokenValidationResult::ContextMismatch;
             }
-        }
+            if let Some(stored_agent) = &token.agent_id
+                && agent_id != Some(stored_agent.as_str())
+            {
+                return TokenValidationResult::ContextMismatch;
+            }
 
-        if token.state == TokenState::Pending {
-            return TokenValidationResult::Pending;
-        }
+            if token.state == TokenState::Pending {
+                return TokenValidationResult::Pending;
+            }
 
-        // Approved → Consumed (atomic single-use).
-        token.state = TokenState::Consumed;
+            // Approved → Consumed (atomic single-use).
+            token.state = TokenState::Consumed;
+        }
         TokenValidationResult::Valid
     }
 
     /// Approve a pending token, making it consumable by `firma-run`.
     ///
     /// Idempotent on [`TokenState::Approved`].
+    #[allow(clippy::significant_drop_tightening)]
     pub fn approve(&self, token_id: &str) -> ApproveResult {
         let mut guard = lock_or_recover(&self.tokens);
 
@@ -329,6 +333,7 @@ impl InMemoryTokenStore {
     /// Revoke a pending or approved token, preventing any future consumption.
     ///
     /// Idempotent on [`TokenState::Revoked`].
+    #[allow(clippy::significant_drop_tightening)]
     pub fn revoke(&self, token_id: &str) -> RevokeResult {
         let mut guard = lock_or_recover(&self.tokens);
 
