@@ -212,3 +212,58 @@ stale entries).
   yourself and pass `--sidecar=external`.
 - The marker layout is the contract consumed by `firma sidecar status`
   (see FIR-103). Do not write or edit those files manually.
+
+### Authority bootstrap
+
+`firma run` decides whether to autostart a Mini Authority before it
+launches the per-run Sidecar. Decision precedence:
+
+1. `--authority local` or `--authority <url>` — skip the prompt entirely.
+2. Persisted `[authority]` table in `$XDG_CONFIG_HOME/firma/firma.toml`
+   (Linux), `~/Library/Application Support/firma/firma.toml` (macOS),
+   `%APPDATA%\firma\firma.toml` (Windows) — skip the prompt.
+3. Neither set, stdin is a TTY — print a single y/N prompt:
+
+   ```text
+   No Authority is configured for this project.
+   firma run can start a local Mini Authority for development on [::1]:50051.
+   This is suitable for a single developer on a trusted workstation.
+
+   Start a local Mini Authority? [y/N]:
+   ```
+
+   On `y` / `Y` / `yes`, `firma run` persists
+   `[authority].type = "local"` (file mode `0600`, parent mode `0700`)
+   and autostarts. On anything else, it aborts with `AuthorityDeclined`.
+
+4. Neither set, stdin is not a TTY — abort with `AuthorityPromptNoTty`.
+
+On `local` selection, `firma run` probes `[::1]:50051` first. If
+reachable, no autostart fires. Otherwise the per-run Mini Authority is
+spawned with an ephemeral signing key and the embedded `developer`
+policy profile materialised under
+`<runtime>/firma/run/<sandbox_id>/authority/`. The Authority is killed
+on `firma run` exit (`SIGTERM` then `SIGKILL` after a 5s grace).
+
+### Authority flags
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--authority <local\|url>` | unset | Skip the y/N prompt. `local` autostarts on `[::1]:50051`; any other value is treated as a remote Authority URL. |
+| `--authority-profile <name>` | `developer` | Profile materialised by the autostarted Mini Authority. Currently only `developer` ships. Ignored when Authority is remote or already reachable. |
+
+The `--no-autostart` flag also suppresses Authority autostart. With
+`--no-autostart --authority local` `firma run` exits immediately with a
+typed argument-conflict error.
+
+### Authority typed errors
+
+| Error | Trigger |
+| ----- | ------- |
+| `MissingAuthority` | `--no-autostart` and nothing configured. |
+| `AuthorityDeclined` | User answered `n` (or empty / garbage) at the prompt. |
+| `AuthorityPromptNoTty` | No config, no CLI flag, stdin is not a TTY. |
+| `AuthorityStartupFailed` | Spawn or stderr-pipe setup failed; stderr closed before `ready`. |
+| `AuthorityReadyTimeout` | Spawned authority did not emit `ready` within the budget. |
+| `AuthorityUnreachable` | Remote URL did not answer a TCP connect probe. |
+| `AuthorityUnknownProfile` | `--authority-profile` is not a registered profile. |

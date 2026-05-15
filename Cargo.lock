@@ -1643,6 +1643,8 @@ dependencies = [
  "anyhow",
  "chrono",
  "ctrlc",
+ "dirs",
+ "firma-authority",
  "firma-stack",
  "nix 0.31.2",
  "pretty_assertions",

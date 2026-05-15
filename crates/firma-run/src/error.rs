@@ -47,4 +47,37 @@ pub enum RunError {
 
     #[error("operation not supported on this platform: {reason}")]
     UnsupportedPlatform { reason: String },
+
+    #[error("no authority configured; pass `--authority local` or `--authority <url>`")]
+    MissingAuthority,
+
+    #[error(
+        "authority bootstrap declined; rerun with `--authority local` to bypass the prompt, \
+         start one manually with `firma authority`, or set [authority].type in firma.toml"
+    )]
+    AuthorityDeclined,
+
+    #[error(
+        "stdin is not a TTY; cannot prompt for authority bootstrap. \
+         Pass `--authority local` / `--authority <url>` or set [authority].type in firma.toml"
+    )]
+    AuthorityPromptNoTty,
+
+    #[error(
+        "authority autostart did not emit 'ready' within {timeout_secs}s; see logs at {}",
+        log_path.display()
+    )]
+    AuthorityReadyTimeout {
+        timeout_secs: u64,
+        log_path: PathBuf,
+    },
+
+    #[error("authority autostart failed: {reason}; see logs at {}", log_path.display())]
+    AuthorityStartupFailed { reason: String, log_path: PathBuf },
+
+    #[error("authority unreachable at {url}: {reason}")]
+    AuthorityUnreachable { url: String, reason: String },
+
+    #[error("unknown --authority-profile `{name}`")]
+    AuthorityUnknownProfile { name: String },
 }

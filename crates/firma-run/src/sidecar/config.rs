@@ -26,6 +26,10 @@ pub struct SynthesizeRequest<'a> {
     pub socket_path: &'a Path,
     /// Destination for the synthesized TOML.
     pub out_path: &'a Path,
+    /// Effective Authority URL to inject into `[authority].url`.
+    /// `None` leaves `[authority]` untouched (preserves any value from
+    /// the operator template).
+    pub authority_url: Option<&'a str>,
 }
 
 /// Result of template resolution. Returned for tests; production callers
@@ -60,6 +64,9 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
         TemplateSource::Minimal => toml::Value::Table(toml::value::Table::new()),
     };
     override_interceptor(&mut value, req.socket_path)?;
+    if let Some(url) = req.authority_url {
+        override_authority_url(&mut value, url)?;
+    }
     write_atomic(req.out_path, &value)?;
     Ok(source)
 }
@@ -111,6 +118,20 @@ fn override_interceptor(value: &mut toml::Value, socket_path: &Path) -> Result<(
         "socket_path".to_string(),
         toml::Value::String(socket_path.display().to_string()),
     );
+    Ok(())
+}
+
+fn override_authority_url(value: &mut toml::Value, url: &str) -> Result<(), RunError> {
+    let root = value
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("sidecar template root is not a table".into()))?;
+    let entry = root
+        .entry("authority".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+    let table = entry
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[authority] is not a table".into()))?;
+    table.insert("url".to_string(), toml::Value::String(url.to_string()));
     Ok(())
 }
 

@@ -559,6 +559,9 @@ mod tests {
             sidecar_template_path: None,
             sidecar_startup_timeout_secs: 10,
             command: vec!["echo".to_string(), "ok".to_string()],
+            authority_cli: crate::authority::AuthorityCli::Unset,
+            authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
+            user_config_path: None,
         }
     }
 
