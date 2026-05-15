@@ -18,6 +18,7 @@ use firma_run::authority::{AuthoritySupervisor, SpawnRequest};
 #[cfg(unix)]
 #[test]
 fn drop_reaps_child_within_grace() {
+    use std::os::unix::fs::PermissionsExt as _;
     let tmp = tempfile::tempdir().expect("tempdir");
     let fake = tmp.path().join("fake-firma.sh");
     std::fs::write(
@@ -36,7 +37,6 @@ fn drop_reaps_child_within_grace() {
          esac\n",
     )
     .unwrap();
-    use std::os::unix::fs::PermissionsExt as _;
     let mut p = std::fs::metadata(&fake).unwrap().permissions();
     p.set_mode(0o755);
     std::fs::set_permissions(&fake, p).unwrap();
