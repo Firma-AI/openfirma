@@ -1,6 +1,6 @@
-.PHONY: fmt lint test build check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps toml-fmt
+.PHONY: fmt lint test build check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps install-tools toml-fmt
 
-install: install-system install-cargo-tools install-docs-deps
+install: install-system install-cargo-tools install-docs-deps install-tools
 	@echo "Dev environment ready. Try 'make check' or 'make docs-dev'."
 
 install-system:
@@ -20,8 +20,18 @@ install-system:
 	fi
 	@corepack enable >/dev/null 2>&1 || echo "warning: 'corepack enable' failed; you may need to run it with sudo"
 
+install-tools:
+	@if ! command -v trufflehog >/dev/null 2>&1; then \
+	  echo "warning: trufflehog not found — install from https://github.com/trufflesecurity/trufflehog/releases"; \
+	  echo "         (macOS: brew install trufflehog)"; \
+	fi
+	@git config core.hooksPath .githooks
+	@echo "Git hooks wired to .githooks/"
+
 install-cargo-tools:
 	@command -v cargo-doc-md >/dev/null 2>&1 || cargo install cargo-doc-md
+	@command -v cargo-audit >/dev/null 2>&1 || cargo install cargo-audit --locked
+	@command -v cargo-deny >/dev/null 2>&1 || cargo install cargo-deny --locked
 
 install-docs-deps:
 	cd docs-site && corepack pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/
@@ -33,15 +43,21 @@ toml-fmt:
 	taplo fmt --check '**/Cargo.toml'
 
 lint:
-	cargo clippy --workspace -- -D warnings
+	cargo clippy --all-features --all-targets
 
 test:
-	cargo test --workspace
+	cargo test --all-features --all-targets
 
 build:
-	cargo build --workspace
+	cargo build --all-features --all-targets
 
-check: fmt toml-fmt lint test build
+audit:
+	cargo audit --deny warnings
+
+deny:
+	cargo deny check licenses bans sources
+
+check: fmt toml-fmt lint test build audit deny
 
 bench:
 	cargo bench --workspace --no-fail-fast

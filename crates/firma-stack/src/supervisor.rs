@@ -10,12 +10,12 @@ use crate::error::Result;
 use crate::platform::{Platform, SystemPlatform};
 
 #[derive(Clone, Copy)]
-pub(crate) struct Children {
-    pub(crate) authority_pid: u32,
-    pub(crate) sidecar_pid: u32,
+pub struct Children {
+    pub authority_pid: u32,
+    pub sidecar_pid: u32,
 }
 
-pub(crate) fn block_until_exit(children: Children) -> Result<()> {
+pub fn block_until_exit(children: Children) -> Result<()> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_handler = Arc::clone(&stop);
     let _ = ctrlc::set_handler(move || {

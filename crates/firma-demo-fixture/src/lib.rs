@@ -17,10 +17,10 @@ pub const DEFAULT_LISTEN_ADDR: &str = "127.0.0.1:9100";
 /// JSON body returned by the fixture for `GET /allow`.
 pub const ALLOW_BODY_JSON: &str = r#"{"ok":true,"path":"/allow"}"#;
 
-/// JSON body returned by the fixture for `POST /deny` when the
-/// upstream policy is misconfigured. The sidecar should always block
-/// before the request reaches the fixture; this body exists only as a
-/// positive control for that misconfiguration scenario.
+/// JSON body returned by the fixture for `POST /deny` when the upstream policy is misconfigured.
+///
+/// The sidecar should always block before the request reaches the fixture; this body exists
+/// only as a positive control for that misconfiguration scenario.
 pub const DENY_BODY_JSON: &str = r#"{"would":"leak"}"#;
 
 /// Plaintext body for `GET /_ping`.

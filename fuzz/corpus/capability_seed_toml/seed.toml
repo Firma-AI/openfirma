@@ -1,0 +1,9 @@
+raw_token = "v4.public.eyJhbGciOiJFZERTQSJ9.test-payload.test-sig"
+token_id = "01J0000000000000000000000Z"
+agent_id = "demo-agent"
+session_id = "demo-session"
+action_set = ["communication.external.send"]
+resource_scope = "wttr.in*"
+issued_at = "2026-04-29T15:00:00Z"
+expiry = "2026-04-29T16:00:00Z"
+context_hash = "deadbeef"

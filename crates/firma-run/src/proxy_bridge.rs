@@ -103,7 +103,7 @@ sandbox clients may report connection failures via http://{bridge_listen_addr} (
         )
     })?;
     if attribution_headers.is_empty() {
-        return relay_tcp_to_unix(&mut client, &mut upstream);
+        return relay_tcp_to_unix(&client, &upstream);
     }
 
     let mut upstream_read = upstream.try_clone()?;
@@ -122,7 +122,7 @@ sandbox clients may report connection failures via http://{bridge_listen_addr} (
 }
 
 #[cfg(unix)]
-fn relay_tcp_to_unix(client: &mut TcpStream, upstream: &mut UnixStream) -> io::Result<()> {
+fn relay_tcp_to_unix(client: &TcpStream, upstream: &UnixStream) -> io::Result<()> {
     let mut client_read = client.try_clone()?;
     let mut client_write = client.try_clone()?;
     let mut upstream_read = upstream.try_clone()?;

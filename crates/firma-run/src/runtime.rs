@@ -199,11 +199,9 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         wait_with_signal_forwarding(child)
     })();
 
-    let teardown_result = if let Some(real_handle) = handle.take() {
-        backend.teardown(real_handle)
-    } else {
-        Ok(())
-    };
+    let teardown_result = handle
+        .take()
+        .map_or(Ok(()), |real_handle| backend.teardown(real_handle));
 
     match (run_result, teardown_result) {
         (Ok(code), Ok(())) => Ok(code),

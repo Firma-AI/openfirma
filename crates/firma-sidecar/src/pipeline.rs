@@ -1238,14 +1238,14 @@ mod tests {
         let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_allow());
 
-        if let EnforcementDecision::Allow { envelope, .. } = decision {
-            if let firma_core::ActionParams::Http(ref params) = envelope.intent().params {
-                assert!(
-                    !params.headers.contains_key("Authorization"),
-                    "authorization header must not leak into envelope"
-                );
-                assert!(params.headers.contains_key("Content-Type"));
-            }
+        if let EnforcementDecision::Allow { envelope, .. } = decision
+            && let firma_core::ActionParams::Http(ref params) = envelope.intent().params
+        {
+            assert!(
+                !params.headers.contains_key("Authorization"),
+                "authorization header must not leak into envelope"
+            );
+            assert!(params.headers.contains_key("Content-Type"));
         }
     }
 

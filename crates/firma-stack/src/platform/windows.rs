@@ -21,9 +21,9 @@ use crate::error::{Result, StackError};
 use crate::platform::{Group, Platform, SpawnedChild};
 use crate::shutdown_event::windows_shutdown_event_name;
 
-pub(crate) struct WindowsPlatform;
+pub struct WindowsPlatform;
 
-pub(crate) fn close_job_object(handle: HANDLE) {
+pub fn close_job_object(handle: HANDLE) {
     if !handle.is_null() {
         let _ = unsafe { CloseHandle(handle) };
     }

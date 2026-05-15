@@ -97,7 +97,7 @@ fn issued_token_seeds_capability_map_and_admits_stage1() {
 
     // 4. Load the capability map from the seed file.
     let seed = CapabilitySeedConfig {
-        paths: vec![seed_path.clone()],
+        paths: vec![seed_path],
     };
     let map = load_capability_map(&seed).expect("seed must load");
 

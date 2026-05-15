@@ -23,7 +23,7 @@ use crate::sidecar::supervisor::{SidecarSupervisor, SpawnRequest};
 fn structural_proxy_listen_addr() -> &'static str {
     static ADDR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     ADDR.get_or_init(|| {
-        std::env::var("FIRMA_PROXY_LISTEN_ADDR").unwrap_or("127.0.0.1:18080".to_string())
+        std::env::var("FIRMA_PROXY_LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:18080".to_string())
     })
 }
 
@@ -31,7 +31,7 @@ fn structural_proxy_listen_addr() -> &'static str {
 fn structural_dns_stub_listen_addr() -> &'static str {
     static ADDR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     ADDR.get_or_init(|| {
-        std::env::var("FIRMA_DNS_STUB_LISTEN_ADDR").unwrap_or("127.0.0.1:53".to_string())
+        std::env::var("FIRMA_DNS_STUB_LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:53".to_string())
     })
 }
 
@@ -504,7 +504,7 @@ impl SidecarAdapter {
                         Ok((client, _)) => {
                             let upstream_target = upstream_for_task.clone();
                             thread::spawn(move || {
-                                if let Err(error) = relay_to_sidecar(client, &upstream_target) {
+                                if let Err(error) = relay_to_sidecar(&client, &upstream_target) {
                                     tracing::warn!("sidecar adapter relay failed: {error}");
                                 }
                             });
@@ -548,21 +548,21 @@ impl Drop for SidecarAdapter {
 }
 
 #[cfg(unix)]
-fn relay_to_sidecar(mut client: UnixStream, upstream: &SidecarEndpoint) -> io::Result<()> {
+fn relay_to_sidecar(client: &UnixStream, upstream: &SidecarEndpoint) -> io::Result<()> {
     match upstream {
         SidecarEndpoint::Tcp { addr } => {
-            let mut target = TcpStream::connect_timeout(addr, Duration::from_secs(1))?;
-            relay_unix_to_tcp(&mut client, &mut target)
+            let target = TcpStream::connect_timeout(addr, Duration::from_secs(1))?;
+            relay_unix_to_tcp(client, &target)
         }
         SidecarEndpoint::Unix { path } => {
-            let mut target = UnixStream::connect(path)?;
-            relay_unix_to_unix(&mut client, &mut target)
+            let target = UnixStream::connect(path)?;
+            relay_unix_to_unix(client, &target)
         }
     }
 }
 
 #[cfg(unix)]
-fn relay_unix_to_tcp(client: &mut UnixStream, target: &mut TcpStream) -> io::Result<()> {
+fn relay_unix_to_tcp(client: &UnixStream, target: &TcpStream) -> io::Result<()> {
     let mut client_read = client.try_clone()?;
     let mut client_write = client.try_clone()?;
     let mut target_read = target.try_clone()?;
@@ -581,7 +581,7 @@ fn relay_unix_to_tcp(client: &mut UnixStream, target: &mut TcpStream) -> io::Res
 }
 
 #[cfg(unix)]
-fn relay_unix_to_unix(client: &mut UnixStream, target: &mut UnixStream) -> io::Result<()> {
+fn relay_unix_to_unix(client: &UnixStream, target: &UnixStream) -> io::Result<()> {
     let mut client_read = client.try_clone()?;
     let mut client_write = client.try_clone()?;
     let mut target_read = target.try_clone()?;

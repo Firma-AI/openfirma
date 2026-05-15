@@ -16,7 +16,7 @@ pub struct DemoRuntime {
 }
 
 impl DemoRuntime {
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&self) {
         let _ = firma_stack::stop(&self.state_dir, Duration::from_secs(10));
     }
 }

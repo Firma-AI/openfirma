@@ -200,9 +200,7 @@ impl SandboxBackend for BwrapBackend {
         }
 
         #[cfg(target_os = "linux")]
-        let mut _seccomp_file: Option<File> = None;
-        #[cfg(target_os = "linux")]
-        if let Some(seccomp_path) = launch
+        let _seccomp_file: Option<File> = if let Some(seccomp_path) = launch
             .env
             .get("FIRMA_RUN_SECCOMP_BPF_PATH")
             .filter(|value| !value.trim().is_empty())
@@ -213,8 +211,10 @@ impl SandboxBackend for BwrapBackend {
             })?;
             clear_fd_cloexec(&file)?;
             command.arg("--seccomp").arg(file.as_raw_fd().to_string());
-            _seccomp_file = Some(file);
-        }
+            Some(file)
+        } else {
+            None
+        };
 
         for mount in &handle.mounts {
             if mount.read_only {
@@ -258,12 +258,9 @@ impl SandboxBackend for BwrapBackend {
         if let Some(entrypoint) = maybe_write_entrypoint_script(handle, launch)? {
             command.arg("/bin/sh");
             command.arg(entrypoint);
-            command.arg(&launch.executable);
-            command.args(&launch.args);
-        } else {
-            command.arg(&launch.executable);
-            command.args(&launch.args);
         }
+        command.arg(&launch.executable);
+        command.args(&launch.args);
 
         command.spawn().map_err(|error| {
             RunError::Spawn(format!(

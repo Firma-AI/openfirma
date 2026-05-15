@@ -24,7 +24,7 @@ use windows_sys::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingl
 /// event is signalled. Best-effort: if event creation or thread spawning
 /// fails, `firma stack stop` falls back to its hard-kill path after the
 /// grace window.
-pub(crate) fn install_listener(token: CancellationToken) {
+pub fn install_listener(token: CancellationToken) {
     let pid = std::process::id();
     let name = firma_stack::shutdown_event::windows_shutdown_event_name(pid);
     let wide: Vec<u16> = OsStr::new(&name)
