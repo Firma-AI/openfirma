@@ -12,7 +12,7 @@ use crate::error::RunError;
 
 /// On-disk schema for `<marker_dir>/metadata.toml`.
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct Metadata {
+pub struct Metadata {
     pub sandbox_id: String,
     pub agent_id: String,
     pub session_id: String,
@@ -24,7 +24,7 @@ pub(crate) struct Metadata {
 
 /// Serialize `meta` and write it atomically to `out`. Creates parent
 /// directories on demand.
-pub(crate) fn write(out: &Path, meta: &Metadata) -> Result<(), RunError> {
+pub fn write(out: &Path, meta: &Metadata) -> Result<(), RunError> {
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| RunError::Internal(format!("mkdir {}: {error}", parent.display())))?;

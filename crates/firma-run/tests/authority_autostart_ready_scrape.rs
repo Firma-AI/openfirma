@@ -1,5 +1,5 @@
 //! Feed a canned four-line ready sequence through the scraper and
-//! assert the listen_addr is captured and `Ready` is signalled.
+//! assert the `listen_addr` is captured and `Ready` is signalled.
 
 #![allow(
     clippy::unwrap_used,

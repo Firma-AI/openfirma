@@ -7,7 +7,7 @@ use serde::Serialize;
 use crate::error::RunError;
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct Metadata {
+pub struct Metadata {
     pub sandbox_id: String,
     pub agent_id: String,
     pub session_id: String,
@@ -17,7 +17,7 @@ pub(crate) struct Metadata {
     pub started_at: String,
 }
 
-pub(crate) fn write(out: &Path, meta: &Metadata) -> Result<(), RunError> {
+pub fn write(out: &Path, meta: &Metadata) -> Result<(), RunError> {
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| RunError::Internal(format!("mkdir {}: {e}", parent.display())))?;
