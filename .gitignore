@@ -60,4 +60,6 @@ audit.jsonl
 
 #fuzzy tests
 fuzz/artifacts/
-fuzz/corpus/
+fuzz/corpus/**
+!fuzz/corpus/**/
+!fuzz/corpus/**/*.toml

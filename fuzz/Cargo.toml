@@ -18,6 +18,7 @@ chrono = "0.4"
 firma-core = { path = "../crates/firma-core" }
 firma-sidecar = { path = "../crates/firma-sidecar" }
 libfuzzer-sys = "0.4"
+toml = "0.8"
 
 [[bin]]
 name = "normalizer"
@@ -34,5 +35,11 @@ doc = false
 [[bin]]
 name = "capability_seed"
 path = "fuzz_targets/capability_seed.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "capability_seed_toml"
+path = "fuzz_targets/capability_seed_toml.rs"
 test = false
 doc = false
