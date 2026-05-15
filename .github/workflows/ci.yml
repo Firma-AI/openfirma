@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: trufflesecurity/trufflehog@main
+      - uses: trufflesecurity/trufflehog@v3.95.3
         with:
           extra_args: --results=verified,unverified,unknown
 

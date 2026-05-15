@@ -30,6 +30,8 @@ install-tools:
 
 install-cargo-tools:
 	@command -v cargo-doc-md >/dev/null 2>&1 || cargo install cargo-doc-md
+	@command -v cargo-audit >/dev/null 2>&1 || cargo install cargo-audit --locked
+	@command -v cargo-deny >/dev/null 2>&1 || cargo install cargo-deny --locked
 
 install-docs-deps:
 	cd docs-site && corepack pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/
