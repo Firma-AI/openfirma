@@ -63,6 +63,7 @@ fn drop_terminates_child_within_grace() {
         cwd_template: None,
         firma_exe: exe,
         startup_timeout: Duration::from_secs(5),
+        authority_url: None,
     })
     .expect("supervisor spawned");
 
@@ -100,6 +101,7 @@ fn marker_files_present_between_ready_and_drop() {
         cwd_template: None,
         firma_exe: exe,
         startup_timeout: Duration::from_secs(5),
+        authority_url: None,
     })
     .expect("supervisor spawned");
 

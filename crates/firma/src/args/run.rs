@@ -67,6 +67,18 @@ pub struct RunArgs {
     #[arg(long, default_value_t = 10)]
     pub sidecar_startup_timeout_secs: u64,
 
+    /// Authority selection. `local` autostarts a local Mini Authority on
+    /// `[::1]:50051`; any other value is treated as a remote Authority URL.
+    /// When unset, falls back to the persisted `[authority]` section or
+    /// the y/N bootstrap prompt.
+    #[arg(long)]
+    pub authority: Option<String>,
+
+    /// Profile name materialised by the autostarted Mini Authority.
+    /// Ignored when Authority is remote or already reachable.
+    #[arg(long, default_value = firma_authority::DEFAULT_PROFILE)]
+    pub authority_profile: String,
+
     /// Wrapped command and args (pass after `--`).
     #[arg(required = true, num_args = 1.., allow_hyphen_values = true)]
     pub command: Vec<String>,

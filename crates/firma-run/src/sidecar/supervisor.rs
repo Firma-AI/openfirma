@@ -40,6 +40,9 @@ pub struct SpawnRequest<'a> {
     pub cwd_template: Option<PathBuf>,
     pub firma_exe: PathBuf,
     pub startup_timeout: Duration,
+    /// Effective Authority URL injected into `[authority].url` of the
+    /// synthesized sidecar config. `None` leaves the section untouched.
+    pub authority_url: Option<&'a str>,
 }
 
 /// Captured values from the seven-line ready sequence.
@@ -121,6 +124,7 @@ impl SidecarSupervisor {
             cwd_template: req.cwd_template.clone(),
             socket_path: &sock_path,
             out_path: &cfg_path,
+            authority_url: req.authority_url,
         })?;
 
         let mut child = std::process::Command::new(&req.firma_exe)

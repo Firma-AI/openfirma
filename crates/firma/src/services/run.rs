@@ -14,6 +14,16 @@ use crate::args::run::RunArgs;
 /// Returns an error if `firma_run` fails to launch or supervise the
 /// wrapped command.
 pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
+    if args.no_autostart && args.authority.as_deref() == Some("local") {
+        anyhow::bail!(
+            "--no-autostart is incompatible with --authority local; pass --authority <url> or omit --no-autostart"
+        );
+    }
+    let authority_cli = match args.authority.as_deref() {
+        None => firma_run::authority::AuthorityCli::Unset,
+        Some("local") => firma_run::authority::AuthorityCli::Local,
+        Some(url) => firma_run::authority::AuthorityCli::Remote(url.to_string()),
+    };
     let input = RunInput {
         profile: args.profile,
         config: args.config,
@@ -28,6 +38,9 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         sidecar_template_path: args.sidecar_config,
         sidecar_startup_timeout_secs: args.sidecar_startup_timeout_secs,
         command: args.command,
+        authority_cli,
+        authority_profile: args.authority_profile,
+        user_config_path: None,
     };
     match execute_run(&input) {
         Ok(code) => Ok(exit_code(code)),
