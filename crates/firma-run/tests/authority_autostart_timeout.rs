@@ -1,5 +1,5 @@
 //! Spawn a child that prints fewer than the contract lines and sleeps;
-//! AuthoritySupervisor::spawn must return `AuthorityReadyTimeout`.
+//! `AuthoritySupervisor::spawn` must return `AuthorityReadyTimeout`.
 
 #![allow(
     clippy::unwrap_used,
@@ -11,10 +11,10 @@
 #[cfg(unix)]
 #[test]
 fn timeout_kills_child_and_returns_typed_error() {
-    use std::time::Duration;
-
     use firma_run::authority::{AuthoritySupervisor, SpawnRequest};
     use firma_run::error::RunError;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::time::Duration;
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let fake = tmp.path().join("fake-firma.sh");
@@ -29,7 +29,6 @@ fn timeout_kills_child_and_returns_typed_error() {
          esac\n",
     )
     .expect("write fake");
-    use std::os::unix::fs::PermissionsExt as _;
     let mut p = std::fs::metadata(&fake).unwrap().permissions();
     p.set_mode(0o755);
     std::fs::set_permissions(&fake, p).unwrap();
@@ -43,9 +42,8 @@ fn timeout_kills_child_and_returns_typed_error() {
         firma_exe: fake,
         startup_timeout: Duration::from_millis(500),
     });
-    let err = match result {
-        Ok(_) => panic!("must time out"),
-        Err(e) => e,
+    let Err(err) = result else {
+        panic!("must time out")
     };
     assert!(
         matches!(err, RunError::AuthorityReadyTimeout { .. }),
