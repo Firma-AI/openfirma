@@ -32,6 +32,7 @@ fn missing_template_writes_minimal_config() {
         cwd_template: None,
         socket_path: &sock,
         out_path: &out,
+        authority_url: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Minimal);
@@ -82,6 +83,7 @@ paths = ["/etc/firma/cap.toml"]
         cwd_template: None,
         socket_path: &sock,
         out_path: &out,
+        authority_url: None,
     })
     .expect("synthesize");
 
@@ -139,6 +141,7 @@ fn priority_order_explicit_over_env_over_cwd() {
         cwd_template: Some(cwd.clone()),
         socket_path: &sock,
         out_path: &out,
+        authority_url: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Explicit(explicit.clone()));
@@ -149,6 +152,7 @@ fn priority_order_explicit_over_env_over_cwd() {
         cwd_template: Some(cwd.clone()),
         socket_path: &sock,
         out_path: &out,
+        authority_url: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Env(env));
@@ -159,6 +163,7 @@ fn priority_order_explicit_over_env_over_cwd() {
         cwd_template: Some(cwd.clone()),
         socket_path: &sock,
         out_path: &out,
+        authority_url: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Cwd(cwd));
@@ -175,6 +180,7 @@ fn nonexistent_template_paths_fall_through_to_minimal() {
         cwd_template: Some(PathBuf::from("/does/not/exist/cwd.toml")),
         socket_path: &sock,
         out_path: &out,
+        authority_url: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Minimal);

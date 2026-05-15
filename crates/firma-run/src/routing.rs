@@ -39,10 +39,12 @@ fn structural_dns_stub_listen_addr() -> &'static str {
 pub struct NetworkRuntime {
     env_overrides: BTreeMap<String, String>,
     sidecar_endpoint: SidecarEndpoint,
-    // Drop order: `_supervisor` (if present) kills the spawned sidecar
-    // before `_adapter` unbinds the per-run upstream UDS, before
-    // `env_overrides` falls out of scope.
-    _supervisor: Option<SidecarSupervisor>,
+    // Drop order: the sidecar supervisor must drop BEFORE the authority
+    // supervisor (the sidecar streams policy from the authority). Rust
+    // drops fields top-to-bottom of struct declaration, so place
+    // `_sidecar_supervisor` above `_authority_supervisor`.
+    _sidecar_supervisor: Option<SidecarSupervisor>,
+    _authority_supervisor: Option<crate::authority::AuthoritySupervisor>,
     #[cfg(unix)]
     _adapter: Option<SidecarAdapter>,
 }
@@ -70,6 +72,17 @@ pub struct AutostartFlags {
     pub no_autostart: bool,
     pub template_path: Option<PathBuf>,
     pub startup_timeout: std::time::Duration,
+    /// Effective Authority URL — set by `resolve_authority` and threaded
+    /// into the synthesized sidecar config.
+    pub authority_url: Option<String>,
+}
+
+/// Resolved Authority for the current run. URL is what gets fed into the
+/// sidecar's `[authority].url`; supervisor is held inside `NetworkRuntime`
+/// for kill-on-Drop.
+pub struct ResolvedAuthority {
+    pub url: String,
+    pub supervisor: Option<crate::authority::AuthoritySupervisor>,
 }
 
 /// Prepare network runtime artifacts for a sandbox launch.
@@ -95,15 +108,20 @@ pub fn prepare_network_runtime(
     sidecar_endpoint: &SidecarEndpoint,
     identity: &RunIdentity,
     flags: &AutostartFlags,
+    authority: ResolvedAuthority,
 ) -> Result<NetworkRuntime, RunError> {
-    let (effective_endpoint, supervisor) =
-        resolve_effective_endpoint(handle, sidecar_endpoint, identity, flags)?;
+    let mut flags = flags.clone();
+    flags.authority_url = Some(authority.url.clone());
+
+    let (effective_endpoint, sidecar_supervisor) =
+        resolve_effective_endpoint(handle, sidecar_endpoint, identity, &flags)?;
 
     if !handle.network_policy.enforce_network_namespace {
         return Ok(NetworkRuntime {
             env_overrides: BTreeMap::new(),
             sidecar_endpoint: effective_endpoint,
-            _supervisor: supervisor,
+            _sidecar_supervisor: sidecar_supervisor,
+            _authority_supervisor: authority.supervisor,
             #[cfg(unix)]
             _adapter: None,
         });
@@ -111,7 +129,7 @@ pub fn prepare_network_runtime(
 
     #[cfg(not(unix))]
     {
-        let _ = (effective_endpoint, supervisor);
+        let _ = (effective_endpoint, sidecar_supervisor, authority);
         Err(RunError::UnsupportedBackend {
             backend: handle.backend.to_string(),
             reason: "structural network confinement currently requires unix sockets".to_string(),
@@ -157,7 +175,8 @@ pub fn prepare_network_runtime(
         Ok(NetworkRuntime {
             env_overrides,
             sidecar_endpoint: effective_endpoint,
-            _supervisor: supervisor,
+            _sidecar_supervisor: sidecar_supervisor,
+            _authority_supervisor: authority.supervisor,
             _adapter: Some(adapter),
         })
     }
@@ -220,7 +239,185 @@ fn autostart_sidecar(
         cwd_template,
         firma_exe,
         startup_timeout: flags.startup_timeout,
+        authority_url: flags.authority_url.as_deref(),
     })
+}
+
+/// Step 0: resolve the Authority before any sidecar work.
+///
+/// CLI > persisted > prompt (only when both empty and TTY). On Local
+/// selection, probe `[::1]:50051`; on miss, spawn an
+/// `AuthoritySupervisor`. EADDRINUSE recovery: on any spawn error,
+/// re-probe once; if the port is now reachable, drop the (failed)
+/// supervisor handle and proceed without one.
+///
+/// # Errors
+///
+/// Propagates any `RunError` raised by selection or spawn paths.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "every input is independent — bundling into a request struct only adds noise here"
+)]
+pub fn resolve_authority(
+    identity: &RunIdentity,
+    runtime_dir: &Path,
+    flags: &AutostartFlags,
+    cli: &crate::authority::AuthorityCli,
+    profile_name: &str,
+    user_config_path: &Path,
+    firma_exe: &Path,
+    prompt: &mut dyn crate::authority::AuthorityPromptIo,
+) -> Result<ResolvedAuthority, RunError> {
+    let selection = crate::authority::resolve(cli, flags.no_autostart, user_config_path, prompt)?;
+
+    match selection {
+        crate::authority::AuthoritySelection::Remote(url) => {
+            probe_authority_url(&url)?;
+            Ok(ResolvedAuthority {
+                url,
+                supervisor: None,
+            })
+        }
+        crate::authority::AuthoritySelection::Local => {
+            let target = "[::1]:50051";
+            if probe_authority_tcp(target).is_ok() {
+                return Ok(ResolvedAuthority {
+                    url: format!("http://{target}"),
+                    supervisor: None,
+                });
+            }
+            if flags.no_autostart {
+                return Err(RunError::MissingAuthority);
+            }
+            let marker =
+                firma_stack::runtime_paths::run_entry_from(runtime_dir, &identity.sandbox_id)
+                    .join("authority");
+            match crate::authority::AuthoritySupervisor::spawn(crate::authority::SpawnRequest {
+                sandbox_id: &identity.sandbox_id,
+                agent_id: &identity.profile,
+                session_id: &identity.session_id,
+                marker_dir: marker,
+                profile_name,
+                firma_exe: firma_exe.to_path_buf(),
+                startup_timeout: flags.startup_timeout,
+            }) {
+                Ok(sup) => Ok(ResolvedAuthority {
+                    url: sup.url(),
+                    supervisor: Some(sup),
+                }),
+                Err(spawn_err) => {
+                    if probe_authority_tcp(target).is_ok() {
+                        Ok(ResolvedAuthority {
+                            url: format!("http://{target}"),
+                            supervisor: None,
+                        })
+                    } else {
+                        Err(spawn_err)
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn probe_authority_tcp(addr: &str) -> Result<(), String> {
+    let socket: std::net::SocketAddr = addr.parse().map_err(|e| format!("parse {addr}: {e}"))?;
+    std::net::TcpStream::connect_timeout(&socket, std::time::Duration::from_millis(500))
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+fn probe_authority_url(url_str: &str) -> Result<(), RunError> {
+    let (host, port) = parse_host_port(url_str).ok_or_else(|| RunError::AuthorityUnreachable {
+        url: url_str.to_string(),
+        reason: "could not extract host:port".into(),
+    })?;
+    let addrs = std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port)).map_err(|e| {
+        RunError::AuthorityUnreachable {
+            url: url_str.to_string(),
+            reason: format!("resolve: {e}"),
+        }
+    })?;
+    for addr in addrs {
+        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500))
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+    Err(RunError::AuthorityUnreachable {
+        url: url_str.to_string(),
+        reason: "connect refused on all resolved addresses".into(),
+    })
+}
+
+fn parse_host_port(url_str: &str) -> Option<(String, u16)> {
+    let (scheme, rest) = match url_str.find("://") {
+        Some(i) => (Some(&url_str[..i]), &url_str[i + 3..]),
+        None => (None, url_str),
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let (host, port_str) = match authority.rfind(':') {
+        Some(i) if !authority[..i].contains(']') || authority.starts_with('[') => (
+            authority[..i].trim_start_matches('[').trim_end_matches(']'),
+            Some(&authority[i + 1..]),
+        ),
+        _ => (
+            authority.trim_start_matches('[').trim_end_matches(']'),
+            None,
+        ),
+    };
+    let port = match port_str {
+        Some(p) => p.parse::<u16>().ok()?,
+        None => match scheme {
+            Some("https") => 443,
+            Some("http") => 80,
+            _ => 50051,
+        },
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some((host.to_string(), port))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod parse_host_port_tests {
+    use super::parse_host_port;
+
+    #[test]
+    fn parses_http_with_port() {
+        assert_eq!(
+            parse_host_port("http://localhost:50051").unwrap(),
+            ("localhost".to_string(), 50051)
+        );
+    }
+    #[test]
+    fn parses_https_without_port() {
+        assert_eq!(
+            parse_host_port("https://authority.example.invariant").unwrap(),
+            ("authority.example.invariant".to_string(), 443)
+        );
+    }
+    #[test]
+    fn parses_ipv6_bracketed() {
+        assert_eq!(
+            parse_host_port("http://[::1]:50051/").unwrap(),
+            ("::1".to_string(), 50051)
+        );
+    }
+    #[test]
+    fn parses_bare_host_port() {
+        assert_eq!(
+            parse_host_port("localhost:50051").unwrap(),
+            ("localhost".to_string(), 50051)
+        );
+    }
+    #[test]
+    fn rejects_empty() {
+        assert!(parse_host_port("").is_none());
+    }
 }
 
 fn format_endpoint(endpoint: &SidecarEndpoint) -> String {

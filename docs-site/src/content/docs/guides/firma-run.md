@@ -92,6 +92,42 @@ Opt out for production or CI:
 
 Autostart currently requires Unix. On Windows, use `--sidecar=external` with a pre-started Sidecar.
 
+### Authority bootstrap
+
+Before the Sidecar fires, `firma run` resolves which Authority to use.
+Precedence: `--authority local` / `--authority <url>` > persisted
+`[authority]` table in `~/.config/firma/firma.toml` (Linux),
+`~/Library/Application Support/firma/firma.toml` (macOS), or
+`%APPDATA%\firma\firma.toml` (Windows) > a one-time y/N prompt when both
+are empty and stdin is a TTY:
+
+```text
+No Authority is configured for this project.
+firma run can start a local Mini Authority for development on [::1]:50051.
+This is suitable for a single developer on a trusted workstation.
+
+Start a local Mini Authority? [y/N]:
+```
+
+On `y` the choice is persisted and a per-run Mini Authority is spawned
+with an ephemeral signing key plus the embedded `developer` policy
+profile (a deny-all baseline). On `n`, no-TTY, or `--no-autostart`,
+`firma run` exits with a typed error (`AuthorityDeclined`,
+`AuthorityPromptNoTty`, or `MissingAuthority`). The spawned Authority is
+killed on `firma run` exit.
+
+Flags:
+
+- `--authority local` — autostart a local Mini Authority on
+  `[::1]:50051`; bypasses the prompt.
+- `--authority <url>` — point at a remote Authority; bypasses the
+  prompt; fails with `AuthorityUnreachable` if the URL does not answer.
+- `--authority-profile <name>` — profile materialised by the
+  autostarted Mini Authority. Today only `developer` ships. Ignored
+  when the Authority is remote or already reachable.
+
+`--no-autostart --authority local` is a typed argument-conflict error.
+
 ## Step 4: Run a command under `firma run`
 
 The simplest invocation:

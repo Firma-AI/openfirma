@@ -20,6 +20,10 @@ use crate::service::AuthorityServiceImpl;
 /// which is useful for integration testing without race conditions.
 pub struct Server {
     port: u16,
+    listen_addr: SocketAddr,
+    policy_dir: std::path::PathBuf,
+    configured_listen_addr: String,
+    policy_count: usize,
     health_reporter: HealthReporter,
     future: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>>,
 }
@@ -64,6 +68,12 @@ impl Server {
             config.schema_path.clone(),
             config.bundle_ttl_seconds,
         )?;
+
+        let policy_count = std::fs::read_dir(&config.policy_dir).map_or(0, |rd| {
+            rd.filter_map(Result::ok)
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "cedar"))
+                .count()
+        });
 
         // Load separate issuance policy store
         tracing::info!(
@@ -113,6 +123,10 @@ impl Server {
 
         Ok(Self {
             port,
+            listen_addr: local_addr,
+            policy_dir: config.policy_dir.clone(),
+            configured_listen_addr: config.listen_addr.clone(),
+            policy_count,
             health_reporter,
             future: Box::pin(server),
         })
@@ -124,10 +138,15 @@ impl Server {
     ///
     /// Returns an error if the underlying gRPC transport fails.
     pub async fn run(self) -> Result<()> {
-        tracing::info!(port = %self.port, "gRPC server listening");
         self.health_reporter
             .set_service_status("", tonic_health::ServingStatus::Serving)
             .await;
+        crate::startup::log_ready_sequence(&crate::startup::StartupReport {
+            policy_dir: &self.policy_dir,
+            configured_listen_addr: &self.configured_listen_addr,
+            policy_count: self.policy_count,
+            effective_listen_addr: self.listen_addr.to_string(),
+        });
         self.future.await.context("gRPC transport server failed")
     }
 

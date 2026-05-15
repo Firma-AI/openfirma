@@ -58,6 +58,13 @@ pub struct RunInput {
     pub sidecar_startup_timeout_secs: u64,
     /// Wrapped command and args.
     pub command: Vec<String>,
+    /// CLI value of `--authority` (`local` | `<url>` | unset).
+    pub authority_cli: crate::authority::AuthorityCli,
+    /// CLI value of `--authority-profile`. Default `developer`.
+    pub authority_profile: String,
+    /// Optional override of the user-config path. Default
+    /// `dirs::config_dir()/firma/firma.toml`. Tests inject a tmp path.
+    pub user_config_path: Option<PathBuf>,
 }
 
 /// Execute `firma run`.
@@ -66,6 +73,10 @@ pub struct RunInput {
 ///
 /// Returns an error when config resolution, backend lifecycle operations, or
 /// wrapped process supervision fails.
+#[allow(
+    clippy::too_many_lines,
+    reason = "step-0 authority resolution + sidecar autostart + sandbox lifecycle are sequential and read more clearly inline"
+)]
 pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
     if args.command.is_empty() {
         return Err(RunError::MissingCommand);
@@ -123,9 +134,38 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             } else {
                 args.sidecar_startup_timeout_secs
             }),
+            authority_url: None,
         };
-        let network_runtime =
-            prepare_network_runtime(handle_ref, &profile.sidecar_endpoint, &identity, &flags)?;
+
+        let user_config_path = args
+            .user_config_path
+            .clone()
+            .or_else(crate::authority::config::default_user_config_path)
+            .ok_or_else(|| {
+                RunError::Internal("no user config path resolvable on this platform".into())
+            })?;
+        let firma_exe = std::env::current_exe()
+            .map_err(|e| RunError::Internal(format!("resolve current_exe: {e}")))?;
+        let runtime_dir = firma_stack::runtime_paths::default_runtime_dir();
+        let mut prompt = crate::authority::StdAuthorityPrompt;
+        let authority = crate::routing::resolve_authority(
+            &identity,
+            &runtime_dir,
+            &flags,
+            &args.authority_cli,
+            &args.authority_profile,
+            &user_config_path,
+            &firma_exe,
+            &mut prompt,
+        )?;
+
+        let network_runtime = prepare_network_runtime(
+            handle_ref,
+            &profile.sidecar_endpoint,
+            &identity,
+            &flags,
+            authority,
+        )?;
         let effective_endpoint = network_runtime.sidecar_endpoint().clone();
         let env = build_execution_env(
             &profile,
