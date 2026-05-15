@@ -1,8 +1,8 @@
 # Mapping rules for the release demo.
 #
 # Mapped (method, host, path) tuples reach the enforcement pipeline.
-# All other hosts PASSTHROUGH because [mapping].default_protected is
-# false in `sidecar.toml` — that keeps unrelated agent traffic (OpenAI,
+# All other hosts PASSTHROUGH because [sidecar.mapping].default_protected
+# is false in `firma.toml` — that keeps unrelated agent traffic (OpenAI,
 # whatever) out of the demo's policy story.
 
 # CI: positive ALLOW path against the local fixture server.

@@ -16,7 +16,7 @@ mod readiness;
 mod spawn;
 mod supervisor;
 
-pub use config::{StackConfig, load_stack_config};
+pub use config::{StackConfig, resolve_stack_config};
 pub use error::StackError;
 pub use runtime_paths::{default_runtime_dir, run_dir_from, run_entry_from};
 pub use start::{StackHandle, StartMode, spawn_stack, start, supervise};

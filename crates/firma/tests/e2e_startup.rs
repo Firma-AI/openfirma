@@ -55,9 +55,13 @@ fn write_authority_fixture(dir: &std::path::Path) -> std::path::PathBuf {
     let revocation_file = dir.join("revocations.txt");
     std::fs::write(&revocation_file, "").unwrap();
 
-    let config_path = dir.join("authority.toml");
+    // Unified sectioned config: `firma authority` resolves the
+    // `[authority]` section out of one `firma.toml` via the strict
+    // section loader.
+    let config_path = dir.join("firma.toml");
     let toml = format!(
         r#"
+[authority]
 listen_addr = "127.0.0.1:0"
 policy_dir = "{policy_dir}"
 issuance_policy_dir = "{issuance_policy_dir}"

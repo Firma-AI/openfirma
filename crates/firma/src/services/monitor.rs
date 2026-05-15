@@ -33,14 +33,13 @@ pub fn run(args: Args) -> ExitCode {
         since = ?args.since,
         "firma monitor starting"
     );
-    let state_dir =
-        match crate::services::stack::resolve_state_dir(args.state_dir, args.config.as_deref()) {
-            Ok(path) => path,
-            Err(error) => {
-                eprintln!("firma monitor: {error}");
-                return ExitCode::from(2);
-            }
-        };
+    let state_dir = match crate::services::stack::resolve_state_dir(args.state_dir) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("firma monitor: {error}");
+            return ExitCode::from(2);
+        }
+    };
 
     let backfill = match args.since.as_deref() {
         Some(value) => match since::parse(value) {

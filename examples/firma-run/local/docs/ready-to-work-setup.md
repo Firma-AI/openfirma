@@ -12,7 +12,7 @@ Use this when onboarding a developer who needs a known-good setup quickly.
 ## Preconditions
 
 - Repo root: `firma-oss`
-- `.local/authority.toml` exists
+- `.local/firma.toml` exists
 - `cargo` available
 
 ## 1) Bootstrap local files
@@ -26,7 +26,7 @@ examples/firma-run/local/setup.sh
 Codex:
 
 ```bash
-cp examples/firma-run/local/assets/firma_sidecar.local.codex.example.toml .local/firma_sidecar.local.toml
+cp examples/firma-run/local/assets/firma.local.codex.example.toml .local/firma.toml
 cp examples/firma-run/local/assets/mapping-rules.codex.local.example.toml .local/mapping-rules.toml
 export FIRMA_RUN_SESSION_ID=demo-session-codex
 examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID" --output .local/capability-codex.toml
@@ -35,7 +35,7 @@ examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID
 Claude:
 
 ```bash
-cp examples/firma-run/local/assets/firma_sidecar.local.claude.example.toml .local/firma_sidecar.local.toml
+cp examples/firma-run/local/assets/firma.local.claude.example.toml .local/firma.toml
 cp examples/firma-run/local/assets/mapping-rules.claude.local.example.toml .local/mapping-rules.toml
 export FIRMA_RUN_SESSION_ID=demo-session-claude
 examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID" --output .local/capability-claude.toml
@@ -46,13 +46,13 @@ examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID
 Terminal A (authority):
 
 ```bash
-cargo run -p firma -- authority --config .local/authority.toml
+cargo run -p firma -- authority --config .local/firma.toml
 ```
 
 Terminal B (sidecar):
 
 ```bash
-cargo run -p firma -- sidecar -c .local/firma_sidecar.local.toml
+cargo run -p firma -- sidecar -c .local/firma.toml
 ```
 
 Terminal C (agent via `firma run`):

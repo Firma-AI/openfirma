@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/firma",
+  "crates/firma-config",
   "crates/firma-core",
   "crates/firma-grpc-interceptor-proto",
   "crates/firma-proto",
@@ -47,6 +48,7 @@ dirs = "6"
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
 elliptic-curve = { version = "0.13", features = ["pem"] }
 firma-authority = { path = "crates/firma-authority" }
+firma-config = { path = "crates/firma-config" }
 firma-core = { path = "crates/firma-core" }
 firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto" }
 firma-proto = { path = "crates/firma-proto" }

@@ -83,10 +83,10 @@ OpenFirma ships three default mapping files under `crates/firma-sidecar/config/m
 | `stripe.toml` | 88 Stripe REST endpoints → 14 action classes |
 | `gmail.toml`  | 41 Gmail REST endpoints → 7 action classes   |
 
-You compose them, plus any project-specific rules, in `sidecar.toml`:
+You compose them, plus any project-specific rules, in `firma.toml`:
 
 ```toml
-[mapping]
+[sidecar.mapping]
 rules_path = "config/mappings/default.toml"
 rules_paths = [
   "crates/firma-sidecar/config/mappings/github.toml",

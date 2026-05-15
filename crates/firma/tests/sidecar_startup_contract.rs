@@ -80,36 +80,37 @@ action_class = "communication.external.send"
 
     let interceptor_port = pick_free_port();
     let health_port = pick_free_port();
-    let sidecar_toml = tmp.path().join("sidecar.toml");
+    let sidecar_toml = tmp.path().join("firma.toml");
     std::fs::write(
         &sidecar_toml,
         format!(
             // Paths embedded as TOML literal strings (single quotes) so Windows
             // backslashes pass through verbatim instead of being interpreted as
-            // escape sequences.
+            // escape sequences. Unified sectioned config: every sidecar
+            // table is nested under `[sidecar.*]`.
             r#"
-[interceptor]
+[sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:{interceptor_port}"
 drain_timeout_secs = 30
 
-[policy]
+[sidecar.policy]
 dir = '{policies}'
 
-[ca]
+[sidecar.ca]
 dir = '{ca}'
 
-[log]
+[sidecar.log]
 level = "info"
 
-[mapping]
+[sidecar.mapping]
 rules_path = '{mapping}'
 default_protected = true
 
-[connector]
+[sidecar.connector]
 default_timeout_ms = 30000
 
-[audit]
+[sidecar.audit]
 sink = "stdout"
 signing_key_path = '{audit_key}'
 "#,
@@ -126,7 +127,7 @@ signing_key_path = '{audit_key}'
     let stderr_file = File::create(&stderr_log).unwrap();
 
     let mut child = Command::new(firma_bin())
-        .args(["sidecar", "--config-file"])
+        .args(["sidecar", "--config"])
         .arg(&sidecar_toml)
         .args(["--health-bind-addr", &format!("127.0.0.1:{health_port}")])
         .stdout(stdout_file)

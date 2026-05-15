@@ -24,11 +24,11 @@ For the conceptual background, read [The sandbox boundary](../../concepts/sandbo
 
 `firma run` uses a different sandbox backend per platform. The defaults are usually right:
 
-| Platform | Default backend | Notes                                                                  |
-| -------- | --------------- | ---------------------------------------------------------------------- |
-| Linux    | `bwrap`         | Requires unprivileged user namespaces + AppArmor allowance for bwrap   |
-| macOS    | `vz`            | Native Apple Virtualization framework                                  |
-| Windows  | `wsl2`          | Linux guest under WSL2                                                 |
+| Platform | Default backend | Notes                                                                |
+| -------- | --------------- | -------------------------------------------------------------------- |
+| Linux    | `bwrap`         | Requires unprivileged user namespaces + AppArmor allowance for bwrap |
+| macOS    | `vz`            | Native Apple Virtualization framework                                |
+| Windows  | `wsl2`          | Linux guest under WSL2                                               |
 
 Verify the platform default works on your host. On Linux, the bwrap backend
 needs two things: unprivileged user namespaces enabled, and — on AppArmor
@@ -59,31 +59,31 @@ examples/firma-run/local/setup.sh
 
 This creates a `.local/` directory with:
 
-- `.local/firma_sidecar.local.toml` — a working Sidecar config.
+- `.local/firma.toml` — a working sectioned Sidecar config.
 - `.local/mapping-rules.toml` — a starter mapping (one stub rule).
 - `.local/audit-key.pem` — a freshly generated audit signing key.
 
 The setup script is idempotent — re-running it leaves existing files alone. Inspect the generated config:
 
 ```bash
-cat .local/firma_sidecar.local.toml
+cat .local/firma.toml
 ```
 
-You'll see `[mapping].default_protected = false` and a `file` audit sink. For a real workload, you'd switch to `default_protected = true` and tighten the mapping. For first-touch, leave it as is.
+You'll see `[sidecar.mapping].default_protected = false` and a `file` audit sink. For a real workload, you'd switch to `default_protected = true` and tighten the mapping. For first-touch, leave it as is.
 
 ## Step 3: Start the Sidecar
 
 In a dedicated terminal:
 
 ```bash
-cargo run --release -p firma -- sidecar -c .local/firma_sidecar.local.toml
+cargo run --release -p firma -- sidecar -c .local/firma.toml
 ```
 
 Wait for the `sidecar ready` line.
 
 ### Or: let `firma run` autostart it
 
-You can skip the explicit Sidecar terminal entirely. When `firma run` is invoked and the configured Sidecar endpoint is unreachable, it autostarts a Sidecar as a child of the wrapper, waits for the seven-line ready log contract, and tears it down on exit. Marker files land under `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/` (Linux) or `/tmp/firma-$UID/firma/run/<sandbox_id>/` (macOS fallback). The spawned Sidecar inherits a config template from `--sidecar-config`, then `FIRMA_SIDECAR_CONFIG_FILE`, then `./firma_sidecar.toml`, then a synthesized minimal config — in that order — with the `[interceptor]` section forced to `unix_socket` mode against the marker socket.
+You can skip the explicit Sidecar terminal entirely. When `firma run` is invoked and the configured Sidecar endpoint is unreachable, it autostarts a Sidecar as a child of the wrapper, waits for the seven-line ready log contract, and tears it down on exit. Marker files land under `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/` (Linux) or `/tmp/firma-$UID/firma/run/<sandbox_id>/` (macOS fallback). The spawned Sidecar inherits a config template from `--sidecar-config`, then `FIRMA_SIDECAR_CONFIG_FILE`, then the discovered `firma.toml`, then a synthesized minimal config — in that order — with the `[sidecar.interceptor]` section forced to `unix_socket` mode against the marker socket.
 
 Opt out for production or CI:
 
@@ -96,10 +96,10 @@ Autostart currently requires Unix. On Windows, use `--sidecar=external` with a p
 
 Before the Sidecar fires, `firma run` resolves which Authority to use.
 Precedence: `--authority local` / `--authority <url>` > persisted
-`[authority]` table in `~/.config/firma/firma.toml` (Linux),
-`~/Library/Application Support/firma/firma.toml` (macOS), or
-`%APPDATA%\firma\firma.toml` (Windows) > a one-time y/N prompt when both
-are empty and stdin is a TTY:
+`[authority]` table in the discovered `firma.toml`
+(`~/.config/firma/firma.toml` on Linux/macOS,
+`%USERPROFILE%\.firma\firma.toml` on Windows) > a one-time y/N prompt when
+both are empty and stdin is a TTY:
 
 ```text
 No Authority is configured for this project.
@@ -150,16 +150,20 @@ The Sidecar receives the curl's request, runs it through the pipeline, and eithe
 
 For Stage 1 to allow the call, the Sidecar must have a capability matching `(session_id, action_class, resource)`. Two options:
 
-**Pre-staged capability seed.** Issue a capability once with `firma authority issue --output .local/capability-<agent>.toml` and reference it in `[capability_seed].paths` in the Sidecar config. Right for a long-lived dev workflow.
+**Pre-staged capability seed.** Issue a capability once with `firma authority issue --output .local/capability-<agent>.toml` and reference it in `[sidecar.capability_seed].paths` in `firma.toml`. Right for a long-lived dev workflow.
 
 **Per-run capability.** Pass `--capability-file` to `firma run`. The wrapper writes the file to a host-side path the Sidecar reads. Right for one-off invocations.
 
 ```bash
-firma authority -c .local/authority.toml issue \
+firma authority -c .local/firma.toml issue \
   --agent-id local-dev \
   --session-id $(uuidgen) \
   --action communication.external.send \
   --output .local/capability-local-dev.toml
+
+# Note: the setup.sh-generated .local/firma.toml is sidecar-only (no
+# [authority] section). To run `firma authority`, add an [authority]
+# section to .local/firma.toml first, or point -c at a file that has one.
 
 cargo run --release -p firma -- run \
   --profile generic \
@@ -181,19 +185,19 @@ This prints the resolved profile as JSON: which backend, which env vars are inje
 
 `firma run --help` is the full reference. The flags that come up most often:
 
-| Flag                                | Effect                                                                                              |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `--profile <name>`                  | Pick a runtime profile. `generic` is the default; `codex` adds workspace mounts for coding agents.  |
-| `--config <file>`                   | Override profile defaults from a TOML/YAML file.                                                    |
-| `--backend <bwrap\|vz\|wsl2\|firecracker>` | Override the platform default backend.                                                       |
-| `--sidecar-endpoint <url>`          | Point at a Sidecar at a non-default address (e.g. UDS path or a different port).                    |
-| `--sidecar <auto\|external>`        | `auto` (default) autostarts a per-run Sidecar when the endpoint is unreachable; `external` requires a pre-running one. |
-| `--no-autostart`                    | Fail loudly if the Sidecar is unreachable, instead of autostarting. CI / production safety net.     |
-| `--sidecar-config <path>`           | Sidecar TOML template for autostart. Falls back to `FIRMA_SIDECAR_CONFIG_FILE`, then `./firma_sidecar.toml`. |
-| `--sidecar-startup-timeout-secs <n>` | Maximum wait for the autostarted Sidecar's `ready` line (default `10`). |
-| `--capability-file <path>`          | Pre-staged capability seed for this run.                                                            |
-| `--identity-mode <sandbox-user\|host-user>` | Choose whether the sandboxed process runs as the host user or a remapped sandbox user.        |
-| `--print-effective-config`          | Print resolved config and exit. No agent launched.                                                  |
+| Flag                                        | Effect                                                                                                                 |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `--profile <name>`                          | Pick a runtime profile. `generic` is the default; `codex` adds workspace mounts for coding agents.                     |
+| `--config <file>`                           | Override profile defaults from a TOML/YAML file.                                                                       |
+| `--backend <bwrap\|vz\|wsl2\|firecracker>`  | Override the platform default backend.                                                                                 |
+| `--sidecar-endpoint <url>`                  | Point at a Sidecar at a non-default address (e.g. UDS path or a different port).                                       |
+| `--sidecar <auto\|external>`                | `auto` (default) autostarts a per-run Sidecar when the endpoint is unreachable; `external` requires a pre-running one. |
+| `--no-autostart`                            | Fail loudly if the Sidecar is unreachable, instead of autostarting. CI / production safety net.                        |
+| `--sidecar-config <path>`                   | Sidecar TOML template for autostart. Falls back to `FIRMA_SIDECAR_CONFIG_FILE`, then the discovered `firma.toml`.      |
+| `--sidecar-startup-timeout-secs <n>`        | Maximum wait for the autostarted Sidecar's `ready` line (default `10`).                                                |
+| `--capability-file <path>`                  | Pre-staged capability seed for this run.                                                                               |
+| `--identity-mode <sandbox-user\|host-user>` | Choose whether the sandboxed process runs as the host user or a remapped sandbox user.                                 |
+| `--print-effective-config`                  | Print resolved config and exit. No agent launched.                                                                     |
 
 ## What does and does not pass through
 

@@ -1,6 +1,13 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
+/// Sentinel: unset `policy_dir`.
+pub(crate) const DEFAULT_POLICY_DIR: &str = "policies/";
+/// Sentinel: unset `issuance_policy_dir`.
+pub(crate) const DEFAULT_ISSUANCE_POLICY_DIR: &str = "issuance-policies/";
+/// Sentinel: unset `key_file`.
+pub(crate) const DEFAULT_KEY_FILE: &str = "firma-authority.key";
+
 /// Authority configuration loaded from TOML file and/or environment variables.
 ///
 /// Environment variables take precedence over TOML values and use the
@@ -43,20 +50,35 @@ impl AuthorityConfig {
     ///
     /// Returns an error if the config file exists but cannot be parsed.
     pub fn load(config_path: Option<&PathBuf>) -> Result<Self, ConfigError> {
-        let mut config = if let Some(path) = config_path {
-            let contents = std::fs::read_to_string(path).map_err(|e| ConfigError::IoError {
-                path: path.clone(),
-                reason: e.to_string(),
-            })?;
-            toml::from_str::<Self>(&contents).map_err(|e| ConfigError::ParseError {
-                path: path.clone(),
-                reason: e.to_string(),
-            })?
-        } else {
-            Self::default()
-        };
+        let mut config = Self::parse_file(config_path)?;
+        config.apply_env_overrides();
+        Ok(config)
+    }
 
-        // Environment variable overrides (FIRMA_AUTHORITY_ prefix)
+    /// Parse the TOML file (or take defaults) without env overrides.
+    fn parse_file(config_path: Option<&PathBuf>) -> Result<Self, ConfigError> {
+        match config_path {
+            Some(path) => {
+                let contents = std::fs::read_to_string(path).map_err(|e| ConfigError::IoError {
+                    path: path.clone(),
+                    reason: e.to_string(),
+                })?;
+                toml::from_str::<Self>(&contents).map_err(|e| ConfigError::ParseError {
+                    path: path.clone(),
+                    reason: e.to_string(),
+                })
+            }
+            None => Ok(Self::default()),
+        }
+    }
+
+    /// Apply `FIRMA_AUTHORITY_`-prefixed env overrides verbatim.
+    ///
+    /// Called *after* [`Self::rebase_defaults`] so an operator-supplied
+    /// path env var is preserved exactly as written (no re-basing of a
+    /// relative value against the config dir).
+    fn apply_env_overrides(&mut self) {
+        let config = self;
         if let Ok(v) = std::env::var("FIRMA_AUTHORITY_LISTEN_ADDR") {
             config.listen_addr = v;
         }
@@ -88,8 +110,50 @@ impl AuthorityConfig {
         {
             config.bundle_ttl_seconds = n;
         }
+    }
 
+    /// Parse a resolved config file (flat or `[authority]`-sectioned via
+    /// the caller), re-base relative paths against `config_dir`, then
+    /// apply env overrides last so they win verbatim.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::IoError`] / [`ConfigError::ParseError`].
+    pub fn load_resolved(
+        file: &std::path::Path,
+        config_dir: &std::path::Path,
+    ) -> Result<Self, ConfigError> {
+        let mut config = Self::parse_file(Some(&file.to_path_buf()))?;
+        config.rebase_defaults(config_dir);
+        config.apply_env_overrides();
         Ok(config)
+    }
+
+    /// Re-base every relative resource path against `config_dir`;
+    /// absolute paths are left untouched. No default-name sentinel
+    /// check — relative always means "relative to the config file's
+    /// directory" for consistency.
+    ///
+    /// `revocation_file` is intentionally excluded — state-managed.
+    /// Env overrides are applied *after* this (see
+    /// [`Self::apply_env_overrides`]) so an env-supplied path is kept
+    /// exactly as the operator wrote it.
+    pub fn rebase_defaults(&mut self, config_dir: &std::path::Path) {
+        let rebase = |p: &mut PathBuf| {
+            // Empty is left for the validator to reject.
+            if !p.as_os_str().is_empty() && p.is_relative() {
+                *p = config_dir.join(&*p);
+            }
+        };
+        rebase(&mut self.policy_dir);
+        rebase(&mut self.issuance_policy_dir);
+        rebase(&mut self.key_file);
+        if let Some(schema_path) = self.schema_path.as_mut()
+            && !schema_path.as_os_str().is_empty()
+            && schema_path.is_relative()
+        {
+            *schema_path = config_dir.join(&*schema_path);
+        }
     }
 }
 
@@ -97,12 +161,12 @@ impl Default for AuthorityConfig {
     fn default() -> Self {
         Self {
             listen_addr: "[::1]:50051".to_string(),
-            policy_dir: PathBuf::from("policies/"),
-            issuance_policy_dir: PathBuf::from("issuance-policies/"),
+            policy_dir: PathBuf::from(DEFAULT_POLICY_DIR),
+            issuance_policy_dir: PathBuf::from(DEFAULT_ISSUANCE_POLICY_DIR),
             schema_path: None,
             revocation_file: PathBuf::from("revocations.txt"),
             max_ttl_seconds: 3600,
-            key_file: PathBuf::from("firma-authority.key"),
+            key_file: PathBuf::from(DEFAULT_KEY_FILE),
             log_level: "info".to_string(),
             bundle_ttl_seconds: 30,
         }
@@ -144,6 +208,66 @@ mod tests {
         let path = PathBuf::from("/nonexistent/config.toml");
         let result = AuthorityConfig::load(Some(&path));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn rebase_rewrites_defaults_not_revocation() {
+        let mut c = AuthorityConfig::default();
+        c.rebase_defaults(std::path::Path::new("/cfg"));
+        assert_eq!(c.policy_dir, PathBuf::from("/cfg/policies"));
+        assert_eq!(
+            c.issuance_policy_dir,
+            PathBuf::from("/cfg/issuance-policies")
+        );
+        assert_eq!(c.key_file, PathBuf::from("/cfg/firma-authority.key"));
+        assert_eq!(c.revocation_file, PathBuf::from("revocations.txt"));
+    }
+
+    #[test]
+    fn rebase_rewrites_relative_non_default_paths() {
+        // Consistency: a relative operator-set path is config-relative,
+        // not cwd-relative, even though it is not the default sentinel.
+        let mut c = AuthorityConfig {
+            policy_dir: PathBuf::from("custom/policies"),
+            schema_path: Some(PathBuf::from("schema.cedarschema")),
+            ..AuthorityConfig::default()
+        };
+        c.rebase_defaults(std::path::Path::new("/cfg"));
+        assert_eq!(c.policy_dir, PathBuf::from("/cfg/custom/policies"));
+        assert_eq!(
+            c.schema_path,
+            Some(PathBuf::from("/cfg/schema.cedarschema"))
+        );
+    }
+
+    #[test]
+    fn rebase_skips_empty_path_for_validator() {
+        let mut c = AuthorityConfig {
+            policy_dir: PathBuf::new(),
+            ..AuthorityConfig::default()
+        };
+        c.rebase_defaults(std::path::Path::new("/cfg"));
+        assert_eq!(c.policy_dir, PathBuf::new());
+    }
+
+    #[test]
+    fn rebase_preserves_explicit_policy_dir() {
+        let mut c = AuthorityConfig {
+            policy_dir: PathBuf::from("/explicit"),
+            ..AuthorityConfig::default()
+        };
+        c.rebase_defaults(std::path::Path::new("/cfg"));
+        assert_eq!(c.policy_dir, PathBuf::from("/explicit"));
+    }
+
+    #[test]
+    fn load_from_resolved_applies_rebase() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("firma.toml");
+        std::fs::write(&p, "max_ttl_seconds = 1800\n").unwrap();
+        let c = AuthorityConfig::load_resolved(&p, tmp.path()).unwrap();
+        assert_eq!(c.max_ttl_seconds, 1800);
+        assert_eq!(c.policy_dir, tmp.path().join("policies"));
     }
 
     #[test]

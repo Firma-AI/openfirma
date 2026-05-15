@@ -32,7 +32,7 @@ The same single command also works without a pre-started Sidecar — `firma run`
 
 ```bash
 examples/firma-run/local/setup.sh
-FIRMA_SIDECAR_CONFIG_FILE=.local/firma_sidecar.local.toml \
+FIRMA_SIDECAR_CONFIG_FILE=.local/firma.toml \
   cargo run -p firma -- run --profile generic -- curl https://example.com
 ```
 

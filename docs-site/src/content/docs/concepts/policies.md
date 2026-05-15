@@ -165,10 +165,10 @@ Use this for category-wide forbids — the rule is shorter and harder to drift.
 
 ## Bundle freshness
 
-The Sidecar holds the policy bundle in memory and reloads it from the Authority's `WatchPolicyBundle` gRPC stream. Two configuration knobs in `sidecar.toml` govern freshness:
+The Sidecar holds the policy bundle in memory and reloads it from the Authority's `WatchPolicyBundle` gRPC stream. Two configuration knobs in `firma.toml` govern freshness:
 
 ```toml
-[constraint_enforcement]
+[sidecar.constraint_enforcement]
 bundle_ttl_seconds     = 60   # bundles older than this are considered stale
 enforcement_timeout_ms = 50   # max time Stage 2 will spend evaluating
 ```

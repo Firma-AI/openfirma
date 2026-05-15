@@ -3,7 +3,7 @@
 // This policy is the Stage 2 Cedar gate. It will take full effect once
 // IssueCapability → CapabilityMap population is wired in the Sidecar (task 007).
 // Until then, Stage 1 (empty CapabilityMap) enforces: mapped hosts DENY, all
-// others PASSTHROUGH (because default_protected = false in sidecar.toml).
+// others PASSTHROUGH (because default_protected = false in [sidecar.mapping]).
 //
 // Principal: Firma::Agent::"example-agent"
 // Actions:   the 15 canonical Firma action classes from FEP v0.1 §2.3.5

@@ -24,14 +24,14 @@ fn firma_bin() -> std::path::PathBuf {
 
 fn write_config(toml_body: &str) -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("sidecar.toml");
+    let path = tmp.path().join("firma.toml");
     std::fs::write(&path, toml_body).unwrap();
     (tmp, path)
 }
 
 fn run_sidecar(config_path: &PathBuf) -> (i32, String, String) {
     let output = Command::new(firma_bin())
-        .args(["sidecar", "--config-file"])
+        .args(["sidecar", "--config"])
         .arg(config_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -47,7 +47,7 @@ fn run_sidecar(config_path: &PathBuf) -> (i32, String, String) {
 fn invalid_interceptor_mode_exits_non_zero() {
     let (_tmp, cfg) = write_config(
         r#"
-[interceptor]
+[sidecar.interceptor]
 mode = "telnet"
 listen_addr = "127.0.0.1:7474"
 "#,
@@ -65,11 +65,11 @@ listen_addr = "127.0.0.1:7474"
 fn invalid_log_level_exits_non_zero() {
     let (_tmp, cfg) = write_config(
         r#"
-[interceptor]
+[sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:7474"
 
-[log]
+[sidecar.log]
 level = "verbose"
 "#,
     );
@@ -85,11 +85,11 @@ level = "verbose"
 fn empty_policy_dir_exits_non_zero() {
     let (_tmp, cfg) = write_config(
         r#"
-[interceptor]
+[sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:7474"
 
-[policy]
+[sidecar.policy]
 dir = ""
 "#,
     );

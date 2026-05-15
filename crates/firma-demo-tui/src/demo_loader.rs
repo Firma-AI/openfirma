@@ -11,8 +11,9 @@ pub struct DemoEntry {
 
 pub struct DemoManifest {
     pub root: PathBuf,
-    pub authority_config: PathBuf,
-    pub sidecar_config: PathBuf,
+    /// The single unified `firma.toml` for this demo (sectioned with
+    /// `[authority]` and `[sidecar.*]`).
+    pub config_file: PathBuf,
     pub agent_script: PathBuf,
     pub session_id: String,
     /// Human-readable description of what the script will do, shown in
@@ -126,26 +127,29 @@ pub fn load(dir: &Path) -> Result<DemoManifest> {
         .canonicalize()
         .with_context(|| format!("demo directory not found: {}", dir.display()))?;
 
-    let authority_config = required_path(&root, "authority.toml")?;
-    let sidecar_config = required_path(&root, "sidecar.toml")?;
+    let config_file = required_path(&root, "firma.toml")?;
     let agent_script = required_path(&root, "agent.py")?;
-    let session_id = parse_preflight_session_id(&sidecar_config);
+    let session_id = parse_preflight_session_id(&config_file);
     let prompt = std::fs::read_to_string(root.join("prompt.md")).unwrap_or_default();
 
     Ok(DemoManifest {
         root,
-        authority_config,
-        sidecar_config,
+        config_file,
         agent_script,
         session_id,
         prompt,
     })
 }
 
-/// Extract `session_id` from `[preflight]` section of a sidecar TOML config.
-fn parse_preflight_session_id(sidecar_toml: &Path) -> String {
+/// Extract `session_id` from the `[sidecar.preflight]` section of the
+/// unified `firma.toml`.
+fn parse_preflight_session_id(firma_toml: &Path) -> String {
     #[derive(serde::Deserialize)]
-    struct SidecarToml {
+    struct FirmaToml {
+        sidecar: Option<SidecarSection>,
+    }
+    #[derive(serde::Deserialize)]
+    struct SidecarSection {
         preflight: Option<PreflightSection>,
     }
     #[derive(serde::Deserialize)]
@@ -153,12 +157,13 @@ fn parse_preflight_session_id(sidecar_toml: &Path) -> String {
         session_id: Option<String>,
     }
 
-    let Ok(content) = std::fs::read_to_string(sidecar_toml) else {
+    let Ok(content) = std::fs::read_to_string(firma_toml) else {
         return String::new();
     };
-    toml::from_str::<SidecarToml>(&content)
+    toml::from_str::<FirmaToml>(&content)
         .ok()
-        .and_then(|t| t.preflight)
+        .and_then(|t| t.sidecar)
+        .and_then(|s| s.preflight)
         .and_then(|p| p.session_id)
         .unwrap_or_default()
 }

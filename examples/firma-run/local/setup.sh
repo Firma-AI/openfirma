@@ -10,10 +10,10 @@ LOCAL_DIR="${ROOT_DIR}/.local"
 EXAMPLES_DIR="${ROOT_DIR}/examples/firma-run/local/assets"
 
 MAPPING_SRC="${EXAMPLES_DIR}/mapping-rules.local.example.toml"
-SIDECAR_SRC_DEFAULT="${EXAMPLES_DIR}/firma_sidecar.local.example.toml"
-SIDECAR_SRC_OBSERVABILITY="${EXAMPLES_DIR}/firma_sidecar.local.observability.example.toml"
+SIDECAR_SRC_DEFAULT="${EXAMPLES_DIR}/firma.local.example.toml"
+SIDECAR_SRC_OBSERVABILITY="${EXAMPLES_DIR}/firma.local.observability.example.toml"
 MAPPING_DST="${LOCAL_DIR}/mapping-rules.toml"
-SIDECAR_DST="${LOCAL_DIR}/firma_sidecar.local.toml"
+SIDECAR_DST="${LOCAL_DIR}/firma.toml"
 AUDIT_KEY_DST="${LOCAL_DIR}/audit-key.pem"
 SETUP_MODE="default"
 
@@ -72,7 +72,7 @@ cat <<'EOM'
 
 Next steps:
 1) Start sidecar:
-   cargo run -p firma -- sidecar -c .local/firma_sidecar.local.toml
+   cargo run -p firma -- sidecar -c .local/firma.toml
 
 2) In a new terminal, run Codex through the wrapper:
    cargo run -p firma -- run --profile codex -- codex

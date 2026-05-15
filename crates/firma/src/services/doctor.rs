@@ -12,7 +12,7 @@ use crate::doctor::{
     capability_seed, config_parse, firma_bin,
     reachability::{self, Endpoint},
     render,
-    report::Report,
+    report::{Check, Report},
     sandbox, state_dirs,
 };
 
@@ -78,36 +78,57 @@ async fn build_report(args: Args) -> RenderedReport {
     let prober = sandbox::CommandProber::new(timeout);
     report.extend(sandbox::check_with(sandbox::OsFamily::current(), &prober).await);
 
-    // 3. config parse — runs early so the reachability probes know which
-    //    child configs to load.
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let config_check = config_parse::check(args.config.as_deref(), &cwd);
-    let stack_cfg_path = args
-        .config
-        .clone()
-        .or_else(|| config_parse::find_stack_config(&cwd));
-    report.push(config_check);
+    // 3. config parse — resolves the unified `firma.toml` everyone else
+    //    uses, then validates both sections. Runs early so the
+    //    reachability probes can reuse the resolved path.
+    let resolved_config =
+        firma_config::resolve_config("doctor", args.config.as_deref(), &firma_config::SystemDirs);
+    let config_path = match &resolved_config {
+        Ok(resolved) => {
+            let p = resolved.config_file.clone();
+            report.push(config_parse::check(&p));
+            Some(p)
+        }
+        Err(error) => {
+            report.push(Check::fail(
+                "config parsed",
+                format!("could not resolve firma.toml: {error}"),
+            ));
+            None
+        }
+    };
 
-    let stack_cfg = stack_cfg_path
-        .as_deref()
-        .and_then(|p| firma_stack::load_stack_config(p).ok());
-
-    // 4. sidecar reachability
-    let sidecar_endpoint =
-        stack_cfg.as_ref().and_then(
-            |cfg| match firma_sidecar::config::SidecarConfig::load_from_path(&cfg.sidecar_config) {
-                Ok(sc) => Some(reachability::endpoint_from_sidecar(&sc)),
+    // Parse the resolved file once; reachability probes 4 and 5 reuse it.
+    let parsed_config =
+        config_path
+            .as_deref()
+            .and_then(|p| match firma_config::FirmaConfig::load(p) {
+                Ok(parsed) => Some(parsed),
                 Err(error) => {
-                    warn!(?error, "could not load sidecar config");
+                    warn!(?error, "could not parse firma.toml");
                     None
                 }
-            },
-        );
+            });
+
+    // 4. sidecar reachability
+    let sidecar_endpoint = parsed_config.as_ref().and_then(|c| {
+        match c.section("sidecar").and_then(|body| {
+            toml::from_str::<firma_sidecar::config::SidecarConfig>(&body).map_err(|e| e.to_string())
+        }) {
+            Ok(sc) => Some(reachability::endpoint_from_sidecar(&sc)),
+            Err(error) => {
+                warn!(?error, "could not load sidecar config");
+                None
+            }
+        }
+    });
     report.push(reachability::check_endpoint("sidecar reachable", sidecar_endpoint, timeout).await);
 
     // 5. authority reachability
-    let authority_endpoint: Option<Endpoint> = stack_cfg.as_ref().and_then(|cfg| {
-        match firma_authority::config::AuthorityConfig::load(Some(&cfg.authority_config)) {
+    let authority_endpoint: Option<Endpoint> = parsed_config.as_ref().and_then(|c| {
+        match c.section("authority").and_then(|body| {
+            toml::from_str::<firma_authority::AuthorityConfig>(&body).map_err(|e| e.to_string())
+        }) {
             Ok(ac) => reachability::endpoint_from_authority(&ac),
             Err(error) => {
                 warn!(?error, "could not load authority config");
@@ -120,7 +141,8 @@ async fn build_report(args: Args) -> RenderedReport {
     );
 
     // 6. capability seed
-    let state_dir = resolve_state_dir(args.state_dir.clone(), stack_cfg.as_ref());
+    let state_dir = crate::services::stack::resolve_state_dir(args.state_dir.clone())
+        .unwrap_or_else(|_| PathBuf::from("."));
     report.push(capability_seed::check(&state_dir));
 
     // 7. state directories
@@ -137,23 +159,4 @@ async fn build_report(args: Args) -> RenderedReport {
         "doctor report built"
     );
     RenderedReport(report, args.json)
-}
-
-/// Resolve the runtime state directory from the CLI flag, the stack config, or
-/// the platform default.
-///
-/// The `unwrap_or_else` fallback is intentional: `firma doctor` must always
-/// produce a report rather than fail-close due to a missing state dir. The
-/// subsequent `state_dirs::check` will mark an absent directory as `WARN`.
-fn resolve_state_dir(
-    flag: Option<PathBuf>,
-    stack_cfg: Option<&firma_stack::StackConfig>,
-) -> PathBuf {
-    if let Some(p) = flag {
-        return p;
-    }
-    if let Some(p) = stack_cfg.and_then(|c| c.state_dir.clone()) {
-        return p;
-    }
-    firma_stack::resolve_state_dir(None).unwrap_or_else(|_| PathBuf::from("."))
 }

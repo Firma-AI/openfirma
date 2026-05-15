@@ -119,8 +119,10 @@ You need a capability for `support-agent` covering one of the permitted action c
 ```bash
 firma authority generate-key -o /tmp/firma-standalone/firma-authority.key
 
-# Create a minimal authority config
-cat > /tmp/firma-standalone/authority.toml <<EOF
+# Add an [authority] section to the shared firma.toml
+cat >> /tmp/firma-standalone/config/firma.toml <<EOF
+
+[authority]
 listen_addr         = "[::1]:50051"
 policy_dir          = "/tmp/firma-standalone/config/policies"
 issuance_policy_dir = "/tmp/firma-standalone/issuance"
@@ -138,7 +140,7 @@ permit (principal, action, resource);
 EOF
 
 # Mint a capability for support-agent
-firma authority -c /tmp/firma-standalone/authority.toml issue \
+firma authority -c /tmp/firma-standalone/config/firma.toml issue \
   --agent-id support-agent \
   --session-id session-001 \
   --action communication.external.send \
@@ -146,13 +148,13 @@ firma authority -c /tmp/firma-standalone/authority.toml issue \
   --output /tmp/firma-standalone/capability-support.toml
 ```
 
-Add `[authority]` and `[capability_seed]` sections to `firma_sidecar.toml`:
+Add `[sidecar.authority]` and `[sidecar.capability_seed]` sections to `firma.toml`:
 
 ```toml
-[authority]
+[sidecar.authority]
 public_key_path = "/tmp/firma-standalone/firma-authority.pub"
 
-[capability_seed]
+[sidecar.capability_seed]
 paths = ["/tmp/firma-standalone/capability-support.toml"]
 ```
 

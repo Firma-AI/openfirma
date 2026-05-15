@@ -130,10 +130,14 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             authority_url: None,
         };
 
+        // First prefer an explicit CLI path, then a discovered config file
+        // (read path). When nothing is discovered, fall back to the
+        // canonical create path so the bootstrap can persist `[authority]`.
         let user_config_path = args
             .user_config_path
             .clone()
             .or_else(crate::authority::config::default_user_config_path)
+            .or_else(crate::authority::config::canonical_write_path)
             .ok_or_else(|| {
                 RunError::Internal("no user config path resolvable on this platform".into())
             })?;

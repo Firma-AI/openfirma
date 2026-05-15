@@ -50,13 +50,16 @@ fn issued_token_seeds_capability_map_and_admits_stage1() {
     assert!(key_path.exists(), "private key file missing");
     assert!(pub_path.exists(), "public key file missing");
 
-    // 2. Write an authority TOML that points at the policies + key.
-    let auth_toml = tmp.path().join("authority.toml");
+    // 2. Write a unified sectioned firma.toml that points at the
+    //    policies + key; `firma authority` resolves `[authority]` via the
+    //    strict section loader.
+    let auth_toml = tmp.path().join("firma.toml");
     let revocation_file = tmp.path().join("revocations.txt");
     std::fs::write(
         &auth_toml,
         format!(
-            "listen_addr = \"127.0.0.1:0\"\n\
+            "[authority]\n\
+             listen_addr = \"127.0.0.1:0\"\n\
              policy_dir = {policy_dir}\n\
              revocation_file = {revocation}\n\
              max_ttl_seconds = 3600\n\

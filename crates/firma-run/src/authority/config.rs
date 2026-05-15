@@ -1,8 +1,7 @@
 //! User-level `firma.toml` reader / writer.
 //!
-//! Path resolution: `dirs::config_dir().join("firma/firma.toml")`. Linux
-//! -> `$XDG_CONFIG_HOME/firma/firma.toml`; macOS -> `~/Library/Application
-//! Support/firma/firma.toml`; Windows -> `%APPDATA%\firma\firma.toml`.
+//! Path resolution is delegated to the shared `firma-config` crate so
+//! every binary discovers and writes the same `firma.toml`.
 //!
 //! Only the `[authority]` table is touched by this module today.
 //! Persistence is gated by the Y branch of the bootstrap prompt; CLI
@@ -16,14 +15,26 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::RunError;
 
-const FILE_NAME: &str = "firma.toml";
-const SUBDIR: &str = "firma";
-
-/// Resolve the default user config path, or `None` on platforms where
-/// `dirs::config_dir()` returns `None`.
+/// Resolve the discovered `firma.toml` path (no explicit override),
+/// or `None` when no candidate exists on this platform.
 #[must_use]
 pub fn default_user_config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join(SUBDIR).join(FILE_NAME))
+    firma_config::resolve_config("run", None, &firma_config::SystemDirs)
+        .ok()
+        .map(|r| r.config_file)
+}
+
+/// The canonical path to create when persisting `[authority]` and no
+/// config file exists yet.
+///
+/// Delegates to the shared firma-config discovery (`$FIRMA_CONFIG_DIR` →
+/// `$XDG_CONFIG_HOME/firma` → `~/.config/firma` → platform config dir),
+/// then appends the canonical file name. `None` only if no config dir is
+/// resolvable.
+#[must_use]
+pub fn canonical_write_path() -> Option<PathBuf> {
+    firma_config::default_config_dir(&firma_config::SystemDirs)
+        .map(|d| d.join(firma_config::CONFIG_FILE_NAME))
 }
 
 /// Persisted `[authority]` table.
@@ -146,6 +157,11 @@ pub fn persist_local(path: &Path) -> Result<(), RunError> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn default_user_config_path_uses_firma_config() {
+        let _ = default_user_config_path();
+    }
 
     #[test]
     fn read_authority_returns_none_when_file_missing() {

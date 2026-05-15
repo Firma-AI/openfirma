@@ -10,7 +10,7 @@ A local coding agent has a powerful threat profile: it has read access to your s
 - Every call is audited and reviewable.
 - The agent process itself never holds the LLM API key.
 
-The repo ships a starting config for Claude Code at `examples/firma-run/local/assets/firma_sidecar.local.claude.example.toml`. We'll use it as the base and explain what each part is doing.
+The repo ships a starting config for Claude Code at `examples/firma-run/local/assets/firma.local.claude.example.toml`. We'll use it as the base and explain what each part is doing.
 
 ## Threat model
 
@@ -46,21 +46,25 @@ examples/firma-run/local/setup.sh
 This creates `.local/` with a working baseline. We're going to swap in the Claude-specific Sidecar config and mapping rules.
 
 ```bash
-cp examples/firma-run/local/assets/firma_sidecar.local.claude.example.toml \
-   .local/firma_sidecar.local.toml
+cp examples/firma-run/local/assets/firma.local.claude.example.toml \
+   .local/firma.toml
 
 cp examples/firma-run/local/assets/mapping-rules.claude.local.example.toml \
    .local/mapping-rules.toml
 ```
 
-Inspect both files. The Sidecar config sets `intercept_hosts` to the Anthropic surface; the mapping rules cover both CONNECT-level (for L4 destination policy) and L7 endpoints under `*.anthropic.com`. `[mapping].default_protected = true` — anything not in this list denies.
+Inspect both files. The Sidecar config sets `intercept_hosts` to the Anthropic surface; the mapping rules cover both CONNECT-level (for L4 destination policy) and L7 endpoints under `*.anthropic.com`. `[sidecar.mapping].default_protected = true` — anything not in this list denies.
 
 ## Step 3: Generate the Authority key and capability
 
 ```bash
 firma authority generate-key -o .local/firma-authority.key
 
-cat > .local/authority.toml <<EOF
+# The setup.sh-generated .local/firma.toml is sidecar-only. Append an
+# [authority] section so the same file serves `firma authority` too.
+cat >> .local/firma.toml <<EOF
+
+[authority]
 listen_addr         = "[::1]:50051"
 policy_dir          = "examples/policies"
 issuance_policy_dir = ".local/issuance"
@@ -86,7 +90,7 @@ touch .local/revocations.txt
 Mint a capability for `claude-code`:
 
 ```bash
-firma authority -c .local/authority.toml issue \
+firma authority -c .local/firma.toml issue \
   --agent-id claude-code \
   --session-id $(uuidgen) \
   --action communication.external.send \
@@ -138,10 +142,10 @@ The `permit` is bound to `claude-code` and a host glob. The `forbid` is unbound 
 
 You don't want the agent process to see the key. Put it in the Sidecar's environment instead, and let the connector inject it on the way out:
 
-In `.local/firma_sidecar.local.toml`:
+In `.local/firma.toml`:
 
 ```toml
-[[credentials]]
+[[sidecar.credentials]]
 host           = "api.anthropic.com"
 mode           = "basic"
 header         = "x-api-key"
@@ -158,14 +162,14 @@ Three terminals.
 
 ```bash
 ANTHROPIC_API_KEY=  # not needed here; the Sidecar holds it
-firma authority -c .local/authority.toml
+firma authority -c .local/firma.toml
 ```
 
 **Terminal 2: Sidecar.**
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-... \
-firma sidecar -c .local/firma_sidecar.local.toml
+firma sidecar -c .local/firma.toml
 ```
 
 The `ANTHROPIC_API_KEY` env var is set on the Sidecar's process only. The agent's process in Terminal 3 does not receive it.
@@ -212,7 +216,7 @@ Two operational considerations:
 # in ~/.zshrc or wherever
 firma-claude-start() {
   cd "$1" || return 1
-  firma authority -c .local/authority.toml issue \
+  firma authority -c .local/firma.toml issue \
     --agent-id claude-code \
     --session-id $(uuidgen) \
     --action communication.external.send \

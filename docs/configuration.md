@@ -1,12 +1,101 @@
 # Configuration Reference
 
-`firma sidecar` reads configuration from a TOML file specified with the
-`--config-file` CLI flag. The default path is `firma_sidecar.toml`.
+Every subcommand reads one shared, sectioned `firma.toml`. There is exactly
+**one** schema. A single file holds top-level `[authority]`, `[sidecar.*]`
+(`[sidecar.interceptor]` / `[sidecar.policy]` / `[sidecar.ca]` /
+`[sidecar.audit]` / `[sidecar.mapping]`, plus any bare `[sidecar]` scalars),
+and `[run]`. Each subcommand reads only its own section; section extraction
+is fail-closed (a missing required section is a hard error).
 
-Configuration is validated at startup. Invalid fields cause the sidecar to exit
-before accepting requests.
+When `--config` is **omitted**, that `firma.toml` is discovered from
+platform-standard directories (see
+[Config Discovery](cli.md#config-discovery)). An explicit `--config <path>`
+only overrides the file location — the file still uses the same sectioned
+shape.
 
-> **See also**: `examples/demo/sidecar.toml` is the canonical
+Configuration is validated at startup. Invalid fields cause the affected
+binary to exit before accepting requests.
+
+## Scaffolded Example
+
+`firma stack init` writes one sectioned `firma.toml` with all paths
+absolutised under the resolved config and state directories. The shape is:
+
+```toml
+[authority]
+listen_addr         = "127.0.0.1:50051"
+policy_dir          = '/home/me/.config/firma/policies'
+issuance_policy_dir = '/home/me/.config/firma/issuance-policies'
+revocation_file     = '/run/user/1000/firma/revocations.txt'
+key_file            = '/home/me/.config/firma/authority.key'
+max_ttl_seconds     = 3600
+bundle_ttl_seconds  = 30
+
+[sidecar.interceptor]
+mode        = "http_proxy"
+listen_addr = "127.0.0.1:8080"
+
+[sidecar.policy]
+authority_url = "http://127.0.0.1:50051"
+
+[sidecar.ca]
+dir = '/run/user/1000/firma/generated-firma-ca'
+
+[sidecar.audit]
+signing_key_path = '/home/me/.config/firma/audit.key'
+
+[sidecar.mapping]
+rules_path = '/home/me/.config/firma/mapping-rules.toml'
+```
+
+The `[sidecar.*]` tables map onto the per-section reference below
+(`[sidecar.interceptor]` documents the same fields as
+[`[interceptor]`](#interceptor), `[sidecar.policy]` as
+[`[policy]`](#policy), and so on). `[authority]` is the
+`firma-authority` config; see
+[the Authority README](../crates/firma-authority/README.md) for its fields.
+
+## Config-Relative Resource Resolution
+
+A resource field holding a **relative** path resolves under the resolved
+`config_dir` (the parent of the discovered `firma.toml`), not the working
+directory. This is consistent whether the value is the serde default or an
+operator-set relative path — relative always means "relative to the config
+file's directory". **Absolute** paths are used verbatim. An **empty** value
+is left untouched so the validator can reject it. Runtime/state paths stay
+in the state/runtime dir and are never re-based.
+
+For `[authority]`, `FIRMA_AUTHORITY_*` environment overrides are applied
+*after* re-basing, so an env-supplied path is preserved exactly as written
+(a relative env value is **not** re-based against `config_dir`).
+
+Every config-declared resource path re-bases, except the two
+state-managed paths listed further below. The re-basing fields are:
+
+| Field                               | Relative value resolves under |
+| ----------------------------------- | ----------------------------- |
+| sidecar `policy.dir`                | `<config_dir>/<value>`        |
+| sidecar `mapping.rules_path`        | `<config_dir>/<value>`        |
+| sidecar `mapping.rules_paths[]`     | `<config_dir>/<value>`        |
+| sidecar `authority.public_key_path` | `<config_dir>/<value>`        |
+| sidecar `capability_seed.paths[]`   | `<config_dir>/<value>`        |
+| sidecar `audit.file_path`           | `<config_dir>/<value>`        |
+| sidecar `audit.signing_key_path`    | `<config_dir>/<value>`        |
+| authority `policy_dir`              | `<config_dir>/<value>`        |
+| authority `issuance_policy_dir`     | `<config_dir>/<value>`        |
+| authority `schema_path`             | `<config_dir>/<value>`        |
+| authority `key_file`                | `<config_dir>/<value>`        |
+
+State-managed paths are explicitly excluded from re-basing and stay in the
+state/runtime dir:
+
+| Field                       | Resolves to                               |
+| --------------------------- | ----------------------------------------- |
+| sidecar `ca.dir`            | as configured (default `./firma-ca/`)     |
+| authority `revocation_file` | as configured (default `revocations.txt`) |
+| sockets, pid, listen, logs  | state/runtime dir                         |
+
+> **See also**: `examples/demo/firma.toml` is the canonical
 > end-to-end reference. `make demo-ci` boots the sidecar against it
 > and gates merges via the `demo-e2e` GitHub Actions workflow.
 
@@ -619,12 +708,12 @@ endpoint is not started.
 This is the server-side counterpart to the `sidecar_local_exec` section in the
 `firma-run` profile config.
 
-| Field            | Type   | Default       | Description                                                                               |
-| ---------------- | ------ | ------------- | ----------------------------------------------------------------------------------------- |
-| `socket_path`    | path   |               | **Required.** Absolute path to the Unix domain socket file.                               |
-| `default_action` | string | `deny`        | Policy for fresh requests: `allow`, `deny`, or `pending_hitl` (HITL approval required).  |
-| `token_ttl_secs` | u64    | `300`         | Approval token lifetime in seconds. Must be > 0.                                          |
-| `retry_after_ms` | u64    | `500`         | Suggested retry interval returned to `firma-run` in `pending_hitl` responses (ms). > 0.  |
+| Field            | Type   | Default | Description                                                                             |
+| ---------------- | ------ | ------- | --------------------------------------------------------------------------------------- |
+| `socket_path`    | path   |         | **Required.** Absolute path to the Unix domain socket file.                             |
+| `default_action` | string | `deny`  | Policy for fresh requests: `allow`, `deny`, or `pending_hitl` (HITL approval required). |
+| `token_ttl_secs` | u64    | `300`   | Approval token lifetime in seconds. Must be > 0.                                        |
+| `retry_after_ms` | u64    | `500`   | Suggested retry interval returned to `firma-run` in `pending_hitl` responses (ms). > 0. |
 
 Validation:
 

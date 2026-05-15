@@ -10,8 +10,8 @@ use clap::{Args as ClapArgs, ValueEnum};
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, ClapArgs)]
 pub struct Args {
-    /// Stack config file. Used to read `state_dir` when `--state-dir` is
-    /// not set.
+    /// Accepted for compatibility; `state_dir` is resolved from
+    /// `--state-dir` / `FIRMA_STATE_DIR` / XDG.
     #[arg(long, env = "FIRMA_STACK_CONFIG")]
     pub config: Option<PathBuf>,
     /// State dir override.

@@ -3,7 +3,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 param(
-  [string]$AuthorityConfig = ".local/authority.toml",
+  [string]$AuthorityConfig = ".local/firma.toml",
   [string]$AgentId = "example-agent",
   [string]$SessionId = "",
   [string]$Action = "communication.external.send",

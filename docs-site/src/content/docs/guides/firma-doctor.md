@@ -21,19 +21,19 @@ safe to run against a live stack at any time.
 ```bash
 firma doctor                                   # pretty output, all checks
 firma doctor --json | jq .                     # machine-readable, pipe-friendly
-firma doctor --config firma-stack.toml         # use an explicit stack config
+firma doctor --config /etc/firma/firma.toml    # use an explicit unified config
 firma doctor --state-dir /run/user/1000/firma  # override runtime state dir
 firma doctor --timeout-ms 1500                 # slower network probe (ms)
 ```
 
 ## Flags
 
-| Flag           | Env                  | Default  | Description                                                    |
-| -------------- | -------------------- | -------- | -------------------------------------------------------------- |
-| `--config`     | `FIRMA_STACK_CONFIG` | _unset_  | Explicit stack config path. Otherwise walked up from cwd.      |
-| `--state-dir`  | `FIRMA_STATE_DIR`    | resolved | Override the runtime state directory.                          |
-| `--json`       | —                    | _off_    | Emit a single JSON object instead of pretty text.              |
-| `--timeout-ms` | —                    | `500`    | Per-probe network timeout (TCP / UDS connect) in milliseconds. |
+| Flag           | Env               | Default    | Description                                                    |
+| -------------- | ----------------- | ---------- | -------------------------------------------------------------- |
+| `--config`     | —                 | discovered | Unified `firma.toml`. Otherwise auto-discovered.               |
+| `--state-dir`  | `FIRMA_STATE_DIR` | resolved   | Override the runtime state directory.                          |
+| `--json`       | —                 | _off_      | Emit a single JSON object instead of pretty text.              |
+| `--timeout-ms` | —                 | `500`      | Per-probe network timeout (TCP / UDS connect) in milliseconds. |
 
 ## Status semantics
 
@@ -43,7 +43,7 @@ firma doctor --timeout-ms 1500                 # slower network probe (ms)
 | `WARN` | Not applicable on this host, or not yet configured. No action needed. |
 | `FAIL` | Configured and broken. Operator action required.                      |
 
-A fresh install with no stack config is expected to produce a mix of `OK` and
+A fresh install with no `firma.toml` is expected to produce a mix of `OK` and
 `WARN` — never `FAIL`. `FAIL` always points to something the operator already
 declared that is now misbehaving.
 
@@ -61,7 +61,7 @@ firma doctor
 [OK]   sandbox firecracker    Firecracker v1.7.0 available
 [OK]   sidecar reachable      127.0.0.1:8080
 [FAIL] authority reachable    127.0.0.1:50051: connection refused
-[OK]   config parsed          ./firma-stack.toml
+[OK]   config parsed          ~/.config/firma/firma.toml
 [WARN] capability seed        /run/user/1000/firma/capabilities: directory does not exist
 [OK]   state dir              /run/user/1000/firma: mode 0700
 [WARN] data dir               could not resolve XDG_DATA_HOME / fallback

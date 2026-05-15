@@ -1514,6 +1514,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "firma-authority",
+ "firma-config",
  "firma-core",
  "firma-run",
  "firma-sidecar",
@@ -1560,6 +1561,18 @@ dependencies = [
  "tonic-health",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "firma-config"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "pretty_assertions",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
 ]
 
 [[package]]
@@ -1645,6 +1658,7 @@ dependencies = [
  "ctrlc",
  "dirs",
  "firma-authority",
+ "firma-config",
  "firma-stack",
  "hex",
  "nix 0.31.2",
@@ -1724,6 +1738,7 @@ dependencies = [
  "chrono",
  "ctrlc",
  "dirs",
+ "firma-config",
  "nix 0.31.2",
  "serde",
  "serial_test",

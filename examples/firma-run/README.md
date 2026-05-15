@@ -10,7 +10,7 @@ If you want to try the wrapper locally, begin with `local/`:
 
 ```bash
 examples/firma-run/local/setup.sh
-cargo run -p firma -- sidecar -c .local/firma_sidecar.local.toml
+cargo run -p firma -- sidecar -c .local/firma.toml
 cargo run -p firma -- run --profile generic -- curl https://example.com
 ```
 
@@ -18,7 +18,7 @@ Skip the dedicated Sidecar terminal by relying on autostart — `firma run` spaw
 
 ```bash
 examples/firma-run/local/setup.sh
-FIRMA_SIDECAR_CONFIG_FILE=.local/firma_sidecar.local.toml \
+FIRMA_SIDECAR_CONFIG_FILE=.local/firma.toml \
   cargo run -p firma -- run --profile generic -- curl https://example.com
 ```
 

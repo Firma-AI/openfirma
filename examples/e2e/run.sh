@@ -45,14 +45,14 @@ echo "      Done."
 
 # ── Start Authority ──────────────────────────────────────────────────────────
 echo "[3/4] Starting firma authority on 127.0.0.1:50051..."
-"$FIRMA_BIN" authority --config "$E2E_DIR/authority.toml" &
+"$FIRMA_BIN" authority --config "$E2E_DIR/firma.toml" &
 AUTHORITY_PID=$!
 echo "      PID: $AUTHORITY_PID"
 sleep 1
 
 # ── Start Sidecar ────────────────────────────────────────────────────────────
 echo "[4/4] Starting firma sidecar on 127.0.0.1:8080..."
-"$FIRMA_BIN" sidecar --config-file "$E2E_DIR/sidecar.toml" &
+"$FIRMA_BIN" sidecar --config "$E2E_DIR/firma.toml" &
 SIDECAR_PID=$!
 echo "      PID: $SIDECAR_PID"
 sleep 1

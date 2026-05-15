@@ -40,49 +40,39 @@ pub fn wait_for_ca_material(ca_dir: &Path, timeout: Duration) -> Result<()> {
     }
 }
 
+/// Read `[authority].listen_addr` from the unified `firma.toml`.
 pub fn read_authority_listen_addr(config_path: &Path) -> Result<SocketAddr> {
-    let text = std::fs::read_to_string(config_path)?;
-    for line in text.lines() {
-        let trimmed = line.split('#').next().unwrap_or_default().trim();
-        let Some((key, value)) = trimmed.split_once('=') else {
-            continue;
-        };
-        if key.trim() == "listen_addr" {
-            let value = value.trim().trim_matches('"');
-            return value.parse::<SocketAddr>().map_err(|error| {
-                StackError::Platform(format!("invalid listen_addr '{value}': {error}"))
-            });
-        }
-    }
-    Err(StackError::Platform(format!(
-        "no listen_addr in '{}'",
-        config_path.display()
-    )))
+    section_listen_addr(config_path, &["authority"], "authority")
 }
 
+/// Read `[sidecar.interceptor].listen_addr` from the unified `firma.toml`.
 pub fn read_sidecar_listen_addr(config_path: &Path) -> Result<SocketAddr> {
-    let text = std::fs::read_to_string(config_path)?;
-    let value: toml::Value = toml::from_str(&text)
-        .map_err(|error: toml::de::Error| StackError::Platform(format!("sidecar toml: {error}")))?;
-    let raw = find_listen_addr(&value).ok_or_else(|| {
-        StackError::Platform(format!(
-            "no listen_addr in sidecar config '{}'",
-            config_path.display()
-        ))
-    })?;
-    raw.parse::<SocketAddr>().map_err(|error| {
-        StackError::Platform(format!("invalid sidecar listen_addr '{raw}': {error}"))
-    })
+    section_listen_addr(config_path, &["sidecar", "interceptor"], "sidecar")
 }
 
-fn find_listen_addr(value: &toml::Value) -> Option<String> {
-    match value {
-        toml::Value::Table(table) => {
-            if let Some(toml::Value::String(value)) = table.get("listen_addr") {
-                return Some(value.clone());
-            }
-            table.values().find_map(find_listen_addr)
-        }
-        _ => None,
+fn section_listen_addr(config_path: &Path, path: &[&str], what: &str) -> Result<SocketAddr> {
+    let text = std::fs::read_to_string(config_path)?;
+    let mut node: &toml::Value = &toml::from_str::<toml::Value>(&text)
+        .map_err(|e: toml::de::Error| StackError::Platform(format!("{what} toml: {e}")))?;
+    for key in path {
+        node = node.get(key).ok_or_else(|| {
+            StackError::Platform(format!(
+                "no [{}] section in '{}'",
+                path.join("."),
+                config_path.display()
+            ))
+        })?;
     }
+    let raw = node
+        .get("listen_addr")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| {
+            StackError::Platform(format!(
+                "no listen_addr under [{}] in '{}'",
+                path.join("."),
+                config_path.display()
+            ))
+        })?;
+    raw.parse::<SocketAddr>()
+        .map_err(|e| StackError::Platform(format!("invalid {what} listen_addr '{raw}': {e}")))
 }

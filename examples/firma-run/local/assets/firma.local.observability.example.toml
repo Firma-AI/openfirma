@@ -1,13 +1,13 @@
-[interceptor]
+[sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
 drain_timeout_secs = 5
 
-[interceptor.connect_relay]
+[sidecar.interceptor.connect_relay]
 setup_timeout_secs = 10
 session_max_secs = 1200
 
-[interceptor.https_mitm]
+[sidecar.interceptor.https_mitm]
 enabled = true
 
 # Keep key agent/control planes here so you get full L7 visibility.
@@ -25,14 +25,14 @@ bypass_hosts = []
 # Strict for hosts where deterministic fail-closed behavior is required.
 strict_hosts = ["api.anthropic.com", "platform.claude.com", "chatgpt.com"]
 
-[mapping]
-rules_path = ".local/mapping-rules.toml"
+[sidecar.mapping]
+rules_path = "mapping-rules.toml"
 default_protected = true
 
-[audit]
+[sidecar.audit]
 sink = "file"
-file_path = ".local/audit.jsonl"
-signing_key_path = ".local/audit-key.pem"
+file_path = "audit.jsonl"
+signing_key_path = "audit-key.pem"
 
-[log]
+[sidecar.log]
 level = "info"
