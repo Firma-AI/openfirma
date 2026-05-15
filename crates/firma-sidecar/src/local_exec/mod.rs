@@ -4,9 +4,13 @@
 //! contacts for pre-execution governance decisions on local tool invocations.
 //!
 //! It is the authoritative implementation of the "mediator" role described in
-//! the FIR-115 architecture: **one control plane, one audit surface, one
-//! budget state**. The mock Python scripts in `examples/` exercise the wire
-//! protocol but are not production components.
+//! the canonical docs:
+//! - `docs/architecture/linux-local-command-enforcement.md`
+//! - `docs/architecture/command-governance-local-exec-contract.md`
+//!
+//! Principle: **one control plane, one audit surface, one budget state**.
+//! The mock Python scripts in `examples/` exercise the wire protocol but are
+//! not production components.
 //!
 //! # Sub-modules
 //!

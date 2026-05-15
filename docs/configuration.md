@@ -643,8 +643,8 @@ retry_after_ms  = 500
 
 The `pending_hitl` action triggers the HITL approval token flow: `firma-run`
 receives a `pending_hitl` response with a single-use, short-lived `approval_token`;
-after the operator approves out-of-band, `firma-run` retries with the token and
-receives `allow`. See the Local-Exec Governance section in
+for `async_token` mode, `firma-run` retries internally with the token until
+`allow|deny` or timeout. See the Local-Exec Governance section in
 `docs/architecture/command-governance-local-exec-contract.md` for the full protocol.
 
 ## Mapping Rules File

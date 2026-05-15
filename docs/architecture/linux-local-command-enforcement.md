@@ -114,7 +114,8 @@ Artifact layout:
 6. Other-write permissions on managed artifact paths are rejected.
 7. Invalid-but-checksummed BPF content still fails closed at runtime load.
 8. Mediated mode is fail-closed on timeout/unavailable/error/invalid response.
-9. When `enforce_known_executables=true`, the runtime canonicalizes the executable path (resolving symlinks, enforcing UTF-8) and checks it against `allowed_executables`. Entries must be absolute canonical paths. Any executable not in the list is fail-closed.
+9. Runtime canonicalizes the executable path (resolving symlinks, enforcing UTF-8) before governance request construction.
+10. When `enforce_known_executables=true`, canonical executable is checked against `allowed_executables`. Any executable not in the list is fail-closed.
 10. Mediator request includes `sandbox_id` + `session_id` for identity/session binding.
 
 ## Local-Exec Governance Contract
@@ -154,14 +155,15 @@ Decision handling:
 1. `allow` -> launch proceeds.
 2. `deny` -> blocked.
 3. `pending_hitl` with `sync_wait` -> blocked (explicit pending fail-closed).
-4. `pending_hitl` with `async_token` -> blocked with explicit approval-token required for caller retry flow.
+4. `pending_hitl` with `async_token` -> runtime enters internal retry loop, carrying `approval_token` on subsequent requests.
 5. Missing token for async mode -> blocked (invalid pending state).
-6. Any other/invalid response -> blocked.
+6. Retry deadline exceeded (`hitl_max_wait_ms`) -> blocked (fail-closed timeout).
+7. Any other/invalid response -> blocked.
 
 ### HITL Runtime Model
 
 1. `sync_wait`: governance endpoint must return final `allow|deny` in request timeout window.
-2. `async_token`: governance endpoint may return `pending_hitl` with `approval_token`; current launch attempt fails closed and caller may retry later with approved context.
+2. `async_token`: governance endpoint may return `pending_hitl` with `approval_token`; runtime sleeps `retry_after_ms` and retries internally until `allow|deny` or `hitl_max_wait_ms` expires.
 3. No background in-place escalation of an already running sandbox process.
 
 ### Budget Source of Truth (Cross-Platform Governance Layer)
@@ -260,7 +262,7 @@ make managed-seccomp-compat-check
 Primary deterministic gate:
 
 ```bash
-make managed-seccomp-compat-check
+make managed-seccomp-guardrail
 ```
 
 Recommended runtime validation:
@@ -288,10 +290,11 @@ cargo build -p firma --release
 cargo test -p firma-run -- --nocapture
 ```
 
-### Step 3: Compatibility Gate
+### Step 3: Compatibility + Guardrail Gate
 
 ```bash
 make managed-seccomp-compat-check
+make managed-seccomp-guardrail
 ```
 
 ### Step 4: Explicit Mediator Tests
@@ -357,11 +360,12 @@ cargo run -p firma -- run \
 Repeat with decision responses:
 
 1. `{"decision":"deny","reason":"blocked-by-policy"}` -> must fail closed.
-2. `{"decision":"pending_hitl","reason":"awaiting-approval"}` -> must fail closed.
-3. `{"decision":"pending_hitl","reason":"awaiting-approval","approval_token":"tok_123","retry_after_ms":500}` with `async_token` -> must fail closed and surface token in error context.
+2. `{"decision":"pending_hitl","reason":"awaiting-approval"}` with `sync_wait` -> must fail closed.
+3. `{"decision":"pending_hitl","reason":"awaiting-approval","approval_token":"tok_123","retry_after_ms":500}` with `async_token` -> runtime should retry internally and only proceed on final `allow`.
 4. governance endpoint stopped/unavailable -> must fail closed.
 5. response missing `approval_token` in async mode -> must fail closed.
-6. run non-allowlisted executable (`/usr/bin/env`) -> must fail closed before launch.
+6. persistent `pending_hitl` responses beyond `hitl_max_wait_ms` -> must fail closed.
+7. run non-allowlisted executable (`/usr/bin/env`) -> must fail closed before launch.
 
 ### Step 5: Negative Config Validation
 
@@ -374,9 +378,10 @@ All must be true:
 
 1. `cargo test -p firma-run -- --nocapture` passes.
 2. `make managed-seccomp-compat-check` passes.
-3. Sidecar local-exec governance allow/deny/pending/unavailable behavior matches fail-closed model.
-4. No direct exec fallback path observed in mediated mode.
-5. Allowlist enforcement blocks unknown executable when enabled.
+3. `make managed-seccomp-guardrail` passes.
+4. Sidecar local-exec governance allow/deny/pending/unavailable behavior matches fail-closed model.
+5. No direct exec fallback path observed in mediated mode.
+6. Allowlist enforcement blocks unknown executable when enabled.
 
 ## Operations and Rollback
 
@@ -388,10 +393,11 @@ All must be true:
 
 ### Rollout Strategy
 
-1. Phase 1: opt-in profile enables managed seccomp + mediator.
-2. Phase 2: enable executable allowlist in governed environments after command inventory stabilization.
-3. Phase 3: default-enable governed path for target profile once latency and fail-closed gates pass.
-4. Phase 4: deprecate unmanaged launch patterns for governed mode.
+1. Current baseline: Linux `generic` + `bwrap` default-enables managed static seccomp.
+2. Phase 1: opt-in profile enables sidecar local-exec mediation for governed workflows.
+3. Phase 2: enable executable allowlist in governed environments after command inventory stabilization.
+4. Phase 3: default-enable governed local-exec mediation for target profile(s) once latency and fail-closed gates pass.
+5. Phase 4: deprecate unmanaged launch patterns for governed mode.
 
 ### Incident Rollback
 

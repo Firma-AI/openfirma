@@ -40,6 +40,16 @@ For CI or production paths where the Sidecar is managed externally, pass `--side
 
 For more detail, see the [`firma run` examples](examples/firma-run/README.md), the [CLI reference](docs/cli.md) (autostart flags + marker layout under `## firma run`), and the [configuration reference](docs/configuration.md). The intentionally risky demo agents live in [`examples/agents`](examples/agents/README.md).
 
+Canonical local-command governance and Linux containment docs:
+
+1. [Linux local command enforcement architecture and runbook](docs/architecture/linux-local-command-enforcement.md)
+2. [Cross-platform local-exec governance request/response contract](docs/architecture/command-governance-local-exec-contract.md)
+
+Recommended Linux validation gates:
+
+1. `make managed-seccomp-compat-check`
+2. `make managed-seccomp-guardrail`
+
 ## How Firma is structured
 
 Firma has three main runtime pieces.
