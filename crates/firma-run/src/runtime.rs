@@ -10,7 +10,9 @@ use crate::capability::CapabilityLeaseManager;
 use crate::config::{CapabilitySource, ResolvedProfile, SidecarEndpoint, resolve_profile};
 use crate::error::RunError;
 use crate::identity::RunIdentity;
+use crate::mediator::enforce_local_command_governance;
 use crate::routing::{AutostartFlags, prepare_network_runtime};
+use crate::seccomp::resolve_effective_seccomp;
 use crate::sidecar::supervisor::DEFAULT_STARTUP_TIMEOUT_SECS;
 use crate::supervisor::wait_with_signal_forwarding;
 
@@ -89,19 +91,10 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
     }
 
     let identity = RunIdentity::new(profile.id.clone());
-    tracing::info!(
-        sandbox_id = %identity.sandbox_id,
-        session_id = %identity.session_id,
-        profile = %identity.profile,
-        backend = %profile.backend,
-        "starting firma run"
-    );
+    log_run_start(&identity, &profile);
 
     let lease = CapabilityLeaseManager::new(&profile.capability)?;
-
-    let working_dir = std::env::current_dir().map_err(|error| {
-        RunError::Internal(format!("failed to read current directory: {error}"))
-    })?;
+    let working_dir = resolve_working_dir()?;
 
     let backend = build_backend(profile.backend);
     let mut handle = Some(backend.prepare(&PrepareRequest {
@@ -167,6 +160,18 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             authority,
         )?;
         let effective_endpoint = network_runtime.sidecar_endpoint().clone();
+        let effective_seccomp = resolve_effective_seccomp(&profile)?;
+        if let Some(materialized) = &effective_seccomp {
+            tracing::info!(
+                policy_id = %materialized.metadata.policy_id,
+                policy_version = %materialized.metadata.policy_version,
+                policy_sha256 = %materialized.metadata.sha256,
+                target_arch = %materialized.metadata.target_arch,
+                compiler_version = %materialized.metadata.compiler_version,
+                seccomp_filter_path = %materialized.bpf_path.display(),
+                "resolved managed static seccomp artifact"
+            );
+        }
         let env = build_execution_env(
             &profile,
             &identity,
@@ -187,11 +192,16 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         );
         let launch_args =
             maybe_apply_claude_settings(handle_ref, &profile, &executable, launch_args)?;
+        if let Some(mediator) = &profile.sidecar_local_exec {
+            let canonical = resolve_governed_executable(mediator, &executable)?;
+            enforce_local_command_governance(mediator, &identity, &canonical, &launch_args)?;
+        }
         let launch = LaunchSpec {
             executable,
             args: launch_args,
             cwd: working_dir,
             env,
+            seccomp_filter_path: effective_seccomp.as_ref().map(|s| s.bpf_path.clone()),
             identity_mode: profile.identity_mode,
         };
 
@@ -203,6 +213,28 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         .take()
         .map_or(Ok(()), |real_handle| backend.teardown(real_handle));
 
+    combine_run_and_teardown_results(run_result, teardown_result)
+}
+
+fn log_run_start(identity: &RunIdentity, profile: &ResolvedProfile) {
+    tracing::info!(
+        sandbox_id = %identity.sandbox_id,
+        session_id = %identity.session_id,
+        profile = %identity.profile,
+        backend = %profile.backend,
+        "starting firma run"
+    );
+}
+
+fn resolve_working_dir() -> Result<PathBuf, RunError> {
+    std::env::current_dir()
+        .map_err(|error| RunError::Internal(format!("failed to read current directory: {error}")))
+}
+
+fn combine_run_and_teardown_results(
+    run_result: Result<i32, RunError>,
+    teardown_result: Result<(), RunError>,
+) -> Result<i32, RunError> {
     match (run_result, teardown_result) {
         (Ok(code), Ok(())) => Ok(code),
         (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
@@ -316,6 +348,52 @@ fn config_item_matches_key(item: &str, key: &str) -> bool {
     item.split_once('=').is_some_and(|(k, _)| k.trim() == key)
 }
 
+/// Resolve `executable` to its canonical UTF-8 path, enforce the configured
+/// allowlist policy, and return the canonical string.
+///
+/// Combines canonicalization, UTF-8 validation, and allowlist enforcement into
+/// a single fail-closed step so no intermediate non-canonical or lossy path
+/// can reach the governance call.
+fn resolve_governed_executable(
+    mediator: &crate::config::CommandMediatorConfig,
+    executable: &str,
+) -> Result<String, RunError> {
+    let canonical_path = std::fs::canonicalize(executable).map_err(|error| {
+        RunError::Governance(format!(
+            "executable '{executable}' could not be resolved (fail-closed): {error}"
+        ))
+    })?;
+
+    // OsString::into_string fails (returns Err(OsString)) on non-UTF-8 paths.
+    // to_string_lossy would silently mangle the path — unacceptable on a
+    // security boundary.
+    let canonical = canonical_path.into_os_string().into_string().map_err(|_| {
+        RunError::Governance(
+            "executable canonical path is not valid UTF-8 (fail-closed)".to_string(),
+        )
+    })?;
+
+    enforce_known_executable_policy(mediator, &canonical)?;
+    Ok(canonical)
+}
+
+fn enforce_known_executable_policy(
+    mediator: &crate::config::CommandMediatorConfig,
+    canonical: &str,
+) -> Result<(), RunError> {
+    if !mediator.enforce_known_executables {
+        return Ok(());
+    }
+
+    if mediator.allowed_executables.contains(canonical) {
+        return Ok(());
+    }
+
+    Err(RunError::Governance(format!(
+        "executable '{canonical}' is not in sidecar_local_exec.allowed_executables"
+    )))
+}
+
 fn build_execution_env(
     profile: &ResolvedProfile,
     identity: &RunIdentity,
@@ -362,13 +440,6 @@ fn build_execution_env(
         "FIRMA_RUN_ATTR_HEADERS_JSON".to_string(),
         serde_json::to_string(&attr_headers).unwrap_or_else(|_| "{}".to_string()),
     );
-
-    if let Some(seccomp_path) = &profile.seccomp_bpf_path {
-        env.insert(
-            "FIRMA_RUN_SECCOMP_BPF_PATH".to_string(),
-            seccomp_path.display().to_string(),
-        );
-    }
 
     if let Some(token) = lease.token() {
         env.insert("FIRMA_CAPABILITY_TOKEN".to_string(), token);
@@ -541,7 +612,7 @@ mod tests {
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::<MountSpec>::new(),
-            seccomp_bpf_path: None,
+            seccomp_policy: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -553,6 +624,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
+            sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
         };
 
@@ -593,7 +665,7 @@ mod tests {
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
-            seccomp_bpf_path: None,
+            seccomp_policy: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -607,6 +679,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
+            sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
         };
 
@@ -632,11 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn seccomp_bpf_path_is_exported_when_configured() {
-        let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let seccomp_path = tempdir.path().join("seccomp.bpf");
-        fs::write(&seccomp_path, [0_u8; 8]).unwrap_or_else(|e| panic!("{e}"));
-
+    fn execution_env_does_not_expose_seccomp_artifact_path() {
         let profile = ResolvedProfile {
             id: "generic".to_string(),
             backend: crate::backend::BackendKind::Bwrap,
@@ -646,7 +715,7 @@ mod tests {
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
-            seccomp_bpf_path: Some(seccomp_path.clone()),
+            seccomp_policy: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -658,6 +727,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
+            sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
         };
 
@@ -672,9 +742,9 @@ mod tests {
             &BTreeMap::default(),
         );
 
-        assert_eq!(
-            env.get("FIRMA_RUN_SECCOMP_BPF_PATH"),
-            Some(&seccomp_path.display().to_string())
+        assert!(
+            env.keys().all(|key| !key.starts_with("FIRMA_RUN_SECCOMP_")),
+            "runtime env must not expose legacy seccomp-path env vars"
         );
     }
 
@@ -704,7 +774,7 @@ mod tests {
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
-            seccomp_bpf_path: None,
+            seccomp_policy: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -716,6 +786,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
+            sidecar_local_exec: None,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
@@ -761,7 +832,7 @@ mod tests {
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
-            seccomp_bpf_path: None,
+            seccomp_policy: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -773,6 +844,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
+            sidecar_local_exec: None,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
@@ -827,7 +899,7 @@ mod tests {
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
-            seccomp_bpf_path: None,
+            seccomp_policy: None,
             allowed_domains: Vec::new(),
             network: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -839,6 +911,7 @@ mod tests {
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
+            sidecar_local_exec: None,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {

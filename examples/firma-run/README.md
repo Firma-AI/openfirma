@@ -30,9 +30,17 @@ If you are on Linux and want to verify the structural sandbox path, use the E2E 
 examples/firma-run/e2e/run.sh
 ```
 
+If you want concrete local-command governance scenarios (allow/deny/HITL/allowlist/tamper), use:
+
+```bash
+examples/firma-run/local-command-governance/scripts/run-allow.sh
+```
+
 ## Folders
 
 - `local/` contains setup scripts, config templates, capability renewal helpers, and local runbook docs.
 - `e2e/` contains the Linux end-to-end harness for sandbox routing, audit output, and fail-closed behavior.
+- `local-command-governance/` contains focused Linux demos for managed static seccomp + mediator governance behavior.
+- `spikes/` contains focused research harnesses for architecture decisions.
 
 Each folder keeps its scripts, documentation, and supporting assets together so example-specific material does not live in the main `docs/` tree.

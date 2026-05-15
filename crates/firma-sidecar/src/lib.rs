@@ -40,6 +40,7 @@ pub mod enforcement;
 pub mod handler;
 pub mod health;
 pub mod interceptor;
+pub mod local_exec;
 pub mod normalizer;
 pub mod pipeline;
 pub mod startup;

@@ -7,6 +7,7 @@ pub mod run;
 pub mod sidecar;
 pub mod stack;
 pub mod supervise;
+pub mod token;
 
 use std::path::PathBuf;
 
@@ -50,4 +51,6 @@ pub enum Command {
     /// Internal detached stack supervisor.
     #[command(name = "__supervise", hide = true)]
     Supervise(supervise::Args),
+    /// Manage local-exec governance tokens (approve / revoke).
+    Token(token::TokenArgs),
 }

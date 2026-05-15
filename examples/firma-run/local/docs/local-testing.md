@@ -238,24 +238,28 @@ Built-in runtime profiles:
 - `codex`
 - `claude-code`
 
-Optional seccomp layer (Linux `bwrap`):
+Managed seccomp layer (Linux `bwrap`):
 
-`firma-run` can optionally pass a compiled seccomp cBPF program to `bwrap`
-(`--seccomp`) for additional syscall-level restriction.
+`firma-run` can compile managed policy input into seccomp cBPF and pass the
+generated filter to `bwrap` (`--seccomp`) for additional syscall restriction.
 
 Example:
 
 ```toml
 [profiles.claude-code]
 backend = "bwrap"
-seccomp_bpf_path = "/absolute/path/to/seccomp.bpf"
+
+[profiles.claude-code.seccomp_policy]
+source_policy_path = "/absolute/path/to/policy.toml"
+artifact_dir = "/absolute/path/to/seccomp-artifacts"
+verify_checksum = true
 ```
 
 Notes:
 
-- `seccomp_bpf_path` is supported only with backend `bwrap`.
-- path must be absolute and point to an existing file.
-- file format must match `bwrap --seccomp` expectations (compiled cBPF).
+- `seccomp_policy` is supported only with backend `bwrap`.
+- policy and artifact paths must be absolute.
+- generated artifact format must match `bwrap --seccomp` expectations (compiled cBPF).
 
 Manual backend override example:
 

@@ -110,6 +110,11 @@ pub struct LaunchSpec {
     pub args: Vec<String>,
     pub cwd: PathBuf,
     pub env: BTreeMap<String, String>,
+    /// Optional static seccomp cBPF artifact path resolved by runtime.
+    ///
+    /// Backends should treat this as the authoritative source for seccomp
+    /// loading instead of relying on environment-variable indirection.
+    pub seccomp_filter_path: Option<PathBuf>,
     pub identity_mode: SandboxIdentityMode,
 }
 

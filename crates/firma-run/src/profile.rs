@@ -49,7 +49,7 @@ fn generic_profile() -> ProfilePatch {
     ProfilePatch {
         backend: None,
         sidecar_endpoint: None,
-        seccomp_bpf_path: None,
+        seccomp_policy: None,
         env_passthrough: vec!["HOME".to_string(), "PATH".to_string(), "TERM".to_string()],
         env_set,
         mounts: vec![MountPatch {
@@ -71,6 +71,7 @@ fn generic_profile() -> ProfilePatch {
             refresh_ratio: Some(0.60),
             grace_seconds: Some(30),
         }),
+        sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
         codex_cli: None,
     }

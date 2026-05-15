@@ -16,9 +16,11 @@ ctrlc.workspace = true
 dirs.workspace = true
 firma-authority.workspace = true
 firma-stack.workspace = true
+hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 tracing.workspace = true
@@ -26,7 +28,7 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-nix.workspace = true
+nix = { workspace = true, features = ["socket"] }
 
 [dev-dependencies]
 pretty_assertions.workspace = true
