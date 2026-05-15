@@ -93,6 +93,13 @@ pub struct SidecarConfig {
     /// with a real token and verifier instead of the stub defaults.
     #[serde(default)]
     pub preflight: Option<PreflightConfig>,
+    /// Local-exec governance endpoint configuration.
+    ///
+    /// When set, the sidecar binds a UDS endpoint that `firma-run` clients
+    /// contact for pre-execution governance decisions. If absent, the
+    /// local-exec endpoint is not started.
+    #[serde(default)]
+    pub local_exec: Option<LocalExecConfig>,
 }
 
 impl SidecarConfig {
@@ -147,6 +154,9 @@ impl SidecarConfig {
         self.audit.validate().map_err(|e| format!("audit: {e}"))?;
         if let Some(ref pf) = self.preflight {
             pf.validate().map_err(|e| format!("preflight: {e}"))?;
+        }
+        if let Some(ref le) = self.local_exec {
+            le.validate().map_err(|e| format!("local_exec: {e}"))?;
         }
         Ok(())
     }
@@ -775,6 +785,76 @@ fn validate_dns_hostname(full: &str, host: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Local-exec governance endpoint configuration
+// ---------------------------------------------------------------------------
+
+/// Configuration for the local-exec governance UDS endpoint.
+///
+/// When present in `SidecarConfig`, the sidecar binds an additional Unix
+/// domain socket that `firma-run` clients contact for pre-execution governance
+/// decisions. This is the server-side counterpart to the
+/// `sidecar_local_exec` section in the `firma-run` profile config.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LocalExecConfig {
+    /// Absolute path to the Unix domain socket file.
+    ///
+    /// Example: `/run/firma/local-exec.sock`
+    pub socket_path: PathBuf,
+
+    /// Policy applied to every fresh local-exec request.
+    ///
+    /// - `"allow"` — allow all executions unconditionally.
+    /// - `"deny"` — deny all executions unconditionally.
+    /// - `"pending_hitl"` — require HITL approval via the token flow.
+    #[serde(default = "LocalExecConfig::default_action")]
+    pub default_action: crate::local_exec::handler::DefaultAction,
+
+    /// Approval token time-to-live in seconds (default: 300).
+    #[serde(default = "LocalExecConfig::default_token_ttl_secs")]
+    pub token_ttl_secs: u64,
+
+    /// Suggested retry interval returned to `firma-run` in `pending_hitl`
+    /// responses (milliseconds, default: 500).
+    #[serde(default = "LocalExecConfig::default_retry_after_ms")]
+    pub retry_after_ms: u64,
+}
+
+impl LocalExecConfig {
+    fn default_action() -> crate::local_exec::handler::DefaultAction {
+        crate::local_exec::handler::DefaultAction::Deny
+    }
+
+    const fn default_token_ttl_secs() -> u64 {
+        300
+    }
+
+    const fn default_retry_after_ms() -> u64 {
+        500
+    }
+
+    /// Validate the local-exec configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the socket path is not absolute.
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.socket_path.is_absolute() {
+            return Err(format!(
+                "socket_path must be absolute, got: {}",
+                self.socket_path.display()
+            ));
+        }
+        if self.token_ttl_secs == 0 {
+            return Err("token_ttl_secs must be > 0".to_string());
+        }
+        if self.retry_after_ms == 0 {
+            return Err("retry_after_ms must be > 0".to_string());
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

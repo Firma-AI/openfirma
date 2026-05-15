@@ -80,4 +80,7 @@ pub enum RunError {
 
     #[error("unknown --authority-profile `{name}`")]
     AuthorityUnknownProfile { name: String },
+
+    #[error("local command governance denied execution: {0}")]
+    Governance(String),
 }

@@ -1,0 +1,18 @@
+# Template profile fragment used by the scenario scripts.
+# Scripts generate a full temp config with absolute paths.
+
+[profiles.generic]
+backend = "bwrap"
+
+[profiles.generic.seccomp_policy]
+source_policy_path = "__POLICY_PATH__"
+artifact_dir = "__ARTIFACT_DIR__"
+verify_checksum = true
+runtime_mode = "compile_on_launch"
+
+[profiles.generic.sidecar_local_exec]
+endpoint = "unix:///tmp/firma-sidecar-tools.sock"
+timeout_ms = 600
+hitl_mode = "sync_wait"
+enforce_known_executables = false
+allowed_executables = []

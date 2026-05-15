@@ -609,6 +609,44 @@ Behavior notes:
   `IssueCapability` client. Production deployments should not rely
   on it.
 
+### `[local_exec]`
+
+Optional local-exec governance endpoint. When present, the sidecar binds an
+additional Unix domain socket that `firma-run` clients contact for pre-execution
+governance decisions on local tool invocations. If the section is absent, the
+endpoint is not started.
+
+This is the server-side counterpart to the `sidecar_local_exec` section in the
+`firma-run` profile config.
+
+| Field            | Type   | Default       | Description                                                                               |
+| ---------------- | ------ | ------------- | ----------------------------------------------------------------------------------------- |
+| `socket_path`    | path   |               | **Required.** Absolute path to the Unix domain socket file.                               |
+| `default_action` | string | `deny`        | Policy for fresh requests: `allow`, `deny`, or `pending_hitl` (HITL approval required).  |
+| `token_ttl_secs` | u64    | `300`         | Approval token lifetime in seconds. Must be > 0.                                          |
+| `retry_after_ms` | u64    | `500`         | Suggested retry interval returned to `firma-run` in `pending_hitl` responses (ms). > 0.  |
+
+Validation:
+
+- `socket_path` must be an absolute path.
+- `token_ttl_secs` and `retry_after_ms` must be greater than `0`.
+
+Example:
+
+```toml
+[local_exec]
+socket_path     = "/run/firma/local-exec.sock"
+default_action  = "pending_hitl"
+token_ttl_secs  = 300
+retry_after_ms  = 500
+```
+
+The `pending_hitl` action triggers the HITL approval token flow: `firma-run`
+receives a `pending_hitl` response with a single-use, short-lived `approval_token`;
+after the operator approves out-of-band, `firma-run` retries with the token and
+receives `allow`. See the Local-Exec Governance section in
+`docs/architecture/command-governance-local-exec-contract.md` for the full protocol.
+
 ## Mapping Rules File
 
 The mapping rules file referenced by `mapping.rules_path` defines how raw HTTP

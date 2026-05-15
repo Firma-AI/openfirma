@@ -22,11 +22,13 @@ firma-core = { workspace = true }
 firma-grpc-interceptor-proto = { workspace = true }
 firma-proto = { workspace = true }
 governor = { workspace = true }
+hex = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 lru = { workspace = true }
+nix = { workspace = true }
 p256 = { workspace = true }
 pingora-core = { workspace = true }
 pingora-http = { workspace = true }

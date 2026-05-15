@@ -29,6 +29,7 @@ fn main() -> ExitCode {
         Command::Sidecar(a) => block_on_async(services::sidecar::run(a)),
         Command::Stack(a) => Ok(services::stack::run(a)),
         Command::Supervise(a) => Ok(services::supervise::run(a)),
+        Command::Token(a) => services::token::run(a),
     };
 
     match result {

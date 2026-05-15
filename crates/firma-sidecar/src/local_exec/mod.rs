@@ -1,0 +1,33 @@
+//! Local-exec governance endpoint.
+//!
+//! This module implements the Sidecar-owned UDS endpoint that `firma-run`
+//! contacts for pre-execution governance decisions on local tool invocations.
+//!
+//! It is the authoritative implementation of the "mediator" role described in
+//! the FIR-115 architecture: **one control plane, one audit surface, one
+//! budget state**. The mock Python scripts in `examples/` exercise the wire
+//! protocol but are not production components.
+//!
+//! # Sub-modules
+//!
+//! - [`token_store`] — Approval token state machine (`Pending → Approved →
+//!   Consumed / Expired / Revoked`). Enforces single-use, short-lived,
+//!   context-bound tokens; operator must explicitly approve before a token can
+//!   be consumed.
+//! - [`handler`] — Decision logic. Processes one [`handler::LocalExecRequest`]
+//!   and returns a [`handler::LocalExecResponse`], and processes management
+//!   commands ([`handler::LocalExecManagementRequest`]) via `decide_management`.
+//! - [`endpoint`] — Async UDS listener. Binds the socket, accepts connections,
+//!   dispatches to the handler (governance or management), and manages the
+//!   pruning task lifecycle.
+
+pub mod endpoint;
+pub mod handler;
+pub mod token_store;
+
+pub use self::endpoint::LocalExecEndpoint;
+pub use self::handler::{
+    DefaultAction, LocalExecDecision, LocalExecHandler, LocalExecHandlerConfig,
+    LocalExecManagementRequest, LocalExecManagementResponse, ManagementOutcome,
+};
+pub use self::token_store::{ApproveResult, RevokeResult, TokenStore};

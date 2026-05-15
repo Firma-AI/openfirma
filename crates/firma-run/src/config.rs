@@ -24,11 +24,12 @@ pub struct ResolvedProfile {
     pub env_passthrough: BTreeSet<String>,
     pub env_set: BTreeMap<String, String>,
     pub mounts: Vec<MountSpec>,
-    pub seccomp_bpf_path: Option<PathBuf>,
+    pub seccomp_policy: Option<SeccompPolicyConfig>,
     pub allowed_domains: Vec<String>,
     pub network: NetworkPolicy,
     pub identity_mode: SandboxIdentityMode,
     pub capability: CapabilityLeaseConfig,
+    pub sidecar_local_exec: Option<CommandMediatorConfig>,
     pub executable_policies: BTreeMap<String, ExecutableLaunchPolicy>,
 }
 
@@ -73,25 +74,76 @@ impl ResolvedProfile {
             }
         }
 
-        if let Some(path) = &self.seccomp_bpf_path {
-            if !path.is_absolute() {
+        if let Some(managed) = &self.seccomp_policy {
+            if !managed.source_policy_path.is_absolute() {
                 return Err(RunError::ConfigValidation(format!(
-                    "seccomp_bpf_path must be absolute: {}",
-                    path.display()
+                    "seccomp_policy.source_policy_path must be absolute: {}",
+                    managed.source_policy_path.display()
                 )));
             }
-            if !path.is_file() {
+            if !managed.source_policy_path.is_file() {
                 return Err(RunError::ConfigValidation(format!(
-                    "seccomp_bpf_path must point to an existing file: {}",
-                    path.display()
+                    "seccomp_policy.source_policy_path must point to an existing file: {}",
+                    managed.source_policy_path.display()
                 )));
+            }
+            if !managed.artifact_dir.is_absolute() {
+                return Err(RunError::ConfigValidation(format!(
+                    "seccomp_policy.artifact_dir must be absolute: {}",
+                    managed.artifact_dir.display()
+                )));
+            }
+            if !managed.verify_checksum {
+                return Err(RunError::ConfigValidation(
+                    "seccomp_policy.verify_checksum=false is unsupported; checksum verification is mandatory"
+                        .to_string(),
+                ));
             }
             if self.backend != BackendKind::Bwrap {
                 return Err(RunError::ConfigValidation(format!(
-                    "seccomp_bpf_path is only supported with backend 'bwrap', got '{backend}'",
+                    "seccomp_policy is only supported with backend 'bwrap', got '{backend}'",
                     backend = self.backend
                 )));
             }
+        }
+
+        if let Some(mediator) = &self.sidecar_local_exec {
+            if mediator.timeout_ms == 0 {
+                return Err(RunError::ConfigValidation(
+                    "sidecar_local_exec.timeout_ms must be > 0".to_string(),
+                ));
+            }
+            #[cfg(target_family = "unix")]
+            if !matches!(self.sidecar_endpoint, SidecarEndpoint::Unix { .. }) {
+                return Err(RunError::ConfigValidation(
+                    "sidecar_local_exec requires sidecar_endpoint to use unix:// on unix hosts"
+                        .to_string(),
+                ));
+            }
+            #[cfg(target_family = "unix")]
+            if matches!(mediator.endpoint, CommandMediatorEndpoint::Tcp { .. }) {
+                return Err(RunError::ConfigValidation(
+                    "sidecar_local_exec.endpoint must use unix:// on unix hosts".to_string(),
+                ));
+            }
+            if let CommandMediatorEndpoint::Unix { path } = &mediator.endpoint
+                && !path.is_absolute()
+            {
+                return Err(RunError::ConfigValidation(format!(
+                    "sidecar_local_exec.endpoint unix path must be absolute: {}",
+                    path.display()
+                )));
+            }
+            if mediator.enforce_known_executables && mediator.allowed_executables.is_empty() {
+                return Err(RunError::ConfigValidation(
+                    "sidecar_local_exec.enforce_known_executables=true requires non-empty sidecar_local_exec.allowed_executables"
+                        .to_string(),
+                ));
+            }
+        } else if env_truthy(REQUIRE_LOCAL_EXEC_GOVERNANCE_ENV) {
+            return Err(RunError::ConfigValidation(format!(
+                "{REQUIRE_LOCAL_EXEC_GOVERNANCE_ENV}=true requires [profiles.<id>.sidecar_local_exec] configuration"
+            )));
         }
 
         Ok(())
@@ -182,6 +234,61 @@ pub struct ExecutableLaunchPolicy {
     pub config_overrides: BTreeMap<String, String>,
 }
 
+/// Runtime command mediation settings for governed local execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CommandMediatorConfig {
+    pub endpoint: CommandMediatorEndpoint,
+    pub timeout_ms: u64,
+    pub hitl_mode: CommandMediatorHitlMode,
+    /// Maximum total wall-clock time `firma-run` will block waiting for a
+    /// human to approve a `pending_hitl` token. Applies only when
+    /// `hitl_mode = "async_token"`. Fail-closed once exceeded.
+    /// Default: 300 000 ms (5 minutes).
+    pub hitl_max_wait_ms: u64,
+    pub enforce_known_executables: bool,
+    pub allowed_executables: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CommandMediatorEndpoint {
+    Tcp { addr: SocketAddr },
+    Unix { path: PathBuf },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandMediatorHitlMode {
+    SyncWait,
+    AsyncToken,
+}
+
+/// Seccomp policy compilation settings for Linux bwrap backend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SeccompPolicyConfig {
+    pub source_policy_path: PathBuf,
+    pub artifact_dir: PathBuf,
+    pub verify_checksum: bool,
+    pub runtime_mode: SeccompRuntimeMode,
+}
+
+/// Runtime behavior for managed seccomp artifact selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SeccompRuntimeMode {
+    /// Compile/update managed seccomp artifacts during launch and then load.
+    CompileOnLaunch,
+    /// Require a precompiled managed seccomp artifact; do not compile at launch.
+    PrecompiledOnly,
+}
+
+const DEFAULT_MANAGED_POLICY_FILE: &str = "generic-local-command-v1.toml";
+const MANAGED_POLICY_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_POLICY_PATH";
+const MANAGED_ARTIFACT_DIR_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_ARTIFACT_DIR";
+const MANAGED_RUNTIME_MODE_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_RUNTIME_MODE";
+const MANAGED_DEFAULT_DISABLE_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_DISABLE_DEFAULT";
+const REQUIRE_LOCAL_EXEC_GOVERNANCE_ENV: &str = "FIRMA_RUN_REQUIRE_LOCAL_EXEC_GOVERNANCE";
+
 /// Source for capability material.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -205,7 +312,7 @@ struct FileConfig {
 pub(crate) struct ProfilePatch {
     pub(crate) backend: Option<BackendKind>,
     pub(crate) sidecar_endpoint: Option<String>,
-    pub(crate) seccomp_bpf_path: Option<PathBuf>,
+    pub(crate) seccomp_policy: Option<SeccompPolicyPatch>,
     #[serde(default)]
     pub(crate) env_passthrough: Vec<String>,
     #[serde(default)]
@@ -217,6 +324,9 @@ pub(crate) struct ProfilePatch {
     pub(crate) network: Option<NetworkPolicyPatch>,
     pub(crate) identity_mode: Option<SandboxIdentityMode>,
     pub(crate) capability: Option<CapabilityLeasePatch>,
+    /// Preferred governance config path. This routes local tool execution
+    /// decisions through a Sidecar-owned endpoint.
+    pub(crate) sidecar_local_exec: Option<CommandMediatorPatch>,
     #[serde(default)]
     pub(crate) executable_policies: BTreeMap<String, ExecutableLaunchPolicyPatch>,
     #[serde(default)]
@@ -238,6 +348,14 @@ pub(crate) struct NetworkPolicyPatch {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub(crate) struct SeccompPolicyPatch {
+    pub(crate) source_policy_path: PathBuf,
+    pub(crate) artifact_dir: PathBuf,
+    pub(crate) verify_checksum: Option<bool>,
+    pub(crate) runtime_mode: Option<SeccompRuntimeMode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub(crate) struct CapabilityLeasePatch {
     pub(crate) source: Option<CapabilitySourcePatch>,
     #[serde(default)]
@@ -255,6 +373,17 @@ pub(crate) struct ExecutableLaunchPolicyPatch {
     pub(crate) approval_policy: Option<String>,
     #[serde(default)]
     pub(crate) config_overrides: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CommandMediatorPatch {
+    pub(crate) endpoint: Option<String>,
+    pub(crate) timeout_ms: Option<u64>,
+    pub(crate) hitl_mode: Option<CommandMediatorHitlMode>,
+    pub(crate) hitl_max_wait_ms: Option<u64>,
+    pub(crate) enforce_known_executables: Option<bool>,
+    #[serde(default)]
+    pub(crate) allowed_executables: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -289,7 +418,7 @@ impl ProfilePatch {
         Self {
             backend: higher.backend.or(self.backend),
             sidecar_endpoint: higher.sidecar_endpoint.or(self.sidecar_endpoint),
-            seccomp_bpf_path: higher.seccomp_bpf_path.or(self.seccomp_bpf_path),
+            seccomp_policy: higher.seccomp_policy.or(self.seccomp_policy),
             env_passthrough,
             env_set,
             mounts,
@@ -297,6 +426,7 @@ impl ProfilePatch {
             network: higher.network.or(self.network),
             identity_mode: higher.identity_mode.or(self.identity_mode),
             capability: higher.capability.or(self.capability),
+            sidecar_local_exec: higher.sidecar_local_exec.or(self.sidecar_local_exec),
             executable_policies,
             codex_cli: higher.codex_cli.or(self.codex_cli),
         }
@@ -334,6 +464,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     let sidecar_endpoint = sidecar_endpoint_value
         .parse::<SidecarEndpoint>()
         .map_err(RunError::ConfigValidation)?;
+    let sidecar_local_exec = resolve_sidecar_local_exec_config(&patch, &sidecar_endpoint)?;
 
     let env_passthrough = patch
         .env_passthrough
@@ -369,7 +500,6 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
             "network.enforce_network_namespace=true is unsupported for backend '{backend}'; use backend 'bwrap' or set enforce_network_namespace=false"
         )));
     }
-
     let capability = patch
         .capability
         .map_or_else(default_capability_config, capability_from_patch);
@@ -381,6 +511,10 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     let executable_policies =
         resolve_executable_policies(patch.executable_policies, patch.codex_cli);
 
+    let seccomp_policy = patch
+        .seccomp_policy
+        .map(seccomp_policy_from_patch)
+        .or(default_managed_seccomp_policy(&args.profile, backend)?);
     let resolved = ResolvedProfile {
         id: args.profile.clone(),
         backend,
@@ -388,11 +522,12 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         env_passthrough,
         env_set: patch.env_set,
         mounts,
-        seccomp_bpf_path: patch.seccomp_bpf_path,
+        seccomp_policy,
         allowed_domains: patch.allowed_domains,
         network,
         identity_mode,
         capability,
+        sidecar_local_exec,
         executable_policies,
     };
 
@@ -416,7 +551,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
     ProfilePatch {
         backend: args.backend,
         sidecar_endpoint: args.sidecar_endpoint.clone(),
-        seccomp_bpf_path: None,
+        seccomp_policy: None,
         env_passthrough: Vec::new(),
         env_set: BTreeMap::new(),
         mounts: Vec::new(),
@@ -437,6 +572,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
                 refresh_ratio: None,
                 grace_seconds: None,
             }),
+        sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
         codex_cli: None,
     }
@@ -503,6 +639,182 @@ fn default_capability_config() -> CapabilityLeaseConfig {
     }
 }
 
+fn seccomp_policy_from_patch(patch: SeccompPolicyPatch) -> SeccompPolicyConfig {
+    SeccompPolicyConfig {
+        source_policy_path: patch.source_policy_path,
+        artifact_dir: patch.artifact_dir,
+        verify_checksum: patch.verify_checksum.unwrap_or(true),
+        runtime_mode: patch
+            .runtime_mode
+            .unwrap_or(SeccompRuntimeMode::CompileOnLaunch),
+    }
+}
+
+fn sidecar_local_exec_from_patch(
+    patch: &CommandMediatorPatch,
+    sidecar_endpoint: &SidecarEndpoint,
+) -> Result<CommandMediatorConfig, RunError> {
+    let endpoint = if let Some(endpoint) = &patch.endpoint {
+        parse_sidecar_local_exec_endpoint(endpoint)?
+    } else {
+        derive_sidecar_local_exec_endpoint(sidecar_endpoint)?
+    };
+    let allowed_executables = patch
+        .allowed_executables
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+    Ok(CommandMediatorConfig {
+        endpoint,
+        timeout_ms: patch.timeout_ms.unwrap_or(500),
+        hitl_mode: patch.hitl_mode.unwrap_or(CommandMediatorHitlMode::SyncWait),
+        hitl_max_wait_ms: patch.hitl_max_wait_ms.unwrap_or(300_000),
+        enforce_known_executables: patch.enforce_known_executables.unwrap_or(false),
+        allowed_executables,
+    })
+}
+
+fn resolve_sidecar_local_exec_config(
+    patch: &ProfilePatch,
+    sidecar_endpoint: &SidecarEndpoint,
+) -> Result<Option<CommandMediatorConfig>, RunError> {
+    patch
+        .sidecar_local_exec
+        .as_ref()
+        .map(|cfg| sidecar_local_exec_from_patch(cfg, sidecar_endpoint))
+        .transpose()
+}
+
+fn parse_sidecar_local_exec_endpoint(value: &str) -> Result<CommandMediatorEndpoint, RunError> {
+    if let Some(rest) = value.strip_prefix("tcp://") {
+        let addr = rest.parse::<SocketAddr>().map_err(|err| {
+            RunError::ConfigValidation(format!(
+                "invalid sidecar_local_exec.endpoint '{value}': {err}"
+            ))
+        })?;
+        return Ok(CommandMediatorEndpoint::Tcp { addr });
+    }
+    if let Some(rest) = value.strip_prefix("unix://") {
+        let path = PathBuf::from(rest);
+        if path.as_os_str().is_empty() {
+            return Err(RunError::ConfigValidation(
+                "sidecar_local_exec.endpoint unix path must not be empty".to_string(),
+            ));
+        }
+        return Ok(CommandMediatorEndpoint::Unix { path });
+    }
+    Err(RunError::ConfigValidation(format!(
+        "unsupported sidecar_local_exec.endpoint '{value}'; expected tcp://host:port or unix:///path"
+    )))
+}
+
+fn derive_sidecar_local_exec_endpoint(
+    sidecar_endpoint: &SidecarEndpoint,
+) -> Result<CommandMediatorEndpoint, RunError> {
+    match sidecar_endpoint {
+        SidecarEndpoint::Unix { path } => {
+            let parent = path.parent().ok_or_else(|| {
+                RunError::ConfigValidation(format!(
+                    "cannot derive sidecar local-exec endpoint from unix path {}",
+                    path.display()
+                ))
+            })?;
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    RunError::ConfigValidation(format!(
+                        "cannot derive sidecar local-exec endpoint from unix path {}",
+                        path.display()
+                    ))
+                })?;
+            let derived_file_name = file_name.strip_suffix(".sock").map_or_else(
+                || format!("{file_name}-tools.sock"),
+                |base| format!("{base}-tools.sock"),
+            );
+            let derived_path = parent.join(derived_file_name);
+            Ok(CommandMediatorEndpoint::Unix { path: derived_path })
+        }
+        SidecarEndpoint::Tcp { addr } => Err(RunError::ConfigValidation(format!(
+            "sidecar_local_exec endpoint is required when sidecar endpoint is tcp://{addr}; automatic derivation only supports unix sidecar endpoints"
+        ))),
+    }
+}
+
+fn default_managed_seccomp_policy(
+    profile_id: &str,
+    backend: BackendKind,
+) -> Result<Option<SeccompPolicyConfig>, RunError> {
+    if !cfg!(target_os = "linux") || backend != BackendKind::Bwrap || profile_id != "generic" {
+        return Ok(None);
+    }
+
+    if env_truthy(MANAGED_DEFAULT_DISABLE_ENV) {
+        tracing::warn!(
+            profile = profile_id,
+            env = MANAGED_DEFAULT_DISABLE_ENV,
+            "managed static seccomp default disabled by environment override"
+        );
+        return Ok(None);
+    }
+
+    let source_policy_path = std::env::var(MANAGED_POLICY_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map_or_else(
+            || {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("policies")
+                    .join(DEFAULT_MANAGED_POLICY_FILE)
+            },
+            PathBuf::from,
+        );
+
+    let artifact_dir = std::env::var(MANAGED_ARTIFACT_DIR_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map_or_else(default_managed_artifact_dir, PathBuf::from);
+
+    let runtime_mode = std::env::var(MANAGED_RUNTIME_MODE_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| parse_managed_runtime_mode(&value))
+        .transpose()?
+        .unwrap_or(SeccompRuntimeMode::CompileOnLaunch);
+
+    Ok(Some(SeccompPolicyConfig {
+        source_policy_path,
+        artifact_dir,
+        verify_checksum: true,
+        runtime_mode,
+    }))
+}
+
+fn parse_managed_runtime_mode(value: &str) -> Result<SeccompRuntimeMode, RunError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "compile_on_launch" => Ok(SeccompRuntimeMode::CompileOnLaunch),
+        "precompiled_only" => Ok(SeccompRuntimeMode::PrecompiledOnly),
+        other => Err(RunError::ConfigValidation(format!(
+            "{MANAGED_RUNTIME_MODE_ENV} must be 'compile_on_launch' or 'precompiled_only', got '{other}'"
+        ))),
+    }
+}
+
+fn default_managed_artifact_dir() -> PathBuf {
+    std::env::temp_dir().join("firma").join("seccomp-artifacts")
+}
+
+fn env_truthy(name: &str) -> bool {
+    std::env::var(name).ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
 fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
     let content = std::fs::read_to_string(path).map_err(|error| RunError::ConfigParse {
         path: path.to_path_buf(),
@@ -541,7 +853,8 @@ mod tests {
     use crate::runtime::RunInput;
 
     use super::{
-        BackendKind, CapabilitySource, SandboxIdentityMode, SidecarEndpoint, resolve_profile,
+        BackendKind, CapabilitySource, SandboxIdentityMode, SeccompRuntimeMode, SidecarEndpoint,
+        resolve_profile,
     };
 
     fn args(profile: &str) -> RunInput {
@@ -577,15 +890,30 @@ mod tests {
             }
         );
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::SandboxUser);
+        if cfg!(target_os = "linux")
+            && resolved.backend == BackendKind::Bwrap
+            && !super::env_truthy(super::MANAGED_DEFAULT_DISABLE_ENV)
+        {
+            let managed = resolved
+                .seccomp_policy
+                .as_ref()
+                .unwrap_or_else(|| panic!("missing managed seccomp default"));
+            assert!(managed.verify_checksum);
+            assert_eq!(managed.runtime_mode, SeccompRuntimeMode::CompileOnLaunch);
+            assert!(
+                managed
+                    .source_policy_path
+                    .ends_with("policies/generic-local-command-v1.toml"),
+                "unexpected managed default policy path: {}",
+                managed.source_policy_path.display()
+            );
+        }
     }
 
     #[test]
     fn yaml_config_overrides_profile() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let config_path = tmpdir.path().join("firma-run.yaml");
-
-        let seccomp_path = tmpdir.path().join("seccomp.bpf");
-        fs::write(&seccomp_path, [0_u8; 8]).unwrap_or_else(|e| panic!("{e}"));
 
         let yaml = format!(
             r#"
@@ -594,15 +922,13 @@ defaults:
 profiles:
   codex:
     backend: bwrap
-    seccomp_bpf_path: {}
     identity_mode: host_user
     env_passthrough:
       - HOME
     capability:
       kind: file
       path: /tmp/capability.token
-"#,
-            seccomp_path.display()
+"#
         );
         fs::write(&config_path, yaml).unwrap_or_else(|e| panic!("{e}"));
 
@@ -611,7 +937,6 @@ profiles:
 
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved.backend, BackendKind::Bwrap);
-        assert_eq!(resolved.seccomp_bpf_path, Some(seccomp_path));
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::HostUser);
         assert!(resolved.env_passthrough.contains("HOME"));
         assert_eq!(
@@ -711,32 +1036,416 @@ fail_closed = true
     }
 
     #[test]
-    fn seccomp_bpf_path_rejected_for_non_bwrap_backend() {
+    fn seccomp_policy_resolves_when_configured_for_bwrap() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let seccomp_path = tmpdir.path().join("seccomp.bpf");
-        fs::write(&seccomp_path, [0_u8; 8]).unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
 
         let config_path = tmpdir.path().join("firma-run.toml");
-        // TOML literal string (single quotes) keeps backslashes verbatim so
-        // Windows paths like `C:\Users\...` parse without escape interpretation.
         let toml = format!(
             r#"
 [profiles.generic]
-backend = "vz"
-seccomp_bpf_path = '{}'
+backend = "bwrap"
+sidecar_endpoint = "unix:///tmp/sidecar.sock"
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+verify_checksum = true
 "#,
-            seccomp_path.display()
+            policy_path.display(),
+            artifact_dir.display()
         );
         fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
 
         let mut run_args = args("generic");
         run_args.config = Some(config_path);
-        let err =
-            resolve_profile(&run_args).expect_err("expected seccomp backend validation error");
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        assert!(resolved.seccomp_policy.is_some());
+    }
+
+    #[test]
+    fn seccomp_policy_rejected_for_non_bwrap_backend() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
+
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "vz"
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+"#,
+            policy_path.display(),
+            artifact_dir.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let err = resolve_profile(&run_args).expect_err("expected backend validation error");
         assert!(
             err.to_string()
-                .contains("seccomp_bpf_path is only supported with backend 'bwrap'"),
+                .contains("seccomp_policy is only supported with backend 'bwrap'"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn seccomp_policy_runtime_mode_parses_precompiled_only() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
+
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "bwrap"
+sidecar_endpoint = "unix:///tmp/sidecar.sock"
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+runtime_mode = "precompiled_only"
+"#,
+            policy_path.display(),
+            artifact_dir.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        let seccomp = resolved
+            .seccomp_policy
+            .unwrap_or_else(|| panic!("missing seccomp policy"));
+        assert_eq!(seccomp.runtime_mode, SeccompRuntimeMode::PrecompiledOnly);
+    }
+
+    #[test]
+    fn seccomp_policy_rejects_checksum_disable() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
+
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "bwrap"
+sidecar_endpoint = "unix:///tmp/sidecar.sock"
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+verify_checksum = false
+"#,
+            policy_path.display(),
+            artifact_dir.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let err = resolve_profile(&run_args).expect_err("expected checksum validation error");
+        assert!(
+            err.to_string()
+                .contains("seccomp_policy.verify_checksum=false is unsupported"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn sidecar_local_exec_parses_unix_endpoint() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
+        let socket_path = tmpdir.path().join("mediator.sock");
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "bwrap"
+sidecar_endpoint = "unix:///tmp/sidecar.sock"
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+runtime_mode = "precompiled_only"
+
+[profiles.generic.sidecar_local_exec]
+endpoint = 'unix://{}'
+timeout_ms = 700
+"#,
+            policy_path.display(),
+            artifact_dir.display(),
+            socket_path.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        let mediator = resolved
+            .sidecar_local_exec
+            .unwrap_or_else(|| panic!("missing sidecar local-exec governance config"));
+        assert_eq!(mediator.timeout_ms, 700);
+    }
+
+    #[test]
+    fn sidecar_local_exec_rejects_relative_unix_path() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "bwrap"
+sidecar_endpoint = "unix:///tmp/sidecar.sock"
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+runtime_mode = "precompiled_only"
+
+[profiles.generic.sidecar_local_exec]
+endpoint = "unix://relative.sock"
+timeout_ms = 500
+"#,
+            policy_path.display(),
+            artifact_dir.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let err = resolve_profile(&run_args).expect_err("expected validation failure");
+        assert!(
+            err.to_string()
+                .contains("sidecar_local_exec.endpoint unix path must be absolute"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn sidecar_local_exec_rejects_empty_allowlist_when_enforced() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let endpoint = if cfg!(target_family = "unix") {
+            "unix:///tmp/sidecar-local-exec.sock"
+        } else {
+            "tcp://127.0.0.1:19090"
+        };
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "bwrap"
+sidecar_endpoint = "unix:///tmp/sidecar.sock"
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+runtime_mode = "precompiled_only"
+
+[profiles.generic.sidecar_local_exec]
+endpoint = "{endpoint}"
+timeout_ms = 500
+enforce_known_executables = true
+"#,
+            policy_path.display(),
+            artifact_dir.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let err = resolve_profile(&run_args).expect_err("expected validation failure");
+        assert!(
+            err.to_string()
+                .contains("sidecar_local_exec.enforce_known_executables=true requires non-empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn sidecar_local_exec_parses_async_hitl_mode_and_allowlist() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let endpoint = if cfg!(target_family = "unix") {
+            "unix:///tmp/sidecar-local-exec.sock"
+        } else {
+            "tcp://127.0.0.1:19090"
+        };
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "bwrap"
+sidecar_endpoint = "unix:///tmp/sidecar.sock"
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+runtime_mode = "precompiled_only"
+
+[profiles.generic.sidecar_local_exec]
+endpoint = "{endpoint}"
+timeout_ms = 800
+hitl_mode = "async_token"
+enforce_known_executables = true
+allowed_executables = ["codex", "claude", "bash"]
+"#,
+            policy_path.display(),
+            artifact_dir.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        let mediator = resolved
+            .sidecar_local_exec
+            .unwrap_or_else(|| panic!("missing sidecar local-exec governance config"));
+        assert!(mediator.enforce_known_executables);
+        assert!(mediator.allowed_executables.contains("codex"));
+        assert_eq!(
+            mediator.hitl_mode,
+            super::CommandMediatorHitlMode::AsyncToken
+        );
+    }
+
+    #[test]
+    fn sidecar_local_exec_derives_unix_tools_endpoint() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = tmpdir.path().join("policy.toml");
+        fs::write(
+            &policy_path,
+            r#"
+policy_id = "generic-local-command"
+policy_version = "v1"
+default_action = "allow"
+deny_actions = ["filesystem.delete"]
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifact_dir = tmpdir.path().join("artifacts");
+        let config_path = tmpdir.path().join("firma-run.toml");
+        let sidecar_sock = tmpdir.path().join("sidecar.sock");
+        let toml = format!(
+            r#"
+[profiles.generic]
+backend = "bwrap"
+sidecar_endpoint = 'unix://{}'
+
+[profiles.generic.seccomp_policy]
+source_policy_path = '{}'
+artifact_dir = '{}'
+runtime_mode = "precompiled_only"
+
+[profiles.generic.sidecar_local_exec]
+timeout_ms = 700
+"#,
+            sidecar_sock.display(),
+            policy_path.display(),
+            artifact_dir.display()
+        );
+        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        let mut run_args = args("generic");
+        run_args.config = Some(config_path);
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        let mediator = resolved
+            .sidecar_local_exec
+            .unwrap_or_else(|| panic!("missing sidecar local-exec governance config"));
+        match mediator.endpoint {
+            super::CommandMediatorEndpoint::Unix { path } => {
+                assert!(path.ends_with("sidecar-tools.sock"));
+            }
+            other => panic!("expected unix endpoint, got {other:?}"),
+        }
     }
 }
