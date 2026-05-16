@@ -29,8 +29,10 @@ pub struct AuthorityConfig {
     #[serde(default)]
     pub public_key_path: Option<PathBuf>,
     /// Path to the PEM-encoded CA certificate used to verify the Authority's
-    /// TLS certificate. Required when `policy.authority_url` uses `https://`.
-    /// Omit for plain `http://` (loopback / local dev only).
+    /// TLS certificate.
+    ///
+    /// Requirement is context-dependent and enforced in `SidecarConfig::validate`:
+    /// required for `https://` authority URLs, optional for loopback `http://`.
     #[serde(default)]
     pub ca_cert_path: Option<PathBuf>,
     /// Allow an insecure plain `http://` authority URL to a non-loopback

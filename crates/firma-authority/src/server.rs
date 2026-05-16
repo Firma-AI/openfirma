@@ -115,22 +115,21 @@ impl Server {
         let port = local_addr.port();
         let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
 
-        // Validate: both TLS fields must be set or neither.
-        if config.tls_cert_path.is_some() != config.tls_key_path.is_some() {
-            anyhow::bail!("tls_cert_path and tls_key_path must both be set or both be unset");
-        }
+        let tls_identity_paths = config.tls_identity_paths().map_err(anyhow::Error::msg)?;
 
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
 
-        let mut tonic_builder = if let (Some(cert_path), Some(key_path)) =
-            (&config.tls_cert_path, &config.tls_key_path)
-        {
-            let cert_pem = tokio::fs::read(cert_path)
+        let mut tonic_builder = if let Some(tls_paths) = tls_identity_paths {
+            let cert_pem = tokio::fs::read(&tls_paths.cert_path)
                 .await
-                .with_context(|| format!("failed to read TLS cert {}", cert_path.display()))?;
-            let key_pem = tokio::fs::read(key_path)
+                .with_context(|| {
+                    format!("failed to read TLS cert {}", tls_paths.cert_path.display())
+                })?;
+            let key_pem = tokio::fs::read(&tls_paths.key_path)
                 .await
-                .with_context(|| format!("failed to read TLS key {}", key_path.display()))?;
+                .with_context(|| {
+                    format!("failed to read TLS key {}", tls_paths.key_path.display())
+                })?;
             let identity = Identity::from_pem(cert_pem, key_pem);
             let tls_config = ServerTlsConfig::new().identity(identity);
             tracing::info!("TLS enabled on gRPC server");

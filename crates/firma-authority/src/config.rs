@@ -41,13 +41,33 @@ pub struct AuthorityConfig {
     pub log_level: String,
     /// Policy bundle TTL advertised to sidecars in seconds (default: 30).
     pub bundle_ttl_seconds: u32,
-    /// Path to the TLS certificate file (PEM). When set together with
-    /// `tls_key_path`, the gRPC listener is TLS-only. Both fields must be
-    /// set or neither.
+    /// Authority TLS configuration.
+    ///
+    /// Uses `tls_cert_path` + `tls_key_path` keys in TOML via flattening.
+    #[serde(flatten)]
+    pub tls: AuthorityTlsConfig,
+}
+
+/// TLS configuration for the Authority gRPC server.
+///
+/// Both values are required together to enable TLS.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AuthorityTlsConfig {
+    /// Path to the TLS certificate file (PEM). Must be set together with
+    /// `tls_key_path`.
+    #[serde(default)]
     pub tls_cert_path: Option<PathBuf>,
     /// Path to the TLS private key file (PEM). Must be set together with
     /// `tls_cert_path`.
+    #[serde(default)]
     pub tls_key_path: Option<PathBuf>,
+}
+
+/// Fully validated TLS identity paths.
+#[derive(Debug, Clone)]
+pub struct TlsIdentityPaths {
+    pub cert_path: PathBuf,
+    pub key_path: PathBuf,
 }
 
 impl AuthorityConfig {
@@ -118,10 +138,10 @@ impl AuthorityConfig {
             config.bundle_ttl_seconds = n;
         }
         if let Ok(v) = std::env::var("FIRMA_AUTHORITY_TLS_CERT_PATH") {
-            config.tls_cert_path = Some(PathBuf::from(v));
+            config.tls.tls_cert_path = Some(PathBuf::from(v));
         }
         if let Ok(v) = std::env::var("FIRMA_AUTHORITY_TLS_KEY_PATH") {
-            config.tls_key_path = Some(PathBuf::from(v));
+            config.tls.tls_key_path = Some(PathBuf::from(v));
         }
     }
 
@@ -140,6 +160,22 @@ impl AuthorityConfig {
         config.rebase_defaults(config_dir);
         config.apply_env_overrides();
         Ok(config)
+    }
+
+    /// Returns TLS identity paths when both TLS fields are configured.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if only one of `tls_cert_path` / `tls_key_path` is set.
+    pub fn tls_identity_paths(&self) -> Result<Option<TlsIdentityPaths>, String> {
+        match (&self.tls.tls_cert_path, &self.tls.tls_key_path) {
+            (Some(cert_path), Some(key_path)) => Ok(Some(TlsIdentityPaths {
+                cert_path: cert_path.clone(),
+                key_path: key_path.clone(),
+            })),
+            (None, None) => Ok(None),
+            _ => Err("tls_cert_path and tls_key_path must both be set or both be unset".into()),
+        }
     }
 
     /// Re-base every relative resource path against `config_dir`;
@@ -182,8 +218,7 @@ impl Default for AuthorityConfig {
             key_file: PathBuf::from(DEFAULT_KEY_FILE),
             log_level: "info".to_string(),
             bundle_ttl_seconds: 30,
-            tls_cert_path: None,
-            tls_key_path: None,
+            tls: AuthorityTlsConfig::default(),
         }
     }
 }

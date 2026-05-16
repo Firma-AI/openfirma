@@ -178,8 +178,7 @@ async fn spawn_mock_authority() -> anyhow::Result<MockAuthorityServer> {
             .await;
     });
 
-    // Give tonic a brief moment to bind before clients attempt to connect.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_tcp_listen(addr, Duration::from_secs(2)).await?;
 
     Ok(MockAuthorityServer {
         url,
@@ -230,7 +229,7 @@ async fn spawn_mock_authority_tls(
             .await;
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_tcp_listen(addr, Duration::from_secs(2)).await?;
 
     Ok(MockAuthorityServer {
         url,
@@ -415,6 +414,17 @@ async fn wait_for<F: Fn() -> bool>(deadline: Duration, predicate: F) -> bool {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     predicate()
+}
+
+async fn wait_for_tcp_listen(addr: std::net::SocketAddr, deadline: Duration) -> anyhow::Result<()> {
+    let start = Instant::now();
+    while start.elapsed() < deadline {
+        match tokio::net::TcpStream::connect(addr).await {
+            Ok(_) => return Ok(()),
+            Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+        }
+    }
+    anyhow::bail!("authority test server did not start listening on {addr} within {deadline:?}")
 }
 
 fn is_revoked(store: &BloomLruRevocationStore, token_id: &TokenId) -> bool {
@@ -783,11 +793,13 @@ async fn tls_handshake_fails_with_wrong_ca_cert_stays_not_ready() -> anyhow::Res
         Some(&wrong_ca_certs.ca_cert_pem),
     )?;
 
-    // Allow several reconnect attempts; readiness must stay false.
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    let stayed_not_ready = wait_for(Duration::from_millis(600), || {
+        harness.readiness_view.snapshot().policy_bundle_ready
+    })
+    .await;
 
     assert!(
-        !harness.readiness_view.snapshot().policy_bundle_ready,
+        !stayed_not_ready,
         "policy_bundle_ready must stay false when TLS cert is untrusted"
     );
     assert_eq!(

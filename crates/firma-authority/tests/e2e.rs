@@ -11,7 +11,7 @@ use pasetors::version4::V4;
 use tempfile::TempDir;
 use tokio::sync::oneshot;
 
-use firma_authority::{AuthorityConfig, Server};
+use firma_authority::{AuthorityConfig, AuthorityTlsConfig, Server};
 
 struct TestServer {
     addr: String,
@@ -57,8 +57,7 @@ impl TestServer {
             max_ttl_seconds: 3600,
             log_level: "info".to_string(),
             bundle_ttl_seconds: 30,
-            tls_cert_path: None,
-            tls_key_path: None,
+            tls: AuthorityTlsConfig::default(),
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
