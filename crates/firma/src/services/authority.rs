@@ -287,13 +287,17 @@ async fn run_issue(config: &AuthorityConfig, args: &IssueArgs) -> Result<()> {
 fn run_issue_client_cert(config: &AuthorityConfig, args: &IssueClientCertArgs) -> Result<()> {
     use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SanType};
 
-    let ca_cert_path = config.mtls_client_ca_cert_path.as_ref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "mtls_client_ca_cert_path is not set in the Authority config; \
+    let ca_cert_path = config
+        .tls
+        .mtls_client_ca_cert_path
+        .as_ref()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "mtls_client_ca_cert_path is not set in the Authority config; \
              run `firma authority generate-client-ca` first"
-        )
-    })?;
-    let ca_key_path = config.mtls_client_ca_key_path.as_ref().ok_or_else(|| {
+            )
+        })?;
+    let ca_key_path = config.tls.mtls_client_ca_key_path.as_ref().ok_or_else(|| {
         anyhow::anyhow!("mtls_client_ca_key_path is not set in the Authority config")
     })?;
 

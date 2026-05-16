@@ -9,7 +9,7 @@
 
 use std::io::Write as _;
 
-use firma_authority::{AuthorityConfig, Server};
+use firma_authority::{AuthorityConfig, AuthorityTlsConfig, Server};
 use firma_proto::firma::v1::WatchPolicyBundleRequest;
 use firma_proto::firma::v1::authority_service_client::AuthorityServiceClient;
 use pasetors::keys::{AsymmetricKeyPair, Generate};
@@ -178,11 +178,13 @@ impl MtlsTestServer {
             max_ttl_seconds: 3600,
             log_level: "info".to_string(),
             bundle_ttl_seconds: 30,
-            tls_cert_path: Some(server_cert_path),
-            tls_key_path: Some(server_key_path),
-            mtls_client_ca_cert_path: Some(client_ca_cert_path),
-            mtls_client_ca_key_path: None,
-            authorized_clients_path: Some(authorized_clients_path),
+            tls: AuthorityTlsConfig {
+                tls_cert_path: Some(server_cert_path),
+                tls_key_path: Some(server_key_path),
+                mtls_client_ca_cert_path: Some(client_ca_cert_path),
+                mtls_client_ca_key_path: None,
+                authorized_clients_path: Some(authorized_clients_path),
+            },
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
