@@ -28,8 +28,11 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@v1.19.1
+
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        run: cargo binstall --no-confirm --locked cargo-fuzz
 
       - name: Run ${{ matrix.target }}
         run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=300
