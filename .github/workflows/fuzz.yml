@@ -35,4 +35,4 @@ jobs:
         run: cargo binstall --no-confirm --locked cargo-fuzz
 
       - name: Run ${{ matrix.target }}
-        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=300
+        run: cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=300
