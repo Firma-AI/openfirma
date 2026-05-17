@@ -11,8 +11,9 @@
 #   bash examples/generic-agent/run.sh -- claude --dangerously-skip-permissions
 set -euo pipefail
 
-command -v cargo >/dev/null 2>&1 || { echo "ERROR: cargo not found" >&2; exit 1; }
-command -v nc    >/dev/null 2>&1 || { echo "ERROR: nc not found (needed for health checks)" >&2; exit 1; }
+command -v cargo   >/dev/null 2>&1 || { echo "ERROR: cargo not found" >&2; exit 1; }
+command -v nc      >/dev/null 2>&1 || { echo "ERROR: nc not found (needed for health checks)" >&2; exit 1; }
+command -v openssl >/dev/null 2>&1 || { echo "ERROR: openssl not found (needed to generate audit key)" >&2; exit 1; }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
@@ -60,7 +61,7 @@ fi
 
 if [[ ! -f "$RUNTIME/audit.key" ]]; then
     openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
-        -out "$RUNTIME/audit.key" 2>/dev/null
+        -out "$RUNTIME/audit.key"
     echo "      Generated audit key."
 fi
 
