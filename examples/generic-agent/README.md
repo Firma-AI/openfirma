@@ -7,11 +7,18 @@ template; copy and narrow per deployment profile.
 ## Run
 
 ```bash
+# Interactive mode — starts stack, prints smoke-test commands, waits for Ctrl+C.
 bash examples/generic-agent/run.sh
+
+# Agent mode — wraps <command> with firma run (Layer 3 bwrap + L1/L4 policy).
+bash examples/generic-agent/run.sh -- <command> [args...]
+# e.g.
+bash examples/generic-agent/run.sh -- claude --dangerously-skip-permissions
 ```
 
-Builds `firma-authority` + `firma-sidecar`, generates keys on first boot
-into `.runtime/`, starts both processes, prints curl smoke-test commands.
+Builds `firma`, `firma-authority`, and `firma-sidecar`, generates keys on first
+boot into `.runtime/`, starts both services, then either runs the agent inside
+the sandbox or prints curl smoke-test commands.
 
 ## Layer coverage
 
@@ -19,12 +26,76 @@ into `.runtime/`, starts both processes, prints curl smoke-test commands.
 |-------|-----------|------------------------|
 | 1 — Network (host / IP allowlist) | mapping rules + Cedar | covered |
 | 2 — Command / syscall | seccomp-unotify / ESF | deferred (FIR-79) |
-| 3 — Filesystem | firma-run sandbox | not configured here |
+| 3 — Filesystem | firma-run sandbox (bwrap) | covered via `firma-run.toml` |
 | 4 — Semantic (HTTP action classes) | Cedar policy bundle | covered |
 
 Layer 3 and Layer 2 are enforced outside the sidecar. The Cedar policy
 in `policies/llm-agent.cedar` does not duplicate filesystem path or
 syscall rules — those belong to firma-run / bwrap / seccomp.
+
+## Layer 3 — Filesystem sandbox (`firma-run.toml`)
+
+Linux-only. Backend: `bwrap`. Configured by
+`examples/generic-agent/firma-run.toml`.
+
+| Access | Paths |
+|--------|-------|
+| Read + Write | Workspace directory. `run.sh` creates and launches from `examples/generic-agent/workspace/`. For direct `firma run` use, `cd` into your workspace first. |
+| Read only | `/usr`, `/lib`, `/bin`, `/etc` (whole rootfs ro-bound — covers `/etc/sudoers`, `/etc/shadow`, `/etc/crontab`, `/etc/hosts`) |
+| No access | `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gcloud` (tmpfs mask on host `$HOME` + sandbox HOME redirected to per-run runtime dir) |
+| No access | `$HOST_HOME/.env` — masked via tmpfs (HOME redirection + explicit mask). `.env` files at arbitrary paths under the host rootfs remain readable via ro-bind; full pattern-deny needs a path-aware FS policy layer (follow-up). |
+| No access | Other users' home dirs (only the workspace path is bound RW; `/home/<other-user>` stays under the rootfs ro-bind) |
+
+The knobs the file sets are read by the bwrap backend
+(`crates/firma-run/src/backend/linux_bwrap.rs`):
+
+- `FIRMA_RUN_BWRAP_ROOTFS_MODE = "readonly"` — `--ro-bind /` + tmpfs on
+  `/tmp`, `/var/tmp`.
+- `FIRMA_RUN_BWRAP_RUNTIME_HOME = "true"` — `HOME`, `XDG_CONFIG_HOME`,
+  `XDG_CACHE_HOME` all point at the per-run runtime dir.
+- `FIRMA_RUN_BWRAP_MASK_HOME_PATHS = ".ssh,.gnupg,.aws,.config/gcloud,.env"`
+  — defense-in-depth tmpfs masks on the host home paths.
+
+### Setting the workspace per project
+
+Two options:
+
+1. **`cd` into the project, then invoke `firma run`** (recommended). The
+   generic profile auto-binds the launch cwd RW at the same path inside
+   the sandbox. No edits required:
+
+   ```bash
+   cd /path/to/my-project
+   firma run --profile generic \
+     --config /path/to/firma-oss/examples/generic-agent/firma-run.toml \
+     -- <command>
+   ```
+
+2. **Pin an explicit absolute path** by uncommenting the
+   `[[profiles.generic.mounts]]` block in `firma-run.toml` and editing
+   both `source` and `target`. Adding any mount entry replaces the cwd
+   default, so list every path the agent needs RW access to.
+
+### Acceptance test
+
+```bash
+# Start the stack first (separate terminal).
+bash examples/generic-agent/run.sh
+
+# Then run the probes against it.
+bash examples/generic-agent/verify-layer3.sh
+```
+
+Runs three probes through `firma run` against the stack started by `run.sh`:
+
+| Probe | Expected |
+|-------|----------|
+| sandbox `$HOME` != host `$HOME` | preflight passes (bwrap active) |
+| `echo ok > <workspace>/probe.txt` | exit 0, file present (PASS) |
+| `echo bad >> ~/.ssh/authorized_keys` | exit non-zero (PASS — denied) |
+
+Exits 0 on PASS, non-zero on FAIL. Linux-only; requires `bwrap` and
+`cargo`.
 
 ## Files
 
@@ -34,6 +105,8 @@ syscall rules — those belong to firma-run / bwrap / seccomp.
 | `policies/llm-agent.cedar` | enforcement policy bundle streamed to the sidecar |
 | `issuance-policies/issuance.cedar` | gates capability token issuance at the Authority |
 | `mapping-rules.toml` | supplemental host/method/path → action class rules (CONNECT tunnels, package managers, localhost) |
+| `firma-run.toml` | Layer 3 firma-run profile config (bwrap mounts + sensitive-path masks) |
+| `verify-layer3.sh` | filesystem sandbox acceptance test (workspace RW vs `~/.ssh` denied) |
 | `run.sh` | startup script + curl smoke tests |
 
 The shipped provider mappings in `crates/firma-sidecar/config/mappings/`

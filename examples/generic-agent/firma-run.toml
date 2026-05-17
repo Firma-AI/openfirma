@@ -1,0 +1,64 @@
+# Layer 3 — Filesystem sandbox profile for the generic agent.
+#
+# Apply with:
+#   firma run --profile generic --config examples/generic-agent/firma-run.toml \
+#     -- <command>
+#
+# Backend: bwrap (Linux). The hardening knobs below are read by the bwrap
+# backend in crates/firma-run/src/backend/linux_bwrap.rs.
+#
+# Filesystem policy
+#   Read + write : workspace directory only (the host cwd at launch is
+#                  bind-mounted into the sandbox at the same path).
+#                  run.sh enforces this by cd-ing into $WORKSPACE_DIR before
+#                  invoking `firma run`; for direct use, cd into your workspace
+#                  first.
+#   Read only    : /usr, /lib, /bin, /etc (the whole rootfs is ro-bound).
+#                  /etc/sudoers, /etc/shadow, /etc/crontab, /etc/hosts are
+#                  read-only through the rootfs ro-bind.
+#   No access    : ~/.ssh, ~/.gnupg, ~/.aws, ~/.config/gcloud — masked with
+#                  tmpfs on top of the host HOME. HOME inside the sandbox is
+#                  redirected to the per-run runtime dir so even resolving
+#                  $HOME/.ssh lands in an empty tmpfs.
+#                  Any .env file under the host home is shadowed for the
+#                  same reason; place project .env files inside the
+#                  workspace (RW) if the agent needs them.
+#   No access    : other users' home directories — only the workspace path
+#                  is bound RW; /home/<other-user> stays under the rootfs
+#                  ro-bind with no credential entries.
+
+[profiles.generic]
+backend = "bwrap"
+
+[profiles.generic.env_set]
+# Bind / read-only and tmpfs over /tmp, /var/tmp. Without this the rootfs is
+# bind-mounted RW.
+FIRMA_RUN_BWRAP_ROOTFS_MODE = "readonly"
+
+# Point HOME at the per-run runtime dir so the agent cannot read host
+# credentials by expanding $HOME.
+FIRMA_RUN_BWRAP_RUNTIME_HOME = "true"
+
+# Defense-in-depth tmpfs masks on the host HOME paths. Comma-separated,
+# relative to $HOME. Extend per project (e.g. add ".docker", ".npmrc").
+# .env is included as best-effort: masks $HOST_HOME/.env via literal path
+# (HOME redirection already covers $HOME/.env resolution inside the sandbox).
+# Files at arbitrary paths under the host rootfs remain readable via ro-bind;
+# full pattern-deny requires a path-aware FS policy layer (follow-up).
+FIRMA_RUN_BWRAP_MASK_HOME_PATHS = ".ssh,.gnupg,.aws,.config/gcloud,.env"
+
+# Workspace mount.
+#
+# The default generic profile already binds the host cwd at launch RW into
+# the sandbox at the same path, so the simplest way to "set the workspace"
+# is to `cd` into the project before invoking `firma run`.
+#
+# To pin the workspace to an explicit absolute path independent of cwd,
+# uncomment the block below and edit both `source` and `target`. Paths must
+# be absolute. Adding the block REPLACES the cwd default — list every path
+# the agent needs RW access to.
+#
+# [[profiles.generic.mounts]]
+# source = "/abs/path/to/workspace"
+# target = "/abs/path/to/workspace"
+# read_only = false
