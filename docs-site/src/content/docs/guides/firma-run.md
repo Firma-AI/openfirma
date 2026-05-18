@@ -5,6 +5,29 @@ description: Use the runtime wrapper so an agent's traffic must go through the S
 
 `firma run` launches an agent inside an OS-level sandbox where every outbound call is forced through the Sidecar. Setting `HTTP_PROXY` is a hint; `firma run` is a constraint. This guide shows you how to use it, and when you should reach for it instead of plain proxy env vars.
 
+```mermaid
+flowchart LR
+    Run["firma run"]
+    Sandbox["Sandbox backend (Linux: bwrap)"]
+    Seccomp["Managed seccomp filter"]
+    Agent["Agent process"]
+    LocalExec["Sidecar local-exec gate"]
+    Sidecar["Firma Sidecar pipeline"]
+    Authority["Firma Authority"]
+    External["External services"]
+    Audit["Audit event"]
+
+    Run -->|"starts with profile"| Sandbox
+    Sandbox -->|"loads"| Seccomp
+    Sandbox -->|"launches"| Agent
+    Agent -->|"pre-exec command check (optional)"| LocalExec
+    LocalExec -->|"allow only"| Agent
+    Agent -->|"forced outbound traffic"| Sidecar
+    Authority -->|"tokens, policies, revocations"| Sidecar
+    Sidecar -->|"allowed traffic"| External
+    Sidecar -->|"policy decision"| Audit
+```
+
 You should already have a Sidecar running with a capability for some agent identity (see [Run the sidecar standalone](../run-the-sidecar/) and [Issue capability tokens](../issue-capability-tokens/)).
 
 ## When `firma run` is the right tool
@@ -145,6 +168,57 @@ Everything after `--` is the command and its arguments. `firma run`:
 5. Launches `curl https://example.com` inside the sandbox under a sandbox identity.
 
 The Sidecar receives the curl's request, runs it through the pipeline, and either dispatches or denies. The `curl` invocation never sees a token; it just talks to the proxy.
+
+## `firma run` execution flow (Linux: `bwrap` + seccomp + Sidecar governance)
+
+```mermaid
+flowchart TD
+    A["Operator runs: firma run --profile generic -- <command>"]
+    B["Resolve profile/config/backend (Linux default: bwrap)"]
+    C{"Authority available?"}
+    D["Autostart Mini Authority (optional)"]
+    E["Resolve Sidecar endpoint"]
+    F{"Sidecar reachable?"}
+    G["Autostart per-run Sidecar (optional)"]
+    H["Resolve seccomp source + artifact path"]
+    I["Verify seccomp metadata + checksum + trust-path"]
+    J{"Verification/load OK?"}
+    K["Fail closed: block launch"]
+    L["Build bwrap sandbox + load --seccomp filter"]
+    M{"sidecar_local_exec configured?"}
+    N["Send pre-exec local.exec request (sandbox_id + session_id)"]
+    O{"Decision = allow?"}
+    P["Deny/timeout/invalid/pending -> fail closed"]
+    Q["Launch wrapped command in sandbox"]
+    R["Command egress forced to local proxy bridge"]
+    S["Sidecar pipeline: normalize -> capability/policy -> allow/deny + audit"]
+
+    A --> B --> C
+    C -- "no, and autostart allowed" --> D --> E
+    C -- "yes" --> E
+    E --> F
+    F -- "no, and autostart allowed" --> G --> H
+    F -- "yes" --> H
+    H --> I --> J
+    J -- "no" --> K
+    J -- "yes" --> L --> M
+    M -- "no" --> Q
+    M -- "yes" --> N --> O
+    O -- "no" --> P
+    O -- "yes" --> Q --> R --> S
+```
+
+Flow references:
+
+- Linux local-command architecture: `docs/architecture/linux-local-command-enforcement.md`
+- Local-exec request/response contract: `docs/architecture/command-governance-local-exec-contract.md`
+- `firma run` autostart + flags + typed errors: `docs/cli.md` (`## firma run`)
+- Runtime launcher implementation: `crates/firma/src/services/run.rs`
+- `firma-run` runtime orchestration: `crates/firma-run/src/runtime.rs`
+- Linux backend (`bwrap`): `crates/firma-run/src/backend/linux_bwrap.rs`
+- Seccomp artifact verify/load path: `crates/firma-run/src/seccomp.rs`
+- Local-exec mediator client: `crates/firma-run/src/mediator.rs`
+- Sidecar local-exec endpoint: `crates/firma-sidecar/src/local_exec/endpoint.rs`
 
 ## Step 5: Use the right capability
 
