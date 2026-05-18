@@ -52,6 +52,7 @@ fn issue_seed() -> IssuedSeed {
         &auth_toml,
         format!(
             r#"
+[authority]
 listen_addr = "127.0.0.1:0"
 policy_dir = {policy_dir}
 revocation_file = {revocation}
@@ -122,34 +123,34 @@ action_class = "communication.external.send"
         &sidecar_toml,
         format!(
             r#"
-[interceptor]
+[sidecar.interceptor]
 mode = "http_proxy"
 listen_addr = "127.0.0.1:0"
 drain_timeout_secs = 30
 
-[policy]
+[sidecar.policy]
 dir = '{policy_dir}'
 
-[ca]
+[sidecar.ca]
 dir = '{ca_dir}'
 
-[log]
+[sidecar.log]
 level = "warn"
 
-[mapping]
+[sidecar.mapping]
 rules_path = '{mapping}'
 default_protected = true
 
-[connector]
+[sidecar.connector]
 default_timeout_ms = 30000
 
-[authority]
+[sidecar.authority]
 public_key_path = '{pub_key}'
 
-[capability_seed]
+[sidecar.capability_seed]
 paths = ['{seed_path}']
 
-[audit]
+[sidecar.audit]
 sink = "stdout"
 signing_key_path = '{audit_key}'
 "#,
@@ -177,7 +178,7 @@ fn generate_audit_key_pem() -> String {
 
     SigningKey::from_slice(&key_bytes)
         .unwrap()
-        .to_pkcs8_pem(LineEnding::LF)
+        .to_pkcs8_pem(LineEnding::default())
         .unwrap()
         .to_string()
 }
@@ -195,7 +196,7 @@ fn tamper_seed_action_set(seed_path: &Path, action: &str) {
 
 fn run_sidecar_until_exit(config_path: &Path) -> (i32, String, String) {
     let mut child = Command::new(FIRMA_BIN)
-        .args(["sidecar", "--config-file"])
+        .args(["sidecar", "--config"])
         .arg(config_path)
         .args(["--health-bind-addr", "127.0.0.1:0"])
         .stdout(Stdio::piped())
