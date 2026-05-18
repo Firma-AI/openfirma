@@ -484,7 +484,8 @@ pub struct PreflightConfig {
     pub resource_scope: String,
     /// Path to the Authority's Ed25519 public key file (32 raw bytes).
     pub authority_pub_key_path: PathBuf,
-    /// Requested token TTL in seconds.
+    /// Requested token TTL in seconds (default: 900 / 15 min).
+    /// Override for long-running batch agents via `preflight.ttl_seconds = <n>`.
     #[serde(default = "default_preflight_ttl_seconds")]
     pub ttl_seconds: i32,
 }
@@ -518,7 +519,7 @@ fn default_resource_scope() -> String {
 }
 
 const fn default_preflight_ttl_seconds() -> i32 {
-    3600
+    900
 }
 
 /// Certificate authority directory settings.
@@ -1483,5 +1484,31 @@ drain_timeout_secs = 10
             config.interceptor.socket_path.as_deref(),
             Some(std::path::Path::new("/tmp/firma.sock"))
         );
+    }
+
+    // T7: default capability TTL ≤ 15 minutes unless explicitly overridden.
+    #[test]
+    fn test_preflight_default_ttl_is_900() {
+        let toml_str = r#"
+            agent_id               = "test-agent"
+            requested_actions      = ["communication.external.send"]
+            authority_pub_key_path = "/tmp/authority.pub"
+        "#;
+        let config: PreflightConfig =
+            toml::from_str(toml_str).unwrap_or_else(|e| panic!("parse failed: {e}"));
+        assert_eq!(config.ttl_seconds, 900);
+    }
+
+    #[test]
+    fn test_preflight_ttl_override_respected() {
+        let toml_str = r#"
+            agent_id               = "batch-agent"
+            requested_actions      = ["communication.external.send"]
+            authority_pub_key_path = "/tmp/authority.pub"
+            ttl_seconds            = 3600
+        "#;
+        let config: PreflightConfig =
+            toml::from_str(toml_str).unwrap_or_else(|e| panic!("parse failed: {e}"));
+        assert_eq!(config.ttl_seconds, 3600);
     }
 }
