@@ -755,13 +755,7 @@ async fn tls_handshake_succeeds_and_policy_streams_over_tls() -> anyhow::Result<
         .handle
         .set_initial_bundle(valid_bundle_update("v-tls", 60));
 
-    let harness = spawn_sidecar(
-        &server.url,
-        test_config(),
-        Some(&certs.ca_cert),
-        None,
-        None,
-    )?;
+    let harness = spawn_sidecar(&server.url, test_config(), Some(&certs.ca_cert), None, None)?;
 
     let policy_ready = wait_for(Duration::from_secs(5), || {
         harness.readiness_view.snapshot().policy_bundle_ready
