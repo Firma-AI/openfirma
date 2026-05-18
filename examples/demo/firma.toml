@@ -7,7 +7,7 @@
 # ── Mini Authority ───────────────────────────────────────────────────────────
 
 [authority]
-listen_addr = "[::1]:50051"
+listen_addr = "127.0.0.1:50051"
 policy_dir = "policies/"
 issuance_policy_dir = "issuance-policies/"
 revocation_file = "examples/demo/revocations.txt"
@@ -39,7 +39,7 @@ intercept_hosts = ["wttr.in", "paste.rs", "api.openai.com"]
 
 [sidecar.policy]
 dir = "policies"
-authority_url = "http://[::1]:50051"
+authority_url = "http://127.0.0.1:50051"
 
 [sidecar.ca]
 dir = "examples/demo/firma-ca"

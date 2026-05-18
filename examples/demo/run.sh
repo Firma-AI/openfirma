@@ -61,6 +61,21 @@ poll_tcp() {
   return 1
 }
 
+# Poll a TCP endpoint on either IPv4 or IPv6 loopback.
+poll_tcp_loopback() {
+  local port="$1"
+  local label="${2:-loopback:$port}"
+  local deadline=$((SECONDS + 15))
+  while (( SECONDS < deadline )); do
+    if nc -z 127.0.0.1 "$port" >/dev/null 2>&1 || nc -z ::1 "$port" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "[demo] timed out waiting for $label" >&2
+  return 1
+}
+
 # Poll an HTTP endpoint for a 2xx response.
 poll_http() {
   local url="$1"
@@ -139,7 +154,7 @@ echo "[demo] starting firma authority"
 (cd "$ROOT" && exec "$TARGET_DIR/firma" authority --config "$DEMO/firma.toml" \
     >"$LOG_DIR/authority.log" 2>&1) &
 AUTH_PID=$!
-poll_tcp "127.0.0.1" 50051 "authority gRPC :50051"
+poll_tcp_loopback 50051 "authority gRPC :50051"
 
 ensure_capability_seed
 

@@ -244,9 +244,9 @@ async fn spawn_mock_authority_tls(
 // -----------------------------------------------------------------------------
 
 struct TlsCerts {
-    ca_cert_pem: Vec<u8>,
-    server_cert_pem: Vec<u8>,
-    server_key_pem: Vec<u8>,
+    ca_cert: Vec<u8>,
+    server_cert: Vec<u8>,
+    server_key: Vec<u8>,
 }
 
 fn generate_test_tls_certs() -> anyhow::Result<TlsCerts> {
@@ -267,9 +267,9 @@ fn generate_test_tls_certs() -> anyhow::Result<TlsCerts> {
     let server_cert = server_params.signed_by(&server_key, &ca_cert, &ca_key)?;
 
     Ok(TlsCerts {
-        ca_cert_pem: ca_cert.pem().into_bytes(),
-        server_cert_pem: server_cert.pem().into_bytes(),
-        server_key_pem: server_key.serialize_pem().into_bytes(),
+        ca_cert: ca_cert.pem().into_bytes(),
+        server_cert: server_cert.pem().into_bytes(),
+        server_key: server_key.serialize_pem().into_bytes(),
     })
 }
 
@@ -744,12 +744,12 @@ async fn cold_boot_without_bundle_stays_not_ready() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tls_handshake_succeeds_and_policy_streams_over_tls() -> anyhow::Result<()> {
     let certs = generate_test_tls_certs()?;
-    let server = spawn_mock_authority_tls(&certs.server_cert_pem, &certs.server_key_pem).await?;
+    let server = spawn_mock_authority_tls(&certs.server_cert, &certs.server_key).await?;
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v-tls", 60));
 
-    let harness = spawn_sidecar(&server.url, test_config(), Some(&certs.ca_cert_pem))?;
+    let harness = spawn_sidecar(&server.url, test_config(), Some(&certs.ca_cert))?;
 
     let policy_ready = wait_for(Duration::from_secs(5), || {
         harness.readiness_view.snapshot().policy_bundle_ready
@@ -780,18 +780,13 @@ async fn tls_handshake_fails_with_wrong_ca_cert_stays_not_ready() -> anyhow::Res
     let wrong_ca_certs = generate_test_tls_certs()?; // independent CA
 
     let server =
-        spawn_mock_authority_tls(&server_certs.server_cert_pem, &server_certs.server_key_pem)
-            .await?;
+        spawn_mock_authority_tls(&server_certs.server_cert, &server_certs.server_key).await?;
     server
         .handle
         .set_initial_bundle(valid_bundle_update("v-should-not-arrive", 60));
 
     // Connect with the wrong CA — TLS verification will fail.
-    let harness = spawn_sidecar(
-        &server.url,
-        test_config(),
-        Some(&wrong_ca_certs.ca_cert_pem),
-    )?;
+    let harness = spawn_sidecar(&server.url, test_config(), Some(&wrong_ca_certs.ca_cert))?;
 
     let stayed_not_ready = wait_for(Duration::from_millis(600), || {
         harness.readiness_view.snapshot().policy_bundle_ready
