@@ -29,6 +29,17 @@ pub enum Commands {
         #[arg(short, long, default_value = "firma-authority.key")]
         output: PathBuf,
     },
+    /// Bootstrap local TLS material for Authority<->Sidecar transport.
+    InitTls {
+        /// Output directory for generated PEM files.
+        #[arg(long, default_value = ".")]
+        out_dir: PathBuf,
+        /// Hostname or IP SAN to include in the Authority server certificate.
+        ///
+        /// Repeat to add multiple SANs.
+        #[arg(long = "host")]
+        hosts: Vec<String>,
+    },
     /// Issue a signed capability token to a TOML seed file.
     Issue(IssueArgs),
 }

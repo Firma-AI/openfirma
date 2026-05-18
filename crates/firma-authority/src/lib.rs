@@ -9,7 +9,7 @@ pub mod service;
 pub mod startup;
 
 pub use cedar_loader::CedarPolicyStore;
-pub use config::AuthorityConfig;
+pub use config::{AuthorityConfig, AuthorityTlsConfig};
 pub use issuance::{IssuanceError, IssuanceRequest, IssuanceResult, issue_capability};
 pub use profiles::{DEFAULT_PROFILE, UnknownProfileError, cedar_for};
 pub use revocation::RevocationStore;

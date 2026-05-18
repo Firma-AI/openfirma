@@ -41,6 +41,33 @@ pub struct AuthorityConfig {
     pub log_level: String,
     /// Policy bundle TTL advertised to sidecars in seconds (default: 30).
     pub bundle_ttl_seconds: u32,
+    /// Authority TLS configuration.
+    ///
+    /// Uses `tls_cert_path` + `tls_key_path` keys in TOML via flattening.
+    #[serde(flatten)]
+    pub tls: AuthorityTlsConfig,
+}
+
+/// TLS configuration for the Authority gRPC server.
+///
+/// Both values are required together to enable TLS.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AuthorityTlsConfig {
+    /// Path to the TLS certificate file (PEM). Must be set together with
+    /// `tls_key_path`.
+    #[serde(default)]
+    pub tls_cert_path: Option<PathBuf>,
+    /// Path to the TLS private key file (PEM). Must be set together with
+    /// `tls_cert_path`.
+    #[serde(default)]
+    pub tls_key_path: Option<PathBuf>,
+}
+
+/// Fully validated TLS identity paths.
+#[derive(Debug, Clone)]
+pub struct TlsIdentityPaths {
+    pub cert_path: PathBuf,
+    pub key_path: PathBuf,
 }
 
 impl AuthorityConfig {
@@ -110,6 +137,12 @@ impl AuthorityConfig {
         {
             config.bundle_ttl_seconds = n;
         }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_TLS_CERT_PATH") {
+            config.tls.tls_cert_path = Some(PathBuf::from(v));
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_TLS_KEY_PATH") {
+            config.tls.tls_key_path = Some(PathBuf::from(v));
+        }
     }
 
     /// Parse a resolved config file (flat or `[authority]`-sectioned via
@@ -127,6 +160,22 @@ impl AuthorityConfig {
         config.rebase_defaults(config_dir);
         config.apply_env_overrides();
         Ok(config)
+    }
+
+    /// Returns TLS identity paths when both TLS fields are configured.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if only one of `tls_cert_path` / `tls_key_path` is set.
+    pub fn tls_identity_paths(&self) -> Result<Option<TlsIdentityPaths>, String> {
+        match (&self.tls.tls_cert_path, &self.tls.tls_key_path) {
+            (Some(cert_path), Some(key_path)) => Ok(Some(TlsIdentityPaths {
+                cert_path: cert_path.clone(),
+                key_path: key_path.clone(),
+            })),
+            (None, None) => Ok(None),
+            _ => Err("tls_cert_path and tls_key_path must both be set or both be unset".into()),
+        }
     }
 
     /// Re-base every relative resource path against `config_dir`;
@@ -148,6 +197,18 @@ impl AuthorityConfig {
         rebase(&mut self.policy_dir);
         rebase(&mut self.issuance_policy_dir);
         rebase(&mut self.key_file);
+        if let Some(cert_path) = self.tls.tls_cert_path.as_mut()
+            && !cert_path.as_os_str().is_empty()
+            && cert_path.is_relative()
+        {
+            *cert_path = config_dir.join(&*cert_path);
+        }
+        if let Some(key_path) = self.tls.tls_key_path.as_mut()
+            && !key_path.as_os_str().is_empty()
+            && key_path.is_relative()
+        {
+            *key_path = config_dir.join(&*key_path);
+        }
         if let Some(schema_path) = self.schema_path.as_mut()
             && !schema_path.as_os_str().is_empty()
             && schema_path.is_relative()
@@ -169,6 +230,7 @@ impl Default for AuthorityConfig {
             key_file: PathBuf::from(DEFAULT_KEY_FILE),
             log_level: "info".to_string(),
             bundle_ttl_seconds: 30,
+            tls: AuthorityTlsConfig::default(),
         }
     }
 }
@@ -264,10 +326,16 @@ mod tests {
     fn load_from_resolved_applies_rebase() {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("firma.toml");
-        std::fs::write(&p, "max_ttl_seconds = 1800\n").unwrap();
+        std::fs::write(
+            &p,
+            "max_ttl_seconds = 1800\ntls_cert_path = \"authority.crt\"\ntls_key_path = \"authority.key\"\n",
+        )
+        .unwrap();
         let c = AuthorityConfig::load_resolved(&p, tmp.path()).unwrap();
         assert_eq!(c.max_ttl_seconds, 1800);
         assert_eq!(c.policy_dir, tmp.path().join("policies"));
+        assert_eq!(c.tls.tls_cert_path, Some(tmp.path().join("authority.crt")));
+        assert_eq!(c.tls.tls_key_path, Some(tmp.path().join("authority.key")));
     }
 
     #[test]
