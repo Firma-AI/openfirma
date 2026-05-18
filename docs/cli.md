@@ -100,6 +100,77 @@ endpoint is reported as `(disabled)`.
 | `0`  | Graceful shutdown after `SIGINT` / `SIGTERM`.                    |
 | `1`  | Configuration parse error, validation error, or startup failure. |
 
+## `firma sidecar status`
+
+Docker-ps-style table of live per-run sidecars. Reads marker directories written
+by `firma run --sidecar=auto` under the per-run state dir.
+
+### Usage
+
+```text
+firma sidecar status [OPTIONS]
+```
+
+### Options
+
+| Flag                | Default | Description                                  |
+| ------------------- | ------- | -------------------------------------------- |
+| `--sandbox-id <id>` | —       | Show one entry and probe it for liveness.    |
+| `--json`            | _off_   | Emit a JSON array; empty list prints `[]`.   |
+| `--daemon`          | _off_   | Probe the long-lived daemon sidecar instead. |
+
+State directory resolution: `FIRMA_STATE_DIR` → `$XDG_RUNTIME_DIR/firma` →
+`/tmp/firma-$UID`. Marker directories live under `<state_dir>/run/<sandbox_id>/`.
+
+### Output columns (table mode)
+
+| Column       | Description                                          |
+| ------------ | ---------------------------------------------------- |
+| `SANDBOX_ID` | The run's sandbox identifier.                        |
+| `AGENT`      | Agent name from the marker metadata.                 |
+| `PID`        | Sidecar process ID, or `-` if absent.                |
+| `STATE`      | `running`, `unhealthy`, `stopped`, or `unknown`.     |
+| `LISTEN`     | UDS path or address the sidecar is bound to, or `-`. |
+| `UPTIME`     | `HH:MM:SS` since the marker was written, or `-`.     |
+
+### STATE semantics
+
+| State       | Meaning                                                 |
+| ----------- | ------------------------------------------------------- |
+| `running`   | PID alive and UDS socket responds to a connect probe.   |
+| `unhealthy` | PID alive but UDS socket is closed or unresponsive.     |
+| `stopped`   | PID is dead (or absent from the marker).                |
+| `unknown`   | Probe was inconclusive (e.g., no socket path recorded). |
+
+### Exit codes
+
+| Code | Meaning                                            |
+| ---- | -------------------------------------------------- |
+| `0`  | All listed sidecars are `running` (or list empty). |
+| `1`  | Any sidecar is `unhealthy` or `stopped`.           |
+| `2`  | Internal error; message on stderr.                 |
+
+An empty sidecar list exits `0` (vacuously: nothing is unhealthy).
+
+### Stale-marker GC
+
+`firma sidecar status` removes marker directories whose recorded PID is dead.
+It **never** deletes a marker whose `metadata.toml` is unreadable or
+unparseable — that marker is skipped from the listing instead of deleted.
+This guards against destroying a live sidecar's socket directory under schema
+drift or a mid-write race.
+
+### `--daemon` path note
+
+`--daemon` probes the long-lived daemon sidecar by reading `firma-stack`'s
+stack state over `resolve_state_dir(None)` — the same path the daemon sidecar
+actually uses: `$XDG_RUNTIME_DIR/firma` (fallback `/tmp/firma-$UID`).
+
+The original FIR-104 spec text referenced `$XDG_DATA_HOME/firma/sidecar/state/`
+for the daemon path. Nothing writes that directory today, so the implementation
+uses the stack state dir instead. This discrepancy is intentional and noted on
+FIR-104.
+
 ## Config Discovery
 
 When `--config` is **omitted**, every subcommand — `sidecar`, `authority`,
