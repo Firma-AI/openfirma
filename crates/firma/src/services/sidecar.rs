@@ -93,15 +93,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     debug!("configuration loaded successfully");
 
     let exit = CancellationToken::new();
-
-    debug!(
-        "initializing health check server at {}",
-        args.health_bind_addr
-    );
-    let health_server =
-        health::HealthcheckServer::bind(args.health_bind_addr, exit.clone()).await?;
-    let health_server = tokio::spawn(health_server.serve());
-    debug!("health check server listening at {}", args.health_bind_addr);
+    let health_server = spawn_health_server(args.health_bind_addr, exit.clone()).await?;
 
     debug!("registering signal handlers for graceful shutdown");
     let shutdown_handler = {
@@ -124,32 +116,8 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         exit.clone(),
     )?;
 
-    let ca_cert_pem: Option<Vec<u8>> = if let Some(ref path) = config.authority.ca_cert_path {
-        Some(tokio::fs::read(path).await.map_err(|e| {
-            anyhow::anyhow!("failed to read authority CA cert {}: {e}", path.display())
-        })?)
-    } else {
-        None
-    };
-
-    let client_cert_pem: Option<Vec<u8>> =
-        if let Some(ref path) = config.authority.tls_client_cert_path {
-            Some(tokio::fs::read(path).await.map_err(|e| {
-                anyhow::anyhow!("failed to read mTLS client cert {}: {e}", path.display())
-            })?)
-        } else {
-            None
-        };
-
-    let client_key_pem: Option<Vec<u8>> =
-        if let Some(ref path) = config.authority.tls_client_key_path {
-            Some(tokio::fs::read(path).await.map_err(|e| {
-                anyhow::anyhow!("failed to read mTLS client key {}: {e}", path.display())
-            })?)
-        } else {
-            None
-        };
-
+    let (ca_cert_pem, client_cert_pem, client_key_pem) =
+        load_authority_tls_material(&config).await?;
     let preflight = match (&config.preflight, config.policy.authority_url.as_deref()) {
         (Some(pf_config), Some(authority_url)) => Some(
             startup::run_preflight(
@@ -258,6 +226,43 @@ fn build_startup_report<'a>(
         connector_default_timeout_ms: config.connector.default_timeout_ms,
         interceptor_addr: interceptor_addr.to_string(),
     }
+}
+
+async fn spawn_health_server(
+    health_bind_addr: std::net::SocketAddr,
+    exit: CancellationToken,
+) -> anyhow::Result<tokio::task::JoinHandle<()>> {
+    tracing::debug!("initializing health check server at {}", health_bind_addr);
+    let health_server = health::HealthcheckServer::bind(health_bind_addr, exit).await?;
+    tracing::debug!("health check server listening at {}", health_bind_addr);
+    Ok(tokio::spawn(health_server.serve()))
+}
+
+type PemTriplet = (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>);
+
+async fn load_authority_tls_material(config: &config::SidecarConfig) -> anyhow::Result<PemTriplet> {
+    let ca_cert_pem = if let Some(ref path) = config.authority.ca_cert_path {
+        Some(tokio::fs::read(path).await.map_err(|e| {
+            anyhow::anyhow!("failed to read authority CA cert {}: {e}", path.display())
+        })?)
+    } else {
+        None
+    };
+    let client_cert_pem = if let Some(ref path) = config.authority.tls_client_cert_path {
+        Some(tokio::fs::read(path).await.map_err(|e| {
+            anyhow::anyhow!("failed to read mTLS client cert {}: {e}", path.display())
+        })?)
+    } else {
+        None
+    };
+    let client_key_pem = if let Some(ref path) = config.authority.tls_client_key_path {
+        Some(tokio::fs::read(path).await.map_err(|e| {
+            anyhow::anyhow!("failed to read mTLS client key {}: {e}", path.display())
+        })?)
+    } else {
+        None
+    };
+    Ok((ca_cert_pem, client_cert_pem, client_key_pem))
 }
 
 fn emit_operator_routing_hints(config: &config::SidecarConfig, interceptor_addr: &str) {
