@@ -1,0 +1,7 @@
+kernel_release=6.17.9-76061709-generic
+kernel_version=#202511241048~1764704751~22.04~b24b425 SMP PREEMPT_DYNAMIC Tue D
+actions_avail=kill_process kill_thread trap errno user_notif trace log allow
+actions_logged=kill_process kill_thread trap errno user_notif trace log
+user_notif_supported=true
+seccomp_header_present=true
+seccomp_notif_addfd_symbol=true
