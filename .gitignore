@@ -56,6 +56,7 @@ audit.jsonl
 
 # Demo runtime artifacts
 /examples/demos/*/.runtime/*
+/examples/generic-agent/workspace/
 .artifacts/
 .claude/
 .cursor/
