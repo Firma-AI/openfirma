@@ -73,6 +73,8 @@ firma authority issue \
 
 The output is a TOML file with both the raw PASETO and the parsed claims, ready to be loaded into a Sidecar via `[capability_seed]` or used by `firma run --capability-file`. See [Issue capability tokens](../../guides/issue-capability-tokens/) for the full operator workflow.
 
+The `raw_token` is the source of truth. The other TOML fields are a parsed mirror for selection, diagnostics, and operator readability. At Sidecar startup, every seed is verified with the configured Authority public key, and the mirrored TOML claims must exactly match the claims inside the signed token. If someone edits `action_set`, `resource_scope`, `session_id`, or any other claim in the TOML without re-issuing and re-signing the token, the Sidecar refuses to start.
+
 ## How a capability is validated
 
 When the agent makes an outbound call, Stage 1 of the pipeline runs the validation flow:
@@ -86,6 +88,8 @@ When the agent makes an outbound call, Stage 1 of the pipeline runs the validati
 If all five pass, Stage 1 emits a `ValidatedCapability` containing the raw token and parsed claims. The pipeline carries it forward into Stage 2 so policies can read `claims.agent_id`, `claims.session_id`, etc. Crucially, **policies do not have to verify the token themselves** — by the time Stage 2 sees the claims, they are already authoritative.
 
 The whole stage is local. There is no network call, no Authority round-trip, no key fetch. This is what lets it stay under 1 ms p95.
+
+Seeded capabilities get an additional startup hardening check before the `CapabilityMap` is built: the Sidecar verifies each seed's `raw_token` and rejects the seed if the signed claims differ from the TOML mirror. This moves tamper detection to boot time instead of waiting for the first matching request.
 
 ## Revocation
 

@@ -98,14 +98,15 @@ fn issued_token_seeds_capability_map_and_admits_stage1() {
     assert!(status.success(), "issue subcommand failed");
     assert!(seed_path.exists(), "issue did not create the seed file");
 
-    // 4. Load the capability map from the seed file.
+    // 4. Build the verifier from the public key the authority just wrote.
+    let verifier = build_token_verifier(Some(pub_path.as_path())).expect("verifier must build");
+
+    // 5. Load the capability map from the seed file. Seed loading verifies
+    // the raw PASETO token before adding it to the map.
     let seed = CapabilitySeedConfig {
         paths: vec![seed_path],
     };
-    let map = load_capability_map(&seed).expect("seed must load");
-
-    // 5. Build the verifier from the public key the authority just wrote.
-    let verifier = build_token_verifier(Some(pub_path.as_path())).expect("verifier must build");
+    let map = load_capability_map(&seed, verifier.as_ref()).expect("seed must load");
 
     // 6. Selecting the seeded action class returns the seed entry.
     let entry = map

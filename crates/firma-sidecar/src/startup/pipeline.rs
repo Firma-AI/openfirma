@@ -98,12 +98,14 @@ pub fn build_pipeline_runtime(
         (pf.capability_map, pf.token_verifier)
     } else {
         tracing::debug!("Stage 1 using configured capability seed and authority public key");
-        (
-            crate::startup::capability::load_capability_map(&config.capability_seed)?,
-            crate::startup::capability::build_token_verifier(
-                config.authority.public_key_path.as_deref(),
-            )?,
-        )
+        let token_verifier = crate::startup::capability::build_token_verifier(
+            config.authority.public_key_path.as_deref(),
+        )?;
+        let capability_map = crate::startup::capability::load_capability_map(
+            &config.capability_seed,
+            token_verifier.as_ref(),
+        )?;
+        (capability_map, token_verifier)
     };
 
     let capability_validator = pipeline::CapabilityValidator::new(
