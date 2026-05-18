@@ -1524,6 +1524,7 @@ dependencies = [
  "pasetors",
  "pretty_assertions",
  "rand 0.9.4",
+ "rcgen",
  "serde",
  "serde_json",
  "serde_yaml",

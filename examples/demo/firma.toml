@@ -12,6 +12,8 @@ policy_dir = "policies/"
 issuance_policy_dir = "issuance-policies/"
 revocation_file = "examples/demo/revocations.txt"
 key_file = "firma-authority.key"
+tls_cert_path = "authority.crt"
+tls_key_path = "authority.key"
 max_ttl_seconds = 3600
 bundle_ttl_seconds = 30
 log_level = "debug"
@@ -39,7 +41,7 @@ intercept_hosts = ["wttr.in", "paste.rs", "api.openai.com"]
 
 [sidecar.policy]
 dir = "policies"
-authority_url = "http://127.0.0.1:50051"
+authority_url = "https://127.0.0.1:50051"
 
 [sidecar.ca]
 dir = "examples/demo/firma-ca"
@@ -86,6 +88,7 @@ timeout_ms = 30000
 
 [sidecar.authority]
 public_key_path = "firma-authority.pub"
+ca_cert_path = "authority-ca.crt"
 
 [sidecar.capability_seed]
 paths = ["capability-demo-agent.toml"]

@@ -197,6 +197,18 @@ impl AuthorityConfig {
         rebase(&mut self.policy_dir);
         rebase(&mut self.issuance_policy_dir);
         rebase(&mut self.key_file);
+        if let Some(cert_path) = self.tls.tls_cert_path.as_mut()
+            && !cert_path.as_os_str().is_empty()
+            && cert_path.is_relative()
+        {
+            *cert_path = config_dir.join(&*cert_path);
+        }
+        if let Some(key_path) = self.tls.tls_key_path.as_mut()
+            && !key_path.as_os_str().is_empty()
+            && key_path.is_relative()
+        {
+            *key_path = config_dir.join(&*key_path);
+        }
         if let Some(schema_path) = self.schema_path.as_mut()
             && !schema_path.as_os_str().is_empty()
             && schema_path.is_relative()
@@ -314,10 +326,16 @@ mod tests {
     fn load_from_resolved_applies_rebase() {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("firma.toml");
-        std::fs::write(&p, "max_ttl_seconds = 1800\n").unwrap();
+        std::fs::write(
+            &p,
+            "max_ttl_seconds = 1800\ntls_cert_path = \"authority.crt\"\ntls_key_path = \"authority.key\"\n",
+        )
+        .unwrap();
         let c = AuthorityConfig::load_resolved(&p, tmp.path()).unwrap();
         assert_eq!(c.max_ttl_seconds, 1800);
         assert_eq!(c.policy_dir, tmp.path().join("policies"));
+        assert_eq!(c.tls.tls_cert_path, Some(tmp.path().join("authority.crt")));
+        assert_eq!(c.tls.tls_key_path, Some(tmp.path().join("authority.key")));
     }
 
     #[test]

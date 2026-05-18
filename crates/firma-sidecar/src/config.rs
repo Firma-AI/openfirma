@@ -215,6 +215,9 @@ impl SidecarConfig {
         if let Some(p) = self.authority.public_key_path.as_mut() {
             rebase(p);
         }
+        if let Some(p) = self.authority.ca_cert_path.as_mut() {
+            rebase(p);
+        }
         if let Some(p) = self.audit.signing_key_path.as_mut() {
             rebase(p);
         }
@@ -964,6 +967,18 @@ mod tests {
         let before = c.ca.dir.clone();
         c.rebase_defaults(&PathBuf::from("/cfg"));
         assert_eq!(c.ca.dir, before);
+    }
+
+    #[test]
+    fn rebase_rewrites_relative_authority_ca_cert_path() {
+        use std::path::PathBuf;
+        let mut c = SidecarConfig::default();
+        c.authority.ca_cert_path = Some(PathBuf::from("authority-ca.crt"));
+        c.rebase_defaults(&PathBuf::from("/cfg"));
+        assert_eq!(
+            c.authority.ca_cert_path,
+            Some(PathBuf::from("/cfg/authority-ca.crt"))
+        );
     }
 
     #[test]

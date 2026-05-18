@@ -14,6 +14,22 @@ Sidecar identity is not asserted — anyone who can establish a TLS connection t
 
 ## Configuration
 
+## One-shot bootstrap (local/dev)
+
+For local development, you can generate a CA + Authority server certs in one
+command:
+
+```bash
+firma authority init-tls --out-dir /tmp/firma-tls --host localhost --host 127.0.0.1
+```
+
+This writes:
+
+- `authority-ca.crt` / `authority-ca.key`
+- `authority.crt` / `authority.key`
+
+Then wire the generated paths into Authority + Sidecar config.
+
 ### Authority (`firma-authority.toml`)
 
 ```toml

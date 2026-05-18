@@ -101,6 +101,18 @@ ensure_authority_key() {
   (cd "$DEMO" && "$TARGET_DIR/firma" authority generate-key --output firma-authority.key)
 }
 
+ensure_authority_tls() {
+  local ca_cert="$DEMO/authority-ca.crt"
+  local ca_key="$DEMO/authority-ca.key"
+  local cert="$DEMO/authority.crt"
+  local key="$DEMO/authority.key"
+  if [[ -f "$ca_cert" && -f "$ca_key" && -f "$cert" && -f "$key" ]]; then
+    return
+  fi
+  echo "[demo] bootstrapping authority transport TLS material"
+  (cd "$DEMO" && "$TARGET_DIR/firma" authority init-tls --out-dir . --host 127.0.0.1 --host localhost)
+}
+
 ensure_audit_key() {
   local key="$DEMO/audit.key"
   if [[ -f "$key" ]]; then
@@ -146,6 +158,7 @@ echo "[demo] building release binaries"
 mkdir -p "$DEMO/firma-ca"
 ensure_revocations_file
 ensure_authority_key
+ensure_authority_tls
 ensure_audit_key
 
 # ── Authority ────────────────────────────────────────────────────────────────

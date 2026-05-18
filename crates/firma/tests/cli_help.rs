@@ -47,7 +47,7 @@ fn sidecar_help_ok() {
 fn authority_help_ok() {
     assert_help(
         &["authority", "--help"],
-        &["revocations", "generate-key", "issue"],
+        &["revocations", "generate-key", "init-tls", "issue"],
     );
 }
 

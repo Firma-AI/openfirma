@@ -67,6 +67,20 @@ fn parse_authority_issue_multiple_actions() {
 }
 
 #[test]
+fn parse_authority_bootstrap_tls() {
+    parse_ok(&[
+        "authority",
+        "init-tls",
+        "--out-dir",
+        "/tmp/firma-tls",
+        "--host",
+        "localhost",
+        "--host",
+        "127.0.0.1",
+    ]);
+}
+
+#[test]
 fn parse_run_with_command_after_dashdash() {
     parse_ok(&["run", "--profile", "generic"]);
 }
