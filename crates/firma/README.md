@@ -66,6 +66,7 @@ state. Pre-flight only — not on the hot path.
 ```bash
 firma authority --config /etc/firma/firma.toml              # serve gRPC
 firma authority generate-key -o auth.key                    # signing key
+firma authority init-tls --out-dir .                   # transport TLS
 firma authority issue --agent-id ... --output seed.toml     # issue token
 firma authority revocations add <token-id>                  # revoke
 firma authority revocations compact                         # gc revocations
@@ -83,6 +84,7 @@ Subcommands:
 | --------------------- | ---------------------------------------- |
 | _(none)_              | Serve gRPC (default action).             |
 | `generate-key`        | Generate an Ed25519 signing key pair.    |
+| `init-tls`       | Generate CA + Authority TLS PEM material. |
 | `issue`               | Issue a signed capability seed file.     |
 | `revocations add`     | Append a token ID to the revocation log. |
 | `revocations compact` | Remove expired entries from the log.     |

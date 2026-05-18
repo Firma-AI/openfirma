@@ -9,6 +9,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context as _;
 use tokio_util::sync::CancellationToken;
 
 use crate::authority_client::policy_bundle::CedarBundleParser;
@@ -23,7 +24,8 @@ use crate::startup::pipeline::PipelineRuntime;
 /// # Errors
 ///
 /// Returns an error when the configured Authority URL cannot be
-/// parsed into a tonic endpoint.
+/// parsed into a tonic endpoint, or when a required CA cert file
+/// cannot be read.
 pub fn spawn_authority_client(
     config: &config::SidecarConfig,
     runtime: &PipelineRuntime,
@@ -34,9 +36,18 @@ pub fn spawn_authority_client(
         return Ok(None);
     };
 
+    let ca_cert_pem: Option<Vec<u8>> = if let Some(ref path) = config.authority.ca_cert_path {
+        let bytes = std::fs::read(path)
+            .with_context(|| format!("failed to read authority CA cert {}", path.display()))?;
+        Some(bytes)
+    } else {
+        None
+    };
+
     let channel = authority_client::channel::build_channel(
         authority_url,
         Duration::from_secs(config.authority.connect_timeout_secs),
+        ca_cert_pem.as_deref(),
     )?;
     tracing::debug!("Authority stream clients wired with Cedar bundle parser");
 

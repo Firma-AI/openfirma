@@ -57,9 +57,17 @@ pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
         exit.clone(),
     )?;
 
+    let ca_cert_pem: Option<Vec<u8>> = if let Some(ref path) = config.authority.ca_cert_path {
+        Some(tokio::fs::read(path).await.map_err(|e| {
+            anyhow::anyhow!("failed to read authority CA cert {}: {e}", path.display())
+        })?)
+    } else {
+        None
+    };
+
     let preflight = match (&config.preflight, config.policy.authority_url.as_deref()) {
         (Some(pf_config), Some(authority_url)) => {
-            Some(startup::run_preflight(pf_config, authority_url).await?)
+            Some(startup::run_preflight(pf_config, authority_url, ca_cert_pem.as_deref()).await?)
         }
         (Some(_), None) => {
             anyhow::bail!("[preflight] is configured but policy.authority_url is not set");

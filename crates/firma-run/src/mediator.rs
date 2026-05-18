@@ -392,7 +392,7 @@ mod tests {
             hitl_mode: CommandMediatorHitlMode::SyncWait,
             hitl_max_wait_ms: 5_000,
             enforce_known_executables: false,
-            allowed_executables: Default::default(),
+            allowed_executables: std::collections::BTreeSet::default(),
         }
     }
 

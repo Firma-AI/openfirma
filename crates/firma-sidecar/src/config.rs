@@ -32,6 +32,7 @@ use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
+use hyper::Uri;
 use serde::Deserialize;
 
 // ---------------------------------------------------------------------------
@@ -151,6 +152,40 @@ impl SidecarConfig {
                     .to_string(),
             );
         }
+        if let Some(ref url) = self.policy.authority_url {
+            let uri: Uri = url
+                .parse()
+                .map_err(|e| format!("policy.authority_url must be a valid URI: {e}"))?;
+            match uri.scheme_str() {
+                Some("https") => {
+                    if self.authority.ca_cert_path.is_none() {
+                        return Err(
+                            "authority.ca_cert_path must be set when policy.authority_url uses https://"
+                                .to_string(),
+                        );
+                    }
+                }
+                Some("http") => {
+                    let host = uri.host().ok_or_else(|| {
+                        "policy.authority_url with http:// must include a host".to_string()
+                    })?;
+                    let host_unbracketed = host.trim_start_matches('[').trim_end_matches(']');
+                    let is_loopback = host.eq_ignore_ascii_case("localhost")
+                        || host_unbracketed
+                            .parse::<IpAddr>()
+                            .is_ok_and(|ip| ip.is_loopback());
+                    if !is_loopback && !self.authority.allow_insecure_remote_authority {
+                        return Err("policy.authority_url uses insecure http:// for a non-loopback host; either switch to https:// or set authority.allow_insecure_remote_authority = true".to_string());
+                    }
+                }
+                Some(other) => {
+                    return Err(format!(
+                        "policy.authority_url scheme must be http or https, got {other}"
+                    ));
+                }
+                None => return Err("policy.authority_url must include a scheme".to_string()),
+            }
+        }
         self.audit.validate().map_err(|e| format!("audit: {e}"))?;
         if let Some(ref pf) = self.preflight {
             pf.validate().map_err(|e| format!("preflight: {e}"))?;
@@ -178,6 +213,9 @@ impl SidecarConfig {
         };
         rebase(&mut self.policy.dir);
         if let Some(p) = self.authority.public_key_path.as_mut() {
+            rebase(p);
+        }
+        if let Some(p) = self.authority.ca_cert_path.as_mut() {
             rebase(p);
         }
         if let Some(p) = self.audit.signing_key_path.as_mut() {
@@ -932,6 +970,18 @@ mod tests {
     }
 
     #[test]
+    fn rebase_rewrites_relative_authority_ca_cert_path() {
+        use std::path::PathBuf;
+        let mut c = SidecarConfig::default();
+        c.authority.ca_cert_path = Some(PathBuf::from("authority-ca.crt"));
+        c.rebase_defaults(&PathBuf::from("/cfg"));
+        assert_eq!(
+            c.authority.ca_cert_path,
+            Some(PathBuf::from("/cfg/authority-ca.crt"))
+        );
+    }
+
+    #[test]
     fn test_sidecar_config_defaults_valid() {
         let config = SidecarConfig::default();
         assert!(config.validate().is_ok());
@@ -1340,6 +1390,9 @@ cert_cache_capacity = 16
 dir = "/etc/firma/policies"
 authority_url = "https://authority.example.com"
 
+[authority]
+ca_cert_path = "/etc/firma/authority-ca.pem"
+
 [ca]
 dir = "/etc/firma/ca"
 
@@ -1407,6 +1460,10 @@ signing_key_path = "/etc/firma/audit.pem"
             config.policy.authority_url.as_deref(),
             Some("https://authority.example.com")
         );
+        assert_eq!(
+            config.authority.ca_cert_path.as_deref(),
+            Some(std::path::Path::new("/etc/firma/authority-ca.pem"))
+        );
         assert_eq!(config.ca.dir, PathBuf::from("/etc/firma/ca"));
         assert_eq!(config.log.level, "debug");
         assert_eq!(config.credentials.len(), 1);
@@ -1465,6 +1522,36 @@ drain_timeout_secs = 10
             config.interceptor.listen_addr,
             "127.0.0.1:9091".parse().unwrap_or_else(|e| panic!("{e}"))
         );
+    }
+
+    #[test]
+    fn authority_http_remote_requires_explicit_opt_in() {
+        let mut config = SidecarConfig::default();
+        config.policy.authority_url = Some("http://authority.example.com:50051".to_string());
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("allow_insecure_remote_authority"));
+    }
+
+    #[test]
+    fn authority_http_remote_allowed_with_explicit_opt_in() {
+        let mut config = SidecarConfig::default();
+        config.policy.authority_url = Some("http://authority.example.com:50051".to_string());
+        config.authority.allow_insecure_remote_authority = true;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn authority_http_loopback_allowed_without_opt_in() {
+        let mut config = SidecarConfig::default();
+        config.policy.authority_url = Some("http://127.0.0.1:50051".to_string());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn authority_http_ipv6_loopback_allowed_without_opt_in() {
+        let mut config = SidecarConfig::default();
+        config.policy.authority_url = Some("http://[::1]:50051".to_string());
+        assert!(config.validate().is_ok());
     }
 
     #[cfg(unix)]

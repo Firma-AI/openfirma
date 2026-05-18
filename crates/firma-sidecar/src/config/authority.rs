@@ -28,6 +28,17 @@ pub struct AuthorityConfig {
     /// verify the seed signatures.
     #[serde(default)]
     pub public_key_path: Option<PathBuf>,
+    /// Path to the PEM-encoded CA certificate used to verify the Authority's
+    /// TLS certificate.
+    ///
+    /// Requirement is context-dependent and enforced in `SidecarConfig::validate`:
+    /// required for `https://` authority URLs, optional for loopback `http://`.
+    #[serde(default)]
+    pub ca_cert_path: Option<PathBuf>,
+    /// Allow an insecure plain `http://` authority URL to a non-loopback
+    /// host. Defaults to `false` (secure-by-default).
+    #[serde(default)]
+    pub allow_insecure_remote_authority: bool,
 }
 
 impl AuthorityConfig {
@@ -57,6 +68,11 @@ impl AuthorityConfig {
         {
             return Err("public_key_path must not be empty when set".to_string());
         }
+        if let Some(ref p) = self.ca_cert_path
+            && p.as_os_str().is_empty()
+        {
+            return Err("ca_cert_path must not be empty when set".to_string());
+        }
         Ok(())
     }
 }
@@ -70,6 +86,8 @@ impl Default for AuthorityConfig {
             revocation_readiness_grace_ms: default_readiness_grace_ms(),
             revocation_fail_closed_on_disconnect: false,
             public_key_path: None,
+            ca_cert_path: None,
+            allow_insecure_remote_authority: false,
         }
     }
 }

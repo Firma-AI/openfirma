@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 use firma_core::token::paseto::PasetoV4Signer;
 use firma_proto::firma::v1::authority_service_server::AuthorityServiceServer;
-use tonic::transport::Server as TonicServer;
+use tonic::transport::{Identity, Server as TonicServer, ServerTlsConfig};
 use tonic_health::server::HealthReporter;
 
 use crate::cedar_loader::CedarPolicyStore;
@@ -115,8 +115,32 @@ impl Server {
         let port = local_addr.port();
         let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
 
+        let tls_identity_paths = config.tls_identity_paths().map_err(anyhow::Error::msg)?;
+
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
-        let server = TonicServer::builder()
+
+        let mut tonic_builder = if let Some(tls_paths) = tls_identity_paths {
+            let cert_pem = tokio::fs::read(&tls_paths.cert_path)
+                .await
+                .with_context(|| {
+                    format!("failed to read TLS cert {}", tls_paths.cert_path.display())
+                })?;
+            let key_pem = tokio::fs::read(&tls_paths.key_path)
+                .await
+                .with_context(|| {
+                    format!("failed to read TLS key {}", tls_paths.key_path.display())
+                })?;
+            let identity = Identity::from_pem(cert_pem, key_pem);
+            let tls_config = ServerTlsConfig::new().identity(identity);
+            tracing::info!("TLS enabled on gRPC server");
+            TonicServer::builder()
+                .tls_config(tls_config)
+                .context("invalid TLS config")?
+        } else {
+            TonicServer::builder()
+        };
+
+        let server = tonic_builder
             .add_service(health_service)
             .add_service(AuthorityServiceServer::new(authority_service))
             .serve_with_incoming_shutdown(incoming, shutdown_signal);

@@ -915,8 +915,7 @@ mod tests {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let config_path = tmpdir.path().join("firma-run.yaml");
 
-        let yaml = format!(
-            r#"
+        let yaml = r#"
 defaults:
   sidecar_endpoint: "tcp://127.0.0.1:18080"
 profiles:
@@ -929,7 +928,7 @@ profiles:
       kind: file
       path: /tmp/capability.token
 "#
-        );
+        .to_string();
         fs::write(&config_path, yaml).unwrap_or_else(|e| panic!("{e}"));
 
         let mut run_args = args("codex");
@@ -1445,7 +1444,9 @@ timeout_ms = 700
             super::CommandMediatorEndpoint::Unix { path } => {
                 assert!(path.ends_with("sidecar-tools.sock"));
             }
-            other => panic!("expected unix endpoint, got {other:?}"),
+            other @ super::CommandMediatorEndpoint::Tcp { .. } => {
+                panic!("expected unix endpoint, got {other:?}")
+            }
         }
     }
 }

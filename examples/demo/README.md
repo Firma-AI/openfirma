@@ -71,6 +71,8 @@ All three modes use the same local Authority and Sidecar configuration. The demo
 The first run creates local runtime files under `examples/demo/`:
 
 - `firma-authority.key` and `firma-authority.pub` for Authority token signing;
+- `authority-ca.crt` and `authority-ca.key` for Authority transport TLS;
+- `authority.crt` and `authority.key` for the Authority gRPC server cert/key;
 - `audit.key` for signing audit events;
 - `capability-demo-agent.toml` as the pre-issued permission token seed;
 - `revocations.txt` as the local revocation file;
@@ -78,6 +80,10 @@ The first run creates local runtime files under `examples/demo/`:
 - `logs/` for Authority, Sidecar, and fixture logs.
 
 These files are generated locally and are not committed.
+
+Transport note: the demo now defaults to `https://127.0.0.1:50051` for Sidecar
+-> Authority streams. `examples/demo/run.sh` auto-runs
+`firma authority init-tls --out-dir .` when TLS files are missing.
 
 ## Files in this example
 
