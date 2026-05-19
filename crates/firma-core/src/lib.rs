@@ -12,7 +12,7 @@ pub mod token;
 pub mod transport;
 
 pub use agent::AgentId;
-pub use cedar::FirmaEntityUid;
+pub use cedar::{FIRMA_SCHEMA, FirmaEntityUid};
 pub use connector::{Connector, ConnectorError, ConnectorResponse};
 pub use credential::InjectedCredentials;
 pub use decision::{Decision, DenyReason};

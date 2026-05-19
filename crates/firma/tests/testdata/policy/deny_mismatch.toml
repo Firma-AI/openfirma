@@ -1,0 +1,18 @@
+# `firma policy test` fixture: expects DENY but the permit-all bundle ALLOWs.
+# The actual decision (ALLOW) does not match `expected` (DENY), so the runner
+# must exit non-zero. Same shape as allow.toml, only `expected` differs.
+
+[fixture]
+expected = "DENY"
+
+[fixture.principal]
+agent_id = "integration-agent"
+
+[fixture.action]
+class = "code.read"
+
+[fixture.resource]
+host = "api.github.com"
+
+[bundle]
+path = "bundle/"

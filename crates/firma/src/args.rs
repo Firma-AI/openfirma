@@ -3,6 +3,7 @@
 pub mod authority;
 pub mod doctor;
 pub mod monitor;
+pub mod policy;
 pub mod run;
 pub mod sidecar;
 pub mod stack;
@@ -39,6 +40,8 @@ pub enum Command {
     Doctor(doctor::Args),
     /// Tail audit and component logs.
     Monitor(monitor::Args),
+    /// Validate and unit-test Cedar policy bundles.
+    Policy(policy::PolicyArgs),
     /// Internal proxy bridge for sandbox.
     #[command(name = "__proxy-bridge", hide = true)]
     ProxyBridge(run::ProxyBridgeArgs),
