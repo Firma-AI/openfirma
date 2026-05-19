@@ -31,6 +31,10 @@ pub struct ResolvedProfile {
     pub capability: CapabilityLeaseConfig,
     pub sidecar_local_exec: Option<CommandMediatorConfig>,
     pub executable_policies: BTreeMap<String, ExecutableLaunchPolicy>,
+    /// When `true`, the autostarted sidecar is configured in HTTP proxy
+    /// interceptor mode (TCP listener). When `false`, UDS interceptor mode.
+    /// Set for profiles whose agent tool uses standard HTTP proxy env vars.
+    pub use_http_proxy_sidecar: bool,
 }
 
 impl ResolvedProfile {
@@ -331,6 +335,10 @@ pub(crate) struct ProfilePatch {
     pub(crate) executable_policies: BTreeMap<String, ExecutableLaunchPolicyPatch>,
     #[serde(default)]
     pub(crate) codex_cli: Option<ExecutableLaunchPolicyPatch>,
+    /// Configure the autostarted sidecar in HTTP proxy interceptor mode.
+    /// Should be `true` for profiles whose agent uses standard HTTP proxy env vars.
+    #[serde(default)]
+    pub(crate) use_http_proxy_sidecar: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -429,6 +437,7 @@ impl ProfilePatch {
             sidecar_local_exec: higher.sidecar_local_exec.or(self.sidecar_local_exec),
             executable_policies,
             codex_cli: higher.codex_cli.or(self.codex_cli),
+            use_http_proxy_sidecar: higher.use_http_proxy_sidecar || self.use_http_proxy_sidecar,
         }
     }
 }
@@ -529,6 +538,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         capability,
         sidecar_local_exec,
         executable_policies,
+        use_http_proxy_sidecar: patch.use_http_proxy_sidecar,
     };
 
     if matches!(
@@ -575,6 +585,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
         sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
         codex_cli: None,
+        use_http_proxy_sidecar: false,
     }
 }
 

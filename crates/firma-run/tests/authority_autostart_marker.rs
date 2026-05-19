@@ -65,9 +65,9 @@ fn marker_dir_layout_and_developer_cedar() {
     assert!(meta.contains("listen_addr = \"[::1]:50051\""));
 
     let cedar = std::fs::read_to_string(marker.join("policy_dir/developer.cedar")).unwrap();
-    assert!(cedar.contains("NOT INTENDED FOR PRODUCTION"));
-    assert!(cedar.contains("forbid"));
-    assert!(cedar.contains("firma monitor --only-deny"));
+    assert!(cedar.contains("Local autostart profile for `firma run`."));
+    assert!(cedar.contains("communication.external.send"));
+    assert!(cedar.contains("permit("));
 
     drop(sup);
 }

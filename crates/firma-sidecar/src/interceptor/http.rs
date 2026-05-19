@@ -120,7 +120,27 @@ impl From<SocketAddr> for HttpInterceptor {
 
 impl Interceptor for HttpInterceptor {
     async fn run(
+        self,
+        handler: Arc<RequestHandler>,
+        cancel: CancellationToken,
+    ) -> Result<(), InterceptorError> {
+        let listener = TcpListener::bind(self.address)
+            .await
+            .map_err(|e| InterceptorError::BindFailed(e.to_string()))?;
+        self.run_with_listener(listener, handler, cancel).await
+    }
+}
+
+impl HttpInterceptor {
+    /// Run the interceptor loop using an already bound listener.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InterceptorError`] if TLS MITM runtime initialization fails
+    /// or the server loop encounters an unrecoverable error.
+    pub async fn run_with_listener(
         mut self,
+        listener: TcpListener,
         handler: Arc<RequestHandler>,
         cancel: CancellationToken,
     ) -> Result<(), InterceptorError> {
@@ -133,10 +153,6 @@ impl Interceptor for HttpInterceptor {
         };
 
         self.handler = Some(handler);
-        let listener = TcpListener::bind(self.address)
-            .await
-            .map_err(|e| InterceptorError::BindFailed(e.to_string()))?;
-
         let handler =
             Arc::clone(self.handler.as_ref().ok_or_else(|| {
                 InterceptorError::ServerError("request handler not set".to_string())

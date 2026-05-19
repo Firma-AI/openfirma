@@ -733,6 +733,7 @@ const fn default_https_mitm_enabled() -> bool {
 fn default_https_mitm_intercept_hosts() -> Vec<String> {
     vec![
         "chatgpt.com".to_string(),
+        "auth.openai.com".to_string(),
         "api.openai.com".to_string(),
         "api.anthropic.com".to_string(),
         "platform.claude.com".to_string(),
@@ -992,6 +993,14 @@ mod tests {
         assert!(
             !config.interceptor.https_mitm.intercept_hosts.is_empty(),
             "default MITM intercept list should not be empty"
+        );
+        assert!(
+            config
+                .interceptor
+                .https_mitm
+                .intercept_hosts
+                .contains(&"auth.openai.com".to_string()),
+            "default MITM intercept list should include auth.openai.com"
         );
         assert!(
             config

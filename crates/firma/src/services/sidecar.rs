@@ -86,7 +86,7 @@ pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
     ));
 
     tracing::debug!(mode = %config.interceptor.mode, "starting interceptor");
-    let interceptor_handle = startup::spawn_interceptor(&config, handler, exit.clone())?;
+    let interceptor = startup::spawn_interceptor(&config, handler, exit.clone())?;
 
     let local_exec_handle = startup::spawn_local_exec_endpoint(&config, exit.clone())?;
 
@@ -94,8 +94,9 @@ pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
         &resolved.config_file,
         &config,
         pipeline_runtime.mapping_rules_loaded,
+        &interceptor.listen_addr,
     );
-    emit_operator_routing_hints(&config);
+    emit_operator_routing_hints(&config, &interceptor.listen_addr);
 
     let authority_stream_tasks = async {
         if let Some(handle) = authority_handle {
@@ -110,7 +111,7 @@ pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
     let _ = tokio::join!(
         audit_sink,
         health_server,
-        interceptor_handle,
+        interceptor.handle,
         shutdown_handler,
         authority_stream_tasks,
         local_exec_task
@@ -120,11 +121,15 @@ pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn emit_ready_sequence(config_path: &Path, config: &config::SidecarConfig, mapping_rules: usize) {
+fn emit_ready_sequence(
+    config_path: &Path,
+    config: &config::SidecarConfig,
+    mapping_rules: usize,
+    interceptor_addr: &str,
+) {
     let (policy_bundle_version, policy_count) =
         startup::compute_policy_bundle_version(&config.policy.dir)
             .unwrap_or_else(|_| ("00000000".to_string(), 0));
-    let interceptor_addr = interceptor_addr_display(&config.interceptor);
     let authority_endpoint = config
         .policy
         .authority_url
@@ -139,26 +144,13 @@ fn emit_ready_sequence(config_path: &Path, config: &config::SidecarConfig, mappi
         authority_endpoint,
         connector_hosts: config.connector.hosts.len(),
         connector_default_timeout_ms: config.connector.default_timeout_ms,
-        interceptor_addr,
+        interceptor_addr: interceptor_addr.to_string(),
     });
 }
 
-fn interceptor_addr_display(ic: &config::InterceptorConfig) -> String {
-    match ic.mode {
-        config::InterceptorMode::HttpProxy | config::InterceptorMode::Grpc => {
-            ic.listen_addr.to_string()
-        }
-        #[cfg(unix)]
-        config::InterceptorMode::UnixSocket => ic
-            .socket_path
-            .as_ref()
-            .map_or_else(String::new, |p| p.display().to_string()),
-    }
-}
-
-fn emit_operator_routing_hints(config: &config::SidecarConfig) {
+fn emit_operator_routing_hints(config: &config::SidecarConfig, interceptor_addr: &str) {
     if config.interceptor.mode == config::InterceptorMode::HttpProxy {
-        let proxy = format!("http://{}", config.interceptor.listen_addr);
+        let proxy = format!("http://{interceptor_addr}");
         tracing::info!(
             proxy = %proxy,
             "http_proxy mode active: clients must route traffic through this proxy for sidecar enforcement/audit"

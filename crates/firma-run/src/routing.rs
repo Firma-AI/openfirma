@@ -75,6 +75,9 @@ pub struct AutostartFlags {
     /// Effective Authority URL — set by `resolve_authority` and threaded
     /// into the synthesized sidecar config.
     pub authority_url: Option<String>,
+    /// When `true`, the autostarted sidecar is started in HTTP proxy
+    /// interceptor mode rather than Unix socket mode.
+    pub use_http_proxy_sidecar: bool,
 }
 
 /// Resolved Authority for the current run. URL is what gets fed into the
@@ -87,12 +90,11 @@ pub struct ResolvedAuthority {
 
 /// Prepare network runtime artifacts for a sandbox launch.
 ///
-/// On endpoint miss with `flags.mode == SidecarMode::Auto` and
+/// With default `flags.mode == SidecarMode::Auto` and
 /// `flags.no_autostart == false`, autostarts a per-run sidecar via
-/// [`SidecarSupervisor`] and substitutes its UDS endpoint into the
-/// returned [`NetworkRuntime`]. The supervisor is held inside the
-/// returned struct so [`Drop`] tears the sidecar down when the wrapped
-/// process exits.
+/// [`SidecarSupervisor`] and substitutes its endpoint into the returned
+/// [`NetworkRuntime`]. The supervisor is held inside the returned struct so
+/// [`Drop`] tears the sidecar down when the wrapped process exits.
 ///
 /// # Errors
 ///
@@ -115,10 +117,11 @@ pub fn prepare_network_runtime(
 
     let (effective_endpoint, sidecar_supervisor) =
         resolve_effective_endpoint(handle, sidecar_endpoint, identity, &flags)?;
+    let autostart_trust_env = sidecar_trust_env_overrides(sidecar_supervisor.as_ref());
 
     if !handle.network_policy.enforce_network_namespace {
         return Ok(NetworkRuntime {
-            env_overrides: BTreeMap::new(),
+            env_overrides: autostart_trust_env,
             sidecar_endpoint: effective_endpoint,
             _sidecar_supervisor: sidecar_supervisor,
             _authority_supervisor: authority.supervisor,
@@ -148,7 +151,7 @@ pub fn prepare_network_runtime(
 
         let proxy_addr = structural_proxy_listen_addr();
         let dns_addr = structural_dns_stub_listen_addr();
-        let mut env_overrides = BTreeMap::new();
+        let mut env_overrides = autostart_trust_env;
         env_overrides.insert("HTTP_PROXY".to_string(), format!("http://{proxy_addr}"));
         env_overrides.insert("HTTPS_PROXY".to_string(), format!("http://{proxy_addr}"));
         env_overrides.insert("http_proxy".to_string(), format!("http://{proxy_addr}"));
@@ -182,12 +185,37 @@ pub fn prepare_network_runtime(
     }
 }
 
+fn sidecar_trust_env_overrides(
+    sidecar_supervisor: Option<&SidecarSupervisor>,
+) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    let Some(supervisor) = sidecar_supervisor else {
+        return env;
+    };
+    let ca_dir = supervisor.marker_dir().join("firma-ca");
+    let ca_cert = ca_dir.join("firma-ca.crt");
+    env.insert(
+        "FIRMA_SIDECAR_CA_DIR".to_string(),
+        ca_dir.display().to_string(),
+    );
+    env.insert(
+        "FIRMA_SIDECAR_CA_CERT_PATH".to_string(),
+        ca_cert.display().to_string(),
+    );
+    env
+}
+
 fn resolve_effective_endpoint(
     handle: &SandboxHandle,
     sidecar_endpoint: &SidecarEndpoint,
     identity: &RunIdentity,
     flags: &AutostartFlags,
 ) -> Result<(SidecarEndpoint, Option<SidecarSupervisor>), RunError> {
+    if !flags.no_autostart && matches!(flags.mode, SidecarMode::Auto) {
+        let supervisor = autostart_sidecar(identity, flags)?;
+        return Ok((supervisor.endpoint(), Some(supervisor)));
+    }
+
     // `fail_closed = false` is an explicit dev/test escape that disables
     // the probe (and therefore disables autostart). It mirrors the
     // pre-FIR-102 behaviour.
@@ -240,6 +268,7 @@ fn autostart_sidecar(
         firma_exe,
         startup_timeout: flags.startup_timeout,
         authority_url: flags.authority_url.as_deref(),
+        use_http_proxy_interceptor: flags.use_http_proxy_sidecar,
     })
 }
 
@@ -511,7 +540,7 @@ impl Drop for SidecarAdapter {
 fn relay_to_sidecar(client: &UnixStream, upstream: &SidecarEndpoint) -> io::Result<()> {
     match upstream {
         SidecarEndpoint::Tcp { addr } => {
-            let target = TcpStream::connect_timeout(addr, Duration::from_secs(1))?;
+            let target = connect_tcp_with_retry(addr)?;
             relay_unix_to_tcp(client, &target)
         }
         SidecarEndpoint::Unix { path } => {
@@ -519,6 +548,28 @@ fn relay_to_sidecar(client: &UnixStream, upstream: &SidecarEndpoint) -> io::Resu
             relay_unix_to_unix(client, &target)
         }
     }
+}
+
+#[cfg(unix)]
+fn connect_tcp_with_retry(addr: &std::net::SocketAddr) -> io::Result<TcpStream> {
+    // On autostart we can race the sidecar's TCP listener by a few ms.
+    // Retry briefly on ECONNREFUSED to smooth startup probes.
+    const ATTEMPTS: usize = 20;
+    const SLEEP_BETWEEN: Duration = Duration::from_millis(50);
+    let mut last_error: Option<io::Error> = None;
+    for attempt in 0..ATTEMPTS {
+        match TcpStream::connect_timeout(addr, Duration::from_millis(250)) {
+            Ok(stream) => return Ok(stream),
+            Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
+                last_error = Some(error);
+                if attempt + 1 < ATTEMPTS {
+                    thread::sleep(SLEEP_BETWEEN);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| io::Error::other("tcp connect failed")))
 }
 
 #[cfg(unix)]

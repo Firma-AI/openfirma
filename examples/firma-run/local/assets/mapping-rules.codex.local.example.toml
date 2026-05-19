@@ -11,6 +11,18 @@ path = "/"
 action_class = "communication.external.send"
 
 [[rules]]
+method = "CONNECT"
+host = "auth.openai.com"
+path = "/"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "api.openai.com"
+path = "/"
+action_class = "communication.external.send"
+
+[[rules]]
 host = "chatgpt.com"
 path = "/backend-api/*"
 action_class = "communication.external.send"
@@ -18,6 +30,16 @@ action_class = "communication.external.send"
 [[rules]]
 host = "*.chatgpt.com"
 path = "/backend-api/*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "auth.openai.com"
+path = "/api/accounts/deviceauth/*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "api.openai.com"
+path = "/v1/*"
 action_class = "communication.external.send"
 
 [[rules]]

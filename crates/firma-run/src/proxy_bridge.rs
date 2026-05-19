@@ -60,6 +60,12 @@ fn run_proxy_bridge_unix(args: &ProxyBridgeInput) -> Result<(), RunError> {
         ))
     })?;
 
+    // Signal readiness after bind so the entrypoint script can start the agent
+    // without a blind sleep. The entrypoint polls for this file's existence.
+    if let Ok(dir) = std::env::var("FIRMA_RUN_RUNTIME_DIR") {
+        let _ = std::fs::write(std::path::Path::new(&dir).join("proxy-bridge-ready"), []);
+    }
+
     loop {
         let (client_stream, client_addr) = listener
             .accept()

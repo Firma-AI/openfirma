@@ -94,7 +94,28 @@ cat .local/firma.toml
 
 You'll see `[sidecar.mapping].default_protected = false` and a `file` audit sink. For a real workload, you'd switch to `default_protected = true` and tighten the mapping. For first-touch, leave it as is.
 
-## Step 3: Start the Sidecar
+## Step 3: Run with Per-Run Sidecar (Default)
+
+In the default `--sidecar=auto` mode, `firma run` always starts a per-run
+Sidecar alongside the agent process, waits for readiness, and tears it down
+on exit.
+
+The simplest invocation:
+
+```bash
+cargo run --release -p firma -- run --profile generic -- curl https://example.com
+```
+
+If you use a coding-agent profile:
+
+```bash
+cargo run --release -p firma -- run --profile codex -- codex
+```
+
+### Optional: run a Sidecar manually (`--sidecar=external`)
+
+Manual sidecar startup is only needed when you explicitly choose external mode
+or operate with a pre-managed sidecar (systemd / `firma stack start`).
 
 In a dedicated terminal:
 
@@ -103,10 +124,6 @@ cargo run --release -p firma -- sidecar -c .local/firma.toml
 ```
 
 Wait for the `sidecar ready` line.
-
-### Or: let `firma run` autostart it
-
-You can skip the explicit Sidecar terminal entirely. When `firma run` is invoked and the configured Sidecar endpoint is unreachable, it autostarts a Sidecar as a child of the wrapper, waits for the seven-line ready log contract, and tears it down on exit. Marker files land under `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/` (Linux) or `/tmp/firma-$UID/firma/run/<sandbox_id>/` (macOS fallback). The spawned Sidecar inherits a config template from `--sidecar-config`, then `FIRMA_SIDECAR_CONFIG_FILE`, then the discovered `firma.toml`, then a synthesized minimal config — in that order — with the `[sidecar.interceptor]` section forced to `unix_socket` mode against the marker socket.
 
 Opt out for production or CI:
 
@@ -117,7 +134,7 @@ Autostart currently requires Unix. On Windows, use `--sidecar=external` with a p
 
 ### Authority bootstrap
 
-Before the Sidecar fires, `firma run` resolves which Authority to use.
+Before the Sidecar starts, `firma run` resolves which Authority to use.
 Precedence: `--authority local` / `--authority <url>` > persisted
 `[authority]` table in the discovered `firma.toml`
 (`~/.config/firma/firma.toml` on Linux/macOS,
@@ -126,15 +143,14 @@ both are empty and stdin is a TTY:
 
 ```text
 No Authority is configured for this project.
-firma run can start a local Mini Authority for development on [::1]:50051.
+firma run can start a local Mini Authority for development on [::1]:<ephemeral-port>.
 This is suitable for a single developer on a trusted workstation.
 
 Start a local Mini Authority? [y/N]:
 ```
 
 On `y` the choice is persisted and a per-run Mini Authority is spawned
-with an ephemeral signing key plus the embedded `developer` policy
-profile (a deny-all baseline). On `n`, no-TTY, or `--no-autostart`,
+with an ephemeral signing key and loopback listen address. On `n`, no-TTY, or `--no-autostart`,
 `firma run` exits with a typed error (`AuthorityDeclined`,
 `AuthorityPromptNoTty`, or `MissingAuthority`). The spawned Authority is
 killed on `firma run` exit.
@@ -142,7 +158,7 @@ killed on `firma run` exit.
 Flags:
 
 - `--authority local` — autostart a local Mini Authority on
-  `[::1]:50051`; bypasses the prompt.
+  a per-run loopback ephemeral port; bypasses the prompt.
 - `--authority <url>` — point at a remote Authority; bypasses the
   prompt; fails with `AuthorityUnreachable` if the URL does not answer.
 - `--authority-profile <name>` — profile materialised by the
@@ -151,13 +167,7 @@ Flags:
 
 `--no-autostart --authority local` is a typed argument-conflict error.
 
-## Step 4: Run a command under `firma run`
-
-The simplest invocation:
-
-```bash
-cargo run --release -p firma -- run --profile generic -- curl https://example.com
-```
+## Step 4: What `firma run` does
 
 Everything after `--` is the command and its arguments. `firma run`:
 
@@ -265,8 +275,8 @@ This prints the resolved profile as JSON: which backend, which env vars are inje
 | `--config <file>`                           | Override profile defaults from a TOML/YAML file.                                                                       |
 | `--backend <bwrap\|vz\|wsl2\|firecracker>`  | Override the platform default backend.                                                                                 |
 | `--sidecar-endpoint <url>`                  | Point at a Sidecar at a non-default address (e.g. UDS path or a different port).                                       |
-| `--sidecar <auto\|external>`                | `auto` (default) autostarts a per-run Sidecar when the endpoint is unreachable; `external` requires a pre-running one. |
-| `--no-autostart`                            | Fail loudly if the Sidecar is unreachable, instead of autostarting. CI / production safety net.                        |
+| `--sidecar <auto\|external>`                | `auto` (default) always autostarts a per-run Sidecar; `external` requires a pre-running one.                           |
+| `--no-autostart`                            | Disable per-run autostart and fail loudly if the configured Sidecar endpoint is unreachable. CI / production safety net. |
 | `--sidecar-config <path>`                   | Sidecar TOML template for autostart. Falls back to `FIRMA_SIDECAR_CONFIG_FILE`, then the discovered `firma.toml`.      |
 | `--sidecar-startup-timeout-secs <n>`        | Maximum wait for the autostarted Sidecar's `ready` line (default `10`).                                                |
 | `--capability-file <path>`                  | Pre-staged capability seed for this run.                                                                               |

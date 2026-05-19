@@ -52,6 +52,7 @@ fn returns_ready_timeout_when_no_ready_line_observed() {
         firma_exe: exe,
         startup_timeout: Duration::from_millis(500),
         authority_url: None,
+        use_http_proxy_interceptor: false,
     });
     let Err(err) = result else {
         panic!("expected timeout, got Ok");

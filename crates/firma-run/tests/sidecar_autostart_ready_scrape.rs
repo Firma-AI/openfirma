@@ -43,6 +43,7 @@ fn captures_version_and_disabled_authority_then_returns_ready() {
         ReadyCapture {
             policy_bundle_version: "ab12cd34".into(),
             authority_url: String::new(),
+            interceptor_addr: "/run/firma/abc/sidecar.sock".into(),
         }
     );
 
@@ -73,6 +74,7 @@ INFO firma_sidecar::startup::log_contract: ready\n";
     };
     assert_eq!(capture.policy_bundle_version, "deadbeef");
     assert_eq!(capture.authority_url, "https://authority.example:8443");
+    assert_eq!(capture.interceptor_addr, "127.0.0.1:8080");
 }
 
 #[test]
@@ -113,6 +115,7 @@ fn ready_line_detected_through_ansi_escapes() {
     };
     assert_eq!(capture.policy_bundle_version, "e3b0c442");
     assert_eq!(capture.authority_url, "http://127.0.0.1:50051");
+    assert_eq!(capture.interceptor_addr, "/tmp/firma-501/sidecar.sock");
 
     // The tee preserves the raw bytes including escapes.
     let drained = String::from_utf8(sink).expect("utf8");
