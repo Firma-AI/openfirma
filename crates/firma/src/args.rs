@@ -2,6 +2,7 @@
 
 pub mod authority;
 pub mod doctor;
+pub mod init;
 pub mod monitor;
 pub mod run;
 pub mod sidecar;
@@ -31,6 +32,8 @@ pub struct Cli {
 pub enum Command {
     /// Run the authority (mini reference impl).
     Authority(authority::Args),
+    /// Scaffold a new agent config directory interactively.
+    Init(init::InitArgs),
     /// Internal sandbox-local DNS stub.
     #[command(name = "__dns-stub", hide = true)]
     DnsStub(run::DnsStubArgs),

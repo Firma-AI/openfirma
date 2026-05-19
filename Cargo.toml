@@ -62,6 +62,7 @@ http-body = "1"
 hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 lru = "0.17"
+minijinja = "2"
 notify = "8"
 nix = { version = "0.31", features = [
   "fs",
