@@ -315,7 +315,7 @@ Components that bind to the registry:
   `mapping.rules_path` in the Sidecar config) — rule authors MUST review
   new entries against §2.3.2 naming rules and the authoring guidance in
   this document.
-- `crates/firma-authority/schema.cedarschema` — canonical schema embedded in
+- `crates/firma-core/firma.cedarschema` — canonical schema embedded in
   the binary; declares the 15 actions for Cedar type-checking. Identifiers
   MUST be byte-identical to the Sidecar registry.
 
@@ -354,7 +354,7 @@ Every site MUST use the byte-identical identifier.
    radius on misuse, not by observed frequency.
 3. Register in `ActionClassRegistry` (`registry.rs`): add an
    `ActionClassDefinition` entry with `name`, `domain`, `risk_level`.
-4. Declare in the Cedar schema (`schema.cedarschema`): add an
+4. Declare in the Cedar schema (`crates/firma-core/firma.cedarschema`): add an
    `action "<name>" appliesTo { ... }` block using the shared
    `EnforcementContext`. `EnforcementContext` shape MUST NOT change.
 5. Allow in the Cedar loader (`cedar_loader.rs`): add the identifier to
@@ -383,7 +383,7 @@ ActionClassDefinition {
 },
 ```
 
-`schema.cedarschema`:
+`crates/firma-core/firma.cedarschema`:
 
 ```cedar
 action "payment.refund" appliesTo {

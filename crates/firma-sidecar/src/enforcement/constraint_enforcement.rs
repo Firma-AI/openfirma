@@ -683,7 +683,9 @@ mod tests {
 
         let context = evaluator.build_context(&envelope, &claims, &signals);
 
-        // Canonical schema fields (7 total):
+        // The canonical schema declares 13 EnforcementContext fields (7
+        // commonly-tuned + 6 payment/transport placeholders); the 7
+        // commonly-tuned ones are asserted here:
         assert_eq!(context["session_id"], "sess_001");
         assert!(context["timestamp_ms"].is_i64());
         assert!(context["params"].is_string());

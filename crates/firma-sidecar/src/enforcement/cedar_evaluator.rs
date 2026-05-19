@@ -152,11 +152,15 @@ impl CedarPolicyEvaluator {
 impl PolicyEvaluation for CedarPolicyEvaluator {
     /// Evaluate Cedar policies for the given principal, action, and resource.
     ///
-    /// Context attributes (`session_id`, `timestamp_ms`, `params`,
+    /// Context attributes — the 13 fields declared by `EnforcementContext` in
+    /// the canonical `crates/firma-core/firma.cedarschema`: the 7
+    /// commonly-tuned keys (`session_id`, `timestamp_ms`, `params`,
     /// `risk_score`, `budget_remaining`, `session_duration_s`,
-    /// `action_count`) — the shape declared by `EnforcementContext` in the
-    /// canonical `schema.cedarschema` — are built from the JSON object
-    /// produced by `ConstraintEnforcer::build_context`.
+    /// `action_count`) plus 6 payment/transport placeholders
+    /// (`transfer_amount`, `daily_cumulative_amount`, `transfers_last_10m`,
+    /// `same_payee_count_30m`, `session_transfer_count`, `raw_transport`) —
+    /// are built from the JSON object produced by
+    /// `ConstraintEnforcer::build_context`.
     ///
     /// Entity UIDs are constructed via [`FirmaEntityUid`] to match the
     /// Authority's issuance evaluation. No schema validation is performed on

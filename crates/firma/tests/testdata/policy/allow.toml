@@ -1,0 +1,21 @@
+# `firma policy test` fixture: expects ALLOW against the permit-all bundle.
+# No `[fixture.context]` is needed — the runner supplies all thirteen
+# schema-required EnforcementContext attributes by default.
+#
+# `bundle.path` is resolved relative to THIS file's parent directory by the
+# runner, so `bundle/` points at testdata/policy/bundle/ regardless of CWD.
+
+[fixture]
+expected = "ALLOW"
+
+[fixture.principal]
+agent_id = "integration-agent"
+
+[fixture.action]
+class = "code.read"
+
+[fixture.resource]
+host = "api.github.com"
+
+[bundle]
+path = "bundle/"
