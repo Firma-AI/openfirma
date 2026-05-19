@@ -2,12 +2,13 @@
 //! kill on Drop. Mirrors `firma-run/src/sidecar/supervisor.rs` (FIR-102).
 
 use std::io::{BufRead, Write};
-use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+#[cfg(unix)]
+use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, TcpListener};
 
 use tracing::{debug, warn};
 
@@ -18,7 +19,9 @@ pub const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
 
 /// Grace period between `SIGTERM` and `SIGKILL` in [`Drop`].
 const STOP_GRACE: Duration = Duration::from_secs(5);
+#[cfg(unix)]
 const MAX_BIND_ATTEMPTS: usize = 8;
+#[cfg(unix)]
 const AUTOSTART_LOCAL_DEVELOPER_POLICY: &str = r#"// Local autostart profile for `firma run`.
 //
 // Keeps default operation strict while allowing outbound communication flows
