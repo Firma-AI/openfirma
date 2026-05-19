@@ -1,0 +1,19 @@
+# Code owners for security-critical paths
+/.github/                          @Firma-AI/team-firma
+/crates/firma-authority/           @Firma-AI/team-firma
+/crates/firma-sidecar/              @Firma-AI/team-firma
+/crates/firma-core/                 @Firma-AI/team-firma
+/crates/firma-proto/                @Firma-AI/team-firma
+/crates/firma-grpc-interceptor-proto/ @Firma-AI/team-firma
+/crates/firma-config/               @Firma-AI/team-firma
+/crates/firma-run/                  @Firma-AI/team-firma
+/docs-site/                         @Firma-AI/team-firma
+
+# Lower priority paths - single approver ok
+/examples/                         @Firma-AI/team-firma
+/scripts/                          @Firma-AI/team-firma
+/spikes/                           @Firma-AI/team-firma
+/fuzz/                             @Firma-AI/team-firma
+/crates/firma-demo-fixture/        @Firma-AI/team-firma
+/crates/firma-demo-tui/             @Firma-AI/team-firma
+/crates/firma-stack/                @Firma-AI/team-firma
