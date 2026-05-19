@@ -117,4 +117,4 @@ Audit events are signed, but the Sidecar writes them before shipping to a durabl
 - [Transport security](docs/security/transport.md)
 - [Interception boundary bypass analysis](docs/security/bypass-analysis.md)
 - [Secure a coding agent guide](docs-site/src/content/docs/guides/secure-a-coding-agent.md)
-- [Audit log guide](docs-site/src/content/docs/guides/audit-log/)
+- [Audit log guide](docs-site/src/content/docs/guides/audit-log.md)
