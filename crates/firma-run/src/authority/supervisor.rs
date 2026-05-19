@@ -126,7 +126,8 @@ impl AuthoritySupervisor {
             .map_err(|e| RunError::Internal(format!("write {}: {e}", revocation_path.display())))?;
 
         let authority_cfg = format!(
-            "listen_addr = \"[::1]:50051\"\n\
+            "[authority]\n\
+             listen_addr = \"[::1]:50051\"\n\
              policy_dir = \"{policy}\"\n\
              issuance_policy_dir = \"{policy}\"\n\
              revocation_file = \"{rev}\"\n\
