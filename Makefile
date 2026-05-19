@@ -1,4 +1,4 @@
-.PHONY: fmt lint test build check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps install-tools toml-fmt managed-seccomp-compat-check
+.PHONY: fmt lint test build check fuzz-check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps install-tools toml-fmt managed-seccomp-compat-check
 
 install: install-system install-cargo-tools install-docs-deps install-tools
 	@echo "Dev environment ready. Try 'make check' or 'make docs-dev'."
@@ -58,6 +58,10 @@ deny:
 	cargo deny check licenses bans sources
 
 check: fmt toml-fmt lint test build audit deny
+
+# Requires nightly: rustup toolchain install nightly
+fuzz-check:
+	cd fuzz && cargo +nightly check
 
 bench:
 	cargo bench --workspace --no-fail-fast

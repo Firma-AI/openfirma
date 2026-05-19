@@ -1,7 +1,10 @@
 #![no_main]
 
+use std::sync::OnceLock;
+
 use arbitrary::Arbitrary;
 use chrono::Utc;
+use firma_core::TokenVerifier;
 use firma_sidecar::config::SeedFile;
 use libfuzzer_sys::fuzz_target;
 
@@ -17,6 +20,15 @@ struct FuzzSeed {
     budget_ceiling: Option<f64>,
 }
 
+fn static_verifier() -> &'static dyn TokenVerifier {
+    static V: OnceLock<Box<dyn TokenVerifier + Send + Sync>> = OnceLock::new();
+    let b = V.get_or_init(|| {
+        firma_sidecar::startup::build_token_verifier(None)
+            .expect("RejectAllVerifier construction is infallible")
+    });
+    b.as_ref()
+}
+
 fuzz_target!(|input: FuzzSeed| {
     let file = SeedFile {
         raw_token: input.raw_token,
@@ -30,5 +42,5 @@ fuzz_target!(|input: FuzzSeed| {
         context_hash: input.context_hash,
         budget_ceiling: input.budget_ceiling,
     };
-    let _ = firma_sidecar::startup::seed_into_entry(&file);
+    let _ = firma_sidecar::startup::seed_into_entry(&file, static_verifier());
 });
