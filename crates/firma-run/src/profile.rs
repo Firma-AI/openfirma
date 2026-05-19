@@ -74,6 +74,7 @@ fn generic_profile() -> ProfilePatch {
         sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
         codex_cli: None,
+        use_http_proxy_sidecar: false,
     }
 }
 
@@ -81,6 +82,10 @@ fn codex_profile() -> ProfilePatch {
     let mut base = generic_profile();
     base.env_set
         .insert("FIRMA_RUN_PROFILE".to_string(), "codex".to_string());
+    // Codex ignores proxy vars when NO_PROXY is set broadly (e.g. from the
+    // host env). Explicitly empty both variants so nothing bypasses the proxy.
+    base.env_set.insert("NO_PROXY".to_string(), String::new());
+    base.env_set.insert("no_proxy".to_string(), String::new());
     base.env_passthrough.extend([
         "OPENAI_API_KEY".to_string(),
         "ANTHROPIC_API_KEY".to_string(),
@@ -92,12 +97,19 @@ fn codex_profile() -> ProfilePatch {
             enforce_wrapper_defaults: Some(true),
             sandbox_mode: Some("workspace-write".to_string()),
             approval_policy: Some("never".to_string()),
-            config_overrides: BTreeMap::from([(
-                "sandbox_workspace_write.network_access".to_string(),
-                "true".to_string(),
-            )]),
+            config_overrides: BTreeMap::from([
+                (
+                    "sandbox_workspace_write.network_access".to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    "shell_environment_policy.inherit".to_string(),
+                    "all".to_string(),
+                ),
+            ]),
         },
     );
+    base.use_http_proxy_sidecar = true;
     base
 }
 
@@ -120,5 +132,6 @@ fn claude_code_profile() -> ProfilePatch {
         "CLAUDE_CODE_USE_VERTEX".to_string(),
         "CLAUDE_CODE_USE_BEDROCK".to_string(),
     ]);
+    base.use_http_proxy_sidecar = true;
     base
 }

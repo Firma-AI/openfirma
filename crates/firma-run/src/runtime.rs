@@ -118,18 +118,6 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             "backend network enforcement proof"
         );
 
-        let flags = AutostartFlags {
-            mode: args.sidecar_mode,
-            no_autostart: args.no_autostart,
-            template_path: args.sidecar_template_path.clone(),
-            startup_timeout: Duration::from_secs(if args.sidecar_startup_timeout_secs == 0 {
-                DEFAULT_STARTUP_TIMEOUT_SECS
-            } else {
-                args.sidecar_startup_timeout_secs
-            }),
-            authority_url: None,
-        };
-
         // First prefer an explicit CLI path, then a discovered config file
         // (read path). When nothing is discovered, fall back to the
         // canonical create path so the bootstrap can persist `[authority]`.
@@ -141,6 +129,19 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             .ok_or_else(|| {
                 RunError::Internal("no user config path resolvable on this platform".into())
             })?;
+        let sidecar_template_path = resolve_sidecar_template_path(args, &user_config_path);
+        let flags = AutostartFlags {
+            mode: args.sidecar_mode,
+            no_autostart: args.no_autostart,
+            template_path: sidecar_template_path,
+            startup_timeout: Duration::from_secs(if args.sidecar_startup_timeout_secs == 0 {
+                DEFAULT_STARTUP_TIMEOUT_SECS
+            } else {
+                args.sidecar_startup_timeout_secs
+            }),
+            authority_url: None,
+            use_http_proxy_sidecar: profile.use_http_proxy_sidecar,
+        };
         let firma_exe = std::env::current_exe()
             .map_err(|e| RunError::Internal(format!("resolve current_exe: {e}")))?;
         let runtime_dir = firma_stack::runtime_paths::default_runtime_dir();
@@ -218,6 +219,19 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         .map_or(Ok(()), |real_handle| backend.teardown(real_handle));
 
     combine_run_and_teardown_results(run_result, teardown_result)
+}
+
+fn resolve_sidecar_template_path(args: &RunInput, user_config_path: &Path) -> Option<PathBuf> {
+    args.sidecar_template_path
+        .clone()
+        .or_else(|| args.config.clone())
+        .or_else(|| {
+            if user_config_path.is_file() {
+                Some(user_config_path.to_path_buf())
+            } else {
+                None
+            }
+        })
 }
 
 fn log_run_start(identity: &RunIdentity, profile: &ResolvedProfile) {
@@ -433,7 +447,7 @@ fn build_execution_env(
         }
     }
 
-    if let Some(ca_cert_path) = resolve_sidecar_ca_cert_path() {
+    if let Some(ca_cert_path) = resolve_sidecar_ca_cert_path(network_overrides) {
         inject_sidecar_ca_trust_env(&mut env, &ca_cert_path);
     }
 
@@ -536,7 +550,25 @@ fn inject_sidecar_ca_trust_env(env: &mut BTreeMap<String, String>, ca_cert_path:
     env.insert("GIT_SSL_CAINFO".to_string(), path);
 }
 
-fn resolve_sidecar_ca_cert_path() -> Option<PathBuf> {
+fn resolve_sidecar_ca_cert_path(network_overrides: &BTreeMap<String, String>) -> Option<PathBuf> {
+    if let Some(explicit) = network_overrides.get("FIRMA_SIDECAR_CA_CERT_PATH")
+        && !explicit.trim().is_empty()
+    {
+        let path = PathBuf::from(explicit);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    if let Some(ca_dir) = network_overrides.get("FIRMA_SIDECAR_CA_DIR")
+        && !ca_dir.trim().is_empty()
+    {
+        let path = PathBuf::from(ca_dir).join("firma-ca.crt");
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
     if let Ok(explicit) = std::env::var("FIRMA_SIDECAR_CA_CERT_PATH")
         && !explicit.trim().is_empty()
     {
@@ -630,6 +662,7 @@ mod tests {
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
+            use_http_proxy_sidecar: false,
         };
 
         let identity = RunIdentity::new("generic");
@@ -685,6 +718,7 @@ mod tests {
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
+            use_http_proxy_sidecar: false,
         };
 
         let identity = RunIdentity::new("generic");
@@ -733,6 +767,7 @@ mod tests {
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
+            use_http_proxy_sidecar: false,
         };
 
         let identity = RunIdentity::new("generic");
@@ -791,16 +826,23 @@ mod tests {
                 grace_seconds: 30,
             },
             sidecar_local_exec: None,
+            use_http_proxy_sidecar: true,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
                     enforce_wrapper_defaults: true,
                     sandbox_mode: Some("workspace-write".to_string()),
                     approval_policy: Some("never".to_string()),
-                    config_overrides: BTreeMap::from([(
-                        "sandbox_workspace_write.network_access".to_string(),
-                        "true".to_string(),
-                    )]),
+                    config_overrides: BTreeMap::from([
+                        (
+                            "sandbox_workspace_write.network_access".to_string(),
+                            "true".to_string(),
+                        ),
+                        (
+                            "shell_environment_policy.inherit".to_string(),
+                            "all".to_string(),
+                        ),
+                    ]),
                 },
             )]),
         };
@@ -819,10 +861,58 @@ mod tests {
                 "never".to_string(),
                 "--config".to_string(),
                 "sandbox_workspace_write.network_access=true".to_string(),
+                "--config".to_string(),
+                "shell_environment_policy.inherit=all".to_string(),
                 "exec".to_string(),
                 "hello".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn codex_execution_env_clears_no_proxy_in_tcp_mode() {
+        // NO_PROXY="" comes from the codex profile's env_set, not from hardcoded
+        // runtime logic. The test reflects this by including it in the profile.
+        let profile = ResolvedProfile {
+            id: "codex".to_string(),
+            backend: crate::backend::BackendKind::Bwrap,
+            sidecar_endpoint: SidecarEndpoint::Tcp {
+                addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
+            },
+            env_passthrough: BTreeSet::default(),
+            env_set: BTreeMap::from([
+                ("NO_PROXY".to_string(), String::new()),
+                ("no_proxy".to_string(), String::new()),
+            ]),
+            mounts: Vec::new(),
+            seccomp_policy: None,
+            allowed_domains: Vec::new(),
+            network: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+            identity_mode: SandboxIdentityMode::SandboxUser,
+            capability: CapabilityLeaseConfig {
+                source: CapabilitySource::Disabled,
+                refresh_ratio: 0.60,
+                grace_seconds: 30,
+            },
+            sidecar_local_exec: None,
+            executable_policies: BTreeMap::new(),
+            use_http_proxy_sidecar: true,
+        };
+        let identity = RunIdentity::new("codex");
+        let lease = crate::capability::CapabilityLeaseManager::new(&profile.capability)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let env = build_execution_env(
+            &profile,
+            &identity,
+            &lease,
+            &profile.sidecar_endpoint,
+            &BTreeMap::default(),
+        );
+        assert_eq!(env.get("NO_PROXY"), Some(&String::new()));
+        assert_eq!(env.get("no_proxy"), Some(&String::new()));
     }
 
     #[test]
@@ -849,16 +939,23 @@ mod tests {
                 grace_seconds: 30,
             },
             sidecar_local_exec: None,
+            use_http_proxy_sidecar: true,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
                     enforce_wrapper_defaults: true,
                     sandbox_mode: Some("workspace-write".to_string()),
                     approval_policy: Some("never".to_string()),
-                    config_overrides: BTreeMap::from([(
-                        "sandbox_workspace_write.network_access".to_string(),
-                        "true".to_string(),
-                    )]),
+                    config_overrides: BTreeMap::from([
+                        (
+                            "sandbox_workspace_write.network_access".to_string(),
+                            "true".to_string(),
+                        ),
+                        (
+                            "shell_environment_policy.inherit".to_string(),
+                            "all".to_string(),
+                        ),
+                    ]),
                 },
             )]),
         };
@@ -880,6 +977,8 @@ mod tests {
         assert_eq!(
             args,
             vec![
+                "--config".to_string(),
+                "shell_environment_policy.inherit=all".to_string(),
                 "--sandbox".to_string(),
                 "read-only".to_string(),
                 "--ask-for-approval".to_string(),
@@ -916,16 +1015,23 @@ mod tests {
                 grace_seconds: 30,
             },
             sidecar_local_exec: None,
+            use_http_proxy_sidecar: true,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
                     enforce_wrapper_defaults: true,
                     sandbox_mode: Some("workspace-write".to_string()),
                     approval_policy: Some("never".to_string()),
-                    config_overrides: BTreeMap::from([(
-                        "sandbox_workspace_write.network_access".to_string(),
-                        "true".to_string(),
-                    )]),
+                    config_overrides: BTreeMap::from([
+                        (
+                            "sandbox_workspace_write.network_access".to_string(),
+                            "true".to_string(),
+                        ),
+                        (
+                            "shell_environment_policy.inherit".to_string(),
+                            "all".to_string(),
+                        ),
+                    ]),
                 },
             )]),
         };
@@ -948,10 +1054,68 @@ mod tests {
                 "--ask-for-approval".to_string(),
                 "never".to_string(),
                 "--config".to_string(),
+                "shell_environment_policy.inherit=all".to_string(),
+                "--config".to_string(),
                 "sandbox_workspace_write.network_access=false".to_string(),
                 "exec".to_string(),
                 "hi".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn resolve_sidecar_template_prefers_explicit_sidecar_config() {
+        let args = super::RunInput {
+            profile: "codex".to_string(),
+            config: Some(PathBuf::from("/tmp/from-run-config.toml")),
+            backend: None,
+            sidecar_endpoint: None,
+            capability_file: None,
+            identity_mode: None,
+            preserve_host_user: false,
+            print_effective_config: false,
+            sidecar_mode: super::SidecarMode::Auto,
+            no_autostart: false,
+            sidecar_template_path: Some(PathBuf::from("/tmp/from-sidecar-config.toml")),
+            sidecar_startup_timeout_secs: 10,
+            command: vec!["codex".to_string()],
+            authority_cli: crate::authority::AuthorityCli::Unset,
+            authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
+            user_config_path: None,
+        };
+        let resolved =
+            super::resolve_sidecar_template_path(&args, PathBuf::from("/tmp/user.toml").as_path());
+        assert_eq!(
+            resolved,
+            Some(PathBuf::from("/tmp/from-sidecar-config.toml"))
+        );
+    }
+
+    #[test]
+    fn resolve_sidecar_template_falls_back_to_user_config_when_present() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let user_cfg = tmp.path().join("firma.toml");
+        fs::write(&user_cfg, "[sidecar]\n").unwrap_or_else(|e| panic!("{e}"));
+
+        let args = super::RunInput {
+            profile: "codex".to_string(),
+            config: None,
+            backend: None,
+            sidecar_endpoint: None,
+            capability_file: None,
+            identity_mode: None,
+            preserve_host_user: false,
+            print_effective_config: false,
+            sidecar_mode: super::SidecarMode::Auto,
+            no_autostart: false,
+            sidecar_template_path: None,
+            sidecar_startup_timeout_secs: 10,
+            command: vec!["codex".to_string()],
+            authority_cli: crate::authority::AuthorityCli::Unset,
+            authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
+            user_config_path: None,
+        };
+        let resolved = super::resolve_sidecar_template_path(&args, &user_cfg);
+        assert_eq!(resolved, Some(user_cfg));
     }
 }

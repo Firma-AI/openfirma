@@ -10,6 +10,7 @@
 //! `STOP_GRACE`, then `SIGKILL`, and joins the tee thread.
 
 use std::io::{BufRead, Write};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::mpsc;
@@ -40,9 +41,13 @@ pub struct SpawnRequest<'a> {
     pub cwd_template: Option<PathBuf>,
     pub firma_exe: PathBuf,
     pub startup_timeout: Duration,
-    /// Effective Authority URL injected into `[authority].url` of the
-    /// synthesized sidecar config. `None` leaves the section untouched.
+    /// Effective Authority URL injected into
+    /// `[sidecar.policy].authority_url` of the synthesized sidecar config.
+    /// `None` leaves the section untouched.
     pub authority_url: Option<&'a str>,
+    /// When `true`, synthesize an `http_proxy` interceptor instead of a
+    /// Unix-domain socket. Set from [`ResolvedProfile::use_http_proxy_sidecar`].
+    pub use_http_proxy_interceptor: bool,
 }
 
 /// Captured values from the seven-line ready sequence.
@@ -51,6 +56,7 @@ pub struct SpawnRequest<'a> {
 pub struct ReadyCapture {
     pub policy_bundle_version: String,
     pub authority_url: String,
+    pub interceptor_addr: String,
 }
 
 /// Outcome reported by the scraper thread to the main thread.
@@ -69,7 +75,7 @@ pub enum ScrapeResult {
 /// down (`SIGTERM` then `SIGKILL`) and cleans the marker directory.
 #[doc(hidden)]
 pub struct SidecarSupervisor {
-    sock_path: PathBuf,
+    endpoint: SidecarEndpoint,
     marker_dir: PathBuf,
     pid: u32,
     child: Option<Child>,
@@ -110,6 +116,8 @@ impl SidecarSupervisor {
         })?;
 
         let sock_path = req.marker_dir.join("sidecar.sock");
+        let use_http_proxy_interceptor = req.use_http_proxy_interceptor;
+        let max_attempts = if use_http_proxy_interceptor { 3 } else { 1 };
         let cfg_path = req.marker_dir.join("sidecar.toml");
         let log_path = req.marker_dir.join("sidecar.log");
         let pid_path = req.marker_dir.join("sidecar.pid");
@@ -117,86 +125,113 @@ impl SidecarSupervisor {
 
         // Pre-clean any leftover socket file from a crashed run.
         let _ = std::fs::remove_file(&sock_path);
-
-        crate::sidecar::config::synthesize(crate::sidecar::config::SynthesizeRequest {
-            explicit_template: req.template_path,
-            env_template: req.env_template.clone(),
-            cwd_template: req.cwd_template.clone(),
-            socket_path: &sock_path,
-            out_path: &cfg_path,
-            authority_url: req.authority_url,
-        })?;
-
-        let mut child = std::process::Command::new(&req.firma_exe)
-            .args(["sidecar", "--config"])
-            .arg(&cfg_path)
-            // Tracing on the spawned sidecar must stay on stderr; opting
-            // into FIRMA_LOG_FILE would silence the scraper.
-            .env_remove("FIRMA_LOG_FILE")
-            // Force ANSI off so the scraper sees the raw `: ready` suffix
-            // emitted by `log_ready_sequence`, regardless of TTY detection.
-            .env("NO_COLOR", "1")
-            .env("CLICOLOR", "0")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|error| RunError::SidecarStartupFailed {
-                reason: format!("spawn firma sidecar: {error}"),
-                log_path: log_path.clone(),
-            })?;
-        let pid = child.id();
-
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| RunError::SidecarStartupFailed {
-                reason: "stderr pipe missing".into(),
-                log_path: log_path.clone(),
+        let mut last_error: Option<RunError> = None;
+        let mut ready: Option<(Child, JoinHandle<()>, u32, ReadyCapture)> = None;
+        for attempt in 0..max_attempts {
+            let proxy_listen_addr = if use_http_proxy_interceptor {
+                Some(select_loopback_port())
+            } else {
+                None
+            };
+            crate::sidecar::config::synthesize(crate::sidecar::config::SynthesizeRequest {
+                agent_id: req.agent_id,
+                session_id: req.session_id,
+                explicit_template: req.template_path,
+                env_template: req.env_template.clone(),
+                cwd_template: req.cwd_template.clone(),
+                socket_path: &sock_path,
+                listen_addr: proxy_listen_addr,
+                out_path: &cfg_path,
+                authority_url: req.authority_url,
             })?;
 
-        let log_file =
-            std::fs::File::create(&log_path).map_err(|error| RunError::SidecarStartupFailed {
-                reason: format!("create log {}: {error}", log_path.display()),
-                log_path: log_path.clone(),
+            let mut child = std::process::Command::new(&req.firma_exe)
+                .args(["sidecar", "--config"])
+                .arg(&cfg_path)
+                .env_remove("FIRMA_LOG_FILE")
+                // Avoid cross-run collisions when multiple autostarted sidecars
+                // run concurrently on the same host.
+                .env("FIRMA_SIDECAR_HEALTH_BIND_ADDR", "127.0.0.1:0")
+                .env("NO_COLOR", "1")
+                .env("CLICOLOR", "0")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|error| RunError::SidecarStartupFailed {
+                    reason: format!("spawn firma sidecar: {error}"),
+                    log_path: log_path.clone(),
+                })?;
+            let pid = child.id();
+
+            let stderr = child
+                .stderr
+                .take()
+                .ok_or_else(|| RunError::SidecarStartupFailed {
+                    reason: "stderr pipe missing".into(),
+                    log_path: log_path.clone(),
+                })?;
+
+            let log_file = std::fs::File::create(&log_path).map_err(|error| {
+                RunError::SidecarStartupFailed {
+                    reason: format!("create log {}: {error}", log_path.display()),
+                    log_path: log_path.clone(),
+                }
             })?;
 
-        let reader = std::io::BufReader::new(stderr);
-        let (tx, rx) = mpsc::sync_channel::<ScrapeResult>(1);
-        let tee_handle = thread::Builder::new()
-            .name("firma-sidecar-tee".into())
-            .spawn(move || run_scraper(reader, log_file, tx))
-            .map_err(|error| RunError::SidecarStartupFailed {
-                reason: format!("spawn scraper thread: {error}"),
-                log_path: log_path.clone(),
-            })?;
+            let reader = std::io::BufReader::new(stderr);
+            let (tx, rx) = mpsc::sync_channel::<ScrapeResult>(1);
+            let tee_handle = thread::Builder::new()
+                .name("firma-sidecar-tee".into())
+                .spawn(move || run_scraper(reader, log_file, tx))
+                .map_err(|error| RunError::SidecarStartupFailed {
+                    reason: format!("spawn scraper thread: {error}"),
+                    log_path: log_path.clone(),
+                })?;
 
-        let outcome = rx.recv_timeout(req.startup_timeout);
-        let capture = match outcome {
-            Ok(ScrapeResult::Ready(capture)) => capture,
-            Ok(ScrapeResult::Eof) => {
-                let _ = child.wait();
-                let _ = tee_handle.join();
-                return Err(RunError::SidecarStartupFailed {
-                    reason: "sidecar stderr closed before 'ready'".into(),
-                    log_path,
-                });
+            match rx.recv_timeout(req.startup_timeout) {
+                Ok(ScrapeResult::Ready(capture)) => {
+                    ready = Some((child, tee_handle, pid, capture));
+                    break;
+                }
+                Ok(ScrapeResult::Eof) => {
+                    let _ = child.wait();
+                    let _ = tee_handle.join();
+                    last_error = Some(RunError::SidecarStartupFailed {
+                        reason: "sidecar stderr closed before 'ready'".into(),
+                        log_path: log_path.clone(),
+                    });
+                }
+                Ok(ScrapeResult::Error(reason)) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = tee_handle.join();
+                    last_error = Some(RunError::SidecarStartupFailed {
+                        reason,
+                        log_path: log_path.clone(),
+                    });
+                }
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = tee_handle.join();
+                    last_error = Some(RunError::SidecarReadyTimeout {
+                        timeout_secs: req.startup_timeout.as_secs(),
+                        log_path: log_path.clone(),
+                    });
+                }
             }
-            Ok(ScrapeResult::Error(reason)) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = tee_handle.join();
-                return Err(RunError::SidecarStartupFailed { reason, log_path });
+            if attempt + 1 < max_attempts {
+                thread::sleep(Duration::from_millis(120));
             }
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = tee_handle.join();
-                return Err(RunError::SidecarReadyTimeout {
-                    timeout_secs: req.startup_timeout.as_secs(),
-                    log_path,
-                });
-            }
+        }
+        let Some((child, tee_handle, pid, capture)) = ready else {
+            return Err(
+                last_error.unwrap_or_else(|| RunError::SidecarStartupFailed {
+                    reason: "sidecar autostart failed".into(),
+                    log_path: log_path.clone(),
+                }),
+            );
         };
 
         firma_stack::pidfile::write(&pid_path, pid)
@@ -217,12 +252,19 @@ impl SidecarSupervisor {
         tracing::info!(
             sandbox_id = req.sandbox_id,
             pid,
-            sock = %sock_path.display(),
+            endpoint = %capture.interceptor_addr,
             "autostarted sidecar ready"
         );
 
+        let endpoint = capture.interceptor_addr.parse::<SocketAddr>().map_or_else(
+            |_| SidecarEndpoint::Unix {
+                path: sock_path.clone(),
+            },
+            |addr| SidecarEndpoint::Tcp { addr },
+        );
+
         Ok(Self {
-            sock_path,
+            endpoint,
             marker_dir: req.marker_dir,
             pid,
             child: Some(child),
@@ -233,9 +275,7 @@ impl SidecarSupervisor {
     /// The UDS endpoint the spawned sidecar is listening on.
     #[must_use]
     pub fn endpoint(&self) -> SidecarEndpoint {
-        SidecarEndpoint::Unix {
-            path: self.sock_path.clone(),
-        }
+        self.endpoint.clone()
     }
 
     /// Pid of the spawned sidecar. Useful for integration tests that
@@ -283,7 +323,14 @@ impl Drop for SidecarSupervisor {
             let _ = handle.join();
         }
         // Best-effort marker cleanup. FIR-103 also GCs stale dirs.
-        let _ = std::fs::remove_dir_all(&self.marker_dir);
+        let keep_markers = std::env::var("FIRMA_RUN_KEEP_MARKERS")
+            .ok()
+            .is_some_and(|v| {
+                matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+            });
+        if !keep_markers {
+            let _ = std::fs::remove_dir_all(&self.marker_dir);
+        }
     }
 }
 
@@ -302,10 +349,20 @@ fn send_sigterm(pid: u32) {
 #[cfg(not(unix))]
 fn send_sigterm(_pid: u32) {}
 
+#[cfg(unix)]
+fn select_loopback_port() -> SocketAddr {
+    // Ask kernel for an ephemeral loopback port. Sidecar startup now logs
+    // the actual bound address from the active listener, so run-side scraping
+    // can consume the real endpoint without fixed/random port guessing.
+    SocketAddr::from(([127, 0, 0, 1], 0))
+}
+
 /// Substring matched on the third info line in the ready contract.
 const POLICY_TOKEN: &str = "policy bundle loaded";
 /// Substring matched on the fourth info line in the ready contract.
 const AUTHORITY_TOKEN: &str = "authority stream connected";
+/// Substring matched on the sixth info line in the ready contract.
+const INTERCEPTOR_TOKEN: &str = "interceptor listening";
 
 /// Loop body for the scraper / tee thread. Reads stderr line by line,
 /// captures version / authority values, signals readiness on the seventh
@@ -354,6 +411,10 @@ where
                         } else {
                             endpoint
                         };
+                    } else if plain.contains(INTERCEPTOR_TOKEN)
+                        && let Some(addr) = extract_kv(&plain, "addr")
+                    {
+                        capture.interceptor_addr = addr;
                     } else if line_marks_ready(&plain) {
                         signalled = true;
                         if tx.send(ScrapeResult::Ready(capture.clone())).is_err() {

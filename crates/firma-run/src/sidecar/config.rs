@@ -1,21 +1,126 @@
 //! Synthesize a sidecar TOML for an autostarted per-run sidecar.
 //!
 //! Strategy: inherit the operator-supplied sidecar template verbatim, then
-//! override the `[interceptor]` section to bind a Unix-domain socket inside
+//! normalize to the unified sectioned schema and override
+//! `[sidecar.interceptor]` to bind a Unix-domain socket inside
 //! the per-sandbox marker directory. When no template is available, write a
 //! minimal config (UDS interceptor only — no authority, no policy bundle).
 //!
 //! The synthesized file is written next to the socket so `firma sidecar
 //! status` (FIR-103) can reconstruct context.
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use crate::error::RunError;
+
+const DEMO_AUDIT_KEY_PEM: &str = "\
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgS+9b9zHd22EAeg9M
+bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
+3wlh7RZmOnI0E3wNCaMKd3B7Sd/fXknJ0WmI6BsrvfidxQEAYvsndbvx
+-----END PRIVATE KEY-----
+";
+
+const MINIMAL_MAPPING_RULES_TOML: &str = "\
+[[rules]]
+method = \"CONNECT\"
+host = \"auth.openai.com\"
+path = \"/\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"api.openai.com\"
+path = \"/\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"chatgpt.com\"
+path = \"/\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.chatgpt.com\"
+path = \"/\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"api.anthropic.com\"
+path = \"/\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"platform.claude.com\"
+path = \"/\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"claude.ai\"
+path = \"/\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"console.anthropic.com\"
+path = \"/\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.anthropic.com\"
+path = \"/\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+host = \"auth.openai.com\"
+path = \"/api/accounts/deviceauth/*\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+host = \"api.openai.com\"
+path = \"/v1/*\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+host = \"chatgpt.com\"
+path = \"/backend-api/*\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+host = \"*.chatgpt.com\"
+path = \"/backend-api/*\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+host = \"api.anthropic.com\"
+path = \"/api/*\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+host = \"platform.claude.com\"
+path = \"/v1/*\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+host = \"*.anthropic.com\"
+path = \"/*\"
+action_class = \"communication.external.send\"
+";
 
 /// Inputs for [`synthesize`].
 #[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct SynthesizeRequest<'a> {
+    /// Effective run agent/profile id.
+    pub agent_id: &'a str,
+    /// Effective run session id.
+    pub session_id: &'a str,
     /// Highest-priority template path (typically `--sidecar-config`).
     pub explicit_template: Option<&'a Path>,
     /// Fallback template path from `FIRMA_SIDECAR_CONFIG_FILE`.
@@ -24,10 +129,14 @@ pub struct SynthesizeRequest<'a> {
     pub cwd_template: Option<PathBuf>,
     /// UDS path the spawned sidecar must bind.
     pub socket_path: &'a Path,
+    /// Optional TCP listen address for autostart proxy mode.
+    /// When set, synthesis configures `[sidecar.interceptor]` for
+    /// `http_proxy` instead of `unix_socket`.
+    pub listen_addr: Option<SocketAddr>,
     /// Destination for the synthesized TOML.
     pub out_path: &'a Path,
-    /// Effective Authority URL to inject into `[authority].url`.
-    /// `None` leaves `[authority]` untouched (preserves any value from
+    /// Effective Authority URL to inject into `[sidecar.policy].authority_url`.
+    /// `None` leaves the value untouched (preserves any value from
     /// the operator template).
     pub authority_url: Option<&'a str>,
 }
@@ -63,10 +172,14 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
         }
         TemplateSource::Minimal => toml::Value::Table(toml::value::Table::new()),
     };
-    override_interceptor(&mut value, req.socket_path)?;
+    normalize_to_sectioned_sidecar(&mut value)?;
+    override_interceptor(&mut value, req.socket_path, req.listen_addr)?;
     if let Some(url) = req.authority_url {
         override_authority_url(&mut value, url)?;
     }
+    configure_preflight_capability(&mut value, req.out_path, req.agent_id, req.session_id)?;
+    ensure_audit_signing_key(&mut value, req.out_path)?;
+    ensure_mapping_rules(&mut value, req.out_path)?;
     write_atomic(req.out_path, &value)?;
     Ok(source)
 }
@@ -100,38 +213,233 @@ fn parse_template(path: &Path) -> Result<toml::Value, RunError> {
     })
 }
 
-fn override_interceptor(value: &mut toml::Value, socket_path: &Path) -> Result<(), RunError> {
-    let root = value
-        .as_table_mut()
-        .ok_or_else(|| RunError::Internal("sidecar template root is not a table".into()))?;
-    let entry = root
+fn override_interceptor(
+    value: &mut toml::Value,
+    socket_path: &Path,
+    listen_addr: Option<SocketAddr>,
+) -> Result<(), RunError> {
+    let sidecar = sidecar_table_mut(value)?;
+    let entry = sidecar
         .entry("interceptor".to_string())
         .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
     let table = entry
         .as_table_mut()
-        .ok_or_else(|| RunError::Internal("[interceptor] is not a table".into()))?;
-    table.insert(
-        "mode".to_string(),
-        toml::Value::String("unix_socket".to_string()),
-    );
-    table.insert(
-        "socket_path".to_string(),
-        toml::Value::String(socket_path.display().to_string()),
-    );
+        .ok_or_else(|| RunError::Internal("[sidecar.interceptor] is not a table".into()))?;
+    if let Some(addr) = listen_addr {
+        table.insert(
+            "mode".to_string(),
+            toml::Value::String("http_proxy".to_string()),
+        );
+        table.insert(
+            "listen_addr".to_string(),
+            toml::Value::String(addr.to_string()),
+        );
+    } else {
+        table.insert(
+            "mode".to_string(),
+            toml::Value::String("unix_socket".to_string()),
+        );
+        table.insert(
+            "socket_path".to_string(),
+            toml::Value::String(socket_path.display().to_string()),
+        );
+    }
     Ok(())
 }
 
 fn override_authority_url(value: &mut toml::Value, url: &str) -> Result<(), RunError> {
+    let sidecar = sidecar_table_mut(value)?;
+    let entry = sidecar
+        .entry("policy".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+    let table = entry
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[sidecar.policy] is not a table".into()))?;
+    table.insert(
+        "authority_url".to_string(),
+        toml::Value::String(url.to_string()),
+    );
+    Ok(())
+}
+
+fn normalize_to_sectioned_sidecar(value: &mut toml::Value) -> Result<(), RunError> {
+    let root = value
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("sidecar template root is not a table".into()))?;
+
+    if root.contains_key("sidecar") {
+        return Ok(());
+    }
+
+    let legacy_flat = std::mem::take(root);
+    let mut new_root = toml::value::Table::new();
+    new_root.insert("sidecar".to_string(), toml::Value::Table(legacy_flat));
+    *root = new_root;
+    Ok(())
+}
+
+fn sidecar_table_mut(value: &mut toml::Value) -> Result<&mut toml::value::Table, RunError> {
     let root = value
         .as_table_mut()
         .ok_or_else(|| RunError::Internal("sidecar template root is not a table".into()))?;
     let entry = root
-        .entry("authority".to_string())
+        .entry("sidecar".to_string())
         .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
-    let table = entry
+    entry
         .as_table_mut()
-        .ok_or_else(|| RunError::Internal("[authority] is not a table".into()))?;
-    table.insert("url".to_string(), toml::Value::String(url.to_string()));
+        .ok_or_else(|| RunError::Internal("[sidecar] is not a table".into()))
+}
+
+fn ensure_audit_signing_key(value: &mut toml::Value, out_path: &Path) -> Result<(), RunError> {
+    let sidecar = sidecar_table_mut(value)?;
+    let audit = sidecar
+        .entry("audit".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[sidecar.audit] is not a table".into()))?;
+
+    let has_path = audit
+        .get("signing_key_path")
+        .and_then(toml::Value::as_str)
+        .is_some_and(|v| !v.trim().is_empty());
+    let has_env = audit
+        .get("signing_key_env")
+        .and_then(toml::Value::as_str)
+        .is_some_and(|v| !v.trim().is_empty());
+    if has_path || has_env {
+        return Ok(());
+    }
+
+    let parent = out_path.parent().ok_or_else(|| {
+        RunError::Internal(format!(
+            "cannot resolve parent dir for synthesized sidecar config {}",
+            out_path.display()
+        ))
+    })?;
+    let key_path = parent.join("audit.key");
+    std::fs::write(&key_path, DEMO_AUDIT_KEY_PEM)
+        .map_err(|error| RunError::Internal(format!("write {}: {error}", key_path.display())))?;
+    audit.insert(
+        "signing_key_path".to_string(),
+        toml::Value::String(key_path.display().to_string()),
+    );
+    Ok(())
+}
+
+fn ensure_mapping_rules(value: &mut toml::Value, out_path: &Path) -> Result<(), RunError> {
+    let sidecar = sidecar_table_mut(value)?;
+    let mapping = sidecar
+        .entry("mapping".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[sidecar.mapping] is not a table".into()))?;
+
+    let parent = out_path.parent().ok_or_else(|| {
+        RunError::Internal(format!(
+            "cannot resolve parent dir for synthesized sidecar config {}",
+            out_path.display()
+        ))
+    })?;
+    let rules_path = parent.join("mapping-rules.toml");
+    if !rules_path.exists() {
+        std::fs::write(&rules_path, MINIMAL_MAPPING_RULES_TOML).map_err(|error| {
+            RunError::Internal(format!("write {}: {error}", rules_path.display()))
+        })?;
+    }
+
+    let has_rules_path = mapping
+        .get("rules_path")
+        .and_then(toml::Value::as_str)
+        .is_some_and(|v| !v.trim().is_empty());
+    if !has_rules_path {
+        mapping.insert(
+            "rules_path".to_string(),
+            toml::Value::String(rules_path.display().to_string()),
+        );
+    }
+
+    if !mapping.contains_key("default_protected") {
+        mapping.insert("default_protected".to_string(), toml::Value::Boolean(true));
+    }
+    Ok(())
+}
+
+fn configure_preflight_capability(
+    value: &mut toml::Value,
+    out_path: &Path,
+    agent_id: &str,
+    session_id: &str,
+) -> Result<(), RunError> {
+    let parent = out_path.parent().ok_or_else(|| {
+        RunError::Internal(format!(
+            "cannot resolve parent dir for synthesized sidecar config {}",
+            out_path.display()
+        ))
+    })?;
+    let authority_pub = parent.join("authority").join("keys").join("authority.pub");
+    if !authority_pub.is_file() {
+        return Ok(());
+    }
+
+    let sidecar = sidecar_table_mut(value)?;
+
+    let authority = sidecar
+        .entry("authority".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[sidecar.authority] is not a table".into()))?;
+    if authority
+        .get("public_key_path")
+        .and_then(toml::Value::as_str)
+        .is_none_or(|v| v.trim().is_empty())
+    {
+        authority.insert(
+            "public_key_path".to_string(),
+            toml::Value::String(authority_pub.display().to_string()),
+        );
+    }
+
+    let preflight = sidecar
+        .entry("preflight".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[sidecar.preflight] is not a table".into()))?;
+    if !preflight.contains_key("agent_id") {
+        preflight.insert(
+            "agent_id".to_string(),
+            toml::Value::String(agent_id.to_string()),
+        );
+    }
+    if !preflight.contains_key("session_id") {
+        preflight.insert(
+            "session_id".to_string(),
+            toml::Value::String(session_id.to_string()),
+        );
+    }
+    if !preflight.contains_key("requested_actions") {
+        preflight.insert(
+            "requested_actions".to_string(),
+            toml::Value::Array(vec![toml::Value::String(
+                "communication.external.send".to_string(),
+            )]),
+        );
+    }
+    if !preflight.contains_key("resource_scope") {
+        preflight.insert(
+            "resource_scope".to_string(),
+            toml::Value::String("*".to_string()),
+        );
+    }
+    if !preflight.contains_key("authority_pub_key_path") {
+        preflight.insert(
+            "authority_pub_key_path".to_string(),
+            toml::Value::String(authority_pub.display().to_string()),
+        );
+    }
+    if !preflight.contains_key("ttl_seconds") {
+        preflight.insert("ttl_seconds".to_string(), toml::Value::Integer(900));
+    }
+
     Ok(())
 }
 

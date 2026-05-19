@@ -17,6 +17,11 @@ fn is_loopback_addr(addr: std::net::SocketAddr) -> bool {
     addr.ip().is_loopback()
 }
 
+pub struct SpawnedInterceptor {
+    pub handle: tokio::task::JoinHandle<()>,
+    pub listen_addr: String,
+}
+
 /// Spawn the configured interceptor as a background tokio task.
 ///
 /// # Errors
@@ -28,7 +33,7 @@ pub fn spawn_interceptor(
     config: &config::SidecarConfig,
     handler: Arc<RequestHandler>,
     cancel: CancellationToken,
-) -> anyhow::Result<tokio::task::JoinHandle<()>> {
+) -> anyhow::Result<SpawnedInterceptor> {
     let ic = &config.interceptor;
 
     match ic.mode {
@@ -47,25 +52,40 @@ pub fn spawn_interceptor(
 
     match ic.mode {
         InterceptorMode::HttpProxy => {
+            let std_listener = std::net::TcpListener::bind(ic.listen_addr)?;
+            std_listener.set_nonblocking(true)?;
+            let bound_addr = std_listener.local_addr()?;
+            let listener = tokio::net::TcpListener::from_std(std_listener)?;
             let interceptor = interceptor::http::HttpInterceptor::new(ic.listen_addr)
                 .with_https_mitm(ic.https_mitm.clone(), config.ca.dir.clone())
                 .with_max_request_body_bytes(ic.max_request_body_bytes)
                 .with_connect_relay(ic.connect_relay.clone());
             tracing::debug!(listen_addr = %ic.listen_addr, "HTTP proxy interceptor configured");
-            Ok(tokio::spawn(async move {
-                if let Err(e) = interceptor.run(handler, cancel).await {
+            let handle = tokio::spawn(async move {
+                if let Err(e) = interceptor
+                    .run_with_listener(listener, handler, cancel)
+                    .await
+                {
                     tracing::error!(error = %e, "HTTP proxy interceptor failed");
                 }
-            }))
+            });
+            Ok(SpawnedInterceptor {
+                handle,
+                listen_addr: bound_addr.to_string(),
+            })
         }
         InterceptorMode::Grpc => {
             let interceptor = interceptor::grpc::GrpcInterceptor::new(ic.listen_addr);
             tracing::debug!(listen_addr = %ic.listen_addr, "gRPC interceptor configured");
-            Ok(tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 if let Err(e) = interceptor.run(handler, cancel).await {
                     tracing::error!(error = %e, "gRPC interceptor failed");
                 }
-            }))
+            });
+            Ok(SpawnedInterceptor {
+                handle,
+                listen_addr: ic.listen_addr.to_string(),
+            })
         }
         #[cfg(unix)]
         InterceptorMode::UnixSocket => {
@@ -102,11 +122,15 @@ pub fn spawn_interceptor(
             let interceptor =
                 interceptor::unix_socket::UnixSocketInterceptor::new(socket_path.clone());
             tracing::debug!(socket_path = %socket_path.display(), "Unix socket interceptor configured");
-            Ok(tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 if let Err(e) = interceptor.run(handler, cancel).await {
                     tracing::error!(error = %e, "Unix socket interceptor failed");
                 }
-            }))
+            });
+            Ok(SpawnedInterceptor {
+                handle,
+                listen_addr: socket_path.display().to_string(),
+            })
         }
     }
 }

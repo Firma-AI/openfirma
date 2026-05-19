@@ -27,19 +27,26 @@ fn missing_template_writes_minimal_config() {
     let out = tmp.path().join("sidecar.toml");
     let sock = tmp.path().join("sidecar.sock");
     let source = synthesize(SynthesizeRequest {
+        agent_id: "generic",
+        session_id: "sess",
         explicit_template: None,
         env_template: None,
         cwd_template: None,
         socket_path: &sock,
+        listen_addr: None,
         out_path: &out,
         authority_url: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Minimal);
     let value = read(&out);
-    let interceptor = value
+    let sidecar = value
         .as_table()
-        .and_then(|t| t.get("interceptor"))
+        .and_then(|t| t.get("sidecar"))
+        .and_then(|v| v.as_table())
+        .expect("sidecar table");
+    let interceptor = sidecar
+        .get("interceptor")
         .and_then(|v| v.as_table())
         .expect("interceptor table");
     assert_eq!(
@@ -49,6 +56,16 @@ fn missing_template_writes_minimal_config() {
     assert_eq!(
         interceptor.get("socket_path").and_then(|v| v.as_str()),
         Some(sock.display().to_string()).as_deref()
+    );
+    let mapping = sidecar
+        .get("mapping")
+        .and_then(|v| v.as_table())
+        .expect("mapping table");
+    assert_eq!(
+        mapping
+            .get("default_protected")
+            .and_then(toml::Value::as_bool),
+        Some(true)
     );
 }
 
@@ -78,10 +95,13 @@ paths = ["/etc/firma/cap.toml"]
     let out = tmp.path().join("sidecar.toml");
     let sock = tmp.path().join("sidecar.sock");
     let source = synthesize(SynthesizeRequest {
+        agent_id: "generic",
+        session_id: "sess",
         explicit_template: Some(&template),
         env_template: None,
         cwd_template: None,
         socket_path: &sock,
+        listen_addr: None,
         out_path: &out,
         authority_url: None,
     })
@@ -90,8 +110,12 @@ paths = ["/etc/firma/cap.toml"]
     assert_eq!(source, TemplateSource::Explicit(template));
     let value = read(&out);
     let root = value.as_table().expect("root table");
+    let sidecar = root
+        .get("sidecar")
+        .and_then(|v| v.as_table())
+        .expect("sidecar");
 
-    let interceptor = root
+    let interceptor = sidecar
         .get("interceptor")
         .and_then(|v| v.as_table())
         .expect("interceptor");
@@ -117,8 +141,8 @@ paths = ["/etc/firma/cap.toml"]
         mitm.get("enabled").and_then(toml::Value::as_bool),
         Some(false)
     );
-    assert!(root.contains_key("mapping"));
-    assert!(root.contains_key("capability_seed"));
+    assert!(sidecar.contains_key("mapping"));
+    assert!(sidecar.contains_key("capability_seed"));
 }
 
 #[test]
@@ -136,10 +160,13 @@ fn priority_order_explicit_over_env_over_cwd() {
     let sock = tmp.path().join("sidecar.sock");
 
     let source = synthesize(SynthesizeRequest {
+        agent_id: "generic",
+        session_id: "sess",
         explicit_template: Some(&explicit),
         env_template: Some(env.clone()),
         cwd_template: Some(cwd.clone()),
         socket_path: &sock,
+        listen_addr: None,
         out_path: &out,
         authority_url: None,
     })
@@ -147,10 +174,13 @@ fn priority_order_explicit_over_env_over_cwd() {
     assert_eq!(source, TemplateSource::Explicit(explicit));
 
     let source = synthesize(SynthesizeRequest {
+        agent_id: "generic",
+        session_id: "sess",
         explicit_template: None,
         env_template: Some(env.clone()),
         cwd_template: Some(cwd.clone()),
         socket_path: &sock,
+        listen_addr: None,
         out_path: &out,
         authority_url: None,
     })
@@ -158,10 +188,13 @@ fn priority_order_explicit_over_env_over_cwd() {
     assert_eq!(source, TemplateSource::Env(env));
 
     let source = synthesize(SynthesizeRequest {
+        agent_id: "generic",
+        session_id: "sess",
         explicit_template: None,
         env_template: None,
         cwd_template: Some(cwd.clone()),
         socket_path: &sock,
+        listen_addr: None,
         out_path: &out,
         authority_url: None,
     })
@@ -175,10 +208,13 @@ fn nonexistent_template_paths_fall_through_to_minimal() {
     let out = tmp.path().join("sidecar.toml");
     let sock = tmp.path().join("sidecar.sock");
     let source = synthesize(SynthesizeRequest {
+        agent_id: "generic",
+        session_id: "sess",
         explicit_template: Some(&PathBuf::from("/does/not/exist/explicit.toml")),
         env_template: Some(PathBuf::from("/does/not/exist/env.toml")),
         cwd_template: Some(PathBuf::from("/does/not/exist/cwd.toml")),
         socket_path: &sock,
+        listen_addr: None,
         out_path: &out,
         authority_url: None,
     })

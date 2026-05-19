@@ -2,6 +2,7 @@
 //! kill on Drop. Mirrors `firma-run/src/sidecar/supervisor.rs` (FIR-102).
 
 use std::io::{BufRead, Write};
+use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::mpsc;
@@ -17,6 +18,18 @@ pub const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
 
 /// Grace period between `SIGTERM` and `SIGKILL` in [`Drop`].
 const STOP_GRACE: Duration = Duration::from_secs(5);
+const MAX_BIND_ATTEMPTS: usize = 8;
+const AUTOSTART_LOCAL_DEVELOPER_POLICY: &str = r#"// Local autostart profile for `firma run`.
+//
+// Keeps default operation strict while allowing outbound communication flows
+// that are further constrained by sidecar mapping, capability scope, and
+// session-bound issued tokens.
+permit(
+    principal,
+    action == Firma::Action::"communication.external.send",
+    resource
+);
+"#;
 
 /// Inputs to [`AuthoritySupervisor::spawn`].
 #[doc(hidden)]
@@ -114,32 +127,20 @@ impl AuthoritySupervisor {
         std::fs::create_dir_all(&keys_dir)
             .map_err(|e| RunError::Internal(format!("mkdir {}: {e}", keys_dir.display())))?;
 
-        let cedar_text = firma_authority::cedar_for(req.profile_name).map_err(|_| {
-            RunError::AuthorityUnknownProfile {
-                name: req.profile_name.to_string(),
-            }
-        })?;
+        let cedar_text = if req.profile_name == firma_authority::DEFAULT_PROFILE {
+            AUTOSTART_LOCAL_DEVELOPER_POLICY
+        } else {
+            firma_authority::cedar_for(req.profile_name).map_err(|_| {
+                RunError::AuthorityUnknownProfile {
+                    name: req.profile_name.to_string(),
+                }
+            })?
+        };
         std::fs::write(&cedar_path, cedar_text)
             .map_err(|e| RunError::Internal(format!("write {}: {e}", cedar_path.display())))?;
 
         std::fs::write(&revocation_path, b"")
             .map_err(|e| RunError::Internal(format!("write {}: {e}", revocation_path.display())))?;
-
-        let authority_cfg = format!(
-            "listen_addr = \"[::1]:50051\"\n\
-             policy_dir = \"{policy}\"\n\
-             issuance_policy_dir = \"{policy}\"\n\
-             revocation_file = \"{rev}\"\n\
-             max_ttl_seconds = 3600\n\
-             key_file = \"{key}\"\n\
-             log_level = \"info\"\n\
-             bundle_ttl_seconds = 30\n",
-            policy = policy_dir.display(),
-            rev = revocation_path.display(),
-            key = key_path.display(),
-        );
-        std::fs::write(&authority_toml, authority_cfg)
-            .map_err(|e| RunError::Internal(format!("write {}: {e}", authority_toml.display())))?;
 
         let key_status = std::process::Command::new(&req.firma_exe)
             .args(["authority", "generate-key", "--output"])
@@ -159,71 +160,122 @@ impl AuthoritySupervisor {
             });
         }
 
-        let mut child = std::process::Command::new(&req.firma_exe)
-            .args(["authority", "--config"])
-            .arg(&authority_toml)
-            .env_remove("FIRMA_LOG_FILE")
-            .env("NO_COLOR", "1")
-            .env("CLICOLOR", "0")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| RunError::AuthorityStartupFailed {
-                reason: format!("spawn firma authority: {e}"),
-                log_path: log_path.clone(),
-            })?;
-        let pid = child.id();
-
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| RunError::AuthorityStartupFailed {
-                reason: "stderr pipe missing".into(),
-                log_path: log_path.clone(),
-            })?;
-        let log_file =
-            std::fs::File::create(&log_path).map_err(|e| RunError::AuthorityStartupFailed {
-                reason: format!("create log {}: {e}", log_path.display()),
-                log_path: log_path.clone(),
+        let mut capture: Option<ReadyCapture> = None;
+        let mut child: Option<Child> = None;
+        let mut pid: u32 = 0;
+        let mut tee_handle: Option<JoinHandle<()>> = None;
+        let mut last_error: Option<RunError> = None;
+        for attempt in 0..MAX_BIND_ATTEMPTS {
+            let listen_addr = select_loopback_v6_port()?;
+            let authority_cfg = format!(
+                "[authority]\n\
+                 listen_addr = \"{listen_addr}\"\n\
+                 policy_dir = \"{policy}\"\n\
+                 issuance_policy_dir = \"{policy}\"\n\
+                 revocation_file = \"{rev}\"\n\
+                 max_ttl_seconds = 3600\n\
+                 key_file = \"{key}\"\n\
+                 log_level = \"info\"\n\
+                 bundle_ttl_seconds = 30\n",
+                policy = policy_dir.display(),
+                rev = revocation_path.display(),
+                key = key_path.display(),
+            );
+            std::fs::write(&authority_toml, authority_cfg).map_err(|e| {
+                RunError::Internal(format!("write {}: {e}", authority_toml.display()))
             })?;
 
-        let reader = std::io::BufReader::new(stderr);
-        let (tx, rx) = mpsc::sync_channel::<ScrapeResult>(1);
-        let tee_handle = thread::Builder::new()
-            .name("firma-authority-tee".into())
-            .spawn(move || run_scraper(reader, log_file, tx))
-            .map_err(|e| RunError::AuthorityStartupFailed {
-                reason: format!("spawn scraper thread: {e}"),
-                log_path: log_path.clone(),
-            })?;
+            let mut try_child = std::process::Command::new(&req.firma_exe)
+                .args(["authority", "--config"])
+                .arg(&authority_toml)
+                .env_remove("FIRMA_LOG_FILE")
+                .env("NO_COLOR", "1")
+                .env("CLICOLOR", "0")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| RunError::AuthorityStartupFailed {
+                    reason: format!("spawn firma authority: {e}"),
+                    log_path: log_path.clone(),
+                })?;
+            let try_pid = try_child.id();
+            let stderr =
+                try_child
+                    .stderr
+                    .take()
+                    .ok_or_else(|| RunError::AuthorityStartupFailed {
+                        reason: "stderr pipe missing".into(),
+                        log_path: log_path.clone(),
+                    })?;
+            let log_file =
+                std::fs::File::create(&log_path).map_err(|e| RunError::AuthorityStartupFailed {
+                    reason: format!("create log {}: {e}", log_path.display()),
+                    log_path: log_path.clone(),
+                })?;
+            let reader = std::io::BufReader::new(stderr);
+            let (tx, rx) = mpsc::sync_channel::<ScrapeResult>(1);
+            let try_tee_handle = thread::Builder::new()
+                .name("firma-authority-tee".into())
+                .spawn(move || run_scraper(reader, log_file, tx))
+                .map_err(|e| RunError::AuthorityStartupFailed {
+                    reason: format!("spawn scraper thread: {e}"),
+                    log_path: log_path.clone(),
+                })?;
 
-        let capture = match rx.recv_timeout(req.startup_timeout) {
-            Ok(ScrapeResult::Ready(c)) => c,
-            Ok(ScrapeResult::Eof) => {
-                let _ = child.wait();
-                let _ = tee_handle.join();
-                return Err(RunError::AuthorityStartupFailed {
-                    reason: "authority stderr closed before 'ready'".into(),
-                    log_path,
-                });
+            match rx.recv_timeout(req.startup_timeout) {
+                Ok(ScrapeResult::Ready(c)) => {
+                    capture = Some(c);
+                    child = Some(try_child);
+                    pid = try_pid;
+                    tee_handle = Some(try_tee_handle);
+                    break;
+                }
+                Ok(ScrapeResult::Eof) => {
+                    let _ = try_child.wait();
+                    let _ = try_tee_handle.join();
+                    last_error = Some(RunError::AuthorityStartupFailed {
+                        reason: "authority stderr closed before 'ready'".into(),
+                        log_path: log_path.clone(),
+                    });
+                }
+                Ok(ScrapeResult::Error(reason)) => {
+                    let _ = try_child.kill();
+                    let _ = try_child.wait();
+                    let _ = try_tee_handle.join();
+                    last_error = Some(RunError::AuthorityStartupFailed {
+                        reason,
+                        log_path: log_path.clone(),
+                    });
+                }
+                Err(_) => {
+                    let _ = try_child.kill();
+                    let _ = try_child.wait();
+                    let _ = try_tee_handle.join();
+                    last_error = Some(RunError::AuthorityReadyTimeout {
+                        timeout_secs: req.startup_timeout.as_secs(),
+                        log_path: log_path.clone(),
+                    });
+                }
             }
-            Ok(ScrapeResult::Error(reason)) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = tee_handle.join();
-                return Err(RunError::AuthorityStartupFailed { reason, log_path });
+            if attempt + 1 < MAX_BIND_ATTEMPTS {
+                thread::sleep(Duration::from_millis(120));
             }
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = tee_handle.join();
-                return Err(RunError::AuthorityReadyTimeout {
-                    timeout_secs: req.startup_timeout.as_secs(),
-                    log_path,
-                });
-            }
-        };
+        }
+        let capture = capture.ok_or_else(|| {
+            last_error.unwrap_or_else(|| RunError::AuthorityStartupFailed {
+                reason: "authority autostart failed".into(),
+                log_path: log_path.clone(),
+            })
+        })?;
+        let child = child.ok_or_else(|| RunError::AuthorityStartupFailed {
+            reason: "authority child missing after startup".into(),
+            log_path: log_path.clone(),
+        })?;
+        let tee_handle = tee_handle.ok_or_else(|| RunError::AuthorityStartupFailed {
+            reason: "authority tee thread missing after startup".into(),
+            log_path: log_path.clone(),
+        })?;
 
         firma_stack::pidfile::write(&pid_path, pid)
             .map_err(|e| RunError::Internal(format!("write authority.pid: {e}")))?;
@@ -302,7 +354,14 @@ impl Drop for AuthoritySupervisor {
         if let Some(h) = self.tee_handle.take() {
             let _ = h.join();
         }
-        let _ = std::fs::remove_dir_all(&self.marker_dir);
+        let keep_markers = std::env::var("FIRMA_RUN_KEEP_MARKERS")
+            .ok()
+            .is_some_and(|v| {
+                matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+            });
+        if !keep_markers {
+            let _ = std::fs::remove_dir_all(&self.marker_dir);
+        }
     }
 }
 
@@ -316,6 +375,17 @@ fn send_sigterm(pid: u32) {
     if let Err(e) = nix::sys::signal::kill(target, nix::sys::signal::Signal::SIGTERM) {
         warn!(error = %e, pid, "SIGTERM to authority failed");
     }
+}
+
+#[cfg(unix)]
+fn select_loopback_v6_port() -> Result<SocketAddr, RunError> {
+    let addr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0));
+    let listener =
+        TcpListener::bind(addr).map_err(|e| RunError::Internal(format!("bind [::1]:0: {e}")))?;
+    let selected = listener
+        .local_addr()
+        .map_err(|e| RunError::Internal(format!("read local addr for authority port: {e}")))?;
+    Ok(selected)
 }
 
 #[cfg(not(unix))]
