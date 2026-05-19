@@ -38,6 +38,17 @@ path = "/api/accounts/deviceauth/*"
 action_class = "communication.external.send"
 
 [[rules]]
+method = "POST"
+host = "auth.openai.com"
+path = "/oauth/token"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "auth.openai.com"
+path = "/oauth/*"
+action_class = "communication.external.send"
+
+[[rules]]
 host = "api.openai.com"
 path = "/v1/*"
 action_class = "communication.external.send"
