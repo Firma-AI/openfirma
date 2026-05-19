@@ -88,3 +88,24 @@ jobs:
 
       - name: Build
         run: cargo build --workspace
+
+  fuzz-check:
+    name: Fuzz targets (check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz -> fuzz/target
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check fuzz targets
+        run: cargo check
+        working-directory: fuzz
