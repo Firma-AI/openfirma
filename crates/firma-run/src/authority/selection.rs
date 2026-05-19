@@ -26,7 +26,8 @@ pub enum AuthorityCli {
 /// Final, resolved Authority selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthoritySelection {
-    /// Use a local Mini Authority on `[::1]:50051`; autostart if missing.
+    /// Use a local Mini Authority on loopback with a per-run ephemeral port;
+    /// autostart if missing.
     Local,
     /// Use a remote Authority at the given URL.
     Remote(String),
@@ -35,7 +36,7 @@ pub enum AuthoritySelection {
 /// User-visible prompt text. Spec §4 step 4 verbatim.
 pub const PROMPT_TEXT: &str = "\
 No Authority is configured for this project.
-firma run can start a local Mini Authority for development on [::1]:50051.
+firma run can start a local Mini Authority for development on loopback ([::1]) using a per-run ephemeral port.
 This is suitable for a single developer on a trusted workstation.
 
 Start a local Mini Authority? [y/N]: ";
