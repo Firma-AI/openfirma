@@ -530,10 +530,8 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e:?}"))
     }
 
-    const FIRMA_SCHEMA: &str = include_str!("../../firma-authority/schema.cedarschema");
-
     fn firma_schema() -> Schema {
-        let (schema, _) = Schema::from_cedarschema_str(FIRMA_SCHEMA)
+        let (schema, _) = Schema::from_cedarschema_str(firma_core::cedar::FIRMA_SCHEMA)
             .unwrap_or_else(|e| panic!("schema parse failed: {e}"));
         schema
     }

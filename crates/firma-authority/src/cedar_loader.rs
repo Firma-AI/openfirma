@@ -10,13 +10,13 @@ use tokio::task::JoinHandle;
 
 use firma_core::policy::PolicyBundle;
 
-/// Canonical Firma enforcement schema, embedded at compile time.
+/// Canonical Firma enforcement schema, re-exported from `firma-core`.
 ///
 /// Used as the default schema when no explicit `schema_path` is configured.
 /// Overriding is intentional — operators who extend the action registry
 /// can set `schema_path` in the authority config to point to their custom
 /// `.cedarschema` or `.json` file.
-pub(crate) const DEFAULT_SCHEMA: &str = include_str!("../schema.cedarschema");
+pub(crate) const DEFAULT_SCHEMA: &str = firma_core::cedar::FIRMA_SCHEMA;
 
 /// All mutable policy state kept under a single lock for atomic swaps.
 struct PolicyState {

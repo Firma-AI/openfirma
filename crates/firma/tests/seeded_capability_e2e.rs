@@ -34,8 +34,11 @@ fn issued_token_seeds_capability_map_and_admits_stage1() {
         "permit(principal, action, resource);",
     )
     .unwrap();
-    let schema_src = include_str!("../../firma-authority/schema.cedarschema");
-    std::fs::write(policies.join("schema.cedarschema"), schema_src).unwrap();
+    std::fs::write(
+        policies.join("schema.cedarschema"),
+        firma_core::cedar::FIRMA_SCHEMA,
+    )
+    .unwrap();
 
     // 1. Generate the Ed25519 key pair via `firma authority generate-key`.
     let key_path = tmp.path().join("firma-authority.key");

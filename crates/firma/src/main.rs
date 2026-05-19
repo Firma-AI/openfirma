@@ -2,6 +2,7 @@ mod args;
 mod doctor;
 mod log;
 mod monitor;
+mod policy;
 mod services;
 mod signal;
 
@@ -24,6 +25,7 @@ fn main() -> ExitCode {
         Command::DnsStub(a) => services::dns_stub::run(a),
         Command::Doctor(a) => Ok(services::doctor::run(a)),
         Command::Monitor(a) => Ok(services::monitor::run(a)),
+        Command::Policy(a) => services::policy::run(a),
         Command::ProxyBridge(a) => services::proxy_bridge::run(a),
         Command::Run(a) => services::run::run(a),
         Command::Sidecar(a) => block_on_async(services::sidecar::run(a)),
