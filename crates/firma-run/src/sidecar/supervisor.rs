@@ -10,13 +10,13 @@
 //! `STOP_GRACE`, then `SIGKILL`, and joins the tee thread.
 
 use std::io::{BufRead, Write};
+#[cfg(unix)]
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-#[cfg(unix)]
-use std::net::SocketAddr;
 
 use tracing::{debug, warn};
 

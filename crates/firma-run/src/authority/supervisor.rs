@@ -2,13 +2,13 @@
 //! kill on Drop. Mirrors `firma-run/src/sidecar/supervisor.rs` (FIR-102).
 
 use std::io::{BufRead, Write};
+#[cfg(unix)]
+use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-#[cfg(unix)]
-use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, TcpListener};
 
 use tracing::{debug, warn};
 
