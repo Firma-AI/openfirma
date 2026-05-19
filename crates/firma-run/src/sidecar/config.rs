@@ -12,15 +12,11 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-use crate::error::RunError;
+use p256::ecdsa::SigningKey;
+use p256::pkcs8::{EncodePrivateKey, LineEnding};
+use sha2::{Digest, Sha256};
 
-const DEMO_AUDIT_KEY_PEM: &str = "\
------BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgS+9b9zHd22EAeg9M
-bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
-3wlh7RZmOnI0E3wNCaMKd3B7Sd/fXknJ0WmI6BsrvfidxQEAYvsndbvx
------END PRIVATE KEY-----
-";
+use crate::error::RunError;
 
 const MINIMAL_MAPPING_RULES_TOML: &str = "\
 [[rules]]
@@ -317,13 +313,27 @@ fn ensure_audit_signing_key(value: &mut toml::Value, out_path: &Path) -> Result<
         ))
     })?;
     let key_path = parent.join("audit.key");
-    std::fs::write(&key_path, DEMO_AUDIT_KEY_PEM)
+    let pem = generate_ephemeral_audit_key_pem()?;
+    std::fs::write(&key_path, pem)
         .map_err(|error| RunError::Internal(format!("write {}: {error}", key_path.display())))?;
     audit.insert(
         "signing_key_path".to_string(),
         toml::Value::String(key_path.display().to_string()),
     );
     Ok(())
+}
+
+fn generate_ephemeral_audit_key_pem() -> Result<String, RunError> {
+    // Derive a fresh P-256 private key per run marker from a per-process UUID.
+    // This avoids shipping static PEM key material in source while preserving
+    // zero-touch autostart behavior.
+    let seed = Sha256::digest(uuid::Uuid::new_v4().as_bytes());
+    let signing_key = SigningKey::from_slice(seed.as_ref())
+        .map_err(|error| RunError::Internal(format!("generate audit signing key: {error}")))?;
+    signing_key
+        .to_pkcs8_pem(LineEnding::LF)
+        .map(|pem| pem.to_string())
+        .map_err(|error| RunError::Internal(format!("encode audit signing key pem: {error}")))
 }
 
 fn ensure_mapping_rules(value: &mut toml::Value, out_path: &Path) -> Result<(), RunError> {
