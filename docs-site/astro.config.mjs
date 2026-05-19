@@ -2,10 +2,8 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import mermaid from 'astro-mermaid';
 import starlightBlog from 'starlight-blog';
-
 const isGitHubPages = process.env.GITHUB_PAGES === 'true';
-const base = isGitHubPages ? '/firma-oss' : '/';
-
+const base = isGitHubPages ? '/openfirma' : '/';
 export default defineConfig({
   site: 'https://firma-ai.github.io',
   base,
@@ -29,7 +27,7 @@ export default defineConfig({
       },
       customCss: ['./src/styles/fonts.css', './src/styles/custom.css'],
       editLink: {
-        baseUrl: 'https://github.com/firma-ai/firma-oss/edit/main/docs-site/',
+        baseUrl: 'https://github.com/firma-ai/openfirma/edit/main/docs-site/',
       },
       lastUpdated: true,
       pagefind: true,
@@ -56,7 +54,7 @@ export default defineConfig({
         {
           icon: 'github',
           label: 'GitHub',
-          href: 'https://github.com/firma-ai/firma-oss',
+          href: 'https://github.com/firma-ai/openfirma',
         },
       ],
       sidebar: [
