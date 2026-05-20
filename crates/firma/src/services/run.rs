@@ -26,7 +26,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     };
     let input = RunInput {
         profile: args.profile,
-        config: args.config,
+        config: args.config.clone(),
         backend: args.backend.map(Into::into),
         sidecar_endpoint: args.sidecar_endpoint,
         capability_file: args.capability_file,
@@ -40,7 +40,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         command: args.command,
         authority_cli,
         authority_profile: args.authority_profile,
-        user_config_path: None,
+        user_config_path: args.config.clone(),
     };
     match execute_run(&input) {
         Ok(code) => Ok(exit_code(code)),

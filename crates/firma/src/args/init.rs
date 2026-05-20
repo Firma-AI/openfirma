@@ -33,9 +33,9 @@ pub struct InitArgs {
     #[arg(long)]
     pub workspace: Option<PathBuf>,
 
-    /// Directory to write scaffolded files into (default: current directory).
-    #[arg(long, short = 'o', default_value = ".")]
-    pub output_dir: PathBuf,
+    /// Directory to write scaffolded files into (default: firma config dir).
+    #[arg(long, short = 'o')]
+    pub output_dir: Option<PathBuf>,
 
     /// Print generated files to stdout without writing to disk.
     #[arg(long)]

@@ -6,6 +6,9 @@
 # Backend: bwrap (Linux). Hardening knobs are read by the bwrap backend in
 # crates/firma-run/src/backend/linux_bwrap.rs.
 
+[authority]
+type = "local"
+
 [profiles.generic]
 backend = "bwrap"
 
