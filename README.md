@@ -6,12 +6,12 @@
 <img src="docs-site/src/assets/Subtitle.gif" alt="OpenFirma" width="600" />
 
   <br/>
+<br/>
 
   **Every call passes through a sidecar that decides whether it happens.**
   <br/>
   Policy in, signed decision out. Open by default. Deterministic.
 
-  <br/>
 
   [Docs](https://firma-ai.github.io/openfirma)
   &nbsp;·&nbsp;
