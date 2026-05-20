@@ -11,6 +11,7 @@ static POSTURE_DEV_DELETE: &str =
 
 /// Scaffold a new agent config directory interactively.
 #[derive(Debug, Args)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct InitArgs {
     /// Agent slug used as the `agent_id` in the generated config (e.g. "my-agent").
     #[arg(long, short = 'n')]
@@ -33,7 +34,12 @@ pub struct InitArgs {
     #[arg(long)]
     pub workspace: Option<PathBuf>,
 
-    /// Directory to write scaffolded files into (default: firma config dir).
+    /// Write scaffolded files into the global config dir (`XDG_CONFIG_HOME/firma`).
+    /// Conflicts with `--output-dir`.
+    #[arg(long, conflicts_with = "output_dir")]
+    pub global: bool,
+
+    /// Directory to write scaffolded files into (default: current directory).
     #[arg(long, short = 'o')]
     pub output_dir: Option<PathBuf>,
 
@@ -48,6 +54,10 @@ pub struct InitArgs {
     /// Print the posture × mapping template catalogue and exit.
     #[arg(long)]
     pub list_templates: bool,
+
+    /// Skip all interactive prompts and use defaults or provided flags.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 }
 
 /// Cedar enforcement posture for `firma init`.

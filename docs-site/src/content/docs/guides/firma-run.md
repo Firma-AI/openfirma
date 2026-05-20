@@ -80,7 +80,13 @@ on some distros) or pick a different backend.
 firma init --name my-agent --posture dev --mapping anthropic
 ```
 
-This writes to the default Firma config directory (`~/.config/firma` on Linux/macOS). To write somewhere else, pass `--output-dir`:
+This writes to the **current directory** by default. To write to the global Firma config directory (`~/.config/firma` on Linux/macOS), pass `--global`:
+
+```bash
+firma init --name my-agent --posture dev --mapping anthropic --global
+```
+
+To write to a specific directory, pass `--output-dir`:
 
 ```bash
 firma init --name my-agent --posture dev --mapping anthropic --output-dir .local
@@ -89,7 +95,7 @@ firma init --name my-agent --posture dev --mapping anthropic --output-dir .local
 Generated layout:
 
 ```
-~/.config/firma/
+./
   firma.toml                   — sidecar + authority unified config
   firma-run.toml               — runtime profiles (workspace mounts, identity)
   mapping-rules.toml           — base mapping rules
@@ -102,7 +108,7 @@ Generated layout:
     revocations.txt
 ```
 
-`firma init` is idempotent — re-running preserves existing files including the authority keypair; pass `--force` to overwrite everything. Preview without writing:
+`firma init` is idempotent — re-running preserves existing files including the authority keypair; pass `--force` to overwrite everything. Skip all interactive prompts with `--yes`. Preview without writing:
 
 ```bash
 firma init --dry-run
@@ -111,7 +117,7 @@ firma init --dry-run
 Inspect the generated config:
 
 ```bash
-cat ~/.config/firma/firma.toml
+cat firma.toml
 ```
 
 ## Step 3: Run with Per-Run Sidecar (Default)
