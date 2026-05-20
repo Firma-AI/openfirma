@@ -3,6 +3,130 @@
 Single binary: `firma <subcommand>`. All examples below assume `firma` is on
 PATH or invoked via `cargo run -p firma --`.
 
+## `firma init`
+
+Interactive scaffolding wizard that creates a complete agent configuration directory — sidecar + authority config, Cedar policy, mapping rules, authority keypair, and a `firma-run.toml` — in a single step. All flags have defaults; omitting them triggers interactive prompts.
+
+### Usage
+
+```text
+firma init [OPTIONS]
+```
+
+### Options
+
+| Flag              | Short | Default                      | Description                                                       |
+| ----------------- | ----- | ---------------------------- | ----------------------------------------------------------------- |
+| `--name`          | `-n`  | `my-agent`                   | Agent slug — used as `agent_id` in generated configs              |
+| `--posture`       |       | `dev`                        | Cedar enforcement posture (`strict`, `dev`, `dev-with-delete-watch`) |
+| `--mapping`       |       | `anthropic`                  | Mapping file(s) to include — repeat for multiple                  |
+| `--extra-hosts`   |       | none                         | Comma-separated extra hosts the agent may reach                   |
+| `--workspace`     |       | CWD                          | Path the agent has RW access to (bwrap mount)                     |
+| `--output-dir`    | `-o`  | Firma config dir             | Directory to write scaffolded files into                          |
+| `--dry-run`       |       | off                          | Print generated files to stdout; no disk writes                   |
+| `--force`         |       | off                          | Overwrite existing files (authority keypair always preserved)     |
+| `--list-templates`|       | off                          | Print posture × mapping catalogue and exit                        |
+
+### Generated layout
+
+```
+<output-dir>/
+  firma.toml                     — sidecar + authority unified config
+  firma-run.toml                 — runtime profiles (workspace mounts, identity)
+  mapping-rules.toml             — base mapping rules (localhost, extra hosts)
+  mappings/<name>.toml           — one file per selected mapping
+  policies/<posture>.cedar       — Cedar enforcement policy
+  issuance-policies/
+    issuance.cedar               — token issuance policy
+  .runtime/
+    authority.key                — generated authority signing keypair
+    authority.pub                — matching public key (referenced in firma.toml)
+    audit.key                    — demo audit signing key
+    revocations.txt              — empty revocations list
+```
+
+### Examples
+
+Interactive:
+
+```bash
+firma init
+```
+
+Non-interactive:
+
+```bash
+firma init --name claude-code --posture strict --mapping anthropic
+```
+
+Multiple mappings:
+
+```bash
+firma init --name my-agent --posture dev --mapping anthropic --mapping github --mapping npm
+```
+
+Preview without writing:
+
+```bash
+firma init --dry-run
+```
+
+After scaffolding, run the agent:
+
+```bash
+firma run --config ~/.config/firma/firma-run.toml -- <agent-command>
+```
+
+### Postures
+
+| Name                    | Description                                                |
+| ----------------------- | ---------------------------------------------------------- |
+| `strict`                | Default-deny + communication only (no code ops)            |
+| `dev`                   | Adds code.read/write, issues, package install              |
+| `dev-with-delete-watch` | Dev + code.destructive allowed (local-exec / delete-watch) |
+
+### Mappings
+
+| Name        | Covers                                                                          |
+| ----------- | ------------------------------------------------------------------------------- |
+| `anthropic` | api.anthropic.com — Anthropic Claude API (CONNECT, no MITM)                    |
+| `openai`    | api.openai.com — OpenAI API (CONNECT, no MITM)                                 |
+| `github`    | api.github.com — GitHub REST API (MITM for per-endpoint classification)        |
+| `gmail`     | gmail.googleapis.com — Gmail REST API (MITM for per-endpoint classification)   |
+| `npm`       | registry.npmjs.org — npm package registry                                      |
+| `pypi`      | pypi.org, files.pythonhosted.org — PyPI                                        |
+| `cargo`     | crates.io, static.crates.io — Rust package registry                            |
+| `stripe`    | api.stripe.com — Stripe REST API                                               |
+| `custom`    | Empty template — fill in manually                                              |
+
+## `firma policy`
+
+Browse the posture × mapping template catalogue and validate Cedar policy bundles.
+
+### `firma policy list`
+
+Print available postures and mapping files:
+
+```bash
+firma policy list
+```
+
+### `firma policy validate`
+
+Validate a Cedar policy bundle (one or more `.cedar` files):
+
+```bash
+firma policy validate --file policies/dev.cedar
+```
+
+### `firma policy test`
+
+Run fixture-based authorization tests against a Cedar policy bundle:
+
+```bash
+firma policy test --fixture tests/my-fixture.json
+```
+
 ## `firma sidecar`
 
 ### Usage

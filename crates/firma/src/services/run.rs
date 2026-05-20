@@ -40,7 +40,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         command: args.command,
         authority_cli,
         authority_profile: args.authority_profile,
-        user_config_path: args.config.clone(),
+        user_config_path: args.config,
     };
     match execute_run(&input) {
         Ok(code) => Ok(exit_code(code)),
