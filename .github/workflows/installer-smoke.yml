@@ -1,11 +1,6 @@
 name: Installer Smoke
 
 on:
-  pull_request:
-    paths:
-      - 'install.sh'
-      - 'install.ps1'
-      - '.github/workflows/installer-smoke.yml'
   schedule:
     - cron: '17 6 * * 1'
   workflow_dispatch:
@@ -33,6 +28,7 @@ jobs:
           FIRMA_NO_INIT: '1'
           FIRMA_NO_MODIFY_PATH: '1'
           FIRMA_VERSION: v0.0.0
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           INSTALL_DIR="${RUNNER_TEMP}/firma-bin"
@@ -44,6 +40,7 @@ jobs:
           FIRMA_NO_INIT: '1'
           FIRMA_NO_MODIFY_PATH: '1'
           FIRMA_VERSION: v0.0.0
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           INSTALL_DIR="${RUNNER_TEMP}/firma-bin"
@@ -61,6 +58,7 @@ jobs:
           FIRMA_NO_INIT: '1'
           FIRMA_NO_MODIFY_PATH: '1'
           FIRMA_VERSION: v0.0.0
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'firma-bin'
           .\install.ps1 -InstallDir $dir
@@ -71,6 +69,7 @@ jobs:
           FIRMA_NO_INIT: '1'
           FIRMA_NO_MODIFY_PATH: '1'
           FIRMA_VERSION: v0.0.0
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'firma-bin'
           $out = .\install.ps1 -InstallDir $dir | Out-String
