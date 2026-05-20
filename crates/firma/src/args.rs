@@ -4,6 +4,7 @@ pub mod authority;
 pub mod doctor;
 pub mod init;
 pub mod monitor;
+pub mod policy;
 pub mod run;
 pub mod sidecar;
 pub mod stack;
@@ -34,6 +35,8 @@ pub enum Command {
     Authority(authority::Args),
     /// Scaffold a new agent config directory interactively.
     Init(init::InitArgs),
+    /// Browse the built-in policy template catalogue.
+    Policy(policy::PolicyArgs),
     /// Internal sandbox-local DNS stub.
     #[command(name = "__dns-stub", hide = true)]
     DnsStub(run::DnsStubArgs),

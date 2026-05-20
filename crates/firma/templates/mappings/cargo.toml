@@ -1,0 +1,23 @@
+# crates.io / Rust package registry.
+
+# Plain CONNECT (no MITM): host carries port.
+[[rules]]
+method = "CONNECT"
+host = "crates.io:443"
+action_class = "system.install"
+
+[[rules]]
+method = "CONNECT"
+host = "static.crates.io:443"
+action_class = "system.install"
+
+# Post-MITM REST rules.
+[[rules]]
+host = "crates.io"
+path = "*"
+action_class = "system.install"
+
+[[rules]]
+host = "static.crates.io"
+path = "*"
+action_class = "system.install"

@@ -1,0 +1,23 @@
+# PyPI — package install rules.
+
+# Plain CONNECT (no MITM): host carries port.
+[[rules]]
+method = "CONNECT"
+host = "pypi.org:443"
+action_class = "system.install"
+
+[[rules]]
+method = "CONNECT"
+host = "files.pythonhosted.org:443"
+action_class = "system.install"
+
+# Post-MITM REST rules.
+[[rules]]
+host = "pypi.org"
+path = "*"
+action_class = "system.install"
+
+[[rules]]
+host = "files.pythonhosted.org"
+path = "*"
+action_class = "system.install"

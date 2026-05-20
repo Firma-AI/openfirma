@@ -5,29 +5,33 @@
 # ── Mini Authority ────────────────────────────────────────────────────────────
 
 [authority]
-listen_addr = "127.0.0.1:50051"
-policy_dir = "policies/"
-issuance_policy_dir = "issuance-policies/"
-revocation_file = ".runtime/revocations.txt"
-key_file = ".runtime/authority.key"
-max_ttl_seconds = 3600
-bundle_ttl_seconds = 30
+listen_addr            = "127.0.0.1:50051"
+policy_dir             = "policies/"
+issuance_policy_dir    = "issuance-policies/"
+revocation_file        = ".runtime/revocations.txt"
+key_file               = ".runtime/authority.key"
+max_ttl_seconds        = 3600
+bundle_ttl_seconds     = 30
 
 # ── Sidecar ───────────────────────────────────────────────────────────────────
 
 [sidecar.interceptor]
-mode = "http_proxy"
-listen_addr = "127.0.0.1:7474"
-drain_timeout_secs = 30
+mode                = "http_proxy"
+listen_addr         = "127.0.0.1:7474"
+drain_timeout_secs  = 30
 
-# HTTPS MITM for GitHub and Gmail. LLM traffic tunnels through untouched —
-# the LLM SDK does not need to trust the generated firma-ca.
+# HTTPS MITM for services that need per-endpoint classification.
+# LLM traffic tunnels through untouched — the LLM SDK does not trust firma-ca.
 [sidecar.interceptor.https_mitm]
-intercept_hosts = ["api.github.com", "gmail.googleapis.com"]
-strict_hosts = ["api.github.com", "gmail.googleapis.com"]
-
+{% if mitm_hosts -%}
+intercept_hosts = [{% for h in mitm_hosts %}"{{ h }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+strict_hosts    = [{% for h in mitm_hosts %}"{{ h }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+{% else -%}
+intercept_hosts = []
+strict_hosts    = []
+{% endif %}
 [sidecar.policy]
-dir = "."
+dir           = "."
 authority_url = "http://127.0.0.1:50051"
 
 [sidecar.ca]
@@ -37,50 +41,40 @@ dir = ".runtime/generated-firma-ca"
 level = "info"
 
 [sidecar.mapping]
-rules_path = "mapping-rules.toml"
-rules_paths = ["mappings/github.toml", "mappings/gmail.toml"]
+rules_path  = "mapping-rules.toml"
+{% if mapping_paths -%}
+rules_paths = [{% for p in mapping_paths %}"{{ p }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+{% endif -%}
 default_protected = true
 
 [sidecar.capability_validation]
 clock_skew_tolerance_seconds = 0
 
 [sidecar.constraint_enforcement]
-bundle_ttl_seconds = 3600
+bundle_ttl_seconds   = 3600
 enforcement_timeout_ms = 50
 
 [sidecar.connector]
 default_timeout_ms = 120000
 
 [sidecar.audit]
-sink = "file"
-file_path = ".runtime/audit.jsonl"
+sink             = "file"
+file_path        = ".runtime/audit.jsonl"
 signing_key_path = ".runtime/audit.key"
 
 [sidecar.authority]
-connect_timeout_secs = 10
-reconnect_min_backoff_ms = 250
-reconnect_max_backoff_secs = 30
-revocation_readiness_grace_ms = 500
-revocation_fail_closed_on_disconnect = false
+connect_timeout_secs                  = 10
+reconnect_min_backoff_ms              = 250
+reconnect_max_backoff_secs            = 30
+revocation_readiness_grace_ms         = 500
+revocation_fail_closed_on_disconnect  = false
 
 [sidecar.preflight]
-agent_id = "{{ name }}"
-session_id = "preflight-session"
-requested_actions = [
-  "system.install",
-  "credential.read",
-  "code.read",
-  "code.review.read",
-  "code.review.submit",
-  "code.write",
-  "code.merge",
-  "issue.read",
-  "issue.write",
-  "security.alert.read",
-  "notification.manage",
-  "communication.external.send",
-  "communication.internal.send",
-]
-resource_scope = "*"
+agent_id              = "{{ name }}"
+session_id            = "preflight-session"
+requested_actions     = [
+{% for action in requested_actions %}  "{{ action }}",
+{% endfor %}]
+resource_scope        = "*"
 authority_pub_key_path = ".runtime/authority.pub"
-ttl_seconds = 3600
+ttl_seconds           = 3600

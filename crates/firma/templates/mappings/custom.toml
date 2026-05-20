@@ -1,0 +1,15 @@
+# Custom mappings — fill in before running `firma stack start`.
+# See docs/markdown/firma_action_class_registry.md for the full action class catalogue.
+#
+# Plain CONNECT tunnel (no MITM):
+# [[rules]]
+# method       = "CONNECT"
+# host         = "api.your-service.com:443"
+# action_class = "communication.external.send"
+#
+# REST rule (requires MITM via intercept_hosts in firma.toml):
+# [[rules]]
+# method       = "GET"
+# host         = "api.your-service.com"
+# path         = "/v1/resource*"
+# action_class = "communication.external.send"
