@@ -20,7 +20,7 @@
 
 ## 1. What is OpenFirma?
 
-OpenFirma is a runtime enforcement boundary that sits between your AI agents and the outside world. Every outbound call an agent makes passes through a local Sidecar that decides whether it happens: using Cedar policies you own, evaluated locally, with no model on the hot path.
+OpenFirma is the runtime enforcement boundary that sits between your AI agents and the outside world. Every outbound call an agent makes passes through a local Sidecar that decides whether it happens: using Cedar policies you own, evaluated locally, with no model on the hot path.
  
 **Why we built it:** AI agents are becoming software operators. They call APIs, read and write files, send messages, and execute code. That is useful, but it also means a bad prompt, a compromised dependency, or a confused model can turn into a real outbound action before anyone notices. OpenFirma gives those actions a boundary.
  
