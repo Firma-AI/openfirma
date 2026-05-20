@@ -103,11 +103,11 @@ firma doctor --json | jq .
   <img src="docs-site/src/assets/openfirma-flow-slow.gif" alt="OpenFirma flow diagram" width="100%" />
 </div>
 
-**[Authority](crates/firma-authority/):** policy lives in one place. It issues short-lived capability tokens and streams Cedar policy bundles to the Sidecar. One policy file governs every agent, every call, every surface. Never on the hot path: once the Sidecar has the token and policy bundle, all decisions are local.
+**[Mini Authority](crates/firma-authority/):** reference local Authority for development. Mints short-lived, cryptographically signed permission tokens for agents, loads policy rules from disk, and streams policy updates and revocation events to connected Sidecars over persistent connections. Sits off the per-request path.
 
-**[Sidecar](crates/firma-sidecar/):** the interception layer. Every outbound action funnels through it. Stage 1 validates the capability token locally (signature, integrity, revocation) in microseconds. Stage 2 evaluates the Cedar policy against the current session state. Sub-millisecond. Deterministic. On ALLOW, credentials are injected; the agent never holds raw tokens.
+**[Sidecar](crates/firma-sidecar/):** application-layer enforcement proxy sitting next to your agent. Intercepts every outbound call (plain HTTP, HTTPS by tunnel or by transparent decryption, remote-procedure calls, Unix sockets) and decides allow / deny / abort through a fully-local two-stage check (capability validation, then policy evaluation), with credential injection after an allow and a signed audit record for every decision. Fail-closed by construction.
 
-**[Audit emitter](crates/firma-core/):** every decision, ALLOW or DENY, produces a signed `ExecutionEvent` written to your configured sink (file, stdout, or gRPC).
+**[Audit emitter](crates/firma-core/):** signs and emits an audit record for every enforcement decision, capturing the agent, session, action class, target resource, the token that authorized the call, the outcome, and timing. Runs as a background task draining a bounded channel into pluggable destinations (standard output, a file, a remote service, or a local write-ahead log on disk), each record independently verifiable.
 
 ### Features
 
