@@ -161,7 +161,9 @@ function New-TempDir {
 }
 
 function Get-FirmaArchive ($TmpDir) {
-    $script:ArchiveName  = "firma-$script:Version-$script:Target.zip"
+    # Release tag carries the v prefix (v0.7.0); asset filenames do not.
+    $versionBare = $script:Version.TrimStart('v')
+    $script:ArchiveName  = "firma-$versionBare-$script:Target.zip"
     $script:ArchivePath  = Join-Path $TmpDir $script:ArchiveName
     $script:ChecksumPath = "$script:ArchivePath.sha256"
     $base = "https://github.com/$GitHubRepo/releases/download/$script:Version"

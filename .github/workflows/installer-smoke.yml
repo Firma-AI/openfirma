@@ -32,6 +32,7 @@ jobs:
           FIRMA_NO_BREW: '1'
           FIRMA_NO_INIT: '1'
           FIRMA_NO_MODIFY_PATH: '1'
+          FIRMA_VERSION: v0.0.0
         run: |
           set -eu
           INSTALL_DIR="${RUNNER_TEMP}/firma-bin"
@@ -42,6 +43,7 @@ jobs:
           FIRMA_NO_BREW: '1'
           FIRMA_NO_INIT: '1'
           FIRMA_NO_MODIFY_PATH: '1'
+          FIRMA_VERSION: v0.0.0
         run: |
           set -eu
           INSTALL_DIR="${RUNNER_TEMP}/firma-bin"
@@ -58,6 +60,7 @@ jobs:
         env:
           FIRMA_NO_INIT: '1'
           FIRMA_NO_MODIFY_PATH: '1'
+          FIRMA_VERSION: v0.0.0
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'firma-bin'
           .\install.ps1 -InstallDir $dir
@@ -67,6 +70,7 @@ jobs:
         env:
           FIRMA_NO_INIT: '1'
           FIRMA_NO_MODIFY_PATH: '1'
+          FIRMA_VERSION: v0.0.0
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'firma-bin'
           $out = .\install.ps1 -InstallDir $dir | Out-String
