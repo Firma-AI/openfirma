@@ -36,7 +36,7 @@ $GitHubRepo    = 'Firma-AI/openfirma'
 
 # Auth header for downloads when GITHUB_TOKEN is set. Used by CI runs
 # against a private repo; harmless when unset.
-function Get-AuthHeaders {
+function Get-AuthHeader {
     if ($env:GITHUB_TOKEN) {
         return @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
     }
@@ -177,7 +177,7 @@ function Get-FirmaArchive ($TmpDir) {
     $script:ArchivePath  = Join-Path $TmpDir $script:ArchiveName
     $script:ChecksumPath = "$script:ArchivePath.sha256"
     $base = "https://github.com/$GitHubRepo/releases/download/$script:Version"
-    $script:Headers = Get-AuthHeaders
+    $script:Headers = Get-AuthHeader
     Write-Info "downloading $script:ArchiveName ..."
     Invoke-Step "Invoke-WebRequest $base/$script:ArchiveName" {
         Invoke-WebRequest -UseBasicParsing -Headers $script:Headers -Uri "$base/$script:ArchiveName"        -OutFile $script:ArchivePath
