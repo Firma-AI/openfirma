@@ -243,7 +243,9 @@ setup_tmp() {
 }
 
 download_archive() {
-    ARCHIVE_NAME="firma-${VERSION}-${TARGET}.tar.gz"
+    # Release tag carries the v prefix (v0.7.0); asset filenames do not.
+    version_bare=${VERSION#v}
+    ARCHIVE_NAME="firma-${version_bare}-${TARGET}.tar.gz"
     ARCHIVE_PATH="${TMP_DIR}/${ARCHIVE_NAME}"
     CHECKSUM_PATH="${ARCHIVE_PATH}.sha256"
     base="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}"
