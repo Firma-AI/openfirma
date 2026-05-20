@@ -1,10 +1,10 @@
 //! Runner for `firma init` — scaffold a new agent config directory.
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context as _, Result};
+use clap::ValueEnum as _;
 use dialoguer::theme::ColorfulTheme;
 use minijinja::{Environment, context};
 
@@ -15,6 +15,7 @@ struct CollectedInputs {
     posture: Posture,
     mappings: Vec<Mapping>,
     extra_hosts: Vec<String>,
+    output_dir: PathBuf,
     workspace: PathBuf,
 }
 
@@ -42,8 +43,7 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     }
 
     let inputs = collect_inputs(args)?;
-    let out = std::path::absolute(&args.output_dir)
-        .with_context(|| format!("resolve path {}", args.output_dir.display()))?;
+    let out = &inputs.output_dir;
 
     let env = build_template_env()?;
     let files = generate_files(&env, &inputs)?;
@@ -112,10 +112,10 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
 
     println!("\nAgent scaffolded: {}", out.display());
     println!("\nNext:");
-    println!("  cd {}", out.display());
-    println!("  firma stack start --config firma.toml");
-    println!("  # In a separate terminal:");
-    println!("  firma run --config firma-run.toml -- <agent-command>");
+    println!(
+        "  firma run --config {}/firma-run.toml -- <agent-command>",
+        out.display()
+    );
 
     Ok(ExitCode::SUCCESS)
 }
@@ -195,25 +195,68 @@ fn render(env: &Environment<'_>, template: &str, ctx: minijinja::Value) -> Resul
         .with_context(|| format!("render template {template}"))
 }
 
+fn default_output_dir(args: &InitArgs) -> PathBuf {
+    args.output_dir.clone().unwrap_or_else(|| {
+        firma_config::default_config_dir(&firma_config::SystemDirs)
+            .unwrap_or_else(|| PathBuf::from("."))
+    })
+}
+
 fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
-    let name = resolve_or_prompt(args.name.as_deref(), "Agent name", "my-agent")?;
+    let theme = ColorfulTheme::default();
+    let interactive = dialoguer::console::Term::stderr().is_term();
+
+    let name = match args.name.as_deref() {
+        Some(v) => v.to_string(),
+        None if interactive => dialoguer::Input::with_theme(&theme)
+            .with_prompt("Agent name")
+            .default("my-agent".to_string())
+            .interact_text()
+            .context("agent name prompt")?,
+        None => "my-agent".to_string(),
+    };
+
+    let output_dir = match &args.output_dir {
+        Some(p) => {
+            std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()))?
+        }
+        None if interactive => {
+            let default = default_output_dir(args).to_string_lossy().into_owned();
+            let s: String = dialoguer::Input::with_theme(&theme)
+                .with_prompt("Config directory")
+                .default(default)
+                .interact_text()
+                .context("config directory prompt")?;
+            std::path::absolute(PathBuf::from(s)).context("resolve config directory path")?
+        }
+        None => default_output_dir(args),
+    };
 
     let posture = match &args.posture {
         Some(p) => p.clone(),
-        None => prompt_posture()?,
+        None if interactive => prompt_posture(&theme)?,
+        None => Posture::Dev,
     };
 
-    let mappings = if args.mapping.is_empty() {
-        prompt_mappings()?
-    } else {
+    let mappings = if !args.mapping.is_empty() {
         args.mapping.clone()
+    } else if interactive {
+        prompt_mappings(&theme)?
+    } else {
+        vec![Mapping::Anthropic]
     };
 
-    let extra_hosts_raw = resolve_or_prompt(
-        args.extra_hosts.as_deref(),
-        "Extra hosts (comma-separated, blank for none)",
-        "",
-    )?;
+    let interactive = dialoguer::console::Term::stderr().is_term();
+
+    let extra_hosts_raw: String = match args.extra_hosts.as_deref() {
+        Some(v) => v.to_string(),
+        None if interactive => dialoguer::Input::with_theme(&theme)
+            .with_prompt("Extra hosts (comma-separated, blank for none)")
+            .allow_empty(true)
+            .interact_text()
+            .context("extra hosts prompt")?,
+        None => String::new(), // default: no extra hosts
+    };
     let extra_hosts: Vec<String> = extra_hosts_raw
         .split(',')
         .map(str::trim)
@@ -224,12 +267,19 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
     let workspace = if let Some(p) = &args.workspace {
         std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()))?
     } else {
-        let out_abs = std::path::absolute(&args.output_dir)
-            .with_context(|| format!("resolve path {}", args.output_dir.display()))?;
-        let default = out_abs.to_string_lossy().into_owned();
-        let s = resolve_or_prompt(None, "Workspace directory (agent RW access)", &default)?;
-        let p = PathBuf::from(s);
-        std::path::absolute(&p).with_context(|| format!("resolve path {}", p.display()))?
+        let cwd = std::env::current_dir().context("get current directory")?;
+        if interactive {
+            let default = cwd.to_string_lossy().into_owned();
+            let s: String = dialoguer::Input::with_theme(&theme)
+                .with_prompt("Workspace directory (agent RW access)")
+                .default(default)
+                .interact_text()
+                .context("workspace prompt")?;
+            let p = PathBuf::from(s);
+            std::path::absolute(&p).with_context(|| format!("resolve path {}", p.display()))?
+        } else {
+            cwd
+        }
     };
 
     Ok(CollectedInputs {
@@ -237,87 +287,59 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         posture,
         mappings,
         extra_hosts,
+        output_dir,
         workspace,
     })
 }
 
-fn prompt_posture() -> Result<Posture> {
-    let items = &[
-        "strict                  Default-deny + communication only",
-        "dev                     Adds code.read/write, issues, package install",
-        "dev-with-delete-watch   Dev + code.destructive allowed (local-exec)",
-    ];
-    let selection = dialoguer::Select::with_theme(&ColorfulTheme::default())
+fn prompt_posture(theme: &ColorfulTheme) -> Result<Posture> {
+    let variants = Posture::value_variants();
+    let items: Vec<String> = variants
+        .iter()
+        .map(|p| format!("{:<24}  {}", p.file_name(), p.description()))
+        .collect();
+    let selection = dialoguer::Select::with_theme(theme)
         .with_prompt("Posture")
-        .items(items)
+        .items(&items)
         .default(1)
+        .report(false)
         .interact()
         .context("posture prompt")?;
-    Ok(match selection {
-        0 => Posture::Strict,
-        1 => Posture::Dev,
-        _ => Posture::DevWithDeleteWatch,
-    })
+    let chosen = variants[selection].clone();
+    eprintln!("  Posture  · {}", chosen.file_name());
+    Ok(chosen)
 }
 
-fn prompt_mappings() -> Result<Vec<Mapping>> {
-    let items = &[
-        "anthropic   api.anthropic.com (CONNECT, no MITM)",
-        "openai      api.openai.com (CONNECT, no MITM)",
-        "github      api.github.com (MITM for per-endpoint classification)",
-        "gmail       gmail.googleapis.com (MITM for per-endpoint classification)",
-        "npm         registry.npmjs.org",
-        "pypi        pypi.org, files.pythonhosted.org",
-        "cargo       crates.io, static.crates.io",
-        "stripe      api.stripe.com (MITM optional — check SDK cert pinning first)",
-        "custom      Empty template — fill in manually",
-    ];
-    let defaults = &[true, false, false, false, false, false, false, false, false];
-    let selections = dialoguer::MultiSelect::with_theme(&ColorfulTheme::default())
+fn prompt_mappings(theme: &ColorfulTheme) -> Result<Vec<Mapping>> {
+    let variants = Mapping::value_variants();
+    let items: Vec<String> = variants
+        .iter()
+        .map(|m| format!("{:<12}  {}", m.as_str(), m.description()))
+        .collect();
+    let defaults: Vec<bool> = variants
+        .iter()
+        .map(|m| matches!(m, Mapping::Anthropic))
+        .collect();
+    let selections = dialoguer::MultiSelect::with_theme(theme)
         .with_prompt("Mappings (space to toggle, enter to confirm)")
-        .items(items)
-        .defaults(defaults)
+        .items(&items)
+        .defaults(&defaults)
+        .report(false)
         .interact()
         .context("mappings prompt")?;
-    Ok(selections
+    let chosen: Vec<Mapping> = selections
         .into_iter()
-        .filter_map(|i| {
-            Some(match i {
-                0 => Mapping::Anthropic,
-                1 => Mapping::Openai,
-                2 => Mapping::Github,
-                3 => Mapping::Gmail,
-                4 => Mapping::Npm,
-                5 => Mapping::Pypi,
-                6 => Mapping::Cargo,
-                7 => Mapping::Stripe,
-                8 => Mapping::Custom,
-                _ => return None,
-            })
-        })
-        .collect())
-}
-
-fn resolve_or_prompt(value: Option<&str>, label: &str, default: &str) -> Result<String> {
-    if let Some(v) = value {
-        return Ok(v.to_string());
-    }
-    if default.is_empty() {
-        print!("{label} (blank for none): ");
-    } else {
-        print!("{label} [{default}]: ");
-    }
-    std::io::stdout().flush().context("flush stdout")?;
-    let mut line = String::new();
-    std::io::stdin()
-        .read_line(&mut line)
-        .context("read stdin")?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        Ok(default.to_string())
-    } else {
-        Ok(trimmed.to_string())
-    }
+        .map(|i| variants[i].clone())
+        .collect();
+    eprintln!(
+        "  Mappings · {}",
+        chosen
+            .iter()
+            .map(Mapping::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    Ok(chosen)
 }
 
 fn write_if_absent(path: &Path, content: &[u8], force: bool) -> Result<()> {
@@ -346,6 +368,7 @@ mod tests {
             posture: posture.clone(),
             mappings: mappings.to_vec(),
             extra_hosts: extra_hosts.to_vec(),
+            output_dir: PathBuf::from(TEST_WORKSPACE),
             workspace: PathBuf::from(TEST_WORKSPACE),
         };
         generate_files(&env, &inputs).unwrap()
