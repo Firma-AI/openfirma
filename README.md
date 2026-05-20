@@ -22,7 +22,7 @@
 
 OpenFirma is a runtime enforcement boundary that sits between your AI agents and the outside world. Every outbound call an agent makes passes through a local Sidecar that decides whether it happens: using Cedar policies you own, evaluated locally, with no model on the hot path.
 
-**Why we built it:** AI agents are becoming software operators. They call APIs, read and write files, send messages, and execute code. That is useful — but it also means a bad prompt, a compromised dependency, or a confused model can turn into a real outbound action before anyone notices. OpenFirma gives those actions a boundary.
+**Why we built it:** AI agents are becoming software operators. They call APIs, read and write files, send messages, and execute code. That is useful but it also means a bad prompt, a compromised dependency, or a confused model can turn into a real outbound action before anyone notices. OpenFirma gives those actions a boundary.
 
 **How it works:** You define a Cedar policy that says what each agent is allowed to do. When an agent makes an outbound call, the Sidecar intercepts it, classifies it into a canonical action class (e.g. `code.read`, `communication.external.send`), validates the capability token, and evaluates the policy. On ALLOW, the call goes through and credentials are injected just-in-time. On DENY, the call is blocked and a signed audit event is written. The agent code contains none of this logic.
 
@@ -87,32 +87,6 @@ firma doctor --json | jq .
 
 > Full CLI reference: [`docs/cli.md`](docs/cli.md)
 
-### Demo
-
-OpenFirma ships a TUI demo runner with three self-contained scenarios. Each demo is a deterministic Python script that issues a fixed sequence of outbound calls. The Sidecar intercepts every call, Cedar policies decide ALLOW or DENY, and a Rust TUI renders the authority, sidecar, and audit panes simultaneously.
-
-```bash
-cargo run -p firma-demo-tui
-```
-
-Or run a specific demo directly from the terminal without the TUI:
-
-```bash
-./examples/demos/run.sh demo0
-```
-
-The three demos:
-
-| Demo | Scenario | What you see |
-|---|---|---|
-| `demo0` | Fragmented enforcement across four systems | 1 ALLOW, 2 DENY across GitHub, Gmail, and an internal API — all governed by one Cedar policy |
-| `demo1` | Path-level enforcement on the same host | ALLOW and DENY decisions on different paths under the same host, showing action-class granularity |
-| `demo2` | Runtime enforcement under compromise | Agent process has no credentials; the Sidecar holds the GitHub token and injects it only on ALLOW |
-
-The demos require a Rust toolchain. `demo0` and `demo1` need no external credentials. `demo2` requires a GitHub token in `examples/demos/.env` (see `.env.sample`).
-
-> Full demo documentation: [`examples/demos/ARCHITECTURE.md`](examples/demos/ARCHITECTURE.md)
-
 <br/>
 
 ## Architecture
@@ -139,7 +113,7 @@ The demos require a Rust toolchain. `demo0` and `demo1` need no external credent
 
 ## Repo structure
 
-**Core runtime**
+**Infrastructure**
 
 | | |
 |---|---|
@@ -147,11 +121,6 @@ The demos require a Rust toolchain. `demo0` and `demo1` need no external credent
 | **[`crates/firma-sidecar`](crates/firma-sidecar/)** | The enforcement Sidecar: interceptors, pipeline, connectors |
 | **[`crates/firma-authority`](crates/firma-authority/)** | Mini Authority: file-based trust root for local development |
 | **[`crates/firma-core`](crates/firma-core/)** | Shared types, Cedar schema, action classes, audit event format |
-
-**Infrastructure**
-
-| | |
-|---|---|
 | **[`crates/firma-run`](crates/firma-run/)** | Agent process confinement: bwrap backend, profile resolution, autostart |
 | **[`crates/firma-stack`](crates/firma-stack/)** | Stack supervisor: Authority + Sidecar lifecycle as one unit |
 | **[`crates/firma-proto`](crates/firma-proto/)** | Protobuf/gRPC service definitions |
