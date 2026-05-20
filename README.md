@@ -1,4 +1,6 @@
-<img src="docs-site/src/assets/openfirma-logo.png" alt="OpenFirma" width="200"/>
+<p align="center">
+  <img src="docs-site/src/assets/openfirma-logo.png" alt="OpenFirma" width="120"/>
+</p>
 
 # OpenFirma
 
