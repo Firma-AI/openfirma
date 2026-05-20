@@ -2,6 +2,9 @@
   <img src="docs-site/src/assets/openfirma-logo.png" alt="OpenFirma" width="440" />
 
   <br/>
+
+<img src="docs-site/src/assets/Subtitle.gif" alt="OpenFirma" width="200" />
+
   <br/>
 
   **Every call passes through a sidecar that decides whether it happens.**
