@@ -2,6 +2,9 @@
 
 use std::process::ExitCode;
 
+use clap::ValueEnum as _;
+
+use crate::args::init::{Mapping, Posture};
 use crate::args::policy::{PolicyArgs, PolicyCommand};
 
 pub fn run(args: &PolicyArgs) -> ExitCode {
@@ -12,49 +15,13 @@ pub fn run(args: &PolicyArgs) -> ExitCode {
 
 pub fn list() -> ExitCode {
     println!("Postures  (--posture):\n");
-    for (name, desc) in POSTURES {
-        println!("  {name:<28}  {desc}");
+    for p in Posture::value_variants() {
+        println!("  {:<28}  {}", p.file_name(), p.description());
     }
     println!("\nMappings  (--mapping, repeatable):\n");
-    for (name, desc) in MAPPINGS {
-        println!("  {name:<28}  {desc}");
+    for m in Mapping::value_variants() {
+        println!("  {:<28}  {}", m.as_str(), m.description());
     }
     println!();
     ExitCode::SUCCESS
 }
-
-static POSTURES: &[(&str, &str)] = &[
-    ("strict", "Default-deny + communication only (no code ops)"),
-    ("dev", "Adds code.read/write, issues, package install"),
-    (
-        "dev-with-delete-watch",
-        "Dev + code.destructive allowed (local-exec / delete-watch)",
-    ),
-];
-
-static MAPPINGS: &[(&str, &str)] = &[
-    (
-        "anthropic",
-        "api.anthropic.com — Anthropic Claude API (CONNECT, no MITM)",
-    ),
-    ("openai", "api.openai.com — OpenAI API (CONNECT, no MITM)"),
-    (
-        "github",
-        "api.github.com — GitHub REST API (MITM for per-endpoint classification)",
-    ),
-    (
-        "gmail",
-        "gmail.googleapis.com — Gmail REST API (MITM for per-endpoint classification)",
-    ),
-    ("npm", "registry.npmjs.org — npm package registry"),
-    ("pypi", "pypi.org, files.pythonhosted.org — PyPI"),
-    (
-        "cargo",
-        "crates.io, static.crates.io — Rust package registry",
-    ),
-    (
-        "stripe",
-        "api.stripe.com — Stripe REST API (MITM optional — check SDK cert pinning first)",
-    ),
-    ("custom", "Empty template — fill in manually"),
-];
