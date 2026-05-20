@@ -3,7 +3,8 @@
 </p>
 
 <p align="center">
-OpenFirma is a runtime enforcement boundary for AI agents. Every outbound call an agent makes is intercepted, classified against policy, and audited before it leaves the machine.
+Every call passes through a sidecar that decides whether it happens. 
+Policy in, signed decision out. Open by default. Deterministic.
 </p>
 
 <p align="center">
@@ -22,7 +23,10 @@ OpenFirma is the authority layer for autonomous software. It sits in the agent's
 - **Per-call enforcement:** policy is evaluated before execution, against current policy and accumulated session state
 - **JIT credentials:** a federated broker issues credentials per call on ALLOW; the agent never holds raw tokens; exfiltration is structurally impossible
 - **Signed audit:** every decision emits a signed execution event with the exact envelope the policy saw
+
+
 ---
+
  
 ## Architecture
  
@@ -35,15 +39,17 @@ flowchart LR
     sidecar --> audit["Signed audit log"]
 ```
  
-**Authority** — policy lives in one place. It issues short-lived capability tokens and streams Cedar policy bundles to the Sidecar. One policy file governs every agent, every call, every surface. The Authority is never on the hot path: once the Sidecar has the token and policy bundle, all decisions are local.
+**Authority** --> policy lives in one place. It issues short-lived capability tokens and streams Cedar policy bundles to the Sidecar. One policy file governs every agent, every call, every surface. The Authority is never on the hot path: once the Sidecar has the token and policy bundle, all decisions are local.
  
-**Sidecar** — the interception layer. Every outbound action funnels through it. Stage 1 validates the capability token locally (signature, integrity, revocation) in microseconds. Stage 2 evaluates the Cedar policy against the current session state. Sub-millisecond. Deterministic. On ALLOW, credentials are injected; the agent never holds raw tokens.
+**Sidecar** --> the interception layer. Every outbound action funnels through it. Stage 1 validates the capability token locally (signature, integrity, revocation) in microseconds. Stage 2 evaluates the Cedar policy against the current session state. Sub-millisecond. Deterministic. On ALLOW, credentials are injected; the agent never holds raw tokens.
  
-**Audit emitter** — every decision, ALLOW or DENY, produces a signed `ExecutionEvent` written to your configured sink (file, stdout, or gRPC).
+**Audit emitter** --> every decision, ALLOW or DENY, produces a signed `ExecutionEvent` written to your configured sink (file, stdout, or gRPC).
  
 > [Architecture & invariants](https://firma-ai.github.io/openfirma/concepts/architecture/) · [The enforcement pipeline](https://firma-ai.github.io/openfirma/concepts/pipeline/)
  
+
 ---
+
  
 ## Run your coding agent with containment
  
@@ -76,7 +82,9 @@ No Rust toolchain, no `protoc`, no API keys required to get started.
  
 > _Coming soon — the demo section will be updated once the new agent demo flow is finalized._
  
+
 ---
+
  
 ## Repo structure
  
@@ -103,4 +111,5 @@ openfirma/
 └── fuzz/                   # Fuzz targets
 ```
  
+
 **Start reading here:** [`crates/firma-sidecar`](crates/firma-sidecar) for the enforcement pipeline, [`crates/firma-authority`](crates/firma-authority) for the trust root, [`examples/demo`](examples/demo) for the fastest path to a running system.
