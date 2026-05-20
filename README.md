@@ -22,9 +22,10 @@
 
 OpenFirma is a runtime enforcement boundary that sits between your AI agents and the outside world. Every outbound call an agent makes passes through a local Sidecar that decides whether it happens: using Cedar policies you own, evaluated locally, with no model on the hot path.
  
-**Why we built it:** AI agents are becoming software operators. They call APIs, read and write files, send messages, and execute code. That is useful — but it also means a bad prompt, a compromised dependency, or a confused model can turn into a real outbound action before anyone notices. OpenFirma gives those actions a boundary.
+**Why we built it:** AI agents are becoming software operators. They call APIs, read and write files, send messages, and execute code. That is useful, but it also means a bad prompt, a compromised dependency, or a confused model can turn into a real outbound action before anyone notices. OpenFirma gives those actions a boundary.
  
-**How it works:** You define a Cedar policy that says what each agent is allowed to do. When an agent makes an outbound call, the Sidecar intercepts it, classifies it into a canonical action class (e.g. `code.read`, `communication.external.send`), validates the capability token, and evaluates the policy. On ALLOW, the call goes through and credentials are injected just-in-time. On DENY, the call is blocked and a signed audit event is written. The agent code contains none of this logic.
+**How it works:** You define a Cedar policy that says what each agent is allowed to do. When an agent makes an outbound call, OpenFirma intercepts it, classifies it into a canonical action class (e.g. `code.read`, `communication.external.send`), validates the capability token, and evaluates the policy. On ALLOW, the call goes through and credentials are injected just-in-time (the agent never sees them). On DENY, the call is blocked. In both cases, a signed audit event is written. 
+
 <br/>
 
 ## 2. Run your coding agent with OpenFirma
@@ -65,10 +66,12 @@ No Rust toolchain, no `protoc`, no API keys required to get started.
 <div align="center">
   <img src="docs-site/src/assets/openfirma-flow-slow.gif" alt="OpenFirma flow diagram" width="100%" />
 </div>
-<br/>
-**[Authority](crates/firma-authority/):** policy lives in one place. It issues short-lived capability tokens and streams Cedar policy bundles to the Sidecar. One policy file governs every agent, every call, every surface. Never on the hot path: once the Sidecar has the token and policy bundle, all decisions are local.
 
-**[Sidecar](crates/firma-sidecar/):** the interception layer. Every outbound action funnels through it. Stage 1 validates the capability token locally (signature, integrity, revocation) in microseconds. Stage 2 evaluates the Cedar policy against the current session state. Sub-millisecond. Deterministic. On ALLOW, credentials are injected; the agent never holds raw tokens.
+<br/>
+
+**[Authority](crates/firma-authority/):** the control-plane component that evaluates policies at issuance time and issues capabilities. Defines the permission perimeter before execution begins (scope, budget, expiry) and distributes policy bundles and revocations to the Sidecar. Contacted only at session start (pre-flight), never on the hot path.
+
+**[Sidecar](crates/firma-sidecar/):** intercepts every call the agent makes and evaluates them in a two-steps process. Stage 1 validates the capability token locally (signature, integrity, revocation) in microseconds. Stage 2 evaluates the Cedar policy against the current session state. Sub-millisecond. Deterministic. On ALLOW, credentials are injected; the agent never holds raw tokens.
 
 **[Audit emitter](crates/firma-core/):** every decision, ALLOW or DENY, produces a signed `ExecutionEvent` written to your configured sink (file, stdout, or gRPC).
 
