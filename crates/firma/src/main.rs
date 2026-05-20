@@ -24,6 +24,7 @@ fn main() -> ExitCode {
         Command::DnsStub(a) => services::dns_stub::run(a),
         Command::Doctor(a) => Ok(services::doctor::run(a)),
         Command::Init(a) => services::init::run(&a),
+        Command::Policy(a) => Ok(services::policy::run(&a)),
         Command::Monitor(a) => Ok(services::monitor::run(a)),
         Command::ProxyBridge(a) => services::proxy_bridge::run(a),
         Command::Run(a) => services::run::run(a),

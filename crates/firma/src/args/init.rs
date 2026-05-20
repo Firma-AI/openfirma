@@ -4,16 +4,25 @@ use std::path::PathBuf;
 
 use clap::{Args, ValueEnum};
 
-/// Scaffold a new agent config directory from the CLI.
+static POSTURE_STRICT: &str = include_str!("../../templates/policies/strict.cedar");
+static POSTURE_DEV: &str = include_str!("../../templates/policies/dev.cedar");
+static POSTURE_DEV_DELETE: &str =
+    include_str!("../../templates/policies/dev-with-delete-watch.cedar");
+
+/// Scaffold a new agent config directory interactively.
 #[derive(Debug, Args)]
 pub struct InitArgs {
     /// Agent slug used as the `agent_id` in the generated config (e.g. "my-agent").
     #[arg(long, short = 'n')]
     pub name: Option<String>,
 
-    /// LLM provider — determines the CONNECT mapping rule in `mapping-rules.toml`.
+    /// Cedar policy posture to use.
     #[arg(long, value_enum)]
-    pub provider: Option<Provider>,
+    pub posture: Option<Posture>,
+
+    /// Mapping file(s) to include — may be repeated.
+    #[arg(long, value_enum)]
+    pub mapping: Vec<Mapping>,
 
     /// Comma-separated extra hosts the agent is allowed to reach.
     #[arg(long)]
@@ -35,15 +44,136 @@ pub struct InitArgs {
     /// Overwrite files that already exist (default: preserve).
     #[arg(long)]
     pub force: bool,
+
+    /// Print the posture × mapping template catalogue and exit.
+    #[arg(long)]
+    pub list_templates: bool,
 }
 
-/// LLM provider selection for `firma init`.
+/// Cedar enforcement posture for `firma init`.
 #[derive(Debug, Clone, ValueEnum)]
-pub enum Provider {
+pub enum Posture {
+    /// Default-deny + communication only. No code operations.
+    Strict,
+    /// Adds code.read/write, issues, package install. No payments or destructive ops.
+    Dev,
+    /// Dev posture + code.destructive allowed (local-exec / delete-watch scenarios).
+    #[value(name = "dev-with-delete-watch")]
+    DevWithDeleteWatch,
+}
+
+impl Posture {
+    /// Cedar policy file content for this posture.
+    pub fn cedar_content(&self) -> &'static str {
+        match self {
+            Self::Strict => POSTURE_STRICT,
+            Self::Dev => POSTURE_DEV,
+            Self::DevWithDeleteWatch => POSTURE_DEV_DELETE,
+        }
+    }
+
+    /// Base name used for the generated Cedar policy file (`policies/{name}.cedar`).
+    pub fn file_name(&self) -> &'static str {
+        match self {
+            Self::Strict => "strict",
+            Self::Dev => "dev",
+            Self::DevWithDeleteWatch => "dev-with-delete-watch",
+        }
+    }
+
+    /// Actions requested in the preflight token for this posture.
+    pub fn requested_actions(&self) -> Vec<&'static str> {
+        match self {
+            Self::Strict => vec![
+                "credential.read",
+                "communication.external.send",
+                "communication.internal.send",
+            ],
+            Self::Dev | Self::DevWithDeleteWatch => {
+                let mut actions = vec![
+                    "system.install",
+                    "credential.read",
+                    "code.read",
+                    "code.review.read",
+                    "code.review.submit",
+                    "code.write",
+                    "code.merge",
+                    "issue.read",
+                    "issue.write",
+                    "security.alert.read",
+                    "notification.manage",
+                    "communication.external.send",
+                    "communication.internal.send",
+                ];
+                if matches!(self, Self::DevWithDeleteWatch) {
+                    actions.push("code.destructive");
+                }
+                actions
+            }
+        }
+    }
+}
+
+/// Mapping file selection for `firma init`.
+#[derive(Debug, Clone, ValueEnum)]
+pub enum Mapping {
     /// Anthropic Claude API (api.anthropic.com).
     Anthropic,
-    /// `OpenAI` API (api.openai.com).
+    /// `OpenAI` API (`api.openai.com`).
     Openai,
-    /// Other — a commented placeholder is written; fill in manually.
-    Other,
+    /// GitHub REST API — requires MITM for per-endpoint classification.
+    Github,
+    /// Gmail REST API — requires MITM for per-endpoint classification.
+    Gmail,
+    /// npm registry (registry.npmjs.org).
+    Npm,
+    /// `PyPI` (`pypi.org`, `files.pythonhosted.org`).
+    Pypi,
+    /// crates.io Rust package registry.
+    Cargo,
+    /// Stripe REST API (`api.stripe.com`).
+    Stripe,
+    /// Empty custom template — fill in manually.
+    Custom,
+}
+
+impl Mapping {
+    /// Mapping name used as the file stem (`mappings/{name}.toml`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::Openai => "openai",
+            Self::Github => "github",
+            Self::Gmail => "gmail",
+            Self::Npm => "npm",
+            Self::Pypi => "pypi",
+            Self::Cargo => "cargo",
+            Self::Stripe => "stripe",
+            Self::Custom => "custom",
+        }
+    }
+
+    /// Hosts that require HTTPS MITM for per-endpoint REST classification.
+    pub fn mitm_hosts(&self) -> &'static [&'static str] {
+        match self {
+            Self::Github => &["api.github.com"],
+            Self::Gmail => &["gmail.googleapis.com"],
+            _ => &[],
+        }
+    }
+
+    /// Static TOML content for this mapping file.
+    pub fn static_content(&self) -> &'static str {
+        match self {
+            Self::Anthropic => include_str!("../../templates/mappings/anthropic.toml"),
+            Self::Openai => include_str!("../../templates/mappings/openai.toml"),
+            Self::Github => include_str!("../../templates/mappings/github.toml"),
+            Self::Gmail => include_str!("../../templates/mappings/gmail.toml"),
+            Self::Npm => include_str!("../../templates/mappings/npm.toml"),
+            Self::Pypi => include_str!("../../templates/mappings/pypi.toml"),
+            Self::Cargo => include_str!("../../templates/mappings/cargo.toml"),
+            Self::Stripe => include_str!("../../templates/mappings/stripe.toml"),
+            Self::Custom => include_str!("../../templates/mappings/custom.toml"),
+        }
+    }
 }

@@ -28,6 +28,7 @@ clap = { workspace = true, features = [
   "usage",
 ] }
 ctrlc = { workspace = true }
+dialoguer = { workspace = true }
 firma-authority = { workspace = true }
 firma-config = { workspace = true }
 firma-core = { workspace = true }

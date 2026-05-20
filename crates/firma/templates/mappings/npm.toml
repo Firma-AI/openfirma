@@ -1,0 +1,13 @@
+# npm registry — package install rules.
+
+# Plain CONNECT (no MITM): host carries port.
+[[rules]]
+method = "CONNECT"
+host = "registry.npmjs.org:443"
+action_class = "system.install"
+
+# Post-MITM REST rule: host without port after TLS decryption.
+[[rules]]
+host = "registry.npmjs.org"
+path = "*"
+action_class = "system.install"
