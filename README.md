@@ -36,11 +36,16 @@ OpenFirma is the authority layer for autonomous software. It sits in the agent's
   <img src="docs-site/src/assets/openfirma-flow-slow.gif" alt="OpenFirma flow diagram" width="100%" />
 </div>
 
-> [Architecture & invariants](https://firma-ai.github.io/openfirma/concepts/architecture/) · [The enforcement pipeline](https://firma-ai.github.io/openfirma/concepts/pipeline/)
+**[Authority](crates/firma-authority/)** — policy lives in one place. It issues short-lived capability tokens and streams Cedar policy bundles to the Sidecar. One policy file governs every agent, every call, every surface. Never on the hot path: once the Sidecar has the token and policy bundle, all decisions are local.
+
+**[Sidecar](crates/firma-sidecar/)** — the interception layer. Every outbound action funnels through it. Stage 1 validates the capability token locally (signature, integrity, revocation) in microseconds. Stage 2 evaluates the Cedar policy against the current session state. Sub-millisecond. Deterministic. On ALLOW, credentials are injected; the agent never holds raw tokens.
+
+**[Audit emitter](crates/firma-core/)** — every decision, ALLOW or DENY, produces a signed `ExecutionEvent` written to your configured sink (file, stdout, or gRPC).
+
 
 <br/>
 
-## Run your coding agent with containment
+## Run your coding agent with OpenFirma
 
 ### Quickstart
 
