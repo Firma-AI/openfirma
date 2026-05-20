@@ -3,7 +3,7 @@
 
   <br/>
 
-<img src="docs-site/src/assets/Subtitle.gif" alt="OpenFirma" width="200" />
+<img src="docs-site/src/assets/Subtitle.gif" alt="OpenFirma" width="600" />
 
   <br/>
 
