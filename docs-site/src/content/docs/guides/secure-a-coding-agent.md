@@ -46,9 +46,10 @@ firma init \
   --mapping anthropic
 ```
 
-This writes to `~/.config/firma` by default. To use a different directory:
+This writes to the **current directory** by default. Pass `--global` to write to the global config directory (`~/.config/firma` on Linux/macOS), or `--output-dir` for a specific path:
 
 ```bash
+firma init --name claude-code --posture strict --mapping anthropic --global
 firma init --name claude-code --posture strict --mapping anthropic --output-dir .local
 ```
 
@@ -57,7 +58,7 @@ firma init --name claude-code --posture strict --mapping anthropic --output-dir 
 Generated layout:
 
 ```
-~/.config/firma/
+./
   firma.toml                   — sidecar + authority unified config
   firma-run.toml               — runtime profiles (workspace mounts)
   mapping-rules.toml           — base mapping rules

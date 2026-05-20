@@ -186,16 +186,13 @@ fn render(env: &Environment<'_>, template: &str, ctx: minijinja::Value) -> Resul
         .with_context(|| format!("render template {template}"))
 }
 
-fn default_output_dir(args: &InitArgs) -> PathBuf {
-    args.output_dir.clone().unwrap_or_else(|| {
-        firma_config::default_config_dir(&firma_config::SystemDirs)
-            .unwrap_or_else(|| PathBuf::from("."))
-    })
+fn default_output_dir(_args: &InitArgs) -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
     let theme = ColorfulTheme::default();
-    let interactive = dialoguer::console::Term::stderr().is_term();
+    let interactive = !args.yes && dialoguer::console::Term::stderr().is_term();
 
     let name = match args.name.as_deref() {
         Some(v) => v.to_string(),
@@ -207,20 +204,24 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         None => "my-agent".to_string(),
     };
 
-    let output_dir = match &args.output_dir {
-        Some(p) => {
-            std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()))?
+    let output_dir = if args.global {
+        default_output_dir(args)
+    } else {
+        match &args.output_dir {
+            Some(p) => {
+                std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()))?
+            }
+            None if interactive => {
+                let default = default_output_dir(args).to_string_lossy().into_owned();
+                let s: String = dialoguer::Input::with_theme(&theme)
+                    .with_prompt("Config directory")
+                    .default(default)
+                    .interact_text()
+                    .context("config directory prompt")?;
+                std::path::absolute(PathBuf::from(s)).context("resolve config directory path")?
+            }
+            None => default_output_dir(args),
         }
-        None if interactive => {
-            let default = default_output_dir(args).to_string_lossy().into_owned();
-            let s: String = dialoguer::Input::with_theme(&theme)
-                .with_prompt("Config directory")
-                .default(default)
-                .interact_text()
-                .context("config directory prompt")?;
-            std::path::absolute(PathBuf::from(s)).context("resolve config directory path")?
-        }
-        None => default_output_dir(args),
     };
 
     let posture = match &args.posture {
@@ -236,8 +237,6 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
     } else {
         vec![Mapping::Anthropic]
     };
-
-    let interactive = dialoguer::console::Term::stderr().is_term();
 
     let extra_hosts_raw: String = match args.extra_hosts.as_deref() {
         Some(v) => v.to_string(),
