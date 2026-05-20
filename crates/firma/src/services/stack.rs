@@ -17,7 +17,6 @@ pub fn run(args: StackArgs) -> ExitCode {
     }
 }
 
-
 fn run_init(args: &InitArgs) -> ExitCode {
     let Some(config_dir) = args
         .config_dir
