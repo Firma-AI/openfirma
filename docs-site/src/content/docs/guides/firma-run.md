@@ -72,27 +72,47 @@ If `unshare --user --pid echo ok` itself fails with a permission error,
 enable unprivileged user namespaces (`sysctl -w kernel.unprivileged_userns_clone=1`
 on some distros) or pick a different backend.
 
-## Step 2: Use the bundled local example as a starting point
+## Step 2: Scaffold a config directory with `firma init`
 
-The repo ships a complete local-dev setup under `examples/firma-run/local/`. From the repo root:
-
-```bash
-examples/firma-run/local/setup.sh
-```
-
-This creates a `.local/` directory with:
-
-- `.local/firma.toml` — a working sectioned Sidecar config.
-- `.local/mapping-rules.toml` — a starter mapping (one stub rule).
-- `.local/audit-key.pem` — a freshly generated audit signing key.
-
-The setup script is idempotent — re-running it leaves existing files alone. Inspect the generated config:
+`firma init` creates a complete working configuration directory — sidecar + authority config, Cedar policy, mapping rules, and an authority keypair — in a single step:
 
 ```bash
-cat .local/firma.toml
+firma init --name my-agent --posture dev --mapping anthropic
 ```
 
-You'll see `[sidecar.mapping].default_protected = false` and a `file` audit sink. For a real workload, you'd switch to `default_protected = true` and tighten the mapping. For first-touch, leave it as is.
+This writes to the default Firma config directory (`~/.config/firma` on Linux/macOS). To write somewhere else, pass `--output-dir`:
+
+```bash
+firma init --name my-agent --posture dev --mapping anthropic --output-dir .local
+```
+
+Generated layout:
+
+```
+~/.config/firma/
+  firma.toml                   — sidecar + authority unified config
+  firma-run.toml               — runtime profiles (workspace mounts, identity)
+  mapping-rules.toml           — base mapping rules
+  mappings/anthropic.toml      — Anthropic endpoint mapping
+  policies/dev.cedar           — Cedar enforcement policy
+  issuance-policies/issuance.cedar
+  .runtime/
+    authority.key              — authority signing keypair (preserved on re-run)
+    audit.key                  — demo audit signing key
+    revocations.txt
+```
+
+`firma init` is idempotent — re-running preserves existing files; pass `--force` to overwrite (the authority keypair is always preserved unless `--force`). Preview without writing:
+
+```bash
+firma init --dry-run
+```
+
+Inspect the generated config:
+
+```bash
+cat ~/.config/firma/firma.toml
+```
 
 ## Step 3: Run with Per-Run Sidecar (Default)
 
@@ -120,7 +140,7 @@ or operate with a pre-managed sidecar (systemd / `firma stack start`).
 In a dedicated terminal:
 
 ```bash
-cargo run --release -p firma -- sidecar -c .local/firma.toml
+firma sidecar -c ~/.config/firma/firma.toml
 ```
 
 Wait for the `sidecar ready` line.
@@ -239,19 +259,16 @@ For Stage 1 to allow the call, the Sidecar must have a capability matching `(ses
 **Per-run capability.** Pass `--capability-file` to `firma run`. The wrapper writes the file to a host-side path the Sidecar reads. Right for one-off invocations.
 
 ```bash
-firma authority -c .local/firma.toml issue \
+firma authority -c ~/.config/firma/firma.toml issue \
   --agent-id local-dev \
   --session-id $(uuidgen) \
   --action communication.external.send \
-  --output .local/capability-local-dev.toml
+  --output ~/.config/firma/.runtime/capability-local-dev.toml
 
-# Note: the setup.sh-generated .local/firma.toml is sidecar-only (no
-# [authority] section). To run `firma authority`, add an [authority]
-# section to .local/firma.toml first, or point -c at a file that has one.
-
-cargo run --release -p firma -- run \
+firma run \
+  --config ~/.config/firma/firma-run.toml \
   --profile generic \
-  --capability-file .local/capability-local-dev.toml \
+  --capability-file ~/.config/firma/.runtime/capability-local-dev.toml \
   -- curl https://example.com
 ```
 
