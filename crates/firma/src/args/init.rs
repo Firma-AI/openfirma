@@ -52,6 +52,7 @@ pub struct InitArgs {
 
 /// Cedar enforcement posture for `firma init`.
 #[derive(Debug, Clone, ValueEnum)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 pub enum Posture {
     /// Default-deny + communication only. No code operations.
     Strict,
@@ -127,6 +128,7 @@ impl Posture {
 
 /// Mapping file selection for `firma init`.
 #[derive(Debug, Clone, ValueEnum)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 pub enum Mapping {
     /// Anthropic Claude API (api.anthropic.com).
     Anthropic,
