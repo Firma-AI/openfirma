@@ -1,4 +1,4 @@
-![OpenFirma](docs-site/src/assets/openfirma-logo.png)
+<img src="docs-site/src/assets/openfirma-logo.png" alt="OpenFirma" width="200"/>
 
 # OpenFirma
 
