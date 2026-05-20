@@ -141,22 +141,43 @@ detect_download_tool() {
 }
 
 # fetch_to <url> <dest-path>
+# GitHub access token (env GITHUB_TOKEN) is added as a Bearer auth header
+# when present, so CI runs against a private repo work without user setup.
 fetch_to() {
     if [ "$DOWNLOAD_TOOL" = "curl" ]; then
-        run "curl -fsSL --proto '=https' --tlsv1.2 -o '$2' '$1'"
+        if [ -n "${GITHUB_TOKEN:-}" ]; then
+            run "curl -fsSL --proto '=https' --tlsv1.2 -H 'Authorization: Bearer ${GITHUB_TOKEN}' -o '$2' '$1'"
+        else
+            run "curl -fsSL --proto '=https' --tlsv1.2 -o '$2' '$1'"
+        fi
     else
-        run "wget -qO '$2' '$1'"
+        if [ -n "${GITHUB_TOKEN:-}" ]; then
+            run "wget -q --header='Authorization: Bearer ${GITHUB_TOKEN}' -O '$2' '$1'"
+        else
+            run "wget -q -O '$2' '$1'"
+        fi
     fi
 }
 
 # fetch_redirect <url> -> prints final URL after redirects
 fetch_redirect() {
     if [ "$DOWNLOAD_TOOL" = "curl" ]; then
-        curl -sILo /dev/null -w '%{url_effective}' --proto '=https' --tlsv1.2 -L "$1"
+        if [ -n "${GITHUB_TOKEN:-}" ]; then
+            curl -sILo /dev/null -w '%{url_effective}' --proto '=https' --tlsv1.2 \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" -L "$1"
+        else
+            curl -sILo /dev/null -w '%{url_effective}' --proto '=https' --tlsv1.2 -L "$1"
+        fi
     else
         # --spider issues HEAD-equivalent. Server-response captures Location.
-        wget --spider --max-redirect=0 -S "$1" 2>&1 \
-            | awk 'tolower($1)=="location:"{print $2; exit}'
+        if [ -n "${GITHUB_TOKEN:-}" ]; then
+            wget --spider --max-redirect=0 -S \
+                --header="Authorization: Bearer ${GITHUB_TOKEN}" "$1" 2>&1 \
+                | awk 'tolower($1)=="location:"{print $2; exit}'
+        else
+            wget --spider --max-redirect=0 -S "$1" 2>&1 \
+                | awk 'tolower($1)=="location:"{print $2; exit}'
+        fi
     fi
 }
 

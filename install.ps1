@@ -34,6 +34,15 @@ $ProgressPreference    = 'SilentlyContinue'
 $QuickstartUrl = 'https://firma-ai.github.io/openfirma/quickstart/'
 $GitHubRepo    = 'Firma-AI/openfirma'
 
+# Auth header for downloads when GITHUB_TOKEN is set. Used by CI runs
+# against a private repo; harmless when unset.
+function Get-AuthHeaders {
+    if ($env:GITHUB_TOKEN) {
+        return @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
+    }
+    return @{}
+}
+
 function Write-Info ($msg) { Write-Host "[firma-installer] $msg" }
 function Write-Warn ($msg) { Write-Warning "[firma-installer] $msg" }
 function Stop-Install {
@@ -106,6 +115,7 @@ function Resolve-FirmaVersion {
     $req = [System.Net.HttpWebRequest]::Create("https://github.com/$GitHubRepo/releases/latest")
     $req.AllowAutoRedirect = $false
     $req.Method = 'HEAD'
+    if ($env:GITHUB_TOKEN) { $req.Headers.Add('Authorization', "Bearer $env:GITHUB_TOKEN") }
     $location = $null
     try {
         $resp = $req.GetResponse()
@@ -167,12 +177,13 @@ function Get-FirmaArchive ($TmpDir) {
     $script:ArchivePath  = Join-Path $TmpDir $script:ArchiveName
     $script:ChecksumPath = "$script:ArchivePath.sha256"
     $base = "https://github.com/$GitHubRepo/releases/download/$script:Version"
+    $script:Headers = Get-AuthHeaders
     Write-Info "downloading $script:ArchiveName ..."
     Invoke-Step "Invoke-WebRequest $base/$script:ArchiveName" {
-        Invoke-WebRequest -UseBasicParsing -Uri "$base/$script:ArchiveName"        -OutFile $script:ArchivePath
+        Invoke-WebRequest -UseBasicParsing -Headers $script:Headers -Uri "$base/$script:ArchiveName"        -OutFile $script:ArchivePath
     }
     Invoke-Step "Invoke-WebRequest $base/$script:ArchiveName.sha256" {
-        Invoke-WebRequest -UseBasicParsing -Uri "$base/$script:ArchiveName.sha256" -OutFile $script:ChecksumPath
+        Invoke-WebRequest -UseBasicParsing -Headers $script:Headers -Uri "$base/$script:ArchiveName.sha256" -OutFile $script:ChecksumPath
     }
 }
 
