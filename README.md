@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/openfirma-logo-animated.gif" alt="OpenFirma" width="440" />
+  <img src="docs-site/src/assets/openfirma-logo-animated.gif" alt="OpenFirma" width="440" />
   <br/>
   <br/>
 
