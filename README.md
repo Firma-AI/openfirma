@@ -3,10 +3,6 @@
 </p>
 
 <p align="center">
-  <strong>OpenFirma</strong> — a runtime enforcement boundary for AI agents.
-</p>
-
-<p align="center">
   <a href="https://firma-ai.github.io/openfirma/">Docs</a> ·
   <a href="https://firma-ai.github.io/openfirma/quickstart/">Quickstart</a> ·
   <a href="https://firma-ai.github.io/openfirma/concepts/architecture/">Architecture</a> ·
@@ -15,7 +11,7 @@
 
 ---
 
-OpenFirma governs what an AI agent is allowed to do at the process boundary. Every outbound call is intercepted, classified, checked against policy, and audited — before it leaves the machine.
+OpenFirma governs what an AI agent is allowed to do at the process boundary. Every outbound call is intercepted, classified, checked against policy, and audited before it leaves the machine.
 
 ---
 
@@ -23,7 +19,7 @@ OpenFirma governs what an AI agent is allowed to do at the process boundary. Eve
 
 ### Install
 
-The fastest way to install is with the install script — no Rust or build tools required:
+The fastest way to install is with the install script, without Rust or build tools:
 
 ```bash
 curl -sSf https://install.openfirma.ai | sh
@@ -46,7 +42,7 @@ brew install firma
 
 ### Run the demo
 
-Once `firma` is installed, run the deterministic demo — no API keys required:
+Once `firma` is installed, run the deterministic demo without API keys:
 
 ```bash
 firma stack init
@@ -77,7 +73,7 @@ firma stack start --detach
 # Watch live decisions
 firma monitor
 
-# Wrap any command — all outbound traffic is governed
+# Wrap any command, all outbound traffic is governed
 firma run --profile generic -- curl https://example.com
 
 # Stop the stack
@@ -186,7 +182,7 @@ OpenFirma has three runtime pieces.
 
 **The Sidecar** is the local enforcement point. Every outbound request from the agent passes through it. It normalizes the request into a canonical action class, validates the agent's capability token, evaluates Cedar policy, injects credentials if needed, dispatches allowed traffic, and writes a signed audit event.
 
-**The Authority** is the trust root. It signs short-lived capability tokens, streams policy bundles, and pushes revocations. The Sidecar holds all of this in local memory — it does not call the Authority on every request.
+**The Authority** is the trust root. It signs short-lived capability tokens, streams policy bundles, and pushes revocations. The Sidecar holds all of this in local memory and does not call the Authority on every request.
 
 **`firma run`** is the optional sandbox launcher. It starts the agent inside an OS-native sandbox (`bwrap` on Linux, `sandbox-exec` on macOS, WSL2 on Windows) and routes all network traffic toward the Sidecar. Without it, proxy environment variables can route cooperative agents. With it, bypassing the Sidecar is structurally prevented.
 
@@ -198,7 +194,7 @@ flowchart TB
         authority -->|"Capability tokens · Policy bundles · Revocations"| state
     end
 
-    subgraph dataPath["Data path — every outbound request"]
+    subgraph dataPath["Data path: every outbound request"]
         agent["Agent process"]
         sidecar["Sidecar"]
         upstream["External service"]
@@ -219,14 +215,14 @@ The enforcement pipeline inside the Sidecar:
 ReadinessFlag → Normalizer → Stage 1: Capability validation → Stage 2: Cedar policy → Credential injection → Connector → Audit
 ```
 
-Every stage short-circuits on failure. If the policy bundle is stale, if the capability token is expired or revoked, or if the action cannot be classified — the request is denied. There is no LLM on the decision path.
+Every stage short-circuits on failure. If the policy bundle is stale, if the capability token is expired or revoked, or if the action cannot be classified, the request is denied. There is no LLM on the decision path.
 
 Four invariants shape every design choice:
 
-- **Fail closed** — uncertainty becomes DENY
-- **No network on the hot path** — authorization is local, deterministic, sub-millisecond
-- **Determinism** — same request + same state = same decision, always
-- **Envelope immutability** — policy sees the same envelope that audit records
+- **Fail closed:** uncertainty becomes DENY
+- **No network on the hot path:** authorization is local, deterministic, sub-millisecond
+- **Determinism:** same request plus same state equals same decision, always
+- **Envelope immutability:** policy sees the same envelope that audit records
 
 For more detail: [Architecture & invariants](https://firma-ai.github.io/openfirma/concepts/architecture/) · [The enforcement pipeline](https://firma-ai.github.io/openfirma/concepts/pipeline/) · [Action classes](https://firma-ai.github.io/openfirma/concepts/action-classes/)
 
@@ -235,7 +231,7 @@ For more detail: [Architecture & invariants](https://firma-ai.github.io/openfirm
 ## Repository layout
 
 ```
-crates/       Rust workspace — sidecar, authority, launcher, shared types, demos
+crates/       Rust workspace: sidecar, authority, launcher, shared types, demos
 examples/     Demo stacks, agents, policy files, mapping files, e2e assets
 docs/         Architecture notes, CLI reference, configuration reference
 docs-site/    OpenFirma documentation site (Starlight)
