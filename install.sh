@@ -259,7 +259,9 @@ check_existing() {
 
 setup_tmp() {
     TMP_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t firma-installer)
-    [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ] || die "could not create temporary directory"
+    if [ -z "$TMP_DIR" ] || [ ! -d "$TMP_DIR" ]; then
+        die "could not create temporary directory"
+    fi
     trap 'rm -rf "$TMP_DIR"' EXIT INT HUP TERM
 }
 
