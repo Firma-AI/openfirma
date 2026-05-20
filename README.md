@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/openfirma-logo-animated-slowblink - Copia.gif" alt="OpenFirma" width="440"/>
+  <img src="assets/openfirma-logo-animated-slowblink - Copia.gif" alt="OpenFirma" width="1000"/>
 
   <br/>
   <br/>
@@ -10,7 +10,6 @@
 
   <br/>
 
-  &nbsp;·&nbsp;
   [Docs](https://firma-ai.github.io/openfirma)
   &nbsp;·&nbsp;
   [Website](https://openfirma.netlify.app/)
