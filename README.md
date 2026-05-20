@@ -13,119 +13,94 @@ OpenFirma is a runtime enforcement boundary for AI agents. Every outbound call a
   <a href="https://firma-ai.github.io/openfirma/blog/">Blog</a>
 </p>
 
-## Install
-
-```bash
-curl -sSf https://install.openfirma.ai | sh
+## What is OpenFirma?
+ 
+OpenFirma is the authority layer for autonomous software. It sits in the agent's outbound path and decides, per call, whether a tool call happens: using Cedar policies you own, evaluated locally, with no model on the hot path.
+ 
+- **Structural interception:** every modality of action funnels through the Sidecar, with the kernel sandbox as the floor
+- **Deterministic intent:** every tool call is classified into an enforceable action class; Cedar evaluates the same input to the same decision, every time
+- **Per-call enforcement:** policy is evaluated before execution, against current policy and accumulated session state
+- **JIT credentials:** a federated broker issues credentials per call on ALLOW; the agent never holds raw tokens; exfiltration is structurally impossible
+- **Signed audit:** every decision emits a signed execution event with the exact envelope the policy saw
+---
+ 
+## Architecture
+ 
+```mermaid
+flowchart LR
+    agent["Agent"] -->|"tool call"| sidecar["Sidecar"]
+    authority["Authority"] -. "capability tokens\npolicy bundles\nrevocations" .-> sidecar
+    sidecar -->|"ALLOW + creds injected"| world["APIs · tools · services"]
+    sidecar -->|"DENY"| blocked["blocked"]
+    sidecar --> audit["Signed audit log"]
 ```
-
-On macOS you can also use Homebrew:
-
+ 
+**Authority** — policy lives in one place. It issues short-lived capability tokens and streams Cedar policy bundles to the Sidecar. One policy file governs every agent, every call, every surface. The Authority is never on the hot path: once the Sidecar has the token and policy bundle, all decisions are local.
+ 
+**Sidecar** — the interception layer. Every outbound action funnels through it. Stage 1 validates the capability token locally (signature, integrity, revocation) in microseconds. Stage 2 evaluates the Cedar policy against the current session state. Sub-millisecond. Deterministic. On ALLOW, credentials are injected; the agent never holds raw tokens.
+ 
+**Audit emitter** — every decision, ALLOW or DENY, produces a signed `ExecutionEvent` written to your configured sink (file, stdout, or gRPC).
+ 
+> [Architecture & invariants](https://firma-ai.github.io/openfirma/concepts/architecture/) · [The enforcement pipeline](https://firma-ai.github.io/openfirma/concepts/pipeline/)
+ 
+---
+ 
+## Run your coding agent with containment
+ 
+### Quickstart
+ 
+**macOS:**
+ 
 ```bash
 brew tap Firma-AI/openfirma
 brew install firma
 ```
-
-If you prefer to build from source, you need Rust 1.86+, `protoc`, and `make`:
-
+ 
+**Linux / other:**
+ 
 ```bash
-git clone https://github.com/firma-ai/openfirma
-cd openfirma
-make install
-cargo build --workspace
+curl -sSf https://install.openfirma.ai | sh
 ```
-
-## Run the demo
-
+ 
+Then wrap your agent:
+ 
 ```bash
-firma stack init
-make demo-ci
+firma run --profile claude-code -- claude
 ```
-
-No API keys required. The demo starts a local Authority and Sidecar, sends one allowed and one denied request, and verifies both decisions were audited.
-
-## Govern your first agent
-
-### 1. Start the stack
-
-```bash
-firma stack init
-firma stack start --detach
+ 
+No Rust toolchain, no `protoc`, no API keys required to get started.
+ 
+> **Build from source:** if you want to contribute or run the deterministic CI demo, you need Rust 1.86+ and `protoc`. Clone the repo and run `make demo-ci`.
+ 
+### Demo
+ 
+> _Coming soon — the demo section will be updated once the new agent demo flow is finalized._
+ 
+---
+ 
+## Repo structure
+ 
+```text
+openfirma/
+├── crates/
+│   ├── firma/              # CLI entrypoint: firma run, firma stack, firma monitor, firma doctor
+│   ├── firma-sidecar/      # Local enforcement point: interceptors, pipeline, connectors
+│   ├── firma-authority/    # Mini Authority: file-based trust root for local development
+│   ├── firma-core/         # Shared types, Cedar schema, action classes, audit event format
+│   ├── firma-run/          # Sandbox launcher: bwrap backend, profile resolution, autostart
+│   ├── firma-stack/        # Stack supervisor: Authority + Sidecar lifecycle as one unit
+│   ├── firma-config/       # Platform config-path discovery
+│   └── firma-proto/        # Protobuf/gRPC service definitions
+│
+├── examples/
+│   ├── demo/               # Quickstart demo: deterministic CI, LLM-backed, interactive REPL
+│   ├── agents/             # Intentionally risky demo agents (OpenAI Agents SDK + Google ADK)
+│   ├── generic-agent/      # firma run profile and stack runner for wrapping any agent command
+│   └── firma-run/          # Focused examples for the governed launcher
+│
+├── docs/                   # Architecture, CLI reference, configuration reference
+├── docs-site/              # Astro/Starlight documentation site (firma-ai.github.io/openfirma)
+└── fuzz/                   # Fuzz targets
 ```
-
-### 2. Run any command through the enforcement boundary
-
-```bash
-firma run --profile generic -- curl https://example.com
-```
-
-### 3. Watch live decisions
-
-```bash
-firma monitor
-```
-
-### 4. Stop
-
-```bash
-firma stack stop
-```
-
-## How it works
-
-OpenFirma has three pieces.
-
-**The Sidecar** is the local enforcement point. It intercepts every outbound request, normalizes it into a canonical action class, validates the agent's capability token, evaluates Cedar policy, and writes a signed audit event.
-
-**The Authority** is the trust root. It signs short-lived capability tokens, streams policy bundles, and pushes revocations. The Sidecar holds everything in local memory and does not call the Authority on each request.
-
-**`firma run`** is the optional sandbox launcher. It starts the agent inside an OS-native sandbox (`bwrap` on Linux, `sandbox-exec` on macOS, WSL2 on Windows) and forces all traffic through the Sidecar. Without it, proxy environment variables route cooperative agents. With it, bypassing the Sidecar is structurally prevented.
-
-```mermaid
-flowchart TB
-    subgraph controlPlane["Control plane"]
-        authority["Authority"]
-        state["Sidecar local state"]
-        authority -->|"Capability tokens · Policy bundles · Revocations"| state
-    end
-
-    subgraph dataPath["Data path: every outbound request"]
-        agent["Agent process"]
-        sidecar["Sidecar"]
-        upstream["External service"]
-        audit["Signed audit log"]
-        agent -->|"HTTP or HTTPS"| sidecar
-        sidecar -->|"ALLOW"| upstream
-        sidecar -->|"DENY / ABORT"| agent
-        sidecar -->|"Decision event"| audit
-    end
-
-    firmaRun["firma run"] -. "sandbox launcher (optional)" .-> agent
-    state -. "used locally by" .-> sidecar
-```
-
-## CLI
-
-`firma stack init` — scaffold config, keys, and policy dirs  
-`firma stack start [--detach]` — start Authority and Sidecar  
-`firma stack stop` — graceful shutdown  
-`firma stack status` — check health  
-`firma run --profile <name> -- <command>` — wrap a command with enforcement  
-`firma monitor` — live tail of audit events  
-`firma policy validate <file>` — validate a Cedar policy offline  
-`firma policy test <fixture>` — test a policy decision against a fixture  
-`firma authority issue` — issue a capability token  
-`firma doctor` — diagnose installation issues  
-
-## Repository layout
-
-```
-crates/       Rust workspace: sidecar, authority, launcher, shared types, demos
-examples/     Demo stacks, agents, policy files, mapping files, e2e assets
-docs/         Architecture notes, CLI reference, configuration reference
-docs-site/    OpenFirma documentation site
-```
-
-## License
-
-[Apache 2.0](LICENSE)
+ 
+**Start reading here:** [`crates/firma-sidecar`](crates/firma-sidecar) for the enforcement pipeline, [`crates/firma-authority`](crates/firma-authority) for the trust root, [`examples/demo`](examples/demo) for the fastest path to a running system.
