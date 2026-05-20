@@ -66,7 +66,7 @@ No Rust toolchain, no `protoc`, no API keys required to get started.
 ## 3. Architecture
 
 <div align="center">
-  <img src="docs-site/src/assets/openfirma-flow-slow.gif" alt="OpenFirma flow diagram" width="70%" />
+  <img src="docs-site/src/assets/openfirma-flow-slow.gif" alt="OpenFirma flow diagram" width="100%" />
 </div>
 
 **[Authority](crates/firma-authority/)** — policy lives in one place. It issues short-lived capability tokens and streams Cedar policy bundles to the Sidecar. One policy file governs every agent, every call, every surface. Never on the hot path: once the Sidecar has the token and policy bundle, all decisions are local.
@@ -93,3 +93,7 @@ No Rust toolchain, no `protoc`, no API keys required to get started.
 | **[`examples/generic-agent`](examples/generic-agent/)** | `firma run` profile and stack runner for wrapping any agent command |
 | **[`docs/`](docs/)** | Architecture, CLI reference, configuration reference |
 | **[`docs-site/`](docs-site/)** | Astro/Starlight documentation site |
+
+## 5. License
+ 
+Apache 2.0. See [LICENSE](LICENSE).
