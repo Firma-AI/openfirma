@@ -81,6 +81,17 @@ impl Posture {
         }
     }
 
+    /// Human-readable description for catalogue display.
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Strict => "Default-deny + communication only (no code ops)",
+            Self::Dev => "Adds code.read/write, issues, package install",
+            Self::DevWithDeleteWatch => {
+                "Dev + code.destructive allowed (local-exec / delete-watch)"
+            }
+        }
+    }
+
     /// Actions requested in the preflight token for this posture.
     pub fn requested_actions(&self) -> Vec<&'static str> {
         match self {
@@ -150,6 +161,27 @@ impl Mapping {
             Self::Cargo => "cargo",
             Self::Stripe => "stripe",
             Self::Custom => "custom",
+        }
+    }
+
+    /// Human-readable description for catalogue display.
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Anthropic => "api.anthropic.com — Anthropic Claude API (CONNECT, no MITM)",
+            Self::Openai => "api.openai.com — OpenAI API (CONNECT, no MITM)",
+            Self::Github => {
+                "api.github.com — GitHub REST API (MITM for per-endpoint classification)"
+            }
+            Self::Gmail => {
+                "gmail.googleapis.com — Gmail REST API (MITM for per-endpoint classification)"
+            }
+            Self::Npm => "registry.npmjs.org — npm package registry",
+            Self::Pypi => "pypi.org, files.pythonhosted.org — PyPI",
+            Self::Cargo => "crates.io, static.crates.io — Rust package registry",
+            Self::Stripe => {
+                "api.stripe.com — Stripe REST API (MITM optional — check SDK cert pinning first)"
+            }
+            Self::Custom => "Empty template — fill in manually",
         }
     }
 
