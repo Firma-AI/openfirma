@@ -3,11 +3,13 @@
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use firma_sidecar::{config, handler, health, startup};
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, info};
 
-use crate::args::sidecar::{Args, SidecarCommand};
+use crate::args::sidecar::{Args, SidecarCommand, StartArgs, StopArgs};
 use crate::signal::wait_for_shutdown;
 
 /// Entry point for `firma sidecar [SUBCOMMAND]`.
@@ -19,35 +21,89 @@ use crate::signal::wait_for_shutdown;
 pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
     match args.command {
         Some(SidecarCommand::Status(ref status)) => crate::services::sidecar_status::run(status),
+        Some(SidecarCommand::Start(start)) => Ok(run_start(start)),
+        Some(SidecarCommand::Stop(stop)) => Ok(run_stop(stop)),
         None => serve(args.serve).await,
     }
 }
 
+fn run_start(args: StartArgs) -> ExitCode {
+    info!(
+        detach = args.detach,
+        config = ?args.config,
+        state_dir = ?args.state_dir,
+        "firma sidecar start invoked"
+    );
+    let cfg = match firma_stack::resolve_stack_config(args.config.as_deref()) {
+        Ok(cfg) => cfg,
+        Err(error) => return fail(&format!("config: {error}")),
+    };
+    let state_dir = match crate::services::init::resolve_state_dir(args.state_dir) {
+        Ok(path) => path,
+        Err(error) => return fail(&error),
+    };
+    let mode = if args.detach {
+        firma_stack::StartMode::Detached
+    } else {
+        firma_stack::StartMode::Foreground
+    };
+    match firma_stack::start(&cfg, &state_dir, mode) {
+        Ok(_) => {
+            if mode == firma_stack::StartMode::Detached {
+                println!("firma sidecar running, state_dir={}", state_dir.display());
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => fail(&format!("start: {error}")),
+    }
+}
+
+fn run_stop(args: StopArgs) -> ExitCode {
+    info!(timeout = args.timeout, "firma sidecar stop invoked");
+    let state_dir = match crate::services::init::resolve_state_dir(args.state_dir) {
+        Ok(path) => path,
+        Err(error) => return fail(&error),
+    };
+    match firma_stack::stop(&state_dir, Duration::from_secs(args.timeout)) {
+        // Either path succeeded as long as the call returned. `forced=true`
+        // means at least one child needed a hard kill — common when the
+        // components hold long-lived gRPC streams that block tonic's
+        // graceful shutdown. The sidecar is down either way.
+        Ok(_) => ExitCode::SUCCESS,
+        Err(error) => fail(&format!("stop: {error}")),
+    }
+}
+
+fn fail(msg: &str) -> ExitCode {
+    eprintln!("firma sidecar: {msg}");
+    ExitCode::from(2)
+}
+
 async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode> {
-    tracing::debug!("firma sidecar starting");
+    debug!("firma sidecar starting");
 
     let resolved =
         firma_config::resolve_config("sidecar", args.config.as_deref(), &firma_config::SystemDirs)?;
-    tracing::info!(
+    info!(
         path = %resolved.config_file.display(),
         source = ?resolved.source,
         "config resolved"
     );
     let config = read_config(&resolved)?;
-    tracing::debug!("configuration loaded successfully");
+    debug!("configuration loaded successfully");
 
     let exit = CancellationToken::new();
 
-    tracing::debug!(
+    debug!(
         "initializing health check server at {}",
         args.health_bind_addr
     );
     let health_server =
         health::HealthcheckServer::bind(args.health_bind_addr, exit.clone()).await?;
     let health_server = tokio::spawn(health_server.serve());
-    tracing::debug!("health check server listening at {}", args.health_bind_addr);
+    debug!("health check server listening at {}", args.health_bind_addr);
 
-    tracing::debug!("registering signal handlers for graceful shutdown");
+    debug!("registering signal handlers for graceful shutdown");
     let shutdown_handler = {
         let exit = exit.clone();
         tokio::spawn(async move {
@@ -92,7 +148,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         audit_payload_tx,
     ));
 
-    tracing::debug!(mode = %config.interceptor.mode, "starting interceptor");
+    debug!(mode = %config.interceptor.mode, "starting interceptor");
     let interceptor = startup::spawn_interceptor(&config, handler, exit.clone())?;
 
     let local_exec_handle = startup::spawn_local_exec_endpoint(&config, exit.clone())?;
@@ -123,7 +179,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         authority_stream_tasks,
         local_exec_task
     );
-    tracing::debug!("firma sidecar exiting");
+    debug!("firma sidecar exiting");
 
     Ok(ExitCode::SUCCESS)
 }
@@ -158,11 +214,11 @@ fn emit_ready_sequence(
 fn emit_operator_routing_hints(config: &config::SidecarConfig, interceptor_addr: &str) {
     if config.interceptor.mode == config::InterceptorMode::HttpProxy {
         let proxy = format!("http://{interceptor_addr}");
-        tracing::info!(
+        info!(
             proxy = %proxy,
             "http_proxy mode active: clients must route traffic through this proxy for sidecar enforcement/audit"
         );
-        tracing::info!(
+        info!(
             "set HTTP_PROXY/HTTPS_PROXY/ALL_PROXY or run via firma run wrapper to guarantee coverage"
         );
     }

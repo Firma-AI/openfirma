@@ -76,7 +76,7 @@ Field-by-field:
 
 ## Tail the log
 
-If the Sidecar is running under [`firma stack`](../manage-the-stack/), use `firma monitor` — it knows the state-dir layout and adds filtering by decision, action class, and time window:
+If the Sidecar is running under [`firma sidecar start`](../manage-the-stack/), use `firma monitor` — it knows the state-dir layout and adds filtering by decision, action class, and time window:
 
 ```bash
 firma monitor --state-dir /var/run/firma --source audit --decision deny
