@@ -2,11 +2,11 @@
 
 pub mod authority;
 pub mod doctor;
+pub mod init;
 pub mod monitor;
 pub mod policy;
 pub mod run;
 pub mod sidecar;
-pub mod stack;
 pub mod supervise;
 pub mod token;
 
@@ -38,6 +38,8 @@ pub enum Command {
     /// Print a structured diagnostic report of installed components,
     /// reachable endpoints, and resolved configuration.
     Doctor(doctor::Args),
+    /// Scaffold a fresh project: config dir, keys, default policies.
+    Init(init::InitArgs),
     /// Tail audit and component logs.
     Monitor(monitor::Args),
     /// Validate and unit-test Cedar policy bundles.
@@ -47,11 +49,9 @@ pub enum Command {
     ProxyBridge(run::ProxyBridgeArgs),
     /// Wrap an agent process via firma-run.
     Run(run::RunArgs),
-    /// Run the enforcement sidecar.
+    /// Run, start, stop, or inspect the enforcement sidecar.
     Sidecar(sidecar::Args),
-    /// Supervise authority + sidecar as one unit.
-    Stack(stack::StackArgs),
-    /// Internal detached stack supervisor.
+    /// Internal detached supervisor process.
     #[command(name = "__supervise", hide = true)]
     Supervise(supervise::Args),
     /// Manage local-exec governance tokens (approve / revoke).

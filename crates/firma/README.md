@@ -10,12 +10,14 @@ Single binary exposing every Firma OSS production component as a subcommand.
    passes through it; fail-closed.
 3. **`firma run`** — wrapper that confines an agent process inside a
    sandbox backend and forces all egress through the sidecar.
-4. **`firma stack`** — supervisor that runs authority + sidecar as one
-   unit (start, stop, status). Reuses the same library as
-   `firma-demo-tui`.
-5. **`firma monitor`** — read-only tail of audit events and component
-   logs from a running stack.
-6. **`firma doctor`** — one-shot diagnostic that prints what's installed,
+4. **`firma init`** — scaffold a fresh project: config dir, signing keys,
+   default policies. Also runs implicitly on first `firma run` if no
+   `firma.toml` is found.
+5. **`firma sidecar {start,stop,status}`** — operator-facing daemon
+   lifecycle for the sidecar (and the authority started alongside it).
+6. **`firma monitor`** — read-only tail of audit events and component
+   logs from a running sidecar.
+7. **`firma doctor`** — one-shot diagnostic that prints what's installed,
    reachable, and configured.
 
 ## Install
@@ -136,90 +138,99 @@ firma run --profile generic -- python agent.py
 
 Wrapped command and args after `--`.
 
-### `firma stack`
+### `firma init`
 
-Supervise the full stack (authority + sidecar) as one unit. Plug and play:
+Scaffold a fresh project: signing keys, default `firma.toml`, empty
+policy directories. Three usage shapes:
 
 ```bash
-# Scaffold one sectioned firma.toml + keys. Both dirs default when omitted
-# (config = XDG/platform config dir; state = FIRMA_STATE_DIR / $XDG_RUNTIME_DIR).
-firma stack init
-firma stack init --config-dir /etc/firma --state-dir /var/run/firma  # explicit
-
-# Boot. --config defaults to the discovered firma.toml; it is passed to
-# both children. State dir resolves from --state-dir / FIRMA_STATE_DIR / XDG.
-firma stack start                                                  # foreground
-firma stack start --detach                                         # daemon
-
-# Observe.
-firma stack status --state-dir /var/run/firma
-firma stack status --state-dir /var/run/firma --json
-
-# Tear down.
-firma stack stop --state-dir /var/run/firma
+firma init                                              # interactive wizard
+firma init --yes                                        # non-interactive defaults
+firma init --global                                     # user-global scaffold (~/.config/firma)
+firma init --agent codex --provider anthropic \
+           --workspace ./proj --authority local         # scripted full setup
 ```
+
+`firma run <agent>` invokes the same scaffold implicitly on first use
+when no `firma.toml` is discoverable, so the one-command path works
+from a fresh clone.
 
 Layout written by `init`:
 
 ```text
-<config_dir>/
+<workspace>/.firma/        # project-local config dir
   firma.toml            authority.key       audit.key
   mapping-rules.toml    policies/           issuance-policies/
 
-<state_dir>/
+<state_dir>/               # user-global runtime state (XDG default)
   revocations.txt
-  generated-firma-ca/   # populated by sidecar
-  # populated by start: authority.pid, sidecar.pid, stack.pid, stack.lock,
-  # authority.log, sidecar.log, supervisor.log, *.listen, audit.jsonl
+  generated-firma-ca/    # populated by the sidecar
 ```
 
-`init` writes a single sectioned `firma.toml` (`[authority]` +
-`[sidecar.*]`); there is no `firma-stack.toml`, `authority.toml`, or
-`sidecar.toml`. The post-init `next:` hint is just `firma stack start`.
+`firma.toml` is one sectioned file: `[project]`, `[authority]`,
+`[sidecar.*]`. The post-init `next:` hint is `firma run <agent>`
+(or `firma sidecar start` for the daemon path).
+
+`init` flags:
+
+| Flag                 | Default                     | Description                                            |
+| -------------------- | --------------------------- | ------------------------------------------------------ |
+| `--workspace <dir>`  | _cwd_ (wizard prompt)       | Project root; config lands at `<workspace>/.firma`.    |
+| `--global`           | _off_                       | Scaffold into the user-global config dir.              |
+| `--config-dir <dir>` | derived from above          | Advanced override; bypasses `--workspace`/`--global`.  |
+| `--agent <name>`     | wizard prompt / `generic`   | Persisted to `[project].agent`.                        |
+| `--provider <name>`  | wizard prompt / `anthropic` | Persisted to `[project].provider`.                     |
+| `--authority <val>`  | wizard prompt / `local`     | `local` or remote URL. Persisted to `[authority]`.     |
+| `--yes`              | _off_                       | Skip the wizard; use defaults for any unset flag.      |
+| `--state-dir <dir>`  | `FIRMA_STATE_DIR` / XDG     | User-global state (keys, revocations, generated CA).   |
+| `--force`            | _off_                       | Overwrite existing files.                              |
+| `--authority-listen` | `127.0.0.1:50051`           | Local authority gRPC listen address.                   |
+| `--sidecar-listen`   | `127.0.0.1:8080`            | Sidecar HTTP proxy listen.                             |
+
+### `firma sidecar` (daemon lifecycle)
+
+Operator-facing daemon control. `firma sidecar` with no subcommand still
+runs the enforcement server (used by `firma run` autostart).
+
+```bash
+# Start (foreground or detached). Discovers firma.toml; boots
+# authority + sidecar pair from the same file.
+firma sidecar start
+firma sidecar start --detach
+
+# Inspect (docker-ps-style across live per-run sidecars).
+firma sidecar status
+firma sidecar status --json
+firma sidecar status --daemon          # daemon-mode pid
+
+# Tear down (soft-signal then hard-kill after --timeout).
+firma sidecar stop --timeout 10
+```
 
 Subcommands:
 
 | Subcommand | Description                                              |
 | ---------- | -------------------------------------------------------- |
-| `init`     | Scaffold state directory with keys + default configs.    |
-| `start`    | Boot authority + sidecar. `--detach` forks a supervisor. |
-| `stop`     | Soft-signal then hard-kill on `--timeout` (default 10s). |
-| `status`   | Per-component pid, listen, state, uptime.                |
+| _(none)_   | Run the enforcement proxy in the foreground.             |
+| `start`    | Daemon-mode boot. `--detach` forks a supervisor.         |
+| `stop`     | Soft-signal then hard-kill on `--timeout`.               |
+| `status`   | docker-ps-style listing of live sidecars.                |
 
-`init` flags:
+`start` / `stop` flags:
 
-| Flag                 | Default               | Description                                     |
-| -------------------- | --------------------- | ----------------------------------------------- |
-| `--config-dir`       | XDG/platform config   | Where to write `firma.toml`, keys, policy dirs. |
-| `--state-dir`        | `FIRMA_STATE_DIR`/XDG | Where to write `revocations.txt` + CA dir.      |
-| `--force`            | _off_                 | Overwrite existing files.                       |
-| `--authority-listen` | `127.0.0.1:50051`     | Authority gRPC listen address.                  |
-| `--sidecar-listen`   | `127.0.0.1:8080`      | Sidecar HTTP proxy listen.                      |
-
-`start` / `stop` / `status` flags:
-
-| Flag          | Env               | Default                                      |
-| ------------- | ----------------- | -------------------------------------------- |
-| `--config`    | —                 | discovered `firma.toml` (`start` only)       |
-| `--state-dir` | `FIRMA_STATE_DIR` | `$XDG_RUNTIME_DIR/firma` → `/tmp/firma-$UID` |
-| `--detach`    | —                 | _off_ (`start` only)                         |
-| `--timeout`   | —                 | `2` seconds (`stop` only)                    |
-| `--json`      | —                 | _off_ (`status` only)                        |
-
-`start` resolves `firma.toml` via the shared Config Discovery precedence
-(see `docs/cli.md`) and passes that exact file to both children with
-`--config`. `--config` on `stop`/`status` is accepted for compatibility but
-not used to resolve state. `state_dir` is **never** a config-file key.
+| Flag          | Env                         | Default                                      |
+| ------------- | --------------------------- | -------------------------------------------- |
+| `--config`    | `FIRMA_SIDECAR_CONFIG_FILE` | discovered `firma.toml` (`start` only)       |
+| `--state-dir` | `FIRMA_STATE_DIR`           | `$XDG_RUNTIME_DIR/firma` → `/tmp/firma-$UID` |
+| `--detach`    | —                           | _off_ (`start` only)                         |
+| `--timeout`   | —                           | `2` seconds (`stop` only)                    |
 
 State-dir resolution order: `--state-dir` flag → `FIRMA_STATE_DIR` env →
 `$XDG_RUNTIME_DIR/firma` → `/tmp/firma-$UID` on Unix;
 `%LOCALAPPDATA%\firma\runtime` → `%TEMP%\firma` on Windows.
 
 Exit codes:
-- `status`: `0` all running, `1` any unhealthy/stopped, `2` internal error.
 - `stop`: `0` on success (graceful or forced hard-kill), `2` on error.
-
-Full reference: `docs/markdown/firma_stack_command.md`.
 
 ### `firma doctor`
 
@@ -297,7 +308,7 @@ completeness.
 | ---------------- | ---------------------------- | ---------------------------------------------- |
 | `__dns-stub`     | `firma run`                  | In-sandbox UDP/TCP DNS stub for the agent.     |
 | `__proxy-bridge` | `firma run`                  | TCP↔UDS bridge from sandbox to sidecar socket. |
-| `__supervise`    | `firma stack start --detach` | Re-attaches to authority + sidecar pidfiles.   |
+| `__supervise`    | `firma sidecar start --detach` | Re-attaches to authority + sidecar pidfiles. |
 
 Each takes a `--listen` (and `--upstream-uds` / `--state-dir`) flag set
 by its spawner.

@@ -1,4 +1,4 @@
-//! Tests for `firma stack init`.
+//! Tests for `firma init`.
 //!
 //! Verifies that the scaffolded unified `firma.toml` is syntactically
 //! valid, round-trips through the strict section loader, and that both
@@ -23,15 +23,15 @@ fn firma() -> Command {
 
 fn run_init(config_dir: &Path, state_dir: &Path) {
     let output = firma()
-        .args(["stack", "init", "--config-dir"])
+        .args(["init", "--yes", "--config-dir"])
         .arg(config_dir)
         .args(["--state-dir"])
         .arg(state_dir)
         .output()
-        .expect("spawn firma stack init");
+        .expect("spawn firma init");
     assert!(
         output.status.success(),
-        "stack init failed: stdout={} stderr={}",
+        "init failed: stdout={} stderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
@@ -89,18 +89,18 @@ fn init_handles_relative_paths() {
     let output = firma()
         .current_dir(&work)
         .args([
-            "stack",
             "init",
+            "--yes",
             "--config-dir",
             "../config",
             "--state-dir",
             "../state",
         ])
         .output()
-        .expect("spawn firma stack init");
+        .expect("spawn firma init");
     assert!(
         output.status.success(),
-        "stack init (relative) failed: stdout={} stderr={}",
+        "init (relative) failed: stdout={} stderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );

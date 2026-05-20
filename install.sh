@@ -52,7 +52,7 @@ Options:
                          Env: FIRMA_NO_BREW=1.
   --no-modify-path       Do not edit shell rc files. Print manual hint.
                          Env: FIRMA_NO_MODIFY_PATH=1.
-  --no-init              Do not prompt to run 'firma stack init'.
+  --no-init              Do not prompt to run 'firma init'.
                          Env: FIRMA_NO_INIT=1.
   --force                Overwrite an existing install without prompting.
                          Env: FIRMA_FORCE=1.
@@ -409,7 +409,7 @@ maybe_run_init() {
         return 1
     fi
     # shellcheck disable=SC2016
-    printf '[firma-installer] run `firma stack init` now? [Y/n] '
+    printf '[firma-installer] run `firma init` now? [Y/n] '
     read -r ans
     case "$ans" in
         ""|y|Y|yes|YES) return 0 ;;
@@ -422,18 +422,18 @@ post_install() {
     info "quickstart: ${QUICKSTART_URL}"
     if maybe_run_init; then
         if [ "$DRY_RUN" = "1" ]; then
-            info "(dry-run) would exec: firma stack init"
+            info "(dry-run) would exec: firma init"
             return
         fi
         # Use the freshly installed binary, not whatever was on PATH before.
         # On the brew branch, prefer brew's PATH; otherwise our install dir.
         if command -v firma >/dev/null 2>&1; then
-            exec firma stack init
+            exec firma init
         else
-            exec "${INSTALL_DIR}/firma" stack init
+            exec "${INSTALL_DIR}/firma" init
         fi
     else
-        info "next step: firma stack init"
+        info "next step: firma init"
     fi
 }
 
