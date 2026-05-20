@@ -33,11 +33,11 @@ flowchart TB
         audit["Signed audit log"]
         agent -->|"HTTP or HTTPS request"| sidecar
         sidecar -->|"ALLOW or PASSTHROUGH"| upstream
-        sidecar -->|"DENY or ABORT response"| agent
+        sidecar -->|"DENY / ABORT"| agent
         sidecar -->|"Decision event"| audit
     end
 
-    firmaRun["firma run"] -. "Optional sandbox launcher" .-> agent
+    firmaRun["firma run"] -. "sandbox launcher (optional)" .-> agent
     sidecarState -. "Used locally by" .-> sidecar
 ```
 
@@ -47,7 +47,9 @@ The **Sidecar** is the local enforcement point. Interceptors feed requests into 
 
 The **Authority** is the trust root. It issues capability tokens and streams policy bundles and revocation updates to Sidecars. It is not consulted for every request.
 
-`firma run` is the optional launcher. It starts the agent inside a sandbox and routes network traffic toward the Sidecar. Without it, proxy environment variables can route cooperative agents. With it, bypassing the Sidecar is much harder.
+`firma run` is the optional launcher. It starts the agent inside a sandbox and routes network traffic toward the Sidecar. Without it, proxy environment variables can route cooperative agents. With it, bypassing the Sidecar is much harder. The sandbox backend is selected by platform: `bwrap` on Linux, `vz` (via `sandbox-exec`) on macOS, and `wsl2` on Windows.
+
+Before any request is evaluated, the Sidecar checks that its local state is ready: both the policy bundle and the revocation cache must be hydrated. If either is missing or stale, the pipeline denies protected traffic immediately. This readiness check runs before normalization and before any enforcement stage.
 
 ## The Four Invariants
 
