@@ -1,8 +1,7 @@
-<p align="center">
+<p align="left">
   <img src="docs-site/src/assets/openfirma-logo.png" alt="OpenFirma" width="400"/>
 </p>
 
-# OpenFirma
 
 OpenFirma is a runtime enforcement boundary for AI agents. Every outbound call an agent makes is intercepted, classified against policy, and audited before it leaves the machine.
 
