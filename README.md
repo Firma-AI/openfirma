@@ -102,6 +102,7 @@ firma doctor --json | jq .
 <div align="center">
   <img src="docs-site/src/assets/openfirma-flow-slow.gif" alt="OpenFirma flow diagram" width="100%" />
 </div>
+<br/>
 
 **[Mini Authority](crates/firma-authority/):** reference local Authority for development. Mints short-lived, cryptographically signed permission tokens for agents, loads policy rules from disk, and streams policy updates and revocation events to connected Sidecars over persistent connections. Sits off the per-request path.
 
