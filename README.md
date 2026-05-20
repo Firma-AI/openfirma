@@ -117,28 +117,28 @@ firma doctor --json | jq .
 
 | | |
 |---|---|
-| **[`crates/firma`](crates/firma/)** | CLI entrypoint: `firma run`, `firma stack`, `firma monitor`, `firma doctor` |
-| **[`crates/firma-sidecar`](crates/firma-sidecar/)** | The enforcement Sidecar: interceptors, pipeline, connectors |
-| **[`crates/firma-authority`](crates/firma-authority/)** | Mini Authority: file-based trust root for local development |
-| **[`crates/firma-core`](crates/firma-core/)** | Shared types, Cedar schema, action classes, audit event format |
-| **[`crates/firma-run`](crates/firma-run/)** | Agent process confinement: bwrap backend, profile resolution, autostart |
-| **[`crates/firma-stack`](crates/firma-stack/)** | Stack supervisor: Authority + Sidecar lifecycle as one unit |
-| **[`crates/firma-proto`](crates/firma-proto/)** | Protobuf/gRPC service definitions |
+| [`crates/firma`](crates/firma/) | CLI entrypoint: `firma run`, `firma stack`, `firma monitor`, `firma doctor` |
+| [`crates/firma-sidecar`](crates/firma-sidecar/) | The enforcement Sidecar: interceptors, pipeline, connectors |
+| [`crates/firma-authority`](crates/firma-authority/) | Mini Authority: file-based trust root for local development |
+| [`crates/firma-core`](crates/firma-core/) | Shared types, Cedar schema, action classes, audit event format |
+| [`crates/firma-run`](crates/firma-run/) | Agent process confinement: bwrap backend, profile resolution, autostart |
+| [`crates/firma-stack`](crates/firma-stack/) | Stack supervisor: Authority + Sidecar lifecycle as one unit |
+| [`crates/firma-proto`](crates/firma-proto/) | Protobuf/gRPC service definitions |
 
 **Examples**
 
 | | |
 |---|---|
-| **[`examples/demos`](examples/demos/)** | TUI demo runner with three self-contained enforcement scenarios |
-| **[`examples/agents`](examples/agents/)** | Intentionally risky demo agents (OpenAI Agents SDK + Google ADK) |
-| **[`examples/generic-agent`](examples/generic-agent/)** | `firma run` profile and stack runner for wrapping any agent command |
+| [`examples/demos`](examples/demos/) | TUI demo runner with three self-contained enforcement scenarios |
+| [`examples/agents`](examples/agents/) | Intentionally risky demo agents (OpenAI Agents SDK + Google ADK) |
+| [`examples/generic-agent`](examples/generic-agent/) | `firma run` profile and stack runner for wrapping any agent command |
 
 **Docs**
 
 | | |
 |---|---|
-| **[`docs/`](docs/)** | Architecture, CLI reference, configuration reference |
-| **[`docs-site/`](docs-site/)** | Astro/Starlight documentation site |
+| [`docs/`](docs/) | Architecture, CLI reference, configuration reference |
+| [`docs-site/`](docs-site/) | Astro/Starlight documentation site |
 
 <br/>
 
