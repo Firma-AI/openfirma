@@ -42,7 +42,8 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     }
 
     let inputs = collect_inputs(args)?;
-    let out = absolutize(&args.output_dir)?;
+    let out = std::path::absolute(&args.output_dir)
+        .with_context(|| format!("resolve path {}", args.output_dir.display()))?;
 
     let env = build_template_env()?;
     let files = generate_files(&env, &inputs)?;
@@ -221,12 +222,14 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         .collect();
 
     let workspace = if let Some(p) = &args.workspace {
-        absolutize(p)?
+        std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()))?
     } else {
-        let out_abs = absolutize(&args.output_dir)?;
+        let out_abs = std::path::absolute(&args.output_dir)
+            .with_context(|| format!("resolve path {}", args.output_dir.display()))?;
         let default = out_abs.to_string_lossy().into_owned();
         let s = resolve_or_prompt(None, "Workspace directory (agent RW access)", &default)?;
-        absolutize(&PathBuf::from(s))?
+        let p = PathBuf::from(s);
+        std::path::absolute(&p).with_context(|| format!("resolve path {}", p.display()))?
     };
 
     Ok(CollectedInputs {
@@ -315,10 +318,6 @@ fn resolve_or_prompt(value: Option<&str>, label: &str, default: &str) -> Result<
     } else {
         Ok(trimmed.to_string())
     }
-}
-
-fn absolutize(path: &Path) -> Result<PathBuf> {
-    std::path::absolute(path).with_context(|| format!("resolve path {}", path.display()))
 }
 
 fn write_if_absent(path: &Path, content: &[u8], force: bool) -> Result<()> {
