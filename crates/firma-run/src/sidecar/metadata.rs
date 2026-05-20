@@ -1,8 +1,9 @@
 //! `metadata.toml` builder for the per-run sidecar marker dir.
 //!
-//! Schema frozen by the FIR-103 plan — `firma sidecar status` reads
-//! exactly these fields. Any change here must move in lockstep with
-//! FIR-103's `sidecar_markers::MetadataFile`.
+//! `firma sidecar status` reads exactly these fields via
+//! `firma_stack::sidecar_markers::MetadataFile`. Any field change here
+//! MUST be mirrored there in lockstep (the two crates cannot share a
+//! type without a dependency cycle).
 
 use std::path::Path;
 

@@ -122,8 +122,11 @@ mod tests {
             "permit(principal, action, resource);",
         )
         .unwrap();
-        let schema_src = include_str!("../schema.cedarschema");
-        std::fs::write(dir.join("schema.cedarschema"), schema_src).unwrap();
+        std::fs::write(
+            dir.join("schema.cedarschema"),
+            firma_core::cedar::FIRMA_SCHEMA,
+        )
+        .unwrap();
         Arc::new(CedarPolicyStore::load(&dir, None, 30).unwrap())
     }
 
@@ -154,8 +157,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap().keep();
         // Empty policy file (no `permit`).
         std::fs::write(dir.join("default.cedar"), "").unwrap();
-        let schema_src = include_str!("../schema.cedarschema");
-        std::fs::write(dir.join("schema.cedarschema"), schema_src).unwrap();
+        std::fs::write(
+            dir.join("schema.cedarschema"),
+            firma_core::cedar::FIRMA_SCHEMA,
+        )
+        .unwrap();
         let store = Arc::new(CedarPolicyStore::load(&dir, None, 30).unwrap());
 
         let kp = AsymmetricKeyPair::<V4>::generate().unwrap();

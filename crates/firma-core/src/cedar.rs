@@ -1,4 +1,4 @@
-//! Cedar entity UID types shared between Authority and Sidecar.
+//! Cedar entity UID types and shared schema for Firma policy evaluation.
 //!
 //! Encodes the three roles used in Firma policy evaluation and produces the
 //! Cedar entity UID via [`TryFrom`] using Cedar's typed builder API.  Both
@@ -25,6 +25,15 @@
 use cedar_policy::{EntityId, EntityTypeName, EntityUid};
 
 use crate::agent::AgentId;
+
+/// Canonical Firma Cedar schema, embedded at compile time.
+///
+/// This is the single source of truth for the Cedar schema shared between the
+/// Authority (issuance) and the Sidecar (enforcement).  Operators who extend
+/// the action registry can override the schema at runtime by configuring an
+/// explicit `schema_path` in the Authority config.
+// M-CANONICAL-DOCS: public constant with module-level docs above.
+pub const FIRMA_SCHEMA: &str = include_str!("../firma.cedarschema");
 
 /// A typed Cedar entity UID in the `Firma` namespace.
 #[derive(Debug, Clone)]

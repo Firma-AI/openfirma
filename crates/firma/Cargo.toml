@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+cedar-policy = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = [
   "color",
@@ -35,6 +36,7 @@ firma-core = { workspace = true }
 firma-run = { workspace = true }
 firma-sidecar = { workspace = true }
 firma-stack = { workspace = true }
+miette = { workspace = true }
 minijinja = { workspace = true }
 pasetors = { workspace = true }
 rcgen = { workspace = true }

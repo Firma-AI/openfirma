@@ -7,9 +7,14 @@ use clap::ValueEnum as _;
 use crate::args::init::{Mapping, Posture};
 use crate::args::policy::{PolicyArgs, PolicyCommand};
 
-pub fn run(args: &PolicyArgs) -> ExitCode {
+/// # Errors
+///
+/// Returns an error on I/O or policy parse failure.
+pub fn run(args: PolicyArgs) -> anyhow::Result<ExitCode> {
     match args.command {
-        PolicyCommand::List => list(),
+        PolicyCommand::List => Ok(list()),
+        PolicyCommand::Validate { file } => crate::policy::validate::run(&file),
+        PolicyCommand::Test { fixture } => crate::policy::test_fixture::run(&fixture),
     }
 }
 
