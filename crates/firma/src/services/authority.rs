@@ -158,6 +158,43 @@ pub fn run_generate_key(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+/// Generate a fresh P-256 ECDSA signing key and write it to `path` in PKCS#8
+/// PEM format. Skips if the file already exists and `force` is false.
+///
+/// # Errors
+///
+/// Returns an error on key generation failure or I/O error.
+pub fn generate_audit_key_if_absent(path: &Path, force: bool) -> Result<()> {
+    use p256::ecdsa::SigningKey;
+    use p256::elliptic_curve::rand_core::OsRng;
+    use p256::pkcs8::EncodePrivateKey as _;
+    let key = SigningKey::random(&mut OsRng);
+    let pem = key
+        .to_pkcs8_pem(p256::pkcs8::LineEnding::default())
+        .context("failed to encode audit key as PKCS#8 PEM")?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true);
+    if force {
+        // Overwrite unconditionally — truncate any existing file.
+        opts.create(true).truncate(true);
+    } else {
+        // create_new: atomic — fails if another writer raced us to create the file.
+        opts.create_new(true);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    match opts.open(path) {
+        Ok(mut file) => file
+            .write_all(pem.as_bytes())
+            .with_context(|| format!("failed to write {}", path.display())),
+        Err(e) if !force && e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("failed to open {}", path.display())),
+    }
+}
+
 fn write_new_file(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     let mut opts = std::fs::OpenOptions::new();
     opts.create_new(true).write(true);

@@ -17,13 +17,6 @@ pub fn run(args: StackArgs) -> ExitCode {
     }
 }
 
-const DEMO_AUDIT_KEY_PEM: &str = "\
------BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgS+9b9zHd22EAeg9M
-bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
-3wlh7RZmOnI0E3wNCaMKd3B7Sd/fXknJ0WmI6BsrvfidxQEAYvsndbvx
------END PRIVATE KEY-----
-";
 
 fn run_init(args: &InitArgs) -> ExitCode {
     let Some(config_dir) = args
@@ -120,11 +113,8 @@ fn init_scaffold_at(
     debug!("writing revocations.txt");
     write_if_absent(&state_dir.join("revocations.txt"), b"", force)?;
     debug!("writing audit.key");
-    write_if_absent(
-        &config_dir.join("audit.key"),
-        DEMO_AUDIT_KEY_PEM.as_bytes(),
-        force,
-    )?;
+    crate::services::authority::generate_audit_key_if_absent(&config_dir.join("audit.key"), force)
+        .map_err(|e| format!("generate audit key: {e}"))?;
 
     let authority_key = config_dir.join("authority.key");
     if force || !authority_key.exists() {

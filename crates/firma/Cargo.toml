@@ -38,6 +38,7 @@ firma-sidecar = { workspace = true }
 firma-stack = { workspace = true }
 miette = { workspace = true }
 minijinja = { workspace = true }
+p256 = { workspace = true }
 pasetors = { workspace = true }
 rcgen = { workspace = true }
 serde = { workspace = true }
@@ -67,9 +68,9 @@ nix = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
-p256 = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
+strum = { workspace = true, features = ["derive"] }
 tempfile = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]

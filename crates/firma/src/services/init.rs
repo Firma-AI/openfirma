@@ -24,14 +24,6 @@ static TPL_MAPPING_RULES: &str = include_str!("../../templates/mapping-rules.tom
 static TPL_FIRMA_RUN: &str = include_str!("../../templates/firma-run.toml.j2");
 static TPL_CEDAR_ISSUANCE: &str = include_str!("../../templates/issuance.cedar");
 
-const DEMO_AUDIT_KEY_PEM: &str = "\
------BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgS+9b9zHd22EAeg9M
-bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
-3wlh7RZmOnI0E3wNCaMKd3B7Sd/fXknJ0WmI6BsrvfidxQEAYvsndbvx
------END PRIVATE KEY-----
-";
-
 /// Entry point for `firma init`.
 ///
 /// # Errors
@@ -86,9 +78,8 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     }
 
     write_if_absent(&out.join(".runtime/revocations.txt"), b"", args.force)?;
-    write_if_absent(
+    crate::services::authority::generate_audit_key_if_absent(
         &out.join(".runtime/audit.key"),
-        DEMO_AUDIT_KEY_PEM.as_bytes(),
         args.force,
     )?;
 
@@ -352,6 +343,8 @@ fn write_if_absent(path: &Path, content: &[u8], force: bool) -> Result<()> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
+    use strum::IntoEnumIterator;
+
     use super::*;
 
     const TEST_AGENT: &str = "test-agent";
@@ -423,7 +416,7 @@ mod tests {
 
     #[test]
     fn firma_toml_is_valid_toml() {
-        for posture in [Posture::Strict, Posture::Dev, Posture::DevWithDeleteWatch] {
+        for posture in Posture::iter() {
             let files = make_files(&posture, &[Mapping::Anthropic, Mapping::Github], &[]);
             let _: toml::Value = toml::from_str(get(&files, "firma.toml")).unwrap();
         }
@@ -641,18 +634,7 @@ mod tests {
 
     #[test]
     fn all_mapping_files_parse_and_validate() {
-        let all = [
-            Mapping::Anthropic,
-            Mapping::Openai,
-            Mapping::Github,
-            Mapping::Gmail,
-            Mapping::Npm,
-            Mapping::Pypi,
-            Mapping::Cargo,
-            Mapping::Stripe,
-            Mapping::Custom,
-        ];
-        for m in &all {
+        for m in Mapping::iter() {
             let f = parse_rules(m.static_content());
             for rule in &f.rules {
                 rule.validate()
