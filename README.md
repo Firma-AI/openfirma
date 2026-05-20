@@ -1,11 +1,17 @@
-<p align="left">
-  <img src="docs-site/src/assets/openfirma-logo.png" alt="OpenFirma" width="400"/>
+<p align="center">
+  <img src="docs-site/src/assets/openfirma-logo.png" alt="OpenFirma" width="120"/>
 </p>
 
-
+<p align="center">
 OpenFirma is a runtime enforcement boundary for AI agents. Every outbound call an agent makes is intercepted, classified against policy, and audited before it leaves the machine.
+</p>
 
-[Docs](https://firma-ai.github.io/openfirma/) · [Quickstart](https://firma-ai.github.io/openfirma/quickstart/) · [Architecture](https://firma-ai.github.io/openfirma/concepts/architecture/) · [Blog](https://firma-ai.github.io/openfirma/blog/)
+<p align="center">
+  <a href="https://firma-ai.github.io/openfirma/">Docs</a> ·
+  <a href="https://firma-ai.github.io/openfirma/quickstart/">Quickstart</a> ·
+  <a href="https://firma-ai.github.io/openfirma/concepts/architecture/">Architecture</a> ·
+  <a href="https://firma-ai.github.io/openfirma/blog/">Blog</a>
+</p>
 
 ## Install
 
