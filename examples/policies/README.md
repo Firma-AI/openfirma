@@ -24,7 +24,7 @@ Cedar is default-deny: if no `permit` rule matches, the request is denied. A mat
 | `filesystem.cedar` | Reference rules for filesystem-style read, write, and delete actions. |
 | `payment.cedar` | Reference rules for payment actions, including cumulative counter checks. |
 
-The canonical schema lives at `crates/firma-authority/schema.cedarschema` and is embedded in the Authority binary. Put a `schema.cedarschema` file beside your policies only when you need to override the embedded schema.
+The canonical schema lives at `crates/firma-core/firma.cedarschema` and is embedded in the binary. Put a `schema.cedarschema` file beside your policies only when you need to override the embedded schema.
 
 ## Entity names
 
@@ -112,7 +112,7 @@ cd examples/e2e && bash run.sh
 Or use the Cedar CLI directly:
 
 ```bash
-cedar authorize   --policies examples/policies/payment.cedar   --schema crates/firma-authority/schema.cedarschema   --entities '[]'   --principal 'Firma::Agent::"example-agent"'   --action 'Firma::Action::"payment.transfer"'   --resource 'Firma::Resource::"payments.example.com"'   --context '{
+cedar authorize   --policies examples/policies/payment.cedar   --schema crates/firma-core/firma.cedarschema   --entities '[]'   --principal 'Firma::Agent::"example-agent"'   --action 'Firma::Action::"payment.transfer"'   --resource 'Firma::Resource::"payments.example.com"'   --context '{
     "session_id":"s1",
     "timestamp_ms":0,
     "params":"{}",

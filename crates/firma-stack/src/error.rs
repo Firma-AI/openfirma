@@ -27,9 +27,9 @@ pub enum StackError {
     ConfigParse {
         /// Path of the offending config file.
         path: PathBuf,
-        /// Underlying TOML parser error.
+        /// Underlying TOML parser error (boxed to keep `StackError` small).
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
 
     /// A required field is absent from the stack config.
@@ -39,6 +39,16 @@ pub enum StackError {
         path: PathBuf,
         /// Name of the missing field.
         field: &'static str,
+    },
+
+    /// A sidecar marker file (`metadata.toml`) is present but not valid TOML.
+    #[error("failed to parse sidecar marker '{path}': {source}")]
+    MarkerParse {
+        /// Path of the offending marker file.
+        path: PathBuf,
+        /// Underlying TOML parser error (boxed to keep `StackError` small).
+        #[source]
+        source: Box<toml::de::Error>,
     },
 
     /// State-dir resolution chain (flag, env, platform default) produced

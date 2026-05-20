@@ -110,6 +110,80 @@ The basic setup flow is:
 4. Start the Sidecar with policies, mappings, and token material.
 5. Run the agent through `firma run` so traffic reaches the Sidecar.
 
+## Test policies offline
+
+`firma policy` lets you check Cedar policies and their decisions without an Authority, a Sidecar, or the network. Both subcommands are fully local, deterministic, and fail-closed: any I/O, parse, schema, or evaluation error prints a diagnostic to stderr and exits non-zero.
+
+`firma policy validate <file.cedar>` parses a policy and strictly type-checks it against the embedded canonical Firma schema. A valid policy prints `OK` and exits `0`; a broken one prints a `line:col` diagnostic with a source caret and exits `1`:
+
+```console
+$ firma policy validate policies/allow-code-read.cedar
+OK
+
+$ firma policy validate bad.cedar
+error: policy 'bad.cedar' failed schema validation:
+  x validation error on policy `policy0` at offset 33-64: unrecognized action `Firma::Action::"does.not.exist"`
+   ,-[3:13]
+ 2 |   principal,
+ 3 |   action == Firma::Action::"does.not.exist",
+   :             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 4 |   resource
+   `----
+  help: did you mean `Firma::Action::"code.write"`?
+```
+
+`firma policy test <fixture.toml>` evaluates a fixture against a `*.cedar` bundle directory and asserts the decision. The fixture's `[bundle] path` is resolved relative to the fixture file. It prints the decision line and exits `0` on a match, or exits `1` on a mismatch:
+
+```toml
+# allow-code-read.toml
+[fixture]
+expected = "ALLOW"
+
+[fixture.principal]
+agent_id = "demo-agent"
+
+[fixture.action]
+class = "code.read"
+
+[fixture.resource]
+host = "api.github.com"
+
+[bundle]
+path = "policies"
+```
+
+```console
+$ firma policy test allow-code-read.toml
+ALLOW policy0
+```
+
+Wire validation into a pre-commit hook so broken policies never land:
+
+```bash
+#!/usr/bin/env bash
+# .git/hooks/pre-commit
+set -euo pipefail
+for f in $(git diff --cached --name-only --diff-filter=ACM -- '*.cedar'); do
+  firma policy validate "$f"
+done
+```
+
+And gate every fixture in CI:
+
+```yaml
+# .github/workflows/policy.yml
+- name: Validate Cedar policies
+  run: |
+    find policies -name '*.cedar' -print0 \
+      | xargs -0 -n1 firma policy validate
+- name: Run policy fixtures
+  run: |
+    find tests/fixtures -name '*.toml' -print0 \
+      | xargs -0 -n1 firma policy test
+```
+
+See the [policy testing guide](docs-site/src/content/docs/guides/test-policies-offline.md) for the full fixture schema, context defaults, and gotchas.
+
 ## Repository map
 
 ```text

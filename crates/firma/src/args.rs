@@ -35,7 +35,7 @@ pub enum Command {
     Authority(authority::Args),
     /// Scaffold a new agent config directory interactively.
     Init(init::InitArgs),
-    /// Browse the built-in policy template catalogue.
+    /// Browse the template catalogue and validate Cedar policy bundles.
     Policy(policy::PolicyArgs),
     /// Internal sandbox-local DNS stub.
     #[command(name = "__dns-stub", hide = true)]

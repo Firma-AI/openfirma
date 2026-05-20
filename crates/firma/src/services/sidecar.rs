@@ -7,16 +7,23 @@ use std::sync::Arc;
 use firma_sidecar::{config, handler, health, startup};
 use tokio_util::sync::CancellationToken;
 
-use crate::args::sidecar::Args;
+use crate::args::sidecar::{Args, SidecarCommand};
 use crate::signal::wait_for_shutdown;
 
-/// Run the sidecar subcommand.
+/// Entry point for `firma sidecar [SUBCOMMAND]`.
 ///
 /// # Errors
 ///
-/// Returns an error if config loading, startup, or any spawned task
-/// fails.
+/// Propagates config/startup/runtime errors from the server path, or
+/// rendering/probe errors from the status path.
 pub async fn run(args: Args) -> anyhow::Result<ExitCode> {
+    match args.command {
+        Some(SidecarCommand::Status(ref status)) => crate::services::sidecar_status::run(status),
+        None => serve(args.serve).await,
+    }
+}
+
+async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode> {
     tracing::debug!("firma sidecar starting");
 
     let resolved =

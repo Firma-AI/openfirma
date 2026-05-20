@@ -33,8 +33,11 @@ fn issue_seed() -> IssuedSeed {
         "permit(principal, action, resource);",
     )
     .unwrap();
-    let schema_src = include_str!("../../firma-authority/schema.cedarschema");
-    std::fs::write(policies.join("schema.cedarschema"), schema_src).unwrap();
+    std::fs::write(
+        policies.join("schema.cedarschema"),
+        firma_core::cedar::FIRMA_SCHEMA,
+    )
+    .unwrap();
 
     let key_path = tmp.path().join("firma-authority.key");
     let pub_key_path = key_path.with_extension("pub");

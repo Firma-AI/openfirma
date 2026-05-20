@@ -377,6 +377,7 @@ fn compute_request_fingerprint(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::io::{BufRead, BufReader, Write};
     use std::net::{SocketAddr, TcpListener};
     use std::sync::{Arc, Mutex};
@@ -392,7 +393,7 @@ mod tests {
             hitl_mode: CommandMediatorHitlMode::SyncWait,
             hitl_max_wait_ms: 5_000,
             enforce_known_executables: false,
-            allowed_executables: std::collections::BTreeSet::default(),
+            allowed_executables: BTreeSet::default(),
         }
     }
 

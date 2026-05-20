@@ -2,10 +2,8 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import mermaid from 'astro-mermaid';
 import starlightBlog from 'starlight-blog';
-
 const isGitHubPages = process.env.GITHUB_PAGES === 'true';
-const base = isGitHubPages ? '/firma-oss' : '/';
-
+const base = isGitHubPages ? '/openfirma' : '/';
 export default defineConfig({
   site: 'https://firma-ai.github.io',
   base,
@@ -29,7 +27,7 @@ export default defineConfig({
       },
       customCss: ['./src/styles/fonts.css', './src/styles/custom.css'],
       editLink: {
-        baseUrl: 'https://github.com/firma-ai/firma-oss/edit/main/docs-site/',
+        baseUrl: 'https://github.com/firma-ai/openfirma/edit/main/docs-site/',
       },
       lastUpdated: true,
       pagefind: true,
@@ -56,7 +54,7 @@ export default defineConfig({
         {
           icon: 'github',
           label: 'GitHub',
-          href: 'https://github.com/firma-ai/firma-oss',
+          href: 'https://github.com/firma-ai/openfirma',
         },
       ],
       sidebar: [
@@ -85,9 +83,11 @@ export default defineConfig({
           label: 'User Guides',
           items: [
             { label: 'Run the sidecar standalone', slug: 'guides/run-the-sidecar' },
+            { label: 'Inspect live sidecars (firma sidecar status)', slug: 'guides/firma-sidecar-status' },
             { label: 'Manage the stack (firma stack & monitor)', slug: 'guides/manage-the-stack' },
             { label: 'Diagnose with firma doctor', slug: 'guides/firma-doctor' },
             { label: 'Write your first Cedar policy', slug: 'guides/write-a-cedar-policy' },
+            { label: 'Test policies offline (firma policy)', slug: 'guides/test-policies-offline' },
             { label: 'Issue capability tokens', slug: 'guides/issue-capability-tokens' },
             { label: 'Wrap an agent with firma run', slug: 'guides/firma-run' },
             { label: 'Enable HTTPS MITM', slug: 'guides/https-mitm' },
