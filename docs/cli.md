@@ -24,7 +24,7 @@ firma init [OPTIONS]
 | `--workspace`     |       | CWD                          | Path the agent has RW access to (bwrap mount)                     |
 | `--output-dir`    | `-o`  | Firma config dir             | Directory to write scaffolded files into                          |
 | `--dry-run`       |       | off                          | Print generated files to stdout; no disk writes                   |
-| `--force`         |       | off                          | Overwrite existing files (authority keypair always preserved)     |
+| `--force`         |       | off                          | Overwrite existing files, including the authority keypair         |
 | `--list-templates`|       | off                          | Print posture × mapping catalogue and exit                        |
 
 ### Generated layout

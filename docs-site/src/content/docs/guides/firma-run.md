@@ -102,7 +102,7 @@ Generated layout:
     revocations.txt
 ```
 
-`firma init` is idempotent — re-running preserves existing files; pass `--force` to overwrite (the authority keypair is always preserved unless `--force`). Preview without writing:
+`firma init` is idempotent — re-running preserves existing files including the authority keypair; pass `--force` to overwrite everything. Preview without writing:
 
 ```bash
 firma init --dry-run

@@ -65,7 +65,7 @@ Generated layout:
   policies/strict.cedar        — Cedar enforcement policy (edit in Step 4)
   issuance-policies/issuance.cedar
   .runtime/
-    authority.key              — authority signing keypair (preserved on re-run)
+    authority.key              — authority signing keypair (regenerated only with --force)
     audit.key                  — demo audit signing key
     revocations.txt
 ```
