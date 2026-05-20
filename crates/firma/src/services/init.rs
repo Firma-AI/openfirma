@@ -186,8 +186,13 @@ fn render(env: &Environment<'_>, template: &str, ctx: minijinja::Value) -> Resul
         .with_context(|| format!("render template {template}"))
 }
 
-fn default_output_dir(_args: &InitArgs) -> PathBuf {
+fn default_output_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn global_config_dir() -> Result<PathBuf> {
+    firma_config::default_config_dir(&firma_config::SystemDirs)
+        .ok_or_else(|| anyhow::anyhow!("cannot resolve global config dir (no home directory?)"))
 }
 
 fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
@@ -205,14 +210,15 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
     };
 
     let output_dir = if args.global {
-        default_output_dir(args)
+        let p = global_config_dir()?;
+        std::path::absolute(&p).with_context(|| format!("resolve path {}", p.display()))?
     } else {
         match &args.output_dir {
             Some(p) => {
                 std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()))?
             }
             None if interactive => {
-                let default = default_output_dir(args).to_string_lossy().into_owned();
+                let default = default_output_dir().to_string_lossy().into_owned();
                 let s: String = dialoguer::Input::with_theme(&theme)
                     .with_prompt("Config directory")
                     .default(default)
@@ -220,7 +226,7 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
                     .context("config directory prompt")?;
                 std::path::absolute(PathBuf::from(s)).context("resolve config directory path")?
             }
-            None => default_output_dir(args),
+            None => default_output_dir(),
         }
     };
 
