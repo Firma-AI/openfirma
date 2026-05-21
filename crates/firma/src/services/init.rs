@@ -345,6 +345,110 @@ fn write_if_absent(path: &Path, content: &[u8], force: bool) -> Result<()> {
     std::fs::write(path, content).with_context(|| format!("write {}", path.display()))
 }
 
+// ── Public API used by `firma run` implicit init and other services ───────────
+
+/// Resolved scaffold parameters. Used by `firma run` for implicit init.
+#[derive(Debug, Clone)]
+pub struct ScaffoldPlan {
+    pub config_dir: PathBuf,
+    pub state_dir: PathBuf,
+    pub force: bool,
+    pub authority_listen: String,
+    pub sidecar_listen: String,
+    pub agent: String,
+    pub provider: String,
+    pub authority: AuthorityShape,
+}
+
+/// Authority deployment shape written into `[authority]` in firma.toml.
+#[derive(Debug, Clone)]
+pub enum AuthorityShape {
+    Local,
+    Remote(String),
+}
+
+/// Resolve the runtime state directory.
+///
+/// Priority: explicit flag → `FIRMA_STATE_DIR` env → platform default.
+///
+/// # Errors
+/// Returns a formatted error string on resolution failure.
+pub fn resolve_state_dir(flag: Option<PathBuf>) -> Result<PathBuf, String> {
+    if let Some(path) = flag {
+        return Ok(path);
+    }
+    if let Ok(env) = std::env::var("FIRMA_STATE_DIR") {
+        if !env.is_empty() {
+            return Ok(PathBuf::from(env));
+        }
+    }
+    firma_stack::resolve_state_dir(None).map_err(|error| format!("state_dir: {error}"))
+}
+
+/// Scaffold from an already-resolved plan. Called by `firma run` on first use
+/// when no `firma.toml` is discoverable.
+///
+/// # Errors
+/// Returns a formatted string on any filesystem or key-generation failure.
+pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
+    let mappings = provider_to_mappings(&plan.provider);
+    let inputs = CollectedInputs {
+        name: plan.agent.clone(),
+        posture: Posture::Dev,
+        mappings,
+        extra_hosts: vec![],
+        output_dir: plan.config_dir.clone(),
+        workspace: plan.config_dir.clone(),
+    };
+    let env = build_template_env().map_err(|e| format!("template env: {e}"))?;
+    let files = generate_files(&env, &inputs).map_err(|e| format!("generate files: {e}"))?;
+
+    for sub in &["policies", "issuance-policies", "mappings", ".runtime"] {
+        let dir = plan.config_dir.join(sub);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    }
+    std::fs::create_dir_all(&plan.state_dir)
+        .map_err(|e| format!("mkdir {}: {e}", plan.state_dir.display()))?;
+
+    for (rel, content) in &files {
+        let path = plan.config_dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+        if !plan.force && path.exists() {
+            continue;
+        }
+        std::fs::write(&path, content)
+            .map_err(|e| format!("write {}: {e}", path.display()))?;
+    }
+
+    let runtime_dir = plan.config_dir.join(".runtime");
+    write_if_absent(&runtime_dir.join("revocations.txt"), b"", plan.force)
+        .map_err(|e| e.to_string())?;
+    crate::services::authority::generate_audit_key_if_absent(
+        &runtime_dir.join("audit.key"),
+        plan.force,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let key_path = runtime_dir.join("authority.key");
+    if plan.force || !key_path.exists() {
+        crate::services::authority::run_generate_key(&key_path)
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn provider_to_mappings(provider: &str) -> Vec<Mapping> {
+    match provider {
+        "openai" => vec![Mapping::Openai],
+        _ => vec![Mapping::Anthropic],
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {

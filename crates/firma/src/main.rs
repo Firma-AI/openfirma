@@ -30,7 +30,6 @@ fn main() -> ExitCode {
         Command::ProxyBridge(a) => services::proxy_bridge::run(a),
         Command::Run(a) => services::run::run(a),
         Command::Sidecar(a) => block_on_async(services::sidecar::run(a)),
-        Command::Stack(a) => Ok(services::stack::run(a)),
         Command::Supervise(a) => Ok(services::supervise::run(a)),
         Command::Token(a) => services::token::run(a),
     };

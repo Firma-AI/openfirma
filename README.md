@@ -22,10 +22,10 @@ To try your own command through the governed launcher:
 
 ```bash
 examples/firma-run/local/setup.sh
-firma stack start --detach
+firma sidecar start --detach
 firma monitor
 cargo run -p firma -- run --profile generic -- curl https://example.com
-firma stack stop
+firma sidecar stop
 ```
 
 The same single command also works without a pre-started Sidecar — `firma run` autostarts a per-run Sidecar on the fly and tears it down when the wrapped process exits:
