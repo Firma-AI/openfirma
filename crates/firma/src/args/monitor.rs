@@ -48,6 +48,13 @@ pub struct Args {
     #[arg(long)]
     pub agent: Option<String>,
 
+    /// Show only audit records whose `sandbox_id` exactly matches this
+    /// value. The `sandbox_id` identifies a single `firma run`
+    /// invocation and matches the marker directory name under
+    /// `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/`.
+    #[arg(long = "sandbox-id")]
+    pub sandbox_id: Option<String>,
+
     /// Backfill records since this point: a duration (`15m`, `2h`) or an
     /// RFC3339 timestamp.
     #[arg(long)]
@@ -142,5 +149,12 @@ mod tests {
     fn agent_filter_parses() {
         let args = try_parse(&["firma-monitor", "--agent", "demo-1"]).expect("parse agent");
         assert_eq!(args.agent.as_deref(), Some("demo-1"));
+    }
+
+    #[test]
+    fn sandbox_id_filter_parses() {
+        let args =
+            try_parse(&["firma-monitor", "--sandbox-id", "sbx_1"]).expect("parse sandbox-id");
+        assert_eq!(args.sandbox_id.as_deref(), Some("sbx_1"));
     }
 }
