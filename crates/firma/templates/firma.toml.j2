@@ -17,11 +17,6 @@ bundle_ttl_seconds     = 30
 {% endif -%}
 # ── Sidecar ───────────────────────────────────────────────────────────────────
 
-[sidecar.interceptor]
-mode                = "http_proxy"
-listen_addr         = "{{ sidecar_listen }}"
-drain_timeout_secs  = 30
-
 # HTTPS MITM for services that need per-endpoint classification.
 # LLM traffic tunnels through untouched — the LLM SDK does not trust firma-ca.
 [sidecar.interceptor.https_mitm]
