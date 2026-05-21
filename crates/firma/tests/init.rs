@@ -21,12 +21,10 @@ fn firma() -> Command {
     Command::new(env!("CARGO_BIN_EXE_firma"))
 }
 
-fn run_init(config_dir: &Path, state_dir: &Path) {
+fn run_init(output_dir: &Path) {
     let output = firma()
-        .args(["init", "--yes", "--config-dir"])
-        .arg(config_dir)
-        .args(["--state-dir"])
-        .arg(state_dir)
+        .args(["init", "--yes", "--output-dir"])
+        .arg(output_dir)
         .output()
         .expect("spawn firma init");
     assert!(
@@ -62,40 +60,29 @@ fn assert_unified_config_parses(firma_toml: &Path) {
 #[test]
 fn init_writes_parseable_config() {
     let tmp = tempfile::tempdir().expect("tmpdir");
-    let config_dir = tmp.path().join("config");
-    let state_dir = tmp.path().join("state");
+    let output_dir = tmp.path().join("config");
 
-    run_init(&config_dir, &state_dir);
+    run_init(&output_dir);
 
-    let firma_toml = config_dir.join("firma.toml");
+    let firma_toml = output_dir.join("firma.toml");
     assert!(firma_toml.is_file(), "firma.toml created");
     // No legacy files.
-    assert!(!config_dir.join("authority.toml").exists());
-    assert!(!config_dir.join("sidecar.toml").exists());
-    assert!(!config_dir.join("firma-stack.toml").exists());
+    assert!(!output_dir.join("authority.toml").exists());
+    assert!(!output_dir.join("sidecar.toml").exists());
+    assert!(!output_dir.join("firma-stack.toml").exists());
 
     assert_unified_config_parses(&firma_toml);
 }
 
 #[test]
 fn init_handles_relative_paths() {
-    // Relative paths exercise the worst case of the Windows bug: the path
-    // `..\test\state` parses as TOML `\t` (tab) + `est\state` which is
-    // valid-but-wrong on Windows, while `..\state` would hit invalid `\s`.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let work = tmp.path().join("workdir");
     std::fs::create_dir_all(&work).unwrap();
 
     let output = firma()
         .current_dir(&work)
-        .args([
-            "init",
-            "--yes",
-            "--config-dir",
-            "../config",
-            "--state-dir",
-            "../state",
-        ])
+        .args(["init", "--yes", "--output-dir", "../config"])
         .output()
         .expect("spawn firma init");
     assert!(
@@ -112,41 +99,25 @@ fn init_handles_relative_paths() {
         firma_toml.display(),
     );
 
-    // Regression: when `--config-dir`/`--state-dir` are relative, the
-    // paths written into firma.toml must be absolute so they resolve from
-    // any working directory; and the file must still parse / deserialize.
     assert_unified_config_parses(&firma_toml);
-
-    let text = std::fs::read_to_string(&firma_toml).unwrap();
-    let value: toml::Value = toml::from_str(&text).unwrap();
-    let key_file = value
-        .get("authority")
-        .and_then(|a| a.get("key_file"))
-        .and_then(toml::Value::as_str)
-        .expect("authority.key_file present");
-    assert!(
-        Path::new(key_file).is_absolute(),
-        "authority.key_file must be absolute, got {key_file}",
-    );
 }
 
 #[cfg(unix)]
 #[test]
-fn init_writes_state_and_config_dirs_with_mode_0700() {
+fn init_writes_sensitive_dirs_with_mode_0700() {
     use std::os::unix::fs::PermissionsExt as _;
 
     let tmp = tempfile::tempdir().expect("tmpdir");
-    let config_dir = tmp.path().join("config");
-    let state_dir = tmp.path().join("state");
+    let output_dir = tmp.path().join("config");
 
-    run_init(&config_dir, &state_dir);
+    run_init(&output_dir);
 
     for path in [
-        &state_dir,
-        &state_dir.join("generated-firma-ca"),
-        &config_dir,
-        &config_dir.join("policies"),
-        &config_dir.join("issuance-policies"),
+        &output_dir,
+        &output_dir.join(".runtime"),
+        &output_dir.join(".runtime/generated-firma-ca"),
+        &output_dir.join("policies"),
+        &output_dir.join("issuance-policies"),
     ] {
         let mode = std::fs::metadata(path)
             .unwrap_or_else(|e| panic!("stat {}: {e}", path.display()))

@@ -17,6 +17,9 @@ struct CollectedInputs {
     extra_hosts: Vec<String>,
     output_dir: PathBuf,
     workspace: PathBuf,
+    authority_listen: String,
+    sidecar_listen: String,
+    authority: AuthorityShape,
 }
 
 static TPL_FIRMA_TOML: &str = include_str!("../../templates/firma.toml.j2");
@@ -48,6 +51,10 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    std::fs::create_dir_all(out).with_context(|| format!("mkdir {}", out.display()))?;
+    #[cfg(unix)]
+    set_dir_mode_0700(out).with_context(|| format!("chmod {}", out.display()))?;
+
     for sub in &[
         "policies",
         "issuance-policies",
@@ -57,6 +64,8 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     ] {
         let dir = out.join(sub);
         std::fs::create_dir_all(&dir).with_context(|| format!("mkdir {}", dir.display()))?;
+        #[cfg(unix)]
+        set_dir_mode_0700(&dir).with_context(|| format!("chmod {}", dir.display()))?;
     }
 
     for (rel, content) in &files {
@@ -141,11 +150,15 @@ fn generate_files(
 
     let requested_actions = inputs.posture.requested_actions();
     let workspace_str = inputs.workspace.to_string_lossy();
+    let (local_authority, authority_url) = match &inputs.authority {
+        AuthorityShape::Local => (true, format!("http://{}", inputs.authority_listen)),
+        AuthorityShape::Remote(url) => (false, url.clone()),
+    };
 
     let firma_toml = render(
         env,
         "firma.toml",
-        context! { name => inputs.name, mapping_paths, mitm_hosts, requested_actions },
+        context! { name => inputs.name, mapping_paths, mitm_hosts, requested_actions, authority_listen => inputs.authority_listen, sidecar_listen => inputs.sidecar_listen, local_authority, authority_url },
     )?;
     let mapping_rules = render(
         env,
@@ -285,6 +298,9 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         extra_hosts,
         output_dir,
         workspace,
+        authority_listen: "127.0.0.1:50051".to_string(),
+        sidecar_listen: "127.0.0.1:7474".to_string(),
+        authority: AuthorityShape::Local,
     })
 }
 
@@ -338,6 +354,13 @@ fn prompt_mappings(theme: &ColorfulTheme) -> Result<Vec<Mapping>> {
     Ok(chosen)
 }
 
+#[cfg(unix)]
+fn set_dir_mode_0700(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("chmod 0700 {}", path.display()))
+}
+
 fn write_if_absent(path: &Path, content: &[u8], force: bool) -> Result<()> {
     if !force && path.exists() {
         return Ok(());
@@ -377,10 +400,10 @@ pub fn resolve_state_dir(flag: Option<PathBuf>) -> Result<PathBuf, String> {
     if let Some(path) = flag {
         return Ok(path);
     }
-    if let Ok(env) = std::env::var("FIRMA_STATE_DIR") {
-        if !env.is_empty() {
-            return Ok(PathBuf::from(env));
-        }
+    if let Ok(env) = std::env::var("FIRMA_STATE_DIR")
+        && !env.is_empty()
+    {
+        return Ok(PathBuf::from(env));
     }
     firma_stack::resolve_state_dir(None).map_err(|error| format!("state_dir: {error}"))
 }
@@ -399,14 +422,16 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
         extra_hosts: vec![],
         output_dir: plan.config_dir.clone(),
         workspace: plan.config_dir.clone(),
+        authority_listen: plan.authority_listen.clone(),
+        sidecar_listen: plan.sidecar_listen.clone(),
+        authority: plan.authority.clone(),
     };
     let env = build_template_env().map_err(|e| format!("template env: {e}"))?;
     let files = generate_files(&env, &inputs).map_err(|e| format!("generate files: {e}"))?;
 
     for sub in &["policies", "issuance-policies", "mappings", ".runtime"] {
         let dir = plan.config_dir.join(sub);
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     }
     std::fs::create_dir_all(&plan.state_dir)
         .map_err(|e| format!("mkdir {}: {e}", plan.state_dir.display()))?;
@@ -420,8 +445,7 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
         if !plan.force && path.exists() {
             continue;
         }
-        std::fs::write(&path, content)
-            .map_err(|e| format!("write {}: {e}", path.display()))?;
+        std::fs::write(&path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
     }
 
     let runtime_dir = plan.config_dir.join(".runtime");
@@ -435,8 +459,7 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
 
     let key_path = runtime_dir.join("authority.key");
     if plan.force || !key_path.exists() {
-        crate::services::authority::run_generate_key(&key_path)
-            .map_err(|e| e.to_string())?;
+        crate::services::authority::run_generate_key(&key_path).map_err(|e| e.to_string())?;
     }
 
     Ok(())
@@ -472,6 +495,9 @@ mod tests {
             extra_hosts: extra_hosts.to_vec(),
             output_dir: PathBuf::from(TEST_WORKSPACE),
             workspace: PathBuf::from(TEST_WORKSPACE),
+            authority_listen: "127.0.0.1:50051".to_string(),
+            sidecar_listen: "127.0.0.1:7474".to_string(),
+            authority: AuthorityShape::Local,
         };
         generate_files(&env, &inputs).unwrap()
     }

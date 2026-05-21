@@ -2,10 +2,11 @@
 # NOT FOR PRODUCTION USE — local dev/testing only.
 # Run from this directory: firma stack start --config firma.toml
 
+{% if local_authority -%}
 # ── Mini Authority ────────────────────────────────────────────────────────────
 
 [authority]
-listen_addr            = "127.0.0.1:50051"
+listen_addr            = "{{ authority_listen }}"
 policy_dir             = "policies/"
 issuance_policy_dir    = "issuance-policies/"
 revocation_file        = ".runtime/revocations.txt"
@@ -13,11 +14,12 @@ key_file               = ".runtime/authority.key"
 max_ttl_seconds        = 3600
 bundle_ttl_seconds     = 30
 
+{% endif -%}
 # ── Sidecar ───────────────────────────────────────────────────────────────────
 
 [sidecar.interceptor]
 mode                = "http_proxy"
-listen_addr         = "127.0.0.1:7474"
+listen_addr         = "{{ sidecar_listen }}"
 drain_timeout_secs  = 30
 
 # HTTPS MITM for services that need per-endpoint classification.
@@ -32,7 +34,7 @@ strict_hosts    = []
 {% endif %}
 [sidecar.policy]
 dir           = "."
-authority_url = "http://127.0.0.1:50051"
+authority_url = "{{ authority_url }}"
 
 [sidecar.ca]
 dir = ".runtime/generated-firma-ca"
