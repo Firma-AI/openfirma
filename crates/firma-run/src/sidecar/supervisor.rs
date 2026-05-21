@@ -153,6 +153,9 @@ impl SidecarSupervisor {
                 // Avoid cross-run collisions when multiple autostarted sidecars
                 // run concurrently on the same host.
                 .env("FIRMA_SIDECAR_HEALTH_BIND_ADDR", "127.0.0.1:0")
+                // Per-run identity stamped on every audit ExecutionEvent
+                // (FIR-185). Matches the marker directory name.
+                .env("FIRMA_RUN_SANDBOX_ID", req.sandbox_id)
                 .env("NO_COLOR", "1")
                 .env("CLICOLOR", "0")
                 .stdin(std::process::Stdio::null())

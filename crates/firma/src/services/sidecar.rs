@@ -112,7 +112,11 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     };
 
     let (audit_payload_tx, audit_payload_rx) = tokio::sync::mpsc::channel(100);
-    let audit_event_builder = startup::load_audit_event_builder(&config.audit)?;
+    // Per-run identity stamped on every emitted audit event (FIR-185).
+    // Set by `firma run`'s SidecarSupervisor; empty in daemon mode.
+    let sandbox_id = std::env::var("FIRMA_RUN_SANDBOX_ID").unwrap_or_default();
+    let audit_event_builder =
+        startup::load_audit_event_builder(&config.audit)?.with_sandbox_id(sandbox_id);
     let audit_sink = startup::spawn_audit_sink(
         &config.audit,
         audit_payload_rx,
