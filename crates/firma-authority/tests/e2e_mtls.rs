@@ -204,7 +204,7 @@ impl MtlsTestServer {
         // Brief delay for the server to become ready.
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        MtlsTestServer {
+        Self {
             port,
             _temp_dir: temp_dir,
             shutdown_tx,
