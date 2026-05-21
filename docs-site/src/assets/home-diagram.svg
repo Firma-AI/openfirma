@@ -29,9 +29,9 @@
         </defs>
 
         <style>
-          .lbl-mn { font-family: 'JetBrains Mono', monospace; font-size: 15px; fill: #7E8B87; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 500; }
-          .lbl-sm { font-family: 'JetBrains Mono', monospace; font-size: 15px; fill: #4A5854; }
-          .lbl-fr { font-family: 'Fraunces', serif; font-size: 22px; fill: #0F1A1A; font-weight: 500; letter-spacing: -0.3px; }
+          .lbl-mn { font-family: 'JetBrains Mono', monospace; font-size: 13px; fill: #7E8B87; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 500; }
+          .lbl-sm { font-family: 'Inter', sans-serif; font-size: 14px; fill: #4A5854; }
+          .lbl-fr { font-family: 'Inter', sans-serif; font-size: 24px; fill: #0F1A1A; font-weight: 500; letter-spacing: -0.3px; }
 
           .agent-box { fill: #FFFFFF; stroke: #C8D3CF; stroke-width: 1.2; }
           .auth-box { fill: rgba(31,142,142,0.06); stroke: #1F8E8E; stroke-width: 1.4; }
@@ -40,7 +40,6 @@
           .line-thin { stroke: #C8D3CF; stroke-width: 1; fill: none; }
           .line-dash { stroke: #C8D3CF; stroke-width: 1; stroke-dasharray: 3 4; fill: none; }
 
-          /* Pulsing glow on key components */
           .glow { animation: glow 3.4s ease-in-out infinite; }
           @keyframes glow {
             0%, 100% { stroke-opacity: 0.7; }
@@ -52,20 +51,13 @@
             50%      { stroke-width: 1.9; filter: drop-shadow(0 0 6px rgba(31,142,142,0.35)); }
           }
 
-          /* Multiple continuous trickle sparks on vertical lines */
-          .trickle {
-            r: 3;
-            fill: url(#spk);
-            opacity: 0;
-            animation: trickle 1.6s linear infinite;
-          }
+          .trickle { r: 3; fill: url(#spk); opacity: 0; animation: trickle 1.6s linear infinite; }
           @keyframes trickle {
             0%   { opacity: 0; }
             12%  { opacity: 1; }
             85%  { opacity: 1; }
             100% { opacity: 0; }
           }
-          /* Agent → Authority trickle (from y=98 to y=128) */
           .t-aa { animation-name: t-aa; }
           @keyframes t-aa {
             0%   { transform: translate(600px, 98px); opacity: 0; }
@@ -77,7 +69,6 @@
           .t-aa-2 { animation-delay: 0.4s; }
           .t-aa-3 { animation-delay: 0.8s; }
           .t-aa-4 { animation-delay: 1.2s; }
-          /* Authority → Sidecar trickle (from y=208 to y=230) */
           .t-as { animation-name: t-as; }
           @keyframes t-as {
             0%   { transform: translate(600px, 208px); opacity: 0; }
@@ -89,7 +80,6 @@
           .t-as-2 { animation-delay: 0.55s; }
           .t-as-3 { animation-delay: 1.1s; }
 
-          /* Sidecar scan line — always sweeping */
           .scan-line { animation: scan 3s linear infinite; }
           @keyframes scan {
             0%   { transform: translateX(25px);  opacity: 0; }
@@ -98,15 +88,11 @@
             100% { transform: translateX(845px); opacity: 0; }
           }
 
-          /* Main call sparks — through full chain to varied surfaces */
-          .call-spark {
-            filter: drop-shadow(0 0 6px rgba(31,142,142,0.5));
-          }
+          .call-spark { filter: drop-shadow(0 0 6px rgba(31,142,142,0.5)); }
 
-          /* Agent name rotator (inside the SVG) */
           .agent-name {
-            font-family: 'Fraunces', serif;
-            font-size: 30px;
+            font-family: 'Inter', sans-serif;
+            font-size: 24px;
             font-weight: 500;
             fill: #0F1A1A;
             letter-spacing: -0.5px;
@@ -125,27 +111,25 @@
             100% { opacity: 0; transform: translateY(-6px); }
           }
 
-          /* Surface glow on receipt — synced to each spark's arrival time */
           .surf-1 { animation: surf-recv-1 12s ease-out infinite; }
           .surf-2 { animation: surf-recv-2 12s ease-out infinite; }
           .surf-4 { animation: surf-recv-4 12s ease-out infinite; }
-          @keyframes surf-recv-1 {  /* terminal — cs-1 arrives at 25% */
+          @keyframes surf-recv-1 {
             0%, 22% { filter: none; }
             25%     { filter: drop-shadow(0 0 14px rgba(31,142,142,0.75)); }
             32%, 100% { filter: none; }
           }
-          @keyframes surf-recv-2 {  /* internal-api — cs-2 arrives at 40.3% */
+          @keyframes surf-recv-2 {
             0%, 37% { filter: none; }
             40%     { filter: drop-shadow(0 0 14px rgba(31,142,142,0.75)); }
             47%, 100% { filter: none; }
           }
-          @keyframes surf-recv-4 {  /* browser — cs-4 arrives at 100% (wraps to 0) */
+          @keyframes surf-recv-4 {
             0%      { filter: drop-shadow(0 0 14px rgba(31,142,142,0.75)); }
             7%, 97% { filter: none; }
             100%    { filter: drop-shadow(0 0 14px rgba(31,142,142,0.75)); }
           }
 
-          /* Deny label flash */
           .deny-lbl { opacity: 0; animation: deny-show 12s ease-in-out infinite; }
           @keyframes deny-show {
             0%, 56% { opacity: 0; }

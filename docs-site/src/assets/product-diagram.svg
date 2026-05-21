@@ -3,7 +3,7 @@
   <rect width="1200" height="660" fill="#FFFFFF"/>
         <defs>
           <marker id="arrFOSS" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#2EA7BF"></path>
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#1F8E8E"></path>
           </marker>
           <marker id="arrInk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="#0F1A1A"></path>
@@ -23,33 +23,33 @@
           </radialGradient>
           <radialGradient id="sparkCap" cx="50%" cy="50%" r="50%">
             <stop offset="0%" stop-color="#A6E0E8" stop-opacity="1"></stop>
-            <stop offset="60%" stop-color="#2EA7BF" stop-opacity="0.7"></stop>
-            <stop offset="100%" stop-color="#2EA7BF" stop-opacity="0"></stop>
+            <stop offset="60%" stop-color="#1F8E8E" stop-opacity="0.7"></stop>
+            <stop offset="100%" stop-color="#1F8E8E" stop-opacity="0"></stop>
           </radialGradient>
           <linearGradient id="sidecarFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="rgba(46,167,191,0.16)"></stop>
-            <stop offset="100%" stop-color="rgba(46,167,191,0.06)"></stop>
+            <stop offset="0%" stop-color="rgba(31,142,142,0.16)"></stop>
+            <stop offset="100%" stop-color="rgba(31,142,142,0.06)"></stop>
           </linearGradient>
         </defs>
 
         <style>
-          .lbl-mn    { font-family: 'JetBrains Mono', monospace; font-size: 16px; fill: #7E8B87; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 500; }
-          .lbl-tx    { font-family: 'Inter', sans-serif; font-size: 20px; fill: #0F1A1A; font-weight: 600; }
-          .lbl-fr    { font-family: 'Inter', sans-serif; font-size: 28px; fill: #0F1A1A; font-weight: 600; letter-spacing: -0.3px; }
-          .lbl-sm    { font-family: 'JetBrains Mono', monospace; font-size: 16px; fill: #4A5854; }
-          .lbl-tiny  { font-family: 'JetBrains Mono', monospace; font-size: 14px; fill: #4A5854; }
-          .lbl-italic{ font-family: 'Inter', sans-serif; font-style: italic; font-size: 16px; fill: #4A5854; }
+          .lbl-mn    { font-family: 'JetBrains Mono', monospace; font-size: 13px; fill: #7E8B87; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 500; }
+          .lbl-tx    { font-family: 'Inter', sans-serif; font-size: 18px; fill: #0F1A1A; font-weight: 500; }
+          .lbl-fr    { font-family: 'Inter', sans-serif; font-size: 24px; fill: #0F1A1A; font-weight: 500; letter-spacing: -0.3px; }
+          .lbl-sm    { font-family: 'JetBrains Mono', monospace; font-size: 13px; fill: #4A5854; }
+          .lbl-tiny  { font-family: 'JetBrains Mono', monospace; font-size: 13px; fill: #4A5854; }
+          .lbl-italic{ font-family: 'Inter', sans-serif; font-style: italic; font-size: 13px; fill: #4A5854; }
 
           .ext-box     { fill: #F2F2F0; stroke: #C8C8C5; stroke-width: 1.2; }
-          .foss-box    { fill: rgba(46,167,191,0.10); stroke: #2EA7BF; stroke-width: 1.4; }
-          .sidecar-box { fill: url(#sidecarFill); stroke: #2EA7BF; stroke-width: 1.8; filter: drop-shadow(0 6px 30px rgba(46,167,191,0.15)); }
+          .foss-box    { fill: rgba(31,142,142,0.10); stroke: #1F8E8E; stroke-width: 1.4; }
+          .sidecar-box { fill: url(#sidecarFill); stroke: #1F8E8E; stroke-width: 1.8; filter: drop-shadow(0 6px 30px rgba(31,142,142,0.15)); }
           .int-box     { fill: rgba(123,95,173,0.10); stroke: #7B5FAD; stroke-width: 1.4; }
           .logic-box   { fill: rgba(200,163,56,0.12); stroke: #C8A338; stroke-width: 1.4; }
           .inner-box   { fill: #FFFFFF; stroke: #B5D7E0; stroke-width: 1.2; }
-          .phase-tint-1 { fill: rgba(46,167,191,0.05); }
+          .phase-tint-1 { fill: rgba(31,142,142,0.05); }
           .phase-tint-2 { fill: rgba(232,154,46,0.05); }
 
-          .line-foss   { stroke: #2EA7BF; stroke-width: 1.6; fill: none; }
+          .line-foss   { stroke: #1F8E8E; stroke-width: 1.6; fill: none; }
           .line-ink    { stroke: #0F1A1A; stroke-width: 1.4; fill: none; }
           .line-deny   { stroke: #B85450; stroke-width: 1.4; fill: none; }
 
@@ -125,7 +125,7 @@
           .ma-grp rect { animation: ma-glow 13s ease-out infinite; }
           @keyframes ma-glow {
             0%, 4%   { filter: none; }
-            5%, 7%   { filter: drop-shadow(0 0 16px rgba(46,167,191,0.65)); }
+            5%, 7%   { filter: drop-shadow(0 0 16px rgba(31,142,142,0.65)); }
             9%, 100% { filter: none; }
           }
 
@@ -138,16 +138,16 @@
           }
           .cap-token-pulse { animation: cap-token-pulse 2.4s ease-in-out infinite; }
           @keyframes cap-token-pulse {
-            0%, 100% { filter: drop-shadow(0 0 4px rgba(46,167,191,0.4)); }
-            50%      { filter: drop-shadow(0 0 12px rgba(46,167,191,0.85)); }
+            0%, 100% { filter: drop-shadow(0 0 4px rgba(31,142,142,0.4)); }
+            50%      { filter: drop-shadow(0 0 12px rgba(31,142,142,0.85)); }
           }
 
           /* Sidecar overall glow when handshake completes */
           .sc-glow { animation: sc-cap-glow 13s ease-out infinite; }
           @keyframes sc-cap-glow {
-            0%, 9%   { filter: drop-shadow(0 6px 30px rgba(46,167,191,0.15)); }
-            10%, 13% { filter: drop-shadow(0 0 26px rgba(46,167,191,0.7)); }
-            17%,100% { filter: drop-shadow(0 6px 30px rgba(46,167,191,0.15)); }
+            0%, 9%   { filter: drop-shadow(0 6px 30px rgba(31,142,142,0.15)); }
+            10%, 13% { filter: drop-shadow(0 0 26px rgba(31,142,142,0.7)); }
+            17%,100% { filter: drop-shadow(0 6px 30px rgba(31,142,142,0.15)); }
           }
 
           /* TOOL CALLS — 3 sequential dots (allow / deny / allow) */
@@ -228,11 +228,11 @@
           .phase-1 { animation: ph1-glow 13s linear infinite; transform-box: fill-box; transform-origin: center; }
           @keyframes ph1-glow {
             0%, 12%  { stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
-            13%, 17% { stroke: #1F8E8E; stroke-width: 2.2; filter: drop-shadow(0 0 12px rgba(46,167,191,0.6)); }
+            13%, 17% { stroke: #1F8E8E; stroke-width: 2.2; filter: drop-shadow(0 0 12px rgba(31,142,142,0.6)); }
             18%, 37% { stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
-            38%, 42% { stroke: #1F8E8E; stroke-width: 2.2; filter: drop-shadow(0 0 12px rgba(46,167,191,0.6)); }
+            38%, 42% { stroke: #1F8E8E; stroke-width: 2.2; filter: drop-shadow(0 0 12px rgba(31,142,142,0.6)); }
             43%, 62% { stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
-            63%, 67% { stroke: #1F8E8E; stroke-width: 2.2; filter: drop-shadow(0 0 12px rgba(46,167,191,0.6)); }
+            63%, 67% { stroke: #1F8E8E; stroke-width: 2.2; filter: drop-shadow(0 0 12px rgba(31,142,142,0.6)); }
             68%, 100%{ stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
           }
 
@@ -240,11 +240,11 @@
           .phase-2 { animation: ph2-glow 13s linear infinite; transform-box: fill-box; transform-origin: center; }
           @keyframes ph2-glow {
             0%, 18%  { stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
-            19%, 24% { stroke: #1F8E8E; stroke-width: 2.2; filter: drop-shadow(0 0 12px rgba(46,167,191,0.6)); }
+            19%, 24% { stroke: #1F8E8E; stroke-width: 2.2; filter: drop-shadow(0 0 12px rgba(31,142,142,0.6)); }
             25%, 43% { stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
             44%, 50% { stroke: #B85450; stroke-width: 2.4; filter: drop-shadow(0 0 14px rgba(184,84,80,0.7)); }
             51%, 68% { stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
-            69%, 74% { stroke: #1F8E8E; stroke-width: 2.2; filter: drop-shadow(0 0 12px rgba(46,167,191,0.6)); }
+            69%, 74% { stroke: #1F8E8E; stroke-width: 2.2; filter: drop-shadow(0 0 12px rgba(31,142,142,0.6)); }
             75%, 100%{ stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
           }
 
@@ -261,11 +261,11 @@
           .audit-box-anim { animation: audit-receive 13s linear infinite; }
           @keyframes audit-receive {
             0%, 30%  { filter: none; }
-            31%, 33% { filter: drop-shadow(0 0 14px rgba(46,167,191,0.55)); }
+            31%, 33% { filter: drop-shadow(0 0 14px rgba(31,142,142,0.55)); }
             34%, 53% { filter: none; }
             54%, 56% { filter: drop-shadow(0 0 14px rgba(184,84,80,0.55)); }
             57%, 80% { filter: none; }
-            81%, 83% { filter: drop-shadow(0 0 14px rgba(46,167,191,0.55)); }
+            81%, 83% { filter: drop-shadow(0 0 14px rgba(31,142,142,0.55)); }
             84%,100% { filter: none; }
           }
 
@@ -273,7 +273,7 @@
           .phase-num  { font-family: 'Inter', sans-serif; font-size: 18px; font-weight: 700; fill: #fff; text-anchor: middle; dominant-baseline: central; }
           .foss-stamp {
             font-family: 'JetBrains Mono', monospace; font-size: 13px;
-            fill: #2EA7BF; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600;
+            fill: #1F8E8E; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600;
           }
           .out-pill {
             font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 700;
@@ -286,7 +286,7 @@
           <rect x="40" y="30" width="340" height="120" rx="12" class="foss-box"></rect>
           <text class="foss-stamp" x="365" y="142" text-anchor="end">OpenFirma</text>
           <text class="lbl-mn ma-label" x="58" y="56">// authority · session-level</text>
-          <text class="lbl-fr" x="58" y="100" style="fill:#2EA7BF;font-size:26px">Mini Authority</text>
+          <text class="lbl-fr" x="58" y="100" style="fill:#1F8E8E;font-size:26px">Mini Authority</text>
           <text class="lbl-sm" x="58" y="128">issues capability tokens</text>
         </g>
 
@@ -296,7 +296,7 @@
 
         <!-- Arrow: Mini Authority → Sidecar top ("Capability token") -->
         <path d="M 340 150 L 340 200 L 460 200 L 460 235" class="line-foss flow-line" fill="none" marker-end="url(#arrFOSS)"></path>
-        <text class="lbl-italic" x="365" y="190" style="font-size:15px;fill:#2EA7BF">Capability token</text>
+        <text class="lbl-italic" x="365" y="190" style="font-size:15px;fill:#1F8E8E">Capability token</text>
 
         <!-- ============ AGENT (left, middle, aligned with Sidecar) ============ -->
         <rect x="40" y="295" width="260" height="100" rx="10" class="ext-box"></rect>
@@ -313,27 +313,27 @@
         </g>
         <text class="foss-stamp" x="865" y="262" text-anchor="end">OpenFirma</text>
         <text class="lbl-mn" x="338" y="262">// sidecar · call-level · fully local</text>
-        <text class="lbl-fr" x="338" y="300" style="fill:#2EA7BF;font-size:28px">Firma Sidecar</text>
+        <text class="lbl-fr" x="338" y="300" style="fill:#1F8E8E;font-size:28px">Firma Sidecar</text>
 
         <!-- Capability-token indicator inside Sidecar (lit after handshake) -->
         <g class="cap-token-ind">
           <g class="cap-token-pulse">
-            <rect x="680" y="278" width="180" height="26" rx="13" fill="rgba(46,167,191,0.22)" stroke="#2EA7BF" stroke-width="1.2"></rect>
-            <circle cx="697" cy="291" r="4" fill="#2EA7BF"></circle>
+            <rect x="680" y="278" width="180" height="26" rx="13" fill="rgba(31,142,142,0.22)" stroke="#1F8E8E" stroke-width="1.2"></rect>
+            <circle cx="697" cy="291" r="4" fill="#1F8E8E"></circle>
             <text x="708" y="296" style="font-family:'JetBrains Mono', monospace;font-size:13px;font-weight:600;fill:#176E6E;letter-spacing:0.06em">capability token</text>
           </g>
         </g>
 
         <!-- Phase 1 (Capability validation) -->
         <rect x="340" y="325" width="250" height="130" rx="8" class="inner-box phase-1"></rect>
-        <text class="lbl-tx" x="358" y="358" style="fill:#2EA7BF;font-size:20px">1. Capability</text>
-        <text class="lbl-tx" x="358" y="384" style="fill:#2EA7BF;font-size:20px">validation</text>
+        <text class="lbl-tx" x="358" y="358" style="fill:#1F8E8E;font-size:20px">1. Capability</text>
+        <text class="lbl-tx" x="358" y="384" style="fill:#1F8E8E;font-size:20px">validation</text>
         <text class="lbl-tiny" x="358" y="420">token · sig · revoke</text>
 
         <!-- Phase 2 (Constraint enforcement) -->
         <rect x="610" y="325" width="250" height="130" rx="8" class="inner-box phase-2"></rect>
-        <text class="lbl-tx" x="628" y="358" style="fill:#2EA7BF;font-size:20px">2. Constraint</text>
-        <text class="lbl-tx" x="628" y="384" style="fill:#2EA7BF;font-size:20px">enforcement</text>
+        <text class="lbl-tx" x="628" y="358" style="fill:#1F8E8E;font-size:20px">2. Constraint</text>
+        <text class="lbl-tx" x="628" y="384" style="fill:#1F8E8E;font-size:20px">enforcement</text>
         <text class="lbl-tiny" x="628" y="418">Cedar eval · context</text>
         <text class="lbl-tiny" x="628" y="438">ALLOW / DENY / HITL</text>
 
@@ -363,7 +363,7 @@
           <rect x="320" y="520" width="560" height="110" rx="12" class="foss-box"></rect>
           <text class="foss-stamp" x="865" y="544" text-anchor="end">OpenFirma</text>
           <text class="lbl-mn" x="338" y="544">// audit</text>
-          <text class="lbl-fr" x="338" y="582" style="fill:#2EA7BF">Audit emitter</text>
+          <text class="lbl-fr" x="338" y="582" style="fill:#1F8E8E">Audit emitter</text>
           <text class="lbl-sm" x="338" y="608">file · stdout · gRPC</text>
         </g>
 
