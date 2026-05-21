@@ -21,7 +21,7 @@
 
 <br/>
 <div align="center">
-  <img src="docs-site/src/assets/DIAGRAMMA GITHUB 1.gif" alt="OpenFirma diagram" width="100%" />
+  <img src="docs-site/src/assets/home-diagram.svg" alt="OpenFirma diagram" width="100%" />
 </div>
 <br/>
 
