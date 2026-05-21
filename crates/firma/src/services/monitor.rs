@@ -96,6 +96,7 @@ pub fn run(args: Args) -> ExitCode {
             decision_filter,
             args.action_class.as_deref(),
             args.agent.as_deref(),
+            args.sandbox_id.as_deref(),
             &mut out,
         ) {
             if error.kind() == io::ErrorKind::BrokenPipe {

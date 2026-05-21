@@ -26,6 +26,7 @@ use super::{AuditPayload, ExecutionEvent};
 /// covering all preceding fields.
 pub struct EventBuilder {
     signing_key: SigningKey,
+    sandbox_id: String,
 }
 
 // custom Debug to avoid leaking key material.
@@ -57,7 +58,20 @@ impl EventBuilder {
             .parse::<SigningKey>()
             .map_err(|e| EventBuilderError::InvalidKey(e.to_string()))?;
 
-        Ok(Self { signing_key })
+        Ok(Self {
+            signing_key,
+            sandbox_id: String::new(),
+        })
+    }
+
+    /// Sets the per-run sandbox identity stamped on every emitted
+    /// event. Sourced from the `FIRMA_RUN_SANDBOX_ID` environment
+    /// variable when the sidecar is autostarted by `firma run`; left
+    /// empty otherwise.
+    #[must_use]
+    pub fn with_sandbox_id(mut self, sandbox_id: String) -> Self {
+        self.sandbox_id = sandbox_id;
+        self
     }
 
     /// Builds a signed [`ExecutionEvent`] from an [`AuditPayload`].
@@ -85,6 +99,7 @@ impl EventBuilder {
             dispatch_status: payload.dispatch_status,
             dispatch_latency_us: payload.dispatch_latency_us,
             response_size: payload.response_size,
+            sandbox_id: self.sandbox_id.clone(),
             signature: Vec::new(),
         };
 
@@ -143,6 +158,8 @@ fn signing_payload(event: &ExecutionEvent) -> Vec<u8> {
     hasher.update(event.dispatch_latency_us.to_string().as_bytes());
     hasher.update(b"\n");
     hasher.update(event.response_size.to_string().as_bytes());
+    hasher.update(b"\n");
+    hasher.update(event.sandbox_id.as_bytes());
     hasher.finalize().to_vec()
 }
 
@@ -398,6 +415,37 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
     }
 
     #[test]
+    fn test_tampered_sandbox_id_fails_verification() {
+        let builder = EventBuilder::new(TEST_KEY_PEM)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .with_sandbox_id("sbx_legit".to_string());
+
+        let decision = EnforcementDecision::Allow {
+            claims: test_claims(),
+            envelope: Box::new(test_envelope()),
+            credentials: firma_core::InjectedCredentials::empty(),
+        };
+
+        let payload = payload_from_decision(&decision, "sess_001", Duration::from_micros(100));
+        let mut event = builder.build(payload);
+
+        event.sandbox_id = "sbx_evil".to_string();
+
+        let signing_key: SigningKey = TEST_KEY_PEM
+            .parse()
+            .unwrap_or_else(|e: ecdsa::Error| panic!("{e}"));
+        let verifying_key = VerifyingKey::from(&signing_key);
+
+        let payload = signing_payload(&event);
+        let sig = DerSignature::from_bytes(&event.signature).unwrap_or_else(|e| panic!("{e}"));
+
+        assert!(
+            verifying_key.verify(&payload, &sig).is_err(),
+            "sandbox_id must be covered by the signature"
+        );
+    }
+
+    #[test]
     fn test_debug_redacts_key() {
         let builder = EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
         let rendered = format!("{builder:?}");
@@ -444,6 +492,37 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             e1.event_id, e2.event_id,
             "each event must get a unique UUID v7"
         );
+    }
+
+    #[test]
+    fn test_builder_stamps_configured_sandbox_id() {
+        let builder = EventBuilder::new(TEST_KEY_PEM)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .with_sandbox_id("sbx_abc123".to_string());
+
+        let decision = EnforcementDecision::Allow {
+            claims: test_claims(),
+            envelope: Box::new(test_envelope()),
+            credentials: firma_core::InjectedCredentials::empty(),
+        };
+        let payload = payload_from_decision(&decision, "sess_001", Duration::from_micros(10));
+        let event = builder.build(payload);
+
+        assert_eq!(event.sandbox_id, "sbx_abc123");
+    }
+
+    #[test]
+    fn test_builder_default_sandbox_id_is_empty() {
+        let builder = EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
+        let decision = EnforcementDecision::Allow {
+            claims: test_claims(),
+            envelope: Box::new(test_envelope()),
+            credentials: firma_core::InjectedCredentials::empty(),
+        };
+        let payload = payload_from_decision(&decision, "sess_001", Duration::from_micros(10));
+        let event = builder.build(payload);
+
+        assert!(event.sandbox_id.is_empty());
     }
 
     #[test]

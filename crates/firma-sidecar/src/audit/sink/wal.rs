@@ -476,6 +476,7 @@ mod tests {
             dispatch_status: 0,
             dispatch_latency_us: 0,
             response_size: 0,
+            sandbox_id: String::new(),
             signature: vec![0xDE, 0xAD],
         }
     }
