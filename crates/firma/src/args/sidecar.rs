@@ -19,26 +19,27 @@ pub struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum SidecarCommand {
-    /// Start the sidecar as a long-lived daemon. Bootstraps the local
-    /// authority + sidecar pair so the operator-facing entry point
-    /// (and `firma run --sidecar=external`) has something to talk to.
+    /// Start the Sidecar (and a local Authority alongside it) as a long-lived
+    /// daemon. Once running, `firma run --sidecar=external` and any external
+    /// callers can connect to the shared enforcement endpoint.
     Start(StartArgs),
-    /// Stop the long-lived sidecar daemon (and any authority started
-    /// alongside it).
+    /// Stop the long-lived Sidecar daemon and any Authority that was started
+    /// alongside it. Graceful by default; falls back to hard-kill after
+    /// `--timeout` seconds.
     Stop(StopArgs),
-    /// docker-ps-style listing / health probe of live sidecars.
+    /// List live Sidecars and probe their health (docker-ps-style table, or
+    /// JSON with `--json`). Covers per-run Sidecars and the long-lived daemon.
     Status(StatusArgs),
 }
 
 #[derive(Debug, clap::Args)]
 pub struct ServeArgs {
-    /// The path to the configuration file for the sidecar.
-    ///
-    /// When unset, `firma.toml` is discovered from platform config
+    /// Path to the Sidecar's `firma.toml` config (listen addresses, Authority
+    /// endpoint, mapping rules, …). When unset, discovered from platform config
     /// dirs (see docs/cli.md).
     #[clap(long, short = 'c', env = "FIRMA_SIDECAR_CONFIG_FILE")]
     pub config: Option<PathBuf>,
-    /// Health check binding address.
+    /// Address the readiness / health-check HTTP endpoint binds to.
     #[clap(
         long,
         env = "FIRMA_SIDECAR_HEALTH_BIND_ADDR",
@@ -49,40 +50,45 @@ pub struct ServeArgs {
 
 #[derive(Debug, clap::Args)]
 pub struct StartArgs {
-    /// Stack config file. When unset, the platform `firma.toml` is used.
+    /// Path to the `firma.toml` config used to launch the stack. When unset,
+    /// the platform-default config is used.
     #[arg(long, env = "FIRMA_SIDECAR_CONFIG_FILE")]
     pub config: Option<PathBuf>,
-    /// Detach after readiness succeeds.
+    /// Detach into the background once readiness has been confirmed. Without
+    /// this flag the command stays attached to the foreground.
     #[arg(long)]
     pub detach: bool,
-    /// State dir override.
+    /// Override the runtime state directory (pid files, sockets, logs).
+    /// Defaults to `FIRMA_STATE_DIR` or the platform default.
     #[arg(long, env = "FIRMA_STATE_DIR")]
     pub state_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, clap::Args)]
 pub struct StopArgs {
-    /// Accepted for compatibility; `state_dir` is resolved from
-    /// `--state-dir` / `FIRMA_STATE_DIR` / XDG.
+    /// Accepted for symmetry with `start`; the running daemon is located via
+    /// `--state-dir` / `FIRMA_STATE_DIR` / XDG, not via this file.
     #[arg(long, env = "FIRMA_SIDECAR_CONFIG_FILE")]
     pub config: Option<PathBuf>,
-    /// State dir override.
+    /// Override the runtime state directory used to locate the running daemon.
     #[arg(long, env = "FIRMA_STATE_DIR")]
     pub state_dir: Option<PathBuf>,
-    /// Soft-shutdown grace before hard-kill, in seconds.
+    /// Seconds to wait for a graceful shutdown before sending SIGKILL.
     #[arg(long, default_value_t = 2)]
     pub timeout: u64,
 }
 
 #[derive(Debug, clap::Args)]
 pub struct StatusArgs {
-    /// Health-probe only the sidecar with this sandbox id.
+    /// Restrict the probe to the Sidecar with this sandbox id (set by
+    /// `firma run` for per-run Sidecars).
     #[clap(long)]
     pub sandbox_id: Option<String>,
-    /// Emit a single JSON array, one object per sidecar.
+    /// Emit machine-readable JSON (one array, one object per Sidecar) instead
+    /// of the human-readable table.
     #[clap(long)]
     pub json: bool,
-    /// Probe the long-lived daemon sidecar instead of per-run markers.
+    /// Probe the long-lived daemon Sidecar instead of per-run markers.
     #[clap(long)]
     pub daemon: bool,
 }

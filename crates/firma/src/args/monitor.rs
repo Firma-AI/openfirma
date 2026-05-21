@@ -14,48 +14,50 @@ pub struct Args {
     /// `--state-dir` / `FIRMA_STATE_DIR` / XDG.
     #[arg(long, env = "FIRMA_STACK_CONFIG")]
     pub config: Option<PathBuf>,
-    /// State dir override.
+    /// Override the runtime state directory containing the audit log and
+    /// component log files.
     #[arg(long, env = "FIRMA_STATE_DIR")]
     pub state_dir: Option<PathBuf>,
 
-    /// Force follow mode regardless of TTY detection. Mutually
-    /// exclusive with `--no-follow`.
+    /// Follow the log as new records are written, regardless of whether stdout
+    /// is a TTY. Mutually exclusive with `--no-follow`.
     #[arg(long, conflicts_with = "no_follow")]
     pub tail: bool,
-    /// Read once and exit instead of following file tails. Overrides
-    /// TTY auto-tail.
+    /// Read once and exit instead of following the log. Overrides the default
+    /// TTY-driven auto-tail.
     #[arg(long = "no-follow")]
     pub no_follow: bool,
 
-    /// Source to monitor.
+    /// Which log to read: the audit log (default), one component's stdout/stderr,
+    /// or all three interleaved with a `[source]` prefix.
     #[arg(long, value_enum, default_value_t = Source::Audit)]
     pub source: Source,
 
-    /// Audit decision filter.
+    /// Show only audit records with this decision (`allow`, `deny`, `passthrough`).
     #[arg(long, value_enum)]
     pub decision: Option<Decision>,
-    /// Shortcut for `--decision deny`. Mutually exclusive with
-    /// `--decision`.
+    /// Shortcut for `--decision deny`. Mutually exclusive with `--decision`.
     #[arg(long = "only-deny", conflicts_with = "decision")]
     pub only_deny: bool,
 
-    /// Audit action class filter.
+    /// Show only audit records matching this action class (e.g. `repo.read`).
     #[arg(long)]
     pub action_class: Option<String>,
 
-    /// Audit `agent_id` exact-match filter.
+    /// Show only audit records whose `agent_id` exactly matches this value.
     #[arg(long)]
     pub agent: Option<String>,
 
-    /// Backfill since a duration or RFC3339 timestamp.
+    /// Backfill records since this point: a duration (`15m`, `2h`) or an
+    /// RFC3339 timestamp.
     #[arg(long)]
     pub since: Option<String>,
 
-    /// Output format.
+    /// Output rendering. `pretty` is colorised single-line; `json` is one
+    /// stable-schema object per line for downstream tooling.
     #[arg(long, value_enum, default_value_t = Format::Pretty)]
     pub format: Format,
-    /// Shortcut for `--format json`. Mutually exclusive with
-    /// `--format`.
+    /// Shortcut for `--format json`. Mutually exclusive with `--format`.
     #[arg(long, conflicts_with = "format")]
     pub json: bool,
 }
