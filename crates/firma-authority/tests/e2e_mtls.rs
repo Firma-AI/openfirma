@@ -27,15 +27,15 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity
 
 struct MtlsCerts {
     /// Authority server CA cert (PEM) — used to sign the server cert.
-    server_ca_cert_pem: Vec<u8>,
+    server_ca_cert: Vec<u8>,
     /// Authority server cert (PEM).
-    server_cert_pem: Vec<u8>,
+    server_cert: Vec<u8>,
     /// Authority server key (PEM).
-    server_key_pem: Vec<u8>,
+    server_key: Vec<u8>,
     /// Client CA cert (PEM) — distributes to Authority for client verification.
-    client_ca_cert_pem: Vec<u8>,
+    client_ca_cert: Vec<u8>,
     /// Client CA key (PEM) — used to sign sidecar client certs.
-    client_ca_key_pem: Vec<u8>,
+    client_ca_key: Vec<u8>,
 }
 
 fn generate_mtls_certs() -> MtlsCerts {
@@ -65,11 +65,11 @@ fn generate_mtls_certs() -> MtlsCerts {
     let client_ca_cert = client_ca_params.self_signed(&client_ca_key).unwrap();
 
     MtlsCerts {
-        server_ca_cert_pem: server_ca_cert.pem().into_bytes(),
-        server_cert_pem: server_cert.pem().into_bytes(),
-        server_key_pem: server_key.serialize_pem().into_bytes(),
-        client_ca_cert_pem: client_ca_cert.pem().into_bytes(),
-        client_ca_key_pem: client_ca_key.serialize_pem().into_bytes(),
+        server_ca_cert: server_ca_cert.pem().into_bytes(),
+        server_cert: server_cert.pem().into_bytes(),
+        server_key: server_key.serialize_pem().into_bytes(),
+        client_ca_cert: client_ca_cert.pem().into_bytes(),
+        client_ca_key: client_ca_key.serialize_pem().into_bytes(),
     }
 }
 
@@ -136,9 +136,9 @@ impl MtlsTestServer {
         let client_ca_cert_path = temp_dir.path().join("client-ca.crt");
         let authorized_clients_path = temp_dir.path().join("authorized_clients.toml");
 
-        std::fs::write(&server_cert_path, &certs.server_cert_pem).unwrap();
-        std::fs::write(&server_key_path, &certs.server_key_pem).unwrap();
-        std::fs::write(&client_ca_cert_path, &certs.client_ca_cert_pem).unwrap();
+        std::fs::write(&server_cert_path, &certs.server_cert).unwrap();
+        std::fs::write(&server_key_path, &certs.server_key).unwrap();
+        std::fs::write(&client_ca_cert_path, &certs.client_ca_cert).unwrap();
 
         // Write authorized clients TOML.
         let mut f = std::fs::File::create(&authorized_clients_path).unwrap();
@@ -262,14 +262,14 @@ async fn mtls_allow_listed_client_receives_policy_bundle() {
     let client = generate_client_cert(
         "sidecar-allowed",
         Some("sidecar-allowed.internal"),
-        &certs.client_ca_cert_pem,
-        &certs.client_ca_key_pem,
+        &certs.client_ca_cert,
+        &certs.client_ca_key,
     );
 
     let server = MtlsTestServer::start(&certs, &[&client.identity]).await;
     let channel = build_mtls_channel(
         &server.url(),
-        &certs.server_ca_cert_pem,
+        &certs.server_ca_cert,
         &client.cert_pem,
         &client.key_pem,
     )
@@ -315,13 +315,13 @@ async fn mtls_non_allow_listed_client_rejected_at_handshake() {
     let client = generate_client_cert(
         "unauthorized-sidecar",
         None,
-        &certs.client_ca_cert_pem,
-        &certs.client_ca_key_pem,
+        &certs.client_ca_cert,
+        &certs.client_ca_key,
     );
 
     let channel = build_mtls_channel(
         &server.url(),
-        &certs.server_ca_cert_pem,
+        &certs.server_ca_cert,
         &client.cert_pem,
         &client.key_pem,
     )
@@ -352,7 +352,7 @@ async fn mtls_missing_client_cert_rejected_at_handshake() {
     let server = MtlsTestServer::start(&certs, &["authorized-sidecar"]).await;
 
     // Build a channel WITHOUT client identity — only the server CA cert.
-    let channel = build_tls_only_channel(&server.url(), &certs.server_ca_cert_pem)
+    let channel = build_tls_only_channel(&server.url(), &certs.server_ca_cert)
         .expect("failed to build TLS-only channel");
 
     let mut grpc = AuthorityServiceClient::new(channel);
@@ -381,15 +381,15 @@ async fn mtls_cn_identity_matched_when_no_san() {
     let client = generate_client_cert(
         "cn-only-sidecar",
         None, // No SAN — CN is the identity
-        &certs.client_ca_cert_pem,
-        &certs.client_ca_key_pem,
+        &certs.client_ca_cert,
+        &certs.client_ca_key,
     );
 
     let server = MtlsTestServer::start(&certs, &["cn-only-sidecar"]).await;
 
     let channel = build_mtls_channel(
         &server.url(),
-        &certs.server_ca_cert_pem,
+        &certs.server_ca_cert,
         &client.cert_pem,
         &client.key_pem,
     )
@@ -444,7 +444,7 @@ async fn mtls_wrong_client_ca_rejected_at_handshake() {
 
     let channel = build_mtls_channel(
         &server.url(),
-        &certs.server_ca_cert_pem,
+        &certs.server_ca_cert,
         &client.cert_pem,
         &client.key_pem,
     )
