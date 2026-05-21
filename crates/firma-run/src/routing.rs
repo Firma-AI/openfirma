@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -309,6 +310,11 @@ pub fn resolve_authority(
         crate::authority::AuthoritySelection::Local => {
             let target = "[::1]:50051";
             if probe_authority_tcp(target).is_ok() {
+                if probe_authority_plaintext_h2(target).is_err() {
+                    return Err(RunError::AuthorityTransportAmbiguous {
+                        endpoint: format!("http://{target}"),
+                    });
+                }
                 warn!(
                     target,
                     "using existing local authority on plaintext loopback (dev mode); mTLS hardening applies to https:// authority deployments"
@@ -344,6 +350,11 @@ pub fn resolve_authority(
                 }
                 Err(spawn_err) => {
                     if probe_authority_tcp(target).is_ok() {
+                        if probe_authority_plaintext_h2(target).is_err() {
+                            return Err(RunError::AuthorityTransportAmbiguous {
+                                endpoint: format!("http://{target}"),
+                            });
+                        }
                         warn!(
                             target,
                             "authority port became reachable during autostart retry; proceeding with plaintext local authority (dev mode)"
@@ -366,6 +377,30 @@ fn probe_authority_tcp(addr: &str) -> Result<(), String> {
     std::net::TcpStream::connect_timeout(&socket, std::time::Duration::from_millis(500))
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+fn probe_authority_plaintext_h2(addr: &str) -> Result<(), String> {
+    const H2_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+    let socket: std::net::SocketAddr = addr.parse().map_err(|e| format!("parse {addr}: {e}"))?;
+    let mut stream =
+        std::net::TcpStream::connect_timeout(&socket, std::time::Duration::from_millis(500))
+            .map_err(|e| e.to_string())?;
+    stream
+        .set_write_timeout(Some(std::time::Duration::from_millis(500)))
+        .map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .map_err(|e| e.to_string())?;
+    stream.write_all(H2_PREFACE).map_err(|e| e.to_string())?;
+
+    // Plaintext h2 servers respond with frames after preface.
+    // TLS endpoints or unrelated listeners usually won't.
+    let mut probe = [0_u8; 1];
+    let read = stream.read(&mut probe).map_err(|e| e.to_string())?;
+    if read == 0 {
+        return Err("connection closed without plaintext h2 response".to_string());
+    }
+    Ok(())
 }
 
 fn probe_authority_url(url_str: &str) -> Result<(), RunError> {
