@@ -1,0 +1,384 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1200 660" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="OpenFirma flow: Mini Authority sits above the Sandboxed Agent on the left; the Firma Sidecar in the center has two phases (Verify capability, Apply policy) that route to the Tool / API or to a deny path; the Audit emitter sits below.">
+  <rect width="1200" height="660" fill="#FFFFFF"/>
+        <defs>
+          <marker id="arrFOSS" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#2EA7BF"></path>
+          </marker>
+          <marker id="arrInk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#0F1A1A"></path>
+          </marker>
+          <marker id="arrDeny" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#B85450"></path>
+          </marker>
+          <radialGradient id="sparkAllow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#5BC9C9" stop-opacity="1"></stop>
+            <stop offset="40%" stop-color="#1F8E8E" stop-opacity="1"></stop>
+            <stop offset="100%" stop-color="#1F8E8E" stop-opacity="0"></stop>
+          </radialGradient>
+          <radialGradient id="sparkDeny" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#FFA39E" stop-opacity="1"></stop>
+            <stop offset="40%" stop-color="#B85450" stop-opacity="1"></stop>
+            <stop offset="100%" stop-color="#B85450" stop-opacity="0"></stop>
+          </radialGradient>
+          <radialGradient id="sparkCap" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#A6E0E8" stop-opacity="1"></stop>
+            <stop offset="60%" stop-color="#2EA7BF" stop-opacity="0.7"></stop>
+            <stop offset="100%" stop-color="#2EA7BF" stop-opacity="0"></stop>
+          </radialGradient>
+          <linearGradient id="sidecarFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="rgba(46,167,191,0.16)"></stop>
+            <stop offset="100%" stop-color="rgba(46,167,191,0.06)"></stop>
+          </linearGradient>
+        </defs>
+
+        <style>
+          .lbl-mn    { font-family: 'JetBrains Mono', monospace; font-size: 16px; fill: #7E8B87; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 500; }
+          .lbl-tx    { font-family: 'Inter', sans-serif; font-size: 20px; fill: #0F1A1A; font-weight: 600; }
+          .lbl-fr    { font-family: 'Inter', sans-serif; font-size: 28px; fill: #0F1A1A; font-weight: 600; letter-spacing: -0.3px; }
+          .lbl-sm    { font-family: 'JetBrains Mono', monospace; font-size: 16px; fill: #4A5854; }
+          .lbl-tiny  { font-family: 'JetBrains Mono', monospace; font-size: 14px; fill: #4A5854; }
+          .lbl-italic{ font-family: 'Inter', sans-serif; font-style: italic; font-size: 16px; fill: #4A5854; }
+
+          .ext-box     { fill: #F2F2F0; stroke: #C8C8C5; stroke-width: 1.2; }
+          .foss-box    { fill: rgba(46,167,191,0.10); stroke: #2EA7BF; stroke-width: 1.4; }
+          .sidecar-box { fill: url(#sidecarFill); stroke: #2EA7BF; stroke-width: 1.8; filter: drop-shadow(0 6px 30px rgba(46,167,191,0.15)); }
+          .int-box     { fill: rgba(123,95,173,0.10); stroke: #7B5FAD; stroke-width: 1.4; }
+          .logic-box   { fill: rgba(200,163,56,0.12); stroke: #C8A338; stroke-width: 1.4; }
+          .inner-box   { fill: #FFFFFF; stroke: #B5D7E0; stroke-width: 1.2; }
+          .phase-tint-1 { fill: rgba(46,167,191,0.05); }
+          .phase-tint-2 { fill: rgba(232,154,46,0.05); }
+
+          .line-foss   { stroke: #2EA7BF; stroke-width: 1.6; fill: none; }
+          .line-ink    { stroke: #0F1A1A; stroke-width: 1.4; fill: none; }
+          .line-deny   { stroke: #B85450; stroke-width: 1.4; fill: none; }
+
+          .flow-line { stroke-dasharray: 5 6; animation: flow-march 1.4s linear infinite; }
+          @keyframes flow-march { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -22; } }
+
+          .phase-1 { transform-box: fill-box; transform-origin: center; animation: phase-1-active 8s ease-in-out infinite; }
+          @keyframes phase-1-active {
+            0%, 5%    { stroke-width: 1.2; stroke: #B5D7E0; filter: none; }
+            8%, 13%   { stroke-width: 2.2; stroke: #1F8E8E; filter: drop-shadow(0 0 10px rgba(31,142,142,0.55)); }
+            16%, 50%  { stroke-width: 1.2; stroke: #B5D7E0; filter: none; }
+            55%, 60%  { stroke-width: 2.2; stroke: #1F8E8E; filter: drop-shadow(0 0 10px rgba(31,142,142,0.55)); }
+            63%, 100% { stroke-width: 1.2; stroke: #B5D7E0; filter: none; }
+          }
+          .phase-2 { animation: phase-2-active 8s ease-in-out infinite; }
+          @keyframes phase-2-active {
+            0%, 12%   { stroke-width: 1.2; stroke: #B5D7E0; filter: none; }
+            16%, 22%  { stroke-width: 2.2; stroke: #1F8E8E; filter: drop-shadow(0 0 10px rgba(31,142,142,0.55)); }
+            25%, 57%  { stroke-width: 1.2; stroke: #B5D7E0; filter: none; }
+            61%, 68%  { stroke-width: 2.2; stroke: #B85450; filter: drop-shadow(0 0 10px rgba(184,84,80,0.55)); }
+            72%, 100% { stroke-width: 1.2; stroke: #B5D7E0; filter: none; }
+          }
+
+          .pulse-bg { animation: gentle-pulse 4s ease-in-out infinite; }
+          @keyframes gentle-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.92; } }
+
+          /* ============ ANIMATION TIMELINE (9s cycle) ============
+             0–10%   handshake: Agent → MA → Sidecar; cap-token indicator lights, MA fades
+             10–35%  tool call 1 (allow): Agent → Cap → Constraint → Outbound + Audit
+             35–60%  tool call 2 (deny): Agent → Cap → Constraint(RED) → Audit only
+             60–85%  tool call 3 (allow): like #1
+             85–100% idle
+          */
+
+          /* HANDSHAKE: Agent → Mini Authority (single dot) */
+          .cap1-spark {
+            fill: url(#sparkCap);
+            animation: cap1-flow 13s linear infinite;
+          }
+          @keyframes cap1-flow {
+            0%   { transform: translate(160px, 295px); opacity: 0; }
+            1%   { opacity: 1; }
+            6%   { transform: translate(160px, 150px); opacity: 1; }
+            7%   { transform: translate(160px, 150px); opacity: 0; }
+            100% { opacity: 0; }
+          }
+
+          /* HANDSHAKE: Mini Authority → Sidecar top */
+          .cap2-spark {
+            fill: url(#sparkCap);
+            animation: cap2-flow 13s linear infinite;
+          }
+          @keyframes cap2-flow {
+            0%, 6%  { transform: translate(340px, 150px); opacity: 0; }
+            7%      { transform: translate(340px, 150px); opacity: 1; }
+            8.5%    { transform: translate(340px, 200px); opacity: 1; }
+            9.5%    { transform: translate(460px, 200px); opacity: 1; }
+            10%     { transform: translate(460px, 235px); opacity: 1; }
+            10.5%   { transform: translate(460px, 235px); opacity: 0; }
+            100%    { opacity: 0; }
+          }
+
+          /* Mini Authority: bright during handshake, then dim */
+          .ma-grp { animation: ma-fade 13s linear infinite; }
+          @keyframes ma-fade {
+            0%       { opacity: 1; }
+            10%      { opacity: 1; }
+            14%      { opacity: 0.4; }
+            100%     { opacity: 0.4; }
+          }
+
+          /* Mini Authority glow when it receives the request */
+          .ma-grp rect { animation: ma-glow 13s ease-out infinite; }
+          @keyframes ma-glow {
+            0%, 4%   { filter: none; }
+            5%, 7%   { filter: drop-shadow(0 0 16px rgba(46,167,191,0.65)); }
+            9%, 100% { filter: none; }
+          }
+
+          /* Capability token indicator inside Sidecar */
+          .cap-token-ind { animation: cap-token-show 13s linear infinite; }
+          @keyframes cap-token-show {
+            0%, 9%   { opacity: 0; }
+            10%      { opacity: 1; }
+            100%     { opacity: 1; }
+          }
+          .cap-token-pulse { animation: cap-token-pulse 2.4s ease-in-out infinite; }
+          @keyframes cap-token-pulse {
+            0%, 100% { filter: drop-shadow(0 0 4px rgba(46,167,191,0.4)); }
+            50%      { filter: drop-shadow(0 0 12px rgba(46,167,191,0.85)); }
+          }
+
+          /* Sidecar overall glow when handshake completes */
+          .sc-glow { animation: sc-cap-glow 13s ease-out infinite; }
+          @keyframes sc-cap-glow {
+            0%, 9%   { filter: drop-shadow(0 6px 30px rgba(46,167,191,0.15)); }
+            10%, 13% { filter: drop-shadow(0 0 26px rgba(46,167,191,0.7)); }
+            17%,100% { filter: drop-shadow(0 6px 30px rgba(46,167,191,0.15)); }
+          }
+
+          /* TOOL CALLS — 3 sequential dots (allow / deny / allow) */
+          .tcall {
+            r: 7;
+          }
+          .tcall.t1 { animation: tcall1 13s linear infinite; fill: url(#sparkAllow); }
+          @keyframes tcall1 {
+            0%, 10%  { transform: translate(300px, 341px); opacity: 0; }
+            11%      { transform: translate(300px, 341px); opacity: 1; }
+            12.5%    { transform: translate(320px, 341px); opacity: 1; }
+            14%      { transform: translate(340px, 341px); opacity: 1; }
+            18%      { transform: translate(590px, 341px); opacity: 1; }
+            19.5%    { transform: translate(610px, 341px); opacity: 1; }
+            24%      { transform: translate(860px, 341px); opacity: 1; }
+            26%      { transform: translate(880px, 341px); opacity: 1; }
+            30%      { transform: translate(990px, 341px); opacity: 1; }
+            31%      { transform: translate(990px, 341px); opacity: 0; }
+            100%     { opacity: 0; }
+          }
+          /* DENY dot — stops at constraint enforcement and turns red */
+          .tcall.t2 { animation: tcall2 13s linear infinite; fill: url(#sparkAllow); }
+          @keyframes tcall2 {
+            0%, 35%  { transform: translate(300px, 341px); opacity: 0; r: 7; fill: url(#sparkAllow); }
+            36%      { transform: translate(300px, 341px); opacity: 1; r: 7; fill: url(#sparkAllow); }
+            37.5%    { transform: translate(320px, 341px); opacity: 1; r: 7; fill: url(#sparkAllow); }
+            39%      { transform: translate(340px, 341px); opacity: 1; r: 7; fill: url(#sparkAllow); }
+            43%      { transform: translate(590px, 341px); opacity: 1; r: 7; fill: url(#sparkAllow); }
+            44.5%    { transform: translate(610px, 341px); opacity: 1; r: 7; fill: url(#sparkAllow); }
+            48%      { transform: translate(735px, 341px); opacity: 1; r: 8; fill: url(#sparkDeny); }
+            50%      { transform: translate(735px, 341px); opacity: 0.7; r: 14; fill: url(#sparkDeny); }
+            52%      { transform: translate(735px, 341px); opacity: 0; r: 20; fill: url(#sparkDeny); }
+            100%     { opacity: 0; }
+          }
+          .tcall.t3 { animation: tcall3 13s linear infinite; fill: url(#sparkAllow); }
+          @keyframes tcall3 {
+            0%, 60%  { transform: translate(300px, 341px); opacity: 0; }
+            61%      { transform: translate(300px, 341px); opacity: 1; }
+            62.5%    { transform: translate(320px, 341px); opacity: 1; }
+            64%      { transform: translate(340px, 341px); opacity: 1; }
+            68%      { transform: translate(590px, 341px); opacity: 1; }
+            69.5%    { transform: translate(610px, 341px); opacity: 1; }
+            74%      { transform: translate(860px, 341px); opacity: 1; }
+            76%      { transform: translate(880px, 341px); opacity: 1; }
+            80%      { transform: translate(990px, 341px); opacity: 1; }
+            81%      { transform: translate(990px, 341px); opacity: 0; }
+            100%     { opacity: 0; }
+          }
+
+          /* AUDIT pulses — one per tool call (allow OR deny, every decision is audited) */
+          .aud { fill: url(#sparkAllow); }
+          .aud.t1 { animation: aud1 13s linear infinite; }
+          @keyframes aud1 {
+            0%, 27%  { transform: translate(600px, 465px); opacity: 0; }
+            28%      { opacity: 1; }
+            31%      { transform: translate(600px, 520px); opacity: 1; }
+            32%      { opacity: 0; }
+            100%     { opacity: 0; }
+          }
+          .aud.t2 { animation: aud2 13s linear infinite; fill: url(#sparkDeny); }
+          @keyframes aud2 {
+            0%, 50%  { transform: translate(600px, 465px); opacity: 0; }
+            51%      { opacity: 1; }
+            54%      { transform: translate(600px, 520px); opacity: 1; }
+            55%      { opacity: 0; }
+            100%     { opacity: 0; }
+          }
+          .aud.t3 { animation: aud3 13s linear infinite; }
+          @keyframes aud3 {
+            0%, 77%  { transform: translate(600px, 465px); opacity: 0; }
+            78%      { opacity: 1; }
+            81%      { transform: translate(600px, 520px); opacity: 1; }
+            82%      { opacity: 0; }
+            100%     { opacity: 0; }
+          }
+
+          /* PHASE 1 (Capability validation) glow */
+          .phase-1 { animation: ph1-glow 13s linear infinite; transform-box: fill-box; transform-origin: center; }
+          @keyframes ph1-glow {
+            0%, 12%  { stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
+            13%, 17% { stroke: #1F8E8E; stroke-width: 2.2; filter: drop-shadow(0 0 12px rgba(46,167,191,0.6)); }
+            18%, 37% { stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
+            38%, 42% { stroke: #1F8E8E; stroke-width: 2.2; filter: drop-shadow(0 0 12px rgba(46,167,191,0.6)); }
+            43%, 62% { stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
+            63%, 67% { stroke: #1F8E8E; stroke-width: 2.2; filter: drop-shadow(0 0 12px rgba(46,167,191,0.6)); }
+            68%, 100%{ stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
+          }
+
+          /* PHASE 2 (Constraint enforcement) glow — teal on allow, red on deny */
+          .phase-2 { animation: ph2-glow 13s linear infinite; transform-box: fill-box; transform-origin: center; }
+          @keyframes ph2-glow {
+            0%, 18%  { stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
+            19%, 24% { stroke: #1F8E8E; stroke-width: 2.2; filter: drop-shadow(0 0 12px rgba(46,167,191,0.6)); }
+            25%, 43% { stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
+            44%, 50% { stroke: #B85450; stroke-width: 2.4; filter: drop-shadow(0 0 14px rgba(184,84,80,0.7)); }
+            51%, 68% { stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
+            69%, 74% { stroke: #1F8E8E; stroke-width: 2.2; filter: drop-shadow(0 0 12px rgba(46,167,191,0.6)); }
+            75%, 100%{ stroke: #B5D7E0; stroke-width: 1.2; filter: none; }
+          }
+
+          /* Outbound flash — only on allow */
+          .world-box-anim { animation: world-receive 13s linear infinite; }
+          @keyframes world-receive {
+            0%, 29%  { filter: none; }
+            30%, 32% { filter: drop-shadow(0 0 16px rgba(31,142,142,0.65)); }
+            33%, 79% { filter: none; }
+            80%, 82% { filter: drop-shadow(0 0 16px rgba(31,142,142,0.65)); }
+            83%,100% { filter: none; }
+          }
+          /* Audit emitter receive flash */
+          .audit-box-anim { animation: audit-receive 13s linear infinite; }
+          @keyframes audit-receive {
+            0%, 30%  { filter: none; }
+            31%, 33% { filter: drop-shadow(0 0 14px rgba(46,167,191,0.55)); }
+            34%, 53% { filter: none; }
+            54%, 56% { filter: drop-shadow(0 0 14px rgba(184,84,80,0.55)); }
+            57%, 80% { filter: none; }
+            81%, 83% { filter: drop-shadow(0 0 14px rgba(46,167,191,0.55)); }
+            84%,100% { filter: none; }
+          }
+
+          .phase-mark { fill: #E89A2E; }
+          .phase-num  { font-family: 'Inter', sans-serif; font-size: 18px; font-weight: 700; fill: #fff; text-anchor: middle; dominant-baseline: central; }
+          .foss-stamp {
+            font-family: 'JetBrains Mono', monospace; font-size: 13px;
+            fill: #2EA7BF; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600;
+          }
+          .out-pill {
+            font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 700;
+            letter-spacing: 0.08em; text-transform: uppercase;
+          }
+        </style>
+
+        <!-- ============ MINI AUTHORITY (top-left) ============ -->
+        <g class="ma-grp">
+          <rect x="40" y="30" width="340" height="120" rx="12" class="foss-box"></rect>
+          <text class="foss-stamp" x="365" y="142" text-anchor="end">OpenFirma</text>
+          <text class="lbl-mn ma-label" x="58" y="56">// authority · session-level</text>
+          <text class="lbl-fr" x="58" y="100" style="fill:#2EA7BF;font-size:26px">Mini Authority</text>
+          <text class="lbl-sm" x="58" y="128">issues capability tokens</text>
+        </g>
+
+        <!-- Arrow: Agent → Mini Authority (upward, "Request capability") -->
+        <line x1="160" y1="295" x2="160" y2="150" class="line-ink flow-line" marker-end="url(#arrInk)"></line>
+        <text class="lbl-italic" x="175" y="225" style="font-size:15px;fill:#0F1A1A">Request capability</text>
+
+        <!-- Arrow: Mini Authority → Sidecar top ("Capability token") -->
+        <path d="M 340 150 L 340 200 L 460 200 L 460 235" class="line-foss flow-line" fill="none" marker-end="url(#arrFOSS)"></path>
+        <text class="lbl-italic" x="365" y="190" style="font-size:15px;fill:#2EA7BF">Capability token</text>
+
+        <!-- ============ AGENT (left, middle, aligned with Sidecar) ============ -->
+        <rect x="40" y="295" width="260" height="100" rx="10" class="ext-box"></rect>
+        <text class="lbl-mn" x="58" y="320">// agent</text>
+        <text class="lbl-fr" x="58" y="358" style="font-size:24px">Agent</text>
+        <text class="lbl-sm" x="58" y="382">tool calls</text>
+
+        <!-- Agent → Sidecar (horizontal) -->
+        <line x1="300" y1="341" x2="320" y2="341" class="line-ink flow-line" marker-end="url(#arrInk)"></line>
+
+        <!-- ============ SIDECAR (center, the focus) ============ -->
+        <g class="sc-glow">
+          <rect x="320" y="235" width="560" height="230" rx="14" class="sidecar-box pulse-bg"></rect>
+        </g>
+        <text class="foss-stamp" x="865" y="262" text-anchor="end">OpenFirma</text>
+        <text class="lbl-mn" x="338" y="262">// sidecar · call-level · fully local</text>
+        <text class="lbl-fr" x="338" y="300" style="fill:#2EA7BF;font-size:28px">Firma Sidecar</text>
+
+        <!-- Capability-token indicator inside Sidecar (lit after handshake) -->
+        <g class="cap-token-ind">
+          <g class="cap-token-pulse">
+            <rect x="680" y="278" width="180" height="26" rx="13" fill="rgba(46,167,191,0.22)" stroke="#2EA7BF" stroke-width="1.2"></rect>
+            <circle cx="697" cy="291" r="4" fill="#2EA7BF"></circle>
+            <text x="708" y="296" style="font-family:'JetBrains Mono', monospace;font-size:13px;font-weight:600;fill:#176E6E;letter-spacing:0.06em">capability token</text>
+          </g>
+        </g>
+
+        <!-- Phase 1 (Capability validation) -->
+        <rect x="340" y="325" width="250" height="130" rx="8" class="inner-box phase-1"></rect>
+        <text class="lbl-tx" x="358" y="358" style="fill:#2EA7BF;font-size:20px">1. Capability</text>
+        <text class="lbl-tx" x="358" y="384" style="fill:#2EA7BF;font-size:20px">validation</text>
+        <text class="lbl-tiny" x="358" y="420">token · sig · revoke</text>
+
+        <!-- Phase 2 (Constraint enforcement) -->
+        <rect x="610" y="325" width="250" height="130" rx="8" class="inner-box phase-2"></rect>
+        <text class="lbl-tx" x="628" y="358" style="fill:#2EA7BF;font-size:20px">2. Constraint</text>
+        <text class="lbl-tx" x="628" y="384" style="fill:#2EA7BF;font-size:20px">enforcement</text>
+        <text class="lbl-tiny" x="628" y="418">Cedar eval · context</text>
+        <text class="lbl-tiny" x="628" y="438">ALLOW / DENY / HITL</text>
+
+        <!-- Sidecar → World (allow path) -->
+        <line x1="880" y1="341" x2="940" y2="341" class="line-foss flow-line" marker-end="url(#arrFOSS)"></line>
+
+        <!-- Credentials box (above World — injected on ALLOW) -->
+        <rect x="940" y="195" width="100" height="70" rx="6" class="logic-box"></rect>
+        <text class="lbl-tiny" x="954" y="222" style="fill:#A07B12;font-weight:600">creds</text>
+        <text class="lbl-tiny" x="954" y="244" style="fill:#A07B12">JIT</text>
+        <line x1="990" y1="265" x2="990" y2="328" class="line-foss" stroke-dasharray="3 3"></line>
+
+        <!-- ============ WORLD (right) ============ -->
+        <g class="world-box-anim">
+          <rect x="940" y="295" width="240" height="100" rx="10" class="ext-box"></rect>
+          <text class="lbl-mn" x="958" y="320">// execution world</text>
+          <text class="lbl-fr" x="958" y="358" style="font-size:24px">Outbound call</text>
+          <text class="lbl-sm" x="958" y="382">tool · API · …</text>
+        </g>
+
+        <!-- Audit flow line (Sidecar bottom → Audit) -->
+        <line x1="600" y1="465" x2="600" y2="520" class="line-foss flow-line" marker-end="url(#arrFOSS)"></line>
+        <text class="lbl-italic" x="610" y="500" style="font-size:14px">every decision</text>
+
+        <!-- ============ AUDIT (bottom) ============ -->
+        <g class="audit-box-anim">
+          <rect x="320" y="520" width="560" height="110" rx="12" class="foss-box"></rect>
+          <text class="foss-stamp" x="865" y="544" text-anchor="end">OpenFirma</text>
+          <text class="lbl-mn" x="338" y="544">// audit</text>
+          <text class="lbl-fr" x="338" y="582" style="fill:#2EA7BF">Audit emitter</text>
+          <text class="lbl-sm" x="338" y="608">file · stdout · gRPC</text>
+        </g>
+
+                <!-- ============ ANIMATED SPARKS ============ -->
+        <!-- Capability handshake (Agent → MA → Sidecar) -->
+        <circle class="cap1-spark" cx="0" cy="0" r="5"></circle>
+        <circle class="cap2-spark" cx="0" cy="0" r="5"></circle>
+
+        <!-- Tool-call dots: one continuous dot per call, traversing both phase boxes -->
+        <circle class="tcall t1" cx="0" cy="0" r="7"></circle>
+        <circle class="tcall t2" cx="0" cy="0" r="7"></circle>
+        <circle class="tcall t3" cx="0" cy="0" r="7"></circle>
+
+        <!-- Audit dots: one per decision (ALLOW, DENY, or ABORT) -->
+        <circle class="aud t1" cx="0" cy="0" r="5"></circle>
+        <circle class="aud t2" cx="0" cy="0" r="5"></circle>
+        <circle class="aud t3" cx="0" cy="0" r="5"></circle>
+      </svg>

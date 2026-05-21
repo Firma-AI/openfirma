@@ -171,7 +171,7 @@ Key flags for `firma run`:
 ## Architecture
 
 <div align="center">
-  <img src="docs-site/src/assets/openfirma-flow-slow.gif" alt="OpenFirma flow diagram" width="100%" />
+  <img src="docs-site/src/assets/product-diagram.svg" alt="OpenFirma flow diagram" width="100%" />
 </div>
 <br/>
 
