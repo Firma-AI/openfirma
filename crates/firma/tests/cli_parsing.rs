@@ -116,14 +116,14 @@ fn parse_init_scripted() {
     parse_ok(&[
         "init",
         "--yes",
-        "--agent",
+        "--name",
         "codex",
-        "--provider",
+        "--posture",
+        "dev",
+        "--mapping",
         "anthropic",
         "--workspace",
         "/tmp/proj",
-        "--authority",
-        "local",
     ]);
 }
 
