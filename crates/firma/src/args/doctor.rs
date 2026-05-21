@@ -18,17 +18,21 @@ use clap::Args as ClapArgs;
 /// already report unreachable as a structured `FAIL`, not a hang.
 #[derive(Debug, ClapArgs)]
 pub struct Args {
-    /// Unified `firma.toml`. When unset, resolved via standard config
-    /// discovery (`--config` / `FIRMA_CONFIG` / XDG).
+    /// Path to the unified `firma.toml`. When unset, resolved via standard
+    /// config discovery (`FIRMA_CONFIG` / XDG).
     #[arg(long, env = "FIRMA_STACK_CONFIG")]
     pub config: Option<PathBuf>,
-    /// State dir override.
+    /// Override the runtime state directory inspected for pid files, sockets,
+    /// and component logs.
     #[arg(long, env = "FIRMA_STATE_DIR")]
     pub state_dir: Option<PathBuf>,
-    /// Emit JSON instead of pretty text.
+    /// Emit a single JSON object (one field per check) instead of the
+    /// pretty-printed report. Useful for scripting and CI assertions.
     #[arg(long)]
     pub json: bool,
-    /// Per-probe network timeout in milliseconds (TCP / UDS connect).
+    /// Per-probe network timeout in milliseconds (TCP / UDS connect). Kept
+    /// small so unreachable endpoints fail fast as a structured `FAIL`
+    /// instead of hanging the report.
     #[arg(long, default_value_t = 500)]
     pub timeout_ms: u64,
 }
