@@ -94,7 +94,6 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
         state_dir,
         force: false,
         authority_listen: "127.0.0.1:50051".into(),
-        sidecar_listen: "127.0.0.1:8080".into(),
         agent: args.profile.clone(),
         provider: "anthropic".into(),
         authority,

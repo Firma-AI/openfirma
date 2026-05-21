@@ -18,7 +18,6 @@ struct CollectedInputs {
     output_dir: PathBuf,
     workspace: PathBuf,
     authority_listen: String,
-    sidecar_listen: String,
     authority: AuthorityShape,
 }
 
@@ -158,7 +157,7 @@ fn generate_files(
     let firma_toml = render(
         env,
         "firma.toml",
-        context! { name => inputs.name, mapping_paths, mitm_hosts, requested_actions, authority_listen => inputs.authority_listen, sidecar_listen => inputs.sidecar_listen, local_authority, authority_url },
+        context! { name => inputs.name, mapping_paths, mitm_hosts, requested_actions, authority_listen => inputs.authority_listen, local_authority, authority_url },
     )?;
     let mapping_rules = render(
         env,
@@ -299,7 +298,6 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         output_dir,
         workspace,
         authority_listen: "127.0.0.1:50051".to_string(),
-        sidecar_listen: "127.0.0.1:7474".to_string(),
         authority: AuthorityShape::Local,
     })
 }
@@ -377,7 +375,6 @@ pub struct ScaffoldPlan {
     pub state_dir: PathBuf,
     pub force: bool,
     pub authority_listen: String,
-    pub sidecar_listen: String,
     pub agent: String,
     pub provider: String,
     pub authority: AuthorityShape,
@@ -423,7 +420,6 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
         output_dir: plan.config_dir.clone(),
         workspace: plan.config_dir.clone(),
         authority_listen: plan.authority_listen.clone(),
-        sidecar_listen: plan.sidecar_listen.clone(),
         authority: plan.authority.clone(),
     };
     let env = build_template_env().map_err(|e| format!("template env: {e}"))?;
@@ -496,7 +492,6 @@ mod tests {
             output_dir: PathBuf::from(TEST_WORKSPACE),
             workspace: PathBuf::from(TEST_WORKSPACE),
             authority_listen: "127.0.0.1:50051".to_string(),
-            sidecar_listen: "127.0.0.1:7474".to_string(),
             authority: AuthorityShape::Local,
         };
         generate_files(&env, &inputs).unwrap()
