@@ -17,6 +17,7 @@ use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 use crate::sidecar::supervisor::{SidecarSupervisor, SpawnRequest};
+use tracing::warn;
 
 #[cfg(unix)]
 fn structural_proxy_listen_addr() -> &'static str {
@@ -272,9 +273,11 @@ fn autostart_sidecar(
 ///
 /// CLI > persisted > prompt (only when both empty and TTY). On Local
 /// selection, probe `[::1]:50051`; on miss, spawn an
-/// `AuthoritySupervisor`. EADDRINUSE recovery: on any spawn error,
-/// re-probe once; if the port is now reachable, drop the (failed)
-/// supervisor handle and proceed without one.
+/// `AuthoritySupervisor`. Local mode is a dev convenience path and
+/// intentionally uses plaintext loopback (`http://`), not TLS/mTLS.
+/// EADDRINUSE recovery: on any spawn error, re-probe once; if the port
+/// is now reachable, drop the (failed) supervisor handle and proceed
+/// without one.
 ///
 /// # Errors
 ///
@@ -306,6 +309,10 @@ pub fn resolve_authority(
         crate::authority::AuthoritySelection::Local => {
             let target = "[::1]:50051";
             if probe_authority_tcp(target).is_ok() {
+                warn!(
+                    target,
+                    "using existing local authority on plaintext loopback (dev mode); mTLS hardening applies to https:// authority deployments"
+                );
                 return Ok(ResolvedAuthority {
                     url: format!("http://{target}"),
                     supervisor: None,
@@ -326,12 +333,21 @@ pub fn resolve_authority(
                 firma_exe: firma_exe.to_path_buf(),
                 startup_timeout: flags.startup_timeout,
             }) {
-                Ok(sup) => Ok(ResolvedAuthority {
-                    url: sup.url(),
-                    supervisor: Some(sup),
-                }),
+                Ok(sup) => {
+                    warn!(
+                        "autostarted local authority in plaintext loopback mode (dev convenience); mTLS hardening applies to https:// authority deployments"
+                    );
+                    Ok(ResolvedAuthority {
+                        url: sup.url(),
+                        supervisor: Some(sup),
+                    })
+                }
                 Err(spawn_err) => {
                     if probe_authority_tcp(target).is_ok() {
+                        warn!(
+                            target,
+                            "authority port became reachable during autostart retry; proceeding with plaintext local authority (dev mode)"
+                        );
                         Ok(ResolvedAuthority {
                             url: format!("http://{target}"),
                             supervisor: None,

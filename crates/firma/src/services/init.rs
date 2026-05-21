@@ -56,6 +56,9 @@ pub fn run(args: InitArgs) -> ExitCode {
             match &plan.authority {
                 AuthorityShape::Local => {
                     println!("  authority:  local ({})", plan.authority_listen);
+                    println!(
+                        "  note:       local authority runs over loopback http:// for dev convenience (no mTLS)"
+                    );
                 }
                 AuthorityShape::Remote(url) => println!("  authority:  remote ({url})"),
             }

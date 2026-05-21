@@ -2,6 +2,8 @@
 
 V1.1 upgrades the Authority ↔ Sidecar transport from **server-only TLS** (V1) to **mutual TLS (mTLS)**. Each Sidecar presents a client certificate during the TLS handshake; the Authority verifies the certificate chain **and** checks the client identity against a configurable allow-list. Connections from unknown Sidecars are dropped at the TLS handshake — no gRPC frame is ever processed.
 
+Scope note: this playbook applies to configured `https://` Authority deployments. The `firma run --authority local` autostart path is a developer convenience mode on loopback `http://` and does not enable mTLS.
+
 ## What V1.1 achieves (on top of V1)
 
 - **Sidecar authentication.** The Authority cryptographically identifies each connecting Sidecar by its client certificate CN or DNS SAN. Spoofed or unknown clients are rejected before any policy data is exchanged.
