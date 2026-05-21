@@ -9,8 +9,8 @@
 listen_addr            = "{{ authority_listen }}"
 policy_dir             = "policies/"
 issuance_policy_dir    = "issuance-policies/"
-revocation_file        = ".runtime/revocations.txt"
-key_file               = ".runtime/authority.key"
+revocation_file        = "{{ state_dir }}/revocations.txt"
+key_file               = "{{ state_dir }}/authority.key"
 max_ttl_seconds        = 3600
 bundle_ttl_seconds     = 30
 
@@ -32,7 +32,7 @@ dir           = "."
 authority_url = "{{ authority_url }}"
 
 [sidecar.ca]
-dir = ".runtime/generated-firma-ca"
+dir = "{{ state_dir }}/generated-firma-ca"
 
 [sidecar.log]
 level = "info"
@@ -56,8 +56,8 @@ default_timeout_ms = 120000
 
 [sidecar.audit]
 sink             = "file"
-file_path        = ".runtime/audit.jsonl"
-signing_key_path = ".runtime/audit.key"
+file_path        = "{{ state_dir }}/audit.jsonl"
+signing_key_path = "{{ state_dir }}/audit.key"
 
 [sidecar.authority]
 connect_timeout_secs                  = 10
@@ -73,5 +73,5 @@ requested_actions     = [
 {% for action in requested_actions %}  "{{ action }}",
 {% endfor %}]
 resource_scope        = "*"
-authority_pub_key_path = ".runtime/authority.pub"
+authority_pub_key_path = "{{ state_dir }}/authority.pub"
 ttl_seconds           = 3600

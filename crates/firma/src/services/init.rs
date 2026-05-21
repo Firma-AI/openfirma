@@ -15,7 +15,8 @@ struct CollectedInputs {
     posture: Posture,
     mappings: Vec<Mapping>,
     extra_hosts: Vec<String>,
-    output_dir: PathBuf,
+    config_dir: PathBuf,
+    state_dir: PathBuf,
     workspace: PathBuf,
     authority_listen: String,
     authority: AuthorityShape,
@@ -37,38 +38,41 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     }
 
     let inputs = collect_inputs(args)?;
-    let out = &inputs.output_dir;
+    let cfg = &inputs.config_dir;
+    let state = &inputs.state_dir;
 
     let env = build_template_env()?;
     let files = generate_files(&env, &inputs)?;
 
     if args.dry_run {
         for (rel, content) in &files {
-            println!("=== {} ===", out.join(rel).display());
+            println!("=== {} ===", cfg.join(rel).display());
             println!("{content}");
         }
         return Ok(ExitCode::SUCCESS);
     }
 
-    std::fs::create_dir_all(out).with_context(|| format!("mkdir {}", out.display()))?;
-    #[cfg(unix)]
-    set_dir_mode_0700(out).with_context(|| format!("chmod {}", out.display()))?;
-
-    for sub in &[
-        "policies",
-        "issuance-policies",
-        "mappings",
-        ".runtime",
-        ".runtime/generated-firma-ca",
+    // Config dir + subdirs (policies, mappings — no keys here).
+    for dir in [
+        cfg.as_path(),
+        &cfg.join("policies"),
+        &cfg.join("issuance-policies"),
+        &cfg.join("mappings"),
     ] {
-        let dir = out.join(sub);
-        std::fs::create_dir_all(&dir).with_context(|| format!("mkdir {}", dir.display()))?;
+        std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
         #[cfg(unix)]
-        set_dir_mode_0700(&dir).with_context(|| format!("chmod {}", dir.display()))?;
+        set_dir_mode_0700(dir).with_context(|| format!("chmod {}", dir.display()))?;
+    }
+
+    // State dir + subdirs (keys, revocations, CA — separate from config).
+    for dir in [state.as_path(), &state.join("generated-firma-ca")] {
+        std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
+        #[cfg(unix)]
+        set_dir_mode_0700(dir).with_context(|| format!("chmod {}", dir.display()))?;
     }
 
     for (rel, content) in &files {
-        let path = out.join(rel);
+        let path = cfg.join(rel);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("mkdir {}", parent.display()))?;
@@ -85,17 +89,14 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
         println!("  wrote {}", path.display());
     }
 
-    write_if_absent(&out.join(".runtime/revocations.txt"), b"", args.force)?;
-    crate::services::authority::generate_audit_key_if_absent(
-        &out.join(".runtime/audit.key"),
-        args.force,
-    )?;
+    write_if_absent(&state.join("revocations.txt"), b"", args.force)?;
+    crate::services::authority::generate_audit_key_if_absent(&state.join("audit.key"), args.force)?;
 
-    let key_path = out.join(".runtime/authority.key");
+    let key_path = state.join("authority.key");
     if args.force && key_path.exists() {
         std::fs::remove_file(&key_path)
             .with_context(|| format!("remove {}", key_path.display()))?;
-        let pub_path = out.join(".runtime/authority.pub");
+        let pub_path = state.join("authority.pub");
         if pub_path.exists() {
             std::fs::remove_file(&pub_path)
                 .with_context(|| format!("remove {}", pub_path.display()))?;
@@ -109,11 +110,13 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
         println!("  generated authority keypair → {}", key_path.display());
     }
 
-    println!("\nAgent scaffolded: {}", out.display());
+    println!("\nScaffolded:");
+    println!("  config  {}", cfg.display());
+    println!("  state   {}", state.display());
     println!("\nNext:");
     println!(
         "  firma run --config {}/firma-run.toml -- <agent-command>",
-        out.display()
+        cfg.display()
     );
 
     Ok(ExitCode::SUCCESS)
@@ -149,6 +152,7 @@ fn generate_files(
 
     let requested_actions = inputs.posture.requested_actions();
     let workspace_str = inputs.workspace.to_string_lossy();
+    let state_dir_str = inputs.state_dir.to_string_lossy();
     let (local_authority, authority_url) = match &inputs.authority {
         AuthorityShape::Local => (true, format!("http://{}", inputs.authority_listen)),
         AuthorityShape::Remote(url) => (false, url.clone()),
@@ -157,7 +161,7 @@ fn generate_files(
     let firma_toml = render(
         env,
         "firma.toml",
-        context! { name => inputs.name, mapping_paths, mitm_hosts, requested_actions, authority_listen => inputs.authority_listen, local_authority, authority_url },
+        context! { name => inputs.name, mapping_paths, mitm_hosts, requested_actions, authority_listen => inputs.authority_listen, local_authority, authority_url, state_dir => state_dir_str.as_ref() },
     )?;
     let mapping_rules = render(
         env,
@@ -221,7 +225,7 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         None => "my-agent".to_string(),
     };
 
-    let output_dir = if args.global {
+    let config_dir = if args.global {
         let p = global_config_dir()?;
         std::path::absolute(&p).with_context(|| format!("resolve path {}", p.display()))?
     } else {
@@ -241,6 +245,10 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
             None => default_output_dir(),
         }
     };
+
+    let state_dir = resolve_state_dir(args.state_dir.clone()).map_err(anyhow::Error::msg)?;
+    let state_dir = std::path::absolute(&state_dir)
+        .with_context(|| format!("resolve path {}", state_dir.display()))?;
 
     let posture = match &args.posture {
         Some(p) => p.clone(),
@@ -295,7 +303,8 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         posture,
         mappings,
         extra_hosts,
-        output_dir,
+        config_dir,
+        state_dir,
         workspace,
         authority_listen: "127.0.0.1:50051".to_string(),
         authority: AuthorityShape::Local,
@@ -417,7 +426,8 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
         posture: Posture::Dev,
         mappings,
         extra_hosts: vec![],
-        output_dir: plan.config_dir.clone(),
+        config_dir: plan.config_dir.clone(),
+        state_dir: plan.state_dir.clone(),
         workspace: plan.config_dir.clone(),
         authority_listen: plan.authority_listen.clone(),
         authority: plan.authority.clone(),
@@ -425,12 +435,16 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
     let env = build_template_env().map_err(|e| format!("template env: {e}"))?;
     let files = generate_files(&env, &inputs).map_err(|e| format!("generate files: {e}"))?;
 
-    for sub in &["policies", "issuance-policies", "mappings", ".runtime"] {
-        let dir = plan.config_dir.join(sub);
-        std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    for dir in [
+        plan.config_dir.as_path(),
+        &plan.config_dir.join("policies"),
+        &plan.config_dir.join("issuance-policies"),
+        &plan.config_dir.join("mappings"),
+        plan.state_dir.as_path(),
+        &plan.state_dir.join("generated-firma-ca"),
+    ] {
+        std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     }
-    std::fs::create_dir_all(&plan.state_dir)
-        .map_err(|e| format!("mkdir {}: {e}", plan.state_dir.display()))?;
 
     for (rel, content) in &files {
         let path = plan.config_dir.join(rel);
@@ -444,16 +458,15 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
         std::fs::write(&path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
     }
 
-    let runtime_dir = plan.config_dir.join(".runtime");
-    write_if_absent(&runtime_dir.join("revocations.txt"), b"", plan.force)
+    write_if_absent(&plan.state_dir.join("revocations.txt"), b"", plan.force)
         .map_err(|e| e.to_string())?;
     crate::services::authority::generate_audit_key_if_absent(
-        &runtime_dir.join("audit.key"),
+        &plan.state_dir.join("audit.key"),
         plan.force,
     )
     .map_err(|e| e.to_string())?;
 
-    let key_path = runtime_dir.join("authority.key");
+    let key_path = plan.state_dir.join("authority.key");
     if plan.force || !key_path.exists() {
         crate::services::authority::run_generate_key(&key_path).map_err(|e| e.to_string())?;
     }
@@ -489,7 +502,8 @@ mod tests {
             posture: posture.clone(),
             mappings: mappings.to_vec(),
             extra_hosts: extra_hosts.to_vec(),
-            output_dir: PathBuf::from(TEST_WORKSPACE),
+            config_dir: PathBuf::from(TEST_WORKSPACE),
+            state_dir: PathBuf::from("/tmp/test-state"),
             workspace: PathBuf::from(TEST_WORKSPACE),
             authority_listen: "127.0.0.1:50051".to_string(),
             authority: AuthorityShape::Local,
