@@ -80,7 +80,7 @@ firma run --profile claude-code -- claude
 firma monitor             # tail the live audit stream
 ```
 
-### Usage patterns
+### From one agent to many (examples)
 
 The **Sidecar** sits next to each agent process and enforces every outbound call. The **Authority** is a single trust root: it issues capability tokens and streams policy bundles to one or more Sidecars. A single Authority can govern many agents concurrently; the Sidecar enforces locally without calling back on every request.
 
