@@ -141,7 +141,7 @@ cargo run --release -p firma -- run --profile codex -- codex
 ### Optional: run a Sidecar manually (`--sidecar=external`)
 
 Manual sidecar startup is only needed when you explicitly choose external mode
-or operate with a pre-managed sidecar (systemd / `firma stack start`).
+or operate with a pre-managed sidecar (systemd / `firma sidecar start`).
 
 In a dedicated terminal:
 
@@ -154,7 +154,7 @@ Wait for the `sidecar ready` line.
 Opt out for production or CI:
 
 - `--no-autostart` — fail with a typed `SidecarUnreachable` error instead of spawning a child Sidecar.
-- `--sidecar=external` — same intent, more explicit; pairs with a systemd-managed or `firma stack start` Sidecar.
+- `--sidecar=external` — same intent, more explicit; pairs with a systemd-managed or `firma sidecar start` Sidecar.
 
 Autostart currently requires Unix. On Windows, use `--sidecar=external` with a pre-started Sidecar.
 

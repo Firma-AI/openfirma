@@ -91,14 +91,14 @@ unhealthy.
 
 ### `--daemon`: long-lived daemon sidecar
 
-Probes the daemon sidecar — the one started by `firma stack start`, not by
-`firma run`. `--daemon` reads the stack state from `resolve_state_dir(None)`,
+Probes the daemon sidecar — the one started by `firma sidecar start`, not by
+`firma run`. `--daemon` reads the daemon state from `resolve_state_dir(None)`,
 which resolves to `$XDG_RUNTIME_DIR/firma` (fallback `/tmp/firma-$UID`).
 
 > **Implementation note:** The original FIR-104 specification referenced
 > `$XDG_DATA_HOME/firma/sidecar/state/` as the daemon sidecar path. Nothing
 > writes that directory in the current implementation. `--daemon` therefore
-> probes the stack state dir (`$XDG_RUNTIME_DIR/firma`) where the daemon
+> probes the daemon state dir (`$XDG_RUNTIME_DIR/firma`) where the daemon
 > sidecar actually registers its marker. This discrepancy is recorded on
 > FIR-104.
 
@@ -145,7 +145,7 @@ last-resort safety net, not the primary cleanup mechanism.
 
 - [Wrap an agent with firma run](../firma-run/) — the command that creates the
   per-run sidecar markers that `firma sidecar status` reads.
-- [Manage the stack (firma stack & monitor)](../manage-the-stack/) — supervise
+- [Start and monitor the daemon (firma sidecar & monitor)](../manage-the-stack/) — supervise
   Authority and the daemon Sidecar as one unit.
 - [Run the sidecar standalone](../run-the-sidecar/) — start a Sidecar directly
-  without `firma run` or `firma stack`.
+  without `firma run` or `firma sidecar start`.

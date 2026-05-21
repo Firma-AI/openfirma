@@ -3,8 +3,10 @@
 use std::process::ExitCode;
 
 use firma_run::runtime::{RunInput, execute_run};
+use tracing::{info, warn};
 
 use crate::args::run::RunArgs;
+use crate::services::init::{AuthorityShape, ScaffoldPlan, scaffold_from_plan};
 
 /// Run the `firma run` subcommand. Sync — must not be called from inside
 /// a tokio runtime.
@@ -19,6 +21,12 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
             "--no-autostart is incompatible with --authority local; pass --authority <url> or omit --no-autostart"
         );
     }
+
+    // Implicit init: if no firma.toml is discoverable for this project,
+    // scaffold one before handing off to firma-run. Keeps the spec's
+    // one-command path (`firma run codex`) working from a fresh clone.
+    maybe_implicit_init(&args)?;
+
     let authority_cli = match args.authority.as_deref() {
         None => firma_run::authority::AuthorityCli::Unset,
         Some("local") => firma_run::authority::AuthorityCli::Local,
@@ -46,6 +54,56 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         Ok(code) => Ok(exit_code(code)),
         Err(error) => Err(anyhow::anyhow!("{error}")),
     }
+}
+
+fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
+    if let Some(explicit) = args.config.as_ref() {
+        // Trust the user-supplied config path. If it does not exist we
+        // let firma-run report the parse/IO error normally.
+        if explicit.exists() {
+            return Ok(());
+        }
+    }
+    // Spec §4 step 1 + §5: walk-up `./.firma/firma.toml` is the project-local
+    // tier, picked up by `firma_config::resolve_config`. If anything in the
+    // search path resolves, skip implicit init.
+    if firma_config::resolve_config("run", None, &firma_config::SystemDirs).is_ok() {
+        return Ok(());
+    }
+    let cwd = std::env::current_dir()
+        .map_err(|e| anyhow::anyhow!("resolve cwd for implicit init: {e}"))?;
+    let resolved = cwd.join(".firma");
+    let firma_toml = resolved.join(firma_config::CONFIG_FILE_NAME);
+    info!(
+        path = %firma_toml.display(),
+        "no firma.toml found; running implicit init with defaults into cwd/.firma"
+    );
+
+    let state_dir = firma_stack::resolve_state_dir(None)
+        .map_err(|e| anyhow::anyhow!("resolve state_dir for implicit init: {e}"))?;
+
+    // Match the persisted [authority] section to whatever the CLI is
+    // about to ask firma-run to do. Default = local mini authority.
+    let authority = match args.authority.as_deref() {
+        None | Some("local") => AuthorityShape::Local,
+        Some(url) => AuthorityShape::Remote(url.to_string()),
+    };
+
+    let plan = ScaffoldPlan {
+        config_dir: resolved,
+        state_dir,
+        force: false,
+        authority_listen: "127.0.0.1:50051".into(),
+        sidecar_listen: "127.0.0.1:8080".into(),
+        agent: args.profile.clone(),
+        provider: "anthropic".into(),
+        authority,
+    };
+    if let Err(error) = scaffold_from_plan(&plan) {
+        warn!(%error, "implicit init failed; continuing — firma-run will surface the underlying error");
+        return Err(anyhow::anyhow!("implicit init: {error}"));
+    }
+    Ok(())
 }
 
 fn exit_code(code: i32) -> ExitCode {

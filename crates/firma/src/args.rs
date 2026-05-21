@@ -7,7 +7,6 @@ pub mod monitor;
 pub mod policy;
 pub mod run;
 pub mod sidecar;
-pub mod stack;
 pub mod supervise;
 pub mod token;
 
@@ -50,11 +49,9 @@ pub enum Command {
     ProxyBridge(run::ProxyBridgeArgs),
     /// Wrap an agent process via firma-run.
     Run(run::RunArgs),
-    /// Run the enforcement sidecar.
+    /// Run, start, stop, or inspect the enforcement sidecar.
     Sidecar(sidecar::Args),
-    /// Supervise authority + sidecar as one unit.
-    Stack(stack::StackArgs),
-    /// Internal detached stack supervisor.
+    /// Internal detached supervisor process.
     #[command(name = "__supervise", hide = true)]
     Supervise(supervise::Args),
     /// Manage local-exec governance tokens (approve / revoke).
