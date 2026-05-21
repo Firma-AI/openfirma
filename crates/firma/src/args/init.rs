@@ -39,9 +39,15 @@ pub struct InitArgs {
     #[arg(long, conflicts_with = "output_dir")]
     pub global: bool,
 
-    /// Directory to write scaffolded files into (default: current directory).
+    /// Config directory — where firma.toml, policies, and mappings are written.
+    /// Defaults to the current directory.
     #[arg(long, short = 'o')]
     pub output_dir: Option<PathBuf>,
+
+    /// State directory — where keys, revocations, and generated CA are written.
+    /// Defaults to the platform state dir (`$FIRMA_STATE_DIR` → `$XDG_DATA_HOME/firma`).
+    #[arg(long, env = "FIRMA_STATE_DIR")]
+    pub state_dir: Option<PathBuf>,
 
     /// Print generated files to stdout without writing to disk.
     #[arg(long)]
