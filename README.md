@@ -82,7 +82,7 @@ firma monitor             # tail the live audit stream
 
 ### Usage patterns
 
-The **Sidecar** sits next to each agent process and enforces every outbound call. The **Authority** is a single trust root — it issues capability tokens and streams policy bundles to one or more Sidecars. A single Authority can govern many agents concurrently; the Sidecar enforces locally without calling back on every request.
+The **Sidecar** sits next to each agent process and enforces every outbound call. The **Authority** is a single trust root: it issues capability tokens and streams policy bundles to one or more Sidecars. A single Authority can govern many agents concurrently; the Sidecar enforces locally without calling back on every request.
 
 **1. Single agent, zero config**
 
@@ -120,7 +120,7 @@ All ALLOW and DENY decisions flow into a shared audit log. One place to see what
 
 **4. Custom Authority, custom agents without `firma run`**
 
-For agents that are not Claude Code or Codex — custom Python loops, LangChain pipelines, CI workers — the Sidecar is a standalone HTTP proxy. Point outbound traffic at it via environment variables; no `firma run` or SDK required.
+For agents that are not Claude Code or Codex (custom Python loops, LangChain pipelines, CI workers) the Sidecar is a standalone HTTP proxy. Point outbound traffic at it via environment variables; no `firma run` or SDK required.
 
 ```bash
 # Start Authority and Sidecar
@@ -151,18 +151,6 @@ The Authority can be the Mini Authority included in this repo or your own implem
 | `firma policy` | Validate and unit-test Cedar policy bundles |
 | `firma token` | Manage local-exec governance tokens (approve / revoke) |
 
-Key flags for `firma run`:
-
-| Flag | Default | Description |
-|---|---|---|
-| `--profile <id>` | `generic` | Built-in policy profile (`claude-code`, `codex`, `generic`, …) |
-| `--authority <local\|url>` | unset | Skip the bootstrap prompt: `local` autostarts on loopback; any URL points at a remote Authority |
-| `--authority-profile <name>` | `developer` | Profile materialised by the autostarted Mini Authority |
-| `--sidecar-endpoint <url>` | auto | Override Sidecar endpoint (`tcp://…` or `unix://…`) |
-| `--no-autostart` | off | Fail with a typed error instead of autostarting — CI safety net |
-| `--config <path>` | auto | Runtime config path (`.toml` or `.yaml`) |
-| `--backend <kind>` | platform default | Override sandbox backend: `bwrap`, `vz`, `wsl2`, `firecracker` |
-| `--print-effective-config` | off | Dump resolved config as JSON before exec |
 
 > Full CLI reference: [`docs/cli.md`](docs/cli.md)
 
