@@ -38,7 +38,7 @@ OpenFirma is a runtime enforcement boundary that sits between your AI agents and
 
 ## Run your coding agent with OpenFirma
 
-### Quickstart
+### Install
 
 **macOS:**
 
@@ -53,45 +53,116 @@ brew install firma
 curl -sSf https://install.openfirma.ai | sh
 ```
 
-Then wrap your agent:
+**Build from source** (requires Rust 1.86+ and `protoc`):
+
+```bash
+git clone https://github.com/firma-ai/openfirma
+cd openfirma
+cargo build --release
+```
+
+### Quickstart
+
+Wrap your agent with a single command:
 
 ```bash
 firma run --profile claude-code -- claude
 ```
 
-No Rust toolchain, no `protoc`, no API keys required to get started.
+`firma run` autostarts a per-run Sidecar and Mini Authority, applies the `claude-code` policy profile, and tears everything down when the agent exits. On first run with no Authority configured, it prompts once to confirm the local autostart and persists the choice.
 
-> **Build from source:** if you want to contribute or run the deterministic CI demo, you need Rust 1.86+ and `protoc`. Clone the repo and run `make demo-ci`.
+To run a persistent stack instead:
 
-### CLI commands
+```bash
+firma stack init          # scaffold keys + config
+firma stack start --detach
+firma run --profile claude-code -- claude
+firma monitor             # tail the live audit stream
+```
+
+### Usage patterns
+
+The **Sidecar** sits next to each agent process and enforces every outbound call. The **Authority** is a single trust root — it issues capability tokens and streams policy bundles to one or more Sidecars. A single Authority can govern many agents concurrently; the Sidecar enforces locally without calling back on every request.
+
+**1. Single agent, zero config**
+
+One developer, one agent. `firma run` handles everything.
+
+```bash
+firma run --profile claude-code -- claude
+```
+
+**2. Local Authority, multiple agents**
+
+Start a persistent stack once, then run several agents concurrently. All Sidecars pull policy from the same local Authority.
+
+```bash
+firma stack init
+firma stack start --detach
+
+firma run --profile claude-code -- claude   &
+firma run --profile codex       -- codex    &
+firma run --profile generic     -- opencode
+```
+
+Rotate or update policy without restarting any agent.
+
+**3. Team Authority, agents on multiple machines**
+
+Run one Authority on a shared server or in CI. Each developer or runner points `firma run` at it with `--authority`:
+
+```bash
+# On each developer machine or CI runner:
+firma run --authority https://authority.internal --profile claude-code -- claude
+```
+
+All ALLOW and DENY decisions flow into a shared audit log. One place to see what every agent on the team is doing.
+
+**4. Custom Authority, custom agents without `firma run`**
+
+For agents that are not Claude Code or Codex — custom Python loops, LangChain pipelines, CI workers — the Sidecar is a standalone HTTP proxy. Point outbound traffic at it via environment variables; no `firma run` or SDK required.
+
+```bash
+# Start Authority and Sidecar
+firma authority --config firma.toml
+firma sidecar   --config firma.toml
+
+# Point your agent at the Sidecar
+export HTTP_PROXY=http://127.0.0.1:8080
+export HTTPS_PROXY=http://127.0.0.1:8080
+python my_agent.py
+```
+
+The Authority can be the Mini Authority included in this repo or your own implementation of the `FirmaAuthority` gRPC interface.
+
+### CLI reference
 
 | Command | Description |
 |---|---|
-| `firma run` | Wrap an agent process: routes all outbound traffic through the Sidecar, optionally inside a sandbox |
-| `firma stack` | Supervise Authority + Sidecar as one unit — `init`, `start`, `stop`, `status` |
+| `firma run` | Wrap an agent process: autostarts Sidecar + Authority, applies a policy profile, tears down on exit |
+| `firma stack init` | Scaffold a deployment: writes `firma.toml`, keys, policy dirs, and revocation file |
+| `firma stack start` | Boot Authority + Sidecar as one unit. `--detach` forks a supervisor |
+| `firma stack stop` | Graceful shutdown with configurable timeout |
+| `firma stack status` | Per-component pid, listen address, state, and uptime. `--json` for machine output |
 | `firma monitor` | Tail the live audit stream and component logs from a running stack |
-| `firma doctor` | Print a structured diagnostic report: installed components, reachable endpoints, config status |
-| `firma authority` | Run the Mini Authority dev server: issues capability tokens, streams policy bundles |
-| `firma sidecar` | Run the enforcement Sidecar standalone |
+| `firma doctor` | Structured diagnostic report: installed components, reachable endpoints, config status |
+| `firma authority` | Run the Mini Authority: issues capability tokens, streams Cedar policy bundles |
+| `firma sidecar` | Run the Sidecar standalone |
 | `firma policy` | Validate and unit-test Cedar policy bundles |
 | `firma token` | Manage local-exec governance tokens (approve / revoke) |
 
-**Common flows:**
+Key flags for `firma run`:
 
-```bash
-# Start the full stack and tail the audit log
-firma stack init
-firma stack start --detach
-firma monitor
-
-# Wrap any agent with enforcement
-firma run --profile claude-code -- claude
-firma run --profile generic -- codex
-
-# Diagnose a running stack
-firma doctor
-firma doctor --json | jq .
-```
+| Flag | Default | Description |
+|---|---|---|
+| `--profile <id>` | `generic` | Built-in policy profile (`claude-code`, `codex`, `generic`, …) |
+| `--authority <local\|url>` | unset | Skip the bootstrap prompt: `local` autostarts on loopback; any URL points at a remote Authority |
+| `--authority-profile <name>` | `developer` | Profile materialised by the autostarted Mini Authority |
+| `--sidecar-endpoint <url>` | auto | Override Sidecar endpoint (`tcp://…` or `unix://…`) |
+| `--no-autostart` | off | Fail with a typed error instead of autostarting — CI safety net |
+| `--config <path>` | auto | Runtime config path (`.toml` or `.yaml`) |
+| `--backend <kind>` | platform default | Override sandbox backend: `bwrap`, `vz`, `wsl2`, `firecracker` |
+| `--print-effective-config` | off | Dump resolved config as JSON before exec |
 
 > Full CLI reference: [`docs/cli.md`](docs/cli.md)
 
