@@ -5,11 +5,11 @@ PATH or invoked via `cargo run -p firma --`.
 
 ## `firma config`
 
-Interactive scaffolding wizard that creates or updates an agent configuration
-directory — sidecar + authority config, Cedar policy, mapping rules, authority
-keypair, and a `firma-run.toml` — in a single step. When config files already
-exist, their current values become the wizard and non-interactive defaults;
-supplied flags override those values.
+`firma run` works out of the box with no prior setup — it auto-scaffolds a
+default config on first use. `firma config` lets you override those defaults:
+posture, mappings, authority mode, workspace path, and more. When config files
+already exist, their current values become the wizard and non-interactive
+defaults; supplied flags override those values.
 
 ### Usage
 
