@@ -107,14 +107,14 @@ fn global_log_filter_visible_under_subcommand() {
 }
 
 #[test]
-fn parse_init_defaults() {
-    parse_ok(&["init"]);
+fn parse_config_defaults() {
+    parse_ok(&["config"]);
 }
 
 #[test]
-fn parse_init_scripted() {
+fn parse_config_scripted() {
     parse_ok(&[
-        "init",
+        "config",
         "--yes",
         "--name",
         "codex",
@@ -128,8 +128,8 @@ fn parse_init_scripted() {
 }
 
 #[test]
-fn parse_init_global() {
-    parse_ok(&["init", "--yes", "--global"]);
+fn parse_config_global() {
+    parse_ok(&["config", "--yes", "--global"]);
 }
 
 #[test]

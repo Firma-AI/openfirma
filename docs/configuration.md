@@ -18,7 +18,7 @@ binary to exit before accepting requests.
 
 ## Scaffolded Example
 
-`firma init` writes one sectioned `firma.toml` with all paths
+`firma config` writes one sectioned `firma.toml` with all paths
 absolutised under the resolved config and state directories. The shape is:
 
 ```toml

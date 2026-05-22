@@ -1,4 +1,4 @@
-//! Runner for `firma init` — scaffold a new agent config directory.
+//! Runner for `firma config` — scaffold a new agent config directory.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -8,7 +8,7 @@ use clap::ValueEnum as _;
 use dialoguer::theme::ColorfulTheme;
 use minijinja::{Environment, context};
 
-use crate::args::init::{InitArgs, Mapping, Posture};
+use crate::args::config::{InitArgs, Mapping, Posture};
 
 struct CollectedInputs {
     name: String,
@@ -27,7 +27,7 @@ static TPL_MAPPING_RULES: &str = include_str!("../../templates/mapping-rules.tom
 static TPL_FIRMA_RUN: &str = include_str!("../../templates/firma-run.toml.j2");
 static TPL_CEDAR_ISSUANCE: &str = include_str!("../../templates/issuance.cedar");
 
-/// Entry point for `firma init`.
+/// Entry point for `firma config`.
 ///
 /// # Errors
 ///

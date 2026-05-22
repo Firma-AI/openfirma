@@ -1,4 +1,4 @@
-//! Args for `firma init`.
+//! Args for `firma config`.
 
 use std::path::PathBuf;
 
@@ -66,7 +66,7 @@ pub struct InitArgs {
     pub yes: bool,
 }
 
-/// Cedar enforcement posture for `firma init`.
+/// Cedar enforcement posture for `firma config`.
 #[derive(Debug, Clone, ValueEnum)]
 #[cfg_attr(test, derive(strum::EnumIter))]
 pub enum Posture {
@@ -142,7 +142,7 @@ impl Posture {
     }
 }
 
-/// Mapping file selection for `firma init`.
+/// Mapping file selection for `firma config`.
 #[derive(Debug, Clone, ValueEnum)]
 #[cfg_attr(test, derive(strum::EnumIter))]
 pub enum Mapping {

@@ -1,6 +1,6 @@
-# `firma init`
+# `firma config`
 
-`firma init` scaffolds a fresh project: keys, default `firma.toml`,
+`firma config` scaffolds a fresh project: keys, default `firma.toml`,
 empty policy directories. Run it once when you start a new project;
 `firma run` invokes the same scaffold implicitly the first time it
 finds no `firma.toml`.
@@ -8,10 +8,10 @@ finds no `firma.toml`.
 ## Quickstart
 
 ```bash
-firma init                                              # interactive wizard
-firma init --yes                                        # non-interactive defaults
-firma init --global                                     # user-global scaffold (~/.config/firma)
-firma init --agent codex --provider anthropic \
+firma config                                              # interactive wizard
+firma config --yes                                        # non-interactive defaults
+firma config --global                                     # user-global scaffold (~/.config/firma)
+firma config --agent codex --provider anthropic \
            --workspace ./proj --authority local         # scripted full setup
 ```
 
@@ -28,9 +28,9 @@ firma init --agent codex --provider anthropic \
 
 | Form                                          | When                                                  |
 | --------------------------------------------- | ----------------------------------------------------- |
-| `firma init`                                  | Interactive wizard. Default for human developers.     |
-| `firma init --yes`                            | Non-interactive. CI / container init / daemon-mode.   |
-| `firma init --agent X --provider Y …`         | Scripted with every value supplied up-front.          |
+| `firma config`                                  | Interactive wizard. Default for human developers.     |
+| `firma config --yes`                            | Non-interactive. CI / container init / daemon-mode.   |
+| `firma config --agent X --provider Y …`         | Scripted with every value supplied up-front.          |
 
 The wizard prompts for: workspace path, agent, provider, authority shape
 (local or remote URL). A flag on the command line short-circuits the
@@ -39,7 +39,7 @@ matching prompt.
 ## Flags
 
 ```text
-firma init [--workspace <dir> | --global | --config-dir <dir>]
+firma config [--workspace <dir> | --global | --config-dir <dir>]
            [--agent <name>] [--provider <name>]
            [--authority <local|url>]
            [--yes] [--force]
