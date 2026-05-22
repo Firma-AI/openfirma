@@ -76,6 +76,14 @@ prompt and non-interactive run. Pass only the flags you want to change;
 everything else is preserved. The existing `firma-run.toml` is preserved
 verbatim (including manual edits) unless `--workspace` overrides it.
 
+Changing an existing local-authority config to `--mode agent-remote`
+normally removes the top-level `[authority]` section from the generated
+`firma.toml`; otherwise `firma run` starts the Authority locally instead
+of using only the remote Authority. Interactive runs without `--force`
+warn about that and ask whether to keep the section; the answer authorizes
+rewriting `firma.toml` for this mode switch. `--force` overwrites the
+config directly and removes the section.
+
 ```bash
 # Keep everything, just rename the agent
 firma config --yes --name new-agent

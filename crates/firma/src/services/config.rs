@@ -33,6 +33,8 @@ struct SidecarInputs {
 
 struct CollectedInputs {
     mode: Mode,
+    keep_local_authority: bool,
+    overwrite_firma_toml: bool,
     authority: AuthorityInputs,
     sidecar: SidecarInputs,
     config_dir: PathBuf,
@@ -86,9 +88,9 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     }
 
     create_scaffold_dirs(cfg, state)?;
-    write_scaffold_files(&files, cfg, args.force)?;
+    write_scaffold_files(&files, cfg, args.force, inputs.overwrite_firma_toml)?;
 
-    let has_server = matches!(inputs.mode, Mode::AgentLocal | Mode::Authority);
+    let has_server = has_server(&inputs);
     let has_sidecar = matches!(inputs.mode, Mode::AgentLocal | Mode::AgentRemote);
 
     if has_sidecar {
@@ -141,14 +143,20 @@ fn create_scaffold_dirs(cfg: &Path, state: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_scaffold_files(files: &[(String, String)], cfg: &Path, force: bool) -> Result<()> {
+fn write_scaffold_files(
+    files: &[(String, String)],
+    cfg: &Path,
+    force: bool,
+    overwrite_firma_toml: bool,
+) -> Result<()> {
     for (rel, content) in files {
         let path = cfg.join(rel);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("mkdir {}", parent.display()))?;
         }
-        if !force && path.exists() {
+        let should_overwrite = force || (overwrite_firma_toml && rel == "firma.toml");
+        if !should_overwrite && path.exists() {
             eprintln!(
                 "skip (exists): {} — use --force to overwrite",
                 path.display()
@@ -220,7 +228,7 @@ fn generate_files(
     env: &Environment<'_>,
     inputs: &CollectedInputs,
 ) -> Result<Vec<(String, String)>> {
-    let has_server = matches!(inputs.mode, Mode::AgentLocal | Mode::Authority);
+    let has_server = has_server(inputs);
     let has_connect = matches!(inputs.mode, Mode::AgentLocal | Mode::AgentRemote);
     let has_sidecar = matches!(inputs.mode, Mode::AgentLocal | Mode::AgentRemote);
 
@@ -355,6 +363,7 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         (None, _) if interactive => prompt_mode_with_default(&theme, &Mode::AgentLocal)?,
         (None, _) => Mode::AgentLocal,
     };
+    let mode_change = confirm_mode_change(args, &existing, &mode, interactive, &theme)?;
 
     let state_dir =
         resolve_state_dir_with_default(args.state_dir.clone(), existing.state_dir.clone())
@@ -377,10 +386,65 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
 
     Ok(CollectedInputs {
         mode,
+        keep_local_authority: mode_change.keep_local_authority,
+        overwrite_firma_toml: mode_change.overwrite_firma_toml,
         authority,
         sidecar,
         config_dir,
         state_dir,
+    })
+}
+
+fn has_server(inputs: &CollectedInputs) -> bool {
+    inputs.keep_local_authority || matches!(inputs.mode, Mode::AgentLocal | Mode::Authority)
+}
+
+struct ModeChangeDecision {
+    keep_local_authority: bool,
+    overwrite_firma_toml: bool,
+}
+
+fn confirm_mode_change(
+    args: &InitArgs,
+    existing: &ExistingConfigDefaults,
+    mode: &Mode,
+    interactive: bool,
+    theme: &ColorfulTheme,
+) -> Result<ModeChangeDecision> {
+    if !interactive || args.dry_run || args.force {
+        return Ok(ModeChangeDecision {
+            keep_local_authority: false,
+            overwrite_firma_toml: false,
+        });
+    }
+
+    if matches!(existing.mode, Some(Mode::AgentLocal | Mode::Authority))
+        && matches!(mode, Mode::AgentRemote)
+    {
+        eprintln!(
+            "Warning: this configuration includes a local [authority] section. \
+             If you keep it, firma run starts the Authority locally instead of using only the remote Authority."
+        );
+        let keep = dialoguer::Confirm::with_theme(theme)
+            .with_prompt("Keep the local [authority] section and local Authority startup?")
+            .default(false)
+            .interact()
+            .context("authority section prompt")?;
+        if keep {
+            return Ok(ModeChangeDecision {
+                keep_local_authority: true,
+                overwrite_firma_toml: true,
+            });
+        }
+        return Ok(ModeChangeDecision {
+            keep_local_authority: false,
+            overwrite_firma_toml: true,
+        });
+    }
+
+    Ok(ModeChangeDecision {
+        keep_local_authority: false,
+        overwrite_firma_toml: false,
     })
 }
 
@@ -1007,6 +1071,8 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
     };
     let inputs = CollectedInputs {
         mode,
+        keep_local_authority: false,
+        overwrite_firma_toml: false,
         authority,
         sidecar: SidecarInputs {
             name: plan.agent.clone(),
@@ -1106,6 +1172,8 @@ mod tests {
         let env = build_template_env().unwrap();
         let inputs = CollectedInputs {
             mode: Mode::AgentLocal,
+            keep_local_authority: false,
+            overwrite_firma_toml: false,
             authority: AuthorityInputs {
                 listen: "127.0.0.1:9443".to_string(),
                 connect_url: "https://127.0.0.1:9443".to_string(),
