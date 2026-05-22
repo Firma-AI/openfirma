@@ -82,7 +82,7 @@ export default defineConfig({
         {
           label: 'User Guides',
           items: [
-            { label: 'Initialize a project (firma init)', slug: 'guides/initialize-a-project' },
+            { label: 'Initialize a project (firma config)', slug: 'guides/initialize-a-project' },
             { label: 'Run the sidecar standalone', slug: 'guides/run-the-sidecar' },
             { label: 'Inspect live sidecars (firma sidecar status)', slug: 'guides/firma-sidecar-status' },
             { label: 'Start & monitor the daemon (firma sidecar & monitor)', slug: 'guides/manage-the-stack' },

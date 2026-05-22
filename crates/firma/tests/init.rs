@@ -1,4 +1,4 @@
-//! Tests for `firma init`.
+//! Tests for `firma config`.
 //!
 //! Verifies that the scaffolded unified `firma.toml` is syntactically
 //! valid, round-trips through the strict section loader, and that both
@@ -23,12 +23,12 @@ fn firma() -> Command {
 
 fn run_init(config_dir: &Path, state_dir: &Path) {
     let output = firma()
-        .args(["init", "--yes", "--output-dir"])
+        .args(["config", "--yes", "--output-dir"])
         .arg(config_dir)
         .args(["--state-dir"])
         .arg(state_dir)
         .output()
-        .expect("spawn firma init");
+        .expect("spawn firma config");
     assert!(
         output.status.success(),
         "init failed: stdout={} stderr={}",
@@ -121,10 +121,16 @@ fn init_handles_relative_paths() {
 
     let output = firma()
         .current_dir(&work)
-        .args(["init", "--yes", "--output-dir", "../config", "--state-dir"])
+        .args([
+            "config",
+            "--yes",
+            "--output-dir",
+            "../config",
+            "--state-dir",
+        ])
         .arg(&state_dir)
         .output()
-        .expect("spawn firma init");
+        .expect("spawn firma config");
     assert!(
         output.status.success(),
         "init (relative) failed: stdout={} stderr={}",

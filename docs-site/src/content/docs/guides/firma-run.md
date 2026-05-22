@@ -72,24 +72,24 @@ If `unshare --user --pid echo ok` itself fails with a permission error,
 enable unprivileged user namespaces (`sysctl -w kernel.unprivileged_userns_clone=1`
 on some distros) or pick a different backend.
 
-## Step 2: Scaffold a config directory with `firma init`
+## Step 2: Scaffold a config directory with `firma config`
 
-`firma init` creates a complete working configuration directory — sidecar + authority config, Cedar policy, mapping rules, and an authority keypair — in a single step:
+`firma config` creates a complete working configuration directory — sidecar + authority config, Cedar policy, mapping rules, and an authority keypair — in a single step:
 
 ```bash
-firma init --name my-agent --posture dev --mapping anthropic
+firma config --name my-agent --posture dev --mapping anthropic
 ```
 
 This writes to the **current directory** by default. To write to the global Firma config directory (`~/.config/firma` on Linux/macOS), pass `--global`:
 
 ```bash
-firma init --name my-agent --posture dev --mapping anthropic --global
+firma config --name my-agent --posture dev --mapping anthropic --global
 ```
 
 To write to a specific directory, pass `--output-dir`:
 
 ```bash
-firma init --name my-agent --posture dev --mapping anthropic --output-dir .local
+firma config --name my-agent --posture dev --mapping anthropic --output-dir .local
 ```
 
 Generated layout:
@@ -108,10 +108,10 @@ Generated layout:
     revocations.txt
 ```
 
-`firma init` is idempotent — re-running preserves existing files including the authority keypair; pass `--force` to overwrite everything. Skip all interactive prompts with `--yes`. Preview without writing:
+`firma config` is idempotent — re-running preserves existing files including the authority keypair; pass `--force` to overwrite everything. Skip all interactive prompts with `--yes`. Preview without writing:
 
 ```bash
-firma init --dry-run
+firma config --dry-run
 ```
 
 Inspect the generated config:

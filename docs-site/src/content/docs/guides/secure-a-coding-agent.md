@@ -35,12 +35,12 @@ Before configuring, list the destinations the agent actually has to reach:
 
 Keep this list as tight as the agent will tolerate. If the agent reaches for github.com to pull docs, list it and decide whether you want it. If it reaches for "random package registry to install something", almost certainly not — that's a signal something's wrong.
 
-## Step 2: Scaffold the config with `firma init`
+## Step 2: Scaffold the config with `firma config`
 
-`firma init` creates a complete configuration directory — sidecar + authority config, Cedar policy, mapping rules, authority keypair, and revocations list — in a single command:
+`firma config` creates a complete configuration directory — sidecar + authority config, Cedar policy, mapping rules, authority keypair, and revocations list — in a single command:
 
 ```bash
-firma init \
+firma config \
   --name claude-code \
   --posture strict \
   --mapping anthropic
@@ -49,8 +49,8 @@ firma init \
 This writes to the **current directory** by default. Pass `--global` to write to the global config directory (`~/.config/firma` on Linux/macOS), or `--output-dir` for a specific path:
 
 ```bash
-firma init --name claude-code --posture strict --mapping anthropic --global
-firma init --name claude-code --posture strict --mapping anthropic --output-dir .local
+firma config --name claude-code --posture strict --mapping anthropic --global
+firma config --name claude-code --posture strict --mapping anthropic --output-dir .local
 ```
 
 `--posture strict` allows only `communication.external.send` (and `credential.read`), which is the right shape for a coding agent that should reach only the LLM endpoint. The `anthropic` mapping covers `api.anthropic.com` via CONNECT — no MITM certificate required for Anthropic's TLS.
@@ -87,7 +87,7 @@ Eight hours is a reasonable working session. If you stop and restart the next mo
 
 ## Step 4: Tighten the runtime policy
 
-`firma init` generated `~/.config/firma/policies/strict.cedar` with a broad `communication.external.send` permit. Edit it to restrict to Anthropic hosts specifically. Replace the file with:
+`firma config` generated `~/.config/firma/policies/strict.cedar` with a broad `communication.external.send` permit. Edit it to restrict to Anthropic hosts specifically. Replace the file with:
 
 ```cedar
 // claude-code: a local coding agent.

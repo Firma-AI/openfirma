@@ -6,7 +6,7 @@ use firma_run::runtime::{RunInput, execute_run};
 use tracing::{info, warn};
 
 use crate::args::run::RunArgs;
-use crate::services::init::{AuthorityShape, ScaffoldPlan, scaffold_from_plan};
+use crate::services::config::{AuthorityShape, ScaffoldPlan, scaffold_from_plan};
 
 /// Run the `firma run` subcommand. Sync — must not be called from inside
 /// a tokio runtime.

@@ -3,14 +3,14 @@
 Single binary: `firma <subcommand>`. All examples below assume `firma` is on
 PATH or invoked via `cargo run -p firma --`.
 
-## `firma init`
+## `firma config`
 
 Interactive scaffolding wizard that creates a complete agent configuration directory — sidecar + authority config, Cedar policy, mapping rules, authority keypair, and a `firma-run.toml` — in a single step. All flags have defaults; omitting them triggers interactive prompts.
 
 ### Usage
 
 ```text
-firma init [OPTIONS]
+firma config [OPTIONS]
 ```
 
 ### Options
@@ -50,25 +50,25 @@ firma init [OPTIONS]
 Interactive:
 
 ```bash
-firma init
+firma config
 ```
 
 Non-interactive:
 
 ```bash
-firma init --name claude-code --posture strict --mapping anthropic
+firma config --name claude-code --posture strict --mapping anthropic
 ```
 
 Multiple mappings:
 
 ```bash
-firma init --name my-agent --posture dev --mapping anthropic --mapping github --mapping npm
+firma config --name my-agent --posture dev --mapping anthropic --mapping github --mapping npm
 ```
 
 Preview without writing:
 
 ```bash
-firma init --dry-run
+firma config --dry-run
 ```
 
 After scaffolding, run the agent:
@@ -309,10 +309,10 @@ subcommand reads only its own section. The first existing file wins:
 2. **Project-local `.firma/firma.toml`**, found by walking up from
    `cwd` (spec §4 step 1). The closest ancestor with a `.firma/firma.toml`
    wins; the walk stops at the filesystem root. This is what
-   `firma init` writes by default.
+   `firma config` writes by default.
 3. `$FIRMA_CONFIG_DIR/firma.toml` if the env var is set.
 4. User config dir (first existing wins). This is what
-   `firma init --global` writes:
+   `firma config --global` writes:
    - Linux: `$XDG_CONFIG_HOME/firma` → `~/.config/firma`
    - macOS: `$XDG_CONFIG_HOME/firma` → `~/.config/firma` →
      `~/Library/Application Support/firma`

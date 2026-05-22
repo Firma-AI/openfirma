@@ -38,7 +38,7 @@ fn run_start(args: StartArgs) -> ExitCode {
         Ok(cfg) => cfg,
         Err(error) => return fail(&format!("config: {error}")),
     };
-    let state_dir = match crate::services::init::resolve_state_dir(args.state_dir) {
+    let state_dir = match crate::services::config::resolve_state_dir(args.state_dir) {
         Ok(path) => path,
         Err(error) => return fail(&error),
     };
@@ -60,7 +60,7 @@ fn run_start(args: StartArgs) -> ExitCode {
 
 fn run_stop(args: StopArgs) -> ExitCode {
     info!(timeout = args.timeout, "firma sidecar stop invoked");
-    let state_dir = match crate::services::init::resolve_state_dir(args.state_dir) {
+    let state_dir = match crate::services::config::resolve_state_dir(args.state_dir) {
         Ok(path) => path,
         Err(error) => return fail(&error),
     };

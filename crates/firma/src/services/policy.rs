@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use clap::ValueEnum as _;
 
-use crate::args::init::{Mapping, Posture};
+use crate::args::config::{Mapping, Posture};
 use crate::args::policy::{PolicyArgs, PolicyCommand};
 
 /// # Errors

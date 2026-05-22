@@ -10,7 +10,7 @@ Single binary exposing every Firma OSS production component as a subcommand.
    passes through it; fail-closed.
 3. **`firma run`** — wrapper that confines an agent process inside a
    sandbox backend and forces all egress through the sidecar.
-4. **`firma init`** — scaffold a fresh project: config dir, signing keys,
+4. **`firma config`** — scaffold a fresh project: config dir, signing keys,
    default policies. Also runs implicitly on first `firma run` if no
    `firma.toml` is found.
 5. **`firma sidecar {start,stop,status}`** — operator-facing daemon
@@ -138,16 +138,16 @@ firma run --profile generic -- python agent.py
 
 Wrapped command and args after `--`.
 
-### `firma init`
+### `firma config`
 
 Scaffold a fresh project: signing keys, default `firma.toml`, empty
 policy directories. Three usage shapes:
 
 ```bash
-firma init                                              # interactive wizard
-firma init --yes                                        # non-interactive defaults
-firma init --global                                     # user-global scaffold (~/.config/firma)
-firma init --agent codex --provider anthropic \
+firma config                                              # interactive wizard
+firma config --yes                                        # non-interactive defaults
+firma config --global                                     # user-global scaffold (~/.config/firma)
+firma config --agent codex --provider anthropic \
            --workspace ./proj --authority local         # scripted full setup
 ```
 

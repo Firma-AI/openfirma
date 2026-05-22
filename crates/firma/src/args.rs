@@ -1,8 +1,8 @@
 //! Top-level CLI for the unified `firma` binary.
 
 pub mod authority;
+pub mod config;
 pub mod doctor;
-pub mod init;
 pub mod monitor;
 pub mod policy;
 pub mod run;
@@ -24,7 +24,7 @@ use clap::{Parser, Subcommand};
                   authorizes it against Cedar policies and short-lived capability tokens \
                   issued by the Authority.\n\n\
                   Typical workflow:\n  \
-                  firma init          — scaffold a new project\n  \
+                  firma config        — scaffold a new project\n  \
                   firma sidecar start — bring up the enforcement stack\n  \
                   firma run …         — launch your agent under enforcement\n  \
                   firma monitor       — watch audit decisions\n  \
@@ -49,7 +49,7 @@ pub enum Command {
     /// production deployments swap in their own Authority.
     Authority(authority::Args),
     /// Scaffold a new agent config directory interactively.
-    Init(init::InitArgs),
+    Config(config::InitArgs),
     /// Browse the template catalogue and validate Cedar policy bundles.
     Policy(policy::PolicyArgs),
     /// Internal sandbox-local DNS stub.

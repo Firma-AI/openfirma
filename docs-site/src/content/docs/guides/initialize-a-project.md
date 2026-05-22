@@ -1,9 +1,9 @@
 ---
-title: Initialize a project with firma init
+title: Initialize a project with firma config
 description: Scaffold a fresh Firma project — config dir, signing keys, default policies — interactively or in scripted form.
 ---
 
-`firma init` writes a fresh project layout in one command: a sectioned
+`firma config` writes a fresh project layout in one command: a sectioned
 `firma.toml`, signing and audit keys, empty policy directories, a
 placeholder mapping file. Run it once per project. `firma run <agent>`
 calls the same scaffold implicitly on first use, so you can also skip
@@ -12,10 +12,10 @@ this step if you only want the one-command path.
 ## Usage shapes
 
 ```bash
-firma init                                              # interactive wizard
-firma init --yes                                        # non-interactive defaults
-firma init --global                                     # user-global scaffold (~/.config/firma)
-firma init --agent codex --provider anthropic \
+firma config                                              # interactive wizard
+firma config --yes                                        # non-interactive defaults
+firma config --global                                     # user-global scaffold (~/.config/firma)
+firma config --agent codex --provider anthropic \
            --workspace ./proj --authority local         # scripted full setup
 ```
 
@@ -31,9 +31,9 @@ and pick where the scaffold lands:
 
 | Form                                          | When                                                  |
 | --------------------------------------------- | ----------------------------------------------------- |
-| `firma init`                                  | Interactive wizard. Default for human developers.     |
-| `firma init --yes`                            | Non-interactive. CI / container init / daemon-mode.   |
-| `firma init --agent X --provider Y …`         | Scripted with every value supplied up-front.          |
+| `firma config`                                  | Interactive wizard. Default for human developers.     |
+| `firma config --yes`                            | Non-interactive. CI / container init / daemon-mode.   |
+| `firma config --agent X --provider Y …`         | Scripted with every value supplied up-front.          |
 
 The wizard prompts for: workspace path, agent, provider, authority
 shape (`local` or a remote URL). Supplying the matching flag on the
@@ -42,7 +42,7 @@ command line short-circuits that prompt.
 ## Flags
 
 ```text
-firma init [--workspace <dir> | --global | --config-dir <dir>]
+firma config [--workspace <dir> | --global | --config-dir <dir>]
            [--agent <name>] [--provider <name>]
            [--authority <local|url>]
            [--yes] [--force]
@@ -103,7 +103,7 @@ from a fresh clone.
 
 ## Common gotchas
 
-**Wizard refuses to run in CI.** `firma init` without `--yes` requires
+**Wizard refuses to run in CI.** `firma config` without `--yes` requires
 a TTY. Pass `--yes` (and any flags you want to override) when running
 unattended.
 

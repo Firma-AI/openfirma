@@ -82,6 +82,6 @@ State-dir resolution order: `--state-dir` flag → `FIRMA_STATE_DIR` env
 
 ## See also
 
-- [`firma init`](firma_init_command.md) — project scaffold (config dir + keys).
+- [`firma config`](firma_init_command.md) — project scaffold (config dir + keys).
 - [`firma monitor`](firma_monitor_command.md) — tail audit + component logs.
 - [Configuration reference](../configuration.md) — full `firma.toml` shape.
