@@ -46,7 +46,7 @@ fn pre_bound_port_short_circuits_to_local() {
         &flags,
         &AuthorityCli::Unset,
         "developer",
-        &cfg,
+        Some(cfg.as_path()),
         &PathBuf::from("/bin/false"),
     )
     .expect("resolve ok");
