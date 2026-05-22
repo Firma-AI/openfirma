@@ -369,6 +369,11 @@ impl InMemoryTokenStore {
     pub fn len(&self) -> usize {
         lock_or_recover(&self.tokens).len()
     }
+
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        lock_or_recover(&self.tokens).is_empty()
+    }
 }
 
 impl TokenStore for InMemoryTokenStore {

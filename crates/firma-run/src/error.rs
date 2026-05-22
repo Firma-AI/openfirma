@@ -81,6 +81,11 @@ pub enum RunError {
     #[error("authority unreachable at {url}: {reason}")]
     AuthorityUnreachable { url: String, reason: String },
 
+    #[error(
+        "local authority endpoint {endpoint} is reachable but transport could not be identified as plaintext local gRPC; pass an explicit --authority http://... or https://... URL"
+    )]
+    AuthorityTransportAmbiguous { endpoint: String },
+
     #[error("unknown --authority-profile `{name}`")]
     AuthorityUnknownProfile { name: String },
 
