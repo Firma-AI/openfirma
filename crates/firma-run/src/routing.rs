@@ -75,16 +75,25 @@ pub struct AutostartFlags {
     /// Effective Authority URL — set by `resolve_authority` and threaded
     /// into the synthesized sidecar config.
     pub authority_url: Option<String>,
+    /// Path to the CA cert that signed the authority's TLS cert — injected
+    /// into `[sidecar.authority].ca_cert_path` during synthesis.
+    pub authority_ca_cert: Option<PathBuf>,
+    /// Path to the authority's Ed25519 public key — injected into
+    /// `[sidecar.authority].public_key_path` and
+    /// `[sidecar.preflight].authority_pub_key_path` during synthesis.
+    pub authority_pub_key: Option<PathBuf>,
     /// When `true`, the autostarted sidecar is started in HTTP proxy
     /// interceptor mode rather than Unix socket mode.
     pub use_http_proxy_sidecar: bool,
 }
 
-/// Resolved Authority for the current run. URL is what gets fed into the
-/// sidecar's `[authority].url`; supervisor is held inside `NetworkRuntime`
-/// for kill-on-Drop.
+/// Resolved Authority for the current run.
 pub struct ResolvedAuthority {
     pub url: String,
+    /// CA cert path from `[authority.connect]`, if present.
+    pub ca_cert_path: Option<PathBuf>,
+    /// Authority public key path from `[authority.connect]`, if present.
+    pub pub_key_path: Option<PathBuf>,
     pub supervisor: Option<crate::authority::AuthoritySupervisor>,
 }
 
@@ -114,6 +123,8 @@ pub fn prepare_network_runtime(
 ) -> Result<NetworkRuntime, RunError> {
     let mut flags = flags.clone();
     flags.authority_url = Some(authority.url.clone());
+    flags.authority_ca_cert.clone_from(&authority.ca_cert_path);
+    flags.authority_pub_key.clone_from(&authority.pub_key_path);
 
     let (effective_endpoint, sidecar_supervisor) =
         resolve_effective_endpoint(handle, sidecar_endpoint, identity, &flags)?;
@@ -268,6 +279,8 @@ fn autostart_sidecar(
         firma_exe,
         startup_timeout: flags.startup_timeout,
         authority_url: flags.authority_url.as_deref(),
+        authority_ca_cert: flags.authority_ca_cert.clone(),
+        authority_pub_key: flags.authority_pub_key.clone(),
         use_http_proxy_interceptor: flags.use_http_proxy_sidecar,
     })
 }
@@ -299,11 +312,19 @@ pub fn resolve_authority(
 ) -> Result<ResolvedAuthority, RunError> {
     let selection = crate::authority::resolve(cli, flags.no_autostart, user_config_path, prompt)?;
 
+    // Read [authority.connect] for cert/key paths regardless of selection mode.
+    let connect =
+        crate::authority::config::read_authority(user_config_path)?.and_then(|s| s.connect);
+    let ca_cert_path = connect.as_ref().and_then(|c| c.ca_cert_path.clone());
+    let pub_key_path = connect.as_ref().and_then(|c| c.pub_key_path.clone());
+
     match selection {
         crate::authority::AuthoritySelection::Remote(url) => {
             probe_authority_url(&url)?;
             Ok(ResolvedAuthority {
                 url,
+                ca_cert_path,
+                pub_key_path,
                 supervisor: None,
             })
         }
@@ -312,6 +333,8 @@ pub fn resolve_authority(
             if probe_authority_tcp(target).is_ok() {
                 return Ok(ResolvedAuthority {
                     url: format!("http://{target}"),
+                    ca_cert_path,
+                    pub_key_path,
                     supervisor: None,
                 });
             }
@@ -332,12 +355,16 @@ pub fn resolve_authority(
             }) {
                 Ok(sup) => Ok(ResolvedAuthority {
                     url: sup.url(),
+                    ca_cert_path,
+                    pub_key_path,
                     supervisor: Some(sup),
                 }),
                 Err(spawn_err) => {
                     if probe_authority_tcp(target).is_ok() {
                         Ok(ResolvedAuthority {
                             url: format!("http://{target}"),
+                            ca_cert_path,
+                            pub_key_path,
                             supervisor: None,
                         })
                     } else {

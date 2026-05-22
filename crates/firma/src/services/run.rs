@@ -86,7 +86,10 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
     // about to ask firma-run to do. Default = local mini authority.
     let authority = match args.authority.as_deref() {
         None | Some("local") => AuthorityShape::Local,
-        Some(url) => AuthorityShape::Remote(url.to_string()),
+        Some(url) => AuthorityShape::Remote {
+            url: url.to_string(),
+            ca_cert: None,
+        },
     };
 
     let plan = ScaffoldPlan {

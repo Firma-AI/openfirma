@@ -9,19 +9,48 @@ static POSTURE_DEV: &str = include_str!("../../templates/policies/dev.cedar");
 static POSTURE_DEV_DELETE: &str =
     include_str!("../../templates/policies/dev-with-delete-watch.cedar");
 
+/// What component to scaffold.
+#[derive(Debug, Clone, ValueEnum)]
+#[cfg_attr(test, derive(strum::EnumIter))]
+pub enum Mode {
+    /// Agent (sidecar) with a co-located local mini-authority — full stack.
+    #[value(name = "agent-local")]
+    AgentLocal,
+    /// Agent (sidecar) connecting to an existing remote authority.
+    #[value(name = "agent-remote")]
+    AgentRemote,
+    /// Standalone authority server only — no sidecar config generated.
+    Authority,
+}
+
+impl Mode {
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::AgentLocal => "Agent + local mini-authority (full stack, single host)",
+            Self::AgentRemote => "Agent only — connects to an existing remote authority",
+            Self::Authority => "Standalone authority server — no sidecar config",
+        }
+    }
+}
+
 /// Scaffold a new agent config directory interactively.
 #[derive(Debug, Args)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct InitArgs {
+    /// What to configure: agent-local | agent-remote | authority.
+    #[arg(long, value_enum)]
+    pub mode: Option<Mode>,
+
     /// Agent slug used as the `agent_id` in the generated config (e.g. "my-agent").
+    /// Not used in `authority` mode.
     #[arg(long, short = 'n')]
     pub name: Option<String>,
 
-    /// Cedar policy posture to use.
+    /// Cedar policy posture to use. Not used in `authority` mode.
     #[arg(long, value_enum)]
     pub posture: Option<Posture>,
 
-    /// Mapping file(s) to include — may be repeated.
+    /// Mapping file(s) to include — may be repeated. Not used in `authority` mode.
     #[arg(long, value_enum)]
     pub mapping: Vec<Mapping>,
 
@@ -43,6 +72,22 @@ pub struct InitArgs {
     /// Defaults to the platform state dir (`$FIRMA_STATE_DIR` → `$XDG_DATA_HOME/firma`).
     #[arg(long, env = "FIRMA_STATE_DIR")]
     pub state_dir: Option<PathBuf>,
+
+    /// Authority URL for `agent-remote` mode (e.g. `<https://authority.example.com:9443>`).
+    #[arg(long)]
+    pub authority_url: Option<String>,
+
+    /// Path to the authority CA certificate (PEM) for `agent-remote` mode.
+    #[arg(long)]
+    pub authority_ca_cert: Option<PathBuf>,
+
+    /// Path to the authority public key for `agent-remote` mode.
+    #[arg(long)]
+    pub authority_pub_key: Option<PathBuf>,
+
+    /// Listen address for the authority gRPC server in `authority` mode.
+    #[arg(long)]
+    pub authority_listen: Option<String>,
 
     /// Print generated files to stdout without writing to disk.
     #[arg(long)]

@@ -28,15 +28,31 @@ impl FirmaConfig {
         })
     }
 
-    /// The named `[section]` body re-serialized as standalone TOML.
+    /// The named section body re-serialized as standalone TOML.
     ///
-    /// A missing `[section]` is a hard error (fail-closed).
+    /// Supports dotted paths (e.g. `"authority.server"`) to address
+    /// sub-tables. A missing section at any level is a hard error
+    /// (fail-closed).
     ///
     /// # Errors
     ///
     /// Returns a "missing section" or serialization error string.
     pub fn section(&self, section: &str) -> Result<String, String> {
-        match self.table.get(section) {
+        let parts: Vec<&str> = section.split('.').collect();
+        let mut current = &self.table;
+        for &part in &parts[..parts.len() - 1] {
+            match current.get(part) {
+                Some(toml::Value::Table(t)) => current = t,
+                _ => {
+                    return Err(format!(
+                        "{}: missing required `[{section}]` section",
+                        self.origin
+                    ));
+                }
+            }
+        }
+        let last = parts.last().copied().unwrap_or(section);
+        match current.get(last) {
             Some(toml::Value::Table(sub)) => {
                 toml::to_string(sub).map_err(|e| format!("{}: {e}", self.origin))
             }
@@ -104,5 +120,37 @@ mod tests {
         std::fs::write(&p, "[authority]\nbar = 2\n").unwrap();
         let err = load_section(&p, "sidecar").unwrap_err();
         assert!(err.contains("sidecar"), "error names the section: {err}");
+    }
+
+    #[test]
+    fn dotted_path_extracts_nested_section() {
+        let tmp = tempdir().unwrap();
+        let p = tmp.path().join("firma.toml");
+        std::fs::write(
+            &p,
+            "[authority.server]\nlisten_addr = \"127.0.0.1:9443\"\n[authority.connect]\nurl = \"https://x\"\n",
+        )
+        .unwrap();
+        let server = load_section(&p, "authority.server").unwrap();
+        let t: toml::Table = server.parse().unwrap();
+        assert_eq!(
+            t.get("listen_addr").and_then(toml::Value::as_str),
+            Some("127.0.0.1:9443")
+        );
+        let connect = load_section(&p, "authority.connect").unwrap();
+        let t2: toml::Table = connect.parse().unwrap();
+        assert_eq!(
+            t2.get("url").and_then(toml::Value::as_str),
+            Some("https://x")
+        );
+    }
+
+    #[test]
+    fn dotted_path_missing_is_an_error() {
+        let tmp = tempdir().unwrap();
+        let p = tmp.path().join("firma.toml");
+        std::fs::write(&p, "[authority.connect]\nurl = \"https://x\"\n").unwrap();
+        let err = load_section(&p, "authority.server").unwrap_err();
+        assert!(err.contains("authority.server"), "error: {err}");
     }
 }

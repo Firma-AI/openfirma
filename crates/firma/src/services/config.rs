@@ -8,18 +8,31 @@ use clap::ValueEnum as _;
 use dialoguer::theme::ColorfulTheme;
 use minijinja::{Environment, context};
 
-use crate::args::config::{InitArgs, Mapping, Posture};
+use crate::args::config::{InitArgs, Mapping, Mode, Posture};
 
-struct CollectedInputs {
+struct AuthorityInputs {
+    /// gRPC listen address (agent-local + authority modes).
+    listen: String,
+    /// URL written to `[authority.connect].url`.
+    connect_url: String,
+    /// CA cert path written to `[authority.connect].ca_cert_path`.
+    connect_ca_cert: String,
+}
+
+struct SidecarInputs {
     name: String,
     posture: Posture,
     mappings: Vec<Mapping>,
     extra_hosts: Vec<String>,
+    workspace: PathBuf,
+}
+
+struct CollectedInputs {
+    mode: Mode,
+    authority: AuthorityInputs,
+    sidecar: SidecarInputs,
     config_dir: PathBuf,
     state_dir: PathBuf,
-    workspace: PathBuf,
-    authority_listen: String,
-    authority: AuthorityShape,
 }
 
 static TPL_FIRMA_TOML: &str = include_str!("../../templates/firma.toml.j2");
@@ -52,9 +65,46 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    // Config dir + subdirs (policies, mappings — no keys here).
+    create_scaffold_dirs(cfg, state)?;
+    write_scaffold_files(&files, cfg, args.force)?;
+
+    let has_server = matches!(inputs.mode, Mode::AgentLocal | Mode::Authority);
+    let has_sidecar = matches!(inputs.mode, Mode::AgentLocal | Mode::AgentRemote);
+
+    if has_sidecar {
+        write_if_absent(&state.join("revocations.txt"), b"", args.force)?;
+        crate::services::authority::generate_audit_key_if_absent(
+            &state.join("audit.key"),
+            args.force,
+        )?;
+    }
+
+    if has_server {
+        write_server_material(state, args.force)?;
+    }
+
+    println!("\nScaffolded:");
+    println!("  config  {}", cfg.display());
+    println!("  state   {}", state.display());
+    println!("\nNext:");
+    match inputs.mode {
+        Mode::AgentLocal | Mode::AgentRemote => {
+            println!(
+                "  firma run --config {}/firma-run.toml -- <agent-command>",
+                cfg.display()
+            );
+        }
+        Mode::Authority => {
+            println!("  firma authority --config {}/firma.toml", cfg.display());
+        }
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+fn create_scaffold_dirs(cfg: &Path, state: &Path) -> Result<()> {
     for dir in [
-        cfg.as_path(),
+        cfg,
         &cfg.join("policies"),
         &cfg.join("issuance-policies"),
         &cfg.join("mappings"),
@@ -63,21 +113,22 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
         #[cfg(unix)]
         set_dir_mode_0700(dir).with_context(|| format!("chmod {}", dir.display()))?;
     }
-
-    // State dir + subdirs (keys, revocations, CA — separate from config).
-    for dir in [state.as_path(), &state.join("generated-firma-ca")] {
+    for dir in [state, &state.join("generated-firma-ca")] {
         std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
         #[cfg(unix)]
         set_dir_mode_0700(dir).with_context(|| format!("chmod {}", dir.display()))?;
     }
+    Ok(())
+}
 
-    for (rel, content) in &files {
+fn write_scaffold_files(files: &[(String, String)], cfg: &Path, force: bool) -> Result<()> {
+    for (rel, content) in files {
         let path = cfg.join(rel);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("mkdir {}", parent.display()))?;
         }
-        if !args.force && path.exists() {
+        if !force && path.exists() {
             eprintln!(
                 "skip (exists): {} — use --force to overwrite",
                 path.display()
@@ -88,12 +139,12 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
             .with_context(|| format!("write {}", path.display()))?;
         println!("  wrote {}", path.display());
     }
+    Ok(())
+}
 
-    write_if_absent(&state.join("revocations.txt"), b"", args.force)?;
-    crate::services::authority::generate_audit_key_if_absent(&state.join("audit.key"), args.force)?;
-
+fn write_server_material(state: &Path, force: bool) -> Result<()> {
     let key_path = state.join("authority.key");
-    if args.force && key_path.exists() {
+    if force && key_path.exists() {
         std::fs::remove_file(&key_path)
             .with_context(|| format!("remove {}", key_path.display()))?;
         let pub_path = state.join("authority.pub");
@@ -112,12 +163,16 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
 
     let tls_dir = state.join("tls");
     let tls_cert = tls_dir.join("authority.crt");
-    if args.force && tls_dir.exists() {
-        for name in ["authority.crt", "authority.key", "authority-ca.crt", "authority-ca.key"] {
+    if force && tls_dir.exists() {
+        for name in [
+            "authority.crt",
+            "authority.key",
+            "authority-ca.crt",
+            "authority-ca.key",
+        ] {
             let p = tls_dir.join(name);
             if p.exists() {
-                std::fs::remove_file(&p)
-                    .with_context(|| format!("remove {}", p.display()))?;
+                std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
             }
         }
     }
@@ -127,17 +182,7 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
         crate::services::authority::run_bootstrap_tls(&tls_dir, &[])
             .with_context(|| "generate TLS material")?;
     }
-
-    println!("\nScaffolded:");
-    println!("  config  {}", cfg.display());
-    println!("  state   {}", state.display());
-    println!("\nNext:");
-    println!(
-        "  firma run --config {}/firma-run.toml -- <agent-command>",
-        cfg.display()
-    );
-
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
 fn build_template_env() -> Result<Environment<'static>> {
@@ -155,76 +200,84 @@ fn generate_files(
     env: &Environment<'_>,
     inputs: &CollectedInputs,
 ) -> Result<Vec<(String, String)>> {
+    let has_server = matches!(inputs.mode, Mode::AgentLocal | Mode::Authority);
+    let has_connect = matches!(inputs.mode, Mode::AgentLocal | Mode::AgentRemote);
+    let has_sidecar = matches!(inputs.mode, Mode::AgentLocal | Mode::AgentRemote);
+
     let mapping_paths: Vec<String> = inputs
+        .sidecar
         .mappings
         .iter()
         .map(|m| format!("mappings/{}.toml", m.as_str()))
         .collect();
 
     let mitm_hosts: Vec<&str> = inputs
+        .sidecar
         .mappings
         .iter()
         .flat_map(Mapping::mitm_hosts)
         .copied()
         .collect();
 
-    let requested_actions = inputs.posture.requested_actions();
-    let workspace_str = inputs.workspace.to_string_lossy();
+    let requested_actions = inputs.sidecar.posture.requested_actions();
+    let workspace_str = inputs.sidecar.workspace.to_string_lossy();
     let state_dir_str = inputs.state_dir.to_string_lossy();
     let tls_dir = inputs.state_dir.join("tls");
     let tls_cert_path = tls_dir.join("authority.crt").to_string_lossy().into_owned();
     let tls_key_path = tls_dir.join("authority.key").to_string_lossy().into_owned();
-    let tls_ca_cert_path = tls_dir.join("authority-ca.crt").to_string_lossy().into_owned();
-    let (local_authority, authority_url) = match &inputs.authority {
-        AuthorityShape::Local => (true, format!("https://{}", inputs.authority_listen)),
-        AuthorityShape::Remote(url) => (false, url.clone()),
-    };
 
     let firma_toml = render(
         env,
         "firma.toml",
         context! {
-            name => inputs.name,
+            has_server,
+            has_connect,
+            has_sidecar,
+            name => inputs.sidecar.name,
             mapping_paths,
             mitm_hosts,
             requested_actions,
-            authority_listen => inputs.authority_listen,
-            local_authority,
-            authority_url,
+            authority_listen => inputs.authority.listen,
+            authority_url => inputs.authority.connect_url,
+            tls_ca_cert_path => inputs.authority.connect_ca_cert,
             state_dir => state_dir_str.as_ref(),
             tls_cert_path,
             tls_key_path,
-            tls_ca_cert_path,
         },
     )?;
-    let mapping_rules = render(
-        env,
-        "mapping-rules.toml",
-        context! { extra_hosts => inputs.extra_hosts },
-    )?;
-    let firma_run = render(
-        env,
-        "firma-run.toml",
-        context! { name => inputs.name, workspace => workspace_str.as_ref() },
-    )?;
 
-    let cedar_path = format!("policies/{}.cedar", inputs.posture.file_name());
+    let cedar_path = format!("policies/{}.cedar", inputs.sidecar.posture.file_name());
     let mut files = vec![
         ("firma.toml".into(), firma_toml),
-        ("mapping-rules.toml".into(), mapping_rules),
-        (cedar_path, inputs.posture.cedar_content().to_string()),
+        (
+            cedar_path,
+            inputs.sidecar.posture.cedar_content().to_string(),
+        ),
         (
             "issuance-policies/issuance.cedar".into(),
             TPL_CEDAR_ISSUANCE.to_string(),
         ),
-        ("firma-run.toml".into(), firma_run),
     ];
 
-    for mapping in &inputs.mappings {
-        files.push((
-            format!("mappings/{}.toml", mapping.as_str()),
-            mapping.static_content().to_string(),
-        ));
+    if has_sidecar {
+        let mapping_rules = render(
+            env,
+            "mapping-rules.toml",
+            context! { extra_hosts => inputs.sidecar.extra_hosts },
+        )?;
+        let firma_run = render(
+            env,
+            "firma-run.toml",
+            context! { name => inputs.sidecar.name, workspace => workspace_str.as_ref() },
+        )?;
+        files.push(("mapping-rules.toml".into(), mapping_rules));
+        files.push(("firma-run.toml".into(), firma_run));
+        for mapping in &inputs.sidecar.mappings {
+            files.push((
+                format!("mappings/{}.toml", mapping.as_str()),
+                mapping.static_content().to_string(),
+            ));
+        }
     }
 
     Ok(files)
@@ -246,14 +299,10 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
     let theme = ColorfulTheme::default();
     let interactive = !args.yes && dialoguer::console::Term::stderr().is_term();
 
-    let name = match args.name.as_deref() {
-        Some(v) => v.to_string(),
-        None if interactive => dialoguer::Input::with_theme(&theme)
-            .with_prompt("Agent name")
-            .default("my-agent".to_string())
-            .interact_text()
-            .context("agent name prompt")?,
-        None => "my-agent".to_string(),
+    let mode = match &args.mode {
+        Some(m) => m.clone(),
+        None if interactive => prompt_mode(&theme)?,
+        None => Mode::AgentLocal,
     };
 
     let config_dir = match &args.output_dir {
@@ -276,28 +325,125 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
     let state_dir = std::path::absolute(&state_dir)
         .with_context(|| format!("resolve path {}", state_dir.display()))?;
 
+    let authority = collect_authority_inputs(args, &mode, interactive, &theme, &state_dir)?;
+
+    let has_sidecar = matches!(mode, Mode::AgentLocal | Mode::AgentRemote);
+    let sidecar = collect_sidecar_inputs(args, has_sidecar, interactive, &theme, &config_dir)?;
+
+    Ok(CollectedInputs {
+        mode,
+        authority,
+        sidecar,
+        config_dir,
+        state_dir,
+    })
+}
+
+fn collect_authority_inputs(
+    args: &InitArgs,
+    mode: &Mode,
+    interactive: bool,
+    theme: &ColorfulTheme,
+    state_dir: &Path,
+) -> Result<AuthorityInputs> {
+    let listen = match (args.authority_listen.as_deref(), mode) {
+        (Some(addr), _) => addr.to_string(),
+        (None, Mode::Authority) if interactive => dialoguer::Input::with_theme(theme)
+            .with_prompt("Authority listen address")
+            .default("0.0.0.0:9443".to_string())
+            .interact_text()
+            .context("authority listen address prompt")?,
+        _ => "127.0.0.1:9443".to_string(),
+    };
+
+    let (connect_url, connect_ca_cert) = match mode {
+        Mode::AgentLocal => {
+            let url = format!("https://{listen}");
+            let tls_ca = state_dir
+                .join("tls")
+                .join("authority-ca.crt")
+                .to_string_lossy()
+                .into_owned();
+            (url, tls_ca)
+        }
+        Mode::AgentRemote => {
+            let url = match args.authority_url.as_deref() {
+                Some(u) => u.to_string(),
+                None if interactive => dialoguer::Input::with_theme(theme)
+                    .with_prompt("Authority URL")
+                    .interact_text()
+                    .context("authority URL prompt")?,
+                None => String::new(),
+            };
+            let ca = match args.authority_ca_cert.as_deref() {
+                Some(p) => p.to_string_lossy().into_owned(),
+                None if interactive => dialoguer::Input::with_theme(theme)
+                    .with_prompt("Path to authority CA certificate (PEM)")
+                    .interact_text()
+                    .context("authority CA cert prompt")?,
+                None => String::new(),
+            };
+            (url, ca)
+        }
+        Mode::Authority => (String::new(), String::new()),
+    };
+
+    Ok(AuthorityInputs {
+        listen,
+        connect_url,
+        connect_ca_cert,
+    })
+}
+
+fn collect_sidecar_inputs(
+    args: &InitArgs,
+    has_sidecar: bool,
+    interactive: bool,
+    theme: &ColorfulTheme,
+    config_dir: &Path,
+) -> Result<SidecarInputs> {
+    if !has_sidecar {
+        return Ok(SidecarInputs {
+            name: "authority".to_string(),
+            posture: Posture::Strict,
+            mappings: vec![],
+            extra_hosts: vec![],
+            workspace: config_dir.to_path_buf(),
+        });
+    }
+
+    let name = match args.name.as_deref() {
+        Some(v) => v.to_string(),
+        None if interactive => dialoguer::Input::with_theme(theme)
+            .with_prompt("Agent name")
+            .default("my-agent".to_string())
+            .interact_text()
+            .context("agent name prompt")?,
+        None => "my-agent".to_string(),
+    };
+
     let posture = match &args.posture {
         Some(p) => p.clone(),
-        None if interactive => prompt_posture(&theme)?,
+        None if interactive => prompt_posture(theme)?,
         None => Posture::Dev,
     };
 
     let mappings = if !args.mapping.is_empty() {
         args.mapping.clone()
     } else if interactive {
-        prompt_mappings(&theme)?
+        prompt_mappings(theme)?
     } else {
         vec![Mapping::Anthropic]
     };
 
     let extra_hosts_raw: String = match args.extra_hosts.as_deref() {
         Some(v) => v.to_string(),
-        None if interactive => dialoguer::Input::with_theme(&theme)
+        None if interactive => dialoguer::Input::with_theme(theme)
             .with_prompt("Extra hosts (comma-separated, blank for none)")
             .allow_empty(true)
             .interact_text()
             .context("extra hosts prompt")?,
-        None => String::new(), // default: no extra hosts
+        None => String::new(),
     };
     let extra_hosts: Vec<String> = extra_hosts_raw
         .split(',')
@@ -312,7 +458,7 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         let cwd = std::env::current_dir().context("get current directory")?;
         if interactive {
             let default = cwd.to_string_lossy().into_owned();
-            let s: String = dialoguer::Input::with_theme(&theme)
+            let s: String = dialoguer::Input::with_theme(theme)
                 .with_prompt("Workspace directory (agent RW access)")
                 .default(default)
                 .interact_text()
@@ -324,17 +470,39 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         }
     };
 
-    Ok(CollectedInputs {
+    Ok(SidecarInputs {
         name,
         posture,
         mappings,
         extra_hosts,
-        config_dir,
-        state_dir,
         workspace,
-        authority_listen: "127.0.0.1:50051".to_string(),
-        authority: AuthorityShape::Local,
     })
+}
+
+fn mode_name(m: &Mode) -> &'static str {
+    match m {
+        Mode::AgentLocal => "agent-local",
+        Mode::AgentRemote => "agent-remote",
+        Mode::Authority => "authority",
+    }
+}
+
+fn prompt_mode(theme: &ColorfulTheme) -> Result<Mode> {
+    let variants = Mode::value_variants();
+    let items: Vec<String> = variants
+        .iter()
+        .map(|m| format!("{:<16}  {}", mode_name(m), m.description()))
+        .collect();
+    let selection = dialoguer::Select::with_theme(theme)
+        .with_prompt("What are you configuring?")
+        .items(&items)
+        .default(0)
+        .report(false)
+        .interact()
+        .context("mode prompt")?;
+    let chosen = variants[selection].clone();
+    eprintln!("  Mode     · {}", mode_name(&chosen));
+    Ok(chosen)
 }
 
 fn prompt_posture(theme: &ColorfulTheme) -> Result<Posture> {
@@ -415,11 +583,14 @@ pub struct ScaffoldPlan {
     pub authority: AuthorityShape,
 }
 
-/// Authority deployment shape written into `[authority]` in firma.toml.
+/// Authority deployment shape for `ScaffoldPlan`.
 #[derive(Debug, Clone)]
 pub enum AuthorityShape {
     Local,
-    Remote(String),
+    Remote {
+        url: String,
+        ca_cert: Option<PathBuf>,
+    },
 }
 
 /// Resolve the runtime state directory.
@@ -447,16 +618,48 @@ pub fn resolve_state_dir(flag: Option<PathBuf>) -> Result<PathBuf, String> {
 /// Returns a formatted string on any filesystem or key-generation failure.
 pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
     let mappings = provider_to_mappings(&plan.provider);
+    let (mode, authority) = match &plan.authority {
+        AuthorityShape::Local => {
+            let connect_url = format!("https://{}", plan.authority_listen);
+            let connect_ca_cert = plan
+                .state_dir
+                .join("tls")
+                .join("authority-ca.crt")
+                .to_string_lossy()
+                .into_owned();
+            (
+                Mode::AgentLocal,
+                AuthorityInputs {
+                    listen: plan.authority_listen.clone(),
+                    connect_url,
+                    connect_ca_cert,
+                },
+            )
+        }
+        AuthorityShape::Remote { url, ca_cert } => (
+            Mode::AgentRemote,
+            AuthorityInputs {
+                listen: plan.authority_listen.clone(),
+                connect_url: url.clone(),
+                connect_ca_cert: ca_cert
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            },
+        ),
+    };
     let inputs = CollectedInputs {
-        name: plan.agent.clone(),
-        posture: Posture::Dev,
-        mappings,
-        extra_hosts: vec![],
+        mode,
+        authority,
+        sidecar: SidecarInputs {
+            name: plan.agent.clone(),
+            posture: Posture::Dev,
+            mappings,
+            extra_hosts: vec![],
+            workspace: plan.config_dir.clone(),
+        },
         config_dir: plan.config_dir.clone(),
         state_dir: plan.state_dir.clone(),
-        workspace: plan.config_dir.clone(),
-        authority_listen: plan.authority_listen.clone(),
-        authority: plan.authority.clone(),
     };
     let env = build_template_env().map_err(|e| format!("template env: {e}"))?;
     let files = generate_files(&env, &inputs).map_err(|e| format!("generate files: {e}"))?;
@@ -499,7 +702,12 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
 
     let tls_dir = plan.state_dir.join("tls");
     if plan.force && tls_dir.exists() {
-        for name in ["authority.crt", "authority.key", "authority-ca.crt", "authority-ca.key"] {
+        for name in [
+            "authority.crt",
+            "authority.key",
+            "authority-ca.crt",
+            "authority-ca.key",
+        ] {
             let p = tls_dir.join(name);
             if p.exists() {
                 std::fs::remove_file(&p).map_err(|e| format!("remove {}: {e}", p.display()))?;
@@ -538,15 +746,21 @@ mod tests {
     ) -> Vec<(String, String)> {
         let env = build_template_env().unwrap();
         let inputs = CollectedInputs {
-            name: TEST_AGENT.to_string(),
-            posture: posture.clone(),
-            mappings: mappings.to_vec(),
-            extra_hosts: extra_hosts.to_vec(),
+            mode: Mode::AgentLocal,
+            authority: AuthorityInputs {
+                listen: "127.0.0.1:9443".to_string(),
+                connect_url: "https://127.0.0.1:9443".to_string(),
+                connect_ca_cert: "/tmp/test-state/tls/authority-ca.crt".to_string(),
+            },
+            sidecar: SidecarInputs {
+                name: TEST_AGENT.to_string(),
+                posture: posture.clone(),
+                mappings: mappings.to_vec(),
+                extra_hosts: extra_hosts.to_vec(),
+                workspace: PathBuf::from(TEST_WORKSPACE),
+            },
             config_dir: PathBuf::from(TEST_WORKSPACE),
             state_dir: PathBuf::from("/tmp/test-state"),
-            workspace: PathBuf::from(TEST_WORKSPACE),
-            authority_listen: "127.0.0.1:50051".to_string(),
-            authority: AuthorityShape::Local,
         };
         generate_files(&env, &inputs).unwrap()
     }
@@ -622,7 +836,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("firma.toml");
         std::fs::write(&path, get(&files, "firma.toml")).unwrap();
-        let body = firma_config::load_section(&path, "authority").unwrap();
+        let body = firma_config::load_section(&path, "authority.server").unwrap();
         let _: firma_authority::AuthorityConfig = toml::from_str(&body).unwrap();
     }
 

@@ -46,6 +46,13 @@ pub struct SpawnRequest<'a> {
     /// `[sidecar.policy].authority_url` of the synthesized sidecar config.
     /// `None` leaves the section untouched.
     pub authority_url: Option<&'a str>,
+    /// CA cert path from `[authority.connect]` — injected into
+    /// `[sidecar.authority].ca_cert_path`. `None` leaves existing value.
+    pub authority_ca_cert: Option<PathBuf>,
+    /// Authority public key path from `[authority.connect]` — injected into
+    /// `[sidecar.authority].public_key_path` and
+    /// `[sidecar.preflight].authority_pub_key_path`. `None` leaves existing.
+    pub authority_pub_key: Option<PathBuf>,
     /// When `true`, synthesize an `http_proxy` interceptor instead of a
     /// Unix-domain socket. Set from [`ResolvedProfile::use_http_proxy_sidecar`].
     pub use_http_proxy_interceptor: bool,
@@ -144,6 +151,8 @@ impl SidecarSupervisor {
                 listen_addr: proxy_listen_addr,
                 out_path: &cfg_path,
                 authority_url: req.authority_url,
+                authority_ca_cert: req.authority_ca_cert.as_deref(),
+                authority_pub_key: req.authority_pub_key.as_deref(),
             })?;
 
             let mut child = std::process::Command::new(&req.firma_exe)

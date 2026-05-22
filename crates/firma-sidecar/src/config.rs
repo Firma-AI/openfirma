@@ -521,7 +521,10 @@ pub struct PreflightConfig {
     #[serde(default = "default_resource_scope")]
     pub resource_scope: String,
     /// Path to the Authority's Ed25519 public key file (32 raw bytes).
-    pub authority_pub_key_path: PathBuf,
+    /// Synthesized at runtime from `[authority.connect].pub_key_path` by
+    /// `firma run`; omit in firm.toml and let firma-run inject it.
+    #[serde(default)]
+    pub authority_pub_key_path: Option<PathBuf>,
     /// Requested token TTL in seconds (default: 900 / 15 min).
     /// Override for long-running batch agents via `preflight.ttl_seconds = <n>`.
     #[serde(default = "default_preflight_ttl_seconds")]
@@ -541,8 +544,10 @@ impl PreflightConfig {
         if self.requested_actions.is_empty() {
             return Err("preflight.requested_actions must not be empty".into());
         }
-        if self.authority_pub_key_path.as_os_str().is_empty() {
-            return Err("preflight.authority_pub_key_path must not be empty".into());
+        if let Some(ref p) = self.authority_pub_key_path
+            && p.as_os_str().is_empty()
+        {
+            return Err("preflight.authority_pub_key_path must not be empty when set".into());
         }
         Ok(())
     }

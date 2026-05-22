@@ -126,14 +126,11 @@ async fn build_report(args: Args) -> RenderedReport {
 
     // 5. authority reachability
     let authority_endpoint: Option<Endpoint> = parsed_config.as_ref().and_then(|c| {
-        match c.section("authority").and_then(|body| {
+        match c.section("authority.server").and_then(|body| {
             toml::from_str::<firma_authority::AuthorityConfig>(&body).map_err(|e| e.to_string())
         }) {
             Ok(ac) => reachability::endpoint_from_authority(&ac),
-            Err(error) => {
-                warn!(?error, "could not load authority config");
-                None
-            }
+            Err(_) => None, // agent-remote configs have no [authority.server] — skip
         }
     });
     report.push(
