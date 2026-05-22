@@ -1,0 +1,243 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1200 490" xmlns="http://www.w3.org/2000/svg" role="img">
+  <rect width="1200" height="490" fill="#FFFFFF"/>
+        <defs>
+          <radialGradient id="spk" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#7DDADA" stop-opacity="1"></stop>
+            <stop offset="55%" stop-color="#1F8E8E" stop-opacity="0.95"></stop>
+            <stop offset="100%" stop-color="#1F8E8E" stop-opacity="0"></stop>
+          </radialGradient>
+          <radialGradient id="spkD" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#FFC4BF" stop-opacity="1"></stop>
+            <stop offset="55%" stop-color="#B85450" stop-opacity="0.95"></stop>
+            <stop offset="100%" stop-color="#B85450" stop-opacity="0"></stop>
+          </radialGradient>
+          <linearGradient id="scan" x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0%"  stop-color="rgba(31,142,142,0)"></stop>
+            <stop offset="15%" stop-color="rgba(31,142,142,0.05)"></stop>
+            <stop offset="30%" stop-color="rgba(31,142,142,0.18)"></stop>
+            <stop offset="45%" stop-color="rgba(31,142,142,0.42)"></stop>
+            <stop offset="50%" stop-color="rgba(31,142,142,0.55)"></stop>
+            <stop offset="55%" stop-color="rgba(31,142,142,0.42)"></stop>
+            <stop offset="70%" stop-color="rgba(31,142,142,0.18)"></stop>
+            <stop offset="85%" stop-color="rgba(31,142,142,0.05)"></stop>
+            <stop offset="100%" stop-color="rgba(31,142,142,0)"></stop>
+          </linearGradient>
+          <clipPath id="scLineClip">
+            <rect x="135" y="230" width="930" height="112" rx="10"></rect>
+          </clipPath>
+        </defs>
+
+        <style>
+          .lbl-mn { font-family: 'JetBrains Mono', monospace; font-size: 13px; fill: #7E8B87; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 500; }
+          .lbl-sm { font-family: 'Inter', sans-serif; font-size: 14px; fill: #4A5854; }
+          .lbl-fr { font-family: 'Inter', sans-serif; font-size: 24px; fill: #0F1A1A; font-weight: 500; letter-spacing: -0.3px; }
+
+          .agent-box { fill: #FFFFFF; stroke: #C8D3CF; stroke-width: 1.2; }
+          .auth-box { fill: rgba(31,142,142,0.06); stroke: #1F8E8E; stroke-width: 1.4; }
+          .sc-box { fill: rgba(31,142,142,0.08); stroke: #1F8E8E; stroke-width: 1.5; }
+          .surf-box { fill: #FFFFFF; stroke: #C8D3CF; stroke-width: 1; }
+          .line-thin { stroke: #C8D3CF; stroke-width: 1; fill: none; }
+          .line-dash { stroke: #C8D3CF; stroke-width: 1; stroke-dasharray: 3 4; fill: none; }
+
+          .glow { animation: glow 3.4s ease-in-out infinite; }
+          @keyframes glow {
+            0%, 100% { stroke-opacity: 0.7; }
+            50%      { stroke-opacity: 1; }
+          }
+          .glow-strong { animation: glow-strong 3s ease-in-out infinite; }
+          @keyframes glow-strong {
+            0%, 100% { stroke-width: 1.4; filter: drop-shadow(0 0 0 rgba(31,142,142,0)); }
+            50%      { stroke-width: 1.9; filter: drop-shadow(0 0 6px rgba(31,142,142,0.35)); }
+          }
+
+          .trickle { r: 3; fill: url(#spk); opacity: 0; animation: trickle 1.6s linear infinite; }
+          @keyframes trickle {
+            0%   { opacity: 0; }
+            12%  { opacity: 1; }
+            85%  { opacity: 1; }
+            100% { opacity: 0; }
+          }
+          .t-aa { animation-name: t-aa; }
+          @keyframes t-aa {
+            0%   { transform: translate(600px, 98px); opacity: 0; }
+            12%  { opacity: 1; }
+            85%  { opacity: 1; transform: translate(600px, 128px); }
+            100% { opacity: 0; transform: translate(600px, 128px); }
+          }
+          .t-aa-1 { animation-delay: 0s; }
+          .t-aa-2 { animation-delay: 0.4s; }
+          .t-aa-3 { animation-delay: 0.8s; }
+          .t-aa-4 { animation-delay: 1.2s; }
+          .t-as { animation-name: t-as; }
+          @keyframes t-as {
+            0%   { transform: translate(600px, 208px); opacity: 0; }
+            12%  { opacity: 1; }
+            85%  { opacity: 1; transform: translate(600px, 230px); }
+            100% { opacity: 0; transform: translate(600px, 230px); }
+          }
+          .t-as-1 { animation-delay: 0s; }
+          .t-as-2 { animation-delay: 0.55s; }
+          .t-as-3 { animation-delay: 1.1s; }
+
+          .scan-line { animation: scan 3s linear infinite; }
+          @keyframes scan {
+            0%   { transform: translateX(25px);  opacity: 0; }
+            12%  { opacity: 1; }
+            88%  { opacity: 1; }
+            100% { transform: translateX(845px); opacity: 0; }
+          }
+
+          .call-spark { filter: drop-shadow(0 0 6px rgba(31,142,142,0.5)); }
+
+          .agent-name {
+            font-family: 'Inter', sans-serif;
+            font-size: 24px;
+            font-weight: 500;
+            fill: #0F1A1A;
+            letter-spacing: -0.5px;
+            text-anchor: middle;
+            opacity: 0;
+            animation: name-rot 12s infinite;
+          }
+          .name-1 { animation-delay: 0s; }
+          .name-2 { animation-delay: 4s; }
+          .name-3 { animation-delay: 8s; }
+          @keyframes name-rot {
+            0%   { opacity: 0; transform: translateY(6px); }
+            2%   { opacity: 1; transform: translateY(0); }
+            30%  { opacity: 1; transform: translateY(0); }
+            33%  { opacity: 0; transform: translateY(-6px); }
+            100% { opacity: 0; transform: translateY(-6px); }
+          }
+
+          .surf-1 { animation: surf-recv-1 12s ease-out infinite; }
+          .surf-2 { animation: surf-recv-2 12s ease-out infinite; }
+          .surf-4 { animation: surf-recv-4 12s ease-out infinite; }
+          @keyframes surf-recv-1 {
+            0%, 22% { filter: none; }
+            25%     { filter: drop-shadow(0 0 14px rgba(31,142,142,0.75)); }
+            32%, 100% { filter: none; }
+          }
+          @keyframes surf-recv-2 {
+            0%, 37% { filter: none; }
+            40%     { filter: drop-shadow(0 0 14px rgba(31,142,142,0.75)); }
+            47%, 100% { filter: none; }
+          }
+          @keyframes surf-recv-4 {
+            0%      { filter: drop-shadow(0 0 14px rgba(31,142,142,0.75)); }
+            7%, 97% { filter: none; }
+            100%    { filter: drop-shadow(0 0 14px rgba(31,142,142,0.75)); }
+          }
+
+          .deny-lbl { opacity: 0; animation: deny-show 12s ease-in-out infinite; }
+          @keyframes deny-show {
+            0%, 56% { opacity: 0; }
+            58%, 70% { opacity: 1; }
+            72%, 100% { opacity: 0; }
+          }
+        </style>
+
+        <!-- AGENT (top, single, with rotating name) -->
+        <rect x="440" y="14" width="320" height="84" rx="10" class="agent-box glow"></rect>
+        <text class="lbl-mn" x="600" y="40" text-anchor="middle">// agent</text>
+        <text class="agent-name name-1" x="600" y="78">claude-code</text>
+        <text class="agent-name name-2" x="600" y="78">custom agent</text>
+        <text class="agent-name name-3" x="600" y="78">openclaw</text>
+
+        <!-- Line: Agent → Authority -->
+        <line x1="600" y1="98" x2="600" y2="128" class="line-thin"></line>
+        <!-- Continuous trickle on agent → authority -->
+        <circle class="trickle t-aa t-aa-1"></circle>
+        <circle class="trickle t-aa t-aa-2"></circle>
+        <circle class="trickle t-aa t-aa-3"></circle>
+        <circle class="trickle t-aa t-aa-4"></circle>
+
+        <!-- AUTHORITY (session-level, single, simple label) -->
+        <rect x="440" y="128" width="320" height="80" rx="10" class="auth-box glow-strong"></rect>
+        <text class="lbl-mn auth-label" x="600" y="152" text-anchor="middle">// authority · session-level</text>
+        <text class="lbl-fr" x="600" y="188" style="fill:#176E6E;font-size:24px" text-anchor="middle">Authority</text>
+
+        <!-- Line: Authority → Sidecar -->
+        <line x1="600" y1="208" x2="600" y2="230" class="line-thin"></line>
+        <!-- Continuous trickle on authority → sidecar -->
+        <circle class="trickle t-as t-as-1"></circle>
+        <circle class="trickle t-as t-as-2"></circle>
+        <circle class="trickle t-as t-as-3"></circle>
+
+        <!-- SIDECAR (call-level, full width) -->
+        <rect x="135" y="230" width="930" height="112" rx="10" class="sc-box glow-strong"></rect>
+        <text class="lbl-mn" x="600" y="256" text-anchor="middle">// sidecar · call-level</text>
+        <text class="lbl-fr" x="600" y="298" style="fill:#176E6E;font-size:24px" text-anchor="middle">Sidecar</text>
+        <text class="lbl-sm" x="600" y="326" style="fill:#176E6E" text-anchor="middle">intercepts every outbound call</text>
+
+        <!-- Scan line on sidecar -->
+        <rect class="scan-line" x="0" y="230" width="220" height="112" fill="url(#scan)" opacity="0.6" clip-path="url(#scLineClip)"></rect>
+
+        <!-- Lines: Sidecar → each surface (fan out) -->
+        <line x1="600" y1="342" x2="240" y2="395" class="line-dash"></line>
+        <line x1="600" y1="342" x2="480" y2="395" class="line-dash"></line>
+        <line x1="600" y1="342" x2="720" y2="395" class="line-dash"></line>
+        <line x1="600" y1="342" x2="960" y2="395" class="line-dash"></line>
+
+        <!-- EXECUTION SURFACES — 4 varied (terminal · internal · api · browser) -->
+        <g class="surf-recv surf-1">
+          <rect x="135" y="395" width="210" height="80" rx="8" class="surf-box"></rect>
+          <text class="lbl-mn" x="240" y="420" text-anchor="middle">// shell exec</text>
+          <text class="lbl-fr" x="240" y="452" style="font-size:20px" text-anchor="middle">terminal</text>
+        </g>
+
+        <g class="surf-recv surf-2">
+          <rect x="375" y="395" width="210" height="80" rx="8" class="surf-box"></rect>
+          <text class="lbl-mn" x="480" y="420" text-anchor="middle">// internal tools</text>
+          <text class="lbl-fr" x="480" y="452" style="font-size:20px" text-anchor="middle">internal-api</text>
+        </g>
+
+        <g>
+          <rect x="615" y="395" width="210" height="80" rx="8" class="surf-box"></rect>
+          <text class="lbl-mn" x="720" y="420" text-anchor="middle">// api</text>
+          <text class="lbl-fr" x="720" y="452" style="font-size:20px" text-anchor="middle">github · stripe</text>
+        </g>
+
+        <g class="surf-recv surf-4">
+          <rect x="855" y="395" width="210" height="80" rx="8" class="surf-box"></rect>
+          <text class="lbl-mn" x="960" y="420" text-anchor="middle">// automation</text>
+          <text class="lbl-fr" x="960" y="452" style="font-size:20px" text-anchor="middle">browser</text>
+        </g>
+
+        <!-- Deny label flashes when cs-3 is denied -->
+        <g class="deny-lbl">
+          <text class="lbl-mn" x="780" y="294" text-anchor="start" style="fill:#B85450; font-weight:700; font-size:14px">DENY</text>
+        </g>
+
+        <!-- Main call sparks (4, staggered, constant speed across paths) -->
+        <!-- cs-1: agent → sidecar → terminal (active 0–0.25 of cycle) -->
+        <circle class="call-spark" cx="0" cy="0" r="8" fill="url(#spk)" opacity="0">
+          <animateMotion dur="12s" repeatCount="indefinite" calcMode="linear" keyTimes="0; 0.090; 0.250; 1" keyPoints="0; 0.359; 1; 1" path="M 600 56 L 600 342 L 240 395"></animateMotion>
+          <animate attributeName="opacity" dur="12s" repeatCount="indefinite" values="0; 1; 1; 0; 0" keyTimes="0; 0.02; 0.22; 0.25; 1"></animate>
+        </circle>
+
+        <!-- cs-2: agent → sidecar → internal-api (active 0.25–0.403) -->
+        <circle class="call-spark" cx="0" cy="0" r="8" fill="url(#spk)" opacity="0">
+          <animateMotion dur="12s" repeatCount="indefinite" calcMode="linear" keyTimes="0; 0.250; 0.340; 0.403; 1" keyPoints="0; 0; 0.588; 1; 1" path="M 600 56 L 600 342 L 480 395"></animateMotion>
+          <animate attributeName="opacity" dur="12s" repeatCount="indefinite" values="0; 0; 1; 1; 0; 0" keyTimes="0; 0.250; 0.270; 0.380; 0.403; 1"></animate>
+        </circle>
+
+        <!-- cs-3a: teal spark travels into sidecar (active 0.50–0.575) -->
+        <circle class="call-spark" cx="0" cy="0" r="8" fill="url(#spk)" opacity="0">
+          <animateMotion dur="12s" repeatCount="indefinite" calcMode="linear" keyTimes="0; 0.500; 0.575; 1" keyPoints="0; 0; 1; 1" path="M 600 56 L 600 286"></animateMotion>
+          <animate attributeName="opacity" dur="12s" repeatCount="indefinite" values="0; 0; 1; 1; 0; 0" keyTimes="0; 0.500; 0.520; 0.572; 0.575; 1"></animate>
+        </circle>
+
+        <!-- cs-3b: red ball appears at sidecar, blinks 3 times, then disappears -->
+        <circle cx="600" cy="286" r="9" fill="url(#spkD)" opacity="0" style="filter: drop-shadow(0 0 8px rgba(184,84,80,0.7));">
+          <animate attributeName="opacity" dur="12s" repeatCount="indefinite" calcMode="discrete" values="0; 1; 0; 1; 0; 1; 0; 0" keyTimes="0; 0.580; 0.605; 0.620; 0.645; 0.660; 0.685; 1"></animate>
+        </circle>
+
+        <!-- cs-4: agent → sidecar → browser (active 0.75–1.00) -->
+        <circle class="call-spark" cx="0" cy="0" r="8" fill="url(#spk)" opacity="0">
+          <animateMotion dur="12s" repeatCount="indefinite" calcMode="linear" keyTimes="0; 0.750; 0.840; 1" keyPoints="0; 0; 0.359; 1" path="M 600 56 L 600 342 L 960 395"></animateMotion>
+          <animate attributeName="opacity" dur="12s" repeatCount="indefinite" values="0; 0; 1; 1; 0" keyTimes="0; 0.750; 0.770; 0.980; 1"></animate>
+        </circle>
+
+      </svg>
