@@ -242,6 +242,54 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
 }
 
 #[test]
+fn agent_remote_switch_drops_local_authority_section() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+
+    run_init(&config_dir, &state_dir);
+
+    let output = firma()
+        .args([
+            "config",
+            "--yes",
+            "--dry-run",
+            "--force",
+            "--mode",
+            "agent-remote",
+            "--output-dir",
+        ])
+        .arg(&config_dir)
+        .args([
+            "--authority-url",
+            "https://authority.example.com:9443",
+            "--authority-ca-cert",
+        ])
+        .arg(state_dir.join("remote-ca.crt"))
+        .args(["--authority-pub-key"])
+        .arg(state_dir.join("remote-authority.pub"))
+        .output()
+        .expect("spawn remote switch firma config");
+    assert!(
+        output.status.success(),
+        "remote switch failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let firma_toml = extract_dry_run_file(&output.stdout, "firma.toml");
+    let value: toml::Value = toml::from_str(&firma_toml).unwrap();
+    assert!(
+        value.get("authority").is_none(),
+        "agent-remote config must not retain [authority]:\n{firma_toml}"
+    );
+    assert_eq!(
+        value["sidecar"]["authority"]["url"].as_str(),
+        Some("https://authority.example.com:9443"),
+    );
+}
+
+#[test]
 fn init_writes_parseable_config() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let config_dir = tmp.path().join("config");
