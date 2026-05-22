@@ -597,7 +597,7 @@ Validation:
 
 Tuning for the background Authority stream clients
 (`WatchPolicyBundle`, `WatchRevocations`). Only consulted when
-`policy.authority_url` is set; when unset the sidecar runs in dev
+`authority.url` is set; when unset the sidecar runs in dev
 mode and this section is ignored.
 
 | Field                                  | Type | Default | Description                                                                                                                 |

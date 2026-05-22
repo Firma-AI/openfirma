@@ -171,7 +171,7 @@ impl AuthoritySupervisor {
         for attempt in 0..MAX_BIND_ATTEMPTS {
             let listen_addr = select_loopback_v6_port()?;
             let authority_cfg = format!(
-                "[authority.server]\n\
+                "[authority]\n\
                  listen_addr = \"{listen_addr}\"\n\
                  policy_dir = \"{policy}\"\n\
                  issuance_policy_dir = \"{policy}\"\n\

@@ -17,9 +17,9 @@ use crate::authority_client::{self, AuthorityClientHandle, AuthorityDeps};
 use crate::config;
 use crate::startup::pipeline::PipelineRuntime;
 
-/// Spawn the Authority stream clients when `policy.authority_url` is
-/// set. Uses the shared policy snapshot, revocation store, and
-/// readiness flag owned by the [`PipelineRuntime`].
+/// Spawn the Authority stream clients when `authority.url` is set.
+/// Uses the shared policy snapshot, revocation store, and readiness
+/// flag owned by the [`PipelineRuntime`].
 ///
 /// # Errors
 ///
@@ -31,8 +31,8 @@ pub fn spawn_authority_client(
     runtime: &PipelineRuntime,
     cancel: CancellationToken,
 ) -> anyhow::Result<Option<AuthorityClientHandle>> {
-    let Some(authority_url) = config.policy.authority_url.as_deref() else {
-        tracing::debug!("policy.authority_url not set; Authority stream clients disabled");
+    let Some(authority_url) = config.authority.url.as_deref() else {
+        tracing::debug!("authority.url not set; Authority stream clients disabled");
         return Ok(None);
     };
 

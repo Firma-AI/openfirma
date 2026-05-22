@@ -55,7 +55,7 @@ fn issue_seed() -> IssuedSeed {
         &auth_toml,
         format!(
             r#"
-[authority.server]
+[authority]
 listen_addr = "127.0.0.1:0"
 policy_dir = {policy_dir}
 revocation_file = {revocation}

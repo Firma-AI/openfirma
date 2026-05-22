@@ -117,7 +117,9 @@ drain_timeout_secs = 30
 
 [sidecar.policy]
 dir = '{policies}'
-authority_url = "{authority_url}"
+
+[sidecar.authority]
+url = "{authority_url}"
 
 [sidecar.ca]
 dir = '{ca}'

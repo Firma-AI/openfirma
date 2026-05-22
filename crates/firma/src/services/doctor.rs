@@ -126,7 +126,7 @@ async fn build_report(args: Args) -> RenderedReport {
 
     // 5. authority reachability
     let authority_endpoint: Option<Endpoint> = parsed_config.as_ref().and_then(|c| {
-        c.section("authority.server")
+        c.section("authority")
             .ok()
             .and_then(|body| toml::from_str::<firma_authority::AuthorityConfig>(&body).ok())
             .and_then(|ac| reachability::endpoint_from_authority(&ac))

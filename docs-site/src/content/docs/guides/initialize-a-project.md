@@ -32,8 +32,8 @@ Config lands in `.firma/` inside the current directory, or an explicit
 
 | Mode            | What it scaffolds                                                              |
 | --------------- | ------------------------------------------------------------------------------ |
-| `agent-local`   | Sidecar + co-located mini-authority (`[authority.server]` + `[authority.connect]`) |
-| `agent-remote`  | Sidecar only, pointing at an existing authority (`[authority.connect]`)        |
+| `agent-local`   | Sidecar + co-located mini-authority (`[authority]` + `[sidecar.authority]`)        |
+| `agent-remote`  | Sidecar only, pointing at an existing authority (`[sidecar.authority]`)            |
 | `authority`     | Standalone authority server — no sidecar config                               |
 
 ## Flags
@@ -107,19 +107,21 @@ firma config --yes --dry-run
 
 ## Generated `firma.toml` structure
 
-`agent-local` emits both sections. `agent-remote` emits only
-`[authority.connect]`. `authority` mode emits only `[authority.server]`.
+`agent-local` emits both sections. `agent-remote` emits only the
+`[sidecar.authority]` connect block. `authority` mode emits only
+`[authority]`.
 
 ```toml
-[authority.server]            # agent-local and authority modes
+[authority]                   # agent-local and authority modes
 listen_addr   = "127.0.0.1:9443"
 key_file      = "/path/to/state/authority.key"
 # ...
 
-[authority.connect]           # agent-local and agent-remote modes
-url           = "https://127.0.0.1:9443"
-ca_cert_path  = "/path/to/state/tls/authority-ca.crt"
-pub_key_path  = "/path/to/state/authority.pub"
+[sidecar.authority]           # agent-local and agent-remote modes
+url             = "https://127.0.0.1:9443"
+ca_cert_path    = "/path/to/state/tls/authority-ca.crt"
+public_key_path = "/path/to/state/authority.pub"
+# ... plus connect_timeout_secs / reconnect_* / revocation_* tuning
 
 [sidecar.preflight]
 agent_id          = "my-agent"

@@ -21,15 +21,12 @@ pub fn check(firma_toml: &Path) -> Check {
         }
     };
 
-    // [authority.server] is optional — agent-remote configs have no server section.
-    if let Ok(body) = parsed.section("authority.server")
+    // [authority] is optional — agent-remote configs have no server section.
+    if let Ok(body) = parsed.section("authority")
         && let Err(error) = toml::from_str::<firma_authority::AuthorityConfig>(&body)
     {
-        return Check::fail(
-            "config parsed",
-            format!("[authority.server]: {display}: {error}"),
-        )
-        .with_detail("path", display);
+        return Check::fail("config parsed", format!("[authority]: {display}: {error}"))
+            .with_detail("path", display);
     }
 
     let sidecar_body = match parsed.section("sidecar") {
@@ -60,8 +57,8 @@ mod tests {
     }
 
     #[test]
-    fn ok_when_no_authority_server_section_agent_remote() {
-        // agent-remote configs have no [authority.server] — should not fail.
+    fn ok_when_no_authority_section_agent_remote() {
+        // agent-remote configs have no [authority] — should not fail.
         let tmp = tempfile::tempdir().unwrap();
         let p = write(
             tmp.path(),
@@ -72,24 +69,21 @@ mod tests {
     }
 
     #[test]
-    fn fail_when_authority_server_section_invalid() {
+    fn fail_when_authority_section_invalid() {
         let tmp = tempfile::tempdir().unwrap();
         let p = write(
             tmp.path(),
-            "[authority.server]\nmax_ttl_seconds = \"not-a-number\"\n",
+            "[authority]\nmax_ttl_seconds = \"not-a-number\"\n",
         );
         let c = check(&p);
         assert_eq!(c.status, Status::Fail);
-        assert!(c.reason.contains("[authority.server]"), "got {c:?}");
+        assert!(c.reason.contains("[authority]"), "got {c:?}");
     }
 
     #[test]
     fn fail_when_sidecar_section_missing() {
         let tmp = tempfile::tempdir().unwrap();
-        let p = write(
-            tmp.path(),
-            "[authority.server]\nlisten_addr = \"127.0.0.1:0\"\n",
-        );
+        let p = write(tmp.path(), "[authority]\nlisten_addr = \"127.0.0.1:0\"\n");
         let c = check(&p);
         assert_eq!(c.status, Status::Fail);
         assert!(c.reason.contains("[sidecar]"), "got {c:?}");
@@ -104,11 +98,11 @@ mod tests {
     }
 
     #[test]
-    fn ok_when_authority_server_and_sidecar_parse() {
+    fn ok_when_authority_and_sidecar_parse() {
         let tmp = tempfile::tempdir().unwrap();
         let p = write(
             tmp.path(),
-            "[authority.server]\nlisten_addr = \"127.0.0.1:0\"\n\n[sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:8080\"\n",
+            "[authority]\nlisten_addr = \"127.0.0.1:0\"\n\n[sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:8080\"\n",
         );
         let c = check(&p);
         assert_eq!(c.status, Status::Ok, "got {c:?}");

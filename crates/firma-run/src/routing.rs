@@ -90,9 +90,9 @@ pub struct AutostartFlags {
 /// Resolved Authority for the current run.
 pub struct ResolvedAuthority {
     pub url: String,
-    /// CA cert path from `[authority.connect]`, if present.
+    /// CA cert path from `[sidecar.authority]`, if present.
     pub ca_cert_path: Option<PathBuf>,
-    /// Authority public key path from `[authority.connect]`, if present.
+    /// Authority public key path from `[sidecar.authority]`, if present.
     pub pub_key_path: Option<PathBuf>,
     pub supervisor: Option<crate::authority::AuthoritySupervisor>,
 }
@@ -308,11 +308,11 @@ pub fn resolve_authority(
 ) -> Result<ResolvedAuthority, RunError> {
     let selection = crate::authority::resolve(cli, flags.no_autostart, user_config_path, prompt)?;
 
-    // Read [authority.connect] for cert/key paths regardless of selection mode.
+    // Read [sidecar.authority] for cert/key paths regardless of selection mode.
     let connect =
         crate::authority::config::read_authority(user_config_path)?.and_then(|s| s.connect);
     let ca_cert_path = connect.as_ref().and_then(|c| c.ca_cert_path.clone());
-    let pub_key_path = connect.as_ref().and_then(|c| c.pub_key_path.clone());
+    let pub_key_path = connect.as_ref().and_then(|c| c.public_key_path.clone());
 
     match selection {
         crate::authority::AuthoritySelection::Remote(url) => {

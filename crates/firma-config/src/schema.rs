@@ -30,7 +30,7 @@ impl FirmaConfig {
 
     /// The named section body re-serialized as standalone TOML.
     ///
-    /// Supports dotted paths (e.g. `"authority.server"`) to address
+    /// Supports dotted paths (e.g. `"sidecar.authority"`) to address
     /// sub-tables. A missing section at any level is a hard error
     /// (fail-closed).
     ///
@@ -100,7 +100,7 @@ mod tests {
         let p = tmp.path().join("firma.toml");
         std::fs::write(
             &p,
-            "[sidecar.interceptor]\nmode = \"http_proxy\"\n[sidecar.policy]\nauthority_url = \"http://x\"\n",
+            "[sidecar.interceptor]\nmode = \"http_proxy\"\n[sidecar.authority]\nurl = \"http://x\"\n",
         )
         .unwrap();
         let out = load_section(&p, "sidecar").unwrap();
@@ -110,7 +110,7 @@ mod tests {
                 .and_then(toml::Value::as_table)
                 .is_some()
         );
-        assert!(t.get("policy").and_then(toml::Value::as_table).is_some());
+        assert!(t.get("authority").and_then(toml::Value::as_table).is_some());
     }
 
     #[test]
@@ -128,16 +128,13 @@ mod tests {
         let p = tmp.path().join("firma.toml");
         std::fs::write(
             &p,
-            "[authority.server]\nlisten_addr = \"127.0.0.1:9443\"\n[authority.connect]\nurl = \"https://x\"\n",
+            "[sidecar.policy]\ndir = \".\"\n[sidecar.authority]\nurl = \"https://x\"\n",
         )
         .unwrap();
-        let server = load_section(&p, "authority.server").unwrap();
-        let t: toml::Table = server.parse().unwrap();
-        assert_eq!(
-            t.get("listen_addr").and_then(toml::Value::as_str),
-            Some("127.0.0.1:9443")
-        );
-        let connect = load_section(&p, "authority.connect").unwrap();
+        let policy = load_section(&p, "sidecar.policy").unwrap();
+        let t: toml::Table = policy.parse().unwrap();
+        assert_eq!(t.get("dir").and_then(toml::Value::as_str), Some("."));
+        let connect = load_section(&p, "sidecar.authority").unwrap();
         let t2: toml::Table = connect.parse().unwrap();
         assert_eq!(
             t2.get("url").and_then(toml::Value::as_str),
@@ -149,8 +146,8 @@ mod tests {
     fn dotted_path_missing_is_an_error() {
         let tmp = tempdir().unwrap();
         let p = tmp.path().join("firma.toml");
-        std::fs::write(&p, "[authority.connect]\nurl = \"https://x\"\n").unwrap();
-        let err = load_section(&p, "authority.server").unwrap_err();
-        assert!(err.contains("authority.server"), "error: {err}");
+        std::fs::write(&p, "[sidecar.policy]\ndir = \".\"\n").unwrap();
+        let err = load_section(&p, "sidecar.authority").unwrap_err();
+        assert!(err.contains("sidecar.authority"), "error: {err}");
     }
 }

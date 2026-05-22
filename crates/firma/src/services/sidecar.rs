@@ -132,12 +132,12 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         None
     };
 
-    let preflight = match (&config.preflight, config.policy.authority_url.as_deref()) {
+    let preflight = match (&config.preflight, config.authority.url.as_deref()) {
         (Some(pf_config), Some(authority_url)) => {
             Some(startup::run_preflight(pf_config, authority_url, ca_cert_pem.as_deref()).await?)
         }
         (Some(_), None) => {
-            anyhow::bail!("[preflight] is configured but policy.authority_url is not set");
+            anyhow::bail!("[preflight] is configured but authority.url is not set");
         }
         (None, _) => None,
     };
@@ -218,8 +218,8 @@ fn build_startup_report<'a>(
         startup::compute_policy_bundle_version(&config.policy.dir)
             .unwrap_or_else(|_| ("00000000".to_string(), 0));
     let authority_endpoint = config
-        .policy
-        .authority_url
+        .authority
+        .url
         .clone()
         .unwrap_or_else(|| "(disabled)".to_string());
 

@@ -394,6 +394,7 @@ fn revocation(token_id: &str, reason: &str) -> RevocationEvent {
 
 fn test_config() -> AuthorityConfig {
     AuthorityConfig {
+        url: None,
         connect_timeout_secs: 2,
         reconnect_min_backoff_ms: 50,
         reconnect_max_backoff_secs: 1,

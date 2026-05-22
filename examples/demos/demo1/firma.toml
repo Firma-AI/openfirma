@@ -34,7 +34,6 @@ strict_hosts = ["httpbin.org"]
 
 [sidecar.policy]
 dir = "."
-authority_url = "http://127.0.0.1:50051"
 
 [sidecar.ca]
 dir = "examples/demos/demo1/.runtime/generated-firma-ca"
@@ -62,6 +61,7 @@ file_path = ".runtime/audit.jsonl"
 signing_key_path = ".runtime/audit.key"
 
 [sidecar.authority]
+url = "http://127.0.0.1:50051"
 connect_timeout_secs = 10
 reconnect_min_backoff_ms = 250
 reconnect_max_backoff_secs = 30
