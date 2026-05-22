@@ -138,6 +138,8 @@ The revoked Sidecar's next reconnect attempt will be rejected at the TLS handsha
 
 For immediate disconnection, restart the Authority; this terminates all active connections.
 
+Revocation model note (V1.1): Authority-side mTLS currently enforces revocation operationally via allow-list updates (`authorized_clients.toml`) and certificate rotation/expiry. It does not perform CRL fetching or OCSP checks in the TLS verifier in this release.
+
 ## Failure modes
 
 | Condition | Behavior |
@@ -149,6 +151,7 @@ For immediate disconnection, restart the Authority; this terminates all active c
 | `authorized_clients_path` is empty (no entries) | Authority starts, but all clients are rejected |
 | Server cert missing/invalid at startup | Authority exits at startup |
 | Wrong server CA on Sidecar | Server TLS verification fails; same as V1 cert-mismatch behavior |
+| Client cert is PKI-revoked by CRL/OCSP only (still signed by trusted CA and still allow-listed) | No automatic rejection in V1.1; remove identity from allow-list to revoke access |
 | Both `tls_client_cert_path`/`tls_client_key_path` set without the other | Sidecar config validation rejects startup |
 | `mtls_client_ca_cert_path` set without TLS server cert | Authority exits at startup with a validation error |
 
