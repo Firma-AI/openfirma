@@ -165,6 +165,12 @@ INFO firma_sidecar: sidecar ready
 
 The `sidecar ready` line is your signal that the Sidecar accepted the config and is enforcing.
 
+When `policy.authority_url` is set, `ready` is held back until both the
+policy-bundle and revocation streams have hydrated — so the line also means
+policy is in place and the first request through the proxy can't race ahead of
+it. With no Authority configured, the streams are pre-seeded ready and the line
+fires immediately.
+
 ## Step 7: Send traffic through it
 
 In a second terminal, route a couple of curl calls through the proxy:

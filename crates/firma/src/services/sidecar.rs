@@ -147,7 +147,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         startup::spawn_authority_client(&config, &pipeline_runtime, exit.clone())?;
     let connector_registry = startup::build_connector_registry(&config.connector)?;
     let handler = Arc::new(handler::RequestHandler::new(
-        pipeline_runtime.pipeline,
+        Arc::clone(&pipeline_runtime.pipeline),
         connector_registry,
         audit_payload_tx,
     ));
@@ -157,13 +157,22 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
 
     let local_exec_handle = startup::spawn_local_exec_endpoint(&config, exit.clone())?;
 
-    emit_ready_sequence(
+    let report = build_startup_report(
         &resolved.config_file,
         &config,
         pipeline_runtime.mapping_rules_loaded,
         &interceptor.listen_addr,
     );
+    startup::log_pre_ready_sequence(&report);
     emit_operator_routing_hints(&config, &interceptor.listen_addr);
+
+    // Hold `ready` until Authority streams hydrate so the first
+    // wrapped-agent call cannot race the readiness gate (FIR-183).
+    // `wait_until_fully_ready` returns immediately when no Authority is
+    // configured because the pipeline pre-seeds both readiness flags as
+    // true in that mode.
+    wait_for_streams_ready(&pipeline_runtime, exit.clone()).await;
+    startup::log_ready_line();
 
     let authority_stream_tasks = async {
         if let Some(handle) = authority_handle {
@@ -188,12 +197,23 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     Ok(ExitCode::SUCCESS)
 }
 
-fn emit_ready_sequence(
-    config_path: &Path,
-    config: &config::SidecarConfig,
+async fn wait_for_streams_ready(runtime: &startup::PipelineRuntime, cancel: CancellationToken) {
+    if runtime.readiness.snapshot().fully_ready() {
+        return;
+    }
+    debug!("awaiting authority stream hydration before emitting ready");
+    tokio::select! {
+        () = runtime.readiness.wait_until_fully_ready() => {}
+        () = cancel.cancelled() => {}
+    }
+}
+
+fn build_startup_report<'a>(
+    config_path: &'a Path,
+    config: &'a config::SidecarConfig,
     mapping_rules: usize,
     interceptor_addr: &str,
-) {
+) -> startup::StartupReport<'a> {
     let (policy_bundle_version, policy_count) =
         startup::compute_policy_bundle_version(&config.policy.dir)
             .unwrap_or_else(|_| ("00000000".to_string(), 0));
@@ -203,7 +223,7 @@ fn emit_ready_sequence(
         .clone()
         .unwrap_or_else(|| "(disabled)".to_string());
 
-    startup::log_ready_sequence(&startup::StartupReport {
+    startup::StartupReport {
         config_path,
         mapping_rules,
         policy_bundle_version,
@@ -212,7 +232,7 @@ fn emit_ready_sequence(
         connector_hosts: config.connector.hosts.len(),
         connector_default_timeout_ms: config.connector.default_timeout_ms,
         interceptor_addr: interceptor_addr.to_string(),
-    });
+    }
 }
 
 fn emit_operator_routing_hints(config: &config::SidecarConfig, interceptor_addr: &str) {
