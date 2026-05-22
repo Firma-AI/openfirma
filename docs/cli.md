@@ -14,10 +14,10 @@ defaults; supplied flags override those values.
 When an existing config includes a local `[authority]` section and you switch
 to `--mode agent-remote`, the regenerated `firma.toml` normally removes that
 section; otherwise `firma run` starts the Authority locally instead of using
-only the remote Authority. Interactive runs without `--force` warn about the
-local startup behavior and ask whether to keep the section; the answer
-authorizes rewriting `firma.toml` for this mode switch. `--force` overwrites
-the config directly and removes the section.
+only the remote Authority. Non-force runs warn about the local startup
+behavior. Interactive runs ask whether to keep the section and use that answer
+to rewrite `firma.toml`; non-interactive non-force runs preserve the existing
+file. `--force` overwrites the config directly and removes the section.
 
 ### Usage
 
@@ -31,7 +31,7 @@ firma config [OPTIONS]
 | ---------------------------- | ----- | ------------------------ | -------------------------------------------------------------------- |
 | `--mode`                     |       | wizard / `agent-local`   | `agent-local`, `agent-remote`, or `authority`                        |
 | `--name`                     | `-n`  | wizard / `my-agent`      | Agent slug — used as `agent_id` in `[sidecar.preflight]`             |
-| `--posture`                  |       | wizard / `dev`           | Cedar enforcement posture                                            |
+| `--posture`                  |       | wizard / `dev`           | Cedar policy posture written under `policies/`                       |
 | `--mapping`                  |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                     |
 | `--requested-action`         |       | derived from posture     | Preflight requested actions — repeat or comma-separate               |
 | `--extra-hosts`              |       | none                     | Comma-separated extra hosts the agent may reach                      |
@@ -46,6 +46,10 @@ firma config [OPTIONS]
 | `--force`                    |       | off                      | Overwrite existing files, including the authority keypair            |
 | `--dry-run`                  |       | off                      | Print generated files to stdout; no disk writes                      |
 | `--list-templates`           |       | off                      | Print posture × mapping catalogue and exit                           |
+
+An explicit `--posture` rewrites the selected `policies/<posture>.cedar`
+file even without `--force`; other existing generated files are still
+preserved unless `--force` is set.
 
 ### Generated layout
 

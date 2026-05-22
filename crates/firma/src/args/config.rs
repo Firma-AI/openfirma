@@ -46,7 +46,7 @@ pub struct InitArgs {
     #[arg(long, short = 'n')]
     pub name: Option<String>,
 
-    /// Cedar policy posture to use. Not used in `authority` mode.
+    /// Cedar policy posture to write under `policies/`.
     #[arg(long, value_enum)]
     pub posture: Option<Posture>,
 
