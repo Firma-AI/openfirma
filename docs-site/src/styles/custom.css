@@ -483,10 +483,8 @@ starlight-menu-button {
   color: #55636f !important;
 }
 
-.mermaid svg [class*="edgeLabel"] p,
-.mermaid svg g.edgeLabel p,
-.mermaid p {
-  background-color: #f2f3f2 !important;
+.mermaid svg g.edgeLabel p {
+  background-color: transparent !important;
   color: #55636f !important;
   margin: 0 !important;
 }
