@@ -1,69 +1,105 @@
 ---
 title: Quickstart
-description: Install OpenFirma, run a local enforcement demo, and inspect a decision in under five minutes.
+description: Install OpenFirma, scaffold a project, and run an agent under enforcement in under five minutes.
 ---
 
 import { Steps } from '@astrojs/starlight/components';
 
-This quickstart gets you to the smallest useful OpenFirma experience: one outbound call is allowed, one is denied, and both are written to the audit log.
+This quickstart takes you from nothing installed to a real agent running under enforcement: its outbound calls are checked against policy, allowed or denied, and written to the audit log.
 
-You do not need API keys for the default path. The demo uses a deterministic fixture agent so you can see the enforcement loop without depending on an LLM's choices.
+`firma` ships as a single precompiled static binary. You do not need Rust, a build toolchain, or any API keys to follow this page.
 
-## Prerequisites
+## Install
 
-- Rust 1.86+ with `cargo` on `PATH`
-- `protoc` (Protocol Buffers compiler)
-- `make`
-- Node.js 20.19+ and Corepack, if you also want to build the docs site
-
-If you're missing any of these, `make install` from the repo root installs `protoc`, the Rust docs tooling, and the docs-site Node deps in one shot.
-
-## Run the deterministic demo
+OpenFirma is installed with a one-line script. It downloads the right binary for your platform, puts it on your `PATH`, and offers to scaffold your first project.
 
 <Steps>
 
-1. Clone the repository.
+1. Run the installer.
+
+   On **Linux and macOS**:
 
    ```bash
-   git clone https://github.com/firma-ai/firma-oss
-   cd firma-oss
+   curl -fsSL https://install.openfirma.ai | sh
    ```
 
-2. Run the CI demo.
+   On **Windows** (PowerShell):
+
+   ```powershell
+   iwr -useb https://install.openfirma.ai/install.ps1 | iex
+   ```
+
+2. Confirm `firma` is on your `PATH`.
 
    ```bash
-   make demo-ci
+   firma --version
    ```
 
-3. Look for the two outcomes.
-
-   ```text
-   [allow] 200 OK path=/allow body={"ok":true,"path":"/allow"}
-   [deny] 403 Forbidden path=/deny body={"denied":true,"reason":"...","detail":"..."}
-   [ok] ALLOW + DENY round-trips matched expectation.
-   ```
+   If the command is not found, open a new terminal so your shell picks up the updated `PATH`, then try again.
 
 </Steps>
 
-The command builds the binaries it needs, starts a local Authority and Sidecar, issues a short-lived capability token for the demo agent, runs the fixture client, and checks that both decisions were audited.
+The installer drops the binary in `~/.local/bin` by default and adds it to your shell's `PATH`. No Rust, `protoc`, or `make` required — those were only ever build-time tools, and you are installing a finished binary.
+
+## Set up a project
+
+`firma init` scaffolds everything a project needs in one command: a `firma.toml` config file, signing keys, and a set of default Cedar policies.
+
+```bash
+firma init
+```
+
+The interactive wizard asks a few questions — which agent you run, which provider it talks to, and whether to use a local Authority. The defaults are sensible; press Enter to accept them. The scaffold lands in a `.firma/` directory under your current folder.
+
+If you accepted the installer's prompt to run `firma init`, this is already done.
+
+To skip the wizard and take all defaults (useful in CI):
+
+```bash
+firma init --yes
+```
+
+## Run an agent under enforcement
+
+`firma run` launches a command inside a sandbox and forces all of its outbound traffic through the enforcement Sidecar. On first use it autostarts a local Authority and Sidecar for you — there is nothing else to start by hand.
+
+Pass the command to wrap after `--`:
+
+```bash
+firma run -- curl -s https://api.github.com/users/firma-ai
+```
+
+Every outbound call the wrapped command makes is normalized, checked against your capabilities, and evaluated against your Cedar policy. Calls that pass are forwarded; calls that fail get a `403` and never leave your machine. Either way, the decision is written to the audit log.
+
+This is the real entry point for running agents — swap `curl ...` for whatever agent command you actually run (a coding agent, a script, a shell).
+
+## Watch the decisions
+
+Open a second terminal and tail the audit log to see ALLOW and DENY decisions as they happen:
+
+```bash
+firma monitor
+```
+
+Each line is one decision: the action class, the resource, and the outcome.
 
 ## What just happened
 
-The demo starts three local pieces:
+`firma run` started three local pieces:
 
 - An **Authority**, which signs a capability token and streams policies and revocations.
 - A **Sidecar**, which receives outbound requests and decides ALLOW or DENY.
-- A **fixture agent**, which makes one request that should pass and one that should fail.
+- Your **wrapped command**, sandboxed so its traffic cannot bypass the Sidecar.
 
 Every request takes the same path:
 
 ```mermaid
 flowchart LR
-    agent["Fixture agent"] -->|"Outbound request"| sidecar["Sidecar"]
+    agent["Wrapped agent"] -->|"Outbound request"| sidecar["Sidecar"]
     sidecar --> normalizer["Normalizer"]
     normalizer --> stage1["Stage 1: Capability validation"]
     stage1 --> stage2["Stage 2: Policy evaluation"]
-    stage2 -->|"ALLOW"| fixture["Demo fixture"]
+    stage2 -->|"ALLOW"| forwarded["External service"]
     stage2 -->|"DENY"| denied["403 response"]
     stage2 --> audit["Signed audit event"]
     authority["Authority"] -. "Capability and policy stream" .-> sidecar
@@ -71,25 +107,7 @@ flowchart LR
 
 The important detail is that the Sidecar does not ask the Authority on every request. Once it has the public key, policy bundle, capability seed, and revocation state, the decision path is local.
 
-Stage 1 checks whether the agent has a valid capability for the normalized action. Stage 2 evaluates the current Cedar policy. Both stages must pass before the connector forwards the call.
-
-## Try the LLM-backed demo
-
-The deterministic demo is the best first run. If you want a more realistic agent loop, use the LLM-backed demo:
-
-```bash
-cp examples/demo/.env.sample examples/demo/.env
-# Add OPENAI_API_KEY to examples/demo/.env
-make demo
-```
-
-There is also an interactive REPL:
-
-```bash
-make demo-repl
-```
-
-These modes use the same Authority and Sidecar shape, but the model may choose different tool paths. For repeatable testing, use `make demo-ci`.
+Stage 1 checks whether the agent has a valid capability for the normalized action. Stage 2 evaluates the current Cedar policy. Both stages must pass before the call is forwarded.
 
 ## Read the docs in order
 
@@ -114,5 +132,5 @@ Then move to the guide that matches your next task:
 ## Useful references
 
 - [Rust API Reference](../api/) — every public item in the workspace, auto-generated from rustdoc.
-- [Demo README](https://github.com/firma-ai/firma-oss/tree/main/examples/demo) — details for `make demo-ci`, `make demo`, and `make demo-repl`.
+- [Diagnose with `firma doctor`](../guides/firma-doctor/) — run this first if `firma run` misbehaves after install.
 - [Blog](../blog/) — release notes and design write-ups.
