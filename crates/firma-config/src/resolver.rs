@@ -82,9 +82,8 @@ pub fn resolve_config(
 
     let mut searched: Vec<PathBuf> = Vec::new();
     if let Some(cwd) = provider.cwd() {
-        let mut dir: Option<&Path> = Some(cwd.as_path());
-        while let Some(d) = dir {
-            let candidate = d.join(".firma").join(FILE_NAME);
+        for dir in cwd.ancestors() {
+            let candidate = dir.join(".firma").join(FILE_NAME);
             if candidate.is_file() {
                 return Ok(ResolvedConfig {
                     config_dir: dir_of(&candidate),
@@ -93,7 +92,6 @@ pub fn resolve_config(
                 });
             }
             searched.push(candidate);
-            dir = d.parent();
         }
     }
 
@@ -193,6 +191,23 @@ mod tests {
         let r = resolve_config("sidecar", None, &f).unwrap();
         assert_eq!(r.source, ConfigSource::ProjectLocal);
         assert_eq!(r.config_file, project_file);
+    }
+
+    #[test]
+    fn project_local_closest_ancestor_wins() {
+        let tmp = tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let nested = project.join("sub").join("deep");
+        std::fs::create_dir_all(&nested).unwrap();
+        touch_project_local(&project);
+        let nested_file = touch_project_local(project.join("sub").as_path());
+        let f = Fake {
+            env: None,
+            cwd: Some(nested),
+        };
+        let r = resolve_config("sidecar", None, &f).unwrap();
+        assert_eq!(r.source, ConfigSource::ProjectLocal);
+        assert_eq!(r.config_file, nested_file);
     }
 
     #[test]
