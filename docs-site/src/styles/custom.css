@@ -489,6 +489,11 @@ starlight-menu-button {
   margin: 0 !important;
 }
 
+.mermaid svg g.edgeLabel rect {
+  fill: transparent !important;
+  stroke: none !important;
+}
+
 /* Pagefind search - keep the modal aligned with the new aesthetic. */
 .pagefind-ui__search-input {
   border-radius: 0.5rem;
