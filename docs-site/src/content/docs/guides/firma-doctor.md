@@ -14,7 +14,7 @@ safe to run against a live stack at any time.
 - **Before opening a bug report** — attach `firma doctor --json` to the issue
   for a reproducible baseline.
 - **In CI** — gate on exit code 0 to catch configuration drift before tests run.
-- **Any time `firma stack status` looks wrong** — doctor tells you *why*.
+- **Any time `firma sidecar status` looks wrong** — doctor tells you *why*.
 
 ## Quickstart
 
@@ -108,5 +108,5 @@ CI pattern: `firma doctor --json > report.json && jq -e '.exit_code == 0' report
 
 ## See also
 
-- [Manage the stack with `firma stack` and `firma monitor`](../manage-the-stack/) — start, stop, and observe the full stack.
+- [Start and monitor the daemon with `firma sidecar` and `firma monitor`](../manage-the-stack/) — start, stop, and observe Authority + Sidecar as one unit.
 - Full reference: `docs/markdown/firma_doctor_command.md` in the repository.
