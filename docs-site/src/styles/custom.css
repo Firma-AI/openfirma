@@ -482,6 +482,15 @@ starlight-menu-button {
 .mermaid .edgeLabel span {
   color: #55636f !important;
 }
+
+.mermaid svg [class*="edgeLabel"] p,
+.mermaid svg g.edgeLabel p,
+.mermaid p {
+  background-color: #f2f3f2 !important;
+  color: #55636f !important;
+  margin: 0 !important;
+}
+
 /* Pagefind search - keep the modal aligned with the new aesthetic. */
 .pagefind-ui__search-input {
   border-radius: 0.5rem;
