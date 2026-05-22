@@ -93,6 +93,14 @@ the SHA-256 of the concatenated `.cedar` files in `policy.dir`. Line 4
 fires unconditionally; when `policy.authority_url` is unset the
 endpoint is reported as `(disabled)`.
 
+Line 7 (`ready`) is held until the Authority streams have hydrated —
+both the policy bundle stream and the revocation stream must report
+themselves ready before the line is emitted. When
+`policy.authority_url` is unset, both flags are pre-seeded as ready, so
+the gate is a no-op and `ready` fires immediately after line 6. This
+prevents the first wrapped-agent call from racing the readiness gate
+and hitting a DENY before policy is in place.
+
 ### Exit codes
 
 | Code | When                                                             |
@@ -295,7 +303,12 @@ When autostart fires, `firma run`:
 2. Synthesizes a sidecar TOML by inheriting the operator template
    (`--sidecar-config` → `FIRMA_SIDECAR_CONFIG_FILE` → the discovered
    `firma.toml` → minimal) and overriding the `[interceptor]` section to
-   bind a Unix-domain socket at `<marker_dir>/sidecar.sock`.
+   bind a Unix-domain socket at `<marker_dir>/sidecar.sock`. Relative
+   resource paths in the inherited template (e.g. `audit.signing_key_path`,
+   `policy.dir`, `mapping.rules_path`, `authority.public_key_path`) are
+   rebased to absolute paths anchored on the **template's** config
+   directory so they keep pointing at the operator's files after the
+   synthesized config is written into `<marker_dir>/`.
 3. Spawns `firma sidecar --config <marker_dir>/sidecar.toml` as a
    child process with stderr piped.
 4. Reads stderr line by line and waits for the seven-line ready log
