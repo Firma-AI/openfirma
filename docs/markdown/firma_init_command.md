@@ -10,19 +10,17 @@ finds no `firma.toml`.
 ```bash
 firma config                                              # interactive wizard
 firma config --yes                                        # non-interactive defaults
-firma config --global                                     # user-global scaffold (~/.config/firma)
+firma config --output-dir .local                          # specific directory
 firma config --agent codex --provider anthropic \
            --workspace ./proj --authority local         # scripted full setup
 ```
 
-`--workspace`, `--global`, and `--config-dir` are mutually exclusive:
+Config always lands in the current directory or an explicit `--output-dir`:
 
-| Form                              | Where the scaffold lands                                   |
-| --------------------------------- | ---------------------------------------------------------- |
-| _(default)_                       | `<cwd>/.firma/` — project-local.                           |
-| `--workspace <dir>`               | `<dir>/.firma/` — project-local.                           |
-| `--global`                        | `$FIRMA_CONFIG_DIR` → `$XDG_CONFIG_HOME/firma` → `~/.config/firma`. |
-| `--config-dir <path>`             | `<path>` verbatim — advanced override.                     |
+| Form                  | Where the scaffold lands |
+| --------------------- | ------------------------ |
+| _(default)_           | Current working directory. |
+| `--output-dir <path>` | `<path>` verbatim.       |
 
 ## Usage shapes
 
@@ -39,27 +37,22 @@ matching prompt.
 ## Flags
 
 ```text
-firma config [--workspace <dir> | --global | --config-dir <dir>]
-           [--agent <name>] [--provider <name>]
-           [--authority <local|url>]
-           [--yes] [--force]
+firma config [--output-dir <dir>]
+           [--name <name>] [--posture <posture>] [--mapping <mapping>]
+           [--workspace <dir>] [--yes] [--force] [--dry-run]
            [--state-dir <dir>]
-           [--authority-listen <addr>] [--sidecar-listen <addr>]
 ```
 
 | Flag                 | Default                     | Description                                            |
 | -------------------- | --------------------------- | ------------------------------------------------------ |
-| `--workspace <dir>`  | _cwd_ (wizard prompt)       | Project root. Config lands at `<workspace>/.firma`.    |
-| `--global`           | _off_                       | Scaffold into the user-global config dir.              |
-| `--config-dir <dir>` | derived from above          | Advanced override; bypasses `--workspace`/`--global`.  |
-| `--agent <name>`     | wizard prompt / `generic`   | Persisted to `[project].agent` in firma.toml.          |
-| `--provider <name>`  | wizard prompt / `anthropic` | Persisted to `[project].provider`.                     |
-| `--authority <val>`  | wizard prompt / `local`     | `local` or a URL. Persisted to `[authority]`.          |
+| `--output-dir <dir>` | current directory           | Where firma.toml, policies, and mappings are written.  |
+| `--workspace <dir>`  | _cwd_ (wizard prompt)       | Agent RW access path (bwrap mount).                    |
+| `--name <name>`      | wizard prompt / `my-agent`  | Agent slug — used as `agent_id` in generated config.   |
+| `--posture <val>`    | wizard prompt / `dev`       | Cedar enforcement posture.                             |
+| `--mapping <val>`    | wizard prompt / `anthropic` | Mapping file(s) — repeat for multiple.                 |
 | `--yes`              | _off_                       | Skip the wizard. Required in non-TTY contexts.         |
-| `--state-dir <dir>`  | `FIRMA_STATE_DIR` / XDG     | User-global state (keys, revocations, CA material).    |
+| `--state-dir <dir>`  | `FIRMA_STATE_DIR` / XDG     | State dir (keys, revocations, CA material).            |
 | `--force`            | _off_                       | Overwrite existing files instead of preserving them.   |
-| `--authority-listen` | `127.0.0.1:50051`           | Local authority gRPC listen address.                   |
-| `--sidecar-listen`   | `127.0.0.1:8080`            | Sidecar HTTP proxy listen.                             |
 
 ## Scaffolded layout
 

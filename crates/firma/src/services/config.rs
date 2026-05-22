@@ -206,11 +206,6 @@ fn default_output_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-fn global_config_dir() -> Result<PathBuf> {
-    firma_config::default_config_dir(&firma_config::SystemDirs)
-        .ok_or_else(|| anyhow::anyhow!("cannot resolve global config dir (no home directory?)"))
-}
-
 fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
     let theme = ColorfulTheme::default();
     let interactive = !args.yes && dialoguer::console::Term::stderr().is_term();
@@ -225,25 +220,20 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         None => "my-agent".to_string(),
     };
 
-    let config_dir = if args.global {
-        let p = global_config_dir()?;
-        std::path::absolute(&p).with_context(|| format!("resolve path {}", p.display()))?
-    } else {
-        match &args.output_dir {
-            Some(p) => {
-                std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()))?
-            }
-            None if interactive => {
-                let default = default_output_dir().to_string_lossy().into_owned();
-                let s: String = dialoguer::Input::with_theme(&theme)
-                    .with_prompt("Config directory")
-                    .default(default)
-                    .interact_text()
-                    .context("config directory prompt")?;
-                std::path::absolute(PathBuf::from(s)).context("resolve config directory path")?
-            }
-            None => default_output_dir(),
+    let config_dir = match &args.output_dir {
+        Some(p) => {
+            std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()))?
         }
+        None if interactive => {
+            let default = default_output_dir().to_string_lossy().into_owned();
+            let s: String = dialoguer::Input::with_theme(&theme)
+                .with_prompt("Config directory")
+                .default(default)
+                .interact_text()
+                .context("config directory prompt")?;
+            std::path::absolute(PathBuf::from(s)).context("resolve config directory path")?
+        }
+        None => default_output_dir(),
     };
 
     let state_dir = resolve_state_dir(args.state_dir.clone()).map_err(anyhow::Error::msg)?;

@@ -34,11 +34,6 @@ pub struct InitArgs {
     #[arg(long)]
     pub workspace: Option<PathBuf>,
 
-    /// Write scaffolded files into the global config dir (`XDG_CONFIG_HOME/firma`).
-    /// Conflicts with `--output-dir`.
-    #[arg(long, conflicts_with = "output_dir")]
-    pub global: bool,
-
     /// Config directory — where firma.toml, policies, and mappings are written.
     /// Defaults to the current directory.
     #[arg(long, short = 'o')]
