@@ -96,7 +96,7 @@ You'll see `[sidecar.mapping].default_protected = false` and a `file` audit sink
 
 ## Step 3: Run with Per-Run Sidecar (Default)
 
-In the default `--sidecar=auto` mode, `firma run` always starts a per-run
+With `--sidecar local` (also the default when no sidecar endpoint is configured), `firma run` always starts a per-run
 Sidecar alongside the agent process, waits for readiness, and tears it down
 on exit.
 
@@ -112,7 +112,7 @@ If you use a coding-agent profile:
 cargo run --release -p firma -- run --profile codex -- codex
 ```
 
-### Optional: run a Sidecar manually (`--sidecar=external`)
+### Optional: run a Sidecar manually (`--sidecar <url>`)
 
 Manual sidecar startup is only needed when you explicitly choose external mode
 or operate with a pre-managed sidecar (systemd / `firma sidecar start`).
@@ -127,10 +127,10 @@ Wait for the `sidecar ready` line.
 
 Opt out for production or CI:
 
-- `--no-autostart` — fail with a typed `SidecarUnreachable` error instead of spawning a child Sidecar.
-- `--sidecar=external` — same intent, more explicit; pairs with a systemd-managed or `firma sidecar start` Sidecar.
+- `--no-autostart` — fail with a typed `MissingSidecar` / `SidecarUnreachable` error instead of spawning a child Sidecar.
+- `--sidecar tcp://host:port` / `--sidecar unix:///path` — point at an external sidecar (systemd-managed or `firma sidecar start`); never autostarts.
 
-Autostart currently requires Unix. On Windows, use `--sidecar=external` with a pre-started Sidecar.
+Autostart currently requires Unix. On Windows, use `--sidecar <url>` with a pre-started Sidecar.
 
 ### Authority bootstrap
 
@@ -269,19 +269,18 @@ This prints the resolved profile as JSON: which backend, which env vars are inje
 
 `firma run --help` is the full reference. The flags that come up most often:
 
-| Flag                                        | Effect                                                                                                                 |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `--profile <name>`                          | Pick a runtime profile. `generic` is the default; `codex` adds workspace mounts for coding agents.                     |
-| `--config <file>`                           | Override profile defaults from a TOML/YAML file.                                                                       |
-| `--backend <bwrap\|vz\|wsl2\|firecracker>`  | Override the platform default backend.                                                                                 |
-| `--sidecar-endpoint <url>`                  | Point at a Sidecar at a non-default address (e.g. UDS path or a different port).                                       |
-| `--sidecar <auto\|external>`                | `auto` (default) always autostarts a per-run Sidecar; `external` requires a pre-running one.                           |
-| `--no-autostart`                            | Disable per-run autostart and fail loudly if the configured Sidecar endpoint is unreachable. CI / production safety net. |
-| `--sidecar-config <path>`                   | Sidecar TOML template for autostart. Falls back to `FIRMA_SIDECAR_CONFIG_FILE`, then the discovered `firma.toml`.      |
-| `--sidecar-startup-timeout-secs <n>`        | Maximum wait for the autostarted Sidecar's `ready` line (default `10`).                                                |
-| `--capability-file <path>`                  | Pre-staged capability seed for this run.                                                                               |
-| `--identity-mode <sandbox-user\|host-user>` | Choose whether the sandboxed process runs as the host user or a remapped sandbox user.                                 |
-| `--print-effective-config`                  | Print resolved config and exit. No agent launched.                                                                     |
+| Flag                                        | Effect                                                                                                                                                                                     |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--profile <name>`                          | Pick a runtime profile. `generic` is the default; `codex` adds workspace mounts for coding agents.                                                                                         |
+| `--config <file>`                           | Override profile defaults from a TOML/YAML file.                                                                                                                                           |
+| `--backend <bwrap\|vz\|wsl2\|firecracker>`  | Override the platform default backend.                                                                                                                                                     |
+| `--sidecar <local\|url>`                    | `local` autostarts a per-run Sidecar; a `tcp://host:port` / `unix:///path` value targets an external one and never autostarts. Omitted: persisted `sidecar_endpoint` else local autostart. |
+| `--no-autostart`                            | Disable autostart for any missing component and fail loudly. Incompatible with `--sidecar local` and `--authority local`. CI / production safety net.                                      |
+| `--sidecar-config <path>`                   | Sidecar TOML template for autostart. Falls back to `FIRMA_SIDECAR_CONFIG_FILE`, then the discovered `firma.toml`.                                                                          |
+| `--sidecar-startup-timeout-secs <n>`        | Maximum wait for the autostarted Sidecar's `ready` line (default `10`).                                                                                                                    |
+| `--capability-file <path>`                  | Pre-staged capability seed for this run.                                                                                                                                                   |
+| `--identity-mode <sandbox-user\|host-user>` | Choose whether the sandboxed process runs as the host user or a remapped sandbox user.                                                                                                     |
+| `--print-effective-config`                  | Print resolved config and exit. No agent launched.                                                                                                                                         |
 
 ## What does and does not pass through
 

@@ -16,18 +16,6 @@ use crate::seccomp::resolve_effective_seccomp;
 use crate::sidecar::supervisor::DEFAULT_STARTUP_TIMEOUT_SECS;
 use crate::supervisor::wait_with_signal_forwarding;
 
-/// Selection between `firma run`'s autostart behaviour and an externally
-/// managed sidecar (e.g. systemd or `firma stack start`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SidecarMode {
-    /// Autostart when the configured endpoint is unreachable. Default.
-    #[default]
-    Auto,
-    /// Never autostart; require an already-running sidecar at the
-    /// configured endpoint.
-    External,
-}
-
 /// Lib-level input for [`execute_run`]. The CLI layer (in the `firma`
 /// host crate) builds this from its `clap`-derived args struct.
 #[derive(Debug, Clone)]
@@ -38,8 +26,8 @@ pub struct RunInput {
     pub config: Option<PathBuf>,
     /// Override backend selection.
     pub backend: Option<crate::backend::BackendKind>,
-    /// Optional sidecar endpoint override.
-    pub sidecar_endpoint: Option<String>,
+    /// CLI value of `--sidecar` (`local` | `<tcp://...|unix:///...>` | unset).
+    pub sidecar_cli: crate::sidecar::SidecarCli,
     /// Optional capability token file path for runtime lease refresh.
     pub capability_file: Option<PathBuf>,
     /// Override sandbox identity mode.
@@ -48,9 +36,6 @@ pub struct RunInput {
     pub preserve_host_user: bool,
     /// Print the resolved effective config as JSON before execution.
     pub print_effective_config: bool,
-    /// Sidecar selection (`auto` autostarts on miss; `external` requires
-    /// pre-running sidecar).
-    pub sidecar_mode: SidecarMode,
     /// When set, never autostart — fail with a typed error if the
     /// configured endpoint is unreachable. CI / production safety net.
     pub no_autostart: bool,
@@ -131,7 +116,10 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             })?;
         let sidecar_template_path = resolve_sidecar_template_path(args, &user_config_path);
         let flags = AutostartFlags {
-            mode: args.sidecar_mode,
+            sidecar_autostart: matches!(
+                profile.sidecar_selection,
+                crate::sidecar::SidecarSelection::Local
+            ),
             no_autostart: args.no_autostart,
             template_path: sidecar_template_path,
             startup_timeout: Duration::from_secs(if args.sidecar_startup_timeout_secs == 0 {
@@ -645,6 +633,7 @@ mod tests {
             sidecar_endpoint: SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
             },
+            sidecar_selection: crate::sidecar::SidecarSelection::Local,
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::<MountSpec>::new(),
@@ -699,6 +688,7 @@ mod tests {
             sidecar_endpoint: SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
             },
+            sidecar_selection: crate::sidecar::SidecarSelection::Local,
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
@@ -750,6 +740,7 @@ mod tests {
             sidecar_endpoint: SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
             },
+            sidecar_selection: crate::sidecar::SidecarSelection::Local,
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
@@ -810,6 +801,7 @@ mod tests {
             sidecar_endpoint: SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
             },
+            sidecar_selection: crate::sidecar::SidecarSelection::Local,
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
@@ -879,6 +871,7 @@ mod tests {
             sidecar_endpoint: SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
             },
+            sidecar_selection: crate::sidecar::SidecarSelection::Local,
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::from([
                 ("NO_PROXY".to_string(), String::new()),
@@ -923,6 +916,7 @@ mod tests {
             sidecar_endpoint: SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
             },
+            sidecar_selection: crate::sidecar::SidecarSelection::Local,
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
@@ -999,6 +993,7 @@ mod tests {
             sidecar_endpoint: SidecarEndpoint::Tcp {
                 addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
             },
+            sidecar_selection: crate::sidecar::SidecarSelection::Local,
             env_passthrough: BTreeSet::default(),
             env_set: BTreeMap::default(),
             mounts: Vec::new(),
@@ -1069,12 +1064,11 @@ mod tests {
             profile: "codex".to_string(),
             config: Some(PathBuf::from("/tmp/from-run-config.toml")),
             backend: None,
-            sidecar_endpoint: None,
+            sidecar_cli: crate::sidecar::SidecarCli::Unset,
             capability_file: None,
             identity_mode: None,
             preserve_host_user: false,
             print_effective_config: false,
-            sidecar_mode: super::SidecarMode::Auto,
             no_autostart: false,
             sidecar_template_path: Some(PathBuf::from("/tmp/from-sidecar-config.toml")),
             sidecar_startup_timeout_secs: 10,
@@ -1101,12 +1095,11 @@ mod tests {
             profile: "codex".to_string(),
             config: None,
             backend: None,
-            sidecar_endpoint: None,
+            sidecar_cli: crate::sidecar::SidecarCli::Unset,
             capability_file: None,
             identity_mode: None,
             preserve_host_user: false,
             print_effective_config: false,
-            sidecar_mode: super::SidecarMode::Auto,
             no_autostart: false,
             sidecar_template_path: None,
             sidecar_startup_timeout_secs: 10,
