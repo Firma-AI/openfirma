@@ -39,6 +39,16 @@ pub struct AuthorityConfig {
     /// host. Defaults to `false` (secure-by-default).
     #[serde(default)]
     pub allow_insecure_remote_authority: bool,
+    /// Path to the PEM-encoded mTLS client certificate presented to the
+    /// Authority during the TLS handshake. Required when the Authority is
+    /// configured with `mtls_client_ca_cert_path`. Must be set together
+    /// with `tls_client_key_path` or not at all.
+    #[serde(default)]
+    pub tls_client_cert_path: Option<PathBuf>,
+    /// Path to the PEM-encoded mTLS client private key. Must be set
+    /// together with `tls_client_cert_path` or not at all.
+    #[serde(default)]
+    pub tls_client_key_path: Option<PathBuf>,
 }
 
 impl AuthorityConfig {
@@ -73,6 +83,22 @@ impl AuthorityConfig {
         {
             return Err("ca_cert_path must not be empty when set".to_string());
         }
+        if self.tls_client_cert_path.is_some() != self.tls_client_key_path.is_some() {
+            return Err(
+                "tls_client_cert_path and tls_client_key_path must both be set or both be unset"
+                    .to_string(),
+            );
+        }
+        if let Some(ref p) = self.tls_client_cert_path
+            && p.as_os_str().is_empty()
+        {
+            return Err("tls_client_cert_path must not be empty when set".to_string());
+        }
+        if let Some(ref p) = self.tls_client_key_path
+            && p.as_os_str().is_empty()
+        {
+            return Err("tls_client_key_path must not be empty when set".to_string());
+        }
         Ok(())
     }
 }
@@ -88,6 +114,8 @@ impl Default for AuthorityConfig {
             public_key_path: None,
             ca_cert_path: None,
             allow_insecure_remote_authority: false,
+            tls_client_cert_path: None,
+            tls_client_key_path: None,
         }
     }
 }

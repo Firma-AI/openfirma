@@ -552,7 +552,7 @@ mod tests {
         h.token_store().approve(&token);
 
         let mut retry = request();
-        retry.approval_token = Some(token.clone());
+        retry.approval_token = Some(token);
         assert_eq!(h.decide(&retry).decision, LocalExecDecision::Allow);
         assert_eq!(h.decide(&retry).decision, LocalExecDecision::Deny);
     }

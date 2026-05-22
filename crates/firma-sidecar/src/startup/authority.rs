@@ -24,8 +24,8 @@ use crate::startup::pipeline::PipelineRuntime;
 /// # Errors
 ///
 /// Returns an error when the configured Authority URL cannot be
-/// parsed into a tonic endpoint, or when a required CA cert file
-/// cannot be read.
+/// parsed into a tonic endpoint, or when a required CA cert or
+/// client cert file cannot be read.
 pub fn spawn_authority_client(
     config: &config::SidecarConfig,
     runtime: &PipelineRuntime,
@@ -44,10 +44,30 @@ pub fn spawn_authority_client(
         None
     };
 
+    let client_cert_pem: Option<Vec<u8>> =
+        if let Some(ref path) = config.authority.tls_client_cert_path {
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("failed to read mTLS client cert {}", path.display()))?;
+            Some(bytes)
+        } else {
+            None
+        };
+
+    let client_key_pem: Option<Vec<u8>> =
+        if let Some(ref path) = config.authority.tls_client_key_path {
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("failed to read mTLS client key {}", path.display()))?;
+            Some(bytes)
+        } else {
+            None
+        };
+
     let channel = authority_client::channel::build_channel(
         authority_url,
         Duration::from_secs(config.authority.connect_timeout_secs),
         ca_cert_pem.as_deref(),
+        client_cert_pem.as_deref(),
+        client_key_pem.as_deref(),
     )?;
     tracing::debug!("Authority stream clients wired with Cedar bundle parser");
 
