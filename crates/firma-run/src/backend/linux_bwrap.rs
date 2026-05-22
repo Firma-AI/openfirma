@@ -49,32 +49,7 @@ impl SandboxBackend for BwrapBackend {
             });
         }
 
-        // WSL environments do not support unprivileged user namespaces required
-        // by bubblewrap. Detect early and surface a typed, actionable error
-        // instead of letting bwrap fail silently after spawning.
-        if platform::detect_wsl().is_wsl() {
-            return Err(RunError::UnsupportedBackend {
-                backend: BackendKind::Bwrap.to_string(),
-                reason: "WSL environment detected; bubblewrap requires unprivileged user \
-                         namespaces which are unavailable under WSL. \
-                         Run `firma doctor` for a full sandbox compatibility report."
-                    .to_string(),
-            });
-        }
-
-        // Some kernels (notably Debian/Ubuntu hardened builds) restrict
-        // unprivileged user namespace creation via a sysctl. Detect and report
-        // before bwrap fails without a useful message.
-        if let Some(sysctl) = platform::userns_restricted() {
-            return Err(RunError::UnsupportedBackend {
-                backend: BackendKind::Bwrap.to_string(),
-                reason: format!(
-                    "user namespace creation is restricted ({sysctl}=0); \
-                     enable it with: sudo sysctl -w kernel.unprivileged_userns_clone=1, \
-                     or contact your system administrator"
-                ),
-            });
-        }
+        preflight_host_support(platform::detect_wsl(), platform::userns_restricted())?;
 
         if !command_available("bwrap") {
             return Err(RunError::Backend {
@@ -343,11 +318,58 @@ impl SandboxBackend for BwrapBackend {
 /// - the path is not a symlink (nothing to resolve)
 /// - `canonicalize` fails (broken symlink, permission error)
 fn resolve_resolv_conf_target() -> PathBuf {
-    let resolv_conf = PathBuf::from("/etc/resolv.conf");
+    resolve_resolv_conf_target_from(std::path::Path::new("/etc/resolv.conf"))
+}
+
+fn resolve_resolv_conf_target_from(resolv_conf: &std::path::Path) -> PathBuf {
     if !resolv_conf.is_symlink() {
-        return resolv_conf;
+        return resolv_conf.to_path_buf();
     }
-    std::fs::canonicalize(&resolv_conf).unwrap_or(resolv_conf)
+    std::fs::canonicalize(resolv_conf).unwrap_or_else(|_| resolv_conf.to_path_buf())
+}
+
+fn preflight_host_support(
+    wsl_kind: platform::WslKind,
+    userns_sysctl: Option<String>,
+) -> Result<(), RunError> {
+    // WSL environments do not support unprivileged user namespaces required
+    // by bubblewrap. Detect early and surface a typed, actionable error
+    // instead of letting bwrap fail silently after spawning.
+    if wsl_kind.is_wsl() {
+        return Err(RunError::UnsupportedBackend {
+            backend: BackendKind::Bwrap.to_string(),
+            reason: "WSL environment detected; bubblewrap requires unprivileged user \
+                     namespaces which are unavailable under WSL. \
+                     Use a non-bwrap backend on this host or run `firma doctor` for \
+                     a full sandbox compatibility report."
+                .to_string(),
+        });
+    }
+
+    // Some kernels (notably Debian/Ubuntu hardened builds) restrict
+    // unprivileged user namespace creation via a sysctl. Detect and report
+    // before bwrap fails without a useful message.
+    if let Some(sysctl) = userns_sysctl {
+        return Err(RunError::UnsupportedBackend {
+            backend: BackendKind::Bwrap.to_string(),
+            reason: format!(
+                "user namespace creation is restricted ({sysctl}=0); {}",
+                userns_remediation(&sysctl)
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+fn userns_remediation(sysctl: &str) -> &'static str {
+    if sysctl.ends_with("/kernel/unprivileged_userns_clone") {
+        "enable it with: sudo sysctl -w kernel.unprivileged_userns_clone=1, or contact your system administrator"
+    } else if sysctl.ends_with("/user/max_user_namespaces") {
+        "raise it with: sudo sysctl -w user.max_user_namespaces=15000, or contact your system administrator"
+    } else {
+        "adjust this sysctl or contact your system administrator"
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -579,9 +601,8 @@ mod tests {
         let resolv_conf = dir.path().join("resolv.conf");
         std::fs::write(&resolv_conf, "nameserver 1.1.1.1\n").expect("write resolv.conf");
 
-        // Regular file — canonicalize returns the same path.
-        let canonical = std::fs::canonicalize(&resolv_conf).expect("canonicalize");
-        assert_eq!(canonical, resolv_conf.canonicalize().expect("canon2"));
+        let resolved = super::resolve_resolv_conf_target_from(&resolv_conf);
+        assert_eq!(resolved, resolv_conf);
     }
 
     #[test]
@@ -594,33 +615,34 @@ mod tests {
         let symlink_path = dir.path().join("resolv.conf");
         std::os::unix::fs::symlink(&real_file, &symlink_path).expect("create symlink");
 
-        let canonical = std::fs::canonicalize(&symlink_path).expect("canonicalize symlink");
-        assert_eq!(canonical, real_file.canonicalize().expect("canon real"));
-    }
-
-    // ── WSL preflight guard ─────────────────────────────────────────────────
-    // These tests exercise the prepare() early-return path via the platform
-    // module's detect_wsl() function, validated through unit tests in platform.rs.
-    // The integration path (calling prepare() itself) requires bwrap installed,
-    // so we test the detection logic independently and trust the wiring from
-    // the code review.
-
-    #[test]
-    fn platform_wsl_detection_rejects_wsl2_kernel() {
-        // Validates that the detection function used by prepare() identifies WSL.
-        use crate::backend::platform;
-        // We can't mutate /proc on a live system, but we can verify the pure
-        // classifier function via the public re-export path.
-        // The real detect_wsl() is tested in platform::tests.
-        let _ = platform::detect_wsl(); // must not panic or unwrap
+        let resolved = super::resolve_resolv_conf_target_from(&symlink_path);
+        assert_eq!(resolved, real_file.canonicalize().expect("canon real"));
     }
 
     #[test]
-    fn platform_userns_check_returns_none_when_unrestricted() {
-        // On a dev machine where tests pass, userns should be available.
-        // If userns IS restricted the test runner itself would be affected,
-        // so asserting None here would fail on restricted kernels. We call
-        // the function only to confirm it doesn't panic.
-        let _ = crate::backend::platform::userns_restricted();
+    fn preflight_rejects_wsl() {
+        let result = super::preflight_host_support(crate::backend::platform::WslKind::Wsl2, None);
+        let err = result.expect_err("WSL must be rejected for bwrap");
+        let message = err.to_string();
+        assert!(message.contains("bwrap"));
+        assert!(message.to_ascii_lowercase().contains("wsl"));
+    }
+
+    #[test]
+    fn preflight_rejects_restricted_userns_with_specific_fix() {
+        let result = super::preflight_host_support(
+            crate::backend::platform::WslKind::NotWsl,
+            Some("/proc/sys/user/max_user_namespaces".to_string()),
+        );
+        let err = result.expect_err("restricted userns must be rejected");
+        let message = err.to_string();
+        assert!(message.contains("user namespace creation is restricted"));
+        assert!(message.contains("user.max_user_namespaces"));
+    }
+
+    #[test]
+    fn preflight_accepts_native_host_with_userns_available() {
+        let result = super::preflight_host_support(crate::backend::platform::WslKind::NotWsl, None);
+        assert!(result.is_ok());
     }
 }

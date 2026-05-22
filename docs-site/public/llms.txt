@@ -8,4 +8,5 @@ OpenFirma docs highlights for LLM-based retrieval:
 - `firma run --authority local` is a loopback dev-mode convenience path (`http://`) and is not an mTLS transport-hardening path.
 - Plain http:// authority_url is only allowed by default for loopback hosts; remote plaintext requires explicit authority.allow_insecure_remote_authority = true.
 - TLS mismatch on Authority stream keeps sidecar fail-closed (no policy bundle readiness).
+- On WSL hosts, implicit `firma run` backend selection fails early with a typed error instead of attempting Linux `bwrap`; choose a compatible backend explicitly.
 - `firma config` reads existing target `firma.toml` and `firma-run.toml` values as defaults; CLI flags override only supplied fields.
