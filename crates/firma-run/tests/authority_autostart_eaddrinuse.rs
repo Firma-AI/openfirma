@@ -16,7 +16,6 @@ use std::time::Duration;
 
 use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
 use firma_run::routing::{AutostartFlags, resolve_authority};
-use firma_run::runtime::SidecarMode;
 
 struct NoPrompt;
 impl AuthorityPromptIo for NoPrompt {
@@ -42,7 +41,7 @@ fn pre_bound_port_short_circuits_to_local() {
     let identity = firma_run::identity::RunIdentity::new("test");
     let runtime_dir = tmp.path().join("runtime");
     let flags = AutostartFlags {
-        mode: SidecarMode::Auto,
+        sidecar_autostart: false,
         no_autostart: false,
         template_path: None,
         startup_timeout: Duration::from_secs(2),

@@ -21,6 +21,7 @@ pub struct ResolvedProfile {
     pub id: String,
     pub backend: BackendKind,
     pub sidecar_endpoint: SidecarEndpoint,
+    pub sidecar_selection: crate::sidecar::SidecarSelection,
     pub env_passthrough: BTreeSet<String>,
     pub env_set: BTreeMap<String, String>,
     pub mounts: Vec<MountSpec>,
@@ -286,6 +287,9 @@ pub enum SeccompRuntimeMode {
     PrecompiledOnly,
 }
 
+/// Fallback sidecar endpoint used only to keep `ResolvedProfile.sidecar_endpoint`
+/// populated on local autostart, where the supervisor substitutes its own UDS.
+const DEFAULT_SIDECAR_ENDPOINT: &str = "tcp://127.0.0.1:8080";
 const DEFAULT_MANAGED_POLICY_FILE: &str = "generic-local-command-v1.toml";
 const MANAGED_POLICY_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_POLICY_PATH";
 const MANAGED_ARTIFACT_DIR_ENV: &str = "FIRMA_RUN_MANAGED_SECCOMP_ARTIFACT_DIR";
@@ -448,6 +452,10 @@ impl ProfilePatch {
 ///
 /// Returns an error when profile resolution fails due to invalid inputs,
 /// parse errors, or resulting validation failures.
+#[allow(
+    clippy::too_many_lines,
+    reason = "sequential profile resolution (patch merge + endpoint/selection + network + capability) reads more clearly inline"
+)]
 pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     let mut patch = built_in_profile(&args.profile)?;
 
@@ -463,16 +471,31 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         .backend
         .unwrap_or_else(BackendKind::default_for_current_host);
 
-    let sidecar_endpoint_value = patch.sidecar_endpoint.as_deref().map_or_else(
-        || {
-            std::env::var("FIRMA_SIDECAR_ENDPOINT")
-                .unwrap_or_else(|_| "tcp://127.0.0.1:8080".to_string())
-        },
-        ToOwned::to_owned,
-    );
-    let sidecar_endpoint = sidecar_endpoint_value
-        .parse::<SidecarEndpoint>()
-        .map_err(RunError::ConfigValidation)?;
+    // The explicitly-configured endpoint (config file or env), without the
+    // hard-coded fallback. `None` means "nothing was set" — which lets the
+    // selector default an unset `--sidecar` to local autostart.
+    let configured_endpoint = patch.sidecar_endpoint.clone().or_else(|| {
+        std::env::var("FIRMA_SIDECAR_ENDPOINT")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    });
+    let sidecar_selection = crate::sidecar::resolve(
+        &args.sidecar_cli,
+        args.no_autostart,
+        configured_endpoint.as_deref(),
+    )?;
+    // `sidecar_endpoint` stays populated for the external-probe path and for
+    // local-exec endpoint derivation. On local autostart the supervisor
+    // substitutes its own UDS for the *traffic* endpoint, so this value is
+    // not used as the autostart target.
+    let sidecar_endpoint = match &sidecar_selection {
+        crate::sidecar::SidecarSelection::Remote(endpoint) => endpoint.clone(),
+        crate::sidecar::SidecarSelection::Local => configured_endpoint
+            .as_deref()
+            .unwrap_or(DEFAULT_SIDECAR_ENDPOINT)
+            .parse::<SidecarEndpoint>()
+            .map_err(RunError::ConfigValidation)?,
+    };
     let sidecar_local_exec = resolve_sidecar_local_exec_config(&patch, &sidecar_endpoint)?;
 
     let env_passthrough = patch
@@ -528,6 +551,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         id: args.profile.clone(),
         backend,
         sidecar_endpoint,
+        sidecar_selection,
         env_passthrough,
         env_set: patch.env_set,
         mounts,
@@ -560,7 +584,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
 fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
     ProfilePatch {
         backend: args.backend,
-        sidecar_endpoint: args.sidecar_endpoint.clone(),
+        sidecar_endpoint: None,
         seccomp_policy: None,
         env_passthrough: Vec::new(),
         env_set: BTreeMap::new(),
@@ -873,12 +897,11 @@ mod tests {
             profile: profile.to_string(),
             config: None,
             backend: None,
-            sidecar_endpoint: None,
+            sidecar_cli: crate::sidecar::SidecarCli::Unset,
             capability_file: None,
             identity_mode: None,
             preserve_host_user: false,
             print_effective_config: false,
-            sidecar_mode: crate::runtime::SidecarMode::Auto,
             no_autostart: false,
             sidecar_template_path: None,
             sidecar_startup_timeout_secs: 10,

@@ -1,7 +1,5 @@
-//! CLI surface for `firma run` autostart flags. Verifies clap accepts the
-//! new flags, that mutually exclusive flags are rejected, and that
-//! `--no-autostart` with an unreachable endpoint surfaces the typed
-//! `SidecarUnreachable` error rather than autostarting.
+//! CLI surface for `firma run --sidecar`. Verifies clap accepts the unified
+//! `--sidecar <local|url>` flag and that invalid forms are rejected.
 
 #![allow(
     clippy::unwrap_used,
@@ -17,8 +15,21 @@ fn firma_bin() -> std::path::PathBuf {
 }
 
 #[test]
-fn parse_sidecar_auto_is_default_and_accepts_external() {
-    for value in ["auto", "external"] {
+fn parse_sidecar_local() {
+    let out = Command::new(firma_bin())
+        .args(["run", "--sidecar", "local", "--help"])
+        .output()
+        .expect("spawn");
+    assert!(
+        out.status.success(),
+        "--sidecar local rejected: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn parse_sidecar_endpoint_urls() {
+    for value in ["tcp://127.0.0.1:8080", "unix:///tmp/firma.sock"] {
         let out = Command::new(firma_bin())
             .args(["run", "--sidecar", value, "--help"])
             .output()
@@ -45,23 +56,39 @@ fn parse_no_autostart_alone() {
 }
 
 #[test]
-fn no_autostart_conflicts_with_sidecar_flag() {
+fn no_autostart_with_sidecar_url_is_accepted_by_clap() {
+    // No longer a clap conflict — `--sidecar <url>` + `--no-autostart` is a
+    // valid (redundant) combination. `--help` short-circuits before runtime.
     let out = Command::new(firma_bin())
         .args([
             "run",
             "--no-autostart",
             "--sidecar",
-            "external",
-            "--",
-            "true",
+            "tcp://127.0.0.1:8080",
+            "--help",
         ])
         .output()
         .expect("spawn");
-    assert!(!out.status.success(), "expected clap conflict failure");
+    assert!(
+        out.status.success(),
+        "expected clap to accept the combination: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn sidecar_local_with_no_autostart_fails_at_runtime() {
+    // No `--help`, so the run executes selection resolution, which rejects
+    // the incompatible pair with the typed error.
+    let out = Command::new(firma_bin())
+        .args(["run", "--sidecar", "local", "--no-autostart", "--", "true"])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success(), "expected runtime failure");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("cannot be used with") || stderr.contains("conflicts with"),
-        "expected clap conflict message, got: {stderr}"
+        stderr.contains("--sidecar local` is incompatible with `--no-autostart"),
+        "expected SidecarLocalNoAutostart message, got: {stderr}"
     );
 }
 
@@ -80,6 +107,22 @@ fn parse_sidecar_config_template_path() {
         out.status.success(),
         "{}",
         String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn sidecar_invalid_endpoint_fails_at_runtime() {
+    // `--sidecar` is `Option<String>` at the clap layer, so an invalid
+    // endpoint is only rejected at runtime during selection resolution.
+    let out = Command::new(firma_bin())
+        .args(["run", "--sidecar", "http://nope", "--", "true"])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success(), "expected runtime failure");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unsupported sidecar endpoint"),
+        "expected endpoint-parse error, got: {stderr}"
     );
 }
 
