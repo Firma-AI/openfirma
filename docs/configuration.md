@@ -18,11 +18,16 @@ binary to exit before accepting requests.
 
 ## Scaffolded Example
 
-`firma stack init` writes one sectioned `firma.toml` with all paths
+`firma init` writes one sectioned `firma.toml` with all paths
 absolutised under the resolved config and state directories. The shape is:
 
 ```toml
+[project]
+agent    = "generic"
+provider = "anthropic"
+
 [authority]
+type                = "local"
 listen_addr         = "127.0.0.1:50051"
 policy_dir          = '/home/me/.config/firma/policies'
 issuance_policy_dir = '/home/me/.config/firma/issuance-policies'

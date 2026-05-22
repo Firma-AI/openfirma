@@ -9,6 +9,9 @@ use crate::provider::DirProvider;
 pub enum ConfigSource {
     /// Explicit `--config` flag — overrides discovery (same sectioned schema).
     Flag,
+    /// Project-local `.firma/firma.toml` found by walking up from cwd
+    /// (per CLI spec §4 step 1).
+    ProjectLocal,
     /// `$FIRMA_CONFIG_DIR`.
     EnvDir,
     /// A platform user config dir.
@@ -53,6 +56,16 @@ fn candidates(p: &dyn DirProvider) -> Vec<(PathBuf, ConfigSource)> {
     let nested = |d: PathBuf| d.join(SUBDIR).join(FILE_NAME);
     let flat = |d: PathBuf| d.join(FILE_NAME);
     let mut out: Vec<(PathBuf, ConfigSource)> = Vec::new();
+    // Project-local tier (highest priority, per CLI spec §4 step 1):
+    // walk up from cwd looking for `.firma/firma.toml`. Stops at the
+    // filesystem root. Each ancestor contributes one candidate.
+    if let Some(cwd) = p.cwd() {
+        let mut dir: Option<&Path> = Some(cwd.as_path());
+        while let Some(d) = dir {
+            out.push((d.join(".firma").join(FILE_NAME), ConfigSource::ProjectLocal));
+            dir = d.parent();
+        }
+    }
     out.extend(p.env_config_dir().map(|d| (flat(d), ConfigSource::EnvDir)));
     out.extend(
         p.xdg_config_home()
@@ -212,6 +225,36 @@ mod tests {
         assert_eq!(r.source, ConfigSource::Flag);
         assert_eq!(r.config_file, flag);
         assert_eq!(r.config_dir, tmp.path());
+    }
+
+    #[test]
+    fn project_local_beats_env_dir() {
+        let tmp = tempdir().unwrap();
+        let cwd = tmp.path().join("project");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let project_file = touch(&cwd.join(".firma"), false);
+        let env = tmp.path().join("env");
+        touch(&env, false);
+        let mut f = empty();
+        f.cwd = Some(cwd);
+        f.env = Some(env);
+        let r = resolve_config("sidecar", None, &f).unwrap();
+        assert_eq!(r.source, ConfigSource::ProjectLocal);
+        assert_eq!(r.config_file, project_file);
+    }
+
+    #[test]
+    fn project_local_walks_up_to_ancestor() {
+        let tmp = tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let nested = project.join("sub").join("deep");
+        std::fs::create_dir_all(&nested).unwrap();
+        let project_file = touch(&project.join(".firma"), false);
+        let mut f = empty();
+        f.cwd = Some(nested);
+        let r = resolve_config("sidecar", None, &f).unwrap();
+        assert_eq!(r.source, ConfigSource::ProjectLocal);
+        assert_eq!(r.config_file, project_file);
     }
 
     #[test]

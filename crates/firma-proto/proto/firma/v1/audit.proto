@@ -68,6 +68,12 @@ message ExecutionEvent {
   // Target response body size in bytes. Zero when the call never
   // dispatched or the target returned no body.
   int64 response_size = 16;
+  // Per-run identity that scopes this event to a single `firma run`
+  // invocation. Matches the directory name under
+  // `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/` written by the
+  // SidecarSupervisor. Empty when the sidecar was not autostarted
+  // by `firma run` (e.g. daemon mode). Covered by `signature`.
+  string sandbox_id = 17;
 }
 
 // StreamEventsResponse is returned when the client half-closes the stream.

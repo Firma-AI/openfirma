@@ -107,8 +107,34 @@ fn global_log_filter_visible_under_subcommand() {
 }
 
 #[test]
-fn parse_stack_start() {
-    parse_ok(&["stack", "start", "--config", "stack.toml", "--detach"]);
+fn parse_init_defaults() {
+    parse_ok(&["init"]);
+}
+
+#[test]
+fn parse_init_scripted() {
+    parse_ok(&[
+        "init",
+        "--yes",
+        "--agent",
+        "codex",
+        "--provider",
+        "anthropic",
+        "--workspace",
+        "/tmp/proj",
+        "--authority",
+        "local",
+    ]);
+}
+
+#[test]
+fn parse_init_global() {
+    parse_ok(&["init", "--yes", "--global"]);
+}
+
+#[test]
+fn parse_sidecar_start() {
+    parse_ok(&["sidecar", "start", "--config", "firma.toml", "--detach"]);
 }
 
 #[test]
@@ -117,6 +143,11 @@ fn parse_monitor_defaults() {
 }
 
 #[test]
-fn parse_stack_status_json() {
-    parse_ok(&["stack", "status", "--json"]);
+fn parse_sidecar_status_json() {
+    parse_ok(&["sidecar", "status", "--json"]);
+}
+
+#[test]
+fn parse_sidecar_stop() {
+    parse_ok(&["sidecar", "stop", "--timeout", "5"]);
 }

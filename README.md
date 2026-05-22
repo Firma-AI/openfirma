@@ -36,8 +36,11 @@ This downloads a precompiled static binary for your platform and puts `firma` on
 On macOS you can also use Homebrew:
 
 ```bash
-brew tap Firma-AI/openfirma
-brew install firma
+examples/firma-run/local/setup.sh
+firma sidecar start --detach
+firma monitor
+cargo run -p firma -- run --profile generic -- curl https://example.com
+firma sidecar stop
 ```
 
 > **Build from source** — if you prefer to build from source, you need Rust 1.86+, `protoc`, and `make`. Run `make install` from the repo root to install all dependencies, then `cargo build --workspace`.
