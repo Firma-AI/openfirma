@@ -49,7 +49,7 @@ firma run --profile generic --backend firecracker -- python my_agent.py
 
 The choice is mostly an operational one: bwrap is fast to start and lightweight; vz and wsl2 are the only options on their platforms; firecracker gives you a real micro-VM at the cost of slightly slower start time.
 
-`firma run` cannot escalate privileges. On Linux it requires unprivileged user namespaces (which most modern distros enable by default). On WSL hosts, implicit backend selection fails early with a typed error instead of attempting `bwrap`.
+`firma run` cannot escalate privileges. On Linux it requires unprivileged user namespaces (which most modern distros enable by default). On WSL hosts, implicit backend selection uses the `wsl2` compatibility backend instead of attempting `bwrap`.
 
 ## Profiles
 

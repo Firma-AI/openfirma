@@ -469,7 +469,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     let cli_patch = cli_profile_patch(args);
     patch = patch.merge(cli_patch);
 
-    let backend = resolve_backend(patch.backend)?;
+    let backend = resolve_backend(patch.backend);
 
     // The explicitly-configured endpoint (config file or env), without the
     // hard-coded fallback. `None` means "nothing was set" — which lets the
@@ -581,10 +581,9 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     Ok(resolved)
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(clippy::unnecessary_wraps))]
-fn resolve_backend(configured_backend: Option<BackendKind>) -> Result<BackendKind, RunError> {
+fn resolve_backend(configured_backend: Option<BackendKind>) -> BackendKind {
     if let Some(backend) = configured_backend {
-        return Ok(backend);
+        return backend;
     }
 
     #[cfg(target_os = "linux")]
@@ -593,27 +592,18 @@ fn resolve_backend(configured_backend: Option<BackendKind>) -> Result<BackendKin
     }
 
     #[cfg(not(target_os = "linux"))]
-    Ok(BackendKind::default_for_current_host())
+    BackendKind::default_for_current_host()
 }
 
 #[cfg(target_os = "linux")]
-fn resolve_backend_for_linux(
-    configured_backend: Option<BackendKind>,
-    wsl: WslKind,
-) -> Result<BackendKind, RunError> {
+fn resolve_backend_for_linux(configured_backend: Option<BackendKind>, wsl: WslKind) -> BackendKind {
     if let Some(backend) = configured_backend {
-        return Ok(backend);
+        return backend;
     }
     if wsl.is_wsl() {
-        return Err(RunError::ConfigValidation(
-            "WSL host detected: implicit backend selection cannot use bwrap on WSL. \
-             Set `backend` explicitly to a compatible option for this host \
-             (for example `firecracker` where available), or run `firma doctor` \
-             for a compatibility report."
-                .to_string(),
-        ));
+        return BackendKind::Wsl2;
     }
-    Ok(BackendKind::Bwrap)
+    BackendKind::Bwrap
 }
 
 fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
@@ -983,19 +973,15 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn implicit_backend_selection_fails_on_wsl() {
-        let err = super::resolve_backend_for_linux(None, WslKind::Wsl2).expect_err("must fail");
-        assert!(
-            err.to_string().contains("WSL host detected"),
-            "unexpected error: {err}"
-        );
+    fn implicit_backend_selection_uses_wsl2_on_wsl() {
+        let backend = super::resolve_backend_for_linux(None, WslKind::Wsl2);
+        assert_eq!(backend, BackendKind::Wsl2);
     }
 
     #[test]
     #[cfg(target_os = "linux")]
     fn explicit_backend_is_kept_on_wsl() {
-        let backend = super::resolve_backend_for_linux(Some(BackendKind::Bwrap), WslKind::Wsl)
-            .expect("explicit backend should be preserved");
+        let backend = super::resolve_backend_for_linux(Some(BackendKind::Bwrap), WslKind::Wsl);
         assert_eq!(backend, BackendKind::Bwrap);
     }
 

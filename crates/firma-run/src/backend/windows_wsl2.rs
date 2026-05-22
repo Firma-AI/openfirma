@@ -1,5 +1,6 @@
 use std::process::{Child, Command};
 
+use crate::backend::platform;
 use crate::backend::{
     BackendKind, EnforcementProof, LaunchSpec, PrepareRequest, SandboxBackend, SandboxHandle,
 };
@@ -24,14 +25,15 @@ impl SandboxBackend for Wsl2Backend {
     }
 
     fn prepare(&self, request: &PrepareRequest) -> Result<SandboxHandle, RunError> {
-        if !cfg!(target_os = "windows") {
+        let wsl_linux_host = cfg!(target_os = "linux") && platform::detect_wsl().is_wsl();
+        if !(cfg!(target_os = "windows") || wsl_linux_host) {
             return Err(RunError::UnsupportedBackend {
                 backend: BackendKind::Wsl2.to_string(),
-                reason: "WSL2 backend is only available on Windows hosts".to_string(),
+                reason: "WSL2 backend is only available on Windows hosts or inside WSL Linux environments".to_string(),
             });
         }
 
-        if !command_available("wsl.exe") {
+        if cfg!(target_os = "windows") && !command_available("wsl.exe") {
             return Err(RunError::Backend {
                 backend: BackendKind::Wsl2.to_string(),
                 reason: "wsl.exe is not installed or not executable".to_string(),
@@ -98,10 +100,22 @@ impl SandboxBackend for Wsl2Backend {
     }
 
     fn start_agent(&self, _handle: &SandboxHandle, launch: &LaunchSpec) -> Result<Child, RunError> {
+        if cfg!(target_os = "linux") && platform::detect_wsl().is_wsl() {
+            let mut command = Command::new(&launch.executable);
+            command.current_dir(&launch.cwd);
+            command.args(&launch.args);
+            command.envs(&launch.env);
+            return command.spawn().map_err(|error| {
+                RunError::Spawn(format!(
+                    "failed to spawn command through WSL2 backend on WSL host: {error}"
+                ))
+            });
+        }
+
         if !cfg!(target_os = "windows") {
             return Err(RunError::UnsupportedBackend {
                 backend: BackendKind::Wsl2.to_string(),
-                reason: "cannot start WSL2 backend agent on non-Windows host".to_string(),
+                reason: "cannot start WSL2 backend agent on non-Windows/non-WSL host".to_string(),
             });
         }
 

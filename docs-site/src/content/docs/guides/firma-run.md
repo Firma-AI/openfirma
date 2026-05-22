@@ -72,7 +72,7 @@ If `unshare --user --pid echo ok` itself fails with a permission error,
 enable unprivileged user namespaces (`sysctl -w kernel.unprivileged_userns_clone=1`
 on some distros) or pick a different backend.
 
-On WSL, `firma run` does not implicitly select `bwrap`; it fails early with a typed configuration error so you can pick an explicit compatible backend.
+On WSL, `firma run` does not implicitly select `bwrap`; it automatically selects the `wsl2` compatibility backend.
 
 ## Step 2: Scaffold a config directory with `firma config`
 
@@ -343,7 +343,7 @@ What it *can* still do is whatever its capability + policy allow it to do *via* 
 
 - **Sidestep bwrap:** use `--backend firecracker` if it's available in your setup. The VM backends don't depend on host AppArmor for namespace setup.
 
-**`firma run` exits immediately with a typed backend/config error.** This is expected when the selected backend is incompatible with the host. On WSL with implicit backend selection, you'll get an early config validation error. On explicit `bwrap` selection with unsupported host conditions (for example WSL or restricted user namespaces), you'll get an `UnsupportedBackend` error with remediation guidance.
+**`firma run` exits immediately with a typed backend/config error.** This is expected when the selected backend is incompatible with the host. On WSL, implicit backend selection uses `wsl2` compatibility mode. On explicit `bwrap` selection with unsupported host conditions (for example WSL or restricted user namespaces), you'll get an `UnsupportedBackend` error with remediation guidance.
 
 **The agent sees `HTTP_PROXY` but its calls still fail with DNS errors.** The DNS stub only answers hosts the Sidecar will route. If your mapping rules don't cover the host, the stub returns NXDOMAIN. Add the host to the mapping (and a permitting rule to the policy).
 
