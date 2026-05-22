@@ -110,6 +110,24 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
         println!("  generated authority keypair → {}", key_path.display());
     }
 
+    let tls_dir = state.join("tls");
+    let tls_cert = tls_dir.join("authority.crt");
+    if args.force && tls_dir.exists() {
+        for name in ["authority.crt", "authority.key", "authority-ca.crt", "authority-ca.key"] {
+            let p = tls_dir.join(name);
+            if p.exists() {
+                std::fs::remove_file(&p)
+                    .with_context(|| format!("remove {}", p.display()))?;
+            }
+        }
+    }
+    if tls_cert.exists() {
+        println!("  preserved existing TLS material");
+    } else {
+        crate::services::authority::run_bootstrap_tls(&tls_dir, &[])
+            .with_context(|| "generate TLS material")?;
+    }
+
     println!("\nScaffolded:");
     println!("  config  {}", cfg.display());
     println!("  state   {}", state.display());
@@ -153,15 +171,31 @@ fn generate_files(
     let requested_actions = inputs.posture.requested_actions();
     let workspace_str = inputs.workspace.to_string_lossy();
     let state_dir_str = inputs.state_dir.to_string_lossy();
+    let tls_dir = inputs.state_dir.join("tls");
+    let tls_cert_path = tls_dir.join("authority.crt").to_string_lossy().into_owned();
+    let tls_key_path = tls_dir.join("authority.key").to_string_lossy().into_owned();
+    let tls_ca_cert_path = tls_dir.join("authority-ca.crt").to_string_lossy().into_owned();
     let (local_authority, authority_url) = match &inputs.authority {
-        AuthorityShape::Local => (true, format!("http://{}", inputs.authority_listen)),
+        AuthorityShape::Local => (true, format!("https://{}", inputs.authority_listen)),
         AuthorityShape::Remote(url) => (false, url.clone()),
     };
 
     let firma_toml = render(
         env,
         "firma.toml",
-        context! { name => inputs.name, mapping_paths, mitm_hosts, requested_actions, authority_listen => inputs.authority_listen, local_authority, authority_url, state_dir => state_dir_str.as_ref() },
+        context! {
+            name => inputs.name,
+            mapping_paths,
+            mitm_hosts,
+            requested_actions,
+            authority_listen => inputs.authority_listen,
+            local_authority,
+            authority_url,
+            state_dir => state_dir_str.as_ref(),
+            tls_cert_path,
+            tls_key_path,
+            tls_ca_cert_path,
+        },
     )?;
     let mapping_rules = render(
         env,
@@ -203,7 +237,9 @@ fn render(env: &Environment<'_>, template: &str, ctx: minijinja::Value) -> Resul
 }
 
 fn default_output_dir() -> PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".firma")
 }
 
 fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
@@ -459,6 +495,20 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
     let key_path = plan.state_dir.join("authority.key");
     if plan.force || !key_path.exists() {
         crate::services::authority::run_generate_key(&key_path).map_err(|e| e.to_string())?;
+    }
+
+    let tls_dir = plan.state_dir.join("tls");
+    if plan.force && tls_dir.exists() {
+        for name in ["authority.crt", "authority.key", "authority-ca.crt", "authority-ca.key"] {
+            let p = tls_dir.join(name);
+            if p.exists() {
+                std::fs::remove_file(&p).map_err(|e| format!("remove {}: {e}", p.display()))?;
+            }
+        }
+    }
+    if !tls_dir.join("authority.crt").exists() {
+        crate::services::authority::run_bootstrap_tls(&tls_dir, &[])
+            .map_err(|e| format!("generate TLS material: {e}"))?;
     }
 
     Ok(())
