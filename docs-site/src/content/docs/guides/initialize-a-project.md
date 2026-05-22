@@ -3,11 +3,11 @@ title: Initialize a project with firma config
 description: Scaffold a fresh Firma project — config dir, signing keys, default policies — interactively or in scripted form.
 ---
 
-`firma config` writes a fresh project layout in one command: a sectioned
-`firma.toml`, signing and audit keys, empty policy directories, a
-placeholder mapping file. Run it once per project. `firma run <agent>`
-calls the same scaffold implicitly on first use, so you can also skip
-this step if you only want the one-command path.
+`firma config` writes or updates a project layout in one command: a
+sectioned `firma.toml`, signing and audit keys, policy files, mapping
+files, and a `firma-run.toml`. `firma run <agent>` calls the same
+scaffold implicitly on first use, so you can also skip this step if you
+only want the one-command path.
 
 ## Usage shapes
 
@@ -35,6 +35,13 @@ Config always lands in the current directory or an explicit `--output-dir`:
 The wizard prompts for: workspace path, agent, provider, authority
 shape (`local` or a remote URL). Supplying the matching flag on the
 command line short-circuits that prompt.
+
+When the target config directory already has `firma.toml` or
+`firma-run.toml`, `firma config` reads them first and uses the current
+values as defaults. Pass only the flags you want to change; omitted
+values keep the existing mode, state directory, authority settings,
+posture, mappings, preflight action list, and workspace. Existing files
+are preserved unless `--force` is set.
 
 ## Flags
 
