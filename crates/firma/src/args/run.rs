@@ -11,37 +11,42 @@ use firma_run::config::SandboxIdentityMode;
 /// Arguments for `firma run`.
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    /// Built-in profile id to use.
+    /// Built-in agent profile (e.g. `generic`, `codex`, `claude`) that selects
+    /// default backend, identity mode and policy bundle.
     #[arg(long, default_value = "generic")]
     pub profile: String,
 
-    /// Optional runtime config path (.toml, .yaml, .yml).
+    /// Path to a runtime config file (`.toml`, `.yaml`, `.yml`) layered on top
+    /// of the selected profile.
     #[arg(long)]
     pub config: Option<PathBuf>,
 
-    /// Override backend selection.
+    /// Force a specific sandbox backend instead of the profile's default.
     #[arg(long)]
     pub backend: Option<BackendOverride>,
 
-    /// Optional sidecar endpoint override.
-    ///
-    /// Accepted forms: `<tcp://127.0.0.1:8080>`, `<unix:///run/firma-sidecar.sock>`
+    /// Address of the Sidecar the sandboxed agent should route outbound traffic
+    /// through. Accepts `tcp://host:port` or `unix:///path/to/sock`.
     #[arg(long)]
     pub sidecar_endpoint: Option<String>,
 
-    /// Optional capability token file path for runtime lease refresh.
+    /// Path to a capability-token file made available to the agent for
+    /// runtime lease refresh.
     #[arg(long)]
     pub capability_file: Option<PathBuf>,
 
-    /// Override sandbox identity mode.
+    /// Override how the agent's identity is mapped inside the sandbox
+    /// (`sandbox-user` for an isolated uid, `host-user` to keep the caller's uid).
     #[arg(long, value_enum)]
     pub identity_mode: Option<IdentityModeOverride>,
 
-    /// Preserve host user identity inside sandbox for compatibility workflows.
+    /// Keep the host user's identity inside the sandbox. Required by tools
+    /// that read `$HOME`-relative paths or expect a matching uid.
     #[arg(long, default_value_t = false)]
     pub preserve_host_user: bool,
 
-    /// Print the resolved effective config as JSON before execution.
+    /// Print the merged effective config as JSON before launching the agent.
+    /// Useful for debugging which knobs actually took effect.
     #[arg(long, default_value_t = false)]
     pub print_effective_config: bool,
 

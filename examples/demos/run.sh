@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Direct terminal runner for the demos. Skips the TUI — boots the firma stack
-# (authority + sidecar) in the background via `firma stack start --detach`,
-# runs the demo script in the foreground, then tears the stack down on exit.
+# Direct terminal runner for the demos. Skips the TUI — boots authority +
+# sidecar in the background via `firma sidecar start --detach`, runs the demo
+# script in the foreground, then tears everything down on exit.
 #
 # Usage:
 #   examples/demos/run.sh demo0 [--no-build] [--no-script]
@@ -57,8 +57,8 @@ if [[ $build -eq 1 ]]; then
     cargo build -p firma
 fi
 
-# 2. Provision authority key if absent. (Demo-specific; firma stack does not
-#    own key material.)
+# 2. Provision authority key if absent. (Demo-specific; firma sidecar start
+#    does not own key material.)
 if [[ ! -f "$authority_key" ]]; then
     firma authority generate-key --output "$authority_key"
 fi
@@ -72,21 +72,21 @@ if [[ ! -f "$audit_key" ]]; then
 fi
 
 # 4. Sidecar regenerates CA material on every boot. Remove stale cert so the
-#    sidecar produces fresh material on stack start.
+#    sidecar produces fresh material on `sidecar start`.
 rm -f "$ca_dir/firma-ca.crt" "$ca_dir/firma-ca.key"
 mkdir -p "$ca_dir"
 
 # 5. Reset audit log so the run is observable from scratch.
 : > "$runtime_dir/audit.jsonl"
 
-# 6. Start the stack (detached) from this demo's unified `firma.toml`.
-#    `start` blocks until both components are listening and the sidecar has
-#    produced CA material, then forks a supervisor and returns. On any error,
-#    stack start tears down what it spawned and exits non-zero — fail-closed.
-firma stack start --detach --state-dir "$runtime_dir" --config "$demo_dir/firma.toml"
+# 6. Start the sidecar daemon (detached) from this demo's unified `firma.toml`.
+#    `start` blocks until both authority and sidecar are listening and CA
+#    material is on disk, then forks a supervisor and returns. On any error,
+#    `start` tears down what it spawned and exits non-zero — fail-closed.
+firma sidecar start --detach --state-dir "$runtime_dir" --config "$demo_dir/firma.toml"
 
 cleanup() {
-    firma stack stop --state-dir "$runtime_dir" --timeout 10 || true
+    firma sidecar stop --state-dir "$runtime_dir" --timeout 10 || true
 }
 trap cleanup EXIT INT TERM
 

@@ -7,6 +7,7 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
+    clippy::too_many_lines,
     reason = "test code: panics acceptable on test failure"
 )]
 
@@ -200,6 +201,175 @@ fn priority_order_explicit_over_env_over_cwd() {
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Cwd(cwd));
+}
+
+#[test]
+fn relative_template_resource_paths_rebase_to_template_dir() {
+    let tmp = TempDir::new().expect("tmp");
+    let template_dir = tmp.path().join("operator-config");
+    fs::create_dir_all(&template_dir).expect("mkdir template dir");
+    let template = template_dir.join("firma.toml");
+    // Touch sentinel files so the assertions key off real paths (the
+    // rebase logic itself does not require them, but it documents that
+    // the operator's config dir is where these resources actually live).
+    fs::write(template_dir.join("audit.key"), b"pem").expect("audit key");
+    fs::write(template_dir.join("mapping-rules.toml"), b"[[rules]]\n").expect("rules");
+    let policies = template_dir.join("policies");
+    fs::create_dir_all(&policies).expect("policies dir");
+
+    // Use a platform-appropriate absolute path: Unix-style "/abs/..." is
+    // NOT absolute on Windows (no drive prefix), so it would be rebased
+    // instead of left untouched. Drive-prefixed paths are absolute on both.
+    #[cfg(windows)]
+    let (abs_keep, abs_seed) = ("C:/abs/keep.toml", "C:/abs/seed.toml");
+    #[cfg(not(windows))]
+    let (abs_keep, abs_seed) = ("/abs/keep.toml", "/abs/seed.toml");
+
+    fs::write(
+        &template,
+        format!(
+            r#"
+[sidecar.audit]
+signing_key_path = "audit.key"
+file_path = "audit/events.jsonl"
+
+[sidecar.policy]
+dir = "policies"
+
+[sidecar.mapping]
+rules_path = "mapping-rules.toml"
+rules_paths = ["extras/github.toml", "{abs_keep}"]
+
+[sidecar.authority]
+public_key_path = "keys/authority.pub"
+
+[sidecar.capability_seed]
+paths = ["seeds/dev.toml", "{abs_seed}"]
+"#
+        ),
+    )
+    .expect("write template");
+
+    // Synthesize into a marker directory that is NOT under template_dir
+    // so a wrong rebase would point at the wrong filesystem location.
+    let marker = tmp.path().join("marker");
+    fs::create_dir_all(&marker).expect("marker dir");
+    let out = marker.join("sidecar.toml");
+    let sock = marker.join("sidecar.sock");
+
+    synthesize(SynthesizeRequest {
+        agent_id: "generic",
+        session_id: "sess",
+        explicit_template: Some(&template),
+        env_template: None,
+        cwd_template: None,
+        socket_path: &sock,
+        listen_addr: None,
+        out_path: &out,
+        authority_url: None,
+    })
+    .expect("synthesize");
+
+    let value = read(&out);
+    let sidecar = value
+        .as_table()
+        .and_then(|t| t.get("sidecar"))
+        .and_then(|v| v.as_table())
+        .expect("sidecar");
+
+    let audit = sidecar
+        .get("audit")
+        .and_then(|v| v.as_table())
+        .expect("audit");
+    assert_eq!(
+        audit.get("signing_key_path").and_then(|v| v.as_str()),
+        Some(template_dir.join("audit.key").display().to_string()).as_deref()
+    );
+    assert_eq!(
+        audit.get("file_path").and_then(|v| v.as_str()),
+        Some(
+            template_dir
+                .join("audit/events.jsonl")
+                .display()
+                .to_string()
+        )
+        .as_deref()
+    );
+
+    let policy = sidecar
+        .get("policy")
+        .and_then(|v| v.as_table())
+        .expect("policy");
+    assert_eq!(
+        policy.get("dir").and_then(|v| v.as_str()),
+        Some(template_dir.join("policies").display().to_string()).as_deref()
+    );
+
+    let mapping = sidecar
+        .get("mapping")
+        .and_then(|v| v.as_table())
+        .expect("mapping");
+    assert_eq!(
+        mapping.get("rules_path").and_then(|v| v.as_str()),
+        Some(
+            template_dir
+                .join("mapping-rules.toml")
+                .display()
+                .to_string()
+        )
+        .as_deref()
+    );
+    let rules_paths = mapping
+        .get("rules_paths")
+        .and_then(|v| v.as_array())
+        .expect("rules_paths array");
+    assert_eq!(
+        rules_paths
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>(),
+        vec![
+            template_dir
+                .join("extras/github.toml")
+                .display()
+                .to_string(),
+            abs_keep.to_string()
+        ]
+    );
+
+    let authority = sidecar
+        .get("authority")
+        .and_then(|v| v.as_table())
+        .expect("authority");
+    assert_eq!(
+        authority.get("public_key_path").and_then(|v| v.as_str()),
+        Some(
+            template_dir
+                .join("keys/authority.pub")
+                .display()
+                .to_string()
+        )
+        .as_deref()
+    );
+
+    let capability_seed = sidecar
+        .get("capability_seed")
+        .and_then(|v| v.as_table())
+        .expect("capability_seed");
+    let seed_paths = capability_seed
+        .get("paths")
+        .and_then(|v| v.as_array())
+        .expect("paths array");
+    assert_eq!(
+        seed_paths
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>(),
+        vec![
+            template_dir.join("seeds/dev.toml").display().to_string(),
+            abs_seed.to_string()
+        ]
+    );
 }
 
 #[test]
