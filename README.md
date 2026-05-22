@@ -125,7 +125,10 @@ Each Sidecar enforces policy locally on its own machine while the shared Authori
 
 ```bash
 # On each developer machine or CI runner:
-firma run --authority https://authority.internal --profile claude-code -- claude
+firma run \
+  --authority https://authority.internal \
+  --profile claude-code \
+  -- claude
 ```
 
 </td><td>
