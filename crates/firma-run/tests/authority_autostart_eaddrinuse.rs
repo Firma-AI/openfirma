@@ -14,18 +14,8 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
+use firma_run::authority::AuthorityCli;
 use firma_run::routing::{AutostartFlags, resolve_authority};
-
-struct NoPrompt;
-impl AuthorityPromptIo for NoPrompt {
-    fn is_tty(&self) -> bool {
-        false
-    }
-    fn confirm(&mut self, _: &str) -> std::io::Result<bool> {
-        Ok(false)
-    }
-}
 
 #[test]
 fn pre_bound_port_short_circuits_to_local() {
@@ -36,7 +26,7 @@ fn pre_bound_port_short_circuits_to_local() {
 
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join("firma.toml");
-    std::fs::write(&cfg, "[authority]\ntype = \"local\"\n").unwrap();
+    std::fs::write(&cfg, "[authority]\nlisten_addr = \"127.0.0.1:50051\"\n").unwrap();
 
     let identity = firma_run::identity::RunIdentity::new("test");
     let runtime_dir = tmp.path().join("runtime");
@@ -50,7 +40,6 @@ fn pre_bound_port_short_circuits_to_local() {
         authority_pub_key: None,
         use_http_proxy_sidecar: false,
     };
-    let mut prompt = NoPrompt;
     let res = resolve_authority(
         &identity,
         &runtime_dir,
@@ -59,7 +48,6 @@ fn pre_bound_port_short_circuits_to_local() {
         "developer",
         &cfg,
         &PathBuf::from("/bin/false"),
-        &mut prompt,
     )
     .expect("resolve ok");
     assert_eq!(res.url, "http://[::1]:50051");

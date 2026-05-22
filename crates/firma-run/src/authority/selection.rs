@@ -1,14 +1,14 @@
-//! Resolve `AuthoritySelection` from CLI args, persisted user config,
-//! and the y/N prompt.
+//! Resolve `AuthoritySelection` from CLI args and `firma.toml`.
 //!
-//! Precedence: CLI > persisted > prompt (only when both empty and TTY).
-//! Persistence is gated strictly by the Y branch of the prompt — CLI
-//! overrides and pre-existing persisted entries do not rewrite the file.
+//! Precedence: CLI > `firma.toml`. Selection rule:
+//!
+//! - `[authority]` present in `firma.toml` → `Local` (autostart).
+//! - `[sidecar.authority].url` present → `Remote(url)`.
+//! - Neither → [`RunError::MissingAuthority`].
 
 use std::path::Path;
 
-use crate::authority::config::{AuthoritySection, persist_local, read_authority};
-use crate::authority::prompt::AuthorityPromptIo;
+use crate::authority::config::{AuthoritySection, read_authority};
 use crate::error::RunError;
 
 /// CLI-side selection (value of `--authority`).
@@ -33,31 +33,17 @@ pub enum AuthoritySelection {
     Remote(String),
 }
 
-/// User-visible prompt text. Spec §4 step 4 verbatim.
-pub const PROMPT_TEXT: &str = "\
-No Authority is configured for this project.
-firma run can start a local Mini Authority for development on loopback ([::1]) using a per-run ephemeral port.
-This is suitable for a single developer on a trusted workstation.
-
-Start a local Mini Authority? [y/N]: ";
-
 /// Resolve the selection.
 ///
 /// # Errors
 ///
-/// Returns:
-///
-/// - [`RunError::MissingAuthority`] when `no_autostart` is set and
-///   nothing is configured.
-/// - [`RunError::AuthorityPromptNoTty`] when no config exists and stdin
-///   is not a TTY.
-/// - [`RunError::AuthorityDeclined`] when the user answers N.
-/// - [`RunError::ConfigParse`] / `Internal` on user-config I/O failure.
+/// Returns [`RunError::MissingAuthority`] when no CLI flag is set and
+/// the user config carries neither `[authority]` nor
+/// `[sidecar.authority].url`.
 pub fn resolve(
     cli: &AuthorityCli,
     no_autostart: bool,
     user_config_path: &Path,
-    prompt: &mut dyn AuthorityPromptIo,
 ) -> Result<AuthoritySelection, RunError> {
     match cli {
         AuthorityCli::Local => return Ok(AuthoritySelection::Local),
@@ -66,193 +52,98 @@ pub fn resolve(
     }
 
     if let Some(section) = read_authority(user_config_path)?
-        && let Some(sel) = section_to_selection(&section)?
+        && let Some(sel) = section_to_selection(&section)
     {
         return Ok(sel);
     }
-
     if no_autostart {
         return Err(RunError::MissingAuthority);
     }
-    if !prompt.is_tty() {
-        return Err(RunError::AuthorityPromptNoTty);
-    }
-    let yes = prompt
-        .confirm(PROMPT_TEXT)
-        .map_err(|e| RunError::Internal(format!("read y/N answer: {e}")))?;
-    if !yes {
-        return Err(RunError::AuthorityDeclined);
-    }
-    persist_local(user_config_path)?;
     Ok(AuthoritySelection::Local)
 }
 
-fn section_to_selection(s: &AuthoritySection) -> Result<Option<AuthoritySelection>, RunError> {
-    match s.r#type.as_deref() {
-        Some("local") => Ok(Some(AuthoritySelection::Local)),
-        Some("remote") => {
-            let url = s
-                .connect
-                .as_ref()
-                .and_then(|c| c.url.as_deref())
-                .filter(|u| !u.is_empty());
-            url.map_or_else(
-                || {
-                    Err(RunError::ConfigValidation(
-                        "[authority].type = \"remote\" requires url in [sidecar.authority]"
-                            .to_string(),
-                    ))
-                },
-                |u| Ok(Some(AuthoritySelection::Remote(u.to_string()))),
-            )
-        }
-        Some(other) => Err(RunError::ConfigValidation(format!(
-            "unknown [authority].type `{other}`"
-        ))),
-        None => Ok(None),
+fn section_to_selection(s: &AuthoritySection) -> Option<AuthoritySelection> {
+    if s.local {
+        return Some(AuthoritySelection::Local);
     }
+    s.connect
+        .as_ref()
+        .and_then(|c| c.url.as_deref())
+        .filter(|u| !u.is_empty())
+        .map(|u| AuthoritySelection::Remote(u.to_string()))
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use std::collections::VecDeque;
     use tempfile::tempdir;
-
-    struct MockPrompt {
-        tty: bool,
-        answers: VecDeque<bool>,
-        called: usize,
-    }
-
-    impl MockPrompt {
-        fn new(tty: bool, answers: Vec<bool>) -> Self {
-            Self {
-                tty,
-                answers: answers.into(),
-                called: 0,
-            }
-        }
-    }
-
-    impl AuthorityPromptIo for MockPrompt {
-        fn is_tty(&self) -> bool {
-            self.tty
-        }
-        fn confirm(&mut self, _: &str) -> std::io::Result<bool> {
-            self.called += 1;
-            Ok(self.answers.pop_front().unwrap_or(false))
-        }
-    }
 
     #[test]
     fn cli_local_wins_over_everything() {
         let tmp = tempdir().unwrap();
         let cfg = tmp.path().join("none.toml");
-        let mut prompt = MockPrompt::new(false, vec![]);
-        let sel = resolve(&AuthorityCli::Local, true, &cfg, &mut prompt).unwrap();
+        let sel = resolve(&AuthorityCli::Local, true, &cfg).unwrap();
         assert_eq!(sel, AuthoritySelection::Local);
-        assert_eq!(prompt.called, 0);
     }
 
     #[test]
     fn cli_remote_wins_over_everything() {
         let tmp = tempdir().unwrap();
         let cfg = tmp.path().join("none.toml");
-        let mut prompt = MockPrompt::new(false, vec![]);
         let sel = resolve(
             &AuthorityCli::Remote("https://x".into()),
             true,
             &cfg,
-            &mut prompt,
         )
         .unwrap();
         assert_eq!(sel, AuthoritySelection::Remote("https://x".into()));
     }
 
     #[test]
-    fn persisted_local_returns_local_without_prompt() {
+    fn authority_section_implies_local() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("firma.toml");
-        std::fs::write(&path, "[authority]\ntype = \"local\"\n").unwrap();
-        let mut prompt = MockPrompt::new(true, vec![]);
-        let sel = resolve(&AuthorityCli::Unset, false, &path, &mut prompt).unwrap();
+        std::fs::write(&path, "[authority]\nlisten_addr = \"127.0.0.1:0\"\n").unwrap();
+        let sel = resolve(&AuthorityCli::Unset, false, &path).unwrap();
         assert_eq!(sel, AuthoritySelection::Local);
-        assert_eq!(prompt.called, 0);
     }
 
     #[test]
-    fn persisted_remote_returns_remote() {
+    fn sidecar_authority_url_only_returns_remote() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("firma.toml");
         std::fs::write(
             &path,
-            "[authority]\ntype = \"remote\"\n\n[sidecar.authority]\nurl = \"https://x\"\n",
+            "[sidecar.authority]\nurl = \"https://x\"\n",
         )
         .unwrap();
-        let mut prompt = MockPrompt::new(false, vec![]);
-        let sel = resolve(&AuthorityCli::Unset, false, &path, &mut prompt).unwrap();
+        let sel = resolve(&AuthorityCli::Unset, false, &path).unwrap();
         assert_eq!(sel, AuthoritySelection::Remote("https://x".into()));
     }
 
     #[test]
-    fn no_autostart_with_empty_errors_missing_authority() {
+    fn empty_config_defaults_to_local_autostart() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("firma.toml");
-        let mut prompt = MockPrompt::new(true, vec![true]);
-        let err = resolve(&AuthorityCli::Unset, true, &path, &mut prompt).unwrap_err();
-        assert!(matches!(err, RunError::MissingAuthority));
-        assert_eq!(prompt.called, 0);
-    }
-
-    #[test]
-    fn no_tty_with_empty_errors_no_tty() {
-        let tmp = tempdir().unwrap();
-        let path = tmp.path().join("firma.toml");
-        let mut prompt = MockPrompt::new(false, vec![]);
-        let err = resolve(&AuthorityCli::Unset, false, &path, &mut prompt).unwrap_err();
-        assert!(matches!(err, RunError::AuthorityPromptNoTty));
-    }
-
-    #[test]
-    fn tty_yes_persists_and_returns_local() {
-        let tmp = tempdir().unwrap();
-        let path = tmp.path().join("firma.toml");
-        let mut prompt = MockPrompt::new(true, vec![true]);
-        let sel = resolve(&AuthorityCli::Unset, false, &path, &mut prompt).unwrap();
+        let sel = resolve(&AuthorityCli::Unset, false, &path).unwrap();
         assert_eq!(sel, AuthoritySelection::Local);
-        let persisted = read_authority(&path).unwrap().unwrap();
-        assert_eq!(persisted.r#type.as_deref(), Some("local"));
     }
 
     #[test]
-    fn tty_no_returns_declined_without_persist() {
+    fn no_authority_keys_defaults_to_local_autostart() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("firma.toml");
-        let mut prompt = MockPrompt::new(true, vec![false]);
-        let err = resolve(&AuthorityCli::Unset, false, &path, &mut prompt).unwrap_err();
-        assert!(matches!(err, RunError::AuthorityDeclined));
-        assert!(read_authority(&path).unwrap().is_none() || !path.exists());
+        std::fs::write(&path, "[other]\nkeep = true\n").unwrap();
+        let sel = resolve(&AuthorityCli::Unset, false, &path).unwrap();
+        assert_eq!(sel, AuthoritySelection::Local);
     }
 
     #[test]
-    fn remote_section_without_url_errors() {
+    fn empty_config_with_no_autostart_errors_missing_authority() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("firma.toml");
-        std::fs::write(&path, "[authority]\ntype = \"remote\"\n").unwrap();
-        let mut prompt = MockPrompt::new(false, vec![]);
-        let err = resolve(&AuthorityCli::Unset, false, &path, &mut prompt).unwrap_err();
-        assert!(matches!(err, RunError::ConfigValidation(_)));
-    }
-
-    #[test]
-    fn unknown_type_errors() {
-        let tmp = tempdir().unwrap();
-        let path = tmp.path().join("firma.toml");
-        std::fs::write(&path, "[authority]\ntype = \"weird\"\n").unwrap();
-        let mut prompt = MockPrompt::new(false, vec![]);
-        let err = resolve(&AuthorityCli::Unset, false, &path, &mut prompt).unwrap_err();
-        assert!(matches!(err, RunError::ConfigValidation(_)));
+        let err = resolve(&AuthorityCli::Unset, true, &path).unwrap_err();
+        assert!(matches!(err, RunError::MissingAuthority));
     }
 }

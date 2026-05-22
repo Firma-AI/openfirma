@@ -155,32 +155,26 @@ Autostart currently requires Unix. On Windows, use `--sidecar <url>` with a pre-
 ### Authority bootstrap
 
 Before the Sidecar starts, `firma run` resolves which Authority to use.
-Precedence: `--authority local` / `--authority <url>` > persisted
-`[authority]` table in the discovered `firma.toml`
-(`~/.config/firma/firma.toml` on Linux/macOS,
-`%USERPROFILE%\.firma\firma.toml` on Windows) > a one-time y/N prompt when
-both are empty and stdin is a TTY:
+Precedence:
 
-```text
-No Authority is configured for this project.
-firma run can start a local Mini Authority for development on [::1]:<ephemeral-port>.
-This is suitable for a single developer on a trusted workstation.
-
-Start a local Mini Authority? [y/N]:
-```
-
-On `y` the choice is persisted and a per-run Mini Authority is spawned
-with an ephemeral signing key and loopback listen address. On `n`, no-TTY, or `--no-autostart`,
-`firma run` exits with a typed error (`AuthorityDeclined`,
-`AuthorityPromptNoTty`, or `MissingAuthority`). The spawned Authority is
-killed on `firma run` exit.
+1. `--authority local` / `--authority <url>` — CLI override.
+2. `[authority]` section present in the discovered `firma.toml`
+   (`~/.config/firma/firma.toml` on Linux/macOS,
+   `%USERPROFILE%\.firma\firma.toml` on Windows) — autostart a local
+   Mini Authority.
+3. `[sidecar.authority].url` set — connect to that remote Authority.
+4. Nothing configured — `firma run` falls back to local autostart so
+   zero-config works. The spawned Authority uses an ephemeral signing
+   key and a per-run loopback listen address; it is killed on
+   `firma run` exit. `--no-autostart` overrides this to fail with
+   `MissingAuthority`.
 
 Flags:
 
 - `--authority local` — autostart a local Mini Authority on
-  a per-run loopback ephemeral port; bypasses the prompt.
-- `--authority <url>` — point at a remote Authority; bypasses the
-  prompt; fails with `AuthorityUnreachable` if the URL does not answer.
+  a per-run loopback ephemeral port; overrides config.
+- `--authority <url>` — point at a remote Authority; overrides config;
+  fails with `AuthorityUnreachable` if the URL does not answer.
 - `--authority-profile <name>` — profile materialised by the
   autostarted Mini Authority. Today only `developer` ships. Ignored
   when the Authority is remote or already reachable.
