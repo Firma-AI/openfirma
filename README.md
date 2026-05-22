@@ -139,7 +139,7 @@ firma run \
 
 **4. Custom Authority, custom agents without `firma run`**
 
-The Sidecar runs independently as a standalone enforcement proxy. Any agent, CI worker, or custom runtime that respects `HTTP_PROXY` / `HTTPS_PROXY` can be governed without SDK integrations or agent-specific wrappers.
+The Sidecar runs independently as a standalone enforcement proxy. Any agent, CI worker, or custom runtime that respects `HTTP_PROXY` / `HTTPS_PROXY` can be governed without agent-specific wrappers.
 
 ```bash
 firma authority --config firma.toml
