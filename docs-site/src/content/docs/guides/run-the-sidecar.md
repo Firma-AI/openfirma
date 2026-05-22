@@ -140,9 +140,9 @@ level = "info"
 
 A few notes on what's *not* here:
 
-- No `[sidecar.policy].authority_url`. With no Authority configured, the Sidecar runs in **policy-only** mode — Stage 1 (capability validation) is effectively bypassed for unmapped/protected actions. We use `default_protected = false` so unmapped traffic passes through, and we will only see Stage 2 decisions for the mapped routes. This is fine for first-touch experimentation; production workloads should run with an Authority and `default_protected = true`.
+- No `[sidecar.authority].url`. With no Authority configured, the Sidecar runs in **policy-only** mode — Stage 1 (capability validation) is effectively bypassed for unmapped/protected actions. We use `default_protected = false` so unmapped traffic passes through, and we will only see Stage 2 decisions for the mapped routes. This is fine for first-touch experimentation; production workloads should run with an Authority and `default_protected = true`.
 - No `[sidecar.ca]` section. We're not using HTTPS MITM. CONNECT-style HTTPS will pass through but we won't see L7 details for it. See [Enable HTTPS MITM](../https-mitm/) when you're ready.
-- If you later set `policy.authority_url = "http://..."`, note that plain HTTP is only accepted by default for loopback Authority hosts (`localhost`/`127.0.0.1`/`::1`). Non-loopback plaintext requires explicit opt-in with `authority.allow_insecure_remote_authority = true`.
+- If you later set `authority.url = "http://..."`, note that plain HTTP is only accepted by default for loopback Authority hosts (`localhost`/`127.0.0.1`/`::1`). Non-loopback plaintext requires explicit opt-in with `authority.allow_insecure_remote_authority = true`.
 - `bundle_ttl_seconds = 3600` is generous; without an Authority pushing fresh bundles, you don't want the bundle to go stale.
 
 ## Step 6: Start the Sidecar
@@ -165,7 +165,7 @@ INFO firma_sidecar: sidecar ready
 
 The `sidecar ready` line is your signal that the Sidecar accepted the config and is enforcing.
 
-When `policy.authority_url` is set, `ready` is held back until both the
+When `authority.url` is set, `ready` is held back until both the
 policy-bundle and revocation streams have hydrated — so the line also means
 policy is in place and the first request through the proxy can't race ahead of
 it. With no Authority configured, the streams are pre-seeded ready and the line

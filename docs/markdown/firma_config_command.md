@@ -24,8 +24,8 @@ firma config --mode agent-local \
 
 | Mode            | What it creates                                                    |
 | --------------- | ------------------------------------------------------------------ |
-| `agent-local`   | Sidecar config + co-located mini-authority (`[authority.server]` + `[authority.connect]`) |
-| `agent-remote`  | Sidecar config only, connecting to an existing authority (`[authority.connect]`) |
+| `agent-local`   | Sidecar config + co-located mini-authority (`[authority]` + `[sidecar.authority]`) |
+| `agent-remote`  | Sidecar config only, connecting to an existing authority (`[sidecar.authority]`)  |
 | `authority`     | Standalone authority server only — no sidecar config              |
 
 ## Flags
@@ -51,8 +51,8 @@ firma config [--mode <mode>]
 | `--workspace <dir>`         |       | CWD                      | Agent RW path written to `firma-run.toml` bwrap mount               |
 | `--output-dir <dir>`        | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings are written     |
 | `--state-dir <dir>`         |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                         |
-| `--authority-listen <addr>` |       | `127.0.0.1:9443`         | gRPC listen address written to `[authority.server]` (`agent-local` / `authority` only) |
-| `--authority-url <url>`     |       | wizard prompt            | Authority URL written to `[authority.connect].url` (`agent-remote`) |
+| `--authority-listen <addr>` |       | `127.0.0.1:9443`         | gRPC listen address written to `[authority]` (`agent-local` / `authority` only) |
+| `--authority-url <url>`     |       | wizard prompt            | Authority URL written to `[sidecar.authority].url` (`agent-remote`) |
 | `--authority-ca-cert <path>`|       | wizard prompt            | Authority CA cert PEM path (`agent-remote`)                         |
 | `--authority-pub-key <path>`|       | derived from state dir   | Authority public key path (`agent-remote`)                          |
 | `--yes`                     | `-y`  | off                      | Skip all interactive prompts; use existing values or flag defaults  |
@@ -105,20 +105,22 @@ firma config [--mode <mode>]
 
 ## Generated `firma.toml` structure
 
-`agent-local` produces both an `[authority.server]` and `[authority.connect]`
-section. `agent-remote` produces only `[authority.connect]`. `authority` mode
-produces only `[authority.server]`.
+`agent-local` produces an `[authority]` section plus a
+`[sidecar.authority]` block with the connect coordinates.
+`agent-remote` produces only the `[sidecar.authority]` connect block.
+`authority` mode produces only `[authority]`.
 
 ```toml
-[authority.server]            # present for agent-local and authority modes
+[authority]                   # present for agent-local and authority modes
 listen_addr   = "127.0.0.1:9443"
 key_file      = "/path/to/state/authority.key"
 # ...
 
-[authority.connect]           # present for agent-local and agent-remote modes
-url           = "https://127.0.0.1:9443"
-ca_cert_path  = "/path/to/state/tls/authority-ca.crt"
-pub_key_path  = "/path/to/state/authority.pub"
+[sidecar.authority]           # connect coords for agent-local / agent-remote
+url             = "https://127.0.0.1:9443"
+ca_cert_path    = "/path/to/state/tls/authority-ca.crt"
+public_key_path = "/path/to/state/authority.pub"
+# ... plus connect_timeout_secs / reconnect_* / revocation_* tuning
 
 [sidecar.preflight]
 agent_id          = "my-agent"

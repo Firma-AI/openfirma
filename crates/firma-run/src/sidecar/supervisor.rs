@@ -43,13 +43,13 @@ pub struct SpawnRequest<'a> {
     pub firma_exe: PathBuf,
     pub startup_timeout: Duration,
     /// Effective Authority URL injected into
-    /// `[sidecar.policy].authority_url` of the synthesized sidecar config.
+    /// `[sidecar.authority].url` of the synthesized sidecar config.
     /// `None` leaves the section untouched.
     pub authority_url: Option<&'a str>,
-    /// CA cert path from `[authority.connect]` — injected into
-    /// `[sidecar.authority].ca_cert_path`. `None` leaves existing value.
+    /// CA cert path injected into `[sidecar.authority].ca_cert_path`.
+    /// `None` leaves existing value.
     pub authority_ca_cert: Option<PathBuf>,
-    /// Authority public key path from `[authority.connect]` — injected into
+    /// Authority public key path injected into
     /// `[sidecar.authority].public_key_path` and
     /// `[sidecar.preflight].authority_pub_key_path`. `None` leaves existing.
     pub authority_pub_key: Option<PathBuf>,

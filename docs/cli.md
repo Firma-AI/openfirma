@@ -31,7 +31,7 @@ firma config [OPTIONS]
 | `--output-dir`               | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings land             |
 | `--state-dir`                |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                          |
 | `--authority-listen <addr>`  |       | `127.0.0.1:9443`         | gRPC listen address (`agent-local` / `authority` modes only)         |
-| `--authority-url <url>`      |       | wizard prompt            | Authority URL written to `[authority.connect].url` (`agent-remote`)  |
+| `--authority-url <url>`      |       | wizard prompt            | Authority URL written to `[sidecar.authority].url` (`agent-remote`)  |
 | `--authority-ca-cert <path>` |       | wizard prompt            | Authority CA cert PEM path (`agent-remote`)                          |
 | `--authority-pub-key <path>` |       | derived from state dir   | Authority public key path                                            |
 | `--yes`                      | `-y`  | off                      | Skip all prompts; use existing values or flag defaults               |
@@ -246,13 +246,13 @@ ready
 
 `policy bundle loaded version` is the eight-character hex prefix of
 the SHA-256 of the concatenated `.cedar` files in `policy.dir`. Line 4
-fires unconditionally; when `policy.authority_url` is unset the
+fires unconditionally; when `authority.url` is unset the
 endpoint is reported as `(disabled)`.
 
 Line 7 (`ready`) is held until the Authority streams have hydrated —
 both the policy bundle stream and the revocation stream must report
 themselves ready before the line is emitted. When
-`policy.authority_url` is unset, both flags are pre-seeded as ready, so
+`authority.url` is unset, both flags are pre-seeded as ready, so
 the gate is a no-op and `ready` fires immediately after line 6. This
 prevents the first wrapped-agent call from racing the readiness gate
 and hitting a DENY before policy is in place.

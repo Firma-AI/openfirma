@@ -94,7 +94,7 @@ cargo run -p firma -- run --profile claude-code -- claude
   - With MITM enabled, add HTTP path mappings, not only CONNECT.
 
 - `PolicyBundleStale`:
-  - Ensure authority is running and `policy.authority_url` is set.
+  - Ensure authority is running and `authority.url` is set.
 
 - MCP/JSON-RPC deserialize errors during startup:
   - Usually upstream unauthorized flow caused by missing classified routes or token/policy issues.

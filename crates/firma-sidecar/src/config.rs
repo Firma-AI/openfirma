@@ -152,22 +152,22 @@ impl SidecarConfig {
                     .to_string(),
             );
         }
-        if let Some(ref url) = self.policy.authority_url {
+        if let Some(ref url) = self.authority.url {
             let uri: Uri = url
                 .parse()
-                .map_err(|e| format!("policy.authority_url must be a valid URI: {e}"))?;
+                .map_err(|e| format!("authority.url must be a valid URI: {e}"))?;
             match uri.scheme_str() {
                 Some("https") => {
                     if self.authority.ca_cert_path.is_none() {
                         return Err(
-                            "authority.ca_cert_path must be set when policy.authority_url uses https://"
+                            "authority.ca_cert_path must be set when authority.url uses https://"
                                 .to_string(),
                         );
                     }
                 }
                 Some("http") => {
                     let host = uri.host().ok_or_else(|| {
-                        "policy.authority_url with http:// must include a host".to_string()
+                        "authority.url with http:// must include a host".to_string()
                     })?;
                     let host_unbracketed = host.trim_start_matches('[').trim_end_matches(']');
                     let is_loopback = host.eq_ignore_ascii_case("localhost")
@@ -175,15 +175,15 @@ impl SidecarConfig {
                             .parse::<IpAddr>()
                             .is_ok_and(|ip| ip.is_loopback());
                     if !is_loopback && !self.authority.allow_insecure_remote_authority {
-                        return Err("policy.authority_url uses insecure http:// for a non-loopback host; either switch to https:// or set authority.allow_insecure_remote_authority = true".to_string());
+                        return Err("authority.url uses insecure http:// for a non-loopback host; either switch to https:// or set authority.allow_insecure_remote_authority = true".to_string());
                     }
                 }
                 Some(other) => {
                     return Err(format!(
-                        "policy.authority_url scheme must be http or https, got {other}"
+                        "authority.url scheme must be http or https, got {other}"
                     ));
                 }
-                None => return Err("policy.authority_url must include a scheme".to_string()),
+                None => return Err("authority.url must include a scheme".to_string()),
             }
         }
         self.audit.validate().map_err(|e| format!("audit: {e}"))?;
@@ -474,21 +474,12 @@ pub struct PolicyConfig {
     /// Directory containing `.cedar` policy files.
     #[serde(default = "default_policy_dir")]
     pub dir: PathBuf,
-    /// Optional Authority gRPC URL. When set, the sidecar streams
-    /// policy bundles and revocations from the Authority.
-    #[serde(default)]
-    pub authority_url: Option<String>,
 }
 
 impl PolicyConfig {
     fn validate(&self) -> Result<(), String> {
         if self.dir.as_os_str().is_empty() {
             return Err("policy.dir must not be empty".into());
-        }
-        if let Some(ref url) = self.authority_url
-            && url.trim().is_empty()
-        {
-            return Err("policy.authority_url must not be empty when set".into());
         }
         Ok(())
     }
@@ -498,7 +489,6 @@ impl Default for PolicyConfig {
     fn default() -> Self {
         Self {
             dir: default_policy_dir(),
-            authority_url: None,
         }
     }
 }
@@ -507,7 +497,7 @@ impl Default for PolicyConfig {
 ///
 /// When present, the sidecar calls `IssueCapability` on the Authority at
 /// startup to obtain a real PASETO v4 token and build a live `CapabilityMap`.
-/// Requires `policy.authority_url` to also be set.
+/// Requires `authority.url` to also be set.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PreflightConfig {
     /// Agent identity string (e.g. `"demo0-agent"`).
@@ -521,8 +511,8 @@ pub struct PreflightConfig {
     #[serde(default = "default_resource_scope")]
     pub resource_scope: String,
     /// Path to the Authority's Ed25519 public key file (32 raw bytes).
-    /// Synthesized at runtime from `[authority.connect].pub_key_path` by
-    /// `firma run`; omit in firm.toml and let firma-run inject it.
+    /// Synthesized at runtime from `[sidecar.authority].public_key_path`
+    /// by `firma run`; omit in firma.toml and let firma-run inject it.
     #[serde(default)]
     pub authority_pub_key_path: Option<PathBuf>,
     /// Requested token TTL in seconds (default: 900 / 15 min).
@@ -1402,9 +1392,9 @@ cert_cache_capacity = 16
 
 [policy]
 dir = "/etc/firma/policies"
-authority_url = "https://authority.example.com"
 
 [authority]
+url = "https://authority.example.com"
 ca_cert_path = "/etc/firma/authority-ca.pem"
 
 [ca]
@@ -1471,7 +1461,7 @@ signing_key_path = "/etc/firma/audit.pem"
         assert_eq!(config.interceptor.https_mitm.cert_cache_capacity, 16);
         assert_eq!(config.policy.dir, PathBuf::from("/etc/firma/policies"));
         assert_eq!(
-            config.policy.authority_url.as_deref(),
+            config.authority.url.as_deref(),
             Some("https://authority.example.com")
         );
         assert_eq!(
@@ -1541,7 +1531,7 @@ drain_timeout_secs = 10
     #[test]
     fn authority_http_remote_requires_explicit_opt_in() {
         let mut config = SidecarConfig::default();
-        config.policy.authority_url = Some("http://authority.example.com:50051".to_string());
+        config.authority.url = Some("http://authority.example.com:50051".to_string());
         let err = config.validate().unwrap_err();
         assert!(err.contains("allow_insecure_remote_authority"));
     }
@@ -1549,7 +1539,7 @@ drain_timeout_secs = 10
     #[test]
     fn authority_http_remote_allowed_with_explicit_opt_in() {
         let mut config = SidecarConfig::default();
-        config.policy.authority_url = Some("http://authority.example.com:50051".to_string());
+        config.authority.url = Some("http://authority.example.com:50051".to_string());
         config.authority.allow_insecure_remote_authority = true;
         assert!(config.validate().is_ok());
     }
@@ -1557,14 +1547,14 @@ drain_timeout_secs = 10
     #[test]
     fn authority_http_loopback_allowed_without_opt_in() {
         let mut config = SidecarConfig::default();
-        config.policy.authority_url = Some("http://127.0.0.1:50051".to_string());
+        config.authority.url = Some("http://127.0.0.1:50051".to_string());
         assert!(config.validate().is_ok());
     }
 
     #[test]
     fn authority_http_ipv6_loopback_allowed_without_opt_in() {
         let mut config = SidecarConfig::default();
-        config.policy.authority_url = Some("http://[::1]:50051".to_string());
+        config.authority.url = Some("http://[::1]:50051".to_string());
         assert!(config.validate().is_ok());
     }
 

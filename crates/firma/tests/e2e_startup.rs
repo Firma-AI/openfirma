@@ -61,7 +61,7 @@ fn write_authority_fixture(dir: &std::path::Path) -> std::path::PathBuf {
     let config_path = dir.join("firma.toml");
     let toml = format!(
         r#"
-[authority.server]
+[authority]
 listen_addr = "127.0.0.1:0"
 policy_dir = "{policy_dir}"
 issuance_policy_dir = "{issuance_policy_dir}"

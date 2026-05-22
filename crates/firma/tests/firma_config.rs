@@ -139,7 +139,7 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
     let firma_run_toml = extract_dry_run_file(&defaults.stdout, "firma-run.toml");
     let value: toml::Value = toml::from_str(&firma_toml).unwrap();
     assert_eq!(
-        value["authority"]["server"]["listen_addr"].as_str(),
+        value["authority"]["listen_addr"].as_str(),
         Some("127.0.0.1:9555"),
     );
     assert_eq!(
@@ -172,7 +172,7 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         "custom preflight actions should not be replaced by inferred posture"
     );
     assert!(
-        firma_run_toml.contains(&format!("source = \"{}\"", workspace.display())),
+        firma_run_toml.contains(&format!("source = '{}'", workspace.display())),
         "workspace should be preserved in firma-run.toml:\n{firma_run_toml}"
     );
     assert!(
@@ -207,7 +207,7 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
     let firma_run_toml = extract_dry_run_file(&override_output.stdout, "firma-run.toml");
     let value: toml::Value = toml::from_str(&firma_toml).unwrap();
     assert_eq!(
-        value["authority"]["server"]["listen_addr"].as_str(),
+        value["authority"]["listen_addr"].as_str(),
         Some("127.0.0.1:9666"),
     );
     assert_eq!(
@@ -232,7 +232,7 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         "explicit dev posture should override existing strict posture"
     );
     assert!(
-        firma_run_toml.contains(&format!("source = \"{}\"", override_workspace.display())),
+        firma_run_toml.contains(&format!("source = '{}'", override_workspace.display())),
         "workspace override should be rendered in firma-run.toml:\n{firma_run_toml}"
     );
     assert!(
@@ -282,9 +282,9 @@ fn init_state_paths_in_config_are_absolute() {
     let text = std::fs::read_to_string(config_dir.join("firma.toml")).unwrap();
     let value: toml::Value = toml::from_str(&text).unwrap();
 
-    let key_file = value["authority"]["server"]["key_file"]
+    let key_file = value["authority"]["key_file"]
         .as_str()
-        .expect("authority.server.key_file");
+        .expect("authority.key_file");
     assert!(
         Path::new(key_file).is_absolute(),
         "authority.key_file must be absolute, got {key_file}"

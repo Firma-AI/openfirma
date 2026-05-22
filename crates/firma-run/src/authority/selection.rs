@@ -99,7 +99,7 @@ fn section_to_selection(s: &AuthoritySection) -> Result<Option<AuthoritySelectio
             url.map_or_else(
                 || {
                     Err(RunError::ConfigValidation(
-                        "[authority].type = \"remote\" requires url in [authority.connect]"
+                        "[authority].type = \"remote\" requires url in [sidecar.authority]"
                             .to_string(),
                     ))
                 },
@@ -188,7 +188,7 @@ mod tests {
         let path = tmp.path().join("firma.toml");
         std::fs::write(
             &path,
-            "[authority]\ntype = \"remote\"\n\n[authority.connect]\nurl = \"https://x\"\n",
+            "[authority]\ntype = \"remote\"\n\n[sidecar.authority]\nurl = \"https://x\"\n",
         )
         .unwrap();
         let mut prompt = MockPrompt::new(false, vec![]);

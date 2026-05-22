@@ -27,6 +27,6 @@ FIRMA_RUN_BWRAP_MASK_HOME_PATHS = ".ssh,.gnupg,.aws,.config/gcloud,.env"
 # The host CWD at launch is also bound RW by default; remove this block if
 # you always `cd` into the workspace before invoking `firma run`.
 [[profiles.generic.mounts]]
-source = "{{ workspace }}"
-target = "{{ workspace }}"
+source = '{{ workspace }}'
+target = '{{ workspace }}'
 read_only = false

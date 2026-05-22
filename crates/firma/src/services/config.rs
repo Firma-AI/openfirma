@@ -13,11 +13,11 @@ use crate::args::config::{InitArgs, Mapping, Mode, Posture};
 struct AuthorityInputs {
     /// gRPC listen address (agent-local + authority modes).
     listen: String,
-    /// URL written to `[authority.connect].url`.
+    /// URL written to `[sidecar.authority].url`.
     connect_url: String,
-    /// CA cert path written to `[authority.connect].ca_cert_path`.
+    /// CA cert path written to `[sidecar.authority].ca_cert_path`.
     connect_ca_cert: String,
-    /// Public key path written to `[authority.connect].pub_key_path`.
+    /// Public key path written to `[sidecar.authority].public_key_path`.
     connect_pub_key: String,
 }
 
@@ -248,10 +248,15 @@ fn generate_files(
             .map(String::from)
             .collect()
     });
-    let state_dir_str = inputs.state_dir.to_string_lossy();
-    let tls_dir = inputs.state_dir.join("tls");
-    let tls_cert_path = tls_dir.join("authority.crt").to_string_lossy().into_owned();
-    let tls_key_path = tls_dir.join("authority.key").to_string_lossy().into_owned();
+    let state_dir = &inputs.state_dir;
+    let tls_dir = state_dir.join("tls");
+    let revocation_file = path_display(&state_dir.join("revocations.txt"));
+    let key_file = path_display(&state_dir.join("authority.key"));
+    let ca_dir = path_display(&state_dir.join("generated-firma-ca"));
+    let audit_file = path_display(&state_dir.join("audit.jsonl"));
+    let audit_key = path_display(&state_dir.join("audit.key"));
+    let tls_cert_path = path_display(&tls_dir.join("authority.crt"));
+    let tls_key_path = path_display(&tls_dir.join("authority.key"));
 
     let firma_toml = render(
         env,
@@ -266,9 +271,13 @@ fn generate_files(
             requested_actions,
             authority_listen => inputs.authority.listen,
             authority_url => inputs.authority.connect_url,
-            tls_ca_cert_path => inputs.authority.connect_ca_cert,
-            authority_pub_key_path => inputs.authority.connect_pub_key,
-            state_dir => state_dir_str.as_ref(),
+            tls_ca_cert_path => &inputs.authority.connect_ca_cert,
+            authority_pub_key_path => &inputs.authority.connect_pub_key,
+            revocation_file,
+            key_file,
+            ca_dir,
+            audit_file,
+            audit_key,
             tls_cert_path,
             tls_key_path,
         },
@@ -296,11 +305,11 @@ fn generate_files(
         let firma_run = if let Some(existing) = &inputs.sidecar.existing_firma_run_toml {
             existing.clone()
         } else {
-            let workspace_str = inputs.sidecar.workspace.to_string_lossy();
+            let workspace = path_display(&inputs.sidecar.workspace);
             render(
                 env,
                 "firma-run.toml",
-                context! { name => inputs.sidecar.name, workspace => workspace_str.as_ref() },
+                context! { name => inputs.sidecar.name, workspace },
             )?
         };
         files.push(("mapping-rules.toml".into(), mapping_rules));
@@ -320,6 +329,10 @@ fn render(env: &Environment<'_>, template: &str, ctx: minijinja::Value) -> Resul
     env.get_template(template)
         .and_then(|t| t.render(ctx))
         .with_context(|| format!("render template {template}"))
+}
+
+fn path_display(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 fn default_output_dir() -> PathBuf {
@@ -409,14 +422,13 @@ fn load_existing_defaults(config_dir: &Path) -> Result<ExistingConfigDefaults> {
 
     let has_server = value
         .get("authority")
-        .and_then(|v| v.get("server"))
         .and_then(toml::Value::as_table)
-        .is_some();
+        .is_some_and(|t| t.contains_key("listen_addr"));
     let has_connect = value
-        .get("authority")
-        .and_then(|v| v.get("connect"))
+        .get("sidecar")
+        .and_then(|v| v.get("authority"))
         .and_then(toml::Value::as_table)
-        .is_some();
+        .is_some_and(|t| t.contains_key("url"));
     let has_sidecar = value
         .get("sidecar")
         .and_then(toml::Value::as_table)
@@ -428,10 +440,10 @@ fn load_existing_defaults(config_dir: &Path) -> Result<ExistingConfigDefaults> {
         _ => None,
     };
 
-    defaults.authority_listen = get_str(&value, &["authority", "server", "listen_addr"]);
-    defaults.authority_url = get_str(&value, &["authority", "connect", "url"]);
-    defaults.authority_ca_cert = get_path(&value, &["authority", "connect", "ca_cert_path"]);
-    defaults.authority_pub_key = get_path(&value, &["authority", "connect", "pub_key_path"]);
+    defaults.authority_listen = get_str(&value, &["authority", "listen_addr"]);
+    defaults.authority_url = get_str(&value, &["sidecar", "authority", "url"]);
+    defaults.authority_ca_cert = get_path(&value, &["sidecar", "authority", "ca_cert_path"]);
+    defaults.authority_pub_key = get_path(&value, &["sidecar", "authority", "public_key_path"]);
     defaults.name = get_str(&value, &["sidecar", "preflight", "agent_id"]);
     defaults.posture = posture_from_preflight_actions(&value);
     defaults.requested_actions = requested_actions_from_config(&value);
@@ -515,8 +527,8 @@ fn mappings_from_rules_paths(value: &toml::Value) -> Option<Vec<Mapping>> {
 
 fn infer_state_dir(value: &toml::Value) -> Option<PathBuf> {
     for path in [
-        get_path(value, &["authority", "server", "key_file"]),
-        get_path(value, &["authority", "server", "revocation_file"]),
+        get_path(value, &["authority", "key_file"]),
+        get_path(value, &["authority", "revocation_file"]),
         get_path(value, &["sidecar", "audit", "file_path"]),
         get_path(value, &["sidecar", "audit", "signing_key_path"]),
     ]
@@ -1186,7 +1198,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("firma.toml");
         std::fs::write(&path, get(&files, "firma.toml")).unwrap();
-        let body = firma_config::load_section(&path, "authority.server").unwrap();
+        let body = firma_config::load_section(&path, "authority").unwrap();
         let _: firma_authority::AuthorityConfig = toml::from_str(&body).unwrap();
     }
 

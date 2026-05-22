@@ -142,7 +142,7 @@ pub struct SynthesizeRequest<'a> {
     pub listen_addr: Option<SocketAddr>,
     /// Destination for the synthesized TOML.
     pub out_path: &'a Path,
-    /// Effective Authority URL to inject into `[sidecar.policy].authority_url`.
+    /// Effective Authority URL to inject into `[sidecar.authority].url`.
     /// `None` leaves the value untouched (preserves any value from
     /// the operator template).
     pub authority_url: Option<&'a str>,
@@ -315,15 +315,12 @@ fn override_authority_pub_key(value: &mut toml::Value, key: &Path) -> Result<(),
 fn override_authority_url(value: &mut toml::Value, url: &str) -> Result<(), RunError> {
     let sidecar = sidecar_table_mut(value)?;
     let entry = sidecar
-        .entry("policy".to_string())
+        .entry("authority".to_string())
         .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
     let table = entry
         .as_table_mut()
-        .ok_or_else(|| RunError::Internal("[sidecar.policy] is not a table".into()))?;
-    table.insert(
-        "authority_url".to_string(),
-        toml::Value::String(url.to_string()),
-    );
+        .ok_or_else(|| RunError::Internal("[sidecar.authority] is not a table".into()))?;
+    table.insert("url".to_string(), toml::Value::String(url.to_string()));
     Ok(())
 }
 

@@ -7,6 +7,10 @@ use serde::Deserialize;
 /// Tuning for background Authority stream clients.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthorityConfig {
+    /// Authority gRPC URL (e.g. `https://127.0.0.1:9443`). When set, the
+    /// sidecar streams policy bundles and revocations from the Authority.
+    #[serde(default)]
+    pub url: Option<String>,
     /// Connection timeout in seconds.
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
@@ -48,6 +52,11 @@ impl AuthorityConfig {
     ///
     /// Returns a human-readable field error for invalid values.
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(ref url) = self.url
+            && url.trim().is_empty()
+        {
+            return Err("url must not be empty when set".into());
+        }
         if self.connect_timeout_secs == 0 {
             return Err("connect_timeout_secs must be > 0".to_string());
         }
@@ -80,6 +89,7 @@ impl AuthorityConfig {
 impl Default for AuthorityConfig {
     fn default() -> Self {
         Self {
+            url: None,
             connect_timeout_secs: default_connect_timeout_secs(),
             reconnect_min_backoff_ms: default_min_backoff_ms(),
             reconnect_max_backoff_secs: default_max_backoff_secs(),

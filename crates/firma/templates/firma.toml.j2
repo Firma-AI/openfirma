@@ -3,27 +3,18 @@
 # Run from this directory: firma stack start --config firma.toml
 
 {% if has_server -%}
-# ── Authority Server ──────────────────────────────────────────────────────────
+# ── Authority ─────────────────────────────────────────────────────────────────
 
-[authority.server]
+[authority]
 listen_addr            = "{{ authority_listen }}"
 policy_dir             = "policies/"
 issuance_policy_dir    = "issuance-policies/"
-revocation_file        = "{{ state_dir }}/revocations.txt"
-key_file               = "{{ state_dir }}/authority.key"
+revocation_file        = '{{ revocation_file }}'
+key_file               = '{{ key_file }}'
 max_ttl_seconds        = 3600
 bundle_ttl_seconds     = 30
-tls_cert_path          = "{{ tls_cert_path }}"
-tls_key_path           = "{{ tls_key_path }}"
-
-{% endif -%}
-{% if has_connect -%}
-# ── Authority Connect ─────────────────────────────────────────────────────────
-
-[authority.connect]
-url          = "{{ authority_url }}"
-ca_cert_path = "{{ tls_ca_cert_path }}"
-pub_key_path = "{{ authority_pub_key_path }}"
+tls_cert_path          = '{{ tls_cert_path }}'
+tls_key_path           = '{{ tls_key_path }}'
 
 {% endif -%}
 {% if has_sidecar -%}
@@ -43,7 +34,7 @@ strict_hosts    = []
 dir = "."
 
 [sidecar.ca]
-dir = "{{ state_dir }}/generated-firma-ca"
+dir = '{{ ca_dir }}'
 
 [sidecar.log]
 level = "info"
@@ -67,10 +58,15 @@ default_timeout_ms = 120000
 
 [sidecar.audit]
 sink             = "file"
-file_path        = "{{ state_dir }}/audit.jsonl"
-signing_key_path = "{{ state_dir }}/audit.key"
+file_path        = '{{ audit_file }}'
+signing_key_path = '{{ audit_key }}'
 
 [sidecar.authority]
+{% if has_connect -%}
+url                                   = "{{ authority_url }}"
+ca_cert_path                          = '{{ tls_ca_cert_path }}'
+public_key_path                       = '{{ authority_pub_key_path }}'
+{% endif -%}
 connect_timeout_secs                  = 10
 reconnect_min_backoff_ms              = 250
 reconnect_max_backoff_secs            = 30

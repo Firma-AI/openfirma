@@ -34,10 +34,10 @@ pub fn canonical_write_path() -> Option<PathBuf> {
         .map(|cwd| cwd.join(".firma").join(firma_config::CONFIG_FILE_NAME))
 }
 
-/// Client-side connect config (`[authority.connect]`).
+/// Client-side connect coordinates lifted from `[sidecar.authority]`.
 ///
-/// Canonical place for URL, CA cert, and pub key — written by `firma config`,
-/// read by `firma run` to synthesize the sidecar config.
+/// Canonical place for URL, CA cert, and pub key — written by
+/// `firma config`, read by `firma run` to synthesize the sidecar config.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorityConnectSection {
     /// Authority gRPC URL (e.g. `https://127.0.0.1:9443`).
@@ -48,25 +48,52 @@ pub struct AuthorityConnectSection {
     pub ca_cert_path: Option<std::path::PathBuf>,
     /// Path to the authority's Ed25519 public key for PASETO token verification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pub_key_path: Option<std::path::PathBuf>,
+    pub public_key_path: Option<std::path::PathBuf>,
 }
 
-/// Persisted `[authority]` routing annotation written by `firma run`.
+/// Routing annotation. `type` lives in `[authority]`, while `connect`
+/// is materialized from `[sidecar.authority]`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthoritySection {
     /// `"local"` or `"remote"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub r#type: Option<String>,
-    /// Client-side connect config from `[authority.connect]`.
+    /// Client-side connect coordinates lifted from `[sidecar.authority]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connect: Option<AuthorityConnectSection>,
 }
 
+/// `[authority]` shape on disk (server-side fields ignored here).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+struct AuthorityOnDisk {
+    #[serde(default)]
+    r#type: Option<String>,
+}
+
+/// `[sidecar.authority]` shape on disk (only connect fields read here).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+struct SidecarAuthorityOnDisk {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    ca_cert_path: Option<std::path::PathBuf>,
+    #[serde(default)]
+    public_key_path: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct SidecarOnDisk {
+    #[serde(default)]
+    authority: Option<SidecarAuthorityOnDisk>,
+}
+
 /// Whole-file shape — only the sections we know live here today.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 struct UserConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    authority: Option<AuthoritySection>,
+    #[serde(default)]
+    authority: Option<AuthorityOnDisk>,
+    #[serde(default)]
+    sidecar: Option<SidecarOnDisk>,
 }
 
 /// Read the `[authority]` section if the file exists and is parseable.
@@ -93,7 +120,20 @@ pub fn read_authority(path: &Path) -> Result<Option<AuthoritySection>, RunError>
         path: path.to_path_buf(),
         reason: e.to_string(),
     })?;
-    Ok(parsed.authority)
+    let r#type = parsed.authority.and_then(|a| a.r#type);
+    let connect = parsed
+        .sidecar
+        .and_then(|s| s.authority)
+        .map(|a| AuthorityConnectSection {
+            url: a.url,
+            ca_cert_path: a.ca_cert_path,
+            public_key_path: a.public_key_path,
+        })
+        .filter(|c| c.url.is_some() || c.ca_cert_path.is_some() || c.public_key_path.is_some());
+    if r#type.is_none() && connect.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(AuthoritySection { r#type, connect }))
 }
 
 /// Persist `[authority].type = "local"` (creating parent dirs as needed).
@@ -122,8 +162,7 @@ pub fn persist_local(path: &Path) -> Result<(), RunError> {
         }
     };
     // Merge into existing authority table rather than replacing it, so that
-    // [authority.server] / [authority.connect] sub-tables written by
-    // `firma config` are preserved.
+    // sibling fields written by `firma config` are preserved.
     let authority = existing
         .entry("authority".to_string())
         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
@@ -234,7 +273,7 @@ mod tests {
         let path = tmp.path().join("firma.toml");
         fs::write(
             &path,
-            "[authority]\ntype = \"remote\"\n\n[authority.connect]\nurl = \"https://x\"\n",
+            "[authority]\ntype = \"remote\"\n\n[sidecar.authority]\nurl = \"https://x\"\n",
         )
         .unwrap();
         let section = read_authority(&path).unwrap().unwrap();
