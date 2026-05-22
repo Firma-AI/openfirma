@@ -249,6 +249,14 @@ the SHA-256 of the concatenated `.cedar` files in `policy.dir`. Line 4
 fires unconditionally; when `policy.authority_url` is unset the
 endpoint is reported as `(disabled)`.
 
+Line 7 (`ready`) is held until the Authority streams have hydrated —
+both the policy bundle stream and the revocation stream must report
+themselves ready before the line is emitted. When
+`policy.authority_url` is unset, both flags are pre-seeded as ready, so
+the gate is a no-op and `ready` fires immediately after line 6. This
+prevents the first wrapped-agent call from racing the readiness gate
+and hitting a DENY before policy is in place.
+
 ### Exit codes
 
 | Code | When                                                             |
@@ -259,7 +267,7 @@ endpoint is reported as `(disabled)`.
 ## `firma sidecar status`
 
 Docker-ps-style table of live per-run sidecars. Reads marker directories written
-by `firma run --sidecar=auto` under the per-run state dir.
+by `firma run --sidecar local` under the per-run state dir.
 
 ### Usage
 
@@ -423,13 +431,17 @@ the duration of the wrapped process.
 
 ### Autostart
 
-The autostart path runs only when all of the following are true:
+The autostart path runs whenever the selection resolves to `local`
+autostart — i.e. `--sidecar local`, or `--sidecar` omitted with no persisted
+`sidecar_endpoint`. Local autostart is unconditional: no endpoint probe and
+no `fail_closed` gate apply. (`--no-autostart` cannot reach this path — it is
+rejected against `--sidecar local` with `SidecarLocalNoAutostart`, and against
+the omitted-with-no-endpoint case with `MissingSidecar`.)
 
-- The configured sidecar endpoint is unreachable (the probe returns an
-  error within 500ms).
-- `--sidecar` is at its default value of `auto`.
-- `--no-autostart` is **not** set.
-- The host network policy has `fail_closed = true` (the default).
+The probe and `fail_closed` checks apply only to the external path
+(`--sidecar <url>` or a persisted endpoint): the endpoint is probed, and an
+unreachable external sidecar fails with `SidecarUnreachable` — it never
+autostarts.
 
 When autostart fires, `firma run`:
 
@@ -438,7 +450,12 @@ When autostart fires, `firma run`:
 2. Synthesizes a sidecar TOML by inheriting the operator template
    (`--sidecar-config` → `FIRMA_SIDECAR_CONFIG_FILE` → the discovered
    `firma.toml` → minimal) and overriding the `[interceptor]` section to
-   bind a Unix-domain socket at `<marker_dir>/sidecar.sock`.
+   bind a Unix-domain socket at `<marker_dir>/sidecar.sock`. Relative
+   resource paths in the inherited template (e.g. `audit.signing_key_path`,
+   `policy.dir`, `mapping.rules_path`, `authority.public_key_path`) are
+   rebased to absolute paths anchored on the **template's** config
+   directory so they keep pointing at the operator's files after the
+   synthesized config is written into `<marker_dir>/`.
 3. Spawns `firma sidecar --config <marker_dir>/sidecar.toml` as a
    child process with stderr piped.
 4. Reads stderr line by line and waits for the seven-line ready log
@@ -458,31 +475,33 @@ stale entries).
 
 ### Flags
 
-| Flag                                   | Default | Description                                                                                                 |
-| -------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------- |
-| `--sidecar <auto\|external>`           | `auto`  | `auto` autostarts when unreachable; `external` requires an already-running sidecar at `--sidecar-endpoint`. |
-| `--no-autostart`                       | off     | Fail with a typed error if the endpoint is unreachable. CI safety net. Mutually exclusive with `--sidecar`. |
-| `--sidecar-config <path>`              | —       | Sidecar TOML template for autostart. Overrides `FIRMA_SIDECAR_CONFIG_FILE` and the CWD fallback.            |
-| `--sidecar-startup-timeout-secs <int>` | `10`    | Maximum wait for the `ready` line. `0` reverts to the built-in default.                                     |
+| Flag                                   | Default | Description                                                                                                                                                                                               |
+| -------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--sidecar <local\|url>`               | —       | `local` autostarts a per-run sidecar. A `tcp://host:port` / `unix:///path` value targets an external sidecar and never autostarts. Omitted: persisted `sidecar_endpoint` (external) else local autostart. |
+| `--no-autostart`                       | off     | Fail with a typed error instead of autostarting any missing component. CI safety net. Incompatible with `--sidecar local` and `--authority local`.                                                        |
+| `--sidecar-config <path>`              | —       | Sidecar TOML template for autostart. Overrides `FIRMA_SIDECAR_CONFIG_FILE` and the CWD fallback.                                                                                                          |
+| `--sidecar-startup-timeout-secs <int>` | `10`    | Maximum wait for the `ready` line. `0` reverts to the built-in default.                                                                                                                                   |
 
 ### Typed errors
 
-| Error                  | Trigger                                                                                                                     |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `SidecarUnreachable`   | Endpoint unreachable and autostart disabled (`--no-autostart` or `--sidecar=external`).                                     |
-| `SidecarReadyTimeout`  | Spawned sidecar did not emit `ready` within the configured budget. Error message points to `<marker_dir>/sidecar.log`.      |
-| `SidecarStartupFailed` | Spawn or stderr-pipe setup failed; or stderr closed before `ready`.                                                         |
-| `UnsupportedPlatform`  | Autostart requested on a platform that does not support a UDS interceptor (e.g. Windows). Use `--sidecar=external` instead. |
+| Error                     | Trigger                                                                                                                                             |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SidecarUnreachable`      | An external sidecar (`--sidecar <url>` or persisted endpoint) is unreachable.                                                                       |
+| `SidecarLocalNoAutostart` | `--sidecar local` combined with `--no-autostart`.                                                                                                   |
+| `MissingSidecar`          | `--sidecar` omitted, no persisted endpoint, and `--no-autostart` set.                                                                               |
+| `SidecarReadyTimeout`     | Spawned sidecar did not emit `ready` within the configured budget. Error message points to `<marker_dir>/sidecar.log`.                              |
+| `SidecarStartupFailed`    | Spawn or stderr-pipe setup failed; or stderr closed before `ready`.                                                                                 |
+| `UnsupportedPlatform`     | Autostart requested on a platform that does not support a UDS interceptor (e.g. Windows). Use `--sidecar <url>` with a pre-started sidecar instead. |
 
 ### Operator caveats
 
 - A template with `interceptor.https_mitm.enabled = true` may fail
   validation when the interceptor is forced to `unix_socket` mode.
-  Either disable MITM in the template or use `--sidecar=external` with a
+  Either disable MITM in the template or use `--sidecar <url>` with a
   long-lived externally-managed sidecar.
 - Autostart currently requires Unix (Linux + macOS). On Windows,
-  `--sidecar=auto` returns `UnsupportedPlatform`; pre-start the sidecar
-  yourself and pass `--sidecar=external`.
+  `--sidecar local` returns `UnsupportedPlatform`; pre-start the sidecar
+  yourself and pass `--sidecar <url>`.
 - The marker layout is the contract consumed by `firma sidecar status`
   (see FIR-103). Do not write or edit those files manually.
 

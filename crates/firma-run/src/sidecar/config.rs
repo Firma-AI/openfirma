@@ -180,13 +180,20 @@ pub enum TemplateSource {
 )]
 pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError> {
     let source = select_template(&req);
-    let mut value = match &source {
+    let (mut value, template_dir) = match &source {
         TemplateSource::Explicit(path) | TemplateSource::Env(path) | TemplateSource::Cwd(path) => {
-            parse_template(path)?
+            (parse_template(path)?, path.parent().map(Path::to_path_buf))
         }
-        TemplateSource::Minimal => toml::Value::Table(toml::value::Table::new()),
+        TemplateSource::Minimal => (toml::Value::Table(toml::value::Table::new()), None),
     };
     normalize_to_sectioned_sidecar(&mut value)?;
+    // Per FIR-183: relative resource paths in the operator's template are
+    // anchored on the template's `config_dir`. The synthesized file is
+    // written into a per-run marker directory, so without this rebase
+    // the sidecar would resolve relative paths under the marker dir.
+    if let Some(dir) = template_dir.as_deref() {
+        rebase_template_resource_paths(&mut value, dir)?;
+    }
     override_interceptor(&mut value, req.socket_path, req.listen_addr)?;
     if let Some(url) = req.authority_url {
         override_authority_url(&mut value, url)?;
@@ -334,6 +341,103 @@ fn normalize_to_sectioned_sidecar(value: &mut toml::Value) -> Result<(), RunErro
     new_root.insert("sidecar".to_string(), toml::Value::Table(legacy_flat));
     *root = new_root;
     Ok(())
+}
+
+/// Resource fields that, per `docs/configuration.md`, resolve under the
+/// owning config file's directory. Each tuple is `(table, key)` rooted
+/// at the `[sidecar]` table.
+const REBASE_SCALAR_FIELDS: &[&[&str]] = &[
+    &["audit", "signing_key_path"],
+    &["audit", "file_path"],
+    &["policy", "dir"],
+    &["mapping", "rules_path"],
+    &["authority", "public_key_path"],
+];
+
+/// Resource list fields anchored to the template's config dir.
+const REBASE_ARRAY_FIELDS: &[&[&str]] =
+    &[&["mapping", "rules_paths"], &["capability_seed", "paths"]];
+
+fn rebase_template_resource_paths(
+    value: &mut toml::Value,
+    template_dir: &Path,
+) -> Result<(), RunError> {
+    let sidecar = sidecar_table_mut(value)?;
+    for path in REBASE_SCALAR_FIELDS {
+        rebase_scalar_in_table(sidecar, path, template_dir);
+    }
+    for path in REBASE_ARRAY_FIELDS {
+        rebase_array_in_table(sidecar, path, template_dir);
+    }
+    Ok(())
+}
+
+fn rebase_scalar_in_table(sidecar: &mut toml::value::Table, path: &[&str], template_dir: &Path) {
+    let Some((table_key, field_key)) = path.split_first() else {
+        return;
+    };
+    let Some(field_key) = field_key.first() else {
+        return;
+    };
+    let Some(table) = sidecar
+        .get_mut(*table_key)
+        .and_then(toml::Value::as_table_mut)
+    else {
+        return;
+    };
+    let Some(entry) = table.get_mut(*field_key) else {
+        return;
+    };
+    let Some(text) = entry.as_str() else {
+        return;
+    };
+    if let Some(rebased) = rebase_relative(text, template_dir) {
+        *entry = toml::Value::String(rebased);
+    }
+}
+
+fn rebase_array_in_table(sidecar: &mut toml::value::Table, path: &[&str], template_dir: &Path) {
+    let Some((table_key, field_key)) = path.split_first() else {
+        return;
+    };
+    let Some(field_key) = field_key.first() else {
+        return;
+    };
+    let Some(table) = sidecar
+        .get_mut(*table_key)
+        .and_then(toml::Value::as_table_mut)
+    else {
+        return;
+    };
+    let Some(array) = table
+        .get_mut(*field_key)
+        .and_then(toml::Value::as_array_mut)
+    else {
+        return;
+    };
+    for entry in array.iter_mut() {
+        let Some(text) = entry.as_str() else {
+            continue;
+        };
+        if let Some(rebased) = rebase_relative(text, template_dir) {
+            *entry = toml::Value::String(rebased);
+        }
+    }
+}
+
+/// Returns `Some(absolute)` only when `value` is a non-empty relative
+/// path. Absolute paths and empty values are returned as `None` so the
+/// caller can skip the rewrite — matching the sidecar's own
+/// `rebase_defaults` contract.
+fn rebase_relative(value: &str, template_dir: &Path) -> Option<String> {
+    if value.trim().is_empty() {
+        return None;
+    }
+    let candidate = Path::new(value);
+    if candidate.is_absolute() {
+        return None;
+    }
+    Some(template_dir.join(candidate).display().to_string())
 }
 
 fn sidecar_table_mut(value: &mut toml::Value) -> Result<&mut toml::value::Table, RunError> {

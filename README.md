@@ -1,209 +1,236 @@
-# OpenFirma
+<div align="center">
+  <img src="docs-site/src/assets/openfirma-logo.png" alt="OpenFirma" width="440" />
 
-AI agents are becoming software operators: they call APIs, read and write files, query databases, send messages, run tools, and execute code. Uncontrolled agents do not just make mistakes; they can leak data, let you lose money, change production systems, and execute code before anyone notices.
+  <br/>
 
-Firma is a governed runtime for those agents.
+<img src="docs-site/src/assets/Subtitle.gif" alt="OpenFirma" width="600" />
 
-Firma starts an agent with a runtime profile, routes the agent's outbound traffic through a local enforcement process, checks protected actions against policy, and records the result. The goal is simple: an agent should only be able to do what it was allowed to do, and every important decision should be visible afterwards.
+  <br/>
+<br/>
 
-## Quickstart
+  **Every call passes through a sidecar that decides whether it happens.**
+  <br/>
+  Policy in, signed decision out. Deterministic. At call-level.
 
-Prerequisites: a Rust toolchain and `protoc`.
 
-From the repository root, run the deterministic local demo:
+  [Docs](https://firma-ai.github.io/openfirma)
+  &nbsp;·&nbsp;
+  [Website](https://openfirma.netlify.app/)
 
-```bash
-make demo-ci
-```
+</div>
 
-This builds the required binaries, starts a local Authority and Sidecar, sends one allowed request and one denied request, and checks that both decisions were audited. It does not require API keys. See [`examples/demo/README.md`](examples/demo/README.md) for the full demo flow, including the optional LLM-backed agent modes.
+<br/>
+<div align="center">
+  <img src="docs-site/src/assets/home-diagram.svg" alt="OpenFirma diagram" width="100%" />
+</div>
+<br/>
 
-To try your own command through the governed launcher:
 
-```bash
-examples/firma-run/local/setup.sh
-firma sidecar start --detach
-firma monitor
-cargo run -p firma -- run --profile generic -- curl https://example.com
-firma sidecar stop
-```
+## What is OpenFirma?
 
-The same single command also works without a pre-started Sidecar — `firma run` autostarts a per-run Sidecar on the fly and tears it down when the wrapped process exits:
+OpenFirma is a runtime enforcement boundary that sits between your AI agents and the outside world. Every outbound call an agent makes passes through a local Sidecar that decides whether it happens: using Cedar policies you own, evaluated locally, with no model on the hot path.
 
-```bash
-examples/firma-run/local/setup.sh
-FIRMA_SIDECAR_CONFIG_FILE=.local/firma.toml \
-  cargo run -p firma -- run --profile generic -- curl https://example.com
-```
+**Why we built it:** AI agents are becoming software operators. They call APIs, read and write files, send messages, and execute code. That is useful but it also means a bad prompt, a compromised dependency, or a confused model can turn into a real outbound action before anyone notices. OpenFirma gives those actions a boundary.
 
-For CI or production paths where the Sidecar is managed externally, pass `--sidecar=external` (uses the existing endpoint, never spawns) or `--no-autostart` (fails loudly if no Sidecar is reachable).
+**How it works:** You define a policy that says what each agent is allowed to do. Every outbound call passes through the Sidecar, which intercepts the request and evaluates it locally before execution. The Sidecar classifies the action (e.g. `code.read`, `communication.external.send`), validates the capability token, and checks the policy. On ALLOW, the call proceeds and credentials are injected just-in-time. On DENY, the call is blocked and a signed audit event is written. The enforcement logic lives outside the agent process.
 
-For more detail, see the [`firma run` examples](examples/firma-run/README.md), the [CLI reference](docs/cli.md) (autostart flags + marker layout under `## firma run`), and the [configuration reference](docs/configuration.md). The intentionally risky demo agents live in [`examples/agents`](examples/agents/README.md).
+<br/>
 
-Canonical local-command governance and Linux containment docs:
+## Run your coding agent with OpenFirma
 
-1. [Linux local command enforcement architecture and runbook](docs/architecture/linux-local-command-enforcement.md)
-2. [Cross-platform local-exec governance request/response contract](docs/architecture/command-governance-local-exec-contract.md)
+### Install
 
-Recommended Linux validation gates:
-
-1. `make managed-seccomp-compat-check`
-2. `make managed-seccomp-guardrail`
-
-## How Firma is structured
-
-Firma has three main runtime pieces.
-
-`firma run` is the launcher. It starts the agent command with a selected profile. A profile defines how the process should run, what environment it receives, how traffic is routed, and which runtime backend is used.
-
-The **Sidecar** is the local enforcement point. It receives outbound requests from the agent, turns each request into a clear action, checks whether that action is allowed, and forwards only allowed traffic. The Sidecar is not the sandbox. The sandbox constrains the process; the Sidecar decides application-level policy.
-
-The **Authority** is the source of permission. It loads policy, signs short-lived permission tokens, and sends policy updates and revocations to Sidecars. A revocation cancels a token before it naturally expires. A permission token is a signed statement that says what an agent may do, where it may do it, and for how long.
-
-```mermaid
-flowchart LR
-    Run["firma run"]
-    Agent["Agent process"]
-    Sidecar["Firma Sidecar"]
-    Authority["Firma Authority"]
-    External["External services"]
-    Audit["Audit event"]
-
-    Run -->|"starts with profile"| Agent
-    Agent -->|"routed traffic"| Sidecar
-    Authority -->|"tokens, policies, revocations"| Sidecar
-    Sidecar -->|"allowed traffic"| External
-    Sidecar -->|"policy decision"| Audit
-```
-
-## What happens during a run
-
-A typical Firma run follows this sequence:
-
-1. You start an agent with `firma run`.
-2. Firma chooses a profile and creates a session identity.
-3. The Authority issues or refreshes permission for that session.
-4. The Sidecar receives the Authority public key, policy updates, and revocation updates.
-5. The agent starts inside the selected runtime backend.
-6. Outbound traffic is routed toward the Sidecar.
-7. The Sidecar identifies the action the agent is trying to perform.
-8. The Sidecar verifies the agent's permission token.
-9. The Sidecar checks policy for that action and resource.
-10. The request is allowed or denied.
-11. Firma writes an audit event for the decision.
-
-The important runtime property is local enforcement. Once the Sidecar has the current policy and revocation data, it can decide on each request without calling the Authority on the hot path.
-
-## Authority, tokens, and certificates
-
-Firma uses two different kinds of cryptographic material.
-
-The **Authority signing key** is used to sign permission tokens. The Authority keeps the private key. The Sidecar gets the matching public key so it can verify tokens locally.
-
-The **Sidecar HTTPS CA** is used when the Sidecar decrypts selected HTTPS traffic for policy enforcement. The CA lets the Sidecar create certificates for intercepted hosts. This is separate from the Authority signing key.
-
-The basic setup flow is:
-
-1. Start the Authority with a policy directory and signing key.
-2. Configure the Sidecar with the Authority address and public key.
-3. Issue a permission token for an agent session.
-4. Start the Sidecar with policies, mappings, and token material.
-5. Run the agent through `firma run` so traffic reaches the Sidecar.
-
-## Test policies offline
-
-`firma policy` lets you check Cedar policies and their decisions without an Authority, a Sidecar, or the network. Both subcommands are fully local, deterministic, and fail-closed: any I/O, parse, schema, or evaluation error prints a diagnostic to stderr and exits non-zero.
-
-`firma policy validate <file.cedar>` parses a policy and strictly type-checks it against the embedded canonical Firma schema. A valid policy prints `OK` and exits `0`; a broken one prints a `line:col` diagnostic with a source caret and exits `1`:
-
-```console
-$ firma policy validate policies/allow-code-read.cedar
-OK
-
-$ firma policy validate bad.cedar
-error: policy 'bad.cedar' failed schema validation:
-  x validation error on policy `policy0` at offset 33-64: unrecognized action `Firma::Action::"does.not.exist"`
-   ,-[3:13]
- 2 |   principal,
- 3 |   action == Firma::Action::"does.not.exist",
-   :             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
- 4 |   resource
-   `----
-  help: did you mean `Firma::Action::"code.write"`?
-```
-
-`firma policy test <fixture.toml>` evaluates a fixture against a `*.cedar` bundle directory and asserts the decision. The fixture's `[bundle] path` is resolved relative to the fixture file. It prints the decision line and exits `0` on a match, or exits `1` on a mismatch:
-
-```toml
-# allow-code-read.toml
-[fixture]
-expected = "ALLOW"
-
-[fixture.principal]
-agent_id = "demo-agent"
-
-[fixture.action]
-class = "code.read"
-
-[fixture.resource]
-host = "api.github.com"
-
-[bundle]
-path = "policies"
-```
-
-```console
-$ firma policy test allow-code-read.toml
-ALLOW policy0
-```
-
-Wire validation into a pre-commit hook so broken policies never land:
+**macOS:**
 
 ```bash
-#!/usr/bin/env bash
-# .git/hooks/pre-commit
-set -euo pipefail
-for f in $(git diff --cached --name-only --diff-filter=ACM -- '*.cedar'); do
-  firma policy validate "$f"
-done
+brew tap Firma-AI/openfirma
+brew install firma
 ```
 
-And gate every fixture in CI:
-
-```yaml
-# .github/workflows/policy.yml
-- name: Validate Cedar policies
-  run: |
-    find policies -name '*.cedar' -print0 \
-      | xargs -0 -n1 firma policy validate
-- name: Run policy fixtures
-  run: |
-    find tests/fixtures -name '*.toml' -print0 \
-      | xargs -0 -n1 firma policy test
-```
-
-See the [policy testing guide](docs-site/src/content/docs/guides/test-policies-offline.md) for the full fixture schema, context defaults, and gotchas.
-
-## Repository map
-
-```text
-crates/          Rust workspace crates for the launcher, Sidecar, Authority, shared types, and demos.
-examples/        Runnable demo stacks, demo agents, policy files, mapping files, and end-to-end assets.
-docs/            Architecture notes, configuration references, CLI docs, security analysis, and release notes.
-context/         Internal design material and early proof-of-concept references.
-.github/         GitHub Actions workflows.
-.cursor/         Cursor workspace guidance.
-```
-
-The top-level `Cargo.toml` defines the Rust workspace. The `Makefile` contains the common build, lint, test, and demo commands.
-
-## Build
+**Linux / other:**
 
 ```bash
-cargo build --workspace
-make check
+curl -sSf https://install.openfirma.ai | sh
 ```
+
+**Build from source** (requires Rust 1.86+ and `protoc`):
+
+```bash
+git clone https://github.com/firma-ai/openfirma
+cd openfirma
+cargo build --release
+```
+
+### Quickstart
+
+Wrap your agent with a single command:
+
+```bash
+firma run --profile claude-code -- claude
+```
+
+`firma run` autostarts a per-run Sidecar and Mini Authority, applies the `claude-code` policy profile, and tears everything down when the agent exits. On first run with no Authority configured, it prompts once to confirm the local autostart and persists the choice.
+
+To run a persistent stack instead:
+
+```bash
+firma stack init          # scaffold keys + config
+firma stack start --detach
+firma run --profile claude-code -- claude
+firma monitor             # tail the live audit stream
+```
+
+### Different operating models
+
+The **Sidecar** sits next to each agent process and enforces every outbound call. The **Authority** is a single trust root: it issues capability tokens and streams policy bundles to one or more Sidecars. A single Authority can govern many agents concurrently; the Sidecar enforces locally without calling back on every request.
+
+<table><tr><td width="55%">
+
+**1. Single agent (like Quickstart)**
+
+OpenFirma first looks for an existing Authority. If none is configured, it offers to autostart a local Mini Authority and Sidecar for the session, wraps the agent process, and applies the selected policy profile automatically.
+
+```bash
+firma run --profile claude-code -- claude
+```
+
+</td><td>
+<img src="docs-site/src/assets/Picture1.png" width="100%"/>
+</td></tr></table>
+
+<table><tr><td width="55%">
+
+**2. Local Authority, multiple agents**
+
+The Authority becomes persistent and shared across local agent sessions. Each new `firma run` attaches to the same trust root and pulls the current policy bundle without restarting existing agents.
+
+```bash
+firma stack init
+firma stack start --detach
+
+firma run --profile claude-code -- claude   &
+firma run --profile codex       -- codex    &
+firma run --profile generic     -- opencode
+```
+
+</td><td>
+<img src="docs-site/src/assets/Picture2.png" width="100%"/>
+</td></tr></table>
+
+<table><tr><td width="55%">
+
+**3. Team Authority, agents on multiple machines**
+
+Each Sidecar enforces policy locally on its own machine while the shared Authority distributes policy bundles, capability tokens, and revocation updates across the team.
+
+```bash
+# On each developer machine or CI runner:
+firma run \
+  --authority https://authority.internal \
+  --profile claude-code \
+  -- claude
+```
+
+</td><td>
+<img src="docs-site/src/assets/Picture3.png" width="100%"/>
+</td></tr></table>
+
+<table><tr><td width="55%">
+
+**4. Custom Authority, custom agents without `firma run`**
+<br/><em>Ideal for more structured enterprise use cases</em>
+
+The Sidecar runs independently as a standalone enforcement proxy. Any agent, CI worker, or custom runtime that respects `HTTP_PROXY` / `HTTPS_PROXY` can be governed without SDK integrations or agent-specific wrappers.
+
+```bash
+firma authority --config firma.toml
+firma sidecar   --config firma.toml
+
+export HTTP_PROXY=http://127.0.0.1:8080
+export HTTPS_PROXY=http://127.0.0.1:8080
+python my_agent.py
+```
+
+The Authority can be the Mini Authority included in this repo or your own implementation of the `FirmaAuthority` gRPC interface.
+
+</td><td>
+<img src="docs-site/src/assets/Picture4.png" width="100%"/>
+</td></tr></table>
+
+### CLI reference
+
+| Command | Description |
+|---|---|
+| `firma run` | Wrap an agent process: autostarts Sidecar + Authority, applies a policy profile, tears down on exit |
+| `firma stack init` | Scaffold a deployment: writes `firma.toml`, keys, policy dirs, and revocation file |
+| `firma stack start` | Boot Authority + Sidecar as one unit. `--detach` forks a supervisor |
+| `firma stack stop` | Graceful shutdown with configurable timeout |
+| `firma stack status` | Per-component pid, listen address, state, and uptime. `--json` for machine output |
+| `firma monitor` | Tail the live audit stream and component logs from a running stack |
+| `firma doctor` | Structured diagnostic report: installed components, reachable endpoints, config status |
+| `firma authority` | Run the Mini Authority: issues capability tokens, streams Cedar policy bundles |
+| `firma sidecar` | Run the Sidecar standalone |
+| `firma policy` | Validate and unit-test Cedar policy bundles |
+| `firma token` | Manage local-exec governance tokens (approve / revoke) |
+
+> Full CLI reference: [`docs/cli.md`](docs/cli.md)
+
+<br/>
+
+## Architecture
+
+<div align="center">
+  <img src="docs-site/src/assets/product-diagram.svg" alt="OpenFirma flow diagram" width="100%" />
+</div>
+<br/>
+
+**[Mini Authority](crates/firma-authority/):** issues capability tokens and distributes policy bundles to connected Sidecars. Sits off the request path.
+
+**[Sidecar](crates/firma-sidecar/):** runs next to the agent process and intercepts outbound calls. Evaluates policy locally before execution and emits signed audit events.
+
+**[Audit](crates/firma-core/):** every enforcement decision produces a signed audit record with the evaluated action, outcome, and metadata.
+
+### Features
+
+- **Structural interception:** every modality of action funnels through the Sidecar, with the kernel sandbox as the floor
+- **Deterministic intent:** every tool call is classified into an enforceable action class; Cedar evaluates the same input to the same decision, every time
+- **Per-call enforcement:** policy is evaluated before execution, against current policy and accumulated session state
+- **JIT credentials:** a federated broker issues credentials per call on ALLOW; the agent never holds raw tokens; exfiltration is structurally impossible
+- **Signed audit:** every decision emits a signed execution event with the exact envelope the policy saw
+
+<br/>
+
+## Repo structure
+
+**Infrastructure**
+
+| | |
+|---|---|
+| [`crates/firma`](crates/firma/) | CLI entrypoint: `firma run`, `firma stack`, `firma monitor`, `firma doctor` |
+| [`crates/firma-sidecar`](crates/firma-sidecar/) | The enforcement Sidecar: interceptors, pipeline, connectors |
+| [`crates/firma-authority`](crates/firma-authority/) | Mini Authority: file-based trust root for local development |
+| [`crates/firma-core`](crates/firma-core/) | Shared types, Cedar schema, action classes, audit event format |
+| [`crates/firma-run`](crates/firma-run/) | Agent process confinement: bwrap backend, profile resolution, autostart |
+| [`crates/firma-stack`](crates/firma-stack/) | Stack supervisor: Authority + Sidecar lifecycle as one unit |
+| [`crates/firma-proto`](crates/firma-proto/) | Protobuf/gRPC service definitions |
+
+**Examples**
+
+| | |
+|---|---|
+| [`examples/demos`](examples/demos/) | TUI demo runner with three self-contained enforcement scenarios |
+| [`examples/agents`](examples/agents/) | Intentionally risky demo agents (OpenAI Agents SDK + Google ADK) |
+| [`examples/generic-agent`](examples/generic-agent/) | `firma run` profile and stack runner for wrapping any agent command |
+
+**Docs**
+
+| | |
+|---|---|
+| [`docs/`](docs/) | Architecture, CLI reference, configuration reference |
+| [`docs-site/`](docs-site/) | Astro/Starlight documentation site |
+
+<br/>
 
 ## License
 
-This project is licensed under the [Apache 2.0 License](LICENSE).
+Apache 2.0. See [LICENSE](LICENSE).

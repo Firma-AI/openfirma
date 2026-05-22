@@ -21,6 +21,17 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
             "--no-autostart is incompatible with --authority local; pass --authority <url> or omit --no-autostart"
         );
     }
+    // Reject `--sidecar local` + `--no-autostart` before any filesystem side
+    // effects (implicit init). `execute_run` would also catch this via
+    // `RunError::SidecarLocalNoAutostart`, but only after init runs — and if
+    // init fails for an unrelated reason (e.g. a non-writable scaffold path),
+    // that downstream error never surfaces. Fail fast on the bad arg pair.
+    if args.no_autostart && args.sidecar.as_deref() == Some("local") {
+        anyhow::bail!(
+            "`--sidecar local` is incompatible with `--no-autostart`; \
+             pass `--sidecar <tcp://...|unix:///...>` or omit `--no-autostart`"
+        );
+    }
 
     // Implicit init: if no firma.toml is discoverable for this project,
     // scaffold one before handing off to firma-run. Keeps the spec's
@@ -40,16 +51,20 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         Some("local") => firma_run::authority::AuthorityCli::Local,
         Some(url) => firma_run::authority::AuthorityCli::Remote(url.to_string()),
     };
+    let sidecar_cli = match args.sidecar.as_deref() {
+        None => firma_run::sidecar::SidecarCli::Unset,
+        Some("local") => firma_run::sidecar::SidecarCli::Local,
+        Some(endpoint) => firma_run::sidecar::SidecarCli::Remote(endpoint.to_string()),
+    };
     let input = RunInput {
         profile: args.profile,
         config: run_config,
         backend: args.backend.map(Into::into),
-        sidecar_endpoint: args.sidecar_endpoint,
         capability_file: args.capability_file,
         identity_mode: args.identity_mode.map(Into::into),
         preserve_host_user: args.preserve_host_user,
         print_effective_config: args.print_effective_config,
-        sidecar_mode: args.sidecar.into(),
+        sidecar_cli,
         no_autostart: args.no_autostart,
         sidecar_template_path: args.sidecar_config,
         sidecar_startup_timeout_secs: args.sidecar_startup_timeout_secs,

@@ -25,11 +25,6 @@ pub struct RunArgs {
     #[arg(long)]
     pub backend: Option<BackendOverride>,
 
-    /// Address of the Sidecar the sandboxed agent should route outbound traffic
-    /// through. Accepts `tcp://host:port` or `unix:///path/to/sock`.
-    #[arg(long)]
-    pub sidecar_endpoint: Option<String>,
-
     /// Path to a capability-token file made available to the agent for
     /// runtime lease refresh.
     #[arg(long)]
@@ -50,15 +45,18 @@ pub struct RunArgs {
     #[arg(long, default_value_t = false)]
     pub print_effective_config: bool,
 
-    /// Sidecar selection. `auto` autostarts a per-run sidecar when the
-    /// configured endpoint is unreachable; `external` requires an
-    /// already-running sidecar at `--sidecar-endpoint`.
-    #[arg(long, value_enum, default_value_t = SidecarSelector::Auto)]
-    pub sidecar: SidecarSelector,
+    /// Sidecar selection. `local` autostarts a per-run sidecar; a
+    /// `tcp://host:port` or `unix:///path/to/sock` value targets an existing
+    /// external sidecar at that endpoint and never autostarts. When omitted,
+    /// falls back to the persisted `sidecar_endpoint` in `firma.toml`
+    /// (external) or, if none, local autostart.
+    #[arg(long)]
+    pub sidecar: Option<String>,
 
-    /// Fail with a typed error if no sidecar is reachable at the
-    /// configured endpoint, instead of autostarting one. CI safety net.
-    #[arg(long, default_value_t = false, conflicts_with = "sidecar")]
+    /// Fail with a typed error instead of autostarting any missing component
+    /// (sidecar or authority). CI / production safety net. Incompatible with
+    /// `--sidecar local` and `--authority local`.
+    #[arg(long, default_value_t = false)]
     pub no_autostart: bool,
 
     /// Optional sidecar config template path for the autostarted sidecar.
@@ -87,24 +85,6 @@ pub struct RunArgs {
     /// Wrapped command and args (pass after `--`).
     #[arg(required = true, num_args = 1.., allow_hyphen_values = true)]
     pub command: Vec<String>,
-}
-
-/// User-facing sidecar selector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum SidecarSelector {
-    /// Autostart a per-run sidecar when the configured endpoint is unreachable.
-    Auto,
-    /// Use the existing sidecar at the configured endpoint; never autostart.
-    External,
-}
-
-impl From<SidecarSelector> for firma_run::runtime::SidecarMode {
-    fn from(value: SidecarSelector) -> Self {
-        match value {
-            SidecarSelector::Auto => Self::Auto,
-            SidecarSelector::External => Self::External,
-        }
-    }
 }
 
 /// Internal helper args for proxy-bridge process.
