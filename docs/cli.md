@@ -5,7 +5,11 @@ PATH or invoked via `cargo run -p firma --`.
 
 ## `firma config`
 
-Interactive scaffolding wizard that creates or updates an agent configuration directory — sidecar + authority config, Cedar policy, mapping rules, authority keypair, and a `firma-run.toml` — in a single step. When config files already exist, their current values become the wizard and non-interactive defaults; supplied flags override those values.
+Interactive scaffolding wizard that creates or updates an agent configuration
+directory — sidecar + authority config, Cedar policy, mapping rules, authority
+keypair, and a `firma-run.toml` — in a single step. When config files already
+exist, their current values become the wizard and non-interactive defaults;
+supplied flags override those values.
 
 ### Usage
 
@@ -15,34 +19,45 @@ firma config [OPTIONS]
 
 ### Options
 
-| Flag              | Short | Default                      | Description                                                       |
-| ----------------- | ----- | ---------------------------- | ----------------------------------------------------------------- |
-| `--name`          | `-n`  | `my-agent`                   | Agent slug — used as `agent_id` in generated configs              |
-| `--posture`       |       | `dev`                        | Cedar enforcement posture (`strict`, `dev`, `dev-with-delete-watch`) |
-| `--mapping`       |       | `anthropic`                  | Mapping file(s) to include — repeat for multiple                  |
-| `--extra-hosts`   |       | none                         | Comma-separated extra hosts the agent may reach                   |
-| `--workspace`     |       | CWD                          | Path the agent has RW access to (bwrap mount)                     |
-| `--output-dir`    | `-o`  | Firma config dir             | Directory to write scaffolded files into                          |
-| `--dry-run`       |       | off                          | Print generated files to stdout; no disk writes                   |
-| `--force`         |       | off                          | Overwrite existing files, including the authority keypair         |
-| `--list-templates`|       | off                          | Print posture × mapping catalogue and exit                        |
+| Flag                         | Short | Default                  | Description                                                          |
+| ---------------------------- | ----- | ------------------------ | -------------------------------------------------------------------- |
+| `--mode`                     |       | wizard / `agent-local`   | `agent-local`, `agent-remote`, or `authority`                        |
+| `--name`                     | `-n`  | wizard / `my-agent`      | Agent slug — used as `agent_id` in `[sidecar.preflight]`             |
+| `--posture`                  |       | wizard / `dev`           | Cedar enforcement posture                                            |
+| `--mapping`                  |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                     |
+| `--requested-action`         |       | derived from posture     | Preflight requested actions — repeat or comma-separate               |
+| `--extra-hosts`              |       | none                     | Comma-separated extra hosts the agent may reach                      |
+| `--workspace`                |       | CWD                      | Agent RW path written to `firma-run.toml` bwrap mount                |
+| `--output-dir`               | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings land             |
+| `--state-dir`                |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                          |
+| `--authority-listen <addr>`  |       | `127.0.0.1:9443`         | gRPC listen address (`agent-local` / `authority` modes only)         |
+| `--authority-url <url>`      |       | wizard prompt            | Authority URL written to `[authority.connect].url` (`agent-remote`)  |
+| `--authority-ca-cert <path>` |       | wizard prompt            | Authority CA cert PEM path (`agent-remote`)                          |
+| `--authority-pub-key <path>` |       | derived from state dir   | Authority public key path                                            |
+| `--yes`                      | `-y`  | off                      | Skip all prompts; use existing values or flag defaults               |
+| `--force`                    |       | off                      | Overwrite existing files, including the authority keypair            |
+| `--dry-run`                  |       | off                      | Print generated files to stdout; no disk writes                      |
+| `--list-templates`           |       | off                      | Print posture × mapping catalogue and exit                           |
 
 ### Generated layout
 
 ```
 <output-dir>/
-  firma.toml                     — sidecar + authority unified config
-  firma-run.toml                 — runtime profiles (workspace mounts, identity)
-  mapping-rules.toml             — base mapping rules (localhost, extra hosts)
+  firma.toml                     — unified config (authority + sidecar sections)
+  firma-run.toml                 — runtime sandbox profile (workspace mounts)
+  mapping-rules.toml             — base routing rules (localhost, extra hosts)
   mappings/<name>.toml           — one file per selected mapping
   policies/<posture>.cedar       — Cedar enforcement policy
   issuance-policies/
     issuance.cedar               — token issuance policy
-  .runtime/
-    authority.key                — generated authority signing keypair
-    authority.pub                — matching public key (referenced in firma.toml)
-    audit.key                    — demo audit signing key
-    revocations.txt              — empty revocations list
+
+<state-dir>/
+  authority.key                  — Ed25519 signing key (never commit)
+  authority.pub                  — matching public key
+  audit.key                      — audit signing key
+  revocations.txt                — empty revocations list
+  tls/                           — self-signed TLS material
+  generated-firma-ca/            — populated by sidecar on first start
 ```
 
 ### Examples
@@ -53,16 +68,26 @@ Interactive:
 firma config
 ```
 
-Non-interactive:
+Non-interactive agent-local:
 
 ```bash
-firma config --name claude-code --posture strict --mapping anthropic
+firma config --yes --name claude-code --posture dev --mapping anthropic
+```
+
+Agent connecting to a remote authority:
+
+```bash
+firma config --yes --mode agent-remote \
+  --authority-url https://authority.example.com:9443 \
+  --authority-ca-cert /path/to/ca.crt \
+  --name my-agent --posture strict --mapping anthropic
 ```
 
 Multiple mappings:
 
 ```bash
-firma config --name my-agent --posture dev --mapping anthropic --mapping github --mapping npm
+firma config --name my-agent --posture dev \
+  --mapping anthropic --mapping github --mapping npm
 ```
 
 Preview without writing:
@@ -71,8 +96,7 @@ Preview without writing:
 firma config --dry-run
 ```
 
-Re-render an existing scaffold, keeping current values unless a flag overrides
-them:
+Re-render an existing scaffold, keeping current values unless a flag overrides:
 
 ```bash
 firma config --yes --dry-run
@@ -82,7 +106,7 @@ firma config --yes --name codex --mapping openai --force
 After scaffolding, run the agent:
 
 ```bash
-firma run --config ~/.config/firma/firma-run.toml -- <agent-command>
+firma run -- <agent-command>
 ```
 
 ### Postures

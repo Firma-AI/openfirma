@@ -571,7 +571,7 @@ fn collect_authority_inputs(
             )
             .interact_text()
             .context("authority listen address prompt")?,
-        (None, _) if interactive => dialoguer::Input::with_theme(theme)
+        (None, Mode::AgentLocal) if interactive => dialoguer::Input::with_theme(theme)
             .with_prompt("Authority listen address")
             .default(
                 existing

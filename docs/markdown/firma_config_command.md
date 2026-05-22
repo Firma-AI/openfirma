@@ -1,100 +1,139 @@
 # `firma config`
 
-`firma config` scaffolds or updates a project: keys, default `firma.toml`,
-policy files, and mapping files. Run it when you start a new project or
-when you want to re-render the scaffold with a few overrides. `firma run`
-invokes the same scaffold implicitly the first time it finds no
-`firma.toml`.
+`firma config` scaffolds or updates a project: signing keys, `firma.toml`,
+Cedar policies, mapping files, and `firma-run.toml`. Run it when starting a
+new project or re-rendering the scaffold with overrides. `firma run` calls
+the same scaffold implicitly on first use if no `firma.toml` is found.
+
+When config files already exist in the target directory, their current values
+become the defaults for every prompt and non-interactive run. Supply only the
+flags you want to change; everything else is preserved.
 
 ## Quickstart
 
 ```bash
-firma config                                              # interactive wizard
-firma config --yes                                        # non-interactive defaults
-firma config --output-dir .local                          # specific directory
-firma config --agent codex --provider anthropic \
-           --workspace ./proj --authority local         # scripted full setup
+firma config                          # interactive wizard
+firma config --yes                    # non-interactive defaults
+firma config --output-dir .local      # specific output directory
+firma config --mode agent-local \
+  --name codex --posture dev \
+  --mapping anthropic --yes           # scripted full setup
 ```
 
-Config always lands in the current directory or an explicit `--output-dir`:
+## Modes
 
-| Form                  | Where the scaffold lands |
-| --------------------- | ------------------------ |
-| _(default)_           | Current working directory. |
-| `--output-dir <path>` | `<path>` verbatim.       |
-
-## Usage shapes
-
-| Form                                          | When                                                  |
-| --------------------------------------------- | ----------------------------------------------------- |
-| `firma config`                                  | Interactive wizard. Default for human developers.     |
-| `firma config --yes`                            | Non-interactive. CI / container init / daemon-mode.   |
-| `firma config --agent X --provider Y …`         | Scripted with every value supplied up-front.          |
-
-The wizard prompts for: workspace path, agent, provider, authority shape
-(local or remote URL). A flag on the command line short-circuits the
-matching prompt.
-
-If the target config directory already contains `firma.toml` or
-`firma-run.toml`, `firma config` reads them first and uses the current
-values as defaults.
-For example, `firma config --yes --name codex` keeps the existing mode,
-state directory, authority settings, posture, mappings, preflight action
-list, and workspace, but writes `agent_id = "codex"` in the generated
-output. Existing files are still preserved unless `--force` is set.
+| Mode            | What it creates                                                    |
+| --------------- | ------------------------------------------------------------------ |
+| `agent-local`   | Sidecar config + co-located mini-authority (`[authority.server]` + `[authority.connect]`) |
+| `agent-remote`  | Sidecar config only, connecting to an existing authority (`[authority.connect]`) |
+| `authority`     | Standalone authority server only — no sidecar config              |
 
 ## Flags
 
 ```text
-firma config [--output-dir <dir>]
-           [--name <name>] [--posture <posture>] [--mapping <mapping>]
-           [--workspace <dir>] [--yes] [--force] [--dry-run]
-           [--state-dir <dir>]
+firma config [--mode <mode>]
+             [--name <name>] [--posture <posture>] [--mapping <mapping>]
+             [--requested-action <action>] [--extra-hosts <hosts>]
+             [--workspace <dir>] [--output-dir <dir>] [--state-dir <dir>]
+             [--authority-url <url>] [--authority-ca-cert <path>]
+             [--authority-pub-key <path>] [--authority-listen <addr>]
+             [--yes] [--force] [--dry-run] [--list-templates]
 ```
 
-| Flag                 | Default                     | Description                                            |
-| -------------------- | --------------------------- | ------------------------------------------------------ |
-| `--output-dir <dir>` | current directory           | Where firma.toml, policies, and mappings are written.  |
-| `--workspace <dir>`  | _cwd_ (wizard prompt)       | Agent RW access path (bwrap mount).                    |
-| `--name <name>`      | wizard prompt / `my-agent`  | Agent slug — used as `agent_id` in generated config.   |
-| `--posture <val>`    | wizard prompt / `dev`       | Cedar enforcement posture.                             |
-| `--mapping <val>`    | wizard prompt / `anthropic` | Mapping file(s) — repeat for multiple.                 |
-| `--yes`              | _off_                       | Skip the wizard. Required in non-TTY contexts.         |
-| `--state-dir <dir>`  | `FIRMA_STATE_DIR` / XDG     | State dir (keys, revocations, CA material).            |
-| `--force`            | _off_                       | Overwrite existing files instead of preserving them.   |
+| Flag                        | Short | Default                  | Description                                                         |
+| --------------------------- | ----- | ------------------------ | ------------------------------------------------------------------- |
+| `--mode <mode>`             |       | wizard / `agent-local`   | What to configure: `agent-local`, `agent-remote`, or `authority`    |
+| `--name <name>`             | `-n`  | wizard / `my-agent`      | Agent slug — written as `agent_id` in `[sidecar.preflight]`         |
+| `--posture <posture>`       |       | wizard / `dev`           | Cedar enforcement posture                                           |
+| `--mapping <mapping>`       |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                    |
+| `--requested-action <val>`  |       | derived from posture     | Preflight requested actions — repeat or comma-separate; overrides posture default |
+| `--extra-hosts <hosts>`     |       | none                     | Comma-separated extra hosts the agent may reach                     |
+| `--workspace <dir>`         |       | CWD                      | Agent RW path written to `firma-run.toml` bwrap mount               |
+| `--output-dir <dir>`        | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings are written     |
+| `--state-dir <dir>`         |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                         |
+| `--authority-listen <addr>` |       | `127.0.0.1:9443`         | gRPC listen address written to `[authority.server]` (`agent-local` / `authority` only) |
+| `--authority-url <url>`     |       | wizard prompt            | Authority URL written to `[authority.connect].url` (`agent-remote`) |
+| `--authority-ca-cert <path>`|       | wizard prompt            | Authority CA cert PEM path (`agent-remote`)                         |
+| `--authority-pub-key <path>`|       | derived from state dir   | Authority public key path (`agent-remote`)                          |
+| `--yes`                     | `-y`  | off                      | Skip all interactive prompts; use existing values or flag defaults  |
+| `--force`                   |       | off                      | Overwrite existing files including the authority keypair            |
+| `--dry-run`                 |       | off                      | Print generated files to stdout without writing to disk             |
+| `--list-templates`          |       | off                      | Print the posture × mapping catalogue and exit                      |
+
+## Postures
+
+| Name                    | Cedar policy behaviour                                     |
+| ----------------------- | ---------------------------------------------------------- |
+| `strict`                | Default-deny + communication only (no code ops)            |
+| `dev`                   | Adds code.read/write, issues, package install              |
+| `dev-with-delete-watch` | Dev + code.destructive (local-exec / delete-watch)         |
+
+## Mappings
+
+| Name        | Covers                                                                        |
+| ----------- | ----------------------------------------------------------------------------- |
+| `anthropic` | api.anthropic.com — Anthropic Claude API (CONNECT, no MITM)                  |
+| `openai`    | api.openai.com — OpenAI API (CONNECT, no MITM)                               |
+| `github`    | api.github.com — GitHub REST API (MITM for per-endpoint classification)      |
+| `gmail`     | gmail.googleapis.com — Gmail REST API (MITM for per-endpoint classification) |
+| `npm`       | registry.npmjs.org — npm package registry                                    |
+| `pypi`      | pypi.org, files.pythonhosted.org — PyPI                                      |
+| `cargo`     | crates.io, static.crates.io — Rust package registry                          |
+| `stripe`    | api.stripe.com — Stripe REST API                                             |
+| `custom`    | Empty template — fill in manually                                            |
 
 ## Scaffolded layout
 
 ```text
-<workspace>/.firma/        # project-local config dir
-  firma.toml              # one sectioned file
-  authority.key           # Ed25519 signing key (never commit)
-  audit.key
-  mapping-rules.toml      # placeholder
-  policies/
+<output-dir>/                    # project-local config dir
+  firma.toml                    # unified config (authority + sidecar)
+  firma-run.toml                # runtime sandbox profile
+  mapping-rules.toml            # base routing rules
+  mappings/<name>.toml          # one file per selected mapping
+  policies/<posture>.cedar      # Cedar enforcement policy
   issuance-policies/
+    issuance.cedar              # token issuance policy
 
-<state_dir>/               # user-global state (XDG default)
-  revocations.txt
-  generated-firma-ca/     # populated by the sidecar on first start
+<state-dir>/                     # user-global state (XDG default)
+  authority.key                 # Ed25519 signing key — never commit
+  authority.pub                 # matching public key
+  audit.key                     # audit signing key
+  revocations.txt               # empty revocations list
+  tls/                          # self-signed TLS material
+  generated-firma-ca/           # populated by sidecar on first start
 ```
 
-`firma.toml` has three sections after init: `[project]` (agent +
-provider metadata), `[authority]` (local or remote shape), and
-`[sidecar.*]` (interceptor + policy + ca + audit + mapping).
+## Generated `firma.toml` structure
+
+`agent-local` produces both an `[authority.server]` and `[authority.connect]`
+section. `agent-remote` produces only `[authority.connect]`. `authority` mode
+produces only `[authority.server]`.
+
+```toml
+[authority.server]            # present for agent-local and authority modes
+listen_addr   = "127.0.0.1:9443"
+key_file      = "/path/to/state/authority.key"
+# ...
+
+[authority.connect]           # present for agent-local and agent-remote modes
+url           = "https://127.0.0.1:9443"
+ca_cert_path  = "/path/to/state/tls/authority-ca.crt"
+pub_key_path  = "/path/to/state/authority.pub"
+
+[sidecar.preflight]
+agent_id          = "my-agent"
+requested_actions = ["credential.read", "code.read", ...]
+# ...
+```
 
 ## Implicit init on `firma run`
 
-`firma run <agent>` checks for a discoverable `firma.toml` at launch
-time. If none is found, `firma run` calls the same scaffold with
-non-interactive defaults (agent = `<agent>` from `--profile`, provider
-= `anthropic`, authority = `local`) and continues. This keeps the
-one-command path working from a fresh clone, as called out by the
-spec's zero-config development mode.
+`firma run` checks for a discoverable `firma.toml` at launch. If none is
+found it scaffolds one with non-interactive defaults and proceeds. This keeps
+`firma run codex` working from a fresh clone.
 
 ## See also
 
-- [`firma sidecar start/stop`](firma_sidecar_daemon_command.md) — daemon
-  lifecycle for the sidecar (and the authority started alongside it).
-- [`firma monitor`](firma_monitor_command.md) — tail audit + component logs.
-- [Configuration reference](../configuration.md) — full `firma.toml` shape.
+- [`docs/markdown/firma_sidecar_daemon_command.md`](firma_sidecar_daemon_command.md) — `firma sidecar {start,stop,status}`.
+- [`docs/markdown/firma_monitor_command.md`](firma_monitor_command.md) — `firma monitor`.
+- [Configuration reference](../configuration.md) — full `firma.toml` schema.
