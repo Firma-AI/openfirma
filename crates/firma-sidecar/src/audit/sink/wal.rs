@@ -89,7 +89,18 @@ impl WalAuditSink {
             0u64
         };
 
-        match file.write_all(line.as_bytes()).await {
+        // Write at EOF explicitly instead of relying on append-mode
+        // file semantics, which can be platform-specific when mixed
+        // with seek/read/truncate during compaction.
+        let write_result = if file.seek(std::io::SeekFrom::End(0)).await.is_ok() {
+            file.write_all(line.as_bytes()).await
+        } else {
+            Err(std::io::Error::other(
+                "failed to seek WAL to end before write",
+            ))
+        };
+
+        match write_result {
             Ok(()) => *wal_size += line_len,
             Err(err) => {
                 tracing::error!(
@@ -136,6 +147,14 @@ impl WalAuditSink {
         let dropped = total - kept.len() as u64;
 
         // Rewrite the file with only the kept lines.
+        //
+        // Important: this file descriptor may be opened with O_APPEND.
+        // In that mode, writes are forced to end-of-file regardless of
+        // seek position, so "seek + write + truncate" can produce
+        // inconsistent compaction results. Truncate first, then write.
+        if file.set_len(0).await.is_err() {
+            return 0;
+        }
         if file.seek(std::io::SeekFrom::Start(0)).await.is_err() {
             return 0;
         }
@@ -147,8 +166,7 @@ impl WalAuditSink {
         let new_len = new_contents.len() as u64;
         let write_ok = file.write_all(new_contents.as_bytes()).await.is_ok();
         if write_ok {
-            // Truncate any leftover bytes from the old file.
-            let _ = file.set_len(new_len).await;
+            let _ = file.sync_data().await;
             *wal_size = new_len;
         }
 
@@ -252,7 +270,7 @@ impl WalAuditSink {
             .create(true)
             .read(true)
             .write(true)
-            .append(true)
+            .truncate(false)
             .open(&self.wal_path)
             .await
             .map_err(|e| AuditSinkError::BindFailed(format!("cannot open WAL file: {e}")))?;
@@ -556,20 +574,31 @@ mod tests {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
         let wal_path = dir.path().join("compact.jsonl");
 
-        // Use a tiny cap so compaction triggers quickly.
-        let event = sample_event("evt-compact");
-        let line = serde_json::to_string(&event).unwrap_or_else(|e| panic!("serialize: {e}"));
-        let line_len = (line.len() + 1) as u64; // +1 for newline
+        // Build concrete events first, then size the cap from their
+        // actual serialized lengths. This keeps the trigger condition
+        // deterministic across platforms/runs even if line sizes differ.
+        let event_a = sample_event("a");
+        let event_b = sample_event("b");
+        let event_c = sample_event("c");
 
-        // Cap = 2.5 lines → after 3 appends, compaction triggers on
-        // the 3rd append to make room.
-        let cap = line_len * 2 + line_len / 2;
+        let line_a_len = (serde_json::to_string(&event_a)
+            .unwrap_or_else(|e| panic!("serialize a: {e}"))
+            .len()
+            + 1) as u64; // +1 for newline
+        let line_b_len = (serde_json::to_string(&event_b)
+            .unwrap_or_else(|e| panic!("serialize b: {e}"))
+            .len()
+            + 1) as u64; // +1 for newline
+
+        // Cap to exactly the first two appends. The third append must
+        // exceed this and therefore trigger compaction.
+        let cap = line_a_len + line_b_len;
 
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
-            .append(true)
+            .truncate(false)
             .open(&wal_path)
             .await
             .unwrap_or_else(|e| panic!("open: {e}"));
@@ -577,12 +606,9 @@ mod tests {
         let mut wal_size = 0u64;
 
         // Append three events.
-        WalAuditSink::wal_append(&mut file, &mut wal_size, cap, &sample_event("a")).await;
-        WalAuditSink::wal_append(&mut file, &mut wal_size, cap, &sample_event("b")).await;
-        let dropped =
-            WalAuditSink::wal_append(&mut file, &mut wal_size, cap, &sample_event("c")).await;
-
-        assert!(dropped > 0, "compaction should have dropped events");
+        WalAuditSink::wal_append(&mut file, &mut wal_size, cap, &event_a).await;
+        WalAuditSink::wal_append(&mut file, &mut wal_size, cap, &event_b).await;
+        let _dropped = WalAuditSink::wal_append(&mut file, &mut wal_size, cap, &event_c).await;
 
         let contents = tokio::fs::read_to_string(&wal_path)
             .await
@@ -594,6 +620,15 @@ mod tests {
         assert!(
             lines.iter().any(|l| l.contains("\"c\"")),
             "newest event 'c' should be in WAL"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("\"a\"")),
+            "oldest event 'a' should have been compacted away"
+        );
+        assert!(
+            lines.len() <= 2,
+            "WAL should contain at most 2 lines after compaction, found {}",
+            lines.len()
         );
         assert!(
             wal_size <= cap,
