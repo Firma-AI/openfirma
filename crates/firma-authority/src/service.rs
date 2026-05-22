@@ -21,6 +21,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::{Stream, StreamExt};
 use tonic::{Request as TonicRequest, Response, Status};
+use x509_parser::prelude::*;
 
 use crate::cedar_loader::{CedarPolicyStore, CedarPolicyStoreWatcher};
 use crate::revocation::{RevocationStore, RevocationStoreWatcher};
@@ -70,6 +71,8 @@ impl AuthorityService for AuthorityServiceImpl {
         &self,
         request: TonicRequest<IssueCapabilityRequest>,
     ) -> Result<Response<IssueCapabilityResponse>, Status> {
+        let client_identity = peer_identity_from_request(&request);
+        let remote_addr = request.remote_addr();
         let req = request.into_inner();
 
         tracing::info!(
@@ -77,6 +80,8 @@ impl AuthorityService for AuthorityServiceImpl {
             session_id = %req.session_id,
             actions = ?req.requested_actions,
             resource = %req.resource_scope,
+            client_identity = %client_identity.as_deref().unwrap_or("<unknown>"),
+            remote_addr = %remote_addr.map_or_else(|| "<unknown>".to_string(), |a| a.to_string()),
             "capability issuance requested"
         );
 
@@ -110,6 +115,7 @@ impl AuthorityService for AuthorityServiceImpl {
                 tracing::info!(
                     agent_id = %token.agent_id,
                     token_id = %token.token_id,
+                    client_identity = %client_identity.as_deref().unwrap_or("<unknown>"),
                     "capability granted"
                 );
                 Ok(Response::new(IssueCapabilityResponse {
@@ -123,6 +129,7 @@ impl AuthorityService for AuthorityServiceImpl {
                 tracing::info!(
                     agent_id = %req.agent_id,
                     deny_reason = %reason,
+                    client_identity = %client_identity.as_deref().unwrap_or("<unknown>"),
                     "capability denied"
                 );
                 Ok(Response::new(IssueCapabilityResponse {
@@ -147,11 +154,13 @@ impl AuthorityService for AuthorityServiceImpl {
         &self,
         request: TonicRequest<WatchPolicyBundleRequest>,
     ) -> Result<Response<Self::WatchPolicyBundleStream>, Status> {
+        let client_identity = peer_identity_from_request(&request);
         let req = request.into_inner();
         let current_version = req.current_version;
 
         tracing::info!(
             client_version = %current_version,
+            client_identity = %client_identity.as_deref().unwrap_or("<unknown>"),
             "sidecar connected to policy bundle stream"
         );
 
@@ -201,6 +210,7 @@ impl AuthorityService for AuthorityServiceImpl {
         &self,
         request: TonicRequest<WatchRevocationsRequest>,
     ) -> Result<Response<Self::WatchRevocationsStream>, Status> {
+        let client_identity = peer_identity_from_request(&request);
         let req = request.into_inner();
 
         let since = req.since.map_or_else(
@@ -211,7 +221,11 @@ impl AuthorityService for AuthorityServiceImpl {
             },
         );
 
-        tracing::info!(?since, "sidecar connected to revocation stream");
+        tracing::info!(
+            ?since,
+            client_identity = %client_identity.as_deref().unwrap_or("<unknown>"),
+            "sidecar connected to revocation stream"
+        );
 
         // Replay events after `since` timestamp
         let replay_events = self.revocation_watcher.events_since(since).await;
@@ -237,6 +251,34 @@ impl AuthorityService for AuthorityServiceImpl {
 
         Ok(Response::new(Box::pin(stream)))
     }
+}
+
+/// Extract peer identity from mTLS request certificates.
+///
+/// Resolution order:
+/// 1. First DNS SAN
+/// 2. Subject CN
+fn peer_identity_from_request<T>(request: &TonicRequest<T>) -> Option<String> {
+    let certs = request.peer_certs()?;
+    let end_entity = certs.first()?;
+    let (_, parsed) = X509Certificate::from_der(end_entity.as_ref()).ok()?;
+
+    for ext in parsed.extensions() {
+        if let ParsedExtension::SubjectAlternativeName(san) = ext.parsed_extension() {
+            for name in &san.general_names {
+                if let GeneralName::DNSName(dns) = name {
+                    return Some((*dns).to_string());
+                }
+            }
+        }
+    }
+
+    parsed
+        .subject()
+        .iter_common_name()
+        .next()
+        .and_then(|cn| cn.as_str().ok())
+        .map(str::to_string)
 }
 
 // --- Cedar evaluation helpers ---

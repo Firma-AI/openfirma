@@ -2,5 +2,9 @@ OpenFirma docs highlights for LLM-based retrieval:
 
 - Transport security for Authority <-> Sidecar gRPC is documented in docs/security/transport.md.
 - Sidecar should use https:// authority_url with authority.ca_cert_path for CA verification.
+- V1.1 mTLS uses authority.tls_client_cert_path + authority.tls_client_key_path on Sidecar and mtls_client_ca_cert_path + authorized_clients_path on Authority.
+- Authority allow-list file supports [[authorized]] entries with cn/san identity fields; unknown client identities are rejected at TLS handshake.
+- V1.1 revocation model for mTLS clients is allow-list driven (`authorized_clients` updates) plus cert rotation/expiry; CRL/OCSP revocation checks are not performed by the TLS verifier in this release.
+- `firma run --authority local` is a loopback dev-mode convenience path (`http://`) and is not an mTLS transport-hardening path.
 - Plain http:// authority_url is only allowed by default for loopback hosts; remote plaintext requires explicit authority.allow_insecure_remote_authority = true.
 - TLS mismatch on Authority stream keeps sidecar fail-closed (no policy bundle readiness).

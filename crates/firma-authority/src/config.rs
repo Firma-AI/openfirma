@@ -61,6 +61,19 @@ pub struct AuthorityTlsConfig {
     /// `tls_cert_path`.
     #[serde(default)]
     pub tls_key_path: Option<PathBuf>,
+    /// Path to the PEM CA certificate used to verify Sidecar mTLS client
+    /// certificates. When set (together with `authorized_clients_path`),
+    /// the server requires client certificates and rejects connections whose
+    /// identity is not in the allow-list at the TLS handshake level.
+    /// Requires `tls_cert_path` / `tls_key_path` to also be configured.
+    pub mtls_client_ca_cert_path: Option<PathBuf>,
+    /// Path to the PEM CA private key used by `firma authority issue-client-cert`
+    /// to sign new Sidecar client certificates. Not loaded at server startup;
+    /// only the `issue-client-cert` subcommand reads this file.
+    pub mtls_client_ca_key_path: Option<PathBuf>,
+    /// Path to the TOML file listing authorized client identities (CN or DNS
+    /// SAN). Required together with `mtls_client_ca_cert_path`.
+    pub authorized_clients_path: Option<PathBuf>,
 }
 
 /// Fully validated TLS identity paths.
@@ -143,6 +156,15 @@ impl AuthorityConfig {
         if let Ok(v) = std::env::var("FIRMA_AUTHORITY_TLS_KEY_PATH") {
             config.tls.tls_key_path = Some(PathBuf::from(v));
         }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_MTLS_CLIENT_CA_CERT_PATH") {
+            config.tls.mtls_client_ca_cert_path = Some(PathBuf::from(v));
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_MTLS_CLIENT_CA_KEY_PATH") {
+            config.tls.mtls_client_ca_key_path = Some(PathBuf::from(v));
+        }
+        if let Ok(v) = std::env::var("FIRMA_AUTHORITY_AUTHORIZED_CLIENTS_PATH") {
+            config.tls.authorized_clients_path = Some(PathBuf::from(v));
+        }
     }
 
     /// Parse a resolved config file (flat or `[authority]`-sectioned via
@@ -208,6 +230,24 @@ impl AuthorityConfig {
             && key_path.is_relative()
         {
             *key_path = config_dir.join(&*key_path);
+        }
+        if let Some(ca_cert_path) = self.tls.mtls_client_ca_cert_path.as_mut()
+            && !ca_cert_path.as_os_str().is_empty()
+            && ca_cert_path.is_relative()
+        {
+            *ca_cert_path = config_dir.join(&*ca_cert_path);
+        }
+        if let Some(ca_key_path) = self.tls.mtls_client_ca_key_path.as_mut()
+            && !ca_key_path.as_os_str().is_empty()
+            && ca_key_path.is_relative()
+        {
+            *ca_key_path = config_dir.join(&*ca_key_path);
+        }
+        if let Some(authorized_clients_path) = self.tls.authorized_clients_path.as_mut()
+            && !authorized_clients_path.as_os_str().is_empty()
+            && authorized_clients_path.is_relative()
+        {
+            *authorized_clients_path = config_dir.join(&*authorized_clients_path);
         }
         if let Some(schema_path) = self.schema_path.as_mut()
             && !schema_path.as_os_str().is_empty()

@@ -1222,7 +1222,7 @@ deny_actions = ["filesystem.delete"]
 
         let compile_mode = SeccompPolicyConfig {
             source_policy_path: policy_path.clone(),
-            artifact_dir: good_artifact_dir.clone(),
+            artifact_dir: good_artifact_dir,
             verify_checksum: true,
             runtime_mode: SeccompRuntimeMode::CompileOnLaunch,
         };

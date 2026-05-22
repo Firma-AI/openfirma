@@ -50,6 +50,21 @@ pub enum Commands {
     /// fixed-scope tokens offline (CI, demos, tests) instead of going through
     /// the Authority's gRPC issuance API.
     Issue(IssueArgs),
+    /// Generate and sign an mTLS client certificate for a Sidecar.
+    ///
+    /// Requires `mtls_client_ca_cert_path` and `mtls_client_ca_key_path` to
+    /// be set in the Authority config. The generated cert and private key are
+    /// written as separate PEM files. Add the CN (or the cert's DNS SAN if
+    /// you specify `--san`) to `authorized_clients_path` to authorize the
+    /// Sidecar.
+    #[command(name = "issue-client-cert")]
+    IssueClientCert(IssueClientCertArgs),
+    /// Generate a new mTLS client CA key pair (CA cert + CA key).
+    ///
+    /// Use this once per Authority deployment to create the CA that signs
+    /// Sidecar client certificates. Keep the CA key offline after signing.
+    #[command(name = "generate-client-ca")]
+    GenerateClientCa(GenerateClientCaArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -69,6 +84,43 @@ pub struct RevocationsAddArgs {
     /// Human-readable reason for the revocation.
     #[arg(short, long, default_value = "operator-revoked")]
     pub reason: String,
+}
+
+#[derive(Debug, ClapArgs)]
+pub struct IssueClientCertArgs {
+    /// Common Name (CN) for the client certificate.
+    /// The CN is used as the primary identity in the authorized-clients allow-list.
+    #[arg(long)]
+    pub cn: String,
+    /// Optional DNS Subject Alternative Name. When set, this SAN (not the CN)
+    /// is checked against the allow-list on the Authority side.
+    #[arg(long)]
+    pub san: Option<String>,
+    /// Certificate validity in days (default: 365).
+    #[arg(long, default_value_t = 365)]
+    pub days: u32,
+    /// Output path for the client certificate PEM (e.g. sidecar-client.crt).
+    #[arg(long)]
+    pub cert_out: PathBuf,
+    /// Output path for the client private key PEM (e.g. sidecar-client.key).
+    #[arg(long)]
+    pub key_out: PathBuf,
+}
+
+#[derive(Debug, ClapArgs)]
+pub struct GenerateClientCaArgs {
+    /// Output path for the CA certificate PEM.
+    #[arg(long, default_value = "firma-client-ca.crt")]
+    pub cert_out: PathBuf,
+    /// Output path for the CA private key PEM.
+    #[arg(long, default_value = "firma-client-ca.key")]
+    pub key_out: PathBuf,
+    /// CA validity in days (default: 3650).
+    #[arg(long, default_value_t = 3650)]
+    pub days: u32,
+    /// Common Name for the CA certificate.
+    #[arg(long, default_value = "Firma mTLS Client CA")]
+    pub cn: String,
 }
 
 #[derive(Debug, ClapArgs)]
