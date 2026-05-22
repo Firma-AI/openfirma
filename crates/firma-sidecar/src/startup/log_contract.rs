@@ -51,6 +51,16 @@ pub struct StartupReport<'a> {
 
 /// Emit the seven contract lines at INFO level, in order.
 pub fn log_ready_sequence(report: &StartupReport<'_>) {
+    log_pre_ready_sequence(report);
+    log_ready_line();
+}
+
+/// Emit contract lines 1-6 (everything before `ready`).
+///
+/// Split from [`log_ready_sequence`] so the sidecar can hold line 7
+/// until the Authority streams hydrate (FIR-183) without breaking the
+/// prefix surface scrapers depend on.
+pub fn log_pre_ready_sequence(report: &StartupReport<'_>) {
     tracing::info!(path = %report.config_path.display(), "config loaded");
     tracing::info!(rules = report.mapping_rules, "mapping table loaded");
     tracing::info!(
@@ -65,6 +75,11 @@ pub fn log_ready_sequence(report: &StartupReport<'_>) {
         "connector registry built"
     );
     tracing::info!(addr = %report.interceptor_addr, "interceptor listening");
+}
+
+/// Emit contract line 7 (`ready`). Callers must have already emitted
+/// the pre-ready sequence via [`log_pre_ready_sequence`].
+pub fn log_ready_line() {
     tracing::info!("ready");
 }
 
