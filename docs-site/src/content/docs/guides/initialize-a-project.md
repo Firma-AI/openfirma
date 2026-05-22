@@ -1,13 +1,13 @@
 ---
-title: Initialize a project with firma config
-description: Scaffold a fresh Firma project — config dir, signing keys, default policies — interactively or in scripted form.
+title: Customize the default config with firma config
+description: firma run works with no setup. firma config lets you override the defaults — posture, mappings, authority mode, workspace, and more.
 ---
 
-`firma config` writes or updates a project layout in one command: a
-sectioned `firma.toml`, signing and audit keys, policy files, mapping
-files, and a `firma-run.toml`. `firma run <agent>` calls the same
-scaffold implicitly on first use, so you can skip this step if you only
-want the one-command path.
+`firma run` works out of the box with no prior setup: it auto-scaffolds a
+default config the first time it runs in a directory. `firma config` lets
+you override those defaults — posture, mappings, authority mode, workspace
+path, and more. Run it when you want control over what `firma run` uses, or
+to update an existing config.
 
 ## Usage shapes
 

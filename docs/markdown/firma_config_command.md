@@ -1,9 +1,9 @@
 # `firma config`
 
-`firma config` scaffolds or updates a project: signing keys, `firma.toml`,
-Cedar policies, mapping files, and `firma-run.toml`. Run it when starting a
-new project or re-rendering the scaffold with overrides. `firma run` calls
-the same scaffold implicitly on first use if no `firma.toml` is found.
+`firma run` works out of the box with no prior setup — it auto-scaffolds a
+default config on first use. `firma config` lets you override those defaults:
+posture, mappings, authority mode, workspace path, and more. Run it when you
+want control over what `firma run` uses, or to update an existing config.
 
 When config files already exist in the target directory, their current values
 become the defaults for every prompt and non-interactive run. Supply only the
