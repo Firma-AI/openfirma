@@ -17,14 +17,18 @@ struct AuthorityInputs {
     connect_url: String,
     /// CA cert path written to `[authority.connect].ca_cert_path`.
     connect_ca_cert: String,
+    /// Public key path written to `[authority.connect].pub_key_path`.
+    connect_pub_key: String,
 }
 
 struct SidecarInputs {
     name: String,
     posture: Posture,
+    requested_actions: Option<Vec<String>>,
     mappings: Vec<Mapping>,
     extra_hosts: Vec<String>,
     workspace: PathBuf,
+    existing_firma_run_toml: Option<String>,
 }
 
 struct CollectedInputs {
@@ -33,6 +37,22 @@ struct CollectedInputs {
     sidecar: SidecarInputs,
     config_dir: PathBuf,
     state_dir: PathBuf,
+}
+
+#[derive(Debug, Default)]
+struct ExistingConfigDefaults {
+    mode: Option<Mode>,
+    authority_listen: Option<String>,
+    authority_url: Option<String>,
+    authority_ca_cert: Option<PathBuf>,
+    authority_pub_key: Option<PathBuf>,
+    state_dir: Option<PathBuf>,
+    name: Option<String>,
+    posture: Option<Posture>,
+    requested_actions: Option<Vec<String>>,
+    mappings: Option<Vec<Mapping>>,
+    workspace: Option<PathBuf>,
+    firma_run_toml: Option<String>,
 }
 
 static TPL_FIRMA_TOML: &str = include_str!("../../templates/firma.toml.j2");
@@ -219,8 +239,15 @@ fn generate_files(
         .copied()
         .collect();
 
-    let requested_actions = inputs.sidecar.posture.requested_actions();
-    let workspace_str = inputs.sidecar.workspace.to_string_lossy();
+    let requested_actions = inputs.sidecar.requested_actions.clone().unwrap_or_else(|| {
+        inputs
+            .sidecar
+            .posture
+            .requested_actions()
+            .into_iter()
+            .map(String::from)
+            .collect()
+    });
     let state_dir_str = inputs.state_dir.to_string_lossy();
     let tls_dir = inputs.state_dir.join("tls");
     let tls_cert_path = tls_dir.join("authority.crt").to_string_lossy().into_owned();
@@ -240,6 +267,7 @@ fn generate_files(
             authority_listen => inputs.authority.listen,
             authority_url => inputs.authority.connect_url,
             tls_ca_cert_path => inputs.authority.connect_ca_cert,
+            authority_pub_key_path => inputs.authority.connect_pub_key,
             state_dir => state_dir_str.as_ref(),
             tls_cert_path,
             tls_key_path,
@@ -265,6 +293,7 @@ fn generate_files(
             "mapping-rules.toml",
             context! { extra_hosts => inputs.sidecar.extra_hosts },
         )?;
+        let workspace_str = inputs.sidecar.workspace.to_string_lossy();
         let firma_run = render(
             env,
             "firma-run.toml",
@@ -299,36 +328,35 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
     let theme = ColorfulTheme::default();
     let interactive = !args.yes && dialoguer::console::Term::stderr().is_term();
 
-    let mode = match &args.mode {
-        Some(m) => m.clone(),
-        None if interactive => prompt_mode(&theme)?,
-        None => Mode::AgentLocal,
+    let config_dir = resolve_config_dir(args, interactive, &theme)?;
+    let existing = load_existing_defaults(&config_dir)?;
+
+    let mode = match (&args.mode, &existing.mode) {
+        (Some(m), _) => m.clone(),
+        (None, Some(m)) if !interactive => m.clone(),
+        (None, Some(m)) if interactive => prompt_mode_with_default(&theme, m)?,
+        (None, _) if interactive => prompt_mode_with_default(&theme, &Mode::AgentLocal)?,
+        (None, _) => Mode::AgentLocal,
     };
 
-    let config_dir = match &args.output_dir {
-        Some(p) => {
-            std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()))?
-        }
-        None if interactive => {
-            let default = default_output_dir().to_string_lossy().into_owned();
-            let s: String = dialoguer::Input::with_theme(&theme)
-                .with_prompt("Config directory")
-                .default(default)
-                .interact_text()
-                .context("config directory prompt")?;
-            std::path::absolute(PathBuf::from(s)).context("resolve config directory path")?
-        }
-        None => default_output_dir(),
-    };
-
-    let state_dir = resolve_state_dir(args.state_dir.clone()).map_err(anyhow::Error::msg)?;
+    let state_dir =
+        resolve_state_dir_with_default(args.state_dir.clone(), existing.state_dir.clone())
+            .map_err(anyhow::Error::msg)?;
     let state_dir = std::path::absolute(&state_dir)
         .with_context(|| format!("resolve path {}", state_dir.display()))?;
 
-    let authority = collect_authority_inputs(args, &mode, interactive, &theme, &state_dir)?;
+    let authority =
+        collect_authority_inputs(args, &existing, &mode, interactive, &theme, &state_dir)?;
 
     let has_sidecar = matches!(mode, Mode::AgentLocal | Mode::AgentRemote);
-    let sidecar = collect_sidecar_inputs(args, has_sidecar, interactive, &theme, &config_dir)?;
+    let sidecar = collect_sidecar_inputs(
+        args,
+        &existing,
+        has_sidecar,
+        interactive,
+        &theme,
+        &config_dir,
+    )?;
 
     Ok(CollectedInputs {
         mode,
@@ -339,8 +367,182 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
     })
 }
 
+fn resolve_config_dir(
+    args: &InitArgs,
+    interactive: bool,
+    theme: &ColorfulTheme,
+) -> Result<PathBuf> {
+    if let Some(p) = &args.output_dir {
+        return std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()));
+    }
+
+    let default = firma_config::resolve_config("config", None, &firma_config::SystemDirs)
+        .map_or_else(|_| default_output_dir(), |resolved| resolved.config_dir);
+
+    if interactive {
+        let s: String = dialoguer::Input::with_theme(theme)
+            .with_prompt("Config directory")
+            .default(default.to_string_lossy().into_owned())
+            .interact_text()
+            .context("config directory prompt")?;
+        return std::path::absolute(PathBuf::from(s)).context("resolve config directory path");
+    }
+
+    Ok(default)
+}
+
+fn load_existing_defaults(config_dir: &Path) -> Result<ExistingConfigDefaults> {
+    let firma_toml = config_dir.join(firma_config::CONFIG_FILE_NAME);
+    if !firma_toml.exists() {
+        return Ok(ExistingConfigDefaults::default());
+    }
+
+    let text = std::fs::read_to_string(&firma_toml)
+        .with_context(|| format!("read existing config {}", firma_toml.display()))?;
+    let value: toml::Value = toml::from_str(&text)
+        .with_context(|| format!("parse existing config {}", firma_toml.display()))?;
+    let mut defaults = ExistingConfigDefaults::default();
+
+    let has_server = value
+        .get("authority")
+        .and_then(|v| v.get("server"))
+        .and_then(toml::Value::as_table)
+        .is_some();
+    let has_connect = value
+        .get("authority")
+        .and_then(|v| v.get("connect"))
+        .and_then(toml::Value::as_table)
+        .is_some();
+    let has_sidecar = value
+        .get("sidecar")
+        .and_then(toml::Value::as_table)
+        .is_some();
+    defaults.mode = match (has_server, has_connect, has_sidecar) {
+        (true, _, true) => Some(Mode::AgentLocal),
+        (false, true, true) => Some(Mode::AgentRemote),
+        (true, _, false) => Some(Mode::Authority),
+        _ => None,
+    };
+
+    defaults.authority_listen = get_str(&value, &["authority", "server", "listen_addr"]);
+    defaults.authority_url = get_str(&value, &["authority", "connect", "url"]);
+    defaults.authority_ca_cert = get_path(&value, &["authority", "connect", "ca_cert_path"]);
+    defaults.authority_pub_key = get_path(&value, &["authority", "connect", "pub_key_path"]);
+    defaults.name = get_str(&value, &["sidecar", "preflight", "agent_id"]);
+    defaults.posture = posture_from_preflight_actions(&value);
+    defaults.requested_actions = requested_actions_from_config(&value);
+    defaults.mappings = mappings_from_rules_paths(&value);
+    defaults.state_dir = infer_state_dir(&value);
+
+    let firma_run_path = config_dir.join("firma-run.toml");
+    if firma_run_path.exists() {
+        if let Ok(run_text) = std::fs::read_to_string(&firma_run_path) {
+            defaults.workspace = workspace_from_firma_run(&run_text);
+            defaults.firma_run_toml = Some(run_text);
+        }
+    }
+
+    Ok(defaults)
+}
+
+fn get_str(value: &toml::Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current.as_str().map(ToOwned::to_owned)
+}
+
+fn get_path(value: &toml::Value, path: &[&str]) -> Option<PathBuf> {
+    get_str(value, path).map(PathBuf::from)
+}
+
+fn posture_from_preflight_actions(value: &toml::Value) -> Option<Posture> {
+    let actions = value
+        .get("sidecar")?
+        .get("preflight")?
+        .get("requested_actions")?
+        .as_array()?;
+    let has_action = |needle: &str| actions.iter().any(|v| v.as_str() == Some(needle));
+    if has_action("code.destructive") {
+        Some(Posture::DevWithDeleteWatch)
+    } else if has_action("code.write") {
+        Some(Posture::Dev)
+    } else {
+        Some(Posture::Strict)
+    }
+}
+
+fn requested_actions_from_config(value: &toml::Value) -> Option<Vec<String>> {
+    let actions = value
+        .get("sidecar")?
+        .get("preflight")?
+        .get("requested_actions")?
+        .as_array()?;
+    Some(
+        actions
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .map(String::from)
+            .collect(),
+    )
+}
+
+fn mappings_from_rules_paths(value: &toml::Value) -> Option<Vec<Mapping>> {
+    let paths = value
+        .get("sidecar")?
+        .get("mapping")?
+        .get("rules_paths")?
+        .as_array()?;
+    let mut mappings = Vec::new();
+    for path in paths {
+        let Some(path) = path.as_str() else {
+            continue;
+        };
+        let Some(stem) = Path::new(path).file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if let Ok(mapping) = Mapping::from_str(stem, true) {
+            mappings.push(mapping);
+        }
+    }
+    Some(mappings)
+}
+
+fn infer_state_dir(value: &toml::Value) -> Option<PathBuf> {
+    for path in [
+        get_path(value, &["authority", "server", "key_file"]),
+        get_path(value, &["authority", "server", "revocation_file"]),
+        get_path(value, &["sidecar", "audit", "file_path"]),
+        get_path(value, &["sidecar", "audit", "signing_key_path"]),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(parent) = path.parent() {
+            return Some(parent.to_path_buf());
+        }
+    }
+
+    get_path(value, &["sidecar", "ca", "dir"]).and_then(|path| path.parent().map(Path::to_path_buf))
+}
+
+fn workspace_from_firma_run(toml_text: &str) -> Option<PathBuf> {
+    let value: toml::Value = toml::from_str(toml_text).ok()?;
+    let mounts = value.get("profiles")?.get("generic")?.get("mounts")?.as_array()?;
+    for mount in mounts {
+        if mount.get("read_only").and_then(toml::Value::as_bool) == Some(false) {
+            if let Some(src) = mount.get("source").and_then(toml::Value::as_str) {
+                return Some(PathBuf::from(src));
+            }
+        }
+    }
+    None
+}
+
 fn collect_authority_inputs(
     args: &InitArgs,
+    existing: &ExistingConfigDefaults,
     mode: &Mode,
     interactive: bool,
     theme: &ColorfulTheme,
@@ -348,13 +550,41 @@ fn collect_authority_inputs(
 ) -> Result<AuthorityInputs> {
     let listen = match (args.authority_listen.as_deref(), mode) {
         (Some(addr), _) => addr.to_string(),
+        (None, _) if existing.authority_listen.is_some() && !interactive => {
+            existing.authority_listen.clone().unwrap_or_default()
+        }
         (None, Mode::Authority) if interactive => dialoguer::Input::with_theme(theme)
             .with_prompt("Authority listen address")
-            .default("0.0.0.0:9443".to_string())
+            .default(
+                existing
+                    .authority_listen
+                    .clone()
+                    .unwrap_or_else(|| "0.0.0.0:9443".to_string()),
+            )
+            .interact_text()
+            .context("authority listen address prompt")?,
+        (None, _) if interactive => dialoguer::Input::with_theme(theme)
+            .with_prompt("Authority listen address")
+            .default(
+                existing
+                    .authority_listen
+                    .clone()
+                    .unwrap_or_else(|| "127.0.0.1:9443".to_string()),
+            )
             .interact_text()
             .context("authority listen address prompt")?,
         _ => "127.0.0.1:9443".to_string(),
     };
+
+    let default_pub_key = state_dir
+        .join("authority.pub")
+        .to_string_lossy()
+        .into_owned();
+    let connect_pub_key = args
+        .authority_pub_key
+        .as_ref()
+        .or(existing.authority_pub_key.as_ref())
+        .map_or(default_pub_key, |p| p.to_string_lossy().into_owned());
 
     let (connect_url, connect_ca_cert) = match mode {
         Mode::AgentLocal => {
@@ -369,16 +599,32 @@ fn collect_authority_inputs(
         Mode::AgentRemote => {
             let url = match args.authority_url.as_deref() {
                 Some(u) => u.to_string(),
+                None if existing.authority_url.is_some() && !interactive => {
+                    existing.authority_url.clone().unwrap_or_default()
+                }
                 None if interactive => dialoguer::Input::with_theme(theme)
                     .with_prompt("Authority URL")
+                    .default(existing.authority_url.clone().unwrap_or_default())
                     .interact_text()
                     .context("authority URL prompt")?,
                 None => String::new(),
             };
             let ca = match args.authority_ca_cert.as_deref() {
                 Some(p) => p.to_string_lossy().into_owned(),
+                None if existing.authority_ca_cert.is_some() && !interactive => existing
+                    .authority_ca_cert
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
                 None if interactive => dialoguer::Input::with_theme(theme)
                     .with_prompt("Path to authority CA certificate (PEM)")
+                    .default(
+                        existing
+                            .authority_ca_cert
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                    )
                     .interact_text()
                     .context("authority CA cert prompt")?,
                 None => String::new(),
@@ -392,11 +638,51 @@ fn collect_authority_inputs(
         listen,
         connect_url,
         connect_ca_cert,
+        connect_pub_key,
     })
+}
+
+fn collect_workspace(
+    args: &InitArgs,
+    existing: &ExistingConfigDefaults,
+    interactive: bool,
+    theme: &ColorfulTheme,
+) -> Result<(PathBuf, Option<String>)> {
+    let mut overridden = args.workspace.is_some();
+    let workspace = if let Some(p) = &args.workspace {
+        std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()))?
+    } else if let Some(p) = &existing.workspace
+        && !interactive
+    {
+        p.clone()
+    } else {
+        let cwd = std::env::current_dir().context("get current directory")?;
+        if interactive {
+            let default_path = existing.workspace.as_ref().unwrap_or(&cwd);
+            let default = default_path.to_string_lossy().into_owned();
+            let s: String = dialoguer::Input::with_theme(theme)
+                .with_prompt("Workspace directory (agent RW access)")
+                .default(default)
+                .interact_text()
+                .context("workspace prompt")?;
+            let p = PathBuf::from(s);
+            let abs = std::path::absolute(&p)
+                .with_context(|| format!("resolve path {}", p.display()))?;
+            let abs_default = std::path::absolute(default_path)
+                .with_context(|| format!("resolve path {}", default_path.display()))?;
+            overridden = abs != abs_default;
+            abs
+        } else {
+            cwd
+        }
+    };
+    let preserved = if overridden { None } else { existing.firma_run_toml.clone() };
+    Ok((workspace, preserved))
 }
 
 fn collect_sidecar_inputs(
     args: &InitArgs,
+    existing: &ExistingConfigDefaults,
     has_sidecar: bool,
     interactive: bool,
     theme: &ColorfulTheme,
@@ -406,32 +692,53 @@ fn collect_sidecar_inputs(
         return Ok(SidecarInputs {
             name: "authority".to_string(),
             posture: Posture::Strict,
+            requested_actions: None,
             mappings: vec![],
             extra_hosts: vec![],
             workspace: config_dir.to_path_buf(),
+            existing_firma_run_toml: None,
         });
     }
 
     let name = match args.name.as_deref() {
         Some(v) => v.to_string(),
+        None if existing.name.is_some() && !interactive => {
+            existing.name.clone().unwrap_or_default()
+        }
         None if interactive => dialoguer::Input::with_theme(theme)
             .with_prompt("Agent name")
-            .default("my-agent".to_string())
+            .default(
+                existing
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| "my-agent".to_string()),
+            )
             .interact_text()
             .context("agent name prompt")?,
         None => "my-agent".to_string(),
     };
 
-    let posture = match &args.posture {
-        Some(p) => p.clone(),
-        None if interactive => prompt_posture(theme)?,
-        None => Posture::Dev,
+    let posture = match (&args.posture, &existing.posture) {
+        (Some(p), _) => p.clone(),
+        (None, Some(p)) if !interactive => p.clone(),
+        (None, Some(p)) if interactive => prompt_posture_with_default(theme, p)?,
+        (None, _) if interactive => prompt_posture_with_default(theme, &Posture::Dev)?,
+        (None, _) => Posture::Dev,
+    };
+    let requested_actions = if args.posture.is_some() {
+        None
+    } else {
+        existing.requested_actions.clone()
     };
 
     let mappings = if !args.mapping.is_empty() {
         args.mapping.clone()
+    } else if let Some(mappings) = &existing.mappings
+        && !interactive
+    {
+        mappings.clone()
     } else if interactive {
-        prompt_mappings(theme)?
+        prompt_mappings_with_default(theme, existing.mappings.as_deref())?
     } else {
         vec![Mapping::Anthropic]
     };
@@ -452,30 +759,17 @@ fn collect_sidecar_inputs(
         .map(String::from)
         .collect();
 
-    let workspace = if let Some(p) = &args.workspace {
-        std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()))?
-    } else {
-        let cwd = std::env::current_dir().context("get current directory")?;
-        if interactive {
-            let default = cwd.to_string_lossy().into_owned();
-            let s: String = dialoguer::Input::with_theme(theme)
-                .with_prompt("Workspace directory (agent RW access)")
-                .default(default)
-                .interact_text()
-                .context("workspace prompt")?;
-            let p = PathBuf::from(s);
-            std::path::absolute(&p).with_context(|| format!("resolve path {}", p.display()))?
-        } else {
-            cwd
-        }
-    };
+    let (workspace, existing_firma_run_toml) =
+        collect_workspace(args, existing, interactive, theme)?;
 
     Ok(SidecarInputs {
         name,
         posture,
+        requested_actions,
         mappings,
         extra_hosts,
         workspace,
+        existing_firma_run_toml,
     })
 }
 
@@ -487,7 +781,7 @@ fn mode_name(m: &Mode) -> &'static str {
     }
 }
 
-fn prompt_mode(theme: &ColorfulTheme) -> Result<Mode> {
+fn prompt_mode_with_default(theme: &ColorfulTheme, default: &Mode) -> Result<Mode> {
     let variants = Mode::value_variants();
     let items: Vec<String> = variants
         .iter()
@@ -496,7 +790,12 @@ fn prompt_mode(theme: &ColorfulTheme) -> Result<Mode> {
     let selection = dialoguer::Select::with_theme(theme)
         .with_prompt("What are you configuring?")
         .items(&items)
-        .default(0)
+        .default(
+            variants
+                .iter()
+                .position(|m| mode_name(m) == mode_name(default))
+                .unwrap_or(0),
+        )
         .report(false)
         .interact()
         .context("mode prompt")?;
@@ -505,7 +804,7 @@ fn prompt_mode(theme: &ColorfulTheme) -> Result<Mode> {
     Ok(chosen)
 }
 
-fn prompt_posture(theme: &ColorfulTheme) -> Result<Posture> {
+fn prompt_posture_with_default(theme: &ColorfulTheme, default: &Posture) -> Result<Posture> {
     let variants = Posture::value_variants();
     let items: Vec<String> = variants
         .iter()
@@ -514,7 +813,12 @@ fn prompt_posture(theme: &ColorfulTheme) -> Result<Posture> {
     let selection = dialoguer::Select::with_theme(theme)
         .with_prompt("Posture")
         .items(&items)
-        .default(1)
+        .default(
+            variants
+                .iter()
+                .position(|p| p.file_name() == default.file_name())
+                .unwrap_or(1),
+        )
         .report(false)
         .interact()
         .context("posture prompt")?;
@@ -523,7 +827,10 @@ fn prompt_posture(theme: &ColorfulTheme) -> Result<Posture> {
     Ok(chosen)
 }
 
-fn prompt_mappings(theme: &ColorfulTheme) -> Result<Vec<Mapping>> {
+fn prompt_mappings_with_default(
+    theme: &ColorfulTheme,
+    default: Option<&[Mapping]>,
+) -> Result<Vec<Mapping>> {
     let variants = Mapping::value_variants();
     let items: Vec<String> = variants
         .iter()
@@ -531,7 +838,12 @@ fn prompt_mappings(theme: &ColorfulTheme) -> Result<Vec<Mapping>> {
         .collect();
     let defaults: Vec<bool> = variants
         .iter()
-        .map(|m| matches!(m, Mapping::Anthropic))
+        .map(|m| {
+            default.map_or_else(
+                || matches!(m, Mapping::Anthropic),
+                |selected| selected.iter().any(|d| d.as_str() == m.as_str()),
+            )
+        })
         .collect();
     let selections = dialoguer::MultiSelect::with_theme(theme)
         .with_prompt("Mappings (space to toggle, enter to confirm)")
@@ -600,7 +912,17 @@ pub enum AuthorityShape {
 /// # Errors
 /// Returns a formatted error string on resolution failure.
 pub fn resolve_state_dir(flag: Option<PathBuf>) -> Result<PathBuf, String> {
+    resolve_state_dir_with_default(flag, None)
+}
+
+fn resolve_state_dir_with_default(
+    flag: Option<PathBuf>,
+    default: Option<PathBuf>,
+) -> Result<PathBuf, String> {
     if let Some(path) = flag {
+        return Ok(path);
+    }
+    if let Some(path) = default {
         return Ok(path);
     }
     if let Ok(env) = std::env::var("FIRMA_STATE_DIR")
@@ -616,6 +938,7 @@ pub fn resolve_state_dir(flag: Option<PathBuf>) -> Result<PathBuf, String> {
 ///
 /// # Errors
 /// Returns a formatted string on any filesystem or key-generation failure.
+#[allow(clippy::too_many_lines)]
 pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
     let mappings = provider_to_mappings(&plan.provider);
     let (mode, authority) = match &plan.authority {
@@ -633,6 +956,11 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
                     listen: plan.authority_listen.clone(),
                     connect_url,
                     connect_ca_cert,
+                    connect_pub_key: plan
+                        .state_dir
+                        .join("authority.pub")
+                        .to_string_lossy()
+                        .into_owned(),
                 },
             )
         }
@@ -645,6 +973,11 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
                     .as_ref()
                     .map(|p| p.to_string_lossy().into_owned())
                     .unwrap_or_default(),
+                connect_pub_key: plan
+                    .state_dir
+                    .join("authority.pub")
+                    .to_string_lossy()
+                    .into_owned(),
             },
         ),
     };
@@ -654,9 +987,11 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
         sidecar: SidecarInputs {
             name: plan.agent.clone(),
             posture: Posture::Dev,
+            requested_actions: None,
             mappings,
             extra_hosts: vec![],
             workspace: plan.config_dir.clone(),
+            existing_firma_run_toml: None,
         },
         config_dir: plan.config_dir.clone(),
         state_dir: plan.state_dir.clone(),
@@ -751,13 +1086,16 @@ mod tests {
                 listen: "127.0.0.1:9443".to_string(),
                 connect_url: "https://127.0.0.1:9443".to_string(),
                 connect_ca_cert: "/tmp/test-state/tls/authority-ca.crt".to_string(),
+                connect_pub_key: "/tmp/test-state/authority.pub".to_string(),
             },
             sidecar: SidecarInputs {
                 name: TEST_AGENT.to_string(),
                 posture: posture.clone(),
+                requested_actions: None,
                 mappings: mappings.to_vec(),
                 extra_hosts: extra_hosts.to_vec(),
                 workspace: PathBuf::from(TEST_WORKSPACE),
+                existing_firma_run_toml: None,
             },
             config_dir: PathBuf::from(TEST_WORKSPACE),
             state_dir: PathBuf::from("/tmp/test-state"),

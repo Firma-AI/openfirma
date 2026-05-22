@@ -23,7 +23,7 @@ tls_key_path           = "{{ tls_key_path }}"
 [authority.connect]
 url          = "{{ authority_url }}"
 ca_cert_path = "{{ tls_ca_cert_path }}"
-pub_key_path = "{{ state_dir }}/authority.pub"
+pub_key_path = "{{ authority_pub_key_path }}"
 
 {% endif -%}
 {% if has_sidecar -%}

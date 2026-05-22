@@ -1,9 +1,10 @@
 # `firma config`
 
-`firma config` scaffolds a fresh project: keys, default `firma.toml`,
-empty policy directories. Run it once when you start a new project;
-`firma run` invokes the same scaffold implicitly the first time it
-finds no `firma.toml`.
+`firma config` scaffolds or updates a project: keys, default `firma.toml`,
+policy files, and mapping files. Run it when you start a new project or
+when you want to re-render the scaffold with a few overrides. `firma run`
+invokes the same scaffold implicitly the first time it finds no
+`firma.toml`.
 
 ## Quickstart
 
@@ -33,6 +34,14 @@ Config always lands in the current directory or an explicit `--output-dir`:
 The wizard prompts for: workspace path, agent, provider, authority shape
 (local or remote URL). A flag on the command line short-circuits the
 matching prompt.
+
+If the target config directory already contains `firma.toml` or
+`firma-run.toml`, `firma config` reads them first and uses the current
+values as defaults.
+For example, `firma config --yes --name codex` keeps the existing mode,
+state directory, authority settings, posture, mappings, preflight action
+list, and workspace, but writes `agent_id = "codex"` in the generated
+output. Existing files are still preserved unless `--force` is set.
 
 ## Flags
 

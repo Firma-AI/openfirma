@@ -58,6 +58,10 @@ pub struct InitArgs {
     #[arg(long)]
     pub extra_hosts: Option<String>,
 
+    /// Capability actions requested during preflight; may be repeated or comma-separated.
+    #[arg(long = "requested-action", value_delimiter = ',')]
+    pub requested_actions: Vec<String>,
+
     /// Absolute path the agent may write to (bwrap RW mount).
     /// Defaults to the output directory.
     #[arg(long)]

@@ -5,7 +5,7 @@ PATH or invoked via `cargo run -p firma --`.
 
 ## `firma config`
 
-Interactive scaffolding wizard that creates a complete agent configuration directory — sidecar + authority config, Cedar policy, mapping rules, authority keypair, and a `firma-run.toml` — in a single step. All flags have defaults; omitting them triggers interactive prompts.
+Interactive scaffolding wizard that creates or updates an agent configuration directory — sidecar + authority config, Cedar policy, mapping rules, authority keypair, and a `firma-run.toml` — in a single step. When config files already exist, their current values become the wizard and non-interactive defaults; supplied flags override those values.
 
 ### Usage
 
@@ -69,6 +69,14 @@ Preview without writing:
 
 ```bash
 firma config --dry-run
+```
+
+Re-render an existing scaffold, keeping current values unless a flag overrides
+them:
+
+```bash
+firma config --yes --dry-run
+firma config --yes --name codex --mapping openai --force
 ```
 
 After scaffolding, run the agent:
