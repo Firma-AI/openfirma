@@ -581,6 +581,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     Ok(resolved)
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(clippy::unnecessary_wraps))]
 fn resolve_backend(configured_backend: Option<BackendKind>) -> Result<BackendKind, RunError> {
     if let Some(backend) = configured_backend {
         return Ok(backend);
