@@ -4,7 +4,7 @@ description: Use firma sidecar status to list and probe per-run sidecars started
 ---
 
 `firma sidecar status` prints a docker-ps-style table of every per-run sidecar
-that `firma run --sidecar=auto` has started. It reads the marker directories
+that `firma run --sidecar local` has started. It reads the marker directories
 written under `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/` (fallback
 `/tmp/firma-$UID`; override with `FIRMA_STATE_DIR`), probes each one for
 liveness, and garbage-collects stale entries whose recorded process is dead.

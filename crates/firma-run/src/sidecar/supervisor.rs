@@ -100,7 +100,7 @@ impl SidecarSupervisor {
     #[cfg(not(unix))]
     pub fn spawn(_req: SpawnRequest<'_>) -> Result<Self, RunError> {
         Err(RunError::UnsupportedPlatform {
-            reason: "firma run sidecar autostart requires Unix; use --sidecar=external on this \
+            reason: "firma run sidecar autostart requires Unix; use --sidecar <url> on this \
                      platform"
                 .into(),
         })

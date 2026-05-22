@@ -20,7 +20,7 @@ pub struct Args {
 #[derive(Debug, clap::Subcommand)]
 pub enum SidecarCommand {
     /// Start the Sidecar (and a local Authority alongside it) as a long-lived
-    /// daemon. Once running, `firma run --sidecar=external` and any external
+    /// daemon. Once running, `firma run --sidecar <url>` and any external
     /// callers can connect to the shared enforcement endpoint.
     Start(StartArgs),
     /// Stop the long-lived Sidecar daemon and any Authority that was started

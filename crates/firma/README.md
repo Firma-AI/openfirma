@@ -130,7 +130,7 @@ firma run --profile generic -- python agent.py
 | `--profile <id>`           | Built-in profile id (default: `generic`).       |
 | `--config <path>`          | Optional runtime config (.toml/.yaml).          |
 | `--backend <kind>`         | Override: `bwrap`, `vz`, `wsl2`, `firecracker`. |
-| `--sidecar-endpoint <url>` | Override sidecar endpoint.                      |
+| `--sidecar <local\|url>`   | `local` autostarts; a URL targets an external sidecar. |
 | `--capability-file <path>` | Capability lease refresh source.                |
 | `--identity-mode <mode>`   | `sandbox-user` or `host-user`.                  |
 | `--preserve-host-user`     | Force host UID/GID inside sandbox.              |

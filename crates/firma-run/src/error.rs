@@ -45,6 +45,18 @@ pub enum RunError {
     #[error("sidecar autostart failed: {reason}; see logs at {}", log_path.display())]
     SidecarStartupFailed { reason: String, log_path: PathBuf },
 
+    #[error(
+        "`--sidecar local` is incompatible with `--no-autostart`; \
+         pass `--sidecar <tcp://...|unix:///...>` or omit `--no-autostart`"
+    )]
+    SidecarLocalNoAutostart,
+
+    #[error(
+        "no sidecar endpoint configured and autostart is disabled; \
+         pass `--sidecar local` or `--sidecar <tcp://...|unix:///...>`"
+    )]
+    MissingSidecar,
+
     #[error("operation not supported on this platform: {reason}")]
     UnsupportedPlatform { reason: String },
 

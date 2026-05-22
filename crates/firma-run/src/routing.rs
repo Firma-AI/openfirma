@@ -16,7 +16,6 @@ use crate::backend::SandboxHandle;
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 use crate::identity::RunIdentity;
-use crate::runtime::SidecarMode;
 use crate::sidecar::supervisor::{SidecarSupervisor, SpawnRequest};
 
 #[cfg(unix)]
@@ -68,7 +67,8 @@ impl NetworkRuntime {
 /// Inputs to [`prepare_network_runtime`] that gate autostart behaviour.
 #[derive(Debug, Clone)]
 pub struct AutostartFlags {
-    pub mode: SidecarMode,
+    /// `true` when the selection resolved to local autostart.
+    pub sidecar_autostart: bool,
     pub no_autostart: bool,
     pub template_path: Option<PathBuf>,
     pub startup_timeout: std::time::Duration,
@@ -90,8 +90,8 @@ pub struct ResolvedAuthority {
 
 /// Prepare network runtime artifacts for a sandbox launch.
 ///
-/// With default `flags.mode == SidecarMode::Auto` and
-/// `flags.no_autostart == false`, autostarts a per-run sidecar via
+/// When `flags.sidecar_autostart == true` (local selection), autostarts a
+/// per-run sidecar via
 /// [`SidecarSupervisor`] and substitutes its endpoint into the returned
 /// [`NetworkRuntime`]. The supervisor is held inside the returned struct so
 /// [`Drop`] tears the sidecar down when the wrapped process exits.
@@ -211,30 +211,26 @@ fn resolve_effective_endpoint(
     identity: &RunIdentity,
     flags: &AutostartFlags,
 ) -> Result<(SidecarEndpoint, Option<SidecarSupervisor>), RunError> {
-    if !flags.no_autostart && matches!(flags.mode, SidecarMode::Auto) {
+    // Local selection: autostart unconditionally. `--sidecar local` +
+    // `--no-autostart` was already rejected during selection resolution.
+    if flags.sidecar_autostart {
         let supervisor = autostart_sidecar(identity, flags)?;
         return Ok((supervisor.endpoint(), Some(supervisor)));
     }
 
-    // `fail_closed = false` is an explicit dev/test escape that disables
-    // the probe (and therefore disables autostart). It mirrors the
-    // pre-FIR-102 behaviour.
+    // External selection: never autostart.
+    // `fail_closed = false` is an explicit dev/test escape that disables the
+    // probe. It mirrors the pre-FIR-102 behaviour.
     if !handle.network_policy.fail_closed {
         return Ok((sidecar_endpoint.clone(), None));
     }
 
     match probe_sidecar(sidecar_endpoint) {
         Ok(()) => Ok((sidecar_endpoint.clone(), None)),
-        Err(reason) => {
-            if flags.no_autostart || matches!(flags.mode, SidecarMode::External) {
-                return Err(RunError::SidecarUnreachable {
-                    endpoint: format_endpoint(sidecar_endpoint),
-                    reason,
-                });
-            }
-            let supervisor = autostart_sidecar(identity, flags)?;
-            Ok((supervisor.endpoint(), Some(supervisor)))
-        }
+        Err(reason) => Err(RunError::SidecarUnreachable {
+            endpoint: format_endpoint(sidecar_endpoint),
+            reason,
+        }),
     }
 }
 
