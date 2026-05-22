@@ -47,6 +47,8 @@ fn pre_bound_port_short_circuits_to_local() {
         template_path: None,
         startup_timeout: Duration::from_secs(2),
         authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
         use_http_proxy_sidecar: false,
     };
     let mut prompt = NoPrompt;

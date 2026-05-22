@@ -90,12 +90,22 @@ pub fn resolve(
 fn section_to_selection(s: &AuthoritySection) -> Result<Option<AuthoritySelection>, RunError> {
     match s.r#type.as_deref() {
         Some("local") => Ok(Some(AuthoritySelection::Local)),
-        Some("remote") => match &s.url {
-            Some(url) if !url.is_empty() => Ok(Some(AuthoritySelection::Remote(url.clone()))),
-            _ => Err(RunError::ConfigValidation(
-                "[authority].type = \"remote\" requires `url`".to_string(),
-            )),
-        },
+        Some("remote") => {
+            let url = s
+                .connect
+                .as_ref()
+                .and_then(|c| c.url.as_deref())
+                .filter(|u| !u.is_empty());
+            url.map_or_else(
+                || {
+                    Err(RunError::ConfigValidation(
+                        "[authority].type = \"remote\" requires url in [authority.connect]"
+                            .to_string(),
+                    ))
+                },
+                |u| Ok(Some(AuthoritySelection::Remote(u.to_string()))),
+            )
+        }
         Some(other) => Err(RunError::ConfigValidation(format!(
             "unknown [authority].type `{other}`"
         ))),
@@ -178,7 +188,7 @@ mod tests {
         let path = tmp.path().join("firma.toml");
         std::fs::write(
             &path,
-            "[authority]\ntype = \"remote\"\nurl = \"https://x\"\n",
+            "[authority]\ntype = \"remote\"\n\n[authority.connect]\nurl = \"https://x\"\n",
         )
         .unwrap();
         let mut prompt = MockPrompt::new(false, vec![]);

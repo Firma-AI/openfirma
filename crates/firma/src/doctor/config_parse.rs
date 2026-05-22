@@ -21,16 +21,15 @@ pub fn check(firma_toml: &Path) -> Check {
         }
     };
 
-    let authority_body = match parsed.section("authority") {
-        Ok(body) => body,
-        Err(error) => {
-            return Check::fail("config parsed", format!("[authority]: {error}"))
-                .with_detail("path", display);
-        }
-    };
-    if let Err(error) = toml::from_str::<firma_authority::AuthorityConfig>(&authority_body) {
-        return Check::fail("config parsed", format!("[authority]: {display}: {error}"))
+    // [authority.server] is optional — agent-remote configs have no server section.
+    if let Ok(body) = parsed.section("authority.server") {
+        if let Err(error) = toml::from_str::<firma_authority::AuthorityConfig>(&body) {
+            return Check::fail(
+                "config parsed",
+                format!("[authority.server]: {display}: {error}"),
+            )
             .with_detail("path", display);
+        }
     }
 
     let sidecar_body = match parsed.section("sidecar") {
@@ -61,18 +60,36 @@ mod tests {
     }
 
     #[test]
-    fn fail_when_authority_section_missing() {
+    fn ok_when_no_authority_server_section_agent_remote() {
+        // agent-remote configs have no [authority.server] — should not fail.
         let tmp = tempfile::tempdir().unwrap();
-        let p = write(tmp.path(), "[sidecar]\n");
+        let p = write(
+            tmp.path(),
+            "[sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:8080\"\n",
+        );
+        let c = check(&p);
+        assert_eq!(c.status, Status::Ok, "got {c:?}");
+    }
+
+    #[test]
+    fn fail_when_authority_server_section_invalid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = write(
+            tmp.path(),
+            "[authority.server]\nmax_ttl_seconds = \"not-a-number\"\n",
+        );
         let c = check(&p);
         assert_eq!(c.status, Status::Fail);
-        assert!(c.reason.contains("[authority]"), "got {c:?}");
+        assert!(c.reason.contains("[authority.server]"), "got {c:?}");
     }
 
     #[test]
     fn fail_when_sidecar_section_missing() {
         let tmp = tempfile::tempdir().unwrap();
-        let p = write(tmp.path(), "[authority]\nlisten_addr = \"127.0.0.1:0\"\n");
+        let p = write(
+            tmp.path(),
+            "[authority.server]\nlisten_addr = \"127.0.0.1:0\"\n",
+        );
         let c = check(&p);
         assert_eq!(c.status, Status::Fail);
         assert!(c.reason.contains("[sidecar]"), "got {c:?}");
@@ -87,11 +104,11 @@ mod tests {
     }
 
     #[test]
-    fn ok_when_both_sections_parse() {
+    fn ok_when_authority_server_and_sidecar_parse() {
         let tmp = tempfile::tempdir().unwrap();
         let p = write(
             tmp.path(),
-            "[authority]\nlisten_addr = \"127.0.0.1:0\"\n\n[sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:8080\"\n",
+            "[authority.server]\nlisten_addr = \"127.0.0.1:0\"\n\n[sidecar.interceptor]\nmode = \"http_proxy\"\nlisten_addr = \"127.0.0.1:8080\"\n",
         );
         let c = check(&p);
         assert_eq!(c.status, Status::Ok, "got {c:?}");

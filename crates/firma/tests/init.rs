@@ -95,9 +95,9 @@ fn init_state_paths_in_config_are_absolute() {
     let text = std::fs::read_to_string(config_dir.join("firma.toml")).unwrap();
     let value: toml::Value = toml::from_str(&text).unwrap();
 
-    let key_file = value["authority"]["key_file"]
+    let key_file = value["authority"]["server"]["key_file"]
         .as_str()
-        .expect("authority.key_file");
+        .expect("authority.server.key_file");
     assert!(
         Path::new(key_file).is_absolute(),
         "authority.key_file must be absolute, got {key_file}"

@@ -34,15 +34,32 @@ pub fn canonical_write_path() -> Option<PathBuf> {
         .map(|cwd| cwd.join(".firma").join(firma_config::CONFIG_FILE_NAME))
 }
 
-/// Persisted `[authority]` table.
+/// Client-side connect config (`[authority.connect]`).
+///
+/// Canonical place for URL, CA cert, and pub key — written by `firma config`,
+/// read by `firma run` to synthesize the sidecar config.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthorityConnectSection {
+    /// Authority gRPC URL (e.g. `https://127.0.0.1:9443`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Path to the PEM CA certificate that signed the authority's TLS cert.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_cert_path: Option<std::path::PathBuf>,
+    /// Path to the authority's Ed25519 public key for PASETO token verification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pub_key_path: Option<std::path::PathBuf>,
+}
+
+/// Persisted `[authority]` routing annotation written by `firma run`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthoritySection {
     /// `"local"` or `"remote"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub r#type: Option<String>,
-    /// Required when `type = "remote"`.
+    /// Client-side connect config from `[authority.connect]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
+    pub connect: Option<AuthorityConnectSection>,
 }
 
 /// Whole-file shape — only the sections we know live here today.
@@ -104,9 +121,15 @@ pub fn persist_local(path: &Path) -> Result<(), RunError> {
             )));
         }
     };
-    let mut authority_table = toml::Table::new();
-    authority_table.insert("type".to_string(), toml::Value::String("local".to_string()));
-    existing.insert("authority".to_string(), toml::Value::Table(authority_table));
+    // Merge into existing authority table rather than replacing it, so that
+    // [authority.server] / [authority.connect] sub-tables written by
+    // `firma config` are preserved.
+    let authority = existing
+        .entry("authority".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[authority] is not a table".into()))?;
+    authority.insert("type".to_string(), toml::Value::String("local".to_string()));
     let serialized = toml::to_string_pretty(&existing).map_err(|e| {
         RunError::Internal(format!("serialize user config {}: {e}", path.display()))
     })?;
@@ -174,7 +197,6 @@ mod tests {
         persist_local(&path).unwrap();
         let section = read_authority(&path).unwrap().unwrap();
         assert_eq!(section.r#type.as_deref(), Some("local"));
-        assert!(section.url.is_none());
     }
 
     #[test]
@@ -212,11 +234,14 @@ mod tests {
         let path = tmp.path().join("firma.toml");
         fs::write(
             &path,
-            "[authority]\ntype = \"remote\"\nurl = \"https://x\"\n",
+            "[authority]\ntype = \"remote\"\n\n[authority.connect]\nurl = \"https://x\"\n",
         )
         .unwrap();
         let section = read_authority(&path).unwrap().unwrap();
         assert_eq!(section.r#type.as_deref(), Some("remote"));
-        assert_eq!(section.url.as_deref(), Some("https://x"));
+        assert_eq!(
+            section.connect.as_ref().and_then(|c| c.url.as_deref()),
+            Some("https://x")
+        );
     }
 }

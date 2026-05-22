@@ -205,7 +205,10 @@ mod tests {
             cwd: Some(cwd.clone()),
         };
         let err = resolve_config("sidecar", None, &f).unwrap_err();
-        let ConfigResolveError::NotFound { subcommand, searched } = err;
+        let ConfigResolveError::NotFound {
+            subcommand,
+            searched,
+        } = err;
         assert_eq!(subcommand, "sidecar");
         assert!(searched.iter().any(|p| p.starts_with(&cwd)));
     }

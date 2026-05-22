@@ -36,6 +36,8 @@ fn missing_template_writes_minimal_config() {
         listen_addr: None,
         out_path: &out,
         authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Minimal);
@@ -104,6 +106,8 @@ paths = ["/etc/firma/cap.toml"]
         listen_addr: None,
         out_path: &out,
         authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
     })
     .expect("synthesize");
 
@@ -169,6 +173,8 @@ fn priority_order_explicit_over_env_over_cwd() {
         listen_addr: None,
         out_path: &out,
         authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Explicit(explicit));
@@ -183,6 +189,8 @@ fn priority_order_explicit_over_env_over_cwd() {
         listen_addr: None,
         out_path: &out,
         authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Env(env));
@@ -197,6 +205,8 @@ fn priority_order_explicit_over_env_over_cwd() {
         listen_addr: None,
         out_path: &out,
         authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Cwd(cwd));
@@ -217,6 +227,8 @@ fn nonexistent_template_paths_fall_through_to_minimal() {
         listen_addr: None,
         out_path: &out,
         authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Minimal);

@@ -61,7 +61,7 @@ fn issued_token_seeds_capability_map_and_admits_stage1() {
     std::fs::write(
         &auth_toml,
         format!(
-            "[authority]\n\
+            "[authority.server]\n\
              listen_addr = \"127.0.0.1:0\"\n\
              policy_dir = {policy_dir}\n\
              revocation_file = {revocation}\n\
