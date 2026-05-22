@@ -171,7 +171,7 @@ impl AuthoritySupervisor {
         for attempt in 0..MAX_BIND_ATTEMPTS {
             let listen_addr = select_loopback_v6_port()?;
             let authority_cfg = format!(
-                "[authority]\n\
+                "[authority.server]\n\
                  listen_addr = \"{listen_addr}\"\n\
                  policy_dir = \"{policy}\"\n\
                  issuance_policy_dir = \"{policy}\"\n\
@@ -327,6 +327,12 @@ impl AuthoritySupervisor {
     #[must_use]
     pub fn marker_dir(&self) -> &Path {
         &self.marker_dir
+    }
+
+    /// Path to the ephemeral Ed25519 public key generated for this run.
+    #[must_use]
+    pub fn pub_key_path(&self) -> PathBuf {
+        self.marker_dir.join("keys").join("authority.pub")
     }
 }
 
