@@ -277,6 +277,8 @@ paths = ["seeds/dev.toml", "{abs_seed}"]
         listen_addr: None,
         out_path: &out,
         authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
     })
     .expect("synthesize");
 
