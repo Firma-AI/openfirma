@@ -11,6 +11,14 @@ posture, mappings, authority mode, workspace path, and more. When config files
 already exist, their current values become the wizard and non-interactive
 defaults; supplied flags override those values.
 
+When an existing config includes a local `[authority]` section and you switch
+to `--mode agent-remote`, the regenerated `firma.toml` normally removes that
+section; otherwise `firma run` starts the Authority locally instead of using
+only the remote Authority. Interactive runs without `--force` warn about the
+local startup behavior and ask whether to keep the section; the answer
+authorizes rewriting `firma.toml` for this mode switch. `--force` overwrites
+the config directly and removes the section.
+
 ### Usage
 
 ```text
