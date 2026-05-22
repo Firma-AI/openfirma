@@ -302,14 +302,17 @@ pub fn resolve_authority(
     flags: &AutostartFlags,
     cli: &crate::authority::AuthorityCli,
     profile_name: &str,
-    user_config_path: &Path,
+    user_config_path: Option<&Path>,
     firma_exe: &Path,
 ) -> Result<ResolvedAuthority, RunError> {
     let selection = crate::authority::resolve(cli, flags.no_autostart, user_config_path)?;
 
     // Read [sidecar.authority] for cert/key paths regardless of selection mode.
-    let connect =
-        crate::authority::config::read_authority(user_config_path)?.and_then(|s| s.connect);
+    let connect = user_config_path
+        .map(crate::authority::config::read_authority)
+        .transpose()?
+        .flatten()
+        .and_then(|s| s.connect);
     let ca_cert_path = connect.as_ref().and_then(|c| c.ca_cert_path.clone());
     let pub_key_path = connect.as_ref().and_then(|c| c.public_key_path.clone());
 

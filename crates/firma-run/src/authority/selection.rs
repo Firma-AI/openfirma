@@ -43,7 +43,7 @@ pub enum AuthoritySelection {
 pub fn resolve(
     cli: &AuthorityCli,
     no_autostart: bool,
-    user_config_path: &Path,
+    user_config_path: Option<&Path>,
 ) -> Result<AuthoritySelection, RunError> {
     match cli {
         AuthorityCli::Local => return Ok(AuthoritySelection::Local),
@@ -51,7 +51,8 @@ pub fn resolve(
         AuthorityCli::Unset => {}
     }
 
-    if let Some(section) = read_authority(user_config_path)?
+    if let Some(path) = user_config_path
+        && let Some(section) = read_authority(path)?
         && let Some(sel) = section_to_selection(&section)
     {
         return Ok(sel);
@@ -83,7 +84,7 @@ mod tests {
     fn cli_local_wins_over_everything() {
         let tmp = tempdir().unwrap();
         let cfg = tmp.path().join("none.toml");
-        let sel = resolve(&AuthorityCli::Local, true, &cfg).unwrap();
+        let sel = resolve(&AuthorityCli::Local, true, Some(cfg.as_path())).unwrap();
         assert_eq!(sel, AuthoritySelection::Local);
     }
 
@@ -94,7 +95,7 @@ mod tests {
         let sel = resolve(
             &AuthorityCli::Remote("https://x".into()),
             true,
-            &cfg,
+            Some(cfg.as_path()),
         )
         .unwrap();
         assert_eq!(sel, AuthoritySelection::Remote("https://x".into()));
@@ -105,7 +106,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("firma.toml");
         std::fs::write(&path, "[authority]\nlisten_addr = \"127.0.0.1:0\"\n").unwrap();
-        let sel = resolve(&AuthorityCli::Unset, false, &path).unwrap();
+        let sel = resolve(&AuthorityCli::Unset, false, Some(path.as_path())).unwrap();
         assert_eq!(sel, AuthoritySelection::Local);
     }
 
@@ -113,20 +114,14 @@ mod tests {
     fn sidecar_authority_url_only_returns_remote() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("firma.toml");
-        std::fs::write(
-            &path,
-            "[sidecar.authority]\nurl = \"https://x\"\n",
-        )
-        .unwrap();
-        let sel = resolve(&AuthorityCli::Unset, false, &path).unwrap();
+        std::fs::write(&path, "[sidecar.authority]\nurl = \"https://x\"\n").unwrap();
+        let sel = resolve(&AuthorityCli::Unset, false, Some(path.as_path())).unwrap();
         assert_eq!(sel, AuthoritySelection::Remote("https://x".into()));
     }
 
     #[test]
     fn empty_config_defaults_to_local_autostart() {
-        let tmp = tempdir().unwrap();
-        let path = tmp.path().join("firma.toml");
-        let sel = resolve(&AuthorityCli::Unset, false, &path).unwrap();
+        let sel = resolve(&AuthorityCli::Unset, false, None).unwrap();
         assert_eq!(sel, AuthoritySelection::Local);
     }
 
@@ -135,15 +130,13 @@ mod tests {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("firma.toml");
         std::fs::write(&path, "[other]\nkeep = true\n").unwrap();
-        let sel = resolve(&AuthorityCli::Unset, false, &path).unwrap();
+        let sel = resolve(&AuthorityCli::Unset, false, Some(path.as_path())).unwrap();
         assert_eq!(sel, AuthoritySelection::Local);
     }
 
     #[test]
-    fn empty_config_with_no_autostart_errors_missing_authority() {
-        let tmp = tempdir().unwrap();
-        let path = tmp.path().join("firma.toml");
-        let err = resolve(&AuthorityCli::Unset, true, &path).unwrap_err();
+    fn no_config_with_no_autostart_errors_missing_authority() {
+        let err = resolve(&AuthorityCli::Unset, true, None).unwrap_err();
         assert!(matches!(err, RunError::MissingAuthority));
     }
 }

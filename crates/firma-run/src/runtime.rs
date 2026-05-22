@@ -104,34 +104,25 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         );
 
         // Resolve firma.toml: explicit CLI path > env var > walk up from
-        // cwd for `.firma/firma.toml` > fallback to `cwd/.firma/firma.toml`.
-        // The fallback path may not exist on disk — `read_authority`
-        // treats a missing file as empty so zero-config still works.
-        let resolved = firma_config::resolve_or_fallback(
+        // cwd for `.firma/firma.toml`. `None` means no config — zero-config
+        // defaults kick in downstream.
+        let user_config_path: Option<PathBuf> = if let Ok(resolved) = firma_config::resolve_config(
             "run",
             args.user_config_path.as_deref(),
             &firma_config::SystemDirs,
-        )
-        .ok_or_else(|| {
-            RunError::Internal("no user config path resolvable on this platform".into())
-        })?;
-        let user_config_path = resolved.config_file.clone();
-        match resolved.source {
-            firma_config::ConfigSource::Fallback => {
-                tracing::info!(
-                    path = %user_config_path.display(),
-                    "no firma.toml found; using zero-config defaults"
-                );
-            }
-            source => {
-                tracing::info!(
-                    path = %user_config_path.display(),
-                    ?source,
-                    "loaded firma.toml"
-                );
-            }
-        }
-        let sidecar_template_path = resolve_sidecar_template_path(args, &user_config_path);
+        ) {
+            tracing::info!(
+                path = %resolved.config_file.display(),
+                source = ?resolved.source,
+                "loaded firma.toml"
+            );
+            Some(resolved.config_file)
+        } else {
+            tracing::info!("no firma.toml found; using zero-config defaults");
+            None
+        };
+        let sidecar_template_path =
+            resolve_sidecar_template_path(args, user_config_path.as_deref());
         let flags = AutostartFlags {
             sidecar_autostart: matches!(
                 profile.sidecar_selection,
@@ -158,7 +149,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             &flags,
             &args.authority_cli,
             &args.authority_profile,
-            &user_config_path,
+            user_config_path.as_deref(),
             &firma_exe,
         )?;
 
@@ -226,16 +217,17 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
     combine_run_and_teardown_results(run_result, teardown_result)
 }
 
-fn resolve_sidecar_template_path(args: &RunInput, user_config_path: &Path) -> Option<PathBuf> {
+fn resolve_sidecar_template_path(
+    args: &RunInput,
+    user_config_path: Option<&Path>,
+) -> Option<PathBuf> {
     args.sidecar_template_path
         .clone()
         .or_else(|| args.config.clone())
         .or_else(|| {
-            if user_config_path.is_file() {
-                Some(user_config_path.to_path_buf())
-            } else {
-                None
-            }
+            user_config_path
+                .filter(|p| p.is_file())
+                .map(Path::to_path_buf)
         })
 }
 
@@ -1094,8 +1086,10 @@ mod tests {
             authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
             user_config_path: None,
         };
-        let resolved =
-            super::resolve_sidecar_template_path(&args, PathBuf::from("/tmp/user.toml").as_path());
+        let resolved = super::resolve_sidecar_template_path(
+            &args,
+            Some(PathBuf::from("/tmp/user.toml").as_path()),
+        );
         assert_eq!(
             resolved,
             Some(PathBuf::from("/tmp/from-sidecar-config.toml"))
@@ -1125,7 +1119,7 @@ mod tests {
             authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
             user_config_path: None,
         };
-        let resolved = super::resolve_sidecar_template_path(&args, &user_cfg);
+        let resolved = super::resolve_sidecar_template_path(&args, Some(user_cfg.as_path()));
         assert_eq!(resolved, Some(user_cfg));
     }
 }
