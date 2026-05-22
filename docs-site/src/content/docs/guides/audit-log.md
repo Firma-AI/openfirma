@@ -76,11 +76,19 @@ Field-by-field:
 
 ## Tail the log
 
-If the Sidecar is running under [`firma stack`](../manage-the-stack/), use `firma monitor` — it knows the state-dir layout and adds filtering by decision, action class, and time window:
+If the Sidecar is running under [`firma sidecar start`](../manage-the-stack/), use `firma monitor` — it knows the state-dir layout and adds filtering by decision, action class, agent, sandbox, and time window:
 
 ```bash
 firma monitor --state-dir /var/run/firma --source audit --decision deny
 ```
+
+When several `firma run` invocations share the same audit log, every `ExecutionEvent` carries a `sandbox_id` matching the marker directory under `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/`. Filter to a single run with:
+
+```bash
+firma monitor --sandbox-id abc123def --source audit
+```
+
+Pretty output appends `sandbox=<id>` after `agent=` when the field is set; passthrough events and externally started Sidecars leave it empty.
 
 For ad-hoc inspection of a raw `audit.jsonl`:
 

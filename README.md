@@ -10,11 +10,7 @@
 
   **Every call passes through a sidecar that decides whether it happens.**
   <br/>
-<<<<<<< Updated upstream
-  Policy in, signed decision out. Open by default. Deterministic.
-=======
   Policy in, signed decision out. Deterministic. At call-level.
->>>>>>> Stashed changes
 
 
   [Docs](https://firma-ai.github.io/openfirma)
@@ -36,11 +32,7 @@ OpenFirma is a runtime enforcement boundary that sits between your AI agents and
 
 **Why we built it:** AI agents are becoming software operators. They call APIs, read and write files, send messages, and execute code. That is useful but it also means a bad prompt, a compromised dependency, or a confused model can turn into a real outbound action before anyone notices. OpenFirma gives those actions a boundary.
 
-<<<<<<< Updated upstream
-**How it works:** You define a Cedar policy that says what each agent is allowed to do. When an agent makes an outbound call, the Sidecar intercepts it, classifies it into a canonical action class (e.g. `code.read`, `communication.external.send`), validates the capability token, and evaluates the policy. On ALLOW, the call goes through and credentials are injected just-in-time. On DENY, the call is blocked and a signed audit event is written. The agent code contains none of this logic.
-=======
 **How it works:** You define a policy that says what each agent is allowed to do. Every outbound call passes through the Sidecar, which intercepts the request and evaluates it locally before execution. The Sidecar classifies the action (e.g. `code.read`, `communication.external.send`), validates the capability token, and checks the policy. On ALLOW, the call proceeds and credentials are injected just-in-time. On DENY, the call is blocked and a signed audit event is written. The enforcement logic lives outside the agent process.
->>>>>>> Stashed changes
 
 <br/>
 
@@ -58,7 +50,11 @@ brew install firma
 **Linux / other:**
 
 ```bash
-curl -sSf https://install.openfirma.ai | sh
+examples/firma-run/local/setup.sh
+firma sidecar start --detach
+firma monitor
+cargo run -p firma -- run --profile generic -- curl https://example.com
+firma sidecar stop
 ```
 
 **Build from source** (requires Rust 1.86+ and `protoc`):
@@ -88,15 +84,6 @@ firma run --profile claude-code -- claude
 firma monitor             # tail the live audit stream
 ```
 
-<<<<<<< Updated upstream
-### From one agent to many (examples)
-
-The **Sidecar** sits next to each agent process and enforces every outbound call. The **Authority** is a single trust root: it issues capability tokens and streams policy bundles to one or more Sidecars. A single Authority can govern many agents concurrently; the Sidecar enforces locally without calling back on every request.
-
-**1. Single agent, zero config**
-
-One developer, one agent. `firma run` handles everything.
-=======
 ### Different operating models
 
 The **Sidecar** sits next to each agent process and enforces every outbound call. The **Authority** is a single trust root: it issues capability tokens and streams policy bundles to one or more Sidecars. A single Authority can govern many agents concurrently; the Sidecar enforces locally without calling back on every request.
@@ -104,7 +91,6 @@ The **Sidecar** sits next to each agent process and enforces every outbound call
 **1. Single agent (like Quickstart)**
 
 OpenFirma first looks for an existing Authority. If none is configured, it offers to autostart a local Mini Authority and Sidecar for the session, wraps the agent process, and applies the selected policy profile automatically.
->>>>>>> Stashed changes
 
 ```bash
 firma run --profile claude-code -- claude
@@ -112,11 +98,7 @@ firma run --profile claude-code -- claude
 
 **2. Local Authority, multiple agents**
 
-<<<<<<< Updated upstream
-Start a persistent stack once, then run several agents concurrently. All Sidecars pull policy from the same local Authority.
-=======
 The Authority becomes persistent and shared across local agent sessions. Each new `firma run` attaches to the same trust root and pulls the current policy bundle without restarting existing agents.
->>>>>>> Stashed changes
 
 ```bash
 firma stack init
@@ -127,37 +109,15 @@ firma run --profile codex       -- codex    &
 firma run --profile generic     -- opencode
 ```
 
-<<<<<<< Updated upstream
-Rotate or update policy without restarting any agent.
-
-**3. Team Authority, agents on multiple machines**
-
-Run one Authority on a shared server or in CI. Each developer or runner points `firma run` at it with `--authority`:
-=======
 **3. Team Authority, agents on multiple machines**
 
 Each Sidecar enforces policy locally on its own machine while the shared Authority distributes policy bundles, capability tokens, and revocation updates across the team.
->>>>>>> Stashed changes
 
 ```bash
 # On each developer machine or CI runner:
 firma run --authority https://authority.internal --profile claude-code -- claude
 ```
 
-<<<<<<< Updated upstream
-All ALLOW and DENY decisions flow into a shared audit log. One place to see what every agent on the team is doing.
-
-**4. Custom Authority, custom agents without `firma run`**
-
-For agents that are not Claude Code or Codex (custom Python loops, LangChain pipelines, CI workers) the Sidecar is a standalone HTTP proxy. Point outbound traffic at it via environment variables; no `firma run` or SDK required.
-
-```bash
-# Start Authority and Sidecar
-firma authority --config firma.toml
-firma sidecar   --config firma.toml
-
-# Point your agent at the Sidecar
-=======
 **4. Custom Authority, custom agents without `firma run`**
 
 The Sidecar runs independently as a standalone enforcement proxy. Any agent, CI worker, or custom runtime that respects `HTTP_PROXY` / `HTTPS_PROXY` can be governed without SDK integrations or agent-specific wrappers.
@@ -166,7 +126,6 @@ The Sidecar runs independently as a standalone enforcement proxy. Any agent, CI 
 firma authority --config firma.toml
 firma sidecar   --config firma.toml
 
->>>>>>> Stashed changes
 export HTTP_PROXY=http://127.0.0.1:8080
 export HTTPS_PROXY=http://127.0.0.1:8080
 python my_agent.py
@@ -190,10 +149,6 @@ The Authority can be the Mini Authority included in this repo or your own implem
 | `firma policy` | Validate and unit-test Cedar policy bundles |
 | `firma token` | Manage local-exec governance tokens (approve / revoke) |
 
-<<<<<<< Updated upstream
-
-=======
->>>>>>> Stashed changes
 > Full CLI reference: [`docs/cli.md`](docs/cli.md)
 
 <br/>
@@ -205,19 +160,11 @@ The Authority can be the Mini Authority included in this repo or your own implem
 </div>
 <br/>
 
-<<<<<<< Updated upstream
-**[Mini Authority](crates/firma-authority/):** reference local Authority for development. Mints short-lived, cryptographically signed permission tokens for agents, loads policy rules from disk, and streams policy updates and revocation events to connected Sidecars over persistent connections. Sits off the per-request path.
-
-**[Sidecar](crates/firma-sidecar/):** application-layer enforcement proxy sitting next to your agent. Intercepts every outbound call (plain HTTP, HTTPS by tunnel or by transparent decryption, remote-procedure calls, Unix sockets) and decides allow / deny / abort through a fully-local two-stage check (capability validation, then policy evaluation), with credential injection after an allow and a signed audit record for every decision. Fail-closed by construction.
-
-**[Audit emitter](crates/firma-core/):** signs and emits an audit record for every enforcement decision, capturing the agent, session, action class, target resource, the token that authorized the call, the outcome, and timing. Runs as a background task draining a bounded channel into pluggable destinations (standard output, a file, a remote service, or a local write-ahead log on disk), each record independently verifiable.
-=======
 **[Mini Authority](crates/firma-authority/):** issues capability tokens and distributes policy bundles to connected Sidecars. Sits off the request path.
 
 **[Sidecar](crates/firma-sidecar/):** runs next to the agent process and intercepts outbound calls. Evaluates policy locally before execution and emits signed audit events.
 
 **[Audit](crates/firma-core/):** every enforcement decision produces a signed audit record with the evaluated action, outcome, and metadata.
->>>>>>> Stashed changes
 
 ### Features
 

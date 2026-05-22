@@ -33,7 +33,7 @@ pub fn run(args: Args) -> ExitCode {
         since = ?args.since,
         "firma monitor starting"
     );
-    let state_dir = match crate::services::stack::resolve_state_dir(args.state_dir) {
+    let state_dir = match crate::services::init::resolve_state_dir(args.state_dir) {
         Ok(path) => path,
         Err(error) => {
             eprintln!("firma monitor: {error}");
@@ -96,6 +96,7 @@ pub fn run(args: Args) -> ExitCode {
             decision_filter,
             args.action_class.as_deref(),
             args.agent.as_deref(),
+            args.sandbox_id.as_deref(),
             &mut out,
         ) {
             if error.kind() == io::ErrorKind::BrokenPipe {

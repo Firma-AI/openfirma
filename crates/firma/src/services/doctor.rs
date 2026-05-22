@@ -141,7 +141,7 @@ async fn build_report(args: Args) -> RenderedReport {
     );
 
     // 6. capability seed
-    let state_dir = crate::services::stack::resolve_state_dir(args.state_dir.clone())
+    let state_dir = crate::services::init::resolve_state_dir(args.state_dir.clone())
         .unwrap_or_else(|_| PathBuf::from("."));
     report.push(capability_seed::check(&state_dir));
 

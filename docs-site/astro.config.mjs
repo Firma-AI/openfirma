@@ -82,9 +82,10 @@ export default defineConfig({
         {
           label: 'User Guides',
           items: [
+            { label: 'Initialize a project (firma init)', slug: 'guides/initialize-a-project' },
             { label: 'Run the sidecar standalone', slug: 'guides/run-the-sidecar' },
             { label: 'Inspect live sidecars (firma sidecar status)', slug: 'guides/firma-sidecar-status' },
-            { label: 'Manage the stack (firma stack & monitor)', slug: 'guides/manage-the-stack' },
+            { label: 'Start & monitor the daemon (firma sidecar & monitor)', slug: 'guides/manage-the-stack' },
             { label: 'Diagnose with firma doctor', slug: 'guides/firma-doctor' },
             { label: 'Write your first Cedar policy', slug: 'guides/write-a-cedar-policy' },
             { label: 'Test policies offline (firma policy)', slug: 'guides/test-policies-offline' },
