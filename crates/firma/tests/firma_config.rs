@@ -70,7 +70,7 @@ fn assert_unified_config_parses(firma_toml: &Path) {
 }
 
 #[test]
-fn firma_config_reads_existing_config_as_defaults_and_allows_overrides() {
+fn reads_existing_config_as_defaults_and_allows_overrides() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let config_dir = tmp.path().join("config");
     let state_dir = tmp.path().join("state");
