@@ -505,6 +505,7 @@ mod tests {
             Some("tok42"),
             "second request must carry the token from the pending_hitl response"
         );
+        drop(reqs);
     }
 
     #[test]

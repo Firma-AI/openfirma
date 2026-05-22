@@ -1,3 +1,4 @@
+pub mod authorized_clients;
 pub mod cedar_loader;
 pub mod config;
 pub mod issuance;
@@ -7,7 +8,9 @@ pub mod seed;
 pub mod server;
 pub mod service;
 pub mod startup;
+pub mod tls_verifier;
 
+pub use authorized_clients::AuthorizedClientSet;
 pub use cedar_loader::CedarPolicyStore;
 pub use config::{AuthorityConfig, AuthorityTlsConfig};
 pub use issuance::{IssuanceError, IssuanceRequest, IssuanceResult, issue_capability};
