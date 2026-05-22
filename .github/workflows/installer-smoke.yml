@@ -1,0 +1,77 @@
+name: Installer Smoke
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  posix:
+    name: install.sh (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-13, macos-14]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run install.sh (no-brew, no-init, no-modify-path)
+        env:
+          FIRMA_NO_BREW: '1'
+          FIRMA_NO_INIT: '1'
+          FIRMA_NO_MODIFY_PATH: '1'
+          FIRMA_VERSION: v0.0.0
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          INSTALL_DIR="${RUNNER_TEMP}/firma-bin"
+          ./install.sh --install-dir "${INSTALL_DIR}"
+          "${INSTALL_DIR}/firma" --version
+      - name: Re-run (already installed exit path)
+        env:
+          FIRMA_NO_BREW: '1'
+          FIRMA_NO_INIT: '1'
+          FIRMA_NO_MODIFY_PATH: '1'
+          FIRMA_VERSION: v0.0.0
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          INSTALL_DIR="${RUNNER_TEMP}/firma-bin"
+          ./install.sh --install-dir "${INSTALL_DIR}" | tee out.log
+          grep -F 'already installed' out.log
+
+  windows:
+    name: install.ps1 (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run install.ps1
+        shell: pwsh
+        env:
+          FIRMA_NO_INIT: '1'
+          FIRMA_NO_MODIFY_PATH: '1'
+          FIRMA_VERSION: v0.0.0
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'firma-bin'
+          .\install.ps1 -InstallDir $dir
+          & (Join-Path $dir 'firma.exe') --version
+      - name: Re-run (already installed exit path)
+        shell: pwsh
+        env:
+          FIRMA_NO_INIT: '1'
+          FIRMA_NO_MODIFY_PATH: '1'
+          FIRMA_VERSION: v0.0.0
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'firma-bin'
+          $out = .\install.ps1 -InstallDir $dir | Out-String
+          $out | Write-Host
+          if ($out -notmatch 'already installed') { exit 1 }

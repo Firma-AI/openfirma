@@ -36,11 +36,13 @@ firma-run = { workspace = true }
 firma-sidecar = { workspace = true }
 firma-stack = { workspace = true }
 miette = { workspace = true }
+p256 = { workspace = true }
 pasetors = { workspace = true }
 rcgen = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+sha2 = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, default-features = false, features = [
@@ -57,6 +59,7 @@ tokio-util = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true }
@@ -65,7 +68,6 @@ nix = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
-p256 = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 tempfile = { workspace = true }
