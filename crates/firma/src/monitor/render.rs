@@ -32,6 +32,7 @@ pub fn render(
     decision_filter: Option<crate::args::monitor::Decision>,
     action_class_filter: Option<&str>,
     agent_filter: Option<&str>,
+    sandbox_id_filter: Option<&str>,
     out: &mut dyn Write,
 ) -> io::Result<()> {
     match (line.source, format) {
@@ -41,6 +42,7 @@ pub fn render(
                 decision_filter,
                 action_class_filter,
                 agent_filter,
+                sandbox_id_filter,
             ) {
                 writeln!(out, "{}", render_audit_pretty(&parsed))?;
             }
@@ -51,6 +53,7 @@ pub fn render(
                 decision_filter,
                 action_class_filter,
                 agent_filter,
+                sandbox_id_filter,
             )
             .is_some()
             {
@@ -94,6 +97,12 @@ fn render_audit_pretty(parsed: &AuditLite) -> String {
 
     let mut line =
         format!("{timestamp}  {decision}  {method}  {resource}  class={action}  agent={agent}");
+    if let Some(sandbox) = parsed.sandbox_id.as_deref()
+        && !sandbox.is_empty()
+    {
+        line.push_str("  sandbox=");
+        line.push_str(sandbox);
+    }
     if parsed.decision == Some(2)
         && let Some(reason) = parsed.deny_reason.as_deref()
         && !reason.is_empty()
@@ -147,7 +156,7 @@ mod tests {
             raw: raw.to_string(),
         };
         let mut buf: Vec<u8> = Vec::new();
-        render(&line, format, None, None, None, &mut buf).expect("render");
+        render(&line, format, None, None, None, None, &mut buf).expect("render");
         String::from_utf8(buf).expect("utf8")
     }
 
@@ -189,8 +198,42 @@ mod tests {
             raw: "authority booted".into(),
         };
         let mut buf: Vec<u8> = Vec::new();
-        render(&line, Format::Pretty, None, None, None, &mut buf).expect("render");
+        render(&line, Format::Pretty, None, None, None, None, &mut buf).expect("render");
         assert_eq!(buf, b"[authority] authority booted\n");
+    }
+
+    const ALLOW_LINE_WITH_SBX: &str = r#"{"event_id":"e4","session_id":"s","token_id":"t","agent_id":"demo-1","action":"github.issue.create","resource":"api.github.com/repos/x/y/issues","decision":1,"deny_reason":"","enforcement_latency_us":150,"context_hash":"","bundle_version":"","timestamp":1715177755000000000,"dispatch_status":201,"dispatch_latency_us":42000,"response_size":128,"sandbox_id":"sbx_xyz","signature":[]}"#;
+
+    #[test]
+    fn pretty_audit_appends_sandbox_when_present() {
+        let out = render_to_string(ALLOW_LINE_WITH_SBX, Source::Audit, Format::Pretty);
+        assert!(out.contains("sandbox=sbx_xyz"), "got: {out}");
+    }
+
+    #[test]
+    fn pretty_audit_omits_sandbox_when_empty() {
+        let out = render_to_string(ALLOW_LINE, Source::Audit, Format::Pretty);
+        assert!(!out.contains("sandbox="), "got: {out}");
+    }
+
+    #[test]
+    fn sandbox_id_filter_skips_non_matching_audit_line() {
+        let line = Line {
+            source: Source::Audit,
+            raw: ALLOW_LINE_WITH_SBX.into(),
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        render(
+            &line,
+            Format::Pretty,
+            None,
+            None,
+            None,
+            Some("other"),
+            &mut buf,
+        )
+        .expect("render");
+        assert!(buf.is_empty(), "filter should drop non-matching sandbox");
     }
 
     #[test]
@@ -204,6 +247,7 @@ mod tests {
             &line,
             Format::Pretty,
             Some(Decision::Deny),
+            None,
             None,
             None,
             &mut buf,

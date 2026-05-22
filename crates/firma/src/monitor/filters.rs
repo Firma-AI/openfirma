@@ -42,6 +42,10 @@ pub struct AuditLite {
     /// `token_id` top-level field. Empty when the record was a
     /// passthrough.
     pub token_id: Option<String>,
+    /// `sandbox_id` top-level field. Identifies the `firma run`
+    /// invocation that produced the event. Empty / absent when the
+    /// sidecar was not autostarted by `firma run`.
+    pub sandbox_id: Option<String>,
 }
 
 /// Return `Some(parsed_audit)` if `raw` is a valid audit-record JSON
@@ -53,6 +57,7 @@ pub fn audit_passes(
     decision: Option<Decision>,
     action_class: Option<&str>,
     agent_id: Option<&str>,
+    sandbox_id: Option<&str>,
 ) -> Option<AuditLite> {
     let parsed: AuditLite = serde_json::from_str(raw).ok()?;
 
@@ -70,6 +75,12 @@ pub fn audit_passes(
 
     if let Some(want) = agent_id
         && parsed.agent_id.as_deref() != Some(want)
+    {
+        return None;
+    }
+
+    if let Some(want) = sandbox_id
+        && parsed.sandbox_id.as_deref() != Some(want)
     {
         return None;
     }
@@ -124,33 +135,42 @@ mod tests {
 
     #[test]
     fn decision_allow_filter_matches_allow_line() {
-        assert!(audit_passes(ALLOW_LINE, Some(Decision::Allow), None, None).is_some());
-        assert!(audit_passes(DENY_LINE, Some(Decision::Allow), None, None).is_none());
+        assert!(audit_passes(ALLOW_LINE, Some(Decision::Allow), None, None, None).is_some());
+        assert!(audit_passes(DENY_LINE, Some(Decision::Allow), None, None, None).is_none());
     }
 
     #[test]
     fn decision_deny_filter_matches_deny_line() {
-        assert!(audit_passes(DENY_LINE, Some(Decision::Deny), None, None).is_some());
-        assert!(audit_passes(ALLOW_LINE, Some(Decision::Deny), None, None).is_none());
+        assert!(audit_passes(DENY_LINE, Some(Decision::Deny), None, None, None).is_some());
+        assert!(audit_passes(ALLOW_LINE, Some(Decision::Deny), None, None, None).is_none());
     }
 
     #[test]
     fn decision_passthrough_requires_empty_token_id() {
-        assert!(audit_passes(PASSTHROUGH_LINE, Some(Decision::Passthrough), None, None).is_some());
-        assert!(audit_passes(ALLOW_LINE, Some(Decision::Passthrough), None, None).is_none());
+        assert!(
+            audit_passes(
+                PASSTHROUGH_LINE,
+                Some(Decision::Passthrough),
+                None,
+                None,
+                None
+            )
+            .is_some()
+        );
+        assert!(audit_passes(ALLOW_LINE, Some(Decision::Passthrough), None, None, None).is_none());
     }
 
     #[test]
     fn action_class_filter_matches_action_field() {
-        assert!(audit_passes(ALLOW_LINE, None, Some("github.issue.create"), None).is_some());
-        assert!(audit_passes(ALLOW_LINE, None, Some("other.class"), None).is_none());
+        assert!(audit_passes(ALLOW_LINE, None, Some("github.issue.create"), None, None).is_some());
+        assert!(audit_passes(ALLOW_LINE, None, Some("other.class"), None, None).is_none());
     }
 
     #[test]
     fn agent_filter_matches_agent_id() {
-        assert!(audit_passes(ALLOW_LINE, None, None, Some("agent_codex")).is_some());
-        assert!(audit_passes(ALLOW_LINE, None, None, Some("agent_other")).is_none());
-        assert!(audit_passes(PASSTHROUGH_LINE, None, None, Some("agent_codex")).is_none());
+        assert!(audit_passes(ALLOW_LINE, None, None, Some("agent_codex"), None).is_some());
+        assert!(audit_passes(ALLOW_LINE, None, None, Some("agent_other"), None).is_none());
+        assert!(audit_passes(PASSTHROUGH_LINE, None, None, Some("agent_codex"), None).is_none());
     }
 
     #[test]
@@ -161,6 +181,7 @@ mod tests {
                 Some(Decision::Deny),
                 Some("stripe.payment.create"),
                 Some("agent_codex"),
+                None,
             )
             .is_some()
         );
@@ -170,6 +191,7 @@ mod tests {
                 Some(Decision::Deny),
                 Some("stripe.payment.create"),
                 Some("wrong_agent"),
+                None,
             )
             .is_none()
         );
@@ -177,6 +199,27 @@ mod tests {
 
     #[test]
     fn non_json_line_returns_none() {
-        assert!(audit_passes("not a json line", None, None, None).is_none());
+        assert!(audit_passes("not a json line", None, None, None, None).is_none());
+    }
+
+    /// Realistic event carrying a `sandbox_id` from the autostarted sidecar.
+    const ALLOW_LINE_WITH_SBX: &str = r#"{"event_id":"01900000-0000-7000-8000-000000000004","session_id":"sess_001","token_id":"tok_a","agent_id":"agent_codex","action":"github.issue.create","resource":"api.github.com/repos/x/y/issues","decision":1,"deny_reason":"","enforcement_latency_us":150,"context_hash":"ctx","bundle_version":"v1","timestamp":1715169755000000000,"dispatch_status":201,"dispatch_latency_us":42000,"response_size":128,"sandbox_id":"sbx_abc","signature":[]}"#;
+
+    #[test]
+    fn audit_lite_parses_sandbox_id() {
+        let parsed: AuditLite =
+            serde_json::from_str(ALLOW_LINE_WITH_SBX).expect("parse with sandbox");
+        assert_eq!(parsed.sandbox_id.as_deref(), Some("sbx_abc"));
+    }
+
+    #[test]
+    fn sandbox_id_filter_matches_exact() {
+        assert!(audit_passes(ALLOW_LINE_WITH_SBX, None, None, None, Some("sbx_abc")).is_some());
+        assert!(audit_passes(ALLOW_LINE_WITH_SBX, None, None, None, Some("other")).is_none());
+    }
+
+    #[test]
+    fn sandbox_id_filter_rejects_missing_field() {
+        assert!(audit_passes(ALLOW_LINE, None, None, None, Some("sbx_abc")).is_none());
     }
 }

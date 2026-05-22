@@ -93,6 +93,14 @@ the SHA-256 of the concatenated `.cedar` files in `policy.dir`. Line 4
 fires unconditionally; when `policy.authority_url` is unset the
 endpoint is reported as `(disabled)`.
 
+Line 7 (`ready`) is held until the Authority streams have hydrated —
+both the policy bundle stream and the revocation stream must report
+themselves ready before the line is emitted. When
+`policy.authority_url` is unset, both flags are pre-seeded as ready, so
+the gate is a no-op and `ready` fires immediately after line 6. This
+prevents the first wrapped-agent call from racing the readiness gate
+and hitting a DENY before policy is in place.
+
 ### Exit codes
 
 | Code | When                                                             |
@@ -173,28 +181,33 @@ FIR-104.
 
 ## Config Discovery
 
-When `--config` is **omitted**, every subcommand — `sidecar`, `authority`,
-`run`, `stack` (`init`/`start`/`stop`/`status`), `monitor`, and `doctor` —
-discovers the same single shared `firma.toml` from platform-standard
-directories. That one file holds top-level `[sidecar]` / `[authority]` /
-`[run]` sections; each subcommand reads only its own section. The first
-existing file wins:
+When `--config` is **omitted**, every subcommand — `sidecar`
+(`start`/`stop`/`status`), `authority`, `run`, `init`, `monitor`, and
+`doctor` — discovers the same single shared `firma.toml` from
+platform-standard directories. That one file holds top-level
+`[project]` / `[sidecar]` / `[authority]` / `[run]` sections; each
+subcommand reads only its own section. The first existing file wins:
 
-1. `--config <path>` flag — unchanged precedence, always wins. It only
-   relocates the file; the file still uses the sectioned schema.
-2. `$FIRMA_CONFIG_DIR/firma.toml` if the env var is set.
-3. User config dir (first existing wins):
+1. `--config <path>` flag — always wins. It only relocates the file;
+   the file still uses the sectioned schema.
+2. **Project-local `.firma/firma.toml`**, found by walking up from
+   `cwd` (spec §4 step 1). The closest ancestor with a `.firma/firma.toml`
+   wins; the walk stops at the filesystem root. This is what
+   `firma init` writes by default.
+3. `$FIRMA_CONFIG_DIR/firma.toml` if the env var is set.
+4. User config dir (first existing wins). This is what
+   `firma init --global` writes:
    - Linux: `$XDG_CONFIG_HOME/firma` → `~/.config/firma`
    - macOS: `$XDG_CONFIG_HOME/firma` → `~/.config/firma` →
      `~/Library/Application Support/firma`
    - Windows: `%XDG_CONFIG_HOME%\firma` (if set) →
      `%USERPROFILE%\.firma` → `%APPDATA%\Roaming\firma`
-4. System-wide config dir:
+5. System-wide config dir:
    - Linux: `/etc/firma/firma.toml`
    - macOS: `/Library/Application Support/firma/firma.toml`
    - Windows: `%PROGRAMDATA%\firma\firma.toml`
-5. CWD-relative `firma.toml` — last fallback.
-6. None found and config is required → exit non-zero with a message listing
+6. CWD-relative `firma.toml` — last fallback.
+7. None found and config is required → exit non-zero with a message listing
    every directory searched.
 
 On macOS the user tier is a dual path: `$XDG_CONFIG_HOME/firma` is tried
@@ -220,7 +233,7 @@ config-relative resource table).
 `state_dir` is **never** a config-file key. The runtime state directory is
 resolved only from `--state-dir`, then `FIRMA_STATE_DIR`, then
 `$XDG_RUNTIME_DIR/firma` (with a `/tmp/firma-$UID` fallback) — independent
-of config discovery. The `--config` flag on `stack stop`/`status`,
+of config discovery. The `--config` flag on `sidecar stop`/`status`,
 `monitor`, and `doctor` is accepted for compatibility; only `doctor`
 actively consumes it to locate the unified file.
 
@@ -290,7 +303,12 @@ When autostart fires, `firma run`:
 2. Synthesizes a sidecar TOML by inheriting the operator template
    (`--sidecar-config` → `FIRMA_SIDECAR_CONFIG_FILE` → the discovered
    `firma.toml` → minimal) and overriding the `[interceptor]` section to
-   bind a Unix-domain socket at `<marker_dir>/sidecar.sock`.
+   bind a Unix-domain socket at `<marker_dir>/sidecar.sock`. Relative
+   resource paths in the inherited template (e.g. `audit.signing_key_path`,
+   `policy.dir`, `mapping.rules_path`, `authority.public_key_path`) are
+   rebased to absolute paths anchored on the **template's** config
+   directory so they keep pointing at the operator's files after the
+   synthesized config is written into `<marker_dir>/`.
 3. Spawns `firma sidecar --config <marker_dir>/sidecar.toml` as a
    child process with stderr piped.
 4. Reads stderr line by line and waits for the seven-line ready log
