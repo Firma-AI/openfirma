@@ -476,3 +476,51 @@ starlight-toc nav ul li a[aria-current='true'] {
     --sl-content-pad-x: 1.25rem;
   }
 }
+
+/* ─── Mermaid dark mode override ───────────────────────────────────────────
+ * The Mermaid theme is set to 'base' with light-mode variables in
+ * astro.config.mjs. These selectors flip the diagram colors when the
+ * user switches to dark mode, using the OpenFirma dark palette.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+:root[data-theme='dark'] .mermaid .node rect,
+:root[data-theme='dark'] .mermaid .node circle,
+:root[data-theme='dark'] .mermaid .node ellipse,
+:root[data-theme='dark'] .mermaid .node polygon,
+:root[data-theme='dark'] .mermaid .node path {
+  fill: #173331 !important;
+  stroke: #8fb6b1 !important;
+}
+
+:root[data-theme='dark'] .mermaid .cluster rect {
+  fill: #0f2422 !important;
+  stroke: #2f5d59 !important;
+}
+
+:root[data-theme='dark'] .mermaid .label,
+:root[data-theme='dark'] .mermaid .nodeLabel,
+:root[data-theme='dark'] .mermaid text {
+  fill: #c9d0ce !important;
+  color: #c9d0ce !important;
+}
+
+:root[data-theme='dark'] .mermaid .edgePath .path,
+:root[data-theme='dark'] .mermaid .flowchart-link {
+  stroke: #8fb6b1 !important;
+}
+
+:root[data-theme='dark'] .mermaid marker path {
+  fill: #8fb6b1 !important;
+  stroke: #8fb6b1 !important;
+}
+
+:root[data-theme='dark'] .mermaid .edgeLabel,
+:root[data-theme='dark'] .mermaid .edgeLabel rect {
+  background-color: #0d141d !important;
+  fill: #0d141d !important;
+  color: #c9d0ce !important;
+}
+
+:root[data-theme='dark'] .mermaid .edgeLabel span {
+  color: #c9d0ce !important;
+}
