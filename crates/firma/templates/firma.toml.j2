@@ -13,6 +13,8 @@ revocation_file        = "{{ state_dir }}/revocations.txt"
 key_file               = "{{ state_dir }}/authority.key"
 max_ttl_seconds        = 3600
 bundle_ttl_seconds     = 30
+tls_cert_path          = "{{ tls_cert_path }}"
+tls_key_path           = "{{ tls_key_path }}"
 
 {% endif -%}
 # ── Sidecar ───────────────────────────────────────────────────────────────────
@@ -60,6 +62,7 @@ file_path        = "{{ state_dir }}/audit.jsonl"
 signing_key_path = "{{ state_dir }}/audit.key"
 
 [sidecar.authority]
+ca_cert_path                          = "{{ tls_ca_cert_path }}"
 connect_timeout_secs                  = 10
 reconnect_min_backoff_ms              = 250
 reconnect_max_backoff_secs            = 30
