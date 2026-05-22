@@ -426,7 +426,7 @@ starlight-menu-button {
   border-bottom: 1px solid var(--sl-color-hairline);
 }
 
-/* Mermaid diagrams - make sure they breathe and pick up theme bg. */
+/* Mermaid diagrams */
 .mermaid {
   margin-block: 1.5rem;
   padding: 1rem;
@@ -441,6 +441,47 @@ starlight-menu-button {
   height: auto;
 }
 
+/* Light mode: force OpenFirma teal palette on all nodes */
+.mermaid .node rect,
+.mermaid .node circle,
+.mermaid .node ellipse,
+.mermaid .node polygon,
+.mermaid .node path {
+  fill: #e3edec !important;
+  stroke: #5b8a86 !important;
+}
+
+.mermaid .cluster rect {
+  fill: #f0f5f4 !important;
+  stroke: #5b8a86 !important;
+}
+
+.mermaid .label,
+.mermaid .nodeLabel,
+.mermaid text {
+  fill: #2a3340 !important;
+  color: #2a3340 !important;
+}
+
+.mermaid .edgePath .path,
+.mermaid .flowchart-link {
+  stroke: #5b8a86 !important;
+}
+
+.mermaid marker path {
+  fill: #5b8a86 !important;
+  stroke: #5b8a86 !important;
+}
+
+.mermaid .edgeLabel,
+.mermaid .edgeLabel rect {
+  background-color: #f0f5f4 !important;
+  fill: #f0f5f4 !important;
+}
+
+.mermaid .edgeLabel span {
+  color: #2a3340 !important;
+}
 /* Pagefind search - keep the modal aligned with the new aesthetic. */
 .pagefind-ui__search-input {
   border-radius: 0.5rem;
