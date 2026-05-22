@@ -16,14 +16,18 @@ pub struct PolicyArgs {
 pub enum PolicyCommand {
     /// Print all available posture and mapping templates.
     List,
-    /// Parse and schema-check a Cedar policy file against the Firma schema.
+    /// Parse a Cedar policy file and schema-check it against the Firma entity
+    /// schema. Catches typos and shape errors before the bundle reaches the
+    /// Authority.
     Validate {
         /// Path to the Cedar policy file (`.cedar`).
         file: PathBuf,
     },
-    /// Run a policy unit-test fixture against a Cedar policy bundle.
+    /// Run a unit-test fixture (allow/deny expectations + sample envelopes)
+    /// against a Cedar policy bundle. Use to lock in policy behaviour before
+    /// rollout.
     Test {
-        /// Path to the test fixture file.
+        /// Path to the test fixture file (TOML).
         fixture: PathBuf,
     },
 }
