@@ -46,10 +46,9 @@ firma config \
   --mapping anthropic
 ```
 
-This writes to the **current directory** by default. Pass `--global` to write to the global config directory (`~/.config/firma` on Linux/macOS), or `--output-dir` for a specific path:
+This writes to the **current directory** by default. Pass `--output-dir` to write to a specific path:
 
 ```bash
-firma config --name claude-code --posture strict --mapping anthropic --global
 firma config --name claude-code --posture strict --mapping anthropic --output-dir .local
 ```
 

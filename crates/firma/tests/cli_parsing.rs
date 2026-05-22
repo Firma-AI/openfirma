@@ -128,11 +128,6 @@ fn parse_config_scripted() {
 }
 
 #[test]
-fn parse_config_global() {
-    parse_ok(&["config", "--yes", "--global"]);
-}
-
-#[test]
 fn parse_sidecar_start() {
     parse_ok(&["sidecar", "start", "--config", "firma.toml", "--detach"]);
 }

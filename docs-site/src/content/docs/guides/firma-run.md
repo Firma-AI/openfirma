@@ -80,13 +80,7 @@ on some distros) or pick a different backend.
 firma config --name my-agent --posture dev --mapping anthropic
 ```
 
-This writes to the **current directory** by default. To write to the global Firma config directory (`~/.config/firma` on Linux/macOS), pass `--global`:
-
-```bash
-firma config --name my-agent --posture dev --mapping anthropic --global
-```
-
-To write to a specific directory, pass `--output-dir`:
+This writes to the **current directory** by default. To write to a specific directory, pass `--output-dir`:
 
 ```bash
 firma config --name my-agent --posture dev --mapping anthropic --output-dir .local

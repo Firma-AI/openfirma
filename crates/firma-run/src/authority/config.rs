@@ -25,16 +25,13 @@ pub fn default_user_config_path() -> Option<PathBuf> {
 }
 
 /// The canonical path to create when persisting `[authority]` and no
-/// config file exists yet.
-///
-/// Delegates to the shared firma-config discovery (`$FIRMA_CONFIG_DIR` →
-/// `$XDG_CONFIG_HOME/firma` → `~/.config/firma` → platform config dir),
-/// then appends the canonical file name. `None` only if no config dir is
-/// resolvable.
+/// config file exists yet. Uses `.firma/firma.toml` under the current
+/// working directory.
 #[must_use]
 pub fn canonical_write_path() -> Option<PathBuf> {
-    firma_config::default_config_dir(&firma_config::SystemDirs)
-        .map(|d| d.join(firma_config::CONFIG_FILE_NAME))
+    std::env::current_dir()
+        .ok()
+        .map(|cwd| cwd.join(".firma").join(firma_config::CONFIG_FILE_NAME))
 }
 
 /// Persisted `[authority]` table.

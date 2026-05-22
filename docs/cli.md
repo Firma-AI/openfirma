@@ -307,23 +307,10 @@ subcommand reads only its own section. The first existing file wins:
 1. `--config <path>` flag — always wins. It only relocates the file;
    the file still uses the sectioned schema.
 2. **Project-local `.firma/firma.toml`**, found by walking up from
-   `cwd` (spec §4 step 1). The closest ancestor with a `.firma/firma.toml`
-   wins; the walk stops at the filesystem root. This is what
-   `firma config` writes by default.
-3. `$FIRMA_CONFIG_DIR/firma.toml` if the env var is set.
-4. User config dir (first existing wins). This is what
-   `firma config --global` writes:
-   - Linux: `$XDG_CONFIG_HOME/firma` → `~/.config/firma`
-   - macOS: `$XDG_CONFIG_HOME/firma` → `~/.config/firma` →
-     `~/Library/Application Support/firma`
-   - Windows: `%XDG_CONFIG_HOME%\firma` (if set) →
-     `%USERPROFILE%\.firma` → `%APPDATA%\Roaming\firma`
-5. System-wide config dir:
-   - Linux: `/etc/firma/firma.toml`
-   - macOS: `/Library/Application Support/firma/firma.toml`
-   - Windows: `%PROGRAMDATA%\firma\firma.toml`
-6. CWD-relative `firma.toml` — last fallback.
-7. None found and config is required → exit non-zero with a message listing
+   `cwd`. The closest ancestor with a `.firma/firma.toml` wins; the
+   walk stops at the filesystem root. This is what `firma config` writes.
+3. `$FIRMA_CONFIG` env var if set — overrides walk, points directly to file.
+4. None found and config is required → exit non-zero with a message listing
    every directory searched.
 
 On macOS the user tier is a dual path: `$XDG_CONFIG_HOME/firma` is tried
