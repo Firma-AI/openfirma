@@ -92,6 +92,17 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     let has_sidecar = matches!(inputs.mode, Mode::AgentLocal | Mode::AgentRemote);
 
     if has_sidecar {
+        let interactive = !args.yes && dialoguer::console::Term::stderr().is_term();
+        cleanup_stale_posture_files(
+            cfg,
+            &inputs.sidecar.posture,
+            interactive,
+            args.force,
+            &ColorfulTheme::default(),
+        )?;
+    }
+
+    if has_sidecar {
         write_if_absent(&state.join("revocations.txt"), b"", args.force)?;
         crate::services::authority::generate_audit_key_if_absent(
             &state.join("audit.key"),
@@ -903,6 +914,72 @@ fn write_if_absent(path: &Path, content: &[u8], force: bool) -> Result<()> {
         return Ok(());
     }
     std::fs::write(path, content).with_context(|| format!("write {}", path.display()))
+}
+
+/// Delete posture cedar files left behind by previous postures.
+///
+/// Posture is a closed set of `(cedar file, requested_actions)` presets.
+/// Changing posture rewrites `requested_actions` in `firma.toml`, but
+/// each posture lives in its own file under `policies/`, so the old
+/// file lingers and the sidecar (which loads every `.cedar` in the
+/// dir) ends up applying both. Remove stale posture files here.
+///
+/// Pristine files (content matches the shipped template) are deleted
+/// silently. Files with local edits are kept by default; in
+/// interactive mode the user is asked. `--force` removes everything.
+fn cleanup_stale_posture_files(
+    cfg: &Path,
+    active: &Posture,
+    interactive: bool,
+    force: bool,
+    theme: &ColorfulTheme,
+) -> Result<()> {
+    let policies_dir = cfg.join("policies");
+    for posture in [Posture::Strict, Posture::Dev, Posture::DevWithDeleteWatch] {
+        if posture.file_name() == active.file_name() {
+            continue;
+        }
+        let path = policies_dir.join(format!("{}.cedar", posture.file_name()));
+        if !path.exists() {
+            continue;
+        }
+        let current =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let pristine = posture.cedar_content();
+        let modified = current.trim() != pristine.trim();
+        if force || !modified {
+            std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+            println!("  removed stale posture file {}", path.display());
+            continue;
+        }
+        if interactive {
+            let prompt = format!(
+                "Old posture file {} has local edits. Remove?",
+                path.display()
+            );
+            let confirmed = dialoguer::Confirm::with_theme(theme)
+                .with_prompt(prompt)
+                .default(false)
+                .interact()
+                .context("posture cleanup prompt")?;
+            if confirmed {
+                std::fs::remove_file(&path)
+                    .with_context(|| format!("remove {}", path.display()))?;
+                println!("  removed {}", path.display());
+            } else {
+                eprintln!(
+                    "  kept {} — sidecar will load it alongside the active posture",
+                    path.display()
+                );
+            }
+        } else {
+            eprintln!(
+                "  kept {} (locally modified) — pass --force to delete",
+                path.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 // ── Public API used by `firma run` implicit init and other services ───────────
