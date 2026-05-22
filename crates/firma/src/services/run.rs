@@ -27,6 +27,14 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     // one-command path (`firma run codex`) working from a fresh clone.
     maybe_implicit_init(&args)?;
 
+    // Auto-discover firma-run.toml alongside firma.toml when --config is not set.
+    let run_config = args.config.clone().or_else(|| {
+        firma_config::resolve_config("run", None, &firma_config::SystemDirs)
+            .ok()
+            .map(|r| r.config_dir.join("firma-run.toml"))
+            .filter(|p| p.is_file())
+    });
+
     let authority_cli = match args.authority.as_deref() {
         None => firma_run::authority::AuthorityCli::Unset,
         Some("local") => firma_run::authority::AuthorityCli::Local,
@@ -34,7 +42,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     };
     let input = RunInput {
         profile: args.profile,
-        config: args.config.clone(),
+        config: run_config,
         backend: args.backend.map(Into::into),
         sidecar_endpoint: args.sidecar_endpoint,
         capability_file: args.capability_file,
@@ -48,7 +56,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         command: args.command,
         authority_cli,
         authority_profile: args.authority_profile,
-        user_config_path: args.config,
+        user_config_path: None,
     };
     match execute_run(&input) {
         Ok(code) => Ok(exit_code(code)),

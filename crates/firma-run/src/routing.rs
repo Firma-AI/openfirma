@@ -353,12 +353,15 @@ pub fn resolve_authority(
                 firma_exe: firma_exe.to_path_buf(),
                 startup_timeout: flags.startup_timeout,
             }) {
-                Ok(sup) => Ok(ResolvedAuthority {
-                    url: sup.url(),
-                    ca_cert_path,
-                    pub_key_path,
-                    supervisor: Some(sup),
-                }),
+                Ok(sup) => {
+                    let ephemeral_pub_key = sup.pub_key_path();
+                    Ok(ResolvedAuthority {
+                        url: sup.url(),
+                        ca_cert_path,
+                        pub_key_path: Some(ephemeral_pub_key),
+                        supervisor: Some(sup),
+                    })
+                }
                 Err(spawn_err) => {
                     if probe_authority_tcp(target).is_ok() {
                         Ok(ResolvedAuthority {
