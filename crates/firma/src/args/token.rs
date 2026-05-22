@@ -11,21 +11,23 @@ pub struct TokenArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum TokenCommand {
-    /// Approve a pending local-exec governance token.
+    /// Approve a pending governance token, releasing the held request so the
+    /// Sidecar can let the original call through.
     Approve(TokenActionArgs),
-    /// Revoke a pending or approved local-exec governance token.
+    /// Revoke a pending or already-approved governance token. The held
+    /// request — and any future call relying on it — is denied.
     Revoke(TokenActionArgs),
 }
 
 #[derive(Debug, Args)]
 pub struct TokenActionArgs {
-    /// The token ID returned by the governance endpoint (`approval_token` field).
+    /// Token ID returned by the governance endpoint (the `approval_token`
+    /// field in the held-request notification).
     pub token_id: String,
 
-    /// Path to the local-exec governance UDS socket.
-    ///
-    /// Must match `local_exec.socket_path` in the sidecar config.
-    /// Accepted forms: a plain filesystem path or `unix:///path/to/sock`.
+    /// Path to the Sidecar's local-exec governance UDS socket. Must match
+    /// `local_exec.socket_path` in the Sidecar config. Accepts a plain
+    /// filesystem path or `unix:///path/to/sock`.
     #[arg(long, default_value = "/tmp/firma-sidecar-tools.sock")]
     pub socket: String,
 }

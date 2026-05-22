@@ -166,6 +166,10 @@ pub struct ExecutionEvent {
     /// Target response body size in bytes. Zero when the call never
     /// dispatched or the target returned no body.
     pub response_size: i64,
+    /// Per-run identity scoping the event to a single `firma run`
+    /// invocation. Matches the marker directory name written by the
+    /// `SidecarSupervisor`. Empty when the sidecar is not autostarted.
+    pub sandbox_id: String,
     /// ECDSA signature (DER-encoded) over all preceding fields.
     pub signature: Vec<u8>,
 }
@@ -200,6 +204,7 @@ impl From<ExecutionEvent> for firma_proto::firma::v1::ExecutionEvent {
             dispatch_status: value.dispatch_status,
             dispatch_latency_us: value.dispatch_latency_us,
             response_size: value.response_size,
+            sandbox_id: value.sandbox_id,
         }
     }
 }
