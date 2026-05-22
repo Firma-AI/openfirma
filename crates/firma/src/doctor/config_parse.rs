@@ -22,14 +22,14 @@ pub fn check(firma_toml: &Path) -> Check {
     };
 
     // [authority.server] is optional — agent-remote configs have no server section.
-    if let Ok(body) = parsed.section("authority.server") {
-        if let Err(error) = toml::from_str::<firma_authority::AuthorityConfig>(&body) {
-            return Check::fail(
-                "config parsed",
-                format!("[authority.server]: {display}: {error}"),
-            )
-            .with_detail("path", display);
-        }
+    if let Ok(body) = parsed.section("authority.server")
+        && let Err(error) = toml::from_str::<firma_authority::AuthorityConfig>(&body)
+    {
+        return Check::fail(
+            "config parsed",
+            format!("[authority.server]: {display}: {error}"),
+        )
+        .with_detail("path", display);
     }
 
     let sidecar_body = match parsed.section("sidecar") {

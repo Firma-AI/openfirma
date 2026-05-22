@@ -293,12 +293,16 @@ fn generate_files(
             "mapping-rules.toml",
             context! { extra_hosts => inputs.sidecar.extra_hosts },
         )?;
-        let workspace_str = inputs.sidecar.workspace.to_string_lossy();
-        let firma_run = render(
-            env,
-            "firma-run.toml",
-            context! { name => inputs.sidecar.name, workspace => workspace_str.as_ref() },
-        )?;
+        let firma_run = if let Some(existing) = &inputs.sidecar.existing_firma_run_toml {
+            existing.clone()
+        } else {
+            let workspace_str = inputs.sidecar.workspace.to_string_lossy();
+            render(
+                env,
+                "firma-run.toml",
+                context! { name => inputs.sidecar.name, workspace => workspace_str.as_ref() },
+            )?
+        };
         files.push(("mapping-rules.toml".into(), mapping_rules));
         files.push(("firma-run.toml".into(), firma_run));
         for mapping in &inputs.sidecar.mappings {
@@ -435,11 +439,11 @@ fn load_existing_defaults(config_dir: &Path) -> Result<ExistingConfigDefaults> {
     defaults.state_dir = infer_state_dir(&value);
 
     let firma_run_path = config_dir.join("firma-run.toml");
-    if firma_run_path.exists() {
-        if let Ok(run_text) = std::fs::read_to_string(&firma_run_path) {
-            defaults.workspace = workspace_from_firma_run(&run_text);
-            defaults.firma_run_toml = Some(run_text);
-        }
+    if firma_run_path.exists()
+        && let Ok(run_text) = std::fs::read_to_string(&firma_run_path)
+    {
+        defaults.workspace = workspace_from_firma_run(&run_text);
+        defaults.firma_run_toml = Some(run_text);
     }
 
     Ok(defaults)
@@ -529,12 +533,16 @@ fn infer_state_dir(value: &toml::Value) -> Option<PathBuf> {
 
 fn workspace_from_firma_run(toml_text: &str) -> Option<PathBuf> {
     let value: toml::Value = toml::from_str(toml_text).ok()?;
-    let mounts = value.get("profiles")?.get("generic")?.get("mounts")?.as_array()?;
+    let mounts = value
+        .get("profiles")?
+        .get("generic")?
+        .get("mounts")?
+        .as_array()?;
     for mount in mounts {
-        if mount.get("read_only").and_then(toml::Value::as_bool) == Some(false) {
-            if let Some(src) = mount.get("source").and_then(toml::Value::as_str) {
-                return Some(PathBuf::from(src));
-            }
+        if mount.get("read_only").and_then(toml::Value::as_bool) == Some(false)
+            && let Some(src) = mount.get("source").and_then(toml::Value::as_str)
+        {
+            return Some(PathBuf::from(src));
         }
     }
     None
@@ -666,8 +674,8 @@ fn collect_workspace(
                 .interact_text()
                 .context("workspace prompt")?;
             let p = PathBuf::from(s);
-            let abs = std::path::absolute(&p)
-                .with_context(|| format!("resolve path {}", p.display()))?;
+            let abs =
+                std::path::absolute(&p).with_context(|| format!("resolve path {}", p.display()))?;
             let abs_default = std::path::absolute(default_path)
                 .with_context(|| format!("resolve path {}", default_path.display()))?;
             overridden = abs != abs_default;
@@ -676,7 +684,11 @@ fn collect_workspace(
             cwd
         }
     };
-    let preserved = if overridden { None } else { existing.firma_run_toml.clone() };
+    let preserved = if overridden {
+        None
+    } else {
+        existing.firma_run_toml.clone()
+    };
     Ok((workspace, preserved))
 }
 
