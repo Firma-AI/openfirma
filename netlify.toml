@@ -1,0 +1,26 @@
+# Netlify config for the install.openfirma.ai script host.
+# Publishes only the install scripts (not the whole repo) and serves
+# install.sh at the site root so `curl https://install.openfirma.ai | sh` works.
+
+[build]
+command = "mkdir -p public && cp install.sh install.ps1 public/"
+publish = "public"
+
+# Root → install.sh (rewrite, keeps the URL clean for piping to sh).
+[[redirects]]
+from = "/"
+to = "/install.sh"
+status = 200
+
+# Serve scripts as plain text so browsers display them and curl/irm pipe cleanly.
+[[headers]]
+for = "/install.sh"
+
+[headers.values]
+Content-Type = "text/plain; charset=utf-8"
+
+[[headers]]
+for = "/install.ps1"
+
+[headers.values]
+Content-Type = "text/plain; charset=utf-8"
