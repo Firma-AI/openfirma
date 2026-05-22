@@ -103,17 +103,34 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             "backend network enforcement proof"
         );
 
-        // First prefer an explicit CLI path, then a discovered config file
-        // (read path). When nothing is discovered, fall back to the
-        // canonical create path so the bootstrap can persist `[authority]`.
-        let user_config_path = args
-            .user_config_path
-            .clone()
-            .or_else(crate::authority::config::default_user_config_path)
-            .or_else(crate::authority::config::canonical_write_path)
-            .ok_or_else(|| {
-                RunError::Internal("no user config path resolvable on this platform".into())
-            })?;
+        // Resolve firma.toml: explicit CLI path > env var > walk up from
+        // cwd for `.firma/firma.toml` > fallback to `cwd/.firma/firma.toml`.
+        // The fallback path may not exist on disk — `read_authority`
+        // treats a missing file as empty so zero-config still works.
+        let resolved = firma_config::resolve_or_fallback(
+            "run",
+            args.user_config_path.as_deref(),
+            &firma_config::SystemDirs,
+        )
+        .ok_or_else(|| {
+            RunError::Internal("no user config path resolvable on this platform".into())
+        })?;
+        let user_config_path = resolved.config_file.clone();
+        match resolved.source {
+            firma_config::ConfigSource::Fallback => {
+                tracing::info!(
+                    path = %user_config_path.display(),
+                    "no firma.toml found; using zero-config defaults"
+                );
+            }
+            source => {
+                tracing::info!(
+                    path = %user_config_path.display(),
+                    ?source,
+                    "loaded firma.toml"
+                );
+            }
+        }
         let sidecar_template_path = resolve_sidecar_template_path(args, &user_config_path);
         let flags = AutostartFlags {
             sidecar_autostart: matches!(
@@ -135,7 +152,6 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         let firma_exe = std::env::current_exe()
             .map_err(|e| RunError::Internal(format!("resolve current_exe: {e}")))?;
         let runtime_dir = firma_stack::runtime_paths::default_runtime_dir();
-        let mut prompt = crate::authority::StdAuthorityPrompt;
         let authority = crate::routing::resolve_authority(
             &identity,
             &runtime_dir,
@@ -144,7 +160,6 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             &args.authority_profile,
             &user_config_path,
             &firma_exe,
-            &mut prompt,
         )?;
 
         let network_runtime = prepare_network_runtime(

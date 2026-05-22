@@ -304,9 +304,8 @@ pub fn resolve_authority(
     profile_name: &str,
     user_config_path: &Path,
     firma_exe: &Path,
-    prompt: &mut dyn crate::authority::AuthorityPromptIo,
 ) -> Result<ResolvedAuthority, RunError> {
-    let selection = crate::authority::resolve(cli, flags.no_autostart, user_config_path, prompt)?;
+    let selection = crate::authority::resolve(cli, flags.no_autostart, user_config_path)?;
 
     // Read [sidecar.authority] for cert/key paths regardless of selection mode.
     let connect =

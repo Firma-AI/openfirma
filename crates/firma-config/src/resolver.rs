@@ -13,6 +13,9 @@ pub enum ConfigSource {
     EnvVar,
     /// Project-local `.firma/firma.toml` found by walking up from cwd.
     ProjectLocal,
+    /// No file found anywhere; falling back to a writable path under
+    /// `cwd/.firma/`. The file may not exist yet.
+    Fallback,
 }
 
 /// Resolved config location plus the dir to re-base defaults against.
@@ -100,6 +103,30 @@ pub fn resolve_config(
     Err(ConfigResolveError::NotFound {
         subcommand: subcommand.to_string(),
         searched,
+    })
+}
+
+/// Like [`resolve_config`] but never fails: when no file is found, returns
+/// a [`ConfigSource::Fallback`] pointing at `cwd/.firma/firma.toml` so
+/// zero-config callers still get a usable path. The fallback file may
+/// not exist on disk — callers should check before reading.
+///
+/// Returns `None` only when `provider.cwd()` is also unresolvable
+/// (extremely rare in practice).
+pub fn resolve_or_fallback(
+    subcommand: &str,
+    cli_override: Option<&Path>,
+    provider: &dyn DirProvider,
+) -> Option<ResolvedConfig> {
+    if let Ok(resolved) = resolve_config(subcommand, cli_override, provider) {
+        return Some(resolved);
+    }
+    let cwd = provider.cwd()?;
+    let file = cwd.join(".firma").join(FILE_NAME);
+    Some(ResolvedConfig {
+        config_dir: dir_of(&file),
+        config_file: file,
+        source: ConfigSource::Fallback,
     })
 }
 
