@@ -22,6 +22,7 @@
 
 use std::path::Path;
 
+use anyhow::{Result, bail};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value, value};
 
 use crate::args::config::Mode;
@@ -81,12 +82,9 @@ impl DocInputs<'_> {
 /// # Errors
 ///
 /// Returns the parse error if `text` is not valid TOML.
-pub fn render_firma_toml(
-    text: &str,
-    inputs: &DocInputs<'_>,
-) -> Result<String, toml_edit::TomlError> {
+pub fn render_firma_toml(text: &str, inputs: &DocInputs<'_>) -> Result<String> {
     let mut doc = parse_or_empty(text)?;
-    merge_firma_toml(&mut doc, inputs);
+    merge_firma_toml(&mut doc, inputs)?;
     Ok(doc.to_string())
 }
 
@@ -96,12 +94,9 @@ pub fn render_firma_toml(
 /// # Errors
 ///
 /// Returns the parse error if `text` is not valid TOML.
-pub fn render_firma_run_toml(
-    text: &str,
-    inputs: &DocInputs<'_>,
-) -> Result<String, toml_edit::TomlError> {
+pub fn render_firma_run_toml(text: &str, inputs: &DocInputs<'_>) -> Result<String> {
     let mut doc = parse_or_empty(text)?;
-    merge_firma_run_toml(&mut doc, inputs);
+    merge_firma_run_toml(&mut doc, inputs)?;
     Ok(doc.to_string())
 }
 
@@ -111,12 +106,9 @@ pub fn render_firma_run_toml(
 /// # Errors
 ///
 /// Returns the parse error if `text` is not valid TOML.
-pub fn render_mapping_rules_toml(
-    text: &str,
-    inputs: &DocInputs<'_>,
-) -> Result<String, toml_edit::TomlError> {
+pub fn render_mapping_rules_toml(text: &str, inputs: &DocInputs<'_>) -> Result<String> {
     let mut doc = parse_or_empty(text)?;
-    merge_mapping_rules_toml(&mut doc, inputs);
+    merge_mapping_rules_toml(&mut doc, inputs)?;
     Ok(doc.to_string())
 }
 
@@ -133,7 +125,7 @@ pub fn read_existing_text(path: &Path) -> std::io::Result<String> {
     }
 }
 
-fn parse_or_empty(text: &str) -> Result<DocumentMut, toml_edit::TomlError> {
+fn parse_or_empty(text: &str) -> std::result::Result<DocumentMut, toml_edit::TomlError> {
     if text.is_empty() {
         return Ok(DocumentMut::new());
     }
@@ -142,22 +134,23 @@ fn parse_or_empty(text: &str) -> Result<DocumentMut, toml_edit::TomlError> {
 
 // ── firma.toml ────────────────────────────────────────────────────────────────
 
-fn merge_firma_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) {
+fn merge_firma_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     if inputs.has_server() {
-        ensure_authority_section(doc, inputs);
+        ensure_authority_section(doc, inputs)?;
     } else {
         doc.as_table_mut().remove("authority");
     }
 
     if inputs.has_sidecar() {
-        ensure_sidecar_section(doc, inputs);
+        ensure_sidecar_section(doc, inputs)?;
     } else {
         doc.as_table_mut().remove("sidecar");
     }
+    Ok(())
 }
 
-fn ensure_authority_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) {
-    let table = ensure_table(doc.as_table_mut(), "authority");
+fn ensure_authority_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
+    let table = ensure_table(doc.as_table_mut(), "authority")?;
     set_str(table, "listen_addr", inputs.authority_listen);
     set_str_if_absent(table, "policy_dir", "policies/");
     set_str_if_absent(table, "issuance_policy_dir", "issuance-policies/");
@@ -167,66 +160,67 @@ fn ensure_authority_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) {
     set_int_if_absent(table, "bundle_ttl_seconds", 30);
     set_str(table, "tls_cert_path", inputs.tls_cert_path);
     set_str(table, "tls_key_path", inputs.tls_key_path);
+    Ok(())
 }
 
-fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) {
-    let sidecar = ensure_table(doc.as_table_mut(), "sidecar");
+fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
+    let sidecar = ensure_table(doc.as_table_mut(), "sidecar")?;
 
     // sidecar.interceptor.https_mitm.{intercept_hosts, strict_hosts}
     {
-        let interceptor = ensure_table(sidecar, "interceptor");
-        let https = ensure_table(interceptor, "https_mitm");
+        let interceptor = ensure_table(sidecar, "interceptor")?;
+        let https = ensure_table(interceptor, "https_mitm")?;
         set_string_array(https, "intercept_hosts", inputs.mitm_hosts);
         set_string_array(https, "strict_hosts", inputs.mitm_hosts);
     }
 
     {
-        let policy = ensure_table(sidecar, "policy");
+        let policy = ensure_table(sidecar, "policy")?;
         set_str_if_absent(policy, "dir", ".");
     }
 
     {
-        let ca = ensure_table(sidecar, "ca");
+        let ca = ensure_table(sidecar, "ca")?;
         set_str(ca, "dir", inputs.ca_dir);
     }
 
     {
-        let log = ensure_table(sidecar, "log");
+        let log = ensure_table(sidecar, "log")?;
         set_str_if_absent(log, "level", "info");
     }
 
     {
-        let mapping = ensure_table(sidecar, "mapping");
+        let mapping = ensure_table(sidecar, "mapping")?;
         set_str_if_absent(mapping, "rules_path", "mapping-rules.toml");
         set_str_array(mapping, "rules_paths", inputs.mapping_paths);
         set_bool_if_absent(mapping, "default_protected", true);
     }
 
     {
-        let cap = ensure_table(sidecar, "capability_validation");
+        let cap = ensure_table(sidecar, "capability_validation")?;
         set_int_if_absent(cap, "clock_skew_tolerance_seconds", 0);
     }
 
     {
-        let ce = ensure_table(sidecar, "constraint_enforcement");
+        let ce = ensure_table(sidecar, "constraint_enforcement")?;
         set_int_if_absent(ce, "bundle_ttl_seconds", 3600);
         set_int_if_absent(ce, "enforcement_timeout_ms", 50);
     }
 
     {
-        let conn = ensure_table(sidecar, "connector");
+        let conn = ensure_table(sidecar, "connector")?;
         set_int_if_absent(conn, "default_timeout_ms", 120_000);
     }
 
     {
-        let audit = ensure_table(sidecar, "audit");
+        let audit = ensure_table(sidecar, "audit")?;
         set_str_if_absent(audit, "sink", "file");
         set_str(audit, "file_path", inputs.audit_file);
         set_str(audit, "signing_key_path", inputs.audit_key);
     }
 
     {
-        let auth = ensure_table(sidecar, "authority");
+        let auth = ensure_table(sidecar, "authority")?;
         if inputs.has_connect() {
             set_str(auth, "url", inputs.authority_url);
             set_str(auth, "ca_cert_path", inputs.authority_ca_cert);
@@ -244,7 +238,7 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) {
     }
 
     {
-        let pre = ensure_table(sidecar, "preflight");
+        let pre = ensure_table(sidecar, "preflight")?;
         set_str(pre, "agent_id", inputs.name);
         set_str_if_absent(pre, "session_id", "preflight-session");
         set_string_array(
@@ -255,26 +249,27 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) {
         set_str_if_absent(pre, "resource_scope", "*");
         set_int_if_absent(pre, "ttl_seconds", 3600);
     }
+    Ok(())
 }
 
 // ── firma-run.toml ────────────────────────────────────────────────────────────
 
-fn merge_firma_run_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) {
+fn merge_firma_run_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     // `[authority]` presence signals "autostart a local Mini Authority".
     // We always emit it on this command path (firma config currently
     // ships an agent that wraps a local mini-authority via firma run);
     // ephemeral port is picked by the supervisor at runtime.
     {
-        let auth = ensure_table(doc.as_table_mut(), "authority");
+        let auth = ensure_table(doc.as_table_mut(), "authority")?;
         set_str_if_absent(auth, "listen_addr", "[::1]:0");
     }
 
     {
-        let profiles = ensure_table(doc.as_table_mut(), "profiles");
-        let generic = ensure_table(profiles, "generic");
+        let profiles = ensure_table(doc.as_table_mut(), "profiles")?;
+        let generic = ensure_table(profiles, "generic")?;
         set_str_if_absent(generic, "backend", "bwrap");
 
-        let env_set = ensure_table(generic, "env_set");
+        let env_set = ensure_table(generic, "env_set")?;
         set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_ROOTFS_MODE", "readonly");
         set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_RUNTIME_HOME", "true");
         set_str_if_absent(
@@ -283,9 +278,10 @@ fn merge_firma_run_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) {
             ".ssh,.gnupg,.aws,.config/gcloud,.env",
         );
 
-        let mounts = ensure_array_of_tables(generic, "mounts");
+        let mounts = ensure_array_of_tables(generic, "mounts")?;
         replace_workspace_mount(mounts, inputs.workspace);
     }
+    Ok(())
 }
 
 fn replace_workspace_mount(mounts: &mut ArrayOfTables, workspace: &str) {
@@ -322,14 +318,15 @@ fn replace_workspace_mount(mounts: &mut ArrayOfTables, workspace: &str) {
 
 // ── mapping-rules.toml ────────────────────────────────────────────────────────
 
-fn merge_mapping_rules_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) {
-    let rules = ensure_array_of_tables(doc.as_table_mut(), "rules");
+fn merge_mapping_rules_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
+    let rules = ensure_array_of_tables(doc.as_table_mut(), "rules")?;
     let mut new_rules = ArrayOfTables::new();
 
-    // Preserve only rules that are neither the generated localhost rules
-    // nor previously-generated extra-host rules. User-added rules survive.
+    // Preserve user-authored rules. Generated localhost fallthroughs and
+    // current extra-host duplicates are regenerated below.
     for rule in rules.iter() {
-        if is_generated_rule(rule) {
+        if is_generated_localhost_rule(rule) || is_current_extra_host_rule(rule, inputs.extra_hosts)
+        {
             continue;
         }
         new_rules.push(rule.clone());
@@ -364,9 +361,10 @@ fn merge_mapping_rules_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) {
     }
 
     *rules = new_rules;
+    Ok(())
 }
 
-fn is_generated_rule(rule: &Table) -> bool {
+fn is_generated_localhost_rule(rule: &Table) -> bool {
     let host = rule.get("host").and_then(Item::as_str).unwrap_or("");
     let path = rule.get("path").and_then(Item::as_str);
     let method = rule.get("method").and_then(Item::as_str);
@@ -375,35 +373,27 @@ fn is_generated_rule(rule: &Table) -> bool {
         .and_then(Item::as_str)
         .unwrap_or("");
 
-    // Localhost fallthroughs.
-    if path == Some("*")
+    path == Some("*")
         && method.is_none()
         && action == "communication.internal.send"
         && matches!(host, "localhost:*" | "127.0.0.1:*")
-    {
-        return true;
-    }
+}
 
-    // Extra-host CONNECT line: method=CONNECT, action=communication.external.send,
-    // host ends with `:443`.
-    if method == Some("CONNECT")
-        && path.is_none()
-        && action == "communication.external.send"
-        && host.ends_with(":443")
-    {
-        return true;
-    }
-
-    // Extra-host wildcard line: method=None, path=*, action=external, host has no port.
-    if path == Some("*")
-        && method.is_none()
-        && action == "communication.external.send"
-        && !host.contains(':')
-    {
-        return true;
-    }
-
-    false
+fn is_current_extra_host_rule(rule: &Table, extra_hosts: &[String]) -> bool {
+    let host = rule.get("host").and_then(Item::as_str).unwrap_or("");
+    let path = rule.get("path").and_then(Item::as_str);
+    let method = rule.get("method").and_then(Item::as_str);
+    let action = rule
+        .get("action_class")
+        .and_then(Item::as_str)
+        .unwrap_or("");
+    extra_hosts.iter().any(|extra_host| {
+        action == "communication.external.send"
+            && ((method == Some("CONNECT")
+                && path.is_none()
+                && host == format!("{extra_host}:443"))
+                || (method.is_none() && path == Some("*") && host == extra_host))
+    })
 }
 
 fn make_rule(method: Option<&str>, host: &str, path: Option<&str>, action: &str) -> Table {
@@ -421,7 +411,7 @@ fn make_rule(method: Option<&str>, host: &str, path: Option<&str>, action: &str)
 
 // ── toml_edit helpers ─────────────────────────────────────────────────────────
 
-fn ensure_table<'a>(parent: &'a mut Table, key: &str) -> &'a mut Table {
+fn ensure_table<'a>(parent: &'a mut Table, key: &str) -> Result<&'a mut Table> {
     if !parent.contains_key(key) {
         let mut t = Table::new();
         t.set_implicit(false);
@@ -430,20 +420,23 @@ fn ensure_table<'a>(parent: &'a mut Table, key: &str) -> &'a mut Table {
     let entry = parent
         .entry(key)
         .or_insert_with(|| Item::Table(Table::new()));
-    entry
-        .as_table_mut()
-        .unwrap_or_else(|| unreachable!("entry just ensured as Table"))
+    let Some(table) = entry.as_table_mut() else {
+        bail!("`{key}` must be a table");
+    };
+    Ok(table)
 }
 
-fn ensure_array_of_tables<'a>(parent: &'a mut Table, key: &str) -> &'a mut ArrayOfTables {
+fn ensure_array_of_tables<'a>(parent: &'a mut Table, key: &str) -> Result<&'a mut ArrayOfTables> {
     if !parent.contains_key(key) {
         parent.insert(key, Item::ArrayOfTables(ArrayOfTables::new()));
     }
-    parent
+    let entry = parent
         .entry(key)
-        .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()))
-        .as_array_of_tables_mut()
-        .unwrap_or_else(|| unreachable!("entry just ensured as ArrayOfTables"))
+        .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+    let Some(array) = entry.as_array_of_tables_mut() else {
+        bail!("`{key}` must be an array of tables");
+    };
+    Ok(array)
 }
 
 fn set_str(table: &mut Table, key: &str, val: &str) {
@@ -730,6 +723,11 @@ action_class = \"data.read\"
 host = \"stale.example.com:443\"
 method = \"CONNECT\"
 action_class = \"communication.external.send\"
+
+[[rules]]
+host = \"api.example.com:443\"
+method = \"CONNECT\"
+action_class = \"communication.external.send\"
 ";
         let out = render_mapping_rules_toml(existing, &inputs).unwrap();
         let parsed: toml::Value = toml::from_str(&out).unwrap();
@@ -743,11 +741,29 @@ action_class = \"communication.external.send\"
         assert!(hosts.contains(&"127.0.0.1:*"));
         // User-added rule preserved.
         assert!(hosts.contains(&"user-kept.example.com"));
-        // Old generated extra-host CONNECT dropped.
-        assert!(!hosts.contains(&"stale.example.com:443"));
+        // External user rules that only look like generated extra-host rules survive.
+        assert!(hosts.contains(&"stale.example.com:443"));
         // New extra-host rules emitted (CONNECT + wildcard).
         assert!(hosts.contains(&"api.example.com:443"));
         assert!(hosts.contains(&"api.example.com"));
+        assert_eq!(
+            hosts
+                .iter()
+                .filter(|host| **host == "api.example.com:443")
+                .count(),
+            1,
+            "current extra-host CONNECT should be replaced, not duplicated"
+        );
+    }
+
+    #[test]
+    fn merge_reports_type_conflicts_without_panicking() {
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let err = render_firma_toml("sidecar = \"not a table\"\n", &inputs).unwrap_err();
+        assert!(
+            err.to_string().contains("sidecar"),
+            "error should name conflicting key: {err}"
+        );
     }
 
     #[test]

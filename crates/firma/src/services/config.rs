@@ -333,7 +333,7 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
 /// return the merged TOML string.
 fn render_for<F>(config_dir: &Path, rel: &str, render: F) -> Result<String>
 where
-    F: FnOnce(&str) -> Result<String, toml_edit::TomlError>,
+    F: FnOnce(&str) -> Result<String>,
 {
     let path = config_dir.join(rel);
     let text =
@@ -651,17 +651,7 @@ fn collect_authority_inputs(
         _ => "127.0.0.1:9443".to_string(),
     };
 
-    let default_pub_key = state_dir
-        .join("authority.pub")
-        .to_string_lossy()
-        .into_owned();
-    let connect_pub_key = args
-        .authority_pub_key
-        .as_ref()
-        .or(existing.authority_pub_key.as_ref())
-        .map_or(default_pub_key, |p| p.to_string_lossy().into_owned());
-
-    let (connect_url, connect_ca_cert) = match mode {
+    let (connect_url, connect_ca_cert, connect_pub_key) = match mode {
         Mode::AgentLocal => {
             let url = format!("https://{listen}");
             let tls_ca = state_dir
@@ -669,7 +659,11 @@ fn collect_authority_inputs(
                 .join("authority-ca.crt")
                 .to_string_lossy()
                 .into_owned();
-            (url, tls_ca)
+            let pub_key = state_dir
+                .join("authority.pub")
+                .to_string_lossy()
+                .into_owned();
+            (url, tls_ca, pub_key)
         }
         Mode::AgentRemote => {
             let url = match args.authority_url.as_deref() {
@@ -684,6 +678,11 @@ fn collect_authority_inputs(
                     .context("authority URL prompt")?,
                 None => String::new(),
             };
+            if url.trim().is_empty() {
+                anyhow::bail!(
+                    "--authority-url is required when --mode agent-remote and no existing remote URL is configured"
+                );
+            }
             let ca = match args.authority_ca_cert.as_deref() {
                 Some(p) => p.to_string_lossy().into_owned(),
                 None if existing.authority_ca_cert.is_some() && !interactive => existing
@@ -704,9 +703,39 @@ fn collect_authority_inputs(
                     .context("authority CA cert prompt")?,
                 None => String::new(),
             };
-            (url, ca)
+            if ca.trim().is_empty() {
+                anyhow::bail!(
+                    "--authority-ca-cert is required when --mode agent-remote and no existing remote CA certificate is configured"
+                );
+            }
+            let pub_key = match args.authority_pub_key.as_deref() {
+                Some(p) => p.to_string_lossy().into_owned(),
+                None if existing.authority_pub_key.is_some() && !interactive => existing
+                    .authority_pub_key
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                None if interactive => dialoguer::Input::with_theme(theme)
+                    .with_prompt("Path to authority public key")
+                    .default(
+                        existing
+                            .authority_pub_key
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                    )
+                    .interact_text()
+                    .context("authority public key prompt")?,
+                None => String::new(),
+            };
+            if pub_key.trim().is_empty() {
+                anyhow::bail!(
+                    "--authority-pub-key is required when --mode agent-remote and no existing remote public key is configured"
+                );
+            }
+            (url, ca, pub_key)
         }
-        Mode::Authority => (String::new(), String::new()),
+        Mode::Authority => (String::new(), String::new(), String::new()),
     };
 
     Ok(AuthorityInputs {
@@ -1268,7 +1297,6 @@ mod tests {
             Mapping::Pypi,
             Mapping::Cargo,
             Mapping::Stripe,
-            Mapping::Custom,
         ];
         make_files(&Posture::Dev, &all_mappings, &[]);
     }

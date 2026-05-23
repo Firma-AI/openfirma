@@ -206,8 +206,6 @@ pub enum Mapping {
     Cargo,
     /// Stripe REST API (`api.stripe.com`).
     Stripe,
-    /// Empty custom template — fill in manually.
-    Custom,
 }
 
 impl Mapping {
@@ -222,7 +220,6 @@ impl Mapping {
             Self::Pypi => "pypi",
             Self::Cargo => "cargo",
             Self::Stripe => "stripe",
-            Self::Custom => "custom",
         }
     }
 
@@ -243,7 +240,6 @@ impl Mapping {
             Self::Stripe => {
                 "api.stripe.com — Stripe REST API (MITM optional — check SDK cert pinning first)"
             }
-            Self::Custom => "Empty template — fill in manually",
         }
     }
 
@@ -267,7 +263,6 @@ impl Mapping {
             Self::Pypi => include_str!("../../templates/mappings/pypi.toml"),
             Self::Cargo => include_str!("../../templates/mappings/cargo.toml"),
             Self::Stripe => include_str!("../../templates/mappings/stripe.toml"),
-            Self::Custom => include_str!("../../templates/mappings/custom.toml"),
         }
     }
 }
