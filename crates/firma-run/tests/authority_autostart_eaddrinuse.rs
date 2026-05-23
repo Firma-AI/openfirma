@@ -14,8 +14,18 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use firma_run::authority::AuthorityCli;
+use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
 use firma_run::routing::{AutostartFlags, resolve_authority};
+
+struct PanicPrompt;
+impl AuthorityPromptIo for PanicPrompt {
+    fn is_tty(&self) -> bool {
+        panic!("prompt should not be consulted when a local Authority is reachable");
+    }
+    fn confirm(&mut self, _: &str) -> std::io::Result<bool> {
+        panic!("prompt should not be invoked");
+    }
+}
 
 #[test]
 fn pre_bound_port_short_circuits_to_local() {
@@ -40,6 +50,7 @@ fn pre_bound_port_short_circuits_to_local() {
         authority_pub_key: None,
         use_http_proxy_sidecar: false,
     };
+    let mut prompt = PanicPrompt;
     let res = resolve_authority(
         &identity,
         &runtime_dir,
@@ -48,6 +59,7 @@ fn pre_bound_port_short_circuits_to_local() {
         "developer",
         Some(cfg.as_path()),
         &PathBuf::from("/bin/false"),
+        &mut prompt,
     )
     .expect("resolve ok");
     assert_eq!(res.url, "http://[::1]:50051");

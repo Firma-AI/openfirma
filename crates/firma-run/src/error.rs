@@ -86,4 +86,18 @@ pub enum RunError {
 
     #[error("local command governance denied execution: {0}")]
     Governance(String),
+
+    #[error(
+        "no Authority is configured and stdin is not a terminal; \
+         pass `--authority local` to autostart, `--authority <url>` for a remote, \
+         add an `[authority]` section, or set `[sidecar.authority].url` in firma.toml"
+    )]
+    AuthorityBootstrapNoTty,
+
+    #[error(
+        "local Mini Authority bootstrap declined; \
+         re-run with `--authority local`, run `firma authority start` as a daemon, \
+         or set `[sidecar.authority].url` in firma.toml"
+    )]
+    AuthorityBootstrapDeclined,
 }
