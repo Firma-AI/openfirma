@@ -117,6 +117,7 @@ tonic-prost-build = "0.14"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
+wait-timeout = "0.2"
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_Security",

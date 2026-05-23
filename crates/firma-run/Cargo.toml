@@ -30,6 +30,7 @@ toml_edit.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+wait-timeout.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["socket"] }
