@@ -30,11 +30,11 @@ firma config --mode agent-local \
 
 ## Modes
 
-| Mode            | What it creates                                                    |
-| --------------- | ------------------------------------------------------------------ |
-| `agent-local`   | Sidecar config + co-located mini-authority (`[authority]` + `[sidecar.authority]`) |
-| `agent-remote`  | Sidecar config only, connecting to an existing authority (`[sidecar.authority]`)  |
-| `authority`     | Standalone authority server only — no sidecar config              |
+| Mode           | What it creates                                                                    |
+| -------------- | ---------------------------------------------------------------------------------- |
+| `agent-local`  | Sidecar config + co-located mini-authority (`[authority]` + `[sidecar.authority]`) |
+| `agent-remote` | Sidecar config only, connecting to an existing authority (`[sidecar.authority]`)   |
+| `authority`    | Standalone authority server only — no sidecar config                               |
 
 ## Flags
 
@@ -48,25 +48,25 @@ firma config [--mode <mode>]
              [--yes] [--force] [--dry-run] [--list-templates]
 ```
 
-| Flag                        | Short | Default                  | Description                                                         |
-| --------------------------- | ----- | ------------------------ | ------------------------------------------------------------------- |
-| `--mode <mode>`             |       | wizard / `agent-local`   | What to configure: `agent-local`, `agent-remote`, or `authority`    |
-| `--name <name>`             | `-n`  | wizard / `my-agent`      | Agent slug — written as `agent_id` in `[sidecar.preflight]`         |
-| `--posture <posture>`       |       | wizard / `dev`           | Cedar policy posture written under `policies/`                      |
-| `--mapping <mapping>`       |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                    |
-| `--requested-action <val>`  |       | derived from posture     | Preflight requested actions — repeat or comma-separate; overrides posture default |
-| `--extra-hosts <hosts>`     |       | none                     | Comma-separated extra hosts the agent may reach                     |
-| `--workspace <dir>`         |       | CWD                      | Agent RW path written to `firma-run.toml` bwrap mount               |
-| `--output-dir <dir>`        | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings are written     |
-| `--state-dir <dir>`         |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                         |
-| `--authority-listen <addr>` |       | `127.0.0.1:9443`         | gRPC listen address written to `[authority]` (`agent-local` / `authority` only) |
-| `--authority-url <url>`     |       | wizard prompt            | Authority URL written to `[sidecar.authority].url` (`agent-remote`) |
-| `--authority-ca-cert <path>`|       | wizard prompt            | Authority CA cert PEM path (`agent-remote`)                         |
-| `--authority-pub-key <path>`|       | derived from state dir   | Authority public key path (`agent-remote`)                          |
-| `--yes`                     | `-y`  | off                      | Skip all interactive prompts; use existing values or flag defaults  |
-| `--force`                   |       | off                      | Overwrite existing files including the authority keypair            |
-| `--dry-run`                 |       | off                      | Print generated files to stdout without writing to disk             |
-| `--list-templates`          |       | off                      | Print the posture × mapping catalogue and exit                      |
+| Flag                         | Short | Default                  | Description                                                                       |
+| ---------------------------- | ----- | ------------------------ | --------------------------------------------------------------------------------- |
+| `--mode <mode>`              |       | wizard / `agent-local`   | What to configure: `agent-local`, `agent-remote`, or `authority`                  |
+| `--name <name>`              | `-n`  | wizard / `my-agent`      | Agent slug — written as `agent_id` in `[sidecar.preflight]`                       |
+| `--posture <posture>`        |       | wizard / `dev`           | Cedar policy posture written under `policies/`                                    |
+| `--mapping <mapping>`        |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                                  |
+| `--requested-action <val>`   |       | derived from posture     | Preflight requested actions — repeat or comma-separate; overrides posture default |
+| `--extra-hosts <hosts>`      |       | none                     | Comma-separated extra hosts the agent may reach                                   |
+| `--workspace <dir>`          |       | CWD                      | Agent RW path written to `firma-run.toml` bwrap mount                             |
+| `--output-dir <dir>`         | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings are written                   |
+| `--state-dir <dir>`          |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                                       |
+| `--authority-listen <addr>`  |       | `127.0.0.1:9443`         | gRPC listen address written to `[authority]` (`agent-local` / `authority` only)   |
+| `--authority-url <url>`      |       | wizard prompt            | Authority URL written to `[sidecar.authority].url` (`agent-remote`)               |
+| `--authority-ca-cert <path>` |       | wizard prompt            | Authority CA cert PEM path (`agent-remote`)                                       |
+| `--authority-pub-key <path>` |       | derived from state dir   | Authority public key path (`agent-remote`)                                        |
+| `--yes`                      | `-y`  | off                      | Skip all interactive prompts; use existing values or flag defaults                |
+| `--force`                    |       | off                      | Overwrite existing files including the authority keypair                          |
+| `--dry-run`                  |       | off                      | Print generated files to stdout without writing to disk                           |
+| `--list-templates`           |       | off                      | Print the posture × mapping catalogue and exit                                    |
 
 An explicit `--posture` rewrites the selected `policies/<posture>.cedar`
 file even without `--force`; other existing generated files are still
@@ -74,16 +74,16 @@ preserved unless `--force` is set.
 
 ## Postures
 
-| Name                    | Cedar policy behaviour                                     |
-| ----------------------- | ---------------------------------------------------------- |
-| `strict`                | Default-deny + communication only (no code ops)            |
-| `dev`                   | Adds code.read/write, issues, package install              |
-| `dev-with-delete-watch` | Dev + code.destructive (local-exec / delete-watch)         |
+| Name                    | Cedar policy behaviour                             |
+| ----------------------- | -------------------------------------------------- |
+| `strict`                | Default-deny + communication only (no code ops)    |
+| `dev`                   | Adds code.read/write, issues, package install      |
+| `dev-with-delete-watch` | Dev + code.destructive (local-exec / delete-watch) |
 
 ## Mappings
 
-| Name        | Covers                                                                        |
-| ----------- | ----------------------------------------------------------------------------- |
+| Name        | Covers                                                                       |
+| ----------- | ---------------------------------------------------------------------------- |
 | `anthropic` | api.anthropic.com — Anthropic Claude API (CONNECT, no MITM)                  |
 | `openai`    | api.openai.com — OpenAI API (CONNECT, no MITM)                               |
 | `github`    | api.github.com — GitHub REST API (MITM for per-endpoint classification)      |
