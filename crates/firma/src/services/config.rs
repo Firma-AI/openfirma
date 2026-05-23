@@ -26,6 +26,7 @@ struct AuthorityInputs {
 struct SidecarInputs {
     name: String,
     posture: Posture,
+    overwrite_policy: bool,
     requested_actions: Option<Vec<String>>,
     mappings: Vec<Mapping>,
     extra_hosts: Vec<String>,
@@ -84,7 +85,13 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     }
 
     create_scaffold_dirs(cfg, state)?;
-    write_scaffold_files(&files, cfg, args.force, inputs.overwrite_firma_toml)?;
+    write_scaffold_files(
+        &files,
+        cfg,
+        args.force,
+        inputs.overwrite_firma_toml,
+        inputs.sidecar.overwrite_policy,
+    )?;
 
     let has_server = has_server(&inputs);
     let has_sidecar = matches!(inputs.mode, Mode::AgentLocal | Mode::AgentRemote);
@@ -155,6 +162,7 @@ fn write_scaffold_files(
     cfg: &Path,
     force: bool,
     overwrite_firma_toml: bool,
+    overwrite_policy: bool,
 ) -> Result<()> {
     for (rel, content) in files {
         let path = cfg.join(rel);
@@ -162,7 +170,9 @@ fn write_scaffold_files(
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("mkdir {}", parent.display()))?;
         }
-        let should_overwrite = force || (overwrite_firma_toml && rel == "firma.toml");
+        let should_overwrite = force
+            || (overwrite_firma_toml && rel == "firma.toml")
+            || (overwrite_policy && rel.starts_with("policies/"));
         if !should_overwrite && path.exists() {
             eprintln!(
                 "skip (exists): {} — use --force to overwrite",
@@ -400,7 +410,7 @@ fn confirm_mode_change(
     interactive: bool,
     theme: &ColorfulTheme,
 ) -> Result<ModeChangeDecision> {
-    if !interactive || args.dry_run || args.force {
+    if args.force {
         return Ok(ModeChangeDecision {
             keep_local_authority: false,
             overwrite_firma_toml: false,
@@ -414,6 +424,12 @@ fn confirm_mode_change(
             "Warning: this configuration includes a local [authority] section. \
              If you keep it, firma run starts the Authority locally instead of using only the remote Authority."
         );
+        if !interactive || args.dry_run {
+            return Ok(ModeChangeDecision {
+                keep_local_authority: false,
+                overwrite_firma_toml: false,
+            });
+        }
         let keep = dialoguer::Confirm::with_theme(theme)
             .with_prompt("Keep the local [authority] section and local Authority startup?")
             .default(false)
@@ -751,10 +767,20 @@ fn collect_sidecar_inputs(
     theme: &ColorfulTheme,
     config_dir: &Path,
 ) -> Result<SidecarInputs> {
+    let overwrite_policy = args.posture.is_some() || interactive;
+    let posture = match (&args.posture, &existing.posture) {
+        (Some(p), _) => p.clone(),
+        (None, Some(p)) if !interactive => p.clone(),
+        (None, Some(p)) if interactive => prompt_posture_with_default(theme, p)?,
+        (None, _) if interactive => prompt_posture_with_default(theme, &Posture::Dev)?,
+        (None, _) => Posture::Dev,
+    };
+
     if !has_sidecar {
         return Ok(SidecarInputs {
             name: "authority".to_string(),
-            posture: Posture::Strict,
+            posture,
+            overwrite_policy,
             requested_actions: None,
             mappings: vec![],
             extra_hosts: vec![],
@@ -780,13 +806,6 @@ fn collect_sidecar_inputs(
         None => "my-agent".to_string(),
     };
 
-    let posture = match (&args.posture, &existing.posture) {
-        (Some(p), _) => p.clone(),
-        (None, Some(p)) if !interactive => p.clone(),
-        (None, Some(p)) if interactive => prompt_posture_with_default(theme, p)?,
-        (None, _) if interactive => prompt_posture_with_default(theme, &Posture::Dev)?,
-        (None, _) => Posture::Dev,
-    };
     let requested_actions = if args.posture.is_some() {
         None
     } else {
@@ -826,6 +845,7 @@ fn collect_sidecar_inputs(
     Ok(SidecarInputs {
         name,
         posture,
+        overwrite_policy,
         requested_actions,
         mappings,
         extra_hosts,
@@ -1115,6 +1135,7 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
         sidecar: SidecarInputs {
             name: plan.agent.clone(),
             posture: Posture::Dev,
+            overwrite_policy: false,
             requested_actions: None,
             mappings,
             extra_hosts: vec![],
@@ -1218,6 +1239,7 @@ mod tests {
             sidecar: SidecarInputs {
                 name: TEST_AGENT.to_string(),
                 posture: posture.clone(),
+                overwrite_policy: false,
                 requested_actions: None,
                 mappings: mappings.to_vec(),
                 extra_hosts: extra_hosts.to_vec(),

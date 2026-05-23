@@ -300,6 +300,148 @@ fn agent_remote_switch_drops_local_authority_section() {
 }
 
 #[test]
+fn agent_remote_switch_warns_about_existing_local_authority_without_force() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+
+    run_init(&config_dir, &state_dir);
+
+    let output = firma()
+        .args([
+            "config",
+            "--yes",
+            "--dry-run",
+            "--mode",
+            "agent-remote",
+            "--output-dir",
+        ])
+        .arg(&config_dir)
+        .args([
+            "--authority-url",
+            "https://authority.example.com:9443",
+            "--authority-ca-cert",
+        ])
+        .arg(state_dir.join("remote-ca.crt"))
+        .args(["--authority-pub-key"])
+        .arg(state_dir.join("remote-authority.pub"))
+        .output()
+        .expect("spawn remote switch firma config");
+    assert!(
+        output.status.success(),
+        "remote switch failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("local [authority] section"),
+        "expected local authority warning in stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("firma run starts the Authority locally"),
+        "expected local startup consequence in stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn authority_mode_honors_selected_posture() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+
+    let output = firma()
+        .args([
+            "config",
+            "--yes",
+            "--dry-run",
+            "--mode",
+            "authority",
+            "--posture",
+            "dev-with-delete-watch",
+            "--output-dir",
+        ])
+        .arg(&config_dir)
+        .args(["--state-dir"])
+        .arg(&state_dir)
+        .output()
+        .expect("spawn authority-only firma config");
+    assert!(
+        output.status.success(),
+        "authority config failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("policies/dev-with-delete-watch.cedar"),
+        "selected authority policy posture should be generated:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("policies/dev.cedar"),
+        "authority mode should not also generate the default dev policy:\n{stdout}"
+    );
+    let firma_toml = extract_dry_run_file(&output.stdout, "firma.toml");
+    let value: toml::Value = toml::from_str(&firma_toml).unwrap();
+    assert!(
+        value.get("authority").is_some(),
+        "authority mode must include [authority]:\n{firma_toml}"
+    );
+    assert!(
+        value.get("sidecar").is_none(),
+        "authority mode must not include [sidecar]:\n{firma_toml}"
+    );
+}
+
+#[test]
+fn explicit_posture_rewrites_selected_policy_without_force() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+    let policies_dir = config_dir.join("policies");
+    std::fs::create_dir_all(&policies_dir).unwrap();
+    std::fs::write(
+        policies_dir.join("strict.cedar"),
+        "// stale strict policy\n",
+    )
+    .unwrap();
+
+    let output = firma()
+        .args([
+            "config",
+            "--yes",
+            "--mode",
+            "authority",
+            "--posture",
+            "strict",
+            "--output-dir",
+        ])
+        .arg(&config_dir)
+        .args(["--state-dir"])
+        .arg(&state_dir)
+        .output()
+        .expect("spawn authority-only firma config");
+    assert!(
+        output.status.success(),
+        "authority config failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let policy = std::fs::read_to_string(policies_dir.join("strict.cedar")).unwrap();
+    assert!(
+        policy.contains("Strict posture"),
+        "explicit posture should rewrite selected policy file:\n{policy}"
+    );
+    assert!(
+        !policy.contains("stale strict policy"),
+        "stale selected policy file should not be preserved:\n{policy}"
+    );
+}
+
+#[test]
 fn init_writes_parseable_config() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let config_dir = tmp.path().join("config");

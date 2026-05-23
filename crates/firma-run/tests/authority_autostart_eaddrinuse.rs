@@ -1,7 +1,6 @@
-//! Bind `[::1]:50051` from the test harness, then call
-//! `routing::resolve_authority`. The first probe must succeed (test
-//! socket answers), so the resolver returns `Local` without a
-//! supervisor.
+//! Bind `[::1]:50051` from the test harness with a non-authority listener,
+//! then call `routing::resolve_authority`. The resolver must fail closed
+//! because local mode cannot prove the transport is plaintext local gRPC.
 
 #![allow(
     clippy::unwrap_used,
@@ -20,7 +19,7 @@ use firma_run::routing::{AutostartFlags, resolve_authority};
 struct PanicPrompt;
 impl AuthorityPromptIo for PanicPrompt {
     fn is_tty(&self) -> bool {
-        panic!("prompt should not be consulted when a local Authority is reachable");
+        panic!("prompt should not be consulted when the local port is already bound");
     }
     fn confirm(&mut self, _: &str) -> std::io::Result<bool> {
         panic!("prompt should not be invoked");
@@ -28,7 +27,7 @@ impl AuthorityPromptIo for PanicPrompt {
 }
 
 #[test]
-fn pre_bound_port_short_circuits_to_local() {
+fn pre_bound_port_without_plaintext_h2_fails_closed() {
     let Ok(_listener) = TcpListener::bind("[::1]:50051") else {
         eprintln!("skip: port 50051 not free for the test");
         return;
@@ -51,7 +50,7 @@ fn pre_bound_port_short_circuits_to_local() {
         use_http_proxy_sidecar: false,
     };
     let mut prompt = PanicPrompt;
-    let res = resolve_authority(
+    let result = resolve_authority(
         &identity,
         &runtime_dir,
         &flags,
@@ -60,8 +59,10 @@ fn pre_bound_port_short_circuits_to_local() {
         Some(cfg.as_path()),
         &PathBuf::from("/bin/false"),
         &mut prompt,
-    )
-    .expect("resolve ok");
-    assert_eq!(res.url, "http://[::1]:50051");
-    assert!(res.supervisor.is_none());
+    );
+    match result {
+        Err(firma_run::error::RunError::AuthorityTransportAmbiguous { .. }) => {}
+        Err(other) => panic!("unexpected error: {other}"),
+        Ok(_) => panic!("expected fail-closed transport ambiguity"),
+    }
 }
