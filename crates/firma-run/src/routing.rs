@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -17,6 +18,7 @@ use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 use crate::sidecar::supervisor::{SidecarSupervisor, SpawnRequest};
+use tracing::warn;
 
 #[cfg(unix)]
 fn structural_proxy_listen_addr() -> &'static str {
@@ -285,9 +287,11 @@ fn autostart_sidecar(
 ///
 /// CLI > persisted > prompt (only when both empty and TTY). On Local
 /// selection, probe `[::1]:50051`; on miss, spawn an
-/// `AuthoritySupervisor`. EADDRINUSE recovery: on any spawn error,
-/// re-probe once; if the port is now reachable, drop the (failed)
-/// supervisor handle and proceed without one.
+/// `AuthoritySupervisor`. Local mode is a dev convenience path and
+/// intentionally uses plaintext loopback (`http://`), not TLS/mTLS.
+/// EADDRINUSE recovery: on any spawn error, re-probe once; if the port
+/// is now reachable, drop the (failed) supervisor handle and proceed
+/// without one.
 ///
 /// # Errors
 ///
@@ -295,6 +299,10 @@ fn autostart_sidecar(
 #[allow(
     clippy::too_many_arguments,
     reason = "every input is independent — bundling into a request struct only adds noise here"
+)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "step-0 selection + plaintext-h2 transport probe + autostart fallback read more clearly inline than split"
 )]
 pub fn resolve_authority(
     identity: &RunIdentity,
@@ -339,6 +347,15 @@ pub fn resolve_authority(
         crate::authority::AuthoritySelection::Local => {
             let target = "[::1]:50051";
             if probe_authority_tcp(target).is_ok() {
+                if probe_authority_plaintext_h2(target).is_err() {
+                    return Err(RunError::AuthorityTransportAmbiguous {
+                        endpoint: format!("http://{target}"),
+                    });
+                }
+                warn!(
+                    target,
+                    "using existing local authority on plaintext loopback (dev mode); mTLS hardening applies to https:// authority deployments"
+                );
                 return Ok(ResolvedAuthority {
                     url: format!("http://{target}"),
                     ca_cert_path,
@@ -374,6 +391,9 @@ pub fn resolve_authority(
             }) {
                 Ok(sup) => {
                     let ephemeral_pub_key = sup.pub_key_path();
+                    warn!(
+                        "autostarted local authority in plaintext loopback mode (dev convenience); mTLS hardening applies to https:// authority deployments"
+                    );
                     Ok(ResolvedAuthority {
                         url: sup.url(),
                         ca_cert_path,
@@ -383,6 +403,15 @@ pub fn resolve_authority(
                 }
                 Err(spawn_err) => {
                     if probe_authority_tcp(target).is_ok() {
+                        if probe_authority_plaintext_h2(target).is_err() {
+                            return Err(RunError::AuthorityTransportAmbiguous {
+                                endpoint: format!("http://{target}"),
+                            });
+                        }
+                        warn!(
+                            target,
+                            "authority port became reachable during autostart retry; proceeding with plaintext local authority (dev mode)"
+                        );
                         Ok(ResolvedAuthority {
                             url: format!("http://{target}"),
                             ca_cert_path,
@@ -403,6 +432,30 @@ fn probe_authority_tcp(addr: &str) -> Result<(), String> {
     std::net::TcpStream::connect_timeout(&socket, std::time::Duration::from_millis(500))
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+fn probe_authority_plaintext_h2(addr: &str) -> Result<(), String> {
+    const H2_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+    let socket: std::net::SocketAddr = addr.parse().map_err(|e| format!("parse {addr}: {e}"))?;
+    let mut stream =
+        std::net::TcpStream::connect_timeout(&socket, std::time::Duration::from_millis(500))
+            .map_err(|e| e.to_string())?;
+    stream
+        .set_write_timeout(Some(std::time::Duration::from_millis(500)))
+        .map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .map_err(|e| e.to_string())?;
+    stream.write_all(H2_PREFACE).map_err(|e| e.to_string())?;
+
+    // Plaintext h2 servers respond with frames after preface.
+    // TLS endpoints or unrelated listeners usually won't.
+    let mut probe = [0_u8; 1];
+    let read = stream.read(&mut probe).map_err(|e| e.to_string())?;
+    if read == 0 {
+        return Err("connection closed without plaintext h2 response".to_string());
+    }
+    Ok(())
 }
 
 fn probe_authority_url(url_str: &str) -> Result<(), RunError> {
