@@ -2,6 +2,7 @@
 
 mod doc;
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -615,6 +616,106 @@ fn workspace_from_firma_run(toml_text: &str) -> Option<PathBuf> {
     None
 }
 
+fn collect_local_connect_inputs(listen: &str, state_dir: &Path) -> (String, String, String) {
+    let url = format!("https://{listen}");
+    let tls_ca = state_dir
+        .join("tls")
+        .join("authority-ca.crt")
+        .to_string_lossy()
+        .into_owned();
+    let pub_key = state_dir
+        .join("authority.pub")
+        .to_string_lossy()
+        .into_owned();
+    (url, tls_ca, pub_key)
+}
+
+struct RemoteAuthorityField<'a> {
+    value: Option<Cow<'a, str>>,
+    existing: Option<Cow<'a, str>>,
+    interactive: bool,
+    theme: &'a ColorfulTheme,
+    prompt: &'a str,
+    context: &'a str,
+    flag: &'a str,
+    configured_name: &'a str,
+}
+
+fn collect_required_remote_authority_field(field: RemoteAuthorityField<'_>) -> Result<String> {
+    let value = match field.value {
+        Some(value) => value.to_string(),
+        None if field.existing.is_some() && !field.interactive => {
+            field.existing.unwrap_or_default().to_string()
+        }
+        None if field.interactive => dialoguer::Input::with_theme(field.theme)
+            .with_prompt(field.prompt)
+            .default(field.existing.unwrap_or_default().to_string())
+            .interact_text()
+            .with_context(|| field.context.to_string())?,
+        None => String::new(),
+    };
+
+    if value.trim().is_empty() {
+        anyhow::bail!(
+            "{} is required when --mode agent-remote and no existing remote {} is configured",
+            field.flag,
+            field.configured_name
+        );
+    }
+    Ok(value)
+}
+
+fn collect_remote_connect_inputs(
+    args: &InitArgs,
+    existing: &ExistingConfigDefaults,
+    interactive: bool,
+    theme: &ColorfulTheme,
+) -> Result<(String, String, String)> {
+    let url = collect_required_remote_authority_field(RemoteAuthorityField {
+        value: args.authority_url.as_deref().map(Cow::Borrowed),
+        existing: existing.authority_url.as_deref().map(Cow::Borrowed),
+        interactive,
+        theme,
+        prompt: "Authority URL",
+        context: "authority URL prompt",
+        flag: "--authority-url",
+        configured_name: "URL",
+    })?;
+    let ca = collect_required_remote_authority_field(RemoteAuthorityField {
+        value: args
+            .authority_ca_cert
+            .as_deref()
+            .map(|p| p.to_string_lossy()),
+        existing: existing
+            .authority_ca_cert
+            .as_ref()
+            .map(|p| p.to_string_lossy()),
+        interactive,
+        theme,
+        prompt: "Path to authority CA certificate (PEM)",
+        context: "authority CA cert prompt",
+        flag: "--authority-ca-cert",
+        configured_name: "CA certificate",
+    })?;
+    let pub_key = collect_required_remote_authority_field(RemoteAuthorityField {
+        value: args
+            .authority_pub_key
+            .as_deref()
+            .map(|p| p.to_string_lossy()),
+        existing: existing
+            .authority_pub_key
+            .as_ref()
+            .map(|p| p.to_string_lossy()),
+        interactive,
+        theme,
+        prompt: "Path to authority public key",
+        context: "authority public key prompt",
+        flag: "--authority-pub-key",
+        configured_name: "public key",
+    })?;
+    Ok((url, ca, pub_key))
+}
+
 fn collect_authority_inputs(
     args: &InitArgs,
     existing: &ExistingConfigDefaults,
@@ -652,89 +753,8 @@ fn collect_authority_inputs(
     };
 
     let (connect_url, connect_ca_cert, connect_pub_key) = match mode {
-        Mode::AgentLocal => {
-            let url = format!("https://{listen}");
-            let tls_ca = state_dir
-                .join("tls")
-                .join("authority-ca.crt")
-                .to_string_lossy()
-                .into_owned();
-            let pub_key = state_dir
-                .join("authority.pub")
-                .to_string_lossy()
-                .into_owned();
-            (url, tls_ca, pub_key)
-        }
-        Mode::AgentRemote => {
-            let url = match args.authority_url.as_deref() {
-                Some(u) => u.to_string(),
-                None if existing.authority_url.is_some() && !interactive => {
-                    existing.authority_url.clone().unwrap_or_default()
-                }
-                None if interactive => dialoguer::Input::with_theme(theme)
-                    .with_prompt("Authority URL")
-                    .default(existing.authority_url.clone().unwrap_or_default())
-                    .interact_text()
-                    .context("authority URL prompt")?,
-                None => String::new(),
-            };
-            if url.trim().is_empty() {
-                anyhow::bail!(
-                    "--authority-url is required when --mode agent-remote and no existing remote URL is configured"
-                );
-            }
-            let ca = match args.authority_ca_cert.as_deref() {
-                Some(p) => p.to_string_lossy().into_owned(),
-                None if existing.authority_ca_cert.is_some() && !interactive => existing
-                    .authority_ca_cert
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                None if interactive => dialoguer::Input::with_theme(theme)
-                    .with_prompt("Path to authority CA certificate (PEM)")
-                    .default(
-                        existing
-                            .authority_ca_cert
-                            .as_ref()
-                            .map(|p| p.to_string_lossy().into_owned())
-                            .unwrap_or_default(),
-                    )
-                    .interact_text()
-                    .context("authority CA cert prompt")?,
-                None => String::new(),
-            };
-            if ca.trim().is_empty() {
-                anyhow::bail!(
-                    "--authority-ca-cert is required when --mode agent-remote and no existing remote CA certificate is configured"
-                );
-            }
-            let pub_key = match args.authority_pub_key.as_deref() {
-                Some(p) => p.to_string_lossy().into_owned(),
-                None if existing.authority_pub_key.is_some() && !interactive => existing
-                    .authority_pub_key
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                None if interactive => dialoguer::Input::with_theme(theme)
-                    .with_prompt("Path to authority public key")
-                    .default(
-                        existing
-                            .authority_pub_key
-                            .as_ref()
-                            .map(|p| p.to_string_lossy().into_owned())
-                            .unwrap_or_default(),
-                    )
-                    .interact_text()
-                    .context("authority public key prompt")?,
-                None => String::new(),
-            };
-            if pub_key.trim().is_empty() {
-                anyhow::bail!(
-                    "--authority-pub-key is required when --mode agent-remote and no existing remote public key is configured"
-                );
-            }
-            (url, ca, pub_key)
-        }
+        Mode::AgentLocal => collect_local_connect_inputs(&listen, state_dir),
+        Mode::AgentRemote => collect_remote_connect_inputs(args, existing, interactive, theme)?,
         Mode::Authority => (String::new(), String::new(), String::new()),
     };
 
