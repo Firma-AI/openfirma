@@ -1,14 +1,16 @@
 //! Runner for `firma config` — scaffold a new agent config directory.
 
+mod doc;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context as _, Result};
 use clap::ValueEnum as _;
 use dialoguer::theme::ColorfulTheme;
-use minijinja::{Environment, context};
 
 use crate::args::config::{InitArgs, Mapping, Mode, Posture};
+use doc::DocInputs;
 
 struct AuthorityInputs {
     /// gRPC listen address (agent-local + authority modes).
@@ -28,7 +30,6 @@ struct SidecarInputs {
     mappings: Vec<Mapping>,
     extra_hosts: Vec<String>,
     workspace: PathBuf,
-    existing_firma_run_toml: Option<String>,
 }
 
 struct CollectedInputs {
@@ -54,12 +55,8 @@ struct ExistingConfigDefaults {
     requested_actions: Option<Vec<String>>,
     mappings: Option<Vec<Mapping>>,
     workspace: Option<PathBuf>,
-    firma_run_toml: Option<String>,
 }
 
-static TPL_FIRMA_TOML: &str = include_str!("../../templates/firma.toml.j2");
-static TPL_MAPPING_RULES: &str = include_str!("../../templates/mapping-rules.toml.j2");
-static TPL_FIRMA_RUN: &str = include_str!("../../templates/firma-run.toml.j2");
 static TPL_CEDAR_ISSUANCE: &str = include_str!("../../templates/issuance.cedar");
 
 /// Entry point for `firma config`.
@@ -76,8 +73,7 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     let cfg = &inputs.config_dir;
     let state = &inputs.state_dir;
 
-    let env = build_template_env()?;
-    let files = generate_files(&env, &inputs)?;
+    let files = generate_files(&inputs)?;
 
     if args.dry_run {
         for (rel, content) in &files {
@@ -224,23 +220,7 @@ fn write_server_material(state: &Path, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn build_template_env() -> Result<Environment<'static>> {
-    let mut env = Environment::new();
-    env.add_template("firma.toml", TPL_FIRMA_TOML)
-        .context("load firma.toml template")?;
-    env.add_template("mapping-rules.toml", TPL_MAPPING_RULES)
-        .context("load mapping-rules.toml template")?;
-    env.add_template("firma-run.toml", TPL_FIRMA_RUN)
-        .context("load firma-run.toml template")?;
-    Ok(env)
-}
-
-fn generate_files(
-    env: &Environment<'_>,
-    inputs: &CollectedInputs,
-) -> Result<Vec<(String, String)>> {
-    let has_server = has_server(inputs);
-    let has_connect = matches!(inputs.mode, Mode::AgentLocal | Mode::AgentRemote);
+fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
     let has_sidecar = matches!(inputs.mode, Mode::AgentLocal | Mode::AgentRemote);
 
     let mapping_paths: Vec<String> = inputs
@@ -249,7 +229,6 @@ fn generate_files(
         .iter()
         .map(|m| format!("mappings/{}.toml", m.as_str()))
         .collect();
-
     let mitm_hosts: Vec<&str> = inputs
         .sidecar
         .mappings
@@ -257,7 +236,6 @@ fn generate_files(
         .flat_map(Mapping::mitm_hosts)
         .copied()
         .collect();
-
     let requested_actions = inputs.sidecar.requested_actions.clone().unwrap_or_else(|| {
         inputs
             .sidecar
@@ -267,6 +245,7 @@ fn generate_files(
             .map(String::from)
             .collect()
     });
+
     let state_dir = &inputs.state_dir;
     let tls_dir = state_dir.join("tls");
     let revocation_file = path_display(&state_dir.join("revocations.txt"));
@@ -276,34 +255,36 @@ fn generate_files(
     let audit_key = path_display(&state_dir.join("audit.key"));
     let tls_cert_path = path_display(&tls_dir.join("authority.crt"));
     let tls_key_path = path_display(&tls_dir.join("authority.key"));
+    let workspace_display = path_display(&inputs.sidecar.workspace);
 
-    let firma_toml = render(
-        env,
-        "firma.toml",
-        context! {
-            has_server,
-            has_connect,
-            has_sidecar,
-            name => inputs.sidecar.name,
-            mapping_paths,
-            mitm_hosts,
-            requested_actions,
-            authority_listen => inputs.authority.listen,
-            authority_url => inputs.authority.connect_url,
-            tls_ca_cert_path => &inputs.authority.connect_ca_cert,
-            authority_pub_key_path => &inputs.authority.connect_pub_key,
-            revocation_file,
-            key_file,
-            ca_dir,
-            audit_file,
-            audit_key,
-            tls_cert_path,
-            tls_key_path,
-        },
-    )?;
+    let doc_inputs = DocInputs {
+        mode: &inputs.mode,
+        keep_local_authority: inputs.keep_local_authority,
+        name: &inputs.sidecar.name,
+        authority_listen: &inputs.authority.listen,
+        authority_url: &inputs.authority.connect_url,
+        authority_ca_cert: &inputs.authority.connect_ca_cert,
+        authority_pub_key: &inputs.authority.connect_pub_key,
+        revocation_file: &revocation_file,
+        key_file: &key_file,
+        ca_dir: &ca_dir,
+        audit_file: &audit_file,
+        audit_key: &audit_key,
+        tls_cert_path: &tls_cert_path,
+        tls_key_path: &tls_key_path,
+        requested_actions: &requested_actions,
+        mapping_paths: &mapping_paths,
+        mitm_hosts: &mitm_hosts,
+        workspace: &workspace_display,
+        extra_hosts: &inputs.sidecar.extra_hosts,
+    };
+
+    let firma_toml = render_for(&inputs.config_dir, "firma.toml", |text| {
+        doc::render_firma_toml(text, &doc_inputs)
+    })?;
 
     let cedar_path = format!("policies/{}.cedar", inputs.sidecar.posture.file_name());
-    let mut files = vec![
+    let mut files: Vec<(String, String)> = vec![
         ("firma.toml".into(), firma_toml),
         (
             cedar_path,
@@ -316,21 +297,12 @@ fn generate_files(
     ];
 
     if has_sidecar {
-        let mapping_rules = render(
-            env,
-            "mapping-rules.toml",
-            context! { extra_hosts => inputs.sidecar.extra_hosts },
-        )?;
-        let firma_run = if let Some(existing) = &inputs.sidecar.existing_firma_run_toml {
-            existing.clone()
-        } else {
-            let workspace = path_display(&inputs.sidecar.workspace);
-            render(
-                env,
-                "firma-run.toml",
-                context! { name => inputs.sidecar.name, workspace },
-            )?
-        };
+        let mapping_rules = render_for(&inputs.config_dir, "mapping-rules.toml", |text| {
+            doc::render_mapping_rules_toml(text, &doc_inputs)
+        })?;
+        let firma_run = render_for(&inputs.config_dir, "firma-run.toml", |text| {
+            doc::render_firma_run_toml(text, &doc_inputs)
+        })?;
         files.push(("mapping-rules.toml".into(), mapping_rules));
         files.push(("firma-run.toml".into(), firma_run));
         for mapping in &inputs.sidecar.mappings {
@@ -344,10 +316,16 @@ fn generate_files(
     Ok(files)
 }
 
-fn render(env: &Environment<'_>, template: &str, ctx: minijinja::Value) -> Result<String> {
-    env.get_template(template)
-        .and_then(|t| t.render(ctx))
-        .with_context(|| format!("render template {template}"))
+/// Read `config_dir/rel` (or empty if absent), pass to `render`, and
+/// return the merged TOML string.
+fn render_for<F>(config_dir: &Path, rel: &str, render: F) -> Result<String>
+where
+    F: FnOnce(&str) -> Result<String, toml_edit::TomlError>,
+{
+    let path = config_dir.join(rel);
+    let text =
+        doc::read_existing_text(&path).with_context(|| format!("read {}", path.display()))?;
+    render(&text).with_context(|| format!("merge {}", path.display()))
 }
 
 fn path_display(path: &Path) -> String {
@@ -530,7 +508,6 @@ fn load_existing_defaults(config_dir: &Path) -> Result<ExistingConfigDefaults> {
         && let Ok(run_text) = std::fs::read_to_string(&firma_run_path)
     {
         defaults.workspace = workspace_from_firma_run(&run_text);
-        defaults.firma_run_toml = Some(run_text);
     }
 
     Ok(defaults)
@@ -742,41 +719,28 @@ fn collect_workspace(
     existing: &ExistingConfigDefaults,
     interactive: bool,
     theme: &ColorfulTheme,
-) -> Result<(PathBuf, Option<String>)> {
-    let mut overridden = args.workspace.is_some();
-    let workspace = if let Some(p) = &args.workspace {
-        std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()))?
-    } else if let Some(p) = &existing.workspace
+) -> Result<PathBuf> {
+    if let Some(p) = &args.workspace {
+        return std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()));
+    }
+    if let Some(p) = &existing.workspace
         && !interactive
     {
-        p.clone()
-    } else {
-        let cwd = std::env::current_dir().context("get current directory")?;
-        if interactive {
-            let default_path = existing.workspace.as_ref().unwrap_or(&cwd);
-            let default = default_path.to_string_lossy().into_owned();
-            let s: String = dialoguer::Input::with_theme(theme)
-                .with_prompt("Workspace directory (agent RW access)")
-                .default(default)
-                .interact_text()
-                .context("workspace prompt")?;
-            let p = PathBuf::from(s);
-            let abs =
-                std::path::absolute(&p).with_context(|| format!("resolve path {}", p.display()))?;
-            let abs_default = std::path::absolute(default_path)
-                .with_context(|| format!("resolve path {}", default_path.display()))?;
-            overridden = abs != abs_default;
-            abs
-        } else {
-            cwd
-        }
-    };
-    let preserved = if overridden {
-        None
-    } else {
-        existing.firma_run_toml.clone()
-    };
-    Ok((workspace, preserved))
+        return Ok(p.clone());
+    }
+    let cwd = std::env::current_dir().context("get current directory")?;
+    if !interactive {
+        return Ok(cwd);
+    }
+    let default_path = existing.workspace.as_ref().unwrap_or(&cwd);
+    let default = default_path.to_string_lossy().into_owned();
+    let s: String = dialoguer::Input::with_theme(theme)
+        .with_prompt("Workspace directory (agent RW access)")
+        .default(default)
+        .interact_text()
+        .context("workspace prompt")?;
+    let p = PathBuf::from(s);
+    std::path::absolute(&p).with_context(|| format!("resolve path {}", p.display()))
 }
 
 fn collect_sidecar_inputs(
@@ -795,7 +759,6 @@ fn collect_sidecar_inputs(
             mappings: vec![],
             extra_hosts: vec![],
             workspace: config_dir.to_path_buf(),
-            existing_firma_run_toml: None,
         });
     }
 
@@ -858,8 +821,7 @@ fn collect_sidecar_inputs(
         .map(String::from)
         .collect();
 
-    let (workspace, existing_firma_run_toml) =
-        collect_workspace(args, existing, interactive, theme)?;
+    let workspace = collect_workspace(args, existing, interactive, theme)?;
 
     Ok(SidecarInputs {
         name,
@@ -868,7 +830,6 @@ fn collect_sidecar_inputs(
         mappings,
         extra_hosts,
         workspace,
-        existing_firma_run_toml,
     })
 }
 
@@ -1158,13 +1119,11 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
             mappings,
             extra_hosts: vec![],
             workspace: plan.config_dir.clone(),
-            existing_firma_run_toml: None,
         },
         config_dir: plan.config_dir.clone(),
         state_dir: plan.state_dir.clone(),
     };
-    let env = build_template_env().map_err(|e| format!("template env: {e}"))?;
-    let files = generate_files(&env, &inputs).map_err(|e| format!("generate files: {e}"))?;
+    let files = generate_files(&inputs).map_err(|e| format!("generate files: {e}"))?;
 
     for dir in [
         plan.config_dir.as_path(),
@@ -1246,7 +1205,6 @@ mod tests {
         mappings: &[Mapping],
         extra_hosts: &[String],
     ) -> Vec<(String, String)> {
-        let env = build_template_env().unwrap();
         let inputs = CollectedInputs {
             mode: Mode::AgentLocal,
             keep_local_authority: false,
@@ -1264,12 +1222,11 @@ mod tests {
                 mappings: mappings.to_vec(),
                 extra_hosts: extra_hosts.to_vec(),
                 workspace: PathBuf::from(TEST_WORKSPACE),
-                existing_firma_run_toml: None,
             },
             config_dir: PathBuf::from(TEST_WORKSPACE),
             state_dir: PathBuf::from("/tmp/test-state"),
         };
-        generate_files(&env, &inputs).unwrap()
+        generate_files(&inputs).unwrap()
     }
 
     fn get<'a>(files: &'a [(String, String)], name: &str) -> &'a str {

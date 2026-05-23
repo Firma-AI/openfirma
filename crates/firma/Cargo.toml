@@ -37,7 +37,6 @@ firma-run = { workspace = true }
 firma-sidecar = { workspace = true }
 firma-stack = { workspace = true }
 miette = { workspace = true }
-minijinja = { workspace = true }
 p256 = { workspace = true }
 pasetors = { workspace = true }
 rcgen = { workspace = true }
@@ -59,6 +58,7 @@ tokio = { workspace = true, default-features = false, features = [
 ] }
 tokio-util = { workspace = true }
 toml = { workspace = true }
+toml_edit = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }

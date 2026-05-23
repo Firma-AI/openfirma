@@ -13,6 +13,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use toml_edit::{DocumentMut, Item, Table, value};
+
 use crate::authority::AuthorityPromptIo;
 use crate::error::RunError;
 
@@ -77,15 +79,14 @@ pub fn resolve_persist_target(existing_config: Option<&Path>) -> Result<PathBuf,
 /// - [`RunError::ConfigParse`] when the existing file is not valid TOML.
 /// - [`RunError::Internal`] on I/O or serialization failure.
 pub fn persist_authority_section(path: &Path) -> Result<(), RunError> {
-    let mut table: toml::Table = match fs::read_to_string(path) {
-        Ok(text) => {
-            text.parse::<toml::Table>()
-                .map_err(|e: toml::de::Error| RunError::ConfigParse {
-                    path: path.to_path_buf(),
-                    reason: e.to_string(),
-                })?
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => toml::Table::new(),
+    let mut doc: DocumentMut = match fs::read_to_string(path) {
+        Ok(text) => text
+            .parse()
+            .map_err(|e: toml_edit::TomlError| RunError::ConfigParse {
+                path: path.to_path_buf(),
+                reason: e.to_string(),
+            })?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => DocumentMut::new(),
         Err(e) => {
             return Err(RunError::Internal(format!(
                 "read user config {}: {e}",
@@ -94,20 +95,15 @@ pub fn persist_authority_section(path: &Path) -> Result<(), RunError> {
         }
     };
 
-    if table.contains_key("authority") {
+    if doc.as_table().contains_key("authority") {
         return Ok(());
     }
 
-    let mut authority_table = toml::Table::new();
-    authority_table.insert(
-        "listen_addr".to_string(),
-        toml::Value::String(DEFAULT_LISTEN_ADDR.to_string()),
-    );
-    table.insert("authority".to_string(), toml::Value::Table(authority_table));
-
-    let serialized = toml::to_string_pretty(&table).map_err(|e| {
-        RunError::Internal(format!("serialize user config {}: {e}", path.display()))
-    })?;
+    let mut authority = Table::new();
+    authority.set_implicit(false);
+    authority.insert("listen_addr", value(DEFAULT_LISTEN_ADDR));
+    doc.as_table_mut()
+        .insert("authority", Item::Table(authority));
 
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -116,7 +112,7 @@ pub fn persist_authority_section(path: &Path) -> Result<(), RunError> {
             .map_err(|e| RunError::Internal(format!("mkdir {}: {e}", parent.display())))?;
     }
 
-    fs::write(path, serialized)
+    fs::write(path, doc.to_string())
         .map_err(|e| RunError::Internal(format!("write {}: {e}", path.display())))?;
     Ok(())
 }
