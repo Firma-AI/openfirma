@@ -433,11 +433,13 @@ starlight-menu-button {
   border-radius: 0.625rem;
   border: 1px solid var(--sl-color-hairline);
   background: var(--of-surface-elevated);
-  text-align: center;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  text-align: start;
 }
 
 .mermaid svg {
-  max-width: 100%;
+  max-width: none;
   height: auto;
 }
 
