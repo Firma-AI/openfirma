@@ -36,7 +36,6 @@ intercept_hosts = ["paste.rs"]
 
 [sidecar.policy]
 dir = "../policies"
-authority_url = "http://127.0.0.1:50051"
 
 [sidecar.ca]
 dir = "examples/e2e/firma-ca"
@@ -70,6 +69,7 @@ sink = "stdout"
 signing_key_path = "audit.key"
 
 [sidecar.authority]
+url = "http://127.0.0.1:50051"
 connect_timeout_secs = 10
 reconnect_min_backoff_ms = 250
 reconnect_max_backoff_secs = 30

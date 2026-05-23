@@ -142,10 +142,17 @@ pub struct SynthesizeRequest<'a> {
     pub listen_addr: Option<SocketAddr>,
     /// Destination for the synthesized TOML.
     pub out_path: &'a Path,
-    /// Effective Authority URL to inject into `[sidecar.policy].authority_url`.
+    /// Effective Authority URL to inject into `[sidecar.authority].url`.
     /// `None` leaves the value untouched (preserves any value from
     /// the operator template).
     pub authority_url: Option<&'a str>,
+    /// CA cert path to inject into `[sidecar.authority].ca_cert_path`.
+    /// `None` leaves any existing template value untouched.
+    pub authority_ca_cert: Option<&'a Path>,
+    /// Authority pub key path to inject into `[sidecar.authority].public_key_path`
+    /// and `[sidecar.preflight].authority_pub_key_path`.
+    /// `None` leaves any existing template value untouched.
+    pub authority_pub_key: Option<&'a Path>,
 }
 
 /// Result of template resolution. Returned for tests; production callers
@@ -190,6 +197,12 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
     override_interceptor(&mut value, req.socket_path, req.listen_addr)?;
     if let Some(url) = req.authority_url {
         override_authority_url(&mut value, url)?;
+    }
+    if let Some(cert) = req.authority_ca_cert {
+        override_authority_ca_cert(&mut value, cert)?;
+    }
+    if let Some(key) = req.authority_pub_key {
+        override_authority_pub_key(&mut value, key)?;
     }
     configure_preflight_capability(&mut value, req.out_path, req.agent_id, req.session_id)?;
     ensure_audit_signing_key(&mut value, req.out_path)?;
@@ -261,18 +274,53 @@ fn override_interceptor(
     Ok(())
 }
 
-fn override_authority_url(value: &mut toml::Value, url: &str) -> Result<(), RunError> {
+fn override_authority_ca_cert(value: &mut toml::Value, cert: &Path) -> Result<(), RunError> {
     let sidecar = sidecar_table_mut(value)?;
     let entry = sidecar
-        .entry("policy".to_string())
+        .entry("authority".to_string())
         .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
     let table = entry
         .as_table_mut()
-        .ok_or_else(|| RunError::Internal("[sidecar.policy] is not a table".into()))?;
+        .ok_or_else(|| RunError::Internal("[sidecar.authority] is not a table".into()))?;
     table.insert(
-        "authority_url".to_string(),
-        toml::Value::String(url.to_string()),
+        "ca_cert_path".to_string(),
+        toml::Value::String(cert.display().to_string()),
     );
+    Ok(())
+}
+
+fn override_authority_pub_key(value: &mut toml::Value, key: &Path) -> Result<(), RunError> {
+    let sidecar = sidecar_table_mut(value)?;
+    let authority = sidecar
+        .entry("authority".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[sidecar.authority] is not a table".into()))?;
+    authority.insert(
+        "public_key_path".to_string(),
+        toml::Value::String(key.display().to_string()),
+    );
+    let preflight = sidecar_table_mut(value)?
+        .entry("preflight".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[sidecar.preflight] is not a table".into()))?;
+    preflight.insert(
+        "authority_pub_key_path".to_string(),
+        toml::Value::String(key.display().to_string()),
+    );
+    Ok(())
+}
+
+fn override_authority_url(value: &mut toml::Value, url: &str) -> Result<(), RunError> {
+    let sidecar = sidecar_table_mut(value)?;
+    let entry = sidecar
+        .entry("authority".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+    let table = entry
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[sidecar.authority] is not a table".into()))?;
+    table.insert("url".to_string(), toml::Value::String(url.to_string()));
     Ok(())
 }
 

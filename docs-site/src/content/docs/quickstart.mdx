@@ -76,7 +76,7 @@ This installs `firma` into Cargo's binary directory, usually `~/.cargo/bin`. If 
 Start in the project directory you want to protect. Scaffold the local OpenFirma layout with the defaults:
 
 ```bash
-firma init --yes
+firma config --yes
 ```
 
 This creates `.firma/` with a `firma.toml` config file, signing keys, empty policy directories, and a placeholder mapping file.
@@ -131,7 +131,7 @@ You do not need to add a Cedar policy file for this demo. `firma run` starts a l
 
 ## Run an agent under enforcement
 
-`firma run` launches a command inside a sandbox and forces all of its outbound traffic through the enforcement Sidecar. On first use it autostarts a local Authority and Sidecar for you — there is nothing else to start by hand.
+`firma run` launches a command inside a sandbox and forces all of its outbound traffic through the enforcement Sidecar. It autostarts a local Sidecar and the local Authority that `firma config` configured in your `firma.toml`, then tears both down when the command exits.
 
 Pass any command you want to wrap after the `--` marker:
 
@@ -143,6 +143,16 @@ FIRMA_RUN_SESSION_ID=quickstart-session firma run --config .firma/firma.toml -- 
 ```
 
 Every outbound call the wrapped command makes is normalized, checked against its capability, and evaluated against the Cedar policy bundle supplied by the Authority. In this quickstart, `firma run` starts a local development Authority and uses a temporary policy bundle for the run. The `-k` flag keeps the demo short by letting `curl` accept the local HTTPS interception certificate; for real workloads, install the generated CA instead.
+
+### Using a different Authority
+
+The `[authority]` section `firma config` wrote makes `firma run` autostart a local Authority. To use an Authority you already run instead, point at it with `--authority`:
+
+```bash
+firma run --authority https://authority.internal:50051 --config .firma/firma.toml -- <command>
+```
+
+In CI or any non-interactive context, pass `--no-autostart` to fail with a typed error instead of silently starting a local Authority or Sidecar.
 
 This is the real entry point for running agents — swap `curl ...` for whatever agent command you actually run (a coding agent, a script, a shell).
 

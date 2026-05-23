@@ -40,10 +40,14 @@ pub async fn run_preflight(
     client_key_pem: Option<&[u8]>,
 ) -> Result<PreflightResult> {
     // Load authority public key (32-byte Ed25519 public key).
-    let pub_key_bytes = std::fs::read(&config.authority_pub_key_path).with_context(|| {
+    let key_path = config
+        .authority_pub_key_path
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("preflight.authority_pub_key_path is not configured"))?;
+    let pub_key_bytes = std::fs::read(key_path).with_context(|| {
         format!(
             "failed to read authority public key from '{}'",
-            config.authority_pub_key_path.display()
+            key_path.display()
         )
     })?;
 

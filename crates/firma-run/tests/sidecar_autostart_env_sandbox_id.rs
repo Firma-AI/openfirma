@@ -59,6 +59,8 @@ fn spawned_sidecar_inherits_sandbox_id_env() {
         firma_exe: exe,
         startup_timeout: Duration::from_secs(5),
         authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
         use_http_proxy_interceptor: false,
     })
     .expect("supervisor spawned");

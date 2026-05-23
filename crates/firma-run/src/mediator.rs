@@ -490,12 +490,15 @@ mod tests {
         let result = enforce_local_command_governance(&cfg, &identity(), "/bin/echo", &[]);
         assert!(result.is_ok(), "unexpected: {result:?}");
 
-        let reqs = requests.lock().unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(reqs.len(), 2, "expected exactly 2 requests");
+        let snapshot: Vec<String> = {
+            let reqs = requests.lock().unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(reqs.len(), 2, "expected exactly 2 requests");
+            reqs.clone()
+        };
         let first: serde_json::Value =
-            serde_json::from_str(&reqs[0]).unwrap_or_else(|e| panic!("{e}"));
+            serde_json::from_str(&snapshot[0]).unwrap_or_else(|e| panic!("{e}"));
         let second: serde_json::Value =
-            serde_json::from_str(&reqs[1]).unwrap_or_else(|e| panic!("{e}"));
+            serde_json::from_str(&snapshot[1]).unwrap_or_else(|e| panic!("{e}"));
         assert!(
             first.get("approval_token").is_none(),
             "first request must not include approval_token"
@@ -505,7 +508,6 @@ mod tests {
             Some("tok42"),
             "second request must carry the token from the pending_hitl response"
         );
-        drop(reqs);
     }
 
     #[test]

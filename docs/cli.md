@@ -3,6 +3,173 @@
 Single binary: `firma <subcommand>`. All examples below assume `firma` is on
 PATH or invoked via `cargo run -p firma --`.
 
+## `firma config`
+
+`firma run` works out of the box with no prior setup — it auto-scaffolds a
+default config on first use. `firma config` lets you override those defaults:
+posture, mappings, authority mode, workspace path, and more. When config files
+already exist, their current values become the wizard and non-interactive
+defaults; supplied flags override those values.
+
+When an existing config includes a local `[authority]` section and you switch
+to `--mode agent-remote`, the regenerated `firma.toml` normally removes that
+section; otherwise `firma run` starts the Authority locally instead of using
+only the remote Authority. Non-force runs warn about the local startup
+behavior. Interactive runs ask whether to keep the section and use that answer
+to rewrite `firma.toml`; non-interactive non-force runs preserve the existing
+file. `--force` overwrites the config directly and removes the section.
+
+### Usage
+
+```text
+firma config [OPTIONS]
+```
+
+### Options
+
+| Flag                         | Short | Default                  | Description                                                          |
+| ---------------------------- | ----- | ------------------------ | -------------------------------------------------------------------- |
+| `--mode`                     |       | wizard / `agent-local`   | `agent-local`, `agent-remote`, or `authority`                        |
+| `--name`                     | `-n`  | wizard / `my-agent`      | Agent slug — used as `agent_id` in `[sidecar.preflight]`             |
+| `--posture`                  |       | wizard / `dev`           | Cedar policy posture written under `policies/`                       |
+| `--mapping`                  |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                     |
+| `--requested-action`         |       | derived from posture     | Preflight requested actions — repeat or comma-separate               |
+| `--extra-hosts`              |       | none                     | Comma-separated extra hosts the agent may reach                      |
+| `--workspace`                |       | CWD                      | Agent RW path written to `firma-run.toml` bwrap mount                |
+| `--output-dir`               | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings land             |
+| `--state-dir`                |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                          |
+| `--authority-listen <addr>`  |       | `127.0.0.1:9443`         | gRPC listen address (`agent-local` / `authority` modes only)         |
+| `--authority-url <url>`      |       | wizard prompt            | Authority URL written to `[sidecar.authority].url` (`agent-remote`)  |
+| `--authority-ca-cert <path>` |       | wizard prompt            | Authority CA cert PEM path (`agent-remote`)                          |
+| `--authority-pub-key <path>` |       | derived from state dir   | Authority public key path                                            |
+| `--yes`                      | `-y`  | off                      | Skip all prompts; use existing values or flag defaults               |
+| `--force`                    |       | off                      | Overwrite existing files, including the authority keypair            |
+| `--dry-run`                  |       | off                      | Print generated files to stdout; no disk writes                      |
+| `--list-templates`           |       | off                      | Print posture × mapping catalogue and exit                           |
+
+An explicit `--posture` rewrites the selected `policies/<posture>.cedar`
+file even without `--force`; other existing generated files are still
+preserved unless `--force` is set.
+
+### Generated layout
+
+```
+<output-dir>/
+  firma.toml                     — unified config (authority + sidecar sections)
+  firma-run.toml                 — runtime sandbox profile (workspace mounts)
+  mapping-rules.toml             — base routing rules (localhost, extra hosts)
+  mappings/<name>.toml           — one file per selected mapping
+  policies/<posture>.cedar       — Cedar enforcement policy
+  issuance-policies/
+    issuance.cedar               — token issuance policy
+
+<state-dir>/
+  authority.key                  — Ed25519 signing key (never commit)
+  authority.pub                  — matching public key
+  audit.key                      — audit signing key
+  revocations.txt                — empty revocations list
+  tls/                           — self-signed TLS material
+  generated-firma-ca/            — populated by sidecar on first start
+```
+
+### Examples
+
+Interactive:
+
+```bash
+firma config
+```
+
+Non-interactive agent-local:
+
+```bash
+firma config --yes --name claude-code --posture dev --mapping anthropic
+```
+
+Agent connecting to a remote authority:
+
+```bash
+firma config --yes --mode agent-remote \
+  --authority-url https://authority.example.com:9443 \
+  --authority-ca-cert /path/to/ca.crt \
+  --name my-agent --posture strict --mapping anthropic
+```
+
+Multiple mappings:
+
+```bash
+firma config --name my-agent --posture dev \
+  --mapping anthropic --mapping github --mapping npm
+```
+
+Preview without writing:
+
+```bash
+firma config --dry-run
+```
+
+Re-render an existing scaffold, keeping current values unless a flag overrides:
+
+```bash
+firma config --yes --dry-run
+firma config --yes --name codex --mapping openai --force
+```
+
+After scaffolding, run the agent:
+
+```bash
+firma run -- <agent-command>
+```
+
+### Postures
+
+| Name                    | Description                                                |
+| ----------------------- | ---------------------------------------------------------- |
+| `strict`                | Default-deny + communication only (no code ops)            |
+| `dev`                   | Adds code.read/write, issues, package install              |
+| `dev-with-delete-watch` | Dev + code.destructive allowed (local-exec / delete-watch) |
+
+### Mappings
+
+| Name        | Covers                                                                          |
+| ----------- | ------------------------------------------------------------------------------- |
+| `anthropic` | api.anthropic.com — Anthropic Claude API (CONNECT, no MITM)                    |
+| `openai`    | api.openai.com — OpenAI API (CONNECT, no MITM)                                 |
+| `github`    | api.github.com — GitHub REST API (MITM for per-endpoint classification)        |
+| `gmail`     | gmail.googleapis.com — Gmail REST API (MITM for per-endpoint classification)   |
+| `npm`       | registry.npmjs.org — npm package registry                                      |
+| `pypi`      | pypi.org, files.pythonhosted.org — PyPI                                        |
+| `cargo`     | crates.io, static.crates.io — Rust package registry                            |
+| `stripe`    | api.stripe.com — Stripe REST API                                               |
+
+## `firma policy`
+
+Browse the posture × mapping template catalogue and validate Cedar policy bundles.
+
+### `firma policy list`
+
+Print available postures and mapping files:
+
+```bash
+firma policy list
+```
+
+### `firma policy validate`
+
+Validate a Cedar policy bundle (one or more `.cedar` files):
+
+```bash
+firma policy validate --file policies/dev.cedar
+```
+
+### `firma policy test`
+
+Run fixture-based authorization tests against a Cedar policy bundle:
+
+```bash
+firma policy test --fixture tests/my-fixture.json
+```
+
 ## `firma sidecar`
 
 ### Usage
@@ -90,13 +257,13 @@ ready
 
 `policy bundle loaded version` is the eight-character hex prefix of
 the SHA-256 of the concatenated `.cedar` files in `policy.dir`. Line 4
-fires unconditionally; when `policy.authority_url` is unset the
+fires unconditionally; when `authority.url` is unset the
 endpoint is reported as `(disabled)`.
 
 Line 7 (`ready`) is held until the Authority streams have hydrated —
 both the policy bundle stream and the revocation stream must report
 themselves ready before the line is emitted. When
-`policy.authority_url` is unset, both flags are pre-seeded as ready, so
+`authority.url` is unset, both flags are pre-seeded as ready, so
 the gate is a no-op and `ready` fires immediately after line 6. This
 prevents the first wrapped-agent call from racing the readiness gate
 and hitting a DENY before policy is in place.
@@ -191,23 +358,10 @@ subcommand reads only its own section. The first existing file wins:
 1. `--config <path>` flag — always wins. It only relocates the file;
    the file still uses the sectioned schema.
 2. **Project-local `.firma/firma.toml`**, found by walking up from
-   `cwd` (spec §4 step 1). The closest ancestor with a `.firma/firma.toml`
-   wins; the walk stops at the filesystem root. This is what
-   `firma init` writes by default.
-3. `$FIRMA_CONFIG_DIR/firma.toml` if the env var is set.
-4. User config dir (first existing wins). This is what
-   `firma init --global` writes:
-   - Linux: `$XDG_CONFIG_HOME/firma` → `~/.config/firma`
-   - macOS: `$XDG_CONFIG_HOME/firma` → `~/.config/firma` →
-     `~/Library/Application Support/firma`
-   - Windows: `%XDG_CONFIG_HOME%\firma` (if set) →
-     `%USERPROFILE%\.firma` → `%APPDATA%\Roaming\firma`
-5. System-wide config dir:
-   - Linux: `/etc/firma/firma.toml`
-   - macOS: `/Library/Application Support/firma/firma.toml`
-   - Windows: `%PROGRAMDATA%\firma\firma.toml`
-6. CWD-relative `firma.toml` — last fallback.
-7. None found and config is required → exit non-zero with a message listing
+   `cwd`. The closest ancestor with a `.firma/firma.toml` wins; the
+   walk stops at the filesystem root. This is what `firma config` writes.
+3. `$FIRMA_CONFIG` env var if set — overrides walk, points directly to file.
+4. None found and config is required → exit non-zero with a message listing
    every directory searched.
 
 On macOS the user tier is a dual path: `$XDG_CONFIG_HOME/firma` is tried
@@ -367,25 +521,16 @@ stale entries).
 `firma run` decides whether to autostart a Mini Authority before it
 launches the per-run Sidecar. Decision precedence:
 
-1. `--authority local` or `--authority <url>` — skip the prompt entirely.
-2. Persisted `[authority]` table in the discovered `firma.toml`
+1. `--authority local` or `--authority <url>` — explicit CLI override.
+2. `[authority]` table present in the discovered `firma.toml`
    (`~/.config/firma/firma.toml` on Linux/macOS,
-   `%USERPROFILE%\.firma\firma.toml` on Windows) — skip the prompt.
-3. Neither set, stdin is a TTY — print a single y/N prompt:
-
-   ```text
-   No Authority is configured for this project.
-   firma run can start a local Mini Authority for development on [::1]:50051.
-   This is suitable for a single developer on a trusted workstation.
-
-   Start a local Mini Authority? [y/N]:
-   ```
-
-   On `y` / `Y` / `yes`, `firma run` persists
-   `[authority].type = "local"` (file mode `0600`, parent mode `0700`)
-   and autostarts. On anything else, it aborts with `AuthorityDeclined`.
-
-4. Neither set, stdin is not a TTY — abort with `AuthorityPromptNoTty`.
+   `%USERPROFILE%\.firma\firma.toml` on Windows) — autostart a local
+   Mini Authority.
+3. `[sidecar.authority].url` set in `firma.toml` — connect to that
+   remote Authority.
+4. Nothing configured — `firma run` falls back to local autostart so
+   zero-config works. `--no-autostart` overrides this to fail with
+   `MissingAuthority`.
 
 On `local` selection, `firma run` probes `[::1]:50051` first. If
 reachable, no autostart fires. Otherwise the per-run Mini Authority is
@@ -398,10 +543,10 @@ on `firma run` exit (`SIGTERM` then `SIGKILL` after a 5s grace).
 
 | Flag                         | Default     | Description                                                                                                                                      |
 | ---------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--authority <local\|url>`   | unset       | Skip the y/N prompt. `local` autostarts on `[::1]:50051`; any other value is treated as a remote Authority URL.                                  |
+| `--authority <local\|url>`   | unset       | Override config. `local` autostarts on `[::1]:50051`; any other value is treated as a remote Authority URL.                                      |
 | `--authority-profile <name>` | `developer` | Profile materialised by the autostarted Mini Authority. Currently only `developer` ships. Ignored when Authority is remote or already reachable. |
 
-The `--no-autostart` flag also suppresses Authority autostart. With
+`--no-autostart` suppresses Authority autostart. With
 `--no-autostart --authority local` `firma run` exits immediately with a
 typed argument-conflict error.
 
@@ -410,8 +555,6 @@ typed argument-conflict error.
 | Error                     | Trigger                                                          |
 | ------------------------- | ---------------------------------------------------------------- |
 | `MissingAuthority`        | `--no-autostart` and nothing configured.                         |
-| `AuthorityDeclined`       | User answered `n` (or empty / garbage) at the prompt.            |
-| `AuthorityPromptNoTty`    | No config, no CLI flag, stdin is not a TTY.                      |
 | `AuthorityStartupFailed`  | Spawn or stderr-pipe setup failed; stderr closed before `ready`. |
 | `AuthorityReadyTimeout`   | Spawned authority did not emit `ready` within the budget.        |
 | `AuthorityUnreachable`    | Remote URL did not answer a TCP connect probe.                   |
