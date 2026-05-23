@@ -3,8 +3,6 @@ title: Capabilities
 description: PASETO v4 tokens that prove an agent was authorized to attempt a class of action.
 ---
 
-A **capability** is a short-lived, signed token that an agent presents to the Sidecar to prove "an Authority decided I'm allowed to attempt this kind of action". It is not a session token, not an API key, and not a bearer credential for the upstream service. It's a proof of authorization that lives entirely between the agent's runtime and the local enforcement plane.
-
 Capabilities are the input to [Stage 1 of the pipeline](../pipeline/). Without one, no agent traffic reaches Stage 2 — and without an Authority that issued one, the agent runs with no privileges at all. This page explains what's inside a capability, how it gets validated, and why the design looks the way it does.
 
 ## What's inside
@@ -116,9 +114,9 @@ You might ask: if Stage 2 has the full power of Cedar, why bother with capabilit
 
 In principle, yes. In practice, the two-layer design buys three things:
 
-1. **Pre-flight authorization.** Issuance is the right place for expensive checks: provenance, agent identity, multi-factor approval, human-in-the-loop. The Sidecar's hot path stays cheap because that work is already done by the time a token exists. A revoked capability turns into a fast bloom-filter miss.
-2. **Cryptographic provability.** A signed token is non-repudiable evidence that *this Authority decided this agent was OK*. You can replay an audit log months later and verify, from cold, that the chain of authorizations actually existed.
-3. **Operational decoupling.** Policy bundles get edited often (you tighten a rule, you push). Capabilities get issued at session start and stay stable. If the policy bundle is briefly missing or stale, capability validation continues working — and Stage 2 fails closed on stale bundles, so an old capability cannot bypass a tightening.
+1. **Low latency.** Issuance is the right place for expensive checks: provenance, agent identity, multi-factor approval, human-in-the-loop. The Sidecar's hot path stays cheap because that work is already done by the time a token exists. A revoked capability turns into a fast bloom-filter miss.
+2. **Auditability.** A signed token is non-repudiable evidence that *this Authority decided this agent was OK*. You can replay an audit log months later and verify, from cold, that the chain of authorizations actually existed.
+3. **Operational safety.** Policy bundles get edited often (you tighten a rule, you push). Capabilities get issued at session start and stay stable. If the policy bundle is briefly missing or stale, capability validation continues working — and Stage 2 fails closed on stale bundles, so an old capability cannot bypass a tightening.
 
 The two together form a textbook capability-based security model: the capability says "you have permission to attempt this", the policy says "given current conditions, this attempt is OK". Either alone is weaker.
 
