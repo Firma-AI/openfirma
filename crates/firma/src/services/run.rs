@@ -118,6 +118,7 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
     let plan = ScaffoldPlan {
         config_dir: resolved,
         state_dir,
+        workspace: cwd,
         force: false,
         authority_listen: "127.0.0.1:50051".into(),
         agent: args.profile.clone(),
