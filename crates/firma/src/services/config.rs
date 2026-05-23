@@ -1034,6 +1034,7 @@ fn cleanup_stale_posture_files(
 pub struct ScaffoldPlan {
     pub config_dir: PathBuf,
     pub state_dir: PathBuf,
+    pub workspace: PathBuf,
     pub force: bool,
     pub authority_listen: String,
     pub agent: String,
@@ -1139,7 +1140,7 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
             requested_actions: None,
             mappings,
             extra_hosts: vec![],
-            workspace: plan.config_dir.clone(),
+            workspace: plan.workspace.clone(),
         },
         config_dir: plan.config_dir.clone(),
         state_dir: plan.state_dir.clone(),
@@ -1543,6 +1544,39 @@ mod tests {
         assert_eq!(mounts[0]["source"].as_str(), Some(TEST_WORKSPACE));
         assert_eq!(mounts[0]["target"].as_str(), Some(TEST_WORKSPACE));
         assert_eq!(mounts[0]["read_only"].as_bool(), Some(false));
+    }
+
+    #[test]
+    fn implicit_scaffold_uses_workspace_not_config_dir_for_mount() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("project");
+        let config_dir = workspace.join(".firma");
+        let state_dir = tmp.path().join("state");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        scaffold_from_plan(&ScaffoldPlan {
+            config_dir: config_dir.clone(),
+            state_dir,
+            workspace: workspace.clone(),
+            force: false,
+            authority_listen: "127.0.0.1:50051".into(),
+            agent: "generic".into(),
+            provider: "anthropic".into(),
+            authority: AuthorityShape::Local,
+        })
+        .unwrap();
+
+        let text = std::fs::read_to_string(config_dir.join("firma-run.toml")).unwrap();
+        let t: toml::Value = toml::from_str(&text).unwrap();
+        let mounts = t["profiles"]["generic"]["mounts"].as_array().unwrap();
+        assert_eq!(
+            mounts[0]["source"].as_str(),
+            Some(workspace.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            mounts[0]["target"].as_str(),
+            Some(workspace.to_string_lossy().as_ref())
+        );
     }
 
     // ── Cedar posture files ───────────────────────────────────────────────────
