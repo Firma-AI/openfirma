@@ -199,6 +199,19 @@ pub fn generate_audit_key_if_absent(path: &Path, force: bool) -> Result<()> {
     }
 }
 
+fn create_private_dir_all(path: &Path) -> Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+        .create(path)
+        .with_context(|| format!("failed to create {}", path.display()))
+}
+
 fn write_new_file(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     let mut opts = std::fs::OpenOptions::new();
     opts.create_new(true).write(true);
@@ -228,8 +241,7 @@ pub fn run_bootstrap_tls(out_dir: &Path, hosts: &[String]) -> Result<()> {
         hosts.to_vec()
     };
 
-    std::fs::create_dir_all(out_dir)
-        .with_context(|| format!("failed to create {}", out_dir.display()))?;
+    create_private_dir_all(out_dir)?;
 
     let ca_cert_path: PathBuf = out_dir.join("authority-ca.crt");
     let ca_key_path: PathBuf = out_dir.join("authority-ca.key");
