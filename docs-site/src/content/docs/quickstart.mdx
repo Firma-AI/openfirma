@@ -43,25 +43,25 @@ The installer drops the binary in `~/.local/bin` by default and adds it to your 
 
 ## Set up a project
 
-`firma init` scaffolds everything a project needs in one command: a `firma.toml` config file, signing keys, and a set of default Cedar policies.
+`firma config` scaffolds everything a project needs in one command: a `firma.toml` config file, signing keys, and a set of default Cedar policies.
 
 ```bash
-firma init
+firma config
 ```
 
-The interactive wizard asks a few questions — which agent you run, which provider it talks to, and whether to use a local Authority. The defaults are sensible; press Enter to accept them. The scaffold lands in a `.firma/` directory under your current folder.
+The interactive wizard asks a few questions — which agent you run, which provider it talks to, and whether to use a local Authority. The defaults are sensible; press Enter to accept them. The default `agent-local` mode writes an `[authority]` section into `firma.toml`, so `firma run` starts a local Authority without prompting later. The scaffold lands in a `.firma/` directory under your current folder.
 
-If you accepted the installer's prompt to run `firma init`, this is already done.
+If you accepted the installer's prompt to scaffold a project, this is already done.
 
 To skip the wizard and take all defaults (useful in CI):
 
 ```bash
-firma init --yes
+firma config --yes
 ```
 
 ## Run an agent under enforcement
 
-`firma run` launches a command inside a sandbox and forces all of its outbound traffic through the enforcement Sidecar. On first use it autostarts a local Authority and Sidecar for you — there is nothing else to start by hand.
+`firma run` launches a command inside a sandbox and forces all of its outbound traffic through the enforcement Sidecar. It autostarts a local Sidecar for you, and on first use offers to start a local Authority too.
 
 Pass the command to wrap after `--`:
 
@@ -69,7 +69,29 @@ Pass the command to wrap after `--`:
 firma run -- curl -s https://api.github.com/users/firma-ai
 ```
 
+The first time you run a project with no Authority configured, `firma run` prompts:
+
+```text
+No Authority is configured for this project.
+firma run can start a local Mini Authority for development on loopback ([::1]) using a per-run ephemeral port.
+This is suitable for a single developer on a trusted workstation.
+
+Start a local Mini Authority? [y/N]
+```
+
+Answer **`y`**. `firma run` writes an `[authority]` section into your `firma.toml`, so every later run starts the local Authority automatically and never prompts again.
+
 Every outbound call the wrapped command makes is normalized, checked against your capabilities, and evaluated against your Cedar policy. Calls that pass are forwarded; calls that fail get a `403` and never leave your machine. Either way, the decision is written to the audit log.
+
+### Non-interactive runs (CI)
+
+The prompt needs a terminal — on a non-TTY (a CI job, a script) it fails fast with a "no TTY" error instead of hanging. Commit the choice up front with `--authority local`, which skips the prompt and autostarts the local Authority:
+
+```bash
+firma run --authority local -- curl -s https://api.github.com/users/firma-ai
+```
+
+To target an Authority you already run, pass its URL instead: `--authority https://authority.internal:50051`.
 
 This is the real entry point for running agents — swap `curl ...` for whatever agent command you actually run (a coding agent, a script, a shell).
 
