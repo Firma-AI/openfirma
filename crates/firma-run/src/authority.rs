@@ -8,11 +8,15 @@
 //! - [`supervisor`] — `AuthoritySupervisor` spawning + scrape + Drop.
 //! - [`metadata`] — per-run `authority/metadata.toml` writer.
 
+pub mod bootstrap;
 pub mod config;
 #[cfg(unix)]
 pub(crate) mod metadata;
+pub mod prompt;
 pub mod selection;
 pub mod supervisor;
+
+pub use prompt::{AuthorityPromptIo, StdAuthorityPrompt};
 
 pub use selection::{AuthorityCli, AuthoritySelection, resolve};
 pub use supervisor::{AuthoritySupervisor, DEFAULT_STARTUP_TIMEOUT_SECS, SpawnRequest};

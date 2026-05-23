@@ -304,17 +304,27 @@ pub fn resolve_authority(
     profile_name: &str,
     user_config_path: Option<&Path>,
     firma_exe: &Path,
+    prompt: &mut dyn crate::authority::AuthorityPromptIo,
 ) -> Result<ResolvedAuthority, RunError> {
     let selection = crate::authority::resolve(cli, flags.no_autostart, user_config_path)?;
 
-    // Read [sidecar.authority] for cert/key paths regardless of selection mode.
-    let connect = user_config_path
+    // Snapshot [authority] / [sidecar.authority] once: we need both the
+    // `local` flag (to distinguish a committed local choice from the
+    // fall-through default that triggers the first-run prompt) and the
+    // connect coordinates (ca/pub key) regardless of selection mode.
+    let section_snapshot = user_config_path
         .map(crate::authority::config::read_authority)
         .transpose()?
-        .flatten()
-        .and_then(|s| s.connect);
-    let ca_cert_path = connect.as_ref().and_then(|c| c.ca_cert_path.clone());
-    let pub_key_path = connect.as_ref().and_then(|c| c.public_key_path.clone());
+        .flatten();
+    let ca_cert_path = section_snapshot
+        .as_ref()
+        .and_then(|s| s.connect.as_ref())
+        .and_then(|c| c.ca_cert_path.clone());
+    let pub_key_path = section_snapshot
+        .as_ref()
+        .and_then(|s| s.connect.as_ref())
+        .and_then(|c| c.public_key_path.clone());
+    let config_committed_local = section_snapshot.as_ref().is_some_and(|s| s.local);
 
     match selection {
         crate::authority::AuthoritySelection::Remote(url) => {
@@ -338,6 +348,17 @@ pub fn resolve_authority(
             }
             if flags.no_autostart {
                 return Err(RunError::MissingAuthority);
+            }
+            // First-run interactive bootstrap: when neither the CLI nor the
+            // resolved firma.toml committed to local, prompt before creating
+            // the user-global Ed25519 signing key. On `Y`, persist the
+            // `[authority]` section so subsequent runs skip the prompt.
+            let cli_committed = !matches!(cli, crate::authority::AuthorityCli::Unset);
+            if !cli_committed && !config_committed_local {
+                crate::authority::bootstrap::run_prompt(prompt)?;
+                let target_path =
+                    crate::authority::bootstrap::resolve_persist_target(user_config_path)?;
+                crate::authority::bootstrap::persist_authority_section(&target_path)?;
             }
             let marker =
                 firma_stack::runtime_paths::run_entry_from(runtime_dir, &identity.sandbox_id)
