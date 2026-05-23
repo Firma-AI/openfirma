@@ -173,7 +173,11 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         "custom preflight actions should not be replaced by inferred posture"
     );
     assert!(
-        firma_run_toml.contains(&format!("source = '{}'", workspace.display())),
+        toml::from_str::<toml::Value>(&firma_run_toml).unwrap()["profiles"]["generic"]["mounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["source"].as_str() == Some(workspace.to_string_lossy().as_ref())),
         "workspace should be preserved in firma-run.toml:\n{firma_run_toml}"
     );
     assert!(
@@ -233,7 +237,11 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         "explicit dev posture should override existing strict posture"
     );
     assert!(
-        firma_run_toml.contains(&format!("source = '{}'", override_workspace.display())),
+        toml::from_str::<toml::Value>(&firma_run_toml).unwrap()["profiles"]["generic"]["mounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["source"].as_str() == Some(override_workspace.to_string_lossy().as_ref())),
         "workspace override should be rendered in firma-run.toml:\n{firma_run_toml}"
     );
     // toml_edit merge contract: workspace override changes only the
@@ -246,7 +254,11 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
     // The previous workspace mount must be gone so the agent does not
     // accidentally retain RW access to the old path.
     assert!(
-        !firma_run_toml.contains(&format!("source = '{}'", workspace.display())),
+        !toml::from_str::<toml::Value>(&firma_run_toml).unwrap()["profiles"]["generic"]["mounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["source"].as_str() == Some(workspace.to_string_lossy().as_ref())),
         "previous workspace mount should be dropped on override:\n{firma_run_toml}"
     );
 }
@@ -342,6 +354,86 @@ fn agent_remote_switch_warns_about_existing_local_authority_without_force() {
     assert!(
         stderr.contains("firma run starts the Authority locally"),
         "expected local startup consequence in stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn agent_remote_requires_connect_material_without_existing_defaults() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+
+    let output = firma()
+        .args([
+            "config",
+            "--yes",
+            "--dry-run",
+            "--mode",
+            "agent-remote",
+            "--output-dir",
+        ])
+        .arg(&config_dir)
+        .output()
+        .expect("spawn incomplete remote firma config");
+
+    assert!(
+        !output.status.success(),
+        "agent-remote without authority material must fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--authority-url"),
+        "error should name missing remote URL:\n{stderr}"
+    );
+
+    let output = firma()
+        .args([
+            "config",
+            "--yes",
+            "--dry-run",
+            "--mode",
+            "agent-remote",
+            "--output-dir",
+        ])
+        .arg(&config_dir)
+        .args(["--authority-url", "https://authority.example.com:9443"])
+        .output()
+        .expect("spawn remote firma config without CA");
+    assert!(
+        !output.status.success(),
+        "agent-remote without CA material must fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--authority-ca-cert"),
+        "error should name missing remote CA:\n{stderr}"
+    );
+
+    let output = firma()
+        .args([
+            "config",
+            "--yes",
+            "--dry-run",
+            "--mode",
+            "agent-remote",
+            "--output-dir",
+        ])
+        .arg(&config_dir)
+        .args([
+            "--authority-url",
+            "https://authority.example.com:9443",
+            "--authority-ca-cert",
+        ])
+        .arg(tmp.path().join("remote-ca.crt"))
+        .output()
+        .expect("spawn remote firma config without public key");
+    assert!(
+        !output.status.success(),
+        "agent-remote without public key material must fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--authority-pub-key"),
+        "error should name missing remote public key:\n{stderr}"
     );
 }
 
