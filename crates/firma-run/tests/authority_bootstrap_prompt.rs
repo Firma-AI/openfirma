@@ -94,6 +94,7 @@ fn prompt_fires_when_no_commit_and_persists_on_yes() {
         &AuthorityCli::Unset,
         "developer",
         Some(cfg.as_path()),
+        cfg.parent(),
         &fake_firma_exe(tmp.path()),
         &mut prompt,
     )
@@ -139,6 +140,7 @@ fn prompt_declined_returns_typed_error_and_does_not_persist() {
         &AuthorityCli::Unset,
         "developer",
         Some(cfg.as_path()),
+        cfg.parent(),
         &fake_firma_exe(tmp.path()),
         &mut prompt,
     )
@@ -172,6 +174,7 @@ fn no_tty_returns_typed_error_without_calling_confirm() {
         &AuthorityCli::Unset,
         "developer",
         Some(cfg.as_path()),
+        cfg.parent(),
         &fake_firma_exe(tmp.path()),
         &mut prompt,
     )
@@ -202,6 +205,7 @@ fn cli_local_skips_prompt_even_without_config() {
         &AuthorityCli::Local,
         "developer",
         Some(cfg.as_path()),
+        cfg.parent(),
         &fake_firma_exe(tmp.path()),
         &mut prompt,
     )
@@ -242,6 +246,7 @@ fn config_authority_section_skips_prompt() {
         &AuthorityCli::Unset,
         "developer",
         Some(cfg.as_path()),
+        cfg.parent(),
         &fake_firma_exe(tmp.path()),
         &mut prompt,
     )

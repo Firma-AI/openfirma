@@ -1082,10 +1082,6 @@ pub struct ScaffoldPlan {
 #[derive(Debug, Clone)]
 pub enum AuthorityShape {
     Local,
-    Remote {
-        url: String,
-        ca_cert: Option<PathBuf>,
-    },
 }
 
 /// Resolve the runtime state directory.
@@ -1147,22 +1143,6 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
                 },
             )
         }
-        AuthorityShape::Remote { url, ca_cert } => (
-            Mode::AgentRemote,
-            AuthorityInputs {
-                listen: plan.authority_listen.clone(),
-                connect_url: url.clone(),
-                connect_ca_cert: ca_cert
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                connect_pub_key: plan
-                    .state_dir
-                    .join("authority.pub")
-                    .to_string_lossy()
-                    .into_owned(),
-            },
-        ),
     };
     let inputs = CollectedInputs {
         mode,

@@ -81,12 +81,10 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
 }
 
 fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
-    if let Some(explicit) = args.config.as_ref() {
+    if args.config.is_some() {
         // Trust the user-supplied config path. If it does not exist we
         // let firma-run report the parse/IO error normally.
-        if explicit.exists() {
-            return Ok(());
-        }
+        return Ok(());
     }
     // Spec §4 step 1 + §5: walk-up `./.firma/firma.toml` is the project-local
     // tier, picked up by `firma_config::resolve_config`. If anything in the
@@ -146,10 +144,11 @@ fn resolve_implicit_init_authority(args: &RunArgs) -> anyhow::Result<AuthoritySh
     if let Some(value) = args.authority.as_deref() {
         return Ok(match value {
             "local" => AuthorityShape::Local,
-            url => AuthorityShape::Remote {
-                url: url.to_string(),
-                ca_cert: None,
-            },
+            _ => anyhow::bail!(
+                "no firma.toml found and remote `--authority <url>` cannot be scaffolded implicitly; \
+                 run `firma config --mode agent-remote` with --authority-url, \
+                 --authority-ca-cert, and --authority-pub-key"
+            ),
         });
     }
 

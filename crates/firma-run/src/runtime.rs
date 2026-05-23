@@ -106,21 +106,29 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         // Resolve firma.toml: explicit CLI path > env var > walk up from
         // cwd for `.firma/firma.toml`. `None` means no config — zero-config
         // defaults kick in downstream.
-        let user_config_path: Option<PathBuf> = if let Ok(resolved) = firma_config::resolve_config(
+        let resolved_user_config = firma_config::resolve_config(
             "run",
             args.user_config_path.as_deref(),
             &firma_config::SystemDirs,
-        ) {
-            tracing::info!(
-                path = %resolved.config_file.display(),
-                source = ?resolved.source,
-                "loaded firma.toml"
-            );
-            Some(resolved.config_file)
-        } else {
-            tracing::info!("no firma.toml found; using zero-config defaults");
-            None
-        };
+        )
+        .ok();
+        let user_config_path: Option<PathBuf> = resolved_user_config.as_ref().map_or_else(
+            || {
+                tracing::info!("no firma.toml found; using zero-config defaults");
+                None
+            },
+            |resolved| {
+                tracing::info!(
+                    path = %resolved.config_file.display(),
+                    source = ?resolved.source,
+                    "loaded firma.toml"
+                );
+                Some(resolved.config_file.clone())
+            },
+        );
+        let user_config_dir = resolved_user_config
+            .as_ref()
+            .map(|resolved| resolved.config_dir.as_path());
         let sidecar_template_path =
             resolve_sidecar_template_path(args, user_config_path.as_deref());
         let flags = AutostartFlags {
@@ -151,6 +159,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             &args.authority_cli,
             &args.authority_profile,
             user_config_path.as_deref(),
+            user_config_dir,
             &firma_exe,
             &mut prompt,
         )?;

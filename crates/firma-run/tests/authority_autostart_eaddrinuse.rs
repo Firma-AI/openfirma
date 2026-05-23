@@ -57,6 +57,7 @@ fn pre_bound_port_without_plaintext_h2_fails_closed() {
         &AuthorityCli::Unset,
         "developer",
         Some(cfg.as_path()),
+        cfg.parent(),
         &PathBuf::from("/bin/false"),
         &mut prompt,
     );
