@@ -2,6 +2,7 @@
 
 use std::process::ExitCode;
 
+use firma_run::authority::AuthorityPromptIo;
 use firma_run::runtime::{RunInput, execute_run};
 use tracing::{info, warn};
 
@@ -93,6 +94,14 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
     if firma_config::resolve_config("run", None, &firma_config::SystemDirs).is_ok() {
         return Ok(());
     }
+
+    // Spec §4.1: implicit init creates a long-lived Ed25519 key under
+    // $XDG_DATA_HOME/firma/authority/keys/ and persists `[authority]` to
+    // `firma.toml`. Both are security-relevant side effects. Gate them on
+    // a deliberate user choice — `--authority` flag, or an interactive
+    // y/N prompt — before any filesystem mutation.
+    let authority = resolve_implicit_init_authority(args)?;
+
     let cwd = std::env::current_dir()
         .map_err(|e| anyhow::anyhow!("resolve cwd for implicit init: {e}"))?;
     let resolved = cwd.join(".firma");
@@ -104,16 +113,6 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
 
     let state_dir = firma_stack::resolve_state_dir(None)
         .map_err(|e| anyhow::anyhow!("resolve state_dir for implicit init: {e}"))?;
-
-    // Match the persisted [authority] section to whatever the CLI is
-    // about to ask firma-run to do. Default = local mini authority.
-    let authority = match args.authority.as_deref() {
-        None | Some("local") => AuthorityShape::Local,
-        Some(url) => AuthorityShape::Remote {
-            url: url.to_string(),
-            ca_cert: None,
-        },
-    };
 
     let plan = ScaffoldPlan {
         config_dir: resolved,
@@ -130,6 +129,50 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
         return Err(anyhow::anyhow!("implicit init: {error}"));
     }
     Ok(())
+}
+
+/// Decide the authority shape for implicit init.
+///
+/// `--authority` is a commitment that bypasses the prompt. `--no-autostart`
+/// refuses any side-effecting scaffold. Otherwise the user must answer Y
+/// to a single y/N prompt on the controlling TTY; non-TTY aborts.
+fn resolve_implicit_init_authority(args: &RunArgs) -> anyhow::Result<AuthorityShape> {
+    if args.no_autostart {
+        anyhow::bail!(
+            "no firma.toml found and `--no-autostart` is set; \
+             run `firma config` to scaffold a project config, or omit `--no-autostart`"
+        );
+    }
+    if let Some(value) = args.authority.as_deref() {
+        return Ok(match value {
+            "local" => AuthorityShape::Local,
+            url => AuthorityShape::Remote {
+                url: url.to_string(),
+                ca_cert: None,
+            },
+        });
+    }
+
+    let mut prompt = firma_run::authority::StdAuthorityPrompt;
+    if !prompt.is_tty() {
+        anyhow::bail!(
+            "no firma.toml found and stdin is not a terminal; \
+             run `firma config` to scaffold a project config, or pass \
+             `--authority local` / `--authority <url>` to commit non-interactively"
+        );
+    }
+    let confirmed = prompt
+        .confirm(firma_run::authority::bootstrap::PROMPT_TEXT)
+        .map_err(|e| anyhow::anyhow!("read y/N answer: {e}"))?;
+    if !confirmed {
+        anyhow::bail!(
+            "local Mini Authority bootstrap declined; \
+             run `firma config` to pick a deployment shape interactively, \
+             pass `--authority <url>` for a remote authority, \
+             or re-run with `--authority local` to bypass this prompt"
+        );
+    }
+    Ok(AuthorityShape::Local)
 }
 
 fn exit_code(code: i32) -> ExitCode {
