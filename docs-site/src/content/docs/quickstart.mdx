@@ -3,15 +3,18 @@ title: Quickstart
 description: Install OpenFirma, scaffold a project, and run an agent under enforcement in under five minutes.
 ---
 
-import { Steps } from '@astrojs/starlight/components';
+import { Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
 This quickstart takes you from nothing installed to a real agent running under enforcement: its outbound calls are checked against policy, allowed or denied, and written to the audit log.
 
-`firma` ships as a single precompiled static binary. You do not need Rust, a build toolchain, or any API keys to follow this page.
+The default install path uses a single precompiled static binary. You do not need a build toolchain, or any API keys, unless you choose to build from source.
 
 ## Install
 
-OpenFirma is installed with a one-line script. It downloads the right binary for your platform, puts it on your `PATH`, and offers to scaffold your first project.
+OpenFirma can be installed with a one-line script or built from source. The script downloads the right binary for your platform, puts it on your `PATH`, and offers to scaffold your first project.
+
+<Tabs>
+<TabItem label="Precompiled binary">
 
 <Steps>
 
@@ -39,34 +42,104 @@ OpenFirma is installed with a one-line script. It downloads the right binary for
 
 </Steps>
 
-The installer drops the binary in `~/.local/bin` by default and adds it to your shell's `PATH`. No Rust, `protoc`, or `make` required — those were only ever build-time tools, and you are installing a finished binary.
+The installer drops the binary in `~/.local/bin` by default and adds it to your shell's `PATH`.
+
+</TabItem>
+<TabItem label="From source">
+
+Prerequisites:
+
+- Rust 1.88 or newer.
+- `protoc`, the Protocol Buffers compiler.
+- `git`.
+
+Clone the repository:
+
+```bash
+git clone https://github.com/Firma-AI/openfirma.git
+cd openfirma
+```
+
+Install the current source checkout:
+
+```bash
+cargo install --path crates/firma --bin firma --locked
+```
+
+This installs `firma` into Cargo's binary directory, usually `~/.cargo/bin`. If `firma --version` is not found, make sure that directory is on your `PATH`.
+
+</TabItem>
+</Tabs>
 
 ## Set up a project
 
-`firma config` scaffolds everything a project needs in one command: a `firma.toml` config file, signing keys, and a set of default Cedar policies.
-
-```bash
-firma config
-```
-
-The interactive wizard asks a few questions — which agent you run, which provider it talks to, and whether to use a local Authority. The defaults are sensible; press Enter to accept them. The default `agent-local` mode writes an `[authority]` section into `firma.toml`, so `firma run` starts a local Authority without prompting later. The scaffold lands in a `.firma/` directory under your current folder.
-
-If you accepted the installer's prompt to scaffold a project, this is already done.
-
-To skip the wizard and take all defaults (useful in CI):
+Start in the project directory you want to protect. Scaffold the local OpenFirma layout with the defaults:
 
 ```bash
 firma config --yes
 ```
 
+This creates `.firma/` with a `firma.toml` config file, signing keys, empty policy directories, and a placeholder mapping file.
+
+Now make the generated profile work for this demo, where we are going to enforce a simple `curl` command.
+
+1. Create the audit directory that `firma monitor` will tail.
+
+   ```bash
+   mkdir -p /tmp/openfirma-quickstart
+   ```
+
+2. Edit `.firma/firma.toml`.
+
+   In the existing `[sidecar.audit]` section, add `sink` and `file_path` below the generated `signing_key_path`:
+
+   ```toml
+   sink = "file"
+   file_path = "/tmp/openfirma-quickstart/audit.jsonl"
+   ```
+
+   Then append these sections to the end of the same file:
+
+   ```toml
+   [profiles.generic]
+   use_http_proxy_sidecar = true
+
+   [sidecar.preflight]
+   session_id = "quickstart-session"
+   resource_scope = "api.github.com/"
+   ```
+
+   The profile setting makes ordinary tools like `curl` use the HTTP proxy Sidecar. The preflight settings pin a stable session ID and grant that session access to the GitHub resource used below.
+
+3. Replace the placeholder contents of `.firma/mapping-rules.toml` with the two rules for the GitHub request:
+
+   ```toml
+   [[rules]]
+   method = "CONNECT"
+   host = "api.github.com"
+   path = "/"
+   action_class = "communication.external.send"
+
+   [[rules]]
+   method = "GET"
+   host = "api.github.com"
+   path = "/users/firma-ai"
+   action_class = "communication.external.send"
+   ```
+
+You do not need to add a Cedar policy file for this demo. `firma run` starts a local development Authority with a temporary policy bundle that permits `communication.external.send`.
+
 ## Run an agent under enforcement
 
 `firma run` launches a command inside a sandbox and forces all of its outbound traffic through the enforcement Sidecar. It autostarts a local Sidecar for you, and on first use offers to start a local Authority too.
 
-Pass the command to wrap after `--`:
+Pass any command you want to wrap after the `--` marker:
 
 ```bash
-firma run -- curl -s https://api.github.com/users/firma-ai
+FIRMA_RUN_SESSION_ID=quickstart-session firma run --config .firma/firma.toml -- \
+  curl -kfsS \
+    --proxy-header 'x-firma-session-id: quickstart-session' \
+    https://api.github.com/users/firma-ai
 ```
 
 The first time you run a project with no Authority configured, `firma run` prompts:
@@ -81,7 +154,7 @@ Start a local Mini Authority? [y/N]
 
 Answer **`y`**. `firma run` writes an `[authority]` section into your `firma.toml`, so every later run starts the local Authority automatically and never prompts again.
 
-Every outbound call the wrapped command makes is normalized, checked against your capabilities, and evaluated against your Cedar policy. Calls that pass are forwarded; calls that fail get a `403` and never leave your machine. Either way, the decision is written to the audit log.
+Every outbound call the wrapped command makes is normalized, checked against its capability, and evaluated against the Cedar policy bundle supplied by the Authority. In this quickstart, `firma run` starts a local development Authority and uses a temporary policy bundle for the run. The `-k` flag keeps the demo short by letting `curl` accept the local HTTPS interception certificate; for real workloads, install the generated CA instead.
 
 ### Non-interactive runs (CI)
 
@@ -100,7 +173,7 @@ This is the real entry point for running agents — swap `curl ...` for whatever
 Open a second terminal and tail the audit log to see ALLOW and DENY decisions as they happen:
 
 ```bash
-firma monitor
+firma monitor --state-dir /tmp/openfirma-quickstart --tail
 ```
 
 Each line is one decision: the action class, the resource, and the outcome.
