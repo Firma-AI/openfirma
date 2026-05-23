@@ -236,9 +236,18 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         firma_run_toml.contains(&format!("source = '{}'", override_workspace.display())),
         "workspace override should be rendered in firma-run.toml:\n{firma_run_toml}"
     );
+    // toml_edit merge contract: workspace override changes only the
+    // [[profiles.generic.mounts]] entry — independent env_set
+    // customizations the operator added by hand survive.
     assert!(
-        !firma_run_toml.contains("CUSTOM_WRAPPER_DEFAULT = \"kept\""),
-        "workspace override should re-render the wrapper instead of preserving stale wrapper content:\n{firma_run_toml}"
+        firma_run_toml.contains("CUSTOM_WRAPPER_DEFAULT = \"kept\""),
+        "merge must preserve unrelated env_set customizations across workspace override:\n{firma_run_toml}"
+    );
+    // The previous workspace mount must be gone so the agent does not
+    // accidentally retain RW access to the old path.
+    assert!(
+        !firma_run_toml.contains(&format!("source = '{}'", workspace.display())),
+        "previous workspace mount should be dropped on override:\n{firma_run_toml}"
     );
 }
 
