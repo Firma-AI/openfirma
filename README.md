@@ -74,8 +74,8 @@ firma run --profile claude-code -- claude
 To run a persistent stack instead:
 
 ```bash
-firma stack init          # scaffold keys + config
-firma stack start --detach
+firma config              # scaffold keys + config
+firma sidecar start --detach
 firma run --profile claude-code -- claude
 firma monitor             # tail the live audit stream
 ```
@@ -105,8 +105,8 @@ firma run --profile claude-code -- claude
 The Authority becomes persistent and shared across local agent sessions. Each new `firma run` attaches to the same trust root and pulls the current policy bundle without restarting existing agents.
 
 ```bash
-firma stack init
-firma stack start --detach
+firma config
+firma sidecar start --detach
 
 firma run --profile claude-code -- claude   &
 firma run --profile codex       -- codex    &
@@ -162,10 +162,10 @@ The Authority can be the Mini Authority included in this repo or your own implem
 | Command | Description |
 |---|---|
 | `firma run` | Wrap an agent process: autostarts Sidecar + Authority, applies a policy profile, tears down on exit |
-| `firma stack init` | Scaffold a deployment: writes `firma.toml`, keys, policy dirs, and revocation file |
-| `firma stack start` | Boot Authority + Sidecar as one unit. `--detach` forks a supervisor |
-| `firma stack stop` | Graceful shutdown with configurable timeout |
-| `firma stack status` | Per-component pid, listen address, state, and uptime. `--json` for machine output |
+| `firma config` | Scaffold a deployment: writes `firma.toml`, keys, policy dirs, and revocation file |
+| `firma sidecar start` | Boot Authority + Sidecar as one unit. `--detach` forks a supervisor |
+| `firma sidecar stop` | Graceful shutdown with configurable timeout |
+| `firma sidecar status` | Per-component pid, listen address, state, and uptime. `--json` for machine output |
 | `firma monitor` | Tail the live audit stream and component logs from a running stack |
 | `firma doctor` | Structured diagnostic report: installed components, reachable endpoints, config status |
 | `firma authority` | Run the Mini Authority: issues capability tokens, streams Cedar policy bundles |
@@ -206,7 +206,7 @@ The Authority can be the Mini Authority included in this repo or your own implem
 
 | | |
 |---|---|
-| [`crates/firma`](crates/firma/) | CLI entrypoint: `firma run`, `firma stack`, `firma monitor`, `firma doctor` |
+| [`crates/firma`](crates/firma/) | CLI entrypoint: `firma run`, `firma sidecar`, `firma monitor`, `firma doctor` |
 | [`crates/firma-sidecar`](crates/firma-sidecar/) | The enforcement Sidecar: interceptors, pipeline, connectors |
 | [`crates/firma-authority`](crates/firma-authority/) | Mini Authority: file-based trust root for local development |
 | [`crates/firma-core`](crates/firma-core/) | Shared types, Cedar schema, action classes, audit event format |
