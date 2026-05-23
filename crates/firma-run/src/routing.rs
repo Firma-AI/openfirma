@@ -311,6 +311,7 @@ pub fn resolve_authority(
     cli: &crate::authority::AuthorityCli,
     profile_name: &str,
     user_config_path: Option<&Path>,
+    user_config_dir: Option<&Path>,
     firma_exe: &Path,
     prompt: &mut dyn crate::authority::AuthorityPromptIo,
 ) -> Result<ResolvedAuthority, RunError> {
@@ -327,11 +328,13 @@ pub fn resolve_authority(
     let ca_cert_path = section_snapshot
         .as_ref()
         .and_then(|s| s.connect.as_ref())
-        .and_then(|c| c.ca_cert_path.clone());
+        .and_then(|c| c.ca_cert_path.as_deref())
+        .map(|path| rebase_config_relative_path(path, user_config_dir));
     let pub_key_path = section_snapshot
         .as_ref()
         .and_then(|s| s.connect.as_ref())
-        .and_then(|c| c.public_key_path.clone());
+        .and_then(|c| c.public_key_path.as_deref())
+        .map(|path| rebase_config_relative_path(path, user_config_dir));
     let config_committed_local = section_snapshot.as_ref().is_some_and(|s| s.local);
 
     match selection {
@@ -424,6 +427,14 @@ pub fn resolve_authority(
                 }
             }
         }
+    }
+}
+
+fn rebase_config_relative_path(path: &Path, config_dir: Option<&Path>) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        config_dir.unwrap_or_else(|| Path::new(".")).join(path)
     }
 }
 
@@ -715,7 +726,9 @@ fn relay_unix_to_unix(client: &UnixStream, target: &UnixStream) -> io::Result<()
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod parse_host_port_tests {
-    use super::parse_host_port;
+    use std::path::{Path, PathBuf};
+
+    use super::{parse_host_port, rebase_config_relative_path};
 
     #[test]
     fn parses_http_with_port() {
@@ -748,5 +761,17 @@ mod parse_host_port_tests {
     #[test]
     fn rejects_empty() {
         assert!(parse_host_port("").is_none());
+    }
+
+    #[test]
+    fn rebases_relative_config_paths_to_config_dir() {
+        assert_eq!(
+            rebase_config_relative_path(Path::new("authority-ca.crt"), Some(Path::new("/cfg"))),
+            PathBuf::from("/cfg/authority-ca.crt")
+        );
+        assert_eq!(
+            rebase_config_relative_path(Path::new("/abs/authority.pub"), Some(Path::new("/cfg"))),
+            PathBuf::from("/abs/authority.pub")
+        );
     }
 }

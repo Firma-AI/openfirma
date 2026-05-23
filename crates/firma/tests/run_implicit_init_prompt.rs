@@ -89,3 +89,63 @@ fn no_autostart_without_firma_toml_errors_with_hint() {
         ".firma/ must not be created on --no-autostart abort"
     );
 }
+
+#[test]
+fn explicit_missing_run_config_does_not_scaffold() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let cwd = tmp.path();
+    let missing = cwd.join("missing-run.toml");
+
+    let out = Command::new(firma_bin())
+        .current_dir(cwd)
+        .args(["run", "--config"])
+        .arg(&missing)
+        .arg("codex")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env_remove("FIRMA_CONFIG")
+        .output()
+        .expect("spawn firma run");
+
+    assert!(!out.status.success(), "missing explicit --config must fail");
+    assert!(
+        !cwd.join(".firma").exists(),
+        ".firma/ must not be created when explicit --config is missing"
+    );
+}
+
+#[test]
+fn remote_authority_does_not_implicit_scaffold_without_trust_material() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let cwd = tmp.path();
+
+    let out = Command::new(firma_bin())
+        .current_dir(cwd)
+        .args([
+            "run",
+            "--authority",
+            "https://authority.example.com:9443",
+            "codex",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env_remove("FIRMA_CONFIG")
+        .output()
+        .expect("spawn firma run");
+
+    assert!(
+        !out.status.success(),
+        "remote implicit init without trust material must fail"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("agent-remote") && stderr.contains("--authority-pub-key"),
+        "stderr should explain how to configure remote authority trust material:\n{stderr}"
+    );
+    assert!(
+        !cwd.join(".firma").exists(),
+        ".firma/ must not be created for incomplete remote implicit init"
+    );
+}
