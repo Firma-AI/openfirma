@@ -103,25 +103,6 @@ When the connector dispatches a call, four things can happen:
 
 Note the subtle but important point: a connector failure does **not** retroactively turn an `Allow` into a `Deny` in the audit log. The policy decision is recorded as it happened, *and* the connector failure is recorded separately. This preserves the determinism invariant: the same envelope plus the same bundle would have produced the same `Allow` regardless of whether the network later cooperated.
 
-## Why a single connector implementation today
-
-V1 ships a single generic HTTP connector and intentionally does not expose connector pluggability as an extension surface. There are good reasons for this:
-
-- **Most upstreams agents talk to are HTTP-shaped.** OpenAI, Anthropic, Stripe, GitHub, Slack, internal SaaS — they're all HTTP/HTTPS over TLS. One connector handles them all.
-- **The enforcement boundary stays small.** A pluggable connector surface would be a place for vendors to ship "smart" wrappers that re-litigate decisions or alter payloads. Keeping the surface frozen prevents that.
-- **Per-host configuration is enough.** Most differentiation between upstreams is rate limits, timeouts, and credentials — all configurable today without code.
-
-Future work may add connectors for non-HTTP transports (gRPC streaming to upstreams, message queues, etc.) where the request shape is fundamentally different. Until that's needed, the single-connector design keeps the system honest.
-
-## What connectors are *not*
-
-A few common misunderstandings:
-
-- **Connectors are not policy.** They cannot deny a request on their own. If you want a request blocked, write a policy rule.
-- **Connectors do not buffer.** A request is forwarded as it streams in; the connector is not a place to inspect bodies or apply transformations.
-- **Connectors do not retry.** A failed dispatch is a single attempt. If you need retry semantics, that's the agent's job — and policies should consider that retries inflate `action_count`.
-- **Connectors are not load balancers.** A request goes to the host it was addressed to. There is no ingress shape, no upstream selection, no traffic splitting.
-
 ## Where to go next
 
 - [Inject credentials](../../guides/inject-credentials/) — operator workflow for `[credentials.*]`.

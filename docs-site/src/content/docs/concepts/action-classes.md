@@ -3,8 +3,6 @@ title: Action classes
 description: The canonical vocabulary that connects raw HTTP traffic to the policies that govern it.
 ---
 
-A capability says "this agent may perform `communication.external.send`". A policy says "`payment.transfer` is forbidden over this amount". Neither statement mentions an HTTP method, a host, or a path. They are written in terms of **action classes**, the shared vocabulary that the rest of OpenFirma speaks.
-
 This page explains what action classes are, where the vocabulary comes from, and how a raw `(method, host, path)` tuple gets turned into one. If you've read [The enforcement pipeline](../pipeline/), you'll recognize this as what the normalizer does.
 
 ## Why a fixed vocabulary?
@@ -35,7 +33,7 @@ Costs:
 
 ## The registry
 
-OpenFirma ships with **44 canonical action classes**. The base 15 come from **FEP v0.1**, the versioned Firma protocol specification that defines the canonical registry and its invariants. The remaining classes extend that base for GitHub (12), Stripe (12), and Gmail (5). The full list lives in `docs/markdown/firma_action_class_registry.md` in the repository.
+OpenFirma ships with **44 canonical action classes**. The base 15 come from **FEP v0.1**, the versioned Firma protocol specification that defines the canonical registry and its invariants. The remaining classes extend that base for GitHub (12), Stripe (12), and Gmail (5).
 
 The 15 FEP v0.1 base classes give you a feel for the granularity:
 
@@ -128,17 +126,6 @@ forbid (
     resource == Firma::Resource::"paste.rs/"
 );
 ```
-
-(Note `paste.rs/` — the trailing slash is the normalizer's representation of an empty path. This is a real source of subtle policy bugs; see the comments in `examples/demo/policies/example-deny.cedar`.)
-
-## What action classes are *not*
-
-A few common misunderstandings worth heading off:
-
-- **They are not authentication.** A class identifies *what* an agent is trying to do; whether the agent is *allowed* to do it is decided by capability (Stage 1) and policy (Stage 2). The class itself is morally neutral.
-- **They are not unique to a host.** `communication.external.send` covers paste.rs *and* webhooks *and* arbitrary POSTs to unknown hosts. The class is the *category* of behavior. The resource (host+path) is what differentiates instances.
-- **They are not extensible at runtime.** You add a class by editing the registry, recompiling the Sidecar, and shipping a new mapping file. There is intentionally no plugin or remote-config path. Determinism is the feature.
-- **They do not carry secrets.** Headers, cookies, body content — none of this is part of the class or the resource. The Sidecar strips sensitive headers before normalization to ensure they don't leak into audit logs.
 
 ## Where to go next
 

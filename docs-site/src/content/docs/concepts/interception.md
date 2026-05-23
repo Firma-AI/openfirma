@@ -9,18 +9,16 @@ This page covers the three transport modes, the CONNECT vs MITM trade-off for HT
 
 ## The three transport modes
 
-```text
-┌──────────┐    HTTP_PROXY=...     ┌──────────────────┐
-│  Agent   │ ────────────────────► │   HTTP proxy     │  default for most workloads
-└──────────┘                       └──────────────────┘
+```mermaid
+flowchart TB
+    agent["Agent"]
+    http["HTTP proxy<br/>default for most workloads"]
+    grpc["gRPC interceptor<br/>programmatic, no port binding"]
+    unix["Unix socket<br/>containers, multi-tenant hosts"]
 
-┌──────────┐    in-process call    ┌──────────────────┐
-│  Agent   │ ────────────────────► │  gRPC interceptor│  programmatic, no port binding
-└──────────┘                       └──────────────────┘
-
-┌──────────┐    /run/firma.sock    ┌──────────────────┐
-│  Agent   │ ────────────────────► │   Unix socket    │  containers, multi-tenant hosts
-└──────────┘                       └──────────────────┘
+    agent -->|"HTTP_PROXY=..."| http
+    agent -->|"in-process call"| grpc
+    agent -->|"/run/firma.sock"| unix
 ```
 
 All three feed the same `RawRequest` shape into the pipeline, so the rest of the Sidecar — normalizer, Stage 1, Stage 2, audit — is identical regardless of how the request arrived.
@@ -63,34 +61,42 @@ This is useful in three situations: (1) containerized environments where binding
 
 ## HTTPS: CONNECT vs MITM
 
-Modern agents talk HTTPS to nearly everything. An HTTP proxy can handle HTTPS in two fundamentally different ways, and the choice is consequential for what the policy can see.
+Modern agents talk HTTPS to nearly everything, which means the request is encrypted before it leaves the agent. The Sidecar has two ways to handle that traffic. The difference is simple: **CONNECT sees the destination; MITM sees the HTTP request.**
 
 ### CONNECT relay
 
-The agent sends `CONNECT api.example.com:443 HTTP/1.1`. The Sidecar opens a TCP connection to that host:port, replies `200 Connection Established`, and from then on **just relays bytes** between agent and origin. The TLS handshake happens between the agent and the origin; the Sidecar sees only encrypted traffic.
+In CONNECT mode, the agent asks the Sidecar to open a tunnel:
 
-What you can enforce in CONNECT-only mode:
+```text
+CONNECT api.example.com:443
+```
 
-- Method: only `CONNECT` is observable.
-- Host and port: from the CONNECT line.
-- Nothing else: no path, no method (the inner one), no headers, no body.
+The Sidecar can allow or deny that tunnel. If it allows, the TLS handshake happens directly between the agent and `api.example.com`, and the Sidecar only relays encrypted bytes.
 
-That's enough for **destination-level policy**: "this agent may not contact `paste.rs`", "this agent may only contact `api.openai.com`". It's *not* enough for L7 policy: "no GET to `/admin/*`", or "no POST with body containing this key".
+That means CONNECT mode can enforce destination-level rules:
 
-CONNECT-only is the right choice for hosts where you don't want to break end-to-end TLS — third-party SaaS where the operator hasn't authorized you to inspect, or services with certificate pinning that would reject MITM.
+- allow `api.openai.com`;
+- deny `paste.rs`;
+- record that the agent tried to open a tunnel to `api.example.com:443`.
+
+It cannot enforce request-level rules such as "deny `GET /admin/*`" or "deny a POST body containing a secret", because the Sidecar never sees the inner HTTP method, path, headers, or body.
+
+Use CONNECT when destination policy is enough, when you are not allowed to inspect the traffic, or when the upstream uses certificate pinning or mTLS that would reject inspection.
 
 ### TLS MITM
 
-The Sidecar accepts the CONNECT, then **terminates TLS** with a certificate it generates on-the-fly using its own CA. The agent's TLS client sees a certificate signed by the Sidecar's CA (which the agent has been configured to trust). Inside that TLS session, the Sidecar decrypts the request, runs the full pipeline, then re-encrypts and forwards to the origin under a fresh outbound TLS connection.
+In MITM mode, the Sidecar becomes the TLS endpoint for the agent. It presents a certificate signed by the Sidecar CA, which the agent process has been configured to trust. The Sidecar decrypts the HTTP request, runs the normal pipeline, then opens a separate TLS connection to the upstream service.
 
-What you can enforce in MITM mode:
+That means MITM mode can enforce full L7 policy:
 
-- Everything from CONNECT mode, plus
-- HTTP method, path, headers, body
-- Full L7 action-class mapping (`POST /v1/payment_intents` → `payment.transfer`)
-- Cedar context built from the actual request body via `intent.params`
+- everything CONNECT can enforce;
+- HTTP method, path, headers, and body;
+- action-class mappings such as `POST /v1/payment_intents` to `payment.transfer`;
+- Cedar rules that inspect normalized request data through fields such as `context.params`.
 
-MITM is the right choice for hosts you control or whose terms permit inspection — your own SaaS APIs, OpenAI / Anthropic / Stripe under explicit organizational policy, or your own internal services. It's also the only way to enforce mission-grade rules like "no Stripe transfer over $1000".
+After decryption, the request is not just treated as an endpoint to allow or deny. It goes through the normal OpenFirma pipeline: mapping to an action class, capability validation, Cedar policy evaluation, audit, and optional credential injection.
+
+Use MITM when you control the destination, have explicit permission to inspect it, and need request-level policy. It is the mode you need for rules like "deny Stripe transfers over $1,000" or "allow only specific API paths."
 
 ### Configuring per-host
 
@@ -101,7 +107,7 @@ MITM is the right choice for hosts you control or whose terms permit inspection 
 enabled         = true
 intercept_hosts = ["api.openai.com", "api.anthropic.com", "api.stripe.com"]
 bypass_hosts    = ["self-signed.internal"]
-strict_hosts    = ["api.stripe.com"]
+strict_hosts    = ["api.github.com"]
 ```
 
 - **`intercept_hosts`** — explicit allowlist for MITM. Hosts in this list get TLS-terminated. Wildcards allowed (`*.anthropic.com`).
