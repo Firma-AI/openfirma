@@ -33,6 +33,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
              pass `--sidecar <tcp://...|unix:///...>` or omit `--no-autostart`"
         );
     }
+    validate_sidecar_endpoint_flag(&args)?;
 
     // Implicit init: if no firma.toml is discoverable for this project,
     // scaffold one before handing off to firma-run. Keeps the spec's
@@ -157,7 +158,7 @@ fn resolve_implicit_init_authority(args: &RunArgs) -> anyhow::Result<AuthoritySh
         anyhow::bail!(
             "no firma.toml found and stdin is not a terminal; \
              run `firma config` to scaffold a project config, or pass \
-             `--authority local` / `--authority <url>` to commit non-interactively"
+             `--authority local` to commit to local implicit setup non-interactively"
         );
     }
     let confirmed = prompt
@@ -167,11 +168,28 @@ fn resolve_implicit_init_authority(args: &RunArgs) -> anyhow::Result<AuthoritySh
         anyhow::bail!(
             "local Mini Authority bootstrap declined; \
              run `firma config` to pick a deployment shape interactively, \
-             pass `--authority <url>` for a remote authority, \
+             use `firma config --mode agent-remote` for a remote authority, \
              or re-run with `--authority local` to bypass this prompt"
         );
     }
     Ok(AuthorityShape::Local)
+}
+
+fn validate_sidecar_endpoint_flag(args: &RunArgs) -> anyhow::Result<()> {
+    let Some(value) = args.sidecar.as_deref() else {
+        return Ok(());
+    };
+    if value == "local" {
+        return Ok(());
+    }
+
+    firma_run::sidecar::resolve(
+        &firma_run::sidecar::SidecarCli::Remote(value.to_string()),
+        false,
+        None,
+    )
+    .map(|_| ())
+    .map_err(|error| anyhow::anyhow!("{error}"))
 }
 
 fn exit_code(code: i32) -> ExitCode {
