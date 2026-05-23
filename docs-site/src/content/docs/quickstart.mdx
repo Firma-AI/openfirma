@@ -131,7 +131,7 @@ You do not need to add a Cedar policy file for this demo. `firma run` starts a l
 
 ## Run an agent under enforcement
 
-`firma run` launches a command inside a sandbox and forces all of its outbound traffic through the enforcement Sidecar. It autostarts a local Sidecar for you, and on first use offers to start a local Authority too.
+`firma run` launches a command inside a sandbox and forces all of its outbound traffic through the enforcement Sidecar. It autostarts a local Sidecar and the local Authority that `firma config` configured in your `firma.toml`, then tears both down when the command exits.
 
 Pass any command you want to wrap after the `--` marker:
 
@@ -142,29 +142,17 @@ FIRMA_RUN_SESSION_ID=quickstart-session firma run --config .firma/firma.toml -- 
     https://api.github.com/users/firma-ai
 ```
 
-The first time you run a project with no Authority configured, `firma run` prompts:
-
-```text
-No Authority is configured for this project.
-firma run can start a local Mini Authority for development on loopback ([::1]) using a per-run ephemeral port.
-This is suitable for a single developer on a trusted workstation.
-
-Start a local Mini Authority? [y/N]
-```
-
-Answer **`y`**. `firma run` writes an `[authority]` section into your `firma.toml`, so every later run starts the local Authority automatically and never prompts again.
-
 Every outbound call the wrapped command makes is normalized, checked against its capability, and evaluated against the Cedar policy bundle supplied by the Authority. In this quickstart, `firma run` starts a local development Authority and uses a temporary policy bundle for the run. The `-k` flag keeps the demo short by letting `curl` accept the local HTTPS interception certificate; for real workloads, install the generated CA instead.
 
-### Non-interactive runs (CI)
+### Using a different Authority
 
-The prompt needs a terminal — on a non-TTY (a CI job, a script) it fails fast with a "no TTY" error instead of hanging. Commit the choice up front with `--authority local`, which skips the prompt and autostarts the local Authority:
+The `[authority]` section `firma config` wrote makes `firma run` autostart a local Authority. To use an Authority you already run instead, point at it with `--authority`:
 
 ```bash
-firma run --authority local -- curl -s https://api.github.com/users/firma-ai
+firma run --authority https://authority.internal:50051 --config .firma/firma.toml -- <command>
 ```
 
-To target an Authority you already run, pass its URL instead: `--authority https://authority.internal:50051`.
+In CI or any non-interactive context, pass `--no-autostart` to fail with a typed error instead of silently starting a local Authority or Sidecar.
 
 This is the real entry point for running agents — swap `curl ...` for whatever agent command you actually run (a coding agent, a script, a shell).
 
