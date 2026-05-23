@@ -346,6 +346,88 @@ fn agent_remote_switch_warns_about_existing_local_authority_without_force() {
 }
 
 #[test]
+fn agent_remote_to_local_switch_persists_authority_section() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+
+    // Bootstrap as agent-remote first.
+    let remote = firma()
+        .args(["config", "--yes", "--mode", "agent-remote", "--output-dir"])
+        .arg(&config_dir)
+        .args(["--state-dir"])
+        .arg(&state_dir)
+        .args([
+            "--authority-url",
+            "https://authority.example.com:9443",
+            "--authority-ca-cert",
+        ])
+        .arg(state_dir.join("remote-ca.crt"))
+        .args(["--authority-pub-key"])
+        .arg(state_dir.join("remote-authority.pub"))
+        .output()
+        .expect("spawn initial remote firma config");
+    assert!(
+        remote.status.success(),
+        "initial remote config failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&remote.stdout),
+        String::from_utf8_lossy(&remote.stderr),
+    );
+
+    let firma_toml_path = config_dir.join("firma.toml");
+    let before: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&firma_toml_path).unwrap()).unwrap();
+    assert!(
+        before.get("authority").is_none(),
+        "agent-remote bootstrap must not write [authority]:\n{}",
+        std::fs::read_to_string(&firma_toml_path).unwrap()
+    );
+
+    // Switch to agent-local. Merge contract: [authority] must be added
+    // without requiring --force, because toml_edit merge is non-destructive
+    // and the previous mode shape (just [sidecar.authority]) survives.
+    let switch = firma()
+        .args([
+            "config",
+            "--yes",
+            "--mode",
+            "agent-local",
+            "--authority-listen",
+            "127.0.0.1:9443",
+            "--output-dir",
+        ])
+        .arg(&config_dir)
+        .args(["--state-dir"])
+        .arg(&state_dir)
+        .output()
+        .expect("spawn switch firma config");
+    assert!(
+        switch.status.success(),
+        "switch to local failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&switch.stdout),
+        String::from_utf8_lossy(&switch.stderr),
+    );
+
+    let after: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&firma_toml_path).unwrap()).unwrap();
+    assert!(
+        after.get("authority").is_some(),
+        "switching to agent-local must persist [authority]:\n{}",
+        std::fs::read_to_string(&firma_toml_path).unwrap()
+    );
+    assert_eq!(
+        after["authority"]["listen_addr"].as_str(),
+        Some("127.0.0.1:9443"),
+    );
+    // The stale remote connect coords must be stripped (Option 1).
+    assert!(
+        after["sidecar"]["authority"].get("url").is_none(),
+        "remote url must be stripped on switch to local:\n{}",
+        std::fs::read_to_string(&firma_toml_path).unwrap()
+    );
+}
+
+#[test]
 fn authority_mode_honors_selected_posture() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let config_dir = tmp.path().join("config");

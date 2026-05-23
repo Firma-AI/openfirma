@@ -36,7 +36,6 @@ struct SidecarInputs {
 struct CollectedInputs {
     mode: Mode,
     keep_local_authority: bool,
-    overwrite_firma_toml: bool,
     authority: AuthorityInputs,
     sidecar: SidecarInputs,
     config_dir: PathBuf,
@@ -85,13 +84,7 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     }
 
     create_scaffold_dirs(cfg, state)?;
-    write_scaffold_files(
-        &files,
-        cfg,
-        args.force,
-        inputs.overwrite_firma_toml,
-        inputs.sidecar.overwrite_policy,
-    )?;
+    write_scaffold_files(&files, cfg, args.force, inputs.sidecar.overwrite_policy)?;
 
     let has_server = has_server(&inputs);
     let has_sidecar = matches!(inputs.mode, Mode::AgentLocal | Mode::AgentRemote);
@@ -161,7 +154,6 @@ fn write_scaffold_files(
     files: &[(String, String)],
     cfg: &Path,
     force: bool,
-    overwrite_firma_toml: bool,
     overwrite_policy: bool,
 ) -> Result<()> {
     for (rel, content) in files {
@@ -170,9 +162,20 @@ fn write_scaffold_files(
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("mkdir {}", parent.display()))?;
         }
-        let should_overwrite = force
-            || (overwrite_firma_toml && rel == "firma.toml")
-            || (overwrite_policy && rel.starts_with("policies/"));
+        // `firma.toml`, `firma-run.toml`, and `mapping-rules.toml` are
+        // produced by the toml_edit merge layer: the input was read from
+        // disk, modified in place, and re-serialized. Writing the
+        // resulting bytes back is non-destructive — unknown sections,
+        // user-tuned defaults, and comments are preserved. Skipping the
+        // write here would silently swallow mode changes (e.g. switching
+        // from agent-remote to agent-local would not persist the new
+        // `[authority]` section).
+        let is_merged_toml = matches!(
+            rel.as_str(),
+            "firma.toml" | "firma-run.toml" | "mapping-rules.toml"
+        );
+        let should_overwrite =
+            force || is_merged_toml || (overwrite_policy && rel.starts_with("policies/"));
         if !should_overwrite && path.exists() {
             eprintln!(
                 "skip (exists): {} — use --force to overwrite",
@@ -362,7 +365,8 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         (None, _) if interactive => prompt_mode_with_default(&theme, &Mode::AgentLocal)?,
         (None, _) => Mode::AgentLocal,
     };
-    let mode_change = confirm_mode_change(args, &existing, &mode, interactive, &theme)?;
+    let keep_local_authority =
+        confirm_keep_local_authority(args, &existing, &mode, interactive, &theme)?;
 
     let state_dir =
         resolve_state_dir_with_default(args.state_dir.clone(), existing.state_dir.clone())
@@ -385,8 +389,7 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
 
     Ok(CollectedInputs {
         mode,
-        keep_local_authority: mode_change.keep_local_authority,
-        overwrite_firma_toml: mode_change.overwrite_firma_toml,
+        keep_local_authority,
         authority,
         sidecar,
         config_dir,
@@ -398,59 +401,43 @@ fn has_server(inputs: &CollectedInputs) -> bool {
     inputs.keep_local_authority || matches!(inputs.mode, Mode::AgentLocal | Mode::Authority)
 }
 
-struct ModeChangeDecision {
-    keep_local_authority: bool,
-    overwrite_firma_toml: bool,
-}
-
-fn confirm_mode_change(
+/// Decide whether to retain the existing local `[authority]` section
+/// when the operator is switching to `agent-remote`.
+///
+/// The `toml_edit` merge layer is non-destructive: switching modes patches
+/// the relevant sections without blasting unknown content, so there is no
+/// "overwrite this file?" gate anymore. The only remaining decision is
+/// whether the user wants the previously-configured local Mini Authority
+/// to keep autostarting even though the sidecar is now configured to
+/// reach a remote URL (an unusual but supported deployment).
+fn confirm_keep_local_authority(
     args: &InitArgs,
     existing: &ExistingConfigDefaults,
     mode: &Mode,
     interactive: bool,
     theme: &ColorfulTheme,
-) -> Result<ModeChangeDecision> {
+) -> Result<bool> {
     if args.force {
-        return Ok(ModeChangeDecision {
-            keep_local_authority: false,
-            overwrite_firma_toml: false,
-        });
+        return Ok(false);
     }
-
-    if matches!(existing.mode, Some(Mode::AgentLocal | Mode::Authority))
-        && matches!(mode, Mode::AgentRemote)
+    if !matches!(existing.mode, Some(Mode::AgentLocal | Mode::Authority))
+        || !matches!(mode, Mode::AgentRemote)
     {
-        eprintln!(
-            "Warning: this configuration includes a local [authority] section. \
-             If you keep it, firma run starts the Authority locally instead of using only the remote Authority."
-        );
-        if !interactive || args.dry_run {
-            return Ok(ModeChangeDecision {
-                keep_local_authority: false,
-                overwrite_firma_toml: false,
-            });
-        }
-        let keep = dialoguer::Confirm::with_theme(theme)
-            .with_prompt("Keep the local [authority] section and local Authority startup?")
-            .default(false)
-            .interact()
-            .context("authority section prompt")?;
-        if keep {
-            return Ok(ModeChangeDecision {
-                keep_local_authority: true,
-                overwrite_firma_toml: true,
-            });
-        }
-        return Ok(ModeChangeDecision {
-            keep_local_authority: false,
-            overwrite_firma_toml: true,
-        });
+        return Ok(false);
     }
 
-    Ok(ModeChangeDecision {
-        keep_local_authority: false,
-        overwrite_firma_toml: false,
-    })
+    eprintln!(
+        "Warning: this configuration includes a local [authority] section. \
+         If you keep it, firma run starts the Authority locally instead of using only the remote Authority."
+    );
+    if !interactive || args.dry_run {
+        return Ok(false);
+    }
+    dialoguer::Confirm::with_theme(theme)
+        .with_prompt("Keep the local [authority] section and local Authority startup?")
+        .default(false)
+        .interact()
+        .context("authority section prompt")
 }
 
 fn resolve_config_dir(
@@ -1131,7 +1118,6 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
     let inputs = CollectedInputs {
         mode,
         keep_local_authority: false,
-        overwrite_firma_toml: false,
         authority,
         sidecar: SidecarInputs {
             name: plan.agent.clone(),
@@ -1230,7 +1216,6 @@ mod tests {
         let inputs = CollectedInputs {
             mode: Mode::AgentLocal,
             keep_local_authority: false,
-            overwrite_firma_toml: false,
             authority: AuthorityInputs {
                 listen: "127.0.0.1:9443".to_string(),
                 connect_url: "https://127.0.0.1:9443".to_string(),
