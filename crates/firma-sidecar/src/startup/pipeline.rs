@@ -129,7 +129,7 @@ pub fn build_pipeline_runtime(
 
     let credential_injector = build_credential_injector(&config.credentials)?;
 
-    let initial_readiness = if config.policy.authority_url.is_some() {
+    let initial_readiness = if config.authority.url.is_some() {
         ReadinessState::default()
     } else {
         ReadinessState {

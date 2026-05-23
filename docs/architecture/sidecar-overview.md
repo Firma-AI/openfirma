@@ -54,7 +54,7 @@ graph LR
 
 At startup, `main.rs` loads configuration, spawns long-lived tasks, and
 wires them together through in-process channels. When
-`policy.authority_url` is configured, two additional background tasks
+`authority.url` is configured, two additional background tasks
 keep policy and revocation state current.
 
 ```mermaid
@@ -379,7 +379,7 @@ shared-reference getters; once built it is never mutated.
 
 ### 5.6 Authority stream clients
 
-When `policy.authority_url` is set, `startup` spawns two long-lived
+When `authority.url` is set, `startup` spawns two long-lived
 tasks from `authority_client`:
 
 - **`PolicyBundleTask`** calls `WatchPolicyBundle` and, on each

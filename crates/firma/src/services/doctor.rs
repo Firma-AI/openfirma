@@ -126,22 +126,17 @@ async fn build_report(args: Args) -> RenderedReport {
 
     // 5. authority reachability
     let authority_endpoint: Option<Endpoint> = parsed_config.as_ref().and_then(|c| {
-        match c.section("authority").and_then(|body| {
-            toml::from_str::<firma_authority::AuthorityConfig>(&body).map_err(|e| e.to_string())
-        }) {
-            Ok(ac) => reachability::endpoint_from_authority(&ac),
-            Err(error) => {
-                warn!(?error, "could not load authority config");
-                None
-            }
-        }
+        c.section("authority")
+            .ok()
+            .and_then(|body| toml::from_str::<firma_authority::AuthorityConfig>(&body).ok())
+            .and_then(|ac| reachability::endpoint_from_authority(&ac))
     });
     report.push(
         reachability::check_endpoint("authority reachable", authority_endpoint, timeout).await,
     );
 
     // 6. capability seed
-    let state_dir = crate::services::init::resolve_state_dir(args.state_dir.clone())
+    let state_dir = crate::services::config::resolve_state_dir(args.state_dir.clone())
         .unwrap_or_else(|_| PathBuf::from("."));
     report.push(capability_seed::check(&state_dir));
 

@@ -10,7 +10,7 @@ Single binary exposing every Firma OSS production component as a subcommand.
    passes through it; fail-closed.
 3. **`firma run`** — wrapper that confines an agent process inside a
    sandbox backend and forces all egress through the sidecar.
-4. **`firma init`** — scaffold a fresh project: config dir, signing keys,
+4. **`firma config`** — scaffold a fresh project: config dir, signing keys,
    default policies. Also runs implicitly on first `firma run` if no
    `firma.toml` is found.
 5. **`firma sidecar {start,stop,status}`** — operator-facing daemon
@@ -138,16 +138,16 @@ firma run --profile generic -- python agent.py
 
 Wrapped command and args after `--`.
 
-### `firma init`
+### `firma config`
 
 Scaffold a fresh project: signing keys, default `firma.toml`, empty
 policy directories. Three usage shapes:
 
 ```bash
-firma init                                              # interactive wizard
-firma init --yes                                        # non-interactive defaults
-firma init --global                                     # user-global scaffold (~/.config/firma)
-firma init --agent codex --provider anthropic \
+firma config                                              # interactive wizard
+firma config --yes                                        # non-interactive defaults
+firma config --output-dir .local                          # specific directory
+firma config --agent codex --provider anthropic \
            --workspace ./proj --authority local         # scripted full setup
 ```
 
@@ -175,16 +175,14 @@ Layout written by `init`:
 
 | Flag                 | Default                     | Description                                            |
 | -------------------- | --------------------------- | ------------------------------------------------------ |
-| `--workspace <dir>`  | _cwd_ (wizard prompt)       | Project root; config lands at `<workspace>/.firma`.    |
-| `--global`           | _off_                       | Scaffold into the user-global config dir.              |
-| `--config-dir <dir>` | derived from above          | Advanced override; bypasses `--workspace`/`--global`.  |
-| `--agent <name>`     | wizard prompt / `generic`   | Persisted to `[project].agent`.                        |
-| `--provider <name>`  | wizard prompt / `anthropic` | Persisted to `[project].provider`.                     |
-| `--authority <val>`  | wizard prompt / `local`     | `local` or remote URL. Persisted to `[authority]`.     |
+| `--output-dir <dir>` | current directory           | Where firma.toml, policies, and mappings are written.  |
+| `--workspace <dir>`  | _cwd_ (wizard prompt)       | Agent RW access path (bwrap mount).                    |
+| `--name <name>`      | wizard prompt / `my-agent`  | Agent slug — used as `agent_id` in generated config.   |
+| `--posture <val>`    | wizard prompt / `dev`       | Cedar enforcement posture.                             |
+| `--mapping <val>`    | wizard prompt / `anthropic` | Mapping file(s) — repeat for multiple.                 |
 | `--yes`              | _off_                       | Skip the wizard; use defaults for any unset flag.      |
-| `--state-dir <dir>`  | `FIRMA_STATE_DIR` / XDG     | User-global state (keys, revocations, generated CA).   |
+| `--state-dir <dir>`  | `FIRMA_STATE_DIR` / XDG     | State dir (keys, revocations, generated CA).           |
 | `--force`            | _off_                       | Overwrite existing files.                              |
-| `--authority-listen` | `127.0.0.1:50051`           | Local authority gRPC listen address.                   |
 | `--sidecar-listen`   | `127.0.0.1:8080`            | Sidecar HTTP proxy listen.                             |
 
 ### `firma sidecar` (daemon lifecycle)

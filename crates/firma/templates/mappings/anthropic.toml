@@ -1,0 +1,7 @@
+# Anthropic API mapping.
+# Tunnels through without MITM; the LLM SDK does not need to trust firma-ca.
+
+[[rules]]
+method = "CONNECT"
+host = "api.anthropic.com:443"
+action_class = "communication.external.send"

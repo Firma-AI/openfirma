@@ -7,10 +7,11 @@ use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::mpsc;
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use tracing::{debug, warn};
+use wait_timeout::ChildExt;
 
 use crate::error::RunError;
 
@@ -218,7 +219,7 @@ impl AuthoritySupervisor {
                 })?;
             let reader = std::io::BufReader::new(stderr);
             let (tx, rx) = mpsc::sync_channel::<ScrapeResult>(1);
-            let try_tee_handle = thread::Builder::new()
+            let try_tee_handle = std::thread::Builder::new()
                 .name("firma-authority-tee".into())
                 .spawn(move || run_scraper(reader, log_file, tx))
                 .map_err(|e| RunError::AuthorityStartupFailed {
@@ -262,7 +263,7 @@ impl AuthoritySupervisor {
                 }
             }
             if attempt + 1 < MAX_BIND_ATTEMPTS {
-                thread::sleep(Duration::from_millis(120));
+                std::thread::sleep(Duration::from_millis(120));
             }
         }
         let capture = capture.ok_or_else(|| {
@@ -328,6 +329,12 @@ impl AuthoritySupervisor {
     pub fn marker_dir(&self) -> &Path {
         &self.marker_dir
     }
+
+    /// Path to the ephemeral Ed25519 public key generated for this run.
+    #[must_use]
+    pub fn pub_key_path(&self) -> PathBuf {
+        self.marker_dir.join("keys").join("authority.pub")
+    }
 }
 
 impl Drop for AuthoritySupervisor {
@@ -335,22 +342,16 @@ impl Drop for AuthoritySupervisor {
         if let Some(mut child) = self.child.take() {
             debug!(pid = self.pid, "stopping autostarted authority");
             send_sigterm(self.pid);
-            let deadline = Instant::now() + STOP_GRACE;
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,
-                    Ok(None) if Instant::now() >= deadline => {
-                        warn!(pid = self.pid, "authority SIGKILL after grace");
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break;
-                    }
-                    Ok(None) => thread::sleep(Duration::from_millis(100)),
-                    Err(e) => {
-                        warn!(error = %e, "authority wait failed");
-                        let _ = child.kill();
-                        break;
-                    }
+            match child.wait_timeout(STOP_GRACE) {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    warn!(pid = self.pid, "authority SIGKILL after grace");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                Err(e) => {
+                    warn!(error = %e, "authority wait failed");
+                    let _ = child.kill();
                 }
             }
         }

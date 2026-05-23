@@ -107,29 +107,24 @@ fn global_log_filter_visible_under_subcommand() {
 }
 
 #[test]
-fn parse_init_defaults() {
-    parse_ok(&["init"]);
+fn parse_config_defaults() {
+    parse_ok(&["config"]);
 }
 
 #[test]
-fn parse_init_scripted() {
+fn parse_config_scripted() {
     parse_ok(&[
-        "init",
+        "config",
         "--yes",
-        "--agent",
+        "--name",
         "codex",
-        "--provider",
+        "--posture",
+        "dev",
+        "--mapping",
         "anthropic",
         "--workspace",
         "/tmp/proj",
-        "--authority",
-        "local",
     ]);
-}
-
-#[test]
-fn parse_init_global() {
-    parse_ok(&["init", "--yes", "--global"]);
 }
 
 #[test]

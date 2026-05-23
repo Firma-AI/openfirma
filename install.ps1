@@ -68,7 +68,7 @@ Options:
                         Default: %LOCALAPPDATA%\Programs\firma\bin.
                         Env: FIRMA_INSTALL_DIR.
   -NoModifyPath         Do not edit the User PATH.
-  -NoInit               Do not prompt to run 'firma init'.
+  -NoInit               Do not prompt to run 'firma config'.
   -Force                Overwrite an existing install without prompting.
   -DryRun               Print planned actions only.
   -Help                 Show this message.
@@ -244,15 +244,15 @@ function Invoke-PostInstall {
     Write-Info 'firma installed.'
     Write-Info "quickstart: $QuickstartUrl"
     if ($NoInit -or -not [Environment]::UserInteractive) {
-        Write-Info 'next step: firma init'
+        Write-Info 'next step: firma config'
         return
     }
-    $ans = Read-Host '[firma-installer] run `firma init` now? [Y/n]'
+    $ans = Read-Host '[firma-installer] run `firma config` now? [Y/n]'
     if ($ans -match '^(y|Y|yes|YES|)$') {
-        if ($DryRun) { Write-Info '(dry-run) would invoke: firma init'; return }
+        if ($DryRun) { Write-Info '(dry-run) would invoke: firma config'; return }
         & (Join-Path $InstallDir 'firma.exe') init
     } else {
-        Write-Info 'next step: firma init'
+        Write-Info 'next step: firma config'
     }
 }
 

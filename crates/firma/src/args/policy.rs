@@ -14,6 +14,8 @@ pub struct PolicyArgs {
 /// Subcommands of `firma policy`.
 #[derive(Debug, Subcommand)]
 pub enum PolicyCommand {
+    /// Print all available posture and mapping templates.
+    List,
     /// Parse a Cedar policy file and schema-check it against the Firma entity
     /// schema. Catches typos and shape errors before the bundle reaches the
     /// Authority.
@@ -53,7 +55,9 @@ mod tests {
             PolicyCommand::Validate { file } => {
                 assert_eq!(file, PathBuf::from("policy.cedar"));
             }
-            PolicyCommand::Test { .. } => panic!("expected validate subcommand"),
+            PolicyCommand::Test { .. } | PolicyCommand::List => {
+                panic!("expected validate subcommand")
+            }
         }
     }
 
@@ -64,7 +68,9 @@ mod tests {
             PolicyCommand::Test { fixture } => {
                 assert_eq!(fixture, PathBuf::from("fixture.json"));
             }
-            PolicyCommand::Validate { .. } => panic!("expected test subcommand"),
+            PolicyCommand::Validate { .. } | PolicyCommand::List => {
+                panic!("expected test subcommand")
+            }
         }
     }
 

@@ -2,11 +2,12 @@
 
 use std::process::ExitCode;
 
+use firma_run::authority::AuthorityPromptIo;
 use firma_run::runtime::{RunInput, execute_run};
 use tracing::{info, warn};
 
 use crate::args::run::RunArgs;
-use crate::services::init::{AuthorityShape, ScaffoldPlan, scaffold_from_plan};
+use crate::services::config::{AuthorityShape, ScaffoldPlan, scaffold_from_plan};
 
 /// Run the `firma run` subcommand. Sync — must not be called from inside
 /// a tokio runtime.
@@ -32,11 +33,20 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
              pass `--sidecar <tcp://...|unix:///...>` or omit `--no-autostart`"
         );
     }
+    validate_sidecar_endpoint_flag(&args)?;
 
     // Implicit init: if no firma.toml is discoverable for this project,
     // scaffold one before handing off to firma-run. Keeps the spec's
     // one-command path (`firma run codex`) working from a fresh clone.
     maybe_implicit_init(&args)?;
+
+    // Auto-discover firma-run.toml alongside firma.toml when --config is not set.
+    let run_config = args.config.clone().or_else(|| {
+        firma_config::resolve_config("run", None, &firma_config::SystemDirs)
+            .ok()
+            .map(|r| r.config_dir.join("firma-run.toml"))
+            .filter(|p| p.is_file())
+    });
 
     let authority_cli = match args.authority.as_deref() {
         None => firma_run::authority::AuthorityCli::Unset,
@@ -50,7 +60,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     };
     let input = RunInput {
         profile: args.profile,
-        config: args.config,
+        config: run_config,
         backend: args.backend.map(Into::into),
         capability_file: args.capability_file,
         identity_mode: args.identity_mode.map(Into::into),
@@ -72,12 +82,10 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
 }
 
 fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
-    if let Some(explicit) = args.config.as_ref() {
+    if args.config.is_some() {
         // Trust the user-supplied config path. If it does not exist we
         // let firma-run report the parse/IO error normally.
-        if explicit.exists() {
-            return Ok(());
-        }
+        return Ok(());
     }
     // Spec §4 step 1 + §5: walk-up `./.firma/firma.toml` is the project-local
     // tier, picked up by `firma_config::resolve_config`. If anything in the
@@ -85,6 +93,14 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
     if firma_config::resolve_config("run", None, &firma_config::SystemDirs).is_ok() {
         return Ok(());
     }
+
+    // Spec §4.1: implicit init creates a long-lived Ed25519 key under
+    // $XDG_DATA_HOME/firma/authority/keys/ and persists `[authority]` to
+    // `firma.toml`. Both are security-relevant side effects. Gate them on
+    // a deliberate user choice — `--authority` flag, or an interactive
+    // y/N prompt — before any filesystem mutation.
+    let authority = resolve_implicit_init_authority(args)?;
+
     let cwd = std::env::current_dir()
         .map_err(|e| anyhow::anyhow!("resolve cwd for implicit init: {e}"))?;
     let resolved = cwd.join(".firma");
@@ -97,19 +113,12 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
     let state_dir = firma_stack::resolve_state_dir(None)
         .map_err(|e| anyhow::anyhow!("resolve state_dir for implicit init: {e}"))?;
 
-    // Match the persisted [authority] section to whatever the CLI is
-    // about to ask firma-run to do. Default = local mini authority.
-    let authority = match args.authority.as_deref() {
-        None | Some("local") => AuthorityShape::Local,
-        Some(url) => AuthorityShape::Remote(url.to_string()),
-    };
-
     let plan = ScaffoldPlan {
         config_dir: resolved,
         state_dir,
+        workspace: cwd,
         force: false,
         authority_listen: "127.0.0.1:50051".into(),
-        sidecar_listen: "127.0.0.1:8080".into(),
         agent: args.profile.clone(),
         provider: "anthropic".into(),
         authority,
@@ -119,6 +128,68 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
         return Err(anyhow::anyhow!("implicit init: {error}"));
     }
     Ok(())
+}
+
+/// Decide the authority shape for implicit init.
+///
+/// `--authority` is a commitment that bypasses the prompt. `--no-autostart`
+/// refuses any side-effecting scaffold. Otherwise the user must answer Y
+/// to a single y/N prompt on the controlling TTY; non-TTY aborts.
+fn resolve_implicit_init_authority(args: &RunArgs) -> anyhow::Result<AuthorityShape> {
+    if args.no_autostart {
+        anyhow::bail!(
+            "no firma.toml found and `--no-autostart` is set; \
+             run `firma config` to scaffold a project config, or omit `--no-autostart`"
+        );
+    }
+    if let Some(value) = args.authority.as_deref() {
+        return Ok(match value {
+            "local" => AuthorityShape::Local,
+            _ => anyhow::bail!(
+                "no firma.toml found and remote `--authority <url>` cannot be scaffolded implicitly; \
+                 run `firma config --mode agent-remote` with --authority-url, \
+                 --authority-ca-cert, and --authority-pub-key"
+            ),
+        });
+    }
+
+    let mut prompt = firma_run::authority::StdAuthorityPrompt;
+    if !prompt.is_tty() {
+        anyhow::bail!(
+            "no firma.toml found and stdin is not a terminal; \
+             run `firma config` to scaffold a project config, or pass \
+             `--authority local` to commit to local implicit setup non-interactively"
+        );
+    }
+    let confirmed = prompt
+        .confirm(firma_run::authority::bootstrap::PROMPT_TEXT)
+        .map_err(|e| anyhow::anyhow!("read y/N answer: {e}"))?;
+    if !confirmed {
+        anyhow::bail!(
+            "local Mini Authority bootstrap declined; \
+             run `firma config` to pick a deployment shape interactively, \
+             use `firma config --mode agent-remote` for a remote authority, \
+             or re-run with `--authority local` to bypass this prompt"
+        );
+    }
+    Ok(AuthorityShape::Local)
+}
+
+fn validate_sidecar_endpoint_flag(args: &RunArgs) -> anyhow::Result<()> {
+    let Some(value) = args.sidecar.as_deref() else {
+        return Ok(());
+    };
+    if value == "local" {
+        return Ok(());
+    }
+
+    firma_run::sidecar::resolve(
+        &firma_run::sidecar::SidecarCli::Remote(value.to_string()),
+        false,
+        None,
+    )
+    .map(|_| ())
+    .map_err(|error| anyhow::anyhow!("{error}"))
 }
 
 fn exit_code(code: i32) -> ExitCode {

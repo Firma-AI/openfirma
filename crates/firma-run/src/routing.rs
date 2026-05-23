@@ -77,16 +77,25 @@ pub struct AutostartFlags {
     /// Effective Authority URL — set by `resolve_authority` and threaded
     /// into the synthesized sidecar config.
     pub authority_url: Option<String>,
+    /// Path to the CA cert that signed the authority's TLS cert — injected
+    /// into `[sidecar.authority].ca_cert_path` during synthesis.
+    pub authority_ca_cert: Option<PathBuf>,
+    /// Path to the authority's Ed25519 public key — injected into
+    /// `[sidecar.authority].public_key_path` and
+    /// `[sidecar.preflight].authority_pub_key_path` during synthesis.
+    pub authority_pub_key: Option<PathBuf>,
     /// When `true`, the autostarted sidecar is started in HTTP proxy
     /// interceptor mode rather than Unix socket mode.
     pub use_http_proxy_sidecar: bool,
 }
 
-/// Resolved Authority for the current run. URL is what gets fed into the
-/// sidecar's `[authority].url`; supervisor is held inside `NetworkRuntime`
-/// for kill-on-Drop.
+/// Resolved Authority for the current run.
 pub struct ResolvedAuthority {
     pub url: String,
+    /// CA cert path from `[sidecar.authority]`, if present.
+    pub ca_cert_path: Option<PathBuf>,
+    /// Authority public key path from `[sidecar.authority]`, if present.
+    pub pub_key_path: Option<PathBuf>,
     pub supervisor: Option<crate::authority::AuthoritySupervisor>,
 }
 
@@ -116,6 +125,8 @@ pub fn prepare_network_runtime(
 ) -> Result<NetworkRuntime, RunError> {
     let mut flags = flags.clone();
     flags.authority_url = Some(authority.url.clone());
+    flags.authority_ca_cert.clone_from(&authority.ca_cert_path);
+    flags.authority_pub_key.clone_from(&authority.pub_key_path);
 
     let (effective_endpoint, sidecar_supervisor) =
         resolve_effective_endpoint(handle, sidecar_endpoint, identity, &flags)?;
@@ -266,6 +277,8 @@ fn autostart_sidecar(
         firma_exe,
         startup_timeout: flags.startup_timeout,
         authority_url: flags.authority_url.as_deref(),
+        authority_ca_cert: flags.authority_ca_cert.clone(),
+        authority_pub_key: flags.authority_pub_key.clone(),
         use_http_proxy_interceptor: flags.use_http_proxy_sidecar,
     })
 }
@@ -287,23 +300,50 @@ fn autostart_sidecar(
     clippy::too_many_arguments,
     reason = "every input is independent — bundling into a request struct only adds noise here"
 )]
+#[allow(
+    clippy::too_many_lines,
+    reason = "step-0 selection + plaintext-h2 transport probe + autostart fallback read more clearly inline than split"
+)]
 pub fn resolve_authority(
     identity: &RunIdentity,
     runtime_dir: &Path,
     flags: &AutostartFlags,
     cli: &crate::authority::AuthorityCli,
     profile_name: &str,
-    user_config_path: &Path,
+    user_config_path: Option<&Path>,
+    user_config_dir: Option<&Path>,
     firma_exe: &Path,
     prompt: &mut dyn crate::authority::AuthorityPromptIo,
 ) -> Result<ResolvedAuthority, RunError> {
-    let selection = crate::authority::resolve(cli, flags.no_autostart, user_config_path, prompt)?;
+    let selection = crate::authority::resolve(cli, flags.no_autostart, user_config_path)?;
+
+    // Snapshot [authority] / [sidecar.authority] once: we need both the
+    // `local` flag (to distinguish a committed local choice from the
+    // fall-through default that triggers the first-run prompt) and the
+    // connect coordinates (ca/pub key) regardless of selection mode.
+    let section_snapshot = user_config_path
+        .map(crate::authority::config::read_authority)
+        .transpose()?
+        .flatten();
+    let ca_cert_path = section_snapshot
+        .as_ref()
+        .and_then(|s| s.connect.as_ref())
+        .and_then(|c| c.ca_cert_path.as_deref())
+        .map(|path| rebase_config_relative_path(path, user_config_dir));
+    let pub_key_path = section_snapshot
+        .as_ref()
+        .and_then(|s| s.connect.as_ref())
+        .and_then(|c| c.public_key_path.as_deref())
+        .map(|path| rebase_config_relative_path(path, user_config_dir));
+    let config_committed_local = section_snapshot.as_ref().is_some_and(|s| s.local);
 
     match selection {
         crate::authority::AuthoritySelection::Remote(url) => {
             probe_authority_url(&url)?;
             Ok(ResolvedAuthority {
                 url,
+                ca_cert_path,
+                pub_key_path,
                 supervisor: None,
             })
         }
@@ -321,11 +361,24 @@ pub fn resolve_authority(
                 );
                 return Ok(ResolvedAuthority {
                     url: format!("http://{target}"),
+                    ca_cert_path,
+                    pub_key_path,
                     supervisor: None,
                 });
             }
             if flags.no_autostart {
                 return Err(RunError::MissingAuthority);
+            }
+            // First-run interactive bootstrap: when neither the CLI nor the
+            // resolved firma.toml committed to local, prompt before creating
+            // the user-global Ed25519 signing key. On `Y`, persist the
+            // `[authority]` section so subsequent runs skip the prompt.
+            let cli_committed = !matches!(cli, crate::authority::AuthorityCli::Unset);
+            if !cli_committed && !config_committed_local {
+                crate::authority::bootstrap::run_prompt(prompt)?;
+                let target_path =
+                    crate::authority::bootstrap::resolve_persist_target(user_config_path)?;
+                crate::authority::bootstrap::persist_authority_section(&target_path)?;
             }
             let marker =
                 firma_stack::runtime_paths::run_entry_from(runtime_dir, &identity.sandbox_id)
@@ -340,11 +393,14 @@ pub fn resolve_authority(
                 startup_timeout: flags.startup_timeout,
             }) {
                 Ok(sup) => {
+                    let ephemeral_pub_key = sup.pub_key_path();
                     warn!(
                         "autostarted local authority in plaintext loopback mode (dev convenience); mTLS hardening applies to https:// authority deployments"
                     );
                     Ok(ResolvedAuthority {
                         url: sup.url(),
+                        ca_cert_path,
+                        pub_key_path: Some(ephemeral_pub_key),
                         supervisor: Some(sup),
                     })
                 }
@@ -361,6 +417,8 @@ pub fn resolve_authority(
                         );
                         Ok(ResolvedAuthority {
                             url: format!("http://{target}"),
+                            ca_cert_path,
+                            pub_key_path,
                             supervisor: None,
                         })
                     } else {
@@ -369,6 +427,14 @@ pub fn resolve_authority(
                 }
             }
         }
+    }
+}
+
+fn rebase_config_relative_path(path: &Path, config_dir: Option<&Path>) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        config_dir.unwrap_or_else(|| Path::new(".")).join(path)
     }
 }
 
@@ -660,7 +726,9 @@ fn relay_unix_to_unix(client: &UnixStream, target: &UnixStream) -> io::Result<()
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod parse_host_port_tests {
-    use super::parse_host_port;
+    use std::path::{Path, PathBuf};
+
+    use super::{parse_host_port, rebase_config_relative_path};
 
     #[test]
     fn parses_http_with_port() {
@@ -693,5 +761,17 @@ mod parse_host_port_tests {
     #[test]
     fn rejects_empty() {
         assert!(parse_host_port("").is_none());
+    }
+
+    #[test]
+    fn rebases_relative_config_paths_to_config_dir() {
+        assert_eq!(
+            rebase_config_relative_path(Path::new("authority-ca.crt"), Some(Path::new("/cfg"))),
+            PathBuf::from("/cfg/authority-ca.crt")
+        );
+        assert_eq!(
+            rebase_config_relative_path(Path::new("/abs/authority.pub"), Some(Path::new("/cfg"))),
+            PathBuf::from("/abs/authority.pub")
+        );
     }
 }

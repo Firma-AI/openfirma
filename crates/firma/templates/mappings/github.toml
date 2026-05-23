@@ -1,0 +1,292 @@
+# GitHub REST API mapping — CONNECT tunnel + 44 rules → 12 action classes.
+# Source of truth: docs/markdown/github_connector.md.
+#
+# MITM required for REST rules (configured via intercept_hosts in firma.toml).
+# Without MITM: only the CONNECT rule below fires — all GitHub traffic → code.review.read.
+# With MITM: individual REST rules classify by method + path.
+
+# Plain CONNECT (no MITM): host carries port.
+[[rules]]
+method = "CONNECT"
+host = "api.github.com:443"
+action_class = "code.review.read"
+
+# ── REST rules (bare host — post-MITM only) ───────────────────────────────────
+
+# Branch-protection subtree is fanned out across GET/PUT/POST/DELETE so
+# each method-specific rule out-ranks the broad `GET /repos/*/*`
+# code.read wildcard via specificity.
+
+# --- code.read (6) ----------------------------------------------------------
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*"
+action_class = "code.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/contents/*"
+action_class = "code.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/commits"
+action_class = "code.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/commits/*"
+action_class = "code.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/branches"
+action_class = "code.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/tags"
+action_class = "code.read"
+
+# --- code.review.read (7) ---------------------------------------------------
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/pulls"
+action_class = "code.review.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/pulls/*"
+action_class = "code.review.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/pulls/*/files"
+action_class = "code.review.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/pulls/*/commits"
+action_class = "code.review.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/pulls/*/reviews"
+action_class = "code.review.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/pulls/*/comments"
+action_class = "code.review.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/pulls/*/requested_reviewers"
+action_class = "code.review.read"
+
+# --- issue.read (3) --------------------------------------------------------
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/issues"
+action_class = "issue.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/issues/*"
+action_class = "issue.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/issues/*/comments"
+action_class = "issue.read"
+
+# --- issue.write (3) -------------------------------------------------------
+[[rules]]
+method = "POST"
+host = "api.github.com"
+path = "/repos/*/*/issues"
+action_class = "issue.write"
+
+[[rules]]
+method = "PATCH"
+host = "api.github.com"
+path = "/repos/*/*/issues/*"
+action_class = "issue.write"
+
+[[rules]]
+method = "POST"
+host = "api.github.com"
+path = "/repos/*/*/issues/*/comments"
+action_class = "issue.write"
+
+# --- code.review.submit (4) ------------------------------------------------
+[[rules]]
+method = "POST"
+host = "api.github.com"
+path = "/repos/*/*/pulls/*/reviews"
+action_class = "code.review.submit"
+
+[[rules]]
+method = "PUT"
+host = "api.github.com"
+path = "/repos/*/*/pulls/*/reviews/*/events"
+action_class = "code.review.submit"
+
+[[rules]]
+method = "DELETE"
+host = "api.github.com"
+path = "/repos/*/*/pulls/*/reviews/*"
+action_class = "code.review.submit"
+
+[[rules]]
+method = "POST"
+host = "api.github.com"
+path = "/repos/*/*/pulls/*/comments"
+action_class = "code.review.submit"
+
+# --- code.write (6) --------------------------------------------------------
+[[rules]]
+method = "PUT"
+host = "api.github.com"
+path = "/repos/*/*/contents/*"
+action_class = "code.write"
+
+[[rules]]
+method = "POST"
+host = "api.github.com"
+path = "/repos/*/*/pulls"
+action_class = "code.write"
+
+[[rules]]
+method = "PATCH"
+host = "api.github.com"
+path = "/repos/*/*/pulls/*"
+action_class = "code.write"
+
+[[rules]]
+method = "PUT"
+host = "api.github.com"
+path = "/repos/*/*/pulls/*/update-branch"
+action_class = "code.write"
+
+[[rules]]
+method = "POST"
+host = "api.github.com"
+path = "/repos/*/*/git/refs"
+action_class = "code.write"
+
+[[rules]]
+method = "PATCH"
+host = "api.github.com"
+path = "/repos/*/*/git/refs/*"
+action_class = "code.write"
+
+# --- code.destructive (2) --------------------------------------------------
+[[rules]]
+method = "DELETE"
+host = "api.github.com"
+path = "/repos/*/*/contents/*"
+action_class = "code.destructive"
+
+[[rules]]
+method = "DELETE"
+host = "api.github.com"
+path = "/repos/*/*/git/refs/*"
+action_class = "code.destructive"
+
+# --- code.merge (1) — most specific; wins over code.write by path ---------
+[[rules]]
+method = "PUT"
+host = "api.github.com"
+path = "/repos/*/*/pulls/*/merge"
+action_class = "code.merge"
+
+# --- repo.lifecycle (3) ----------------------------------------------------
+[[rules]]
+method = "POST"
+host = "api.github.com"
+path = "/user/repos"
+action_class = "repo.lifecycle"
+
+[[rules]]
+method = "POST"
+host = "api.github.com"
+path = "/orgs/*/repos"
+action_class = "repo.lifecycle"
+
+[[rules]]
+method = "POST"
+host = "api.github.com"
+path = "/repos/*/*/forks"
+action_class = "repo.lifecycle"
+
+# --- repo.admin (5) — repo settings + branch protection subtree -----------
+[[rules]]
+method = "PATCH"
+host = "api.github.com"
+path = "/repos/*/*"
+action_class = "repo.admin"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/branches/*/protection*"
+action_class = "repo.admin"
+
+[[rules]]
+method = "PUT"
+host = "api.github.com"
+path = "/repos/*/*/branches/*/protection*"
+action_class = "repo.admin"
+
+[[rules]]
+method = "POST"
+host = "api.github.com"
+path = "/repos/*/*/branches/*/protection*"
+action_class = "repo.admin"
+
+[[rules]]
+method = "DELETE"
+host = "api.github.com"
+path = "/repos/*/*/branches/*/protection*"
+action_class = "repo.admin"
+
+# --- security.alert.read (2) ----------------------------------------------
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/code-scanning/alerts*"
+action_class = "security.alert.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/secret-scanning/alerts*"
+action_class = "security.alert.read"
+
+# --- notification.manage (2) ----------------------------------------------
+[[rules]]
+host = "api.github.com"
+path = "/notifications*"
+action_class = "notification.manage"
+
+[[rules]]
+host = "api.github.com"
+path = "/repos/*/*/subscription"
+action_class = "notification.manage"

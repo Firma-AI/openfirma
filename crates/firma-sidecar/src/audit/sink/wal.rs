@@ -570,6 +570,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(
+        clippy::similar_names,
+        reason = "_a / _b suffixes are descriptive here"
+    )]
     async fn test_wal_compaction_drops_oldest_events() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
         let wal_path = dir.path().join("compact.jsonl");

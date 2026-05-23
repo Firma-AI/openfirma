@@ -370,7 +370,9 @@ impl InMemoryTokenStore {
         lock_or_recover(&self.tokens).len()
     }
 
+    /// Whether the store has no live records. Intended for tests and metrics.
     #[cfg(test)]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         lock_or_recover(&self.tokens).is_empty()
     }

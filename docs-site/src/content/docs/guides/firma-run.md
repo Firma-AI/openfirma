@@ -72,27 +72,47 @@ If `unshare --user --pid echo ok` itself fails with a permission error,
 enable unprivileged user namespaces (`sysctl -w kernel.unprivileged_userns_clone=1`
 on some distros) or pick a different backend.
 
-## Step 2: Use the bundled local example as a starting point
+## Step 2: Scaffold a config directory with `firma config`
 
-The repo ships a complete local-dev setup under `examples/firma-run/local/`. From the repo root:
-
-```bash
-examples/firma-run/local/setup.sh
-```
-
-This creates a `.local/` directory with:
-
-- `.local/firma.toml` — a working sectioned Sidecar config.
-- `.local/mapping-rules.toml` — a starter mapping (one stub rule).
-- `.local/audit-key.pem` — a freshly generated audit signing key.
-
-The setup script is idempotent — re-running it leaves existing files alone. Inspect the generated config:
+`firma config` creates a complete working configuration directory — sidecar + authority config, Cedar policy, mapping rules, and an authority keypair — in a single step:
 
 ```bash
-cat .local/firma.toml
+firma config --name my-agent --posture dev --mapping anthropic
 ```
 
-You'll see `[sidecar.mapping].default_protected = false` and a `file` audit sink. For a real workload, you'd switch to `default_protected = true` and tighten the mapping. For first-touch, leave it as is.
+This writes to the **current directory** by default. To write to a specific directory, pass `--output-dir`:
+
+```bash
+firma config --name my-agent --posture dev --mapping anthropic --output-dir .local
+```
+
+Generated layout:
+
+```
+./
+  firma.toml                   — sidecar + authority unified config
+  firma-run.toml               — runtime profiles (workspace mounts, identity)
+  mapping-rules.toml           — base mapping rules
+  mappings/anthropic.toml      — Anthropic endpoint mapping
+  policies/dev.cedar           — Cedar enforcement policy
+  issuance-policies/issuance.cedar
+  .runtime/
+    authority.key              — authority signing keypair (preserved on re-run)
+    audit.key                  — demo audit signing key
+    revocations.txt
+```
+
+`firma config` is idempotent — re-running preserves existing files including the authority keypair; pass `--force` to overwrite everything. Skip all interactive prompts with `--yes`. Preview without writing:
+
+```bash
+firma config --dry-run
+```
+
+Inspect the generated config:
+
+```bash
+cat firma.toml
+```
 
 ## Step 3: Run with Per-Run Sidecar (Default)
 
@@ -120,7 +140,7 @@ or operate with a pre-managed sidecar (systemd / `firma sidecar start`).
 In a dedicated terminal:
 
 ```bash
-cargo run --release -p firma -- sidecar -c .local/firma.toml
+firma sidecar -c ~/.config/firma/firma.toml
 ```
 
 Wait for the `sidecar ready` line.
@@ -135,32 +155,26 @@ Autostart currently requires Unix. On Windows, use `--sidecar <url>` with a pre-
 ### Authority bootstrap
 
 Before the Sidecar starts, `firma run` resolves which Authority to use.
-Precedence: `--authority local` / `--authority <url>` > persisted
-`[authority]` table in the discovered `firma.toml`
-(`~/.config/firma/firma.toml` on Linux/macOS,
-`%USERPROFILE%\.firma\firma.toml` on Windows) > a one-time y/N prompt when
-both are empty and stdin is a TTY:
+Precedence:
 
-```text
-No Authority is configured for this project.
-firma run can start a local Mini Authority for development on [::1]:<ephemeral-port>.
-This is suitable for a single developer on a trusted workstation.
-
-Start a local Mini Authority? [y/N]:
-```
-
-On `y` the choice is persisted and a per-run Mini Authority is spawned
-with an ephemeral signing key and loopback listen address. On `n`, no-TTY, or `--no-autostart`,
-`firma run` exits with a typed error (`AuthorityDeclined`,
-`AuthorityPromptNoTty`, or `MissingAuthority`). The spawned Authority is
-killed on `firma run` exit.
+1. `--authority local` / `--authority <url>` — CLI override.
+2. `[authority]` section present in the discovered `firma.toml`
+   (`~/.config/firma/firma.toml` on Linux/macOS,
+   `%USERPROFILE%\.firma\firma.toml` on Windows) — autostart a local
+   Mini Authority.
+3. `[sidecar.authority].url` set — connect to that remote Authority.
+4. Nothing configured — `firma run` falls back to local autostart so
+   zero-config works. The spawned Authority uses an ephemeral signing
+   key and a per-run loopback listen address; it is killed on
+   `firma run` exit. `--no-autostart` overrides this to fail with
+   `MissingAuthority`.
 
 Flags:
 
 - `--authority local` — autostart a local Mini Authority on
-  a per-run loopback ephemeral port; bypasses the prompt.
-- `--authority <url>` — point at a remote Authority; bypasses the
-  prompt; fails with `AuthorityUnreachable` if the URL does not answer.
+  a per-run loopback ephemeral port; overrides config.
+- `--authority <url>` — point at a remote Authority; overrides config;
+  fails with `AuthorityUnreachable` if the URL does not answer.
 - `--authority-profile <name>` — profile materialised by the
   autostarted Mini Authority. Today only `developer` ships. Ignored
   when the Authority is remote or already reachable.
@@ -239,19 +253,16 @@ For Stage 1 to allow the call, the Sidecar must have a capability matching `(ses
 **Per-run capability.** Pass `--capability-file` to `firma run`. The wrapper writes the file to a host-side path the Sidecar reads. Right for one-off invocations.
 
 ```bash
-firma authority -c .local/firma.toml issue \
+firma authority -c ~/.config/firma/firma.toml issue \
   --agent-id local-dev \
   --session-id $(uuidgen) \
   --action communication.external.send \
-  --output .local/capability-local-dev.toml
+  --output ~/.config/firma/.runtime/capability-local-dev.toml
 
-# Note: the setup.sh-generated .local/firma.toml is sidecar-only (no
-# [authority] section). To run `firma authority`, add an [authority]
-# section to .local/firma.toml first, or point -c at a file that has one.
-
-cargo run --release -p firma -- run \
+firma run \
+  --config ~/.config/firma/firma-run.toml \
   --profile generic \
-  --capability-file .local/capability-local-dev.toml \
+  --capability-file ~/.config/firma/.runtime/capability-local-dev.toml \
   -- curl https://example.com
 ```
 

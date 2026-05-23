@@ -38,7 +38,7 @@ fn run_start(args: StartArgs) -> ExitCode {
         Ok(cfg) => cfg,
         Err(error) => return fail(&format!("config: {error}")),
     };
-    let state_dir = match crate::services::init::resolve_state_dir(args.state_dir) {
+    let state_dir = match crate::services::config::resolve_state_dir(args.state_dir) {
         Ok(path) => path,
         Err(error) => return fail(&error),
     };
@@ -60,7 +60,7 @@ fn run_start(args: StartArgs) -> ExitCode {
 
 fn run_stop(args: StopArgs) -> ExitCode {
     info!(timeout = args.timeout, "firma sidecar stop invoked");
-    let state_dir = match crate::services::init::resolve_state_dir(args.state_dir) {
+    let state_dir = match crate::services::config::resolve_state_dir(args.state_dir) {
         Ok(path) => path,
         Err(error) => return fail(&error),
     };
@@ -118,7 +118,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
 
     let (ca_cert_pem, client_cert_pem, client_key_pem) =
         load_authority_tls_material(&config).await?;
-    let preflight = match (&config.preflight, config.policy.authority_url.as_deref()) {
+    let preflight = match (&config.preflight, config.authority.url.as_deref()) {
         (Some(pf_config), Some(authority_url)) => Some(
             startup::run_preflight(
                 pf_config,
@@ -130,7 +130,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
             .await?,
         ),
         (Some(_), None) => {
-            anyhow::bail!("[preflight] is configured but policy.authority_url is not set");
+            anyhow::bail!("[preflight] is configured but authority.url is not set");
         }
         (None, _) => None,
     };
@@ -211,8 +211,8 @@ fn build_startup_report<'a>(
         startup::compute_policy_bundle_version(&config.policy.dir)
             .unwrap_or_else(|_| ("00000000".to_string(), 0));
     let authority_endpoint = config
-        .policy
-        .authority_url
+        .authority
+        .url
         .clone()
         .unwrap_or_else(|| "(disabled)".to_string());
 

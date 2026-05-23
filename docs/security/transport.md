@@ -55,7 +55,7 @@ ca_cert_path = "/etc/firma/authority-ca.crt"
 allow_insecure_remote_authority = false
 ```
 
-`authority.ca_cert_path` is required when `policy.authority_url` uses `https://`.
+`authority.ca_cert_path` is required when `authority.url` uses `https://`.
 For `http://`, sidecar permits loopback (`localhost`, `127.0.0.1`, `::1`) by
 default for local dev. Non-loopback `http://` is rejected unless
 `authority.allow_insecure_remote_authority = true`.

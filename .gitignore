@@ -53,6 +53,7 @@ revocations.txt
 audit.jsonl
 *.crt
 *.log
+.firma/
 
 # Demo runtime artifacts
 /examples/demos/*/.runtime/*

@@ -28,15 +28,31 @@ impl FirmaConfig {
         })
     }
 
-    /// The named `[section]` body re-serialized as standalone TOML.
+    /// The named section body re-serialized as standalone TOML.
     ///
-    /// A missing `[section]` is a hard error (fail-closed).
+    /// Supports dotted paths (e.g. `"sidecar.authority"`) to address
+    /// sub-tables. A missing section at any level is a hard error
+    /// (fail-closed).
     ///
     /// # Errors
     ///
     /// Returns a "missing section" or serialization error string.
     pub fn section(&self, section: &str) -> Result<String, String> {
-        match self.table.get(section) {
+        let parts: Vec<&str> = section.split('.').collect();
+        let mut current = &self.table;
+        for &part in &parts[..parts.len() - 1] {
+            match current.get(part) {
+                Some(toml::Value::Table(t)) => current = t,
+                _ => {
+                    return Err(format!(
+                        "{}: missing required `[{section}]` section",
+                        self.origin
+                    ));
+                }
+            }
+        }
+        let last = parts.last().copied().unwrap_or(section);
+        match current.get(last) {
             Some(toml::Value::Table(sub)) => {
                 toml::to_string(sub).map_err(|e| format!("{}: {e}", self.origin))
             }
@@ -84,7 +100,7 @@ mod tests {
         let p = tmp.path().join("firma.toml");
         std::fs::write(
             &p,
-            "[sidecar.interceptor]\nmode = \"http_proxy\"\n[sidecar.policy]\nauthority_url = \"http://x\"\n",
+            "[sidecar.interceptor]\nmode = \"http_proxy\"\n[sidecar.authority]\nurl = \"http://x\"\n",
         )
         .unwrap();
         let out = load_section(&p, "sidecar").unwrap();
@@ -94,7 +110,7 @@ mod tests {
                 .and_then(toml::Value::as_table)
                 .is_some()
         );
-        assert!(t.get("policy").and_then(toml::Value::as_table).is_some());
+        assert!(t.get("authority").and_then(toml::Value::as_table).is_some());
     }
 
     #[test]
@@ -104,5 +120,34 @@ mod tests {
         std::fs::write(&p, "[authority]\nbar = 2\n").unwrap();
         let err = load_section(&p, "sidecar").unwrap_err();
         assert!(err.contains("sidecar"), "error names the section: {err}");
+    }
+
+    #[test]
+    fn dotted_path_extracts_nested_section() {
+        let tmp = tempdir().unwrap();
+        let p = tmp.path().join("firma.toml");
+        std::fs::write(
+            &p,
+            "[sidecar.policy]\ndir = \".\"\n[sidecar.authority]\nurl = \"https://x\"\n",
+        )
+        .unwrap();
+        let policy = load_section(&p, "sidecar.policy").unwrap();
+        let t: toml::Table = policy.parse().unwrap();
+        assert_eq!(t.get("dir").and_then(toml::Value::as_str), Some("."));
+        let connect = load_section(&p, "sidecar.authority").unwrap();
+        let t2: toml::Table = connect.parse().unwrap();
+        assert_eq!(
+            t2.get("url").and_then(toml::Value::as_str),
+            Some("https://x")
+        );
+    }
+
+    #[test]
+    fn dotted_path_missing_is_an_error() {
+        let tmp = tempdir().unwrap();
+        let p = tmp.path().join("firma.toml");
+        std::fs::write(&p, "[sidecar.policy]\ndir = \".\"\n").unwrap();
+        let err = load_section(&p, "sidecar.authority").unwrap_err();
+        assert!(err.contains("sidecar.authority"), "error: {err}");
     }
 }

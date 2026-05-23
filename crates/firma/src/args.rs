@@ -1,8 +1,8 @@
 //! Top-level CLI for the unified `firma` binary.
 
 pub mod authority;
+pub mod config;
 pub mod doctor;
-pub mod init;
 pub mod monitor;
 pub mod policy;
 pub mod run;
@@ -24,7 +24,7 @@ use clap::{Parser, Subcommand};
                   authorizes it against Cedar policies and short-lived capability tokens \
                   issued by the Authority.\n\n\
                   Typical workflow:\n  \
-                  firma init          — scaffold a new project\n  \
+                  firma config        — scaffold a new project\n  \
                   firma sidecar start — bring up the enforcement stack\n  \
                   firma run …         — launch your agent under enforcement\n  \
                   firma monitor       — watch audit decisions\n  \
@@ -48,6 +48,10 @@ pub enum Command {
     /// and serves revocations. Local reference implementation for development —
     /// production deployments swap in their own Authority.
     Authority(authority::Args),
+    /// Scaffold a new agent config directory interactively.
+    Config(config::InitArgs),
+    /// Browse the template catalogue and validate Cedar policy bundles.
+    Policy(policy::PolicyArgs),
     /// Internal sandbox-local DNS stub.
     #[command(name = "__dns-stub", hide = true)]
     DnsStub(run::DnsStubArgs),
@@ -55,18 +59,10 @@ pub enum Command {
     /// endpoints, and print the resolved configuration. Run this first when
     /// `firma run` misbehaves.
     Doctor(doctor::Args),
-    /// Scaffold a new Firma project: create the config directory, generate signing
-    /// keys, write default Cedar policies, and produce a starter `firma.toml`.
-    /// Interactive by default; pass `--yes` for non-interactive (CI) setup.
-    Init(init::InitArgs),
     /// Tail audit decisions and component logs from a running Firma stack. Default
     /// tails the audit log; use `--source` to switch to Authority/Sidecar logs or
     /// interleave all three.
     Monitor(monitor::Args),
-    /// Validate Cedar policy bundles and run policy unit-test fixtures. Use
-    /// before pushing a bundle to the Authority so deny/allow behaviour is
-    /// pinned by tests.
-    Policy(policy::PolicyArgs),
     /// Internal proxy bridge for sandbox.
     #[command(name = "__proxy-bridge", hide = true)]
     ProxyBridge(run::ProxyBridgeArgs),

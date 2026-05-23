@@ -16,13 +16,13 @@ use std::time::Duration;
 use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
 use firma_run::routing::{AutostartFlags, resolve_authority};
 
-struct NoPrompt;
-impl AuthorityPromptIo for NoPrompt {
+struct PanicPrompt;
+impl AuthorityPromptIo for PanicPrompt {
     fn is_tty(&self) -> bool {
-        false
+        panic!("prompt should not be consulted when the local port is already bound");
     }
     fn confirm(&mut self, _: &str) -> std::io::Result<bool> {
-        Ok(false)
+        panic!("prompt should not be invoked");
     }
 }
 
@@ -35,7 +35,7 @@ fn pre_bound_port_without_plaintext_h2_fails_closed() {
 
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join("firma.toml");
-    std::fs::write(&cfg, "[authority]\ntype = \"local\"\n").unwrap();
+    std::fs::write(&cfg, "[authority]\nlisten_addr = \"127.0.0.1:50051\"\n").unwrap();
 
     let identity = firma_run::identity::RunIdentity::new("test");
     let runtime_dir = tmp.path().join("runtime");
@@ -45,16 +45,19 @@ fn pre_bound_port_without_plaintext_h2_fails_closed() {
         template_path: None,
         startup_timeout: Duration::from_secs(2),
         authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
         use_http_proxy_sidecar: false,
     };
-    let mut prompt = NoPrompt;
+    let mut prompt = PanicPrompt;
     let result = resolve_authority(
         &identity,
         &runtime_dir,
         &flags,
         &AuthorityCli::Unset,
         "developer",
-        &cfg,
+        Some(cfg.as_path()),
+        cfg.parent(),
         &PathBuf::from("/bin/false"),
         &mut prompt,
     );
