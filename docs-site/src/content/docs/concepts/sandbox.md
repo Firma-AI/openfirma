@@ -36,7 +36,7 @@ Network sandboxing primitives differ across OSes, so `firma run` selects a backe
 
 | Backend       | Platform | Mechanism                                    | When to use                                     |
 | ------------- | -------- | -------------------------------------------- | ----------------------------------------------- |
-| `bwrap`       | Linux    | Unprivileged user namespaces (bubblewrap)    | Default on Linux. Lightweight, no VM overhead.  |
+| `bwrap`       | Linux    | Unprivileged user namespaces (bubblewrap)    | Default on native Linux. Lightweight, no VM overhead. |
 | `vz`          | macOS    | Apple Virtualization framework, Linux guest  | Default on macOS. Native Apple Silicon support. |
 | `wsl2`        | Windows  | Linux guest under WSL2                       | Default on Windows.                             |
 | `firecracker` | Linux    | KVM micro-VM                                 | Higher isolation than bwrap; opt-in.            |
@@ -49,7 +49,7 @@ firma run --profile generic --backend firecracker -- python my_agent.py
 
 The choice is mostly an operational one: bwrap is fast to start and lightweight; vz and wsl2 are the only options on their platforms; firecracker gives you a real micro-VM at the cost of slightly slower start time.
 
-`firma run` cannot escalate privileges. On Linux it requires unprivileged user namespaces (which most modern distros enable by default). On macOS and Windows, the OS-native virtualization stacks handle the isolation.
+`firma run` cannot escalate privileges. On Linux it requires unprivileged user namespaces (which most modern distros enable by default). On WSL hosts, implicit backend selection uses the `wsl2` compatibility backend instead of attempting `bwrap`.
 
 ## Profiles
 

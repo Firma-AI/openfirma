@@ -6,6 +6,8 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::BackendKind;
+#[cfg(target_os = "linux")]
+use crate::backend::platform::{WslKind, detect_wsl};
 use crate::error::RunError;
 use crate::profile::{BuiltInProfileId, built_in_profile};
 use crate::runtime::RunInput;
@@ -467,9 +469,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     let cli_patch = cli_profile_patch(args);
     patch = patch.merge(cli_patch);
 
-    let backend = patch
-        .backend
-        .unwrap_or_else(BackendKind::default_for_current_host);
+    let backend = resolve_backend(patch.backend);
 
     // The explicitly-configured endpoint (config file or env), without the
     // hard-coded fallback. `None` means "nothing was set" — which lets the
@@ -579,6 +579,31 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
 
     resolved.validate()?;
     Ok(resolved)
+}
+
+fn resolve_backend(configured_backend: Option<BackendKind>) -> BackendKind {
+    if let Some(backend) = configured_backend {
+        return backend;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        resolve_backend_for_linux(configured_backend, detect_wsl())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    BackendKind::default_for_current_host()
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_backend_for_linux(configured_backend: Option<BackendKind>, wsl: WslKind) -> BackendKind {
+    if let Some(backend) = configured_backend {
+        return backend;
+    }
+    if wsl.is_wsl() {
+        return BackendKind::Wsl2;
+    }
+    BackendKind::Bwrap
 }
 
 fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
@@ -891,6 +916,8 @@ mod tests {
         BackendKind, CapabilitySource, SandboxIdentityMode, SeccompRuntimeMode, SidecarEndpoint,
         resolve_profile,
     };
+    #[cfg(target_os = "linux")]
+    use crate::backend::platform::WslKind;
 
     fn args(profile: &str) -> RunInput {
         RunInput {
@@ -942,6 +969,20 @@ mod tests {
                 managed.source_policy_path.display()
             );
         }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn implicit_backend_selection_uses_wsl2_on_wsl() {
+        let backend = super::resolve_backend_for_linux(None, WslKind::Wsl2);
+        assert_eq!(backend, BackendKind::Wsl2);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn explicit_backend_is_kept_on_wsl() {
+        let backend = super::resolve_backend_for_linux(Some(BackendKind::Bwrap), WslKind::Wsl);
+        assert_eq!(backend, BackendKind::Bwrap);
     }
 
     #[test]
