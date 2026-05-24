@@ -585,18 +585,18 @@ mod tests {
         let event_b = sample_event("b");
         let event_c = sample_event("c");
 
-        let line_a_len = (serde_json::to_string(&event_a)
+        let first_line_len = (serde_json::to_string(&event_a)
             .unwrap_or_else(|e| panic!("serialize a: {e}"))
             .len()
             + 1) as u64; // +1 for newline
-        let line_b_len = (serde_json::to_string(&event_b)
+        let second_line_len = (serde_json::to_string(&event_b)
             .unwrap_or_else(|e| panic!("serialize b: {e}"))
             .len()
             + 1) as u64; // +1 for newline
 
         // Cap to exactly the first two appends. The third append must
         // exceed this and therefore trigger compaction.
-        let cap = line_a_len + line_b_len;
+        let cap = first_line_len + second_line_len;
 
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
