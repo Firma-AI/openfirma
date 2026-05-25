@@ -12,7 +12,7 @@ import FeatureGrid from '../../components/FeatureGrid.astro';
 <Hero
   eyebrow={null}
   title="Give AI agents a runtime boundary."
-  tagline="OpenFirma puts a local enforcement point between an agent and the outside world, so every important outbound call is checked, scoped, and recorded before it leaves the machine."
+  tagline="OpenFirma puts a local enforcement point between an agent and the outside world. Every outbound call is intercepted, classified, checked against policy, and recorded — before it leaves the machine."
   actions={[
     { text: 'Run the quickstart', href: './quickstart/', variant: 'primary' },
     { text: 'See the architecture', href: './concepts/architecture/', variant: 'minimal' },
@@ -64,13 +64,13 @@ flowchart LR
     sidecar --> audit["Signed audit log"]
 ```
 
-Three pieces matter at first:
+Three infrastructure components matter at first:
 
-- The **Sidecar** is the local enforcement point. It sees outbound requests and decides whether to forward them.
-- The **Authority** is the trust root. It signs short-lived capability tokens and streams policy updates and revocations.
-- `firma run` is the optional launcher. It starts an agent inside a sandbox so traffic cannot skip the Sidecar.
+- The **Sidecar** is the local enforcement point. It intercepts outbound requests and decides whether to forward them.
+- The **Authority** is the trust root. It signs short-lived capability tokens and streams policy updates and revocations to connected Sidecars.
+- The **Audit emitter** writes a signed event for every enforcement decision, capturing agent, session, action class, target, outcome, and timing.
 
-Those pieces are built around four promises: fail closed, keep the hot path local, make decisions deterministic, and record the exact envelope the policy saw.
+Those components are built around four invariants: fail closed, keep the hot path local, make decisions deterministic, and record the exact envelope the policy saw.
 
 ## Where to start
 
@@ -80,8 +80,9 @@ If you want the mental model, read [Architecture & invariants](./concepts/archit
 
 If you already have a workload in mind, pick the closest guide:
 
-- [Run the Sidecar standalone](./guides/run-the-sidecar/) for a minimal local setup.
-- [Secure a local coding agent](./guides/secure-a-coding-agent/) for Claude Code, Codex, Cursor, or similar tools.
+- [Initialize a project](./guides/initialize-a-project/) to scaffold config, keys, and policies in one command with `firma init`.
+- [Secure a local coding agent](./guides/secure-a-coding-agent/) to wrap Claude Code, Codex, or Cursor with `firma run`.
+- [Run the Sidecar standalone](./guides/run-the-sidecar/) for a minimal setup without `firma run`, pointing agents at the proxy directly.
 - [Deploy a GenAI web app](./guides/deploy-a-genai-webapp/) for a multi-user service that calls LLMs and SaaS APIs.
 
 For implementation details, the [Rust API reference](./api/) is generated from the workspace crates.
