@@ -1609,6 +1609,31 @@ mod tests {
     }
 
     #[test]
+    fn shipped_posture_templates_pass_schema_validation() {
+        use cedar_policy::{PolicySet, Schema};
+
+        let (schema, _) = Schema::from_cedarschema_str(firma_core::FIRMA_SCHEMA)
+            .unwrap_or_else(|e| panic!("schema parse: {e}"));
+
+        for posture in Posture::iter() {
+            let set: PolicySet = posture
+                .cedar_content()
+                .parse()
+                .unwrap_or_else(|e| panic!("{posture:?} parse: {e}"));
+            firma_core::validate_policies(&set, &schema).unwrap_or_else(|errs| {
+                panic!("{posture:?} schema validation: {}", errs.join("; "))
+            });
+        }
+
+        // The issuance template ships alongside every posture.
+        let issuance: PolicySet = TPL_CEDAR_ISSUANCE
+            .parse()
+            .unwrap_or_else(|e| panic!("issuance parse: {e}"));
+        firma_core::validate_policies(&issuance, &schema)
+            .unwrap_or_else(|errs| panic!("issuance schema validation: {}", errs.join("; ")));
+    }
+
+    #[test]
     fn strict_posture_does_not_permit_code_write() {
         assert!(
             !Posture::Strict.cedar_content().contains("code.write"),
