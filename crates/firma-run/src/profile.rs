@@ -45,6 +45,11 @@ fn generic_profile() -> ProfilePatch {
         "FIRMA_RUN_BWRAP_RUNTIME_HOME".to_string(),
         "true".to_string(),
     );
+    // On macOS (vz) and WSL2 backends, structural network-namespace confinement is
+    // unavailable; enforcement is proxy-based. Clear NO_PROXY so host env cannot
+    // accidentally route traffic around the HTTP proxy Sidecar.
+    env_set.insert("NO_PROXY".to_string(), String::new());
+    env_set.insert("no_proxy".to_string(), String::new());
 
     ProfilePatch {
         backend: None,
@@ -74,7 +79,7 @@ fn generic_profile() -> ProfilePatch {
         sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
         codex_cli: None,
-        use_http_proxy_sidecar: false,
+        use_http_proxy_sidecar: true,
     }
 }
 
@@ -82,10 +87,6 @@ fn codex_profile() -> ProfilePatch {
     let mut base = generic_profile();
     base.env_set
         .insert("FIRMA_RUN_PROFILE".to_string(), "codex".to_string());
-    // Codex ignores proxy vars when NO_PROXY is set broadly (e.g. from the
-    // host env). Explicitly empty both variants so nothing bypasses the proxy.
-    base.env_set.insert("NO_PROXY".to_string(), String::new());
-    base.env_set.insert("no_proxy".to_string(), String::new());
     base.env_passthrough.extend([
         "OPENAI_API_KEY".to_string(),
         "ANTHROPIC_API_KEY".to_string(),
@@ -109,7 +110,6 @@ fn codex_profile() -> ProfilePatch {
             ]),
         },
     );
-    base.use_http_proxy_sidecar = true;
     base
 }
 
