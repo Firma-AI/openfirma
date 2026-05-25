@@ -40,13 +40,6 @@ OpenFirma is a runtime enforcement boundary that sits between your AI agents and
 
 ### Install
 
-**macOS:**
-
-```bash
-brew tap Firma-AI/openfirma
-brew install firma
-```
-
 **Linux / other:**
 
 ```bash
@@ -60,6 +53,8 @@ git clone https://github.com/firma-ai/firma-oss
 cd firma-oss
 cargo build --release
 ```
+
+> macOS Homebrew support releasing in v0.1.1.
 
 ### Quickstart
 
@@ -94,15 +89,6 @@ firma run -- claude
 firma monitor
 ```
 Use this when you want to run multiple agents against the same Authority, keep enforcement running between sessions, or configure posture and mappings upfront with `firma config` before starting anything.
-
-**Live policy update** (works with both options)
-
-Edit a Cedar policy file on disk at any point. The Authority picks up the change via file watcher and pushes the updated bundle to all connected Sidecars. No restart needed.
-
-```bash
-vim .firma/policies/allow.cedar
-# Authority reloads and pushes to all Sidecars automatically
-```
 
 ### Policies
 
@@ -142,6 +128,10 @@ firma policy test     .firma/policies/fixture.toml      # run allow/deny fixture
 firma policy list                                        # browse all available packs
 firma config --posture dev --mapping github --mapping stripe
 ```
+
+**Live policy update**
+ 
+Edit a Cedar policy file on disk at any point. The Authority picks up the change via file watcher and pushes the updated bundle to all connected Sidecars. No restart needed.
 
 > Full policy reference: [Concepts: Policies](https://firma-ai.github.io/openfirma/concepts/policies/) · [Write your first Cedar policy](https://firma-ai.github.io/openfirma/guides/write-a-cedar-policy/)
 
