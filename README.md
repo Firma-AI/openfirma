@@ -117,7 +117,7 @@ firma policy test     .firma/policies/fixture.toml      # run allow/deny fixture
 
 `firma config` scaffolds your first policy from a **pack** — a pre-built combination of a posture and one or more mappings. A posture defines what action classes are permitted by default. A mapping translates the raw HTTP calls of a specific service into those action classes. Without a mapping for a service, the Sidecar cannot classify its calls and blocks them.
 
-**Posture packs** — choose one per project:
+**Posture packs**, choose one per project:
 
 | Posture | What it permits |
 |---|---|
@@ -125,7 +125,7 @@ firma policy test     .firma/policies/fixture.toml      # run allow/deny fixture
 | `dev` | Adds `code.read/write`, issues, package install. No payments or destructive ops. |
 | `dev-with-delete-watch` | `dev` plus `code.destructive` for local-exec and delete-watch scenarios. |
 
-**Mapping packs** — add one per service your agent calls:
+**Mapping packs**, add one per service your agent calls:
 
 | Mapping | Covers |
 |---|---|
