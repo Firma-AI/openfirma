@@ -23,17 +23,14 @@ const STOP_GRACE: Duration = Duration::from_secs(5);
 #[cfg(unix)]
 const MAX_BIND_ATTEMPTS: usize = 8;
 #[cfg(unix)]
-const AUTOSTART_LOCAL_DEVELOPER_POLICY: &str = r#"// Local autostart profile for `firma run`.
+const AUTOSTART_LOCAL_DEVELOPER_POLICY: &str = r"// Local autostart profile for `firma run`.
 //
-// Keeps default operation strict while allowing outbound communication flows
-// that are further constrained by sidecar mapping, capability scope, and
-// session-bound issued tokens.
-permit(
-    principal,
-    action == Firma::Action::"communication.external.send",
-    resource
-);
-"#;
+// Governs token *issuance* only. Runtime enforcement is handled by the
+// sidecar's Cedar policy bundle (dev.cedar). All registered action classes
+// are permitted here so the sidecar can classify and enforce without the
+// Authority becoming the bottleneck for local dev.
+permit(principal, action, resource);
+";
 
 /// Inputs to [`AuthoritySupervisor::spawn`].
 #[doc(hidden)]

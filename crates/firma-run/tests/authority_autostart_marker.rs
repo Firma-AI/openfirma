@@ -66,8 +66,7 @@ fn marker_dir_layout_and_developer_cedar() {
 
     let cedar = std::fs::read_to_string(marker.join("policy_dir/developer.cedar")).unwrap();
     assert!(cedar.contains("Local autostart profile for `firma run`."));
-    assert!(cedar.contains("communication.external.send"));
-    assert!(cedar.contains("permit("));
+    assert!(cedar.contains("permit(principal, action, resource)"));
 
     drop(sup);
 }
