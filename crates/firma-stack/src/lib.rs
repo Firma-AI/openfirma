@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod error;
+pub mod fs;
 pub mod pidfile;
 pub mod runtime_paths;
 pub mod shutdown_event;

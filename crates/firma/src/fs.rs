@@ -14,7 +14,11 @@ pub struct FsError {
 
 impl FsError {
     fn new(op: &'static str, path: &Path, source: io::Error) -> Self {
-        Self { op, path: path.to_path_buf(), source }
+        Self {
+            op,
+            path: path.to_path_buf(),
+            source,
+        }
     }
 
     pub fn kind(&self) -> io::ErrorKind {
