@@ -63,21 +63,43 @@ cargo build --release
 
 ### Quickstart
 
-Wrap your agent with a single command:
+`firma` ships as a single precompiled static binary. No Rust, no build toolchain, no API keys required.
+
+**1. First run, zero config**
+
+`firma run` autostarts a local Authority and Sidecar on first use. Pass the agent command after `--`:
 
 ```bash
-firma run --profile claude-code -- claude
+firma run -- claude
 ```
 
-`firma run` autostarts a per-run Sidecar and Mini Authority, applies the `claude-code` policy profile, and tears everything down when the agent exits. On first run with no Authority configured, it prompts once to confirm the local autostart and persists the choice.
-
-To run a persistent stack instead:
+Every outbound call is normalized, checked against your Cedar policy, and either forwarded or denied. Every decision is written to the audit log. Watch it live:
 
 ```bash
-firma stack init          # scaffold keys + config
-firma stack start --detach
-firma run --profile claude-code -- claude
-firma monitor             # tail the live audit stream
+firma monitor
+```
+
+**2. Persistent Authority, multiple agents**
+
+If you run more than one agent, or want the Authority and Sidecar to stay alive across sessions rather than restart on every `firma run`, scaffold the project once and start them as persistent background daemons.
+
+```bash
+firma init                         # scaffold once per project
+firma stack start --detach         # start Authority + Sidecar in the background
+
+firma run -- claude &
+firma run -- codex  &
+```
+
+Each agent gets its own Sidecar. All Sidecars pull policy from the same Authority. Rotate or update policy without restarting any agent.
+
+**3. Live policy update**
+
+Edit a Cedar policy file on disk at any point. The Authority picks up the change via file watcher and pushes the updated bundle to all connected Sidecars. No restart needed.
+
+```bash
+vim .firma/policies/allow.cedar
+# Authority reloads and pushes to all Sidecars automatically
 ```
 
 ### Different operating models
@@ -105,12 +127,12 @@ firma run --profile claude-code -- claude
 The Authority becomes persistent and shared across local agent sessions. Each new `firma run` attaches to the same trust root and pulls the current policy bundle without restarting existing agents.
 
 ```bash
-firma stack init
+firma init
 firma stack start --detach
 
-firma run --profile claude-code -- claude   &
-firma run --profile codex       -- codex    &
-firma run --profile generic     -- opencode
+firma run -- claude   &
+firma run -- codex    &
+firma run -- opencode
 ```
 
 </td><td>
@@ -159,19 +181,19 @@ The Authority can be the Mini Authority included in this repo or your own implem
 
 ### CLI reference
 
-| Command | Description |
-|---|---|
-| `firma run` | Wrap an agent process: autostarts Sidecar + Authority, applies a policy profile, tears down on exit |
-| `firma stack init` | Scaffold a deployment: writes `firma.toml`, keys, policy dirs, and revocation file |
-| `firma stack start` | Boot Authority + Sidecar as one unit. `--detach` forks a supervisor |
-| `firma stack stop` | Graceful shutdown with configurable timeout |
-| `firma stack status` | Per-component pid, listen address, state, and uptime. `--json` for machine output |
-| `firma monitor` | Tail the live audit stream and component logs from a running stack |
-| `firma doctor` | Structured diagnostic report: installed components, reachable endpoints, config status |
-| `firma authority` | Run the Mini Authority: issues capability tokens, streams Cedar policy bundles |
-| `firma sidecar` | Run the Sidecar standalone |
-| `firma policy` | Validate and unit-test Cedar policy bundles |
-| `firma token` | Manage local-exec governance tokens (approve / revoke) |
+| Command               | Description                                                                                         |
+| --------------------- | --------------------------------------------------------------------------------------------------- |
+| `firma run`           | Wrap an agent process: autostarts Authority + Sidecar, applies a policy profile, tears down on exit |
+| `firma init`          | Scaffold a project: writes `firma.toml`, signing keys, policy dirs                                  |
+| `firma stack start`   | Boot Authority + Sidecar as persistent daemons. `--detach` forks a supervisor                       |
+| `firma stack stop`    | Graceful shutdown with configurable timeout                                                         |
+| `firma stack status`  | Per-component pid, listen address, state, and uptime. `--json` for machine output                   |
+| `firma monitor`       | Tail the live audit stream and component logs                                                       |
+| `firma doctor`        | Structured diagnostic report: installed components, reachable endpoints, config status              |
+| `firma authority`     | Run the Mini Authority: issues capability tokens, streams Cedar policy bundles                      |
+| `firma sidecar`       | Run the Sidecar standalone                                                                          |
+| `firma policy`        | Validate and unit-test Cedar policy bundles                                                         |
+| `firma token`         | Manage local-exec governance tokens (approve / revoke)                                              |
 
 > Full CLI reference: [`docs/cli.md`](docs/cli.md)
 
@@ -204,30 +226,30 @@ The Authority can be the Mini Authority included in this repo or your own implem
 
 **Infrastructure**
 
-| | |
-|---|---|
-| [`crates/firma`](crates/firma/) | CLI entrypoint: `firma run`, `firma stack`, `firma monitor`, `firma doctor` |
-| [`crates/firma-sidecar`](crates/firma-sidecar/) | The enforcement Sidecar: interceptors, pipeline, connectors |
-| [`crates/firma-authority`](crates/firma-authority/) | Mini Authority: file-based trust root for local development |
-| [`crates/firma-core`](crates/firma-core/) | Shared types, Cedar schema, action classes, audit event format |
-| [`crates/firma-run`](crates/firma-run/) | Agent process confinement: bwrap backend, profile resolution, autostart |
-| [`crates/firma-stack`](crates/firma-stack/) | Stack supervisor: Authority + Sidecar lifecycle as one unit |
-| [`crates/firma-proto`](crates/firma-proto/) | Protobuf/gRPC service definitions |
+|                                                     |                                                                               |
+| --------------------------------------------------- | ----------------------------------------------------------------------------- |
+| [`crates/firma`](crates/firma/)                     | CLI entrypoint: `firma run`, `firma sidecar`, `firma monitor`, `firma doctor` |
+| [`crates/firma-sidecar`](crates/firma-sidecar/)     | The enforcement Sidecar: interceptors, pipeline, connectors                   |
+| [`crates/firma-authority`](crates/firma-authority/) | Mini Authority: file-based trust root for local development                   |
+| [`crates/firma-core`](crates/firma-core/)           | Shared types, Cedar schema, action classes, audit event format                |
+| [`crates/firma-run`](crates/firma-run/)             | Agent process confinement: bwrap backend, profile resolution, autostart       |
+| [`crates/firma-stack`](crates/firma-stack/)         | Stack supervisor: Authority + Sidecar lifecycle as one unit                   |
+| [`crates/firma-proto`](crates/firma-proto/)         | Protobuf/gRPC service definitions                                             |
 
 **Examples**
 
-| | |
-|---|---|
-| [`examples/demos`](examples/demos/) | TUI demo runner with three self-contained enforcement scenarios |
-| [`examples/agents`](examples/agents/) | Intentionally risky demo agents (OpenAI Agents SDK + Google ADK) |
+|                                                     |                                                                     |
+| --------------------------------------------------- | ------------------------------------------------------------------- |
+| [`examples/demos`](examples/demos/)                 | TUI demo runner with three self-contained enforcement scenarios     |
+| [`examples/agents`](examples/agents/)               | Intentionally risky demo agents (OpenAI Agents SDK + Google ADK)    |
 | [`examples/generic-agent`](examples/generic-agent/) | `firma run` profile and stack runner for wrapping any agent command |
 
 **Docs**
 
-| | |
-|---|---|
-| [`docs/`](docs/) | Architecture, CLI reference, configuration reference |
-| [`docs-site/`](docs-site/) | Astro/Starlight documentation site |
+|                            |                                                      |
+| -------------------------- | ---------------------------------------------------- |
+| [`docs/`](docs/)           | Architecture, CLI reference, configuration reference |
+| [`docs-site/`](docs-site/) | Astro/Starlight documentation site                   |
 
 <br/>
 
