@@ -265,6 +265,28 @@ fn merge_firma_run_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result
     }
 
     {
+        let audit = ensure_table(doc.as_table_mut(), "audit")?;
+        set_str_if_absent(audit, "sink", "file");
+        set_str(audit, "file_path", inputs.audit_file);
+        set_str(audit, "signing_key_path", inputs.audit_key);
+    }
+
+    {
+        let mapping = ensure_table(doc.as_table_mut(), "mapping")?;
+        set_str_if_absent(mapping, "rules_path", "mapping-rules.toml");
+        set_str_array(mapping, "rules_paths", inputs.mapping_paths);
+        set_bool_if_absent(mapping, "default_protected", true);
+    }
+
+    {
+        let pre = ensure_table(doc.as_table_mut(), "preflight")?;
+        set_str_if_absent(pre, "agent_id", inputs.name);
+        set_str_array(pre, "requested_actions", inputs.requested_actions);
+        set_str_if_absent(pre, "resource_scope", "*");
+        set_int_if_absent(pre, "ttl_seconds", 900);
+    }
+
+    {
         let profiles = ensure_table(doc.as_table_mut(), "profiles")?;
         let generic = ensure_table(profiles, "generic")?;
         set_str_if_absent(generic, "backend", "bwrap");

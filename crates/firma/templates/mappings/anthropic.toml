@@ -1,7 +1,23 @@
-# Anthropic API mapping.
-# Tunnels through without MITM; the LLM SDK does not need to trust firma-ca.
+# Anthropic / Claude API mapping.
+# Tunnels through without MITM; the SDK does not need to trust firma-ca.
 
 [[rules]]
 method = "CONNECT"
-host = "api.anthropic.com:443"
+host = "*.anthropic.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.claude.com"
+action_class = "communication.external.send"
+
+# REST fallback (plain HTTP proxy or post-MITM).
+[[rules]]
+host = "*.anthropic.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.claude.com"
+path = "*"
 action_class = "communication.external.send"

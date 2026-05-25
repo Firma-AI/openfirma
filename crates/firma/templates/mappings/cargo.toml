@@ -1,14 +1,14 @@
 # crates.io / Rust package registry.
 
-# Plain CONNECT (no MITM): host carries port.
+# Plain CONNECT (no MITM): bare host, default port stripped by normalizer.
 [[rules]]
 method = "CONNECT"
-host = "crates.io:443"
+host = "crates.io"
 action_class = "system.install"
 
 [[rules]]
 method = "CONNECT"
-host = "static.crates.io:443"
+host = "static.crates.io"
 action_class = "system.install"
 
 # Post-MITM REST rules.
