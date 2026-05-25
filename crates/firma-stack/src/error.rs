@@ -66,6 +66,16 @@ pub enum StackError {
         source: io::Error,
     },
 
+    /// Setting the state directory mode to 0700 failed.
+    #[error("failed to set state dir mode 0700 '{path}': {source}")]
+    StateDirMode {
+        /// Path whose permissions could not be set.
+        path: PathBuf,
+        /// Underlying I/O error.
+        #[source]
+        source: io::Error,
+    },
+
     /// Another supervisor already holds the stack lock for this state dir.
     #[error("stack already running (lock held at '{path}')")]
     AlreadyRunning {

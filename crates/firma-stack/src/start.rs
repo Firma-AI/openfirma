@@ -59,10 +59,7 @@ pub struct StackHandle {
 /// removes any pid/listen/lock files it created before returning the error.
 pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
     info!(state_dir = %state_dir.display(), "spawning firma stack");
-    std::fs::create_dir_all(state_dir).map_err(|source| StackError::StateDirCreate {
-        path: state_dir.to_path_buf(),
-        source,
-    })?;
+    create_private_dir_all(state_dir)?;
     debug!("acquiring stack lock");
     acquire_lock(state_dir)?;
     debug!("reaping stale pidfiles");
@@ -227,6 +224,30 @@ fn spawn_with_config(
             exe,
         },
     )
+}
+
+fn create_private_dir_all(path: &Path) -> Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
+    }
+    builder.create(path).map_err(|source| StackError::StateDirCreate {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .map_err(|source| StackError::StateDirMode {
+                path: path.to_path_buf(),
+                source,
+            })?;
+    }
+    Ok(())
 }
 
 fn acquire_lock(state_dir: &Path) -> Result<()> {
