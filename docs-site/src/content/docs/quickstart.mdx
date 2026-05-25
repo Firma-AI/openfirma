@@ -98,18 +98,15 @@ Now make the generated profile work for this demo, where we are going to enforce
    file_path = "/tmp/openfirma-quickstart/audit.jsonl"
    ```
 
-   Then append these sections to the end of the same file:
+   Then append this section to the end of the same file:
 
    ```toml
-   [profiles.generic]
-   use_http_proxy_sidecar = true
-
    [sidecar.preflight]
    session_id = "quickstart-session"
    resource_scope = "api.github.com/"
    ```
 
-   The profile setting makes ordinary tools like `curl` use the HTTP proxy Sidecar. The preflight settings pin a stable session ID and grant that session access to the GitHub resource used below.
+   The preflight settings pin a stable session ID and grant that session access to the GitHub resource used below. The `generic` profile routes traffic through the HTTP proxy Sidecar by default — no extra config needed.
 
 3. Replace the placeholder contents of `.firma/mapping-rules.toml` with the two rules for the GitHub request:
 
