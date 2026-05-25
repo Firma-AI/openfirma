@@ -63,37 +63,42 @@ cargo build --release
 
 ### Quickstart
 
-`firma` ships as a single precompiled static binary. No Rust, no build toolchain, no API keys required.
+`firma` ships as a single precompiled static binary, no build toolchain or API keys required to get started.
 
-**1. First run, zero config**
+There are two ways to start OpenFirma. Both end up in the same place (your agent running under enforcement) but the first is faster to try, the second gives you more control.
 
-`firma run` autostarts a local Authority and Sidecar on first use. Pass the agent command after `--`:
+---
+
+**Option A: zero config**
+
+`firma run` autostarts a local Authority and Sidecar for the duration of the session and shuts them down when the agent exits. One command, nothing to configure, nothing left running when you are done. On first launch it prompts once to confirm the autostart; subsequent runs are silent.
 
 ```bash
 firma run -- claude
 ```
 
-Every outbound call is normalized, checked against your Cedar policy, and either forwarded or denied. Every decision is written to the audit log. Watch it live:
+Every outbound call is normalized, checked against your Cedar policy, and either forwarded or denied. Watch decisions live in a second terminal:
 
 ```bash
 firma monitor
 ```
 
-**2. Persistent Authority, multiple agents**
+---
 
-If you run more than one agent, or want the Authority and Sidecar to stay alive across sessions rather than restart on every `firma run`, scaffold the project once and start them as persistent background daemons.
+**Option B: explicit setup**
+
+`firma sidecar start` boots Authority and Sidecar as persistent daemons that stay alive across sessions. Use this when you want to run multiple agents against the same Authority, keep enforcement running between sessions, or configure posture and mappings upfront with `firma config` before starting anything.
 
 ```bash
-firma config                       # scaffold once per project
-firma sidecar start --detach       # start Authority + Sidecar in the background
-
-firma run -- claude &
-firma run -- codex  &
+firma config                       # scaffold once: keys, policy, mappings
+firma sidecar start --detach       # boot Authority + Sidecar as persistent daemons
+firma run -- claude
+firma monitor
 ```
 
-Each agent gets its own Sidecar. All Sidecars pull policy from the same Authority. Rotate or update policy without restarting any agent.
+---
 
-**3. Live policy update**
+**Live policy update** (works with both options)
 
 Edit a Cedar policy file on disk at any point. The Authority picks up the change via file watcher and pushes the updated bundle to all connected Sidecars. No restart needed.
 
@@ -104,7 +109,7 @@ vim .firma/policies/allow.cedar
 
 ### Policies
 
-Cedar policy files live under `.firma/policies/`. The Authority watches that directory and pushes any change to all connected Sidecars automatically (edit a file, save it, enforcement updates within 30 seconds). No restart needed.
+Cedar policy files live under `.firma/policies/`. The Authority watches that directory and pushes any change to all connected Sidecars automatically — edit a file, save it, enforcement updates within 30 seconds. No restart needed.
 
 ```bash
 firma policy validate .firma/policies/my-policy.cedar  # check before it goes live
@@ -113,9 +118,9 @@ firma policy test     .firma/policies/fixture.toml      # run allow/deny fixture
 
 **Packs**
 
-`firma config` scaffolds your first policy from a **pack**, a pre-built combination of a posture and one or more mappings. A posture defines what action classes are permitted by default. A mapping translates the raw HTTP calls of a specific service into those action classes. Without a mapping for a service, the Sidecar cannot classify its calls and blocks them.
+`firma config` scaffolds your first policy from a **pack** — a pre-built combination of a posture and one or more mappings. A posture defines what action classes are permitted by default. A mapping translates the raw HTTP calls of a specific service into those action classes. Without a mapping for a service, the Sidecar cannot classify its calls and blocks them.
 
-**Posture packs**, choose one per project:
+**Posture packs** — choose one per project:
 
 | Posture | What it permits |
 |---|---|
@@ -123,7 +128,7 @@ firma policy test     .firma/policies/fixture.toml      # run allow/deny fixture
 | `dev` | Adds `code.read/write`, issues, package install. No payments or destructive ops. |
 | `dev-with-delete-watch` | `dev` plus `code.destructive` for local-exec and delete-watch scenarios. |
 
-**Mapping packs**, add one per service your agent calls:
+**Mapping packs** — add one per service your agent calls:
 
 | Mapping | Covers |
 |---|---|
@@ -326,4 +331,4 @@ The Authority can be the Mini Authority included in this repo or your own implem
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE).
+Apache 2.0. See [LICENSE](LICENSE)
