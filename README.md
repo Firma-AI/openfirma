@@ -104,45 +104,41 @@ vim .firma/policies/allow.cedar
 
 ### Policies
 
-Policies are Cedar files under `.firma/policies/`. The Sidecar evaluates them locally on every call — default deny, `forbid` overrides `permit`.
+Cedar policy files live under `.firma/policies/`. The Authority watches that directory and pushes any change to all connected Sidecars automatically (edit a file, save it, enforcement updates within 30 seconds). No restart needed.
 
-`firma config` generates a policy from a **posture** template:
+```bash
+firma policy validate .firma/policies/my-policy.cedar  # check before it goes live
+firma policy test     .firma/policies/fixture.toml      # run allow/deny fixtures
+```
+
+**Packs**
+
+`firma config` scaffolds your first policy from a **pack**, a pre-built combination of a posture and one or more mappings. A posture defines what action classes are permitted by default. A mapping translates the raw HTTP calls of a specific service into those action classes. Without a mapping for a service, the Sidecar cannot classify its calls and blocks them.
+
+**Posture packs**, choose one per project:
 
 | Posture | What it permits |
 |---|---|
-| `strict` | `credential.read` and `communication.external.send` only |
-| `dev` | Adds `code.read/write`, issues, package install |
-| `dev-with-delete-watch` | `dev` plus `code.destructive` |
+| `strict` | `credential.read` and `communication.external.send` only. No code operations. |
+| `dev` | Adds `code.read/write`, issues, package install. No payments or destructive ops. |
+| `dev-with-delete-watch` | `dev` plus `code.destructive` for local-exec and delete-watch scenarios. |
 
-Each outbound request is classified into an **action class** by a **mapping**. Eight mappings ship out of the box: `anthropic`, `openai`, `github`, `gmail`, `stripe`, `npm`, `pypi`, `cargo`. Select them during `firma config`, or list all available templates:
+**Mapping packs**, add one per service your agent calls:
 
-```bash
-firma policy list
-```
-
-Write a rule:
-
-```cedar
-// Permit code reads for this agent
-permit (
-    principal == Firma::Agent::"my-agent",
-    action == Firma::Action::"code.read",
-    resource
-);
-
-// Block exfiltration for everyone
-forbid (
-    principal,
-    action == Firma::Action::"communication.external.send",
-    resource == Firma::Resource::"paste.rs/"
-);
-```
-
-Validate before deploying:
+| Mapping | Covers |
+|---|---|
+| `anthropic` | `api.anthropic.com` |
+| `openai` | `api.openai.com` |
+| `github` | 44 GitHub REST endpoints → 12 action classes |
+| `gmail` | 41 Gmail REST endpoints → 7 action classes |
+| `stripe` | 88 Stripe REST endpoints → 14 action classes |
+| `npm` | `registry.npmjs.org` |
+| `pypi` | `pypi.org`, `files.pythonhosted.org` |
+| `cargo` | `crates.io` |
 
 ```bash
-firma policy validate .firma/policies/my-policy.cedar
-firma policy test     .firma/policies/fixture.toml
+firma policy list                                        # browse all available packs
+firma config --posture dev --mapping github --mapping stripe
 ```
 
 > Full policy reference: [Concepts: Policies](https://firma-ai.github.io/openfirma/concepts/policies/) · [Write your first Cedar policy](https://firma-ai.github.io/openfirma/guides/write-a-cedar-policy/)
