@@ -102,19 +102,8 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
         )?;
     }
 
-    if has_sidecar {
-        let revoc = state.join("revocations.txt");
-        if args.force {
-            std::fs::write(&revoc, b"").with_context(|| format!("write {}", revoc.display()))?;
-        } else {
-            crate::fs::write_new_file(&revoc, b"", 0o600).or_else(|e| {
-                if e.kind() == std::io::ErrorKind::AlreadyExists {
-                    Ok(())
-                } else {
-                    Err(e)
-                }
-            })?;
-        }
+    if has_server {
+        write_revocations(state, args.force)?;
         crate::services::authority::generate_audit_key_if_absent(
             &state.join("audit.key"),
             args.force,
@@ -142,6 +131,21 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+fn write_revocations(state_dir: &Path, force: bool) -> Result<()> {
+    let path = state_dir.join("revocations.txt");
+    if force {
+        Ok(crate::fs::write_file(&path, b"", 0o600)?)
+    } else {
+        Ok(crate::fs::write_new_file(&path, b"", 0o600).or_else(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })?)
+    }
 }
 
 fn create_scaffold_dirs(cfg: &Path, state: &Path) -> Result<()> {
@@ -1178,18 +1182,7 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
         std::fs::write(&path, content).with_context(|| format!("write {}", path.display()))?;
     }
 
-    let revoc = plan.state_dir.join("revocations.txt");
-    if plan.force {
-        std::fs::write(&revoc, b"").with_context(|| format!("write {}", revoc.display()))?;
-    } else {
-        crate::fs::write_new_file(&revoc, b"", 0o600).or_else(|e| {
-            if e.kind() == std::io::ErrorKind::AlreadyExists {
-                Ok(())
-            } else {
-                Err(e)
-            }
-        })?;
-    }
+    write_revocations(&plan.state_dir, plan.force)?;
     crate::services::authority::generate_audit_key_if_absent(
         &plan.state_dir.join("audit.key"),
         plan.force,
