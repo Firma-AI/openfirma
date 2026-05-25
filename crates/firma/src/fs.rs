@@ -49,6 +49,31 @@ pub fn create_private_dir_all(path: &Path) -> Result<(), FsError> {
     Ok(())
 }
 
+/// Write `bytes` to `path`, creating or truncating it, with the given Unix mode.
+/// On Windows the `mode` argument is ignored.
+pub fn write_file(path: &Path, bytes: &[u8], mode: u32) -> Result<(), FsError> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(mode);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    opts.open(path)
+        .map_err(|e| FsError::new("open", path, e))?
+        .write_all(bytes)
+        .map_err(|e| FsError::new("write", path, e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            .map_err(|e| FsError::new("chmod", path, e))?;
+    }
+    Ok(())
+}
+
 /// Write `bytes` to a new file at `path` with the given Unix mode.
 /// Returns `FsError` with `kind() == AlreadyExists` if the file already exists —
 /// callers decide whether to treat that as an error or ignore it.
