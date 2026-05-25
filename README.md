@@ -46,12 +46,13 @@ OpenFirma is a runtime enforcement boundary that sits between your AI agents and
 curl -sSf https://install.openfirma.ai | sh
 ```
 
-**Build from source** (requires Rust 1.88+ and `protoc`):
-
+**Build and install from source** (requires Rust 1.88+ and `protoc`):
+ 
 ```bash
 git clone https://github.com/firma-ai/firma-oss
 cd firma-oss
 cargo build --release
+cargo install --path crates/firma
 ```
 
 > macOS Homebrew support releasing in v0.1.1.
