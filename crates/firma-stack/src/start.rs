@@ -59,10 +59,7 @@ pub struct StackHandle {
 /// removes any pid/listen/lock files it created before returning the error.
 pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
     info!(state_dir = %state_dir.display(), "spawning firma stack");
-    std::fs::create_dir_all(state_dir).map_err(|source| StackError::StateDirCreate {
-        path: state_dir.to_path_buf(),
-        source,
-    })?;
+    crate::fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
     debug!("acquiring stack lock");
     acquire_lock(state_dir)?;
     debug!("reaping stale pidfiles");

@@ -23,7 +23,7 @@ impl DemoRuntime {
 
 pub fn boot(manifest: &DemoManifest) -> Result<DemoRuntime> {
     let state_dir = manifest.root.join(".runtime");
-    std::fs::create_dir_all(&state_dir).context("failed to create .runtime directory")?;
+    firma_stack::fs::create_private_dir_all(&state_dir)?;
 
     provision_demo_assets(&state_dir)?;
     // Demo-specific: always regenerate CA material so the cert reflects current code.
@@ -66,7 +66,7 @@ fn resolve_firma_bin() -> Result<PathBuf> {
 }
 
 fn wipe_ca_dir(ca_dir: &Path) -> Result<()> {
-    std::fs::create_dir_all(ca_dir).context("failed to create firma-ca directory")?;
+    firma_stack::fs::create_private_dir_all(ca_dir)?;
     for name in ["firma-ca.crt", "firma-ca.key"] {
         let path = ca_dir.join(name);
         if path.exists() {
