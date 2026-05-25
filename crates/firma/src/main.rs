@@ -1,5 +1,6 @@
 mod args;
 mod doctor;
+mod fs;
 mod log;
 mod monitor;
 mod policy;

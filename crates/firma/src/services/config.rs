@@ -11,6 +11,7 @@ use clap::ValueEnum as _;
 use dialoguer::theme::ColorfulTheme;
 
 use crate::args::config::{InitArgs, Mapping, Mode, Posture};
+use crate::fs::create_private_dir_all;
 use doc::DocInputs;
 
 struct AuthorityInputs {
@@ -101,8 +102,8 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
         )?;
     }
 
-    if has_sidecar {
-        write_if_absent(&state.join("revocations.txt"), b"", args.force)?;
+    if has_server {
+        write_revocations(state, args.force)?;
         crate::services::authority::generate_audit_key_if_absent(
             &state.join("audit.key"),
             args.force,
@@ -132,21 +133,31 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn write_revocations(state_dir: &Path, force: bool) -> Result<()> {
+    let path = state_dir.join("revocations.txt");
+    if force {
+        Ok(crate::fs::write_file(&path, b"", 0o600)?)
+    } else {
+        Ok(crate::fs::write_new_file(&path, b"", 0o600).or_else(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })?)
+    }
+}
+
 fn create_scaffold_dirs(cfg: &Path, state: &Path) -> Result<()> {
     for dir in [
         cfg,
         &cfg.join("policies"),
         &cfg.join("issuance-policies"),
         &cfg.join("mappings"),
+        state,
+        &state.join("generated-firma-ca"),
     ] {
-        std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
-        #[cfg(unix)]
-        set_dir_mode_0700(dir).with_context(|| format!("chmod {}", dir.display()))?;
-    }
-    for dir in [state, &state.join("generated-firma-ca")] {
-        std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
-        #[cfg(unix)]
-        set_dir_mode_0700(dir).with_context(|| format!("chmod {}", dir.display()))?;
+        create_private_dir_all(dir)?;
     }
     Ok(())
 }
@@ -983,20 +994,6 @@ fn prompt_mappings_with_default(
     Ok(chosen)
 }
 
-#[cfg(unix)]
-fn set_dir_mode_0700(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-        .with_context(|| format!("chmod 0700 {}", path.display()))
-}
-
-fn write_if_absent(path: &Path, content: &[u8], force: bool) -> Result<()> {
-    if !force && path.exists() {
-        return Ok(());
-    }
-    std::fs::write(path, content).with_context(|| format!("write {}", path.display()))
-}
-
 /// Delete posture cedar files left behind by previous postures.
 ///
 /// Posture is a closed set of `(cedar file, requested_actions)` presets.
@@ -1118,7 +1115,7 @@ fn resolve_state_dir_with_default(
 /// # Errors
 /// Returns a formatted string on any filesystem or key-generation failure.
 #[allow(clippy::too_many_lines)]
-pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
+pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
     let mappings = provider_to_mappings(&plan.provider);
     let (mode, authority) = match &plan.authority {
         AuthorityShape::Local => {
@@ -1160,7 +1157,7 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
         config_dir: plan.config_dir.clone(),
         state_dir: plan.state_dir.clone(),
     };
-    let files = generate_files(&inputs).map_err(|e| format!("generate files: {e}"))?;
+    let files = generate_files(&inputs).context("generate files")?;
 
     for dir in [
         plan.config_dir.as_path(),
@@ -1170,32 +1167,30 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
         plan.state_dir.as_path(),
         &plan.state_dir.join("generated-firma-ca"),
     ] {
-        std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+        create_private_dir_all(dir)?;
     }
 
     for (rel, content) in &files {
         let path = plan.config_dir.join(rel);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+                .with_context(|| format!("mkdir {}", parent.display()))?;
         }
         if !plan.force && path.exists() {
             continue;
         }
-        std::fs::write(&path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
+        std::fs::write(&path, content).with_context(|| format!("write {}", path.display()))?;
     }
 
-    write_if_absent(&plan.state_dir.join("revocations.txt"), b"", plan.force)
-        .map_err(|e| e.to_string())?;
+    write_revocations(&plan.state_dir, plan.force)?;
     crate::services::authority::generate_audit_key_if_absent(
         &plan.state_dir.join("audit.key"),
         plan.force,
-    )
-    .map_err(|e| e.to_string())?;
+    )?;
 
     let key_path = plan.state_dir.join("authority.key");
     if plan.force || !key_path.exists() {
-        crate::services::authority::run_generate_key(&key_path).map_err(|e| e.to_string())?;
+        crate::services::authority::run_generate_key(&key_path)?;
     }
 
     let tls_dir = plan.state_dir.join("tls");
@@ -1208,13 +1203,13 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
         ] {
             let p = tls_dir.join(name);
             if p.exists() {
-                std::fs::remove_file(&p).map_err(|e| format!("remove {}: {e}", p.display()))?;
+                std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
             }
         }
     }
     if !tls_dir.join("authority.crt").exists() {
         crate::services::authority::run_bootstrap_tls(&tls_dir, &[])
-            .map_err(|e| format!("generate TLS material: {e}"))?;
+            .context("generate TLS material")?;
     }
 
     Ok(())
