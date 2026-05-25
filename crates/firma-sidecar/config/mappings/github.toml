@@ -1,11 +1,11 @@
-# GitHub REST API mapping — 44 rules → 12 canonical action classes.
+# GitHub REST API mapping — 46 rules → 12 canonical action classes.
 # Source of truth: docs/markdown/github_connector.md.
 #
 # Branch-protection subtree is fanned out across GET/PUT/POST/DELETE so
 # each method-specific rule out-ranks the broad `GET /repos/*/*`
 # code.read wildcard via specificity.
 
-# --- code.read (6) ----------------------------------------------------------
+# --- code.read (8) ----------------------------------------------------------
 [[rules]]
 method = "GET"
 host = "api.github.com"
@@ -40,6 +40,18 @@ action_class = "code.read"
 method = "GET"
 host = "api.github.com"
 path = "/repos/*/*/tags"
+action_class = "code.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/orgs/*/repos"
+action_class = "code.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/user/repos"
 action_class = "code.read"
 
 # --- code.review.read (7) ---------------------------------------------------

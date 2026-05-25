@@ -182,7 +182,8 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
     let source = select_template(&req);
     let (mut value, template_dir) = match &source {
         TemplateSource::Explicit(path) | TemplateSource::Env(path) | TemplateSource::Cwd(path) => {
-            (parse_template(path)?, path.parent().map(Path::to_path_buf))
+            let abs = std::path::absolute(path).unwrap_or_else(|_| path.clone());
+            (parse_template(path)?, abs.parent().map(Path::to_path_buf))
         }
         TemplateSource::Minimal => (toml::Value::Table(toml::value::Table::new()), None),
     };
