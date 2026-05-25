@@ -3,5 +3,11 @@
 
 [[rules]]
 method = "CONNECT"
-host = "api.openai.com:443"
+host = "api.openai.com"
+action_class = "communication.external.send"
+
+# REST fallback (plain HTTP proxy or post-MITM).
+[[rules]]
+host = "api.openai.com"
+path = "*"
 action_class = "communication.external.send"

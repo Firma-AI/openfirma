@@ -9,10 +9,10 @@
 # Host: only `gmail.googleapis.com`. The legacy `www.googleapis.com` host
 # serves many non-Gmail Google APIs and is intentionally not enrolled.
 
-# Plain CONNECT (no MITM): host carries port.
+# Plain CONNECT (no MITM): bare host, default port stripped by normalizer.
 [[rules]]
 method = "CONNECT"
-host = "gmail.googleapis.com:443"
+host = "gmail.googleapis.com"
 action_class = "communication.external.send"
 
 # ── REST rules (bare host — post-MITM only) ───────────────────────────────────

@@ -1455,10 +1455,10 @@ mod tests {
     fn anthropic_mapping_has_connect_rule() {
         let rules = parse_rules(Mapping::Anthropic.static_content()).rules;
         assert!(
-            rules.iter().any(
-                |r| r.host == "api.anthropic.com:443" && r.method.as_deref() == Some("CONNECT")
-            ),
-            "expected api.anthropic.com:443 CONNECT rule"
+            rules
+                .iter()
+                .any(|r| r.host == "*.anthropic.com" && r.method.as_deref() == Some("CONNECT")),
+            "expected *.anthropic.com CONNECT rule"
         );
     }
 
@@ -1468,7 +1468,7 @@ mod tests {
         assert!(
             rules
                 .iter()
-                .any(|r| r.host == "api.openai.com:443" && r.method.as_deref() == Some("CONNECT")),
+                .any(|r| r.host == "api.openai.com" && r.method.as_deref() == Some("CONNECT")),
             "expected api.openai.com:443 CONNECT rule"
         );
     }
@@ -1479,7 +1479,7 @@ mod tests {
         assert!(
             rules
                 .iter()
-                .any(|r| r.host == "api.github.com:443" && r.method.as_deref() == Some("CONNECT")),
+                .any(|r| r.host == "api.github.com" && r.method.as_deref() == Some("CONNECT")),
             "CONNECT rule missing from github mapping"
         );
         assert!(
@@ -1496,8 +1496,7 @@ mod tests {
         assert!(
             rules
                 .iter()
-                .any(|r| r.host == "gmail.googleapis.com:443"
-                    && r.method.as_deref() == Some("CONNECT")),
+                .any(|r| r.host == "gmail.googleapis.com" && r.method.as_deref() == Some("CONNECT")),
             "CONNECT rule missing from gmail mapping"
         );
         assert!(
@@ -1542,6 +1541,19 @@ mod tests {
     fn firma_run_toml_is_valid_toml() {
         let files = make_files(&Posture::Dev, &[], &[]);
         let _: toml::Value = toml::from_str(get(&files, "firma-run.toml")).unwrap();
+    }
+
+    #[test]
+    fn firma_run_toml_has_file_audit_sink() {
+        let files = make_files(&Posture::Dev, &[], &[]);
+        let t: toml::Value = toml::from_str(get(&files, "firma-run.toml")).unwrap();
+        assert_eq!(t["audit"]["sink"].as_str(), Some("file"));
+        assert!(
+            t["audit"]["file_path"]
+                .as_str()
+                .is_some_and(|p| !p.is_empty()),
+            "audit.file_path must be set"
+        );
     }
 
     #[test]
