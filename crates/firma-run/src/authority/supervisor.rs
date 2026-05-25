@@ -113,8 +113,8 @@ impl AuthoritySupervisor {
             }
         })?;
 
-        std::fs::create_dir_all(&req.marker_dir)
-            .map_err(|e| RunError::Internal(format!("mkdir {}: {e}", req.marker_dir.display())))?;
+        firma_stack::fs::create_private_dir_all(&req.marker_dir)
+            .map_err(|e| RunError::Internal(e.to_string()))?;
 
         let policy_dir = req.marker_dir.join("policy_dir");
         let keys_dir = req.marker_dir.join("keys");
@@ -126,10 +126,10 @@ impl AuthoritySupervisor {
         let pid_path = req.marker_dir.join("authority.pid");
         let metadata_path = req.marker_dir.join("metadata.toml");
 
-        std::fs::create_dir_all(&policy_dir)
-            .map_err(|e| RunError::Internal(format!("mkdir {}: {e}", policy_dir.display())))?;
-        std::fs::create_dir_all(&keys_dir)
-            .map_err(|e| RunError::Internal(format!("mkdir {}: {e}", keys_dir.display())))?;
+        firma_stack::fs::create_private_dir_all(&policy_dir)
+            .map_err(|e| RunError::Internal(e.to_string()))?;
+        firma_stack::fs::create_private_dir_all(&keys_dir)
+            .map_err(|e| RunError::Internal(e.to_string()))?;
 
         let cedar_text = if req.profile_name == firma_authority::DEFAULT_PROFILE {
             AUTOSTART_LOCAL_DEVELOPER_POLICY

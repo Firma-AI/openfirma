@@ -58,7 +58,7 @@ pub fn resolve_state_dir_from(
         if let Some(tmp) = temp.filter(|value| !value.is_empty()) {
             return Ok(PathBuf::from(tmp).join("firma"));
         }
-        Err(crate::StackError::StateDir(
+        Err(crate::StackError::StateDirResolve(
             "neither LOCALAPPDATA nor TEMP is set".into(),
         ))
     }

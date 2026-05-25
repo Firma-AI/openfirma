@@ -199,8 +199,6 @@ pub fn generate_audit_key_if_absent(path: &Path, force: bool) -> Result<()> {
     }
 }
 
-
-
 pub fn run_bootstrap_tls(out_dir: &Path, hosts: &[String]) -> Result<()> {
     let hosts = if hosts.is_empty() {
         vec![
@@ -250,7 +248,11 @@ pub fn run_bootstrap_tls(out_dir: &Path, hosts: &[String]) -> Result<()> {
     crate::fs::write_new_file(&ca_cert_path, ca_cert.pem().as_bytes(), 0o644)?;
     crate::fs::write_new_file(&ca_key_path, ca_key.serialize_pem().as_bytes(), 0o600)?;
     crate::fs::write_new_file(&server_cert_path, server_cert.pem().as_bytes(), 0o644)?;
-    crate::fs::write_new_file(&server_key_path, server_key.serialize_pem().as_bytes(), 0o600)?;
+    crate::fs::write_new_file(
+        &server_key_path,
+        server_key.serialize_pem().as_bytes(),
+        0o600,
+    )?;
 
     println!("bootstrapped TLS material:");
     println!("  ca cert : {}", ca_cert_path.display());

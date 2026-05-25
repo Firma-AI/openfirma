@@ -107,10 +107,13 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
         if args.force {
             std::fs::write(&revoc, b"").with_context(|| format!("write {}", revoc.display()))?;
         } else {
-            crate::fs::write_new_file(&revoc, b"", 0o600)
-                .or_else(|e| {
-                    if e.kind() == std::io::ErrorKind::AlreadyExists { Ok(()) } else { Err(e) }
-                })?;
+            crate::fs::write_new_file(&revoc, b"", 0o600).or_else(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })?;
         }
         crate::services::authority::generate_audit_key_if_absent(
             &state.join("audit.key"),
@@ -987,7 +990,6 @@ fn prompt_mappings_with_default(
     Ok(chosen)
 }
 
-
 /// Delete posture cedar files left behind by previous postures.
 ///
 /// Posture is a closed set of `(cedar file, requested_actions)` presets.
@@ -1173,18 +1175,20 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
         if !plan.force && path.exists() {
             continue;
         }
-        std::fs::write(&path, content)
-            .with_context(|| format!("write {}", path.display()))?;
+        std::fs::write(&path, content).with_context(|| format!("write {}", path.display()))?;
     }
 
     let revoc = plan.state_dir.join("revocations.txt");
     if plan.force {
         std::fs::write(&revoc, b"").with_context(|| format!("write {}", revoc.display()))?;
     } else {
-        crate::fs::write_new_file(&revoc, b"", 0o600)
-            .or_else(|e| {
-                if e.kind() == std::io::ErrorKind::AlreadyExists { Ok(()) } else { Err(e) }
-            })?;
+        crate::fs::write_new_file(&revoc, b"", 0o600).or_else(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })?;
     }
     crate::services::authority::generate_audit_key_if_absent(
         &plan.state_dir.join("audit.key"),
@@ -1206,8 +1210,7 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
         ] {
             let p = tls_dir.join(name);
             if p.exists() {
-                std::fs::remove_file(&p)
-                    .with_context(|| format!("remove {}", p.display()))?;
+                std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
             }
         }
     }
