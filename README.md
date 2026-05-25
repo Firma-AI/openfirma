@@ -67,7 +67,6 @@ cargo build --release
 
 There are two ways to start OpenFirma. Both end up in the same place (your agent running under enforcement) but the first is faster to try, the second gives you more control.
 
----
 
 **Option A: zero config**
 
@@ -83,11 +82,10 @@ Every outbound call is normalized, checked against your Cedar policy, and either
 firma monitor
 ```
 
----
 
 **Option B: explicit setup**
 
-`firma sidecar start` boots Authority and Sidecar as persistent daemons that stay alive across sessions. Use this when you want to run multiple agents against the same Authority, keep enforcement running between sessions, or configure posture and mappings upfront with `firma config` before starting anything.
+`firma sidecar start` boots Authority and Sidecar as persistent daemons that stay alive across sessions. 
 
 ```bash
 firma config                       # scaffold once: keys, policy, mappings
@@ -95,8 +93,7 @@ firma sidecar start --detach       # boot Authority + Sidecar as persistent daem
 firma run -- claude
 firma monitor
 ```
-
----
+Use this when you want to run multiple agents against the same Authority, keep enforcement running between sessions, or configure posture and mappings upfront with `firma config` before starting anything.
 
 **Live policy update** (works with both options)
 
