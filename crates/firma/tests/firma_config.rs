@@ -739,3 +739,52 @@ fn init_writes_sensitive_dirs_with_mode_0700() {
         );
     }
 }
+
+/// Every shipped posture, scaffolded via the real `firma config` binary, must
+/// pass the real `firma policy validate` binary — end-to-end through the CLI,
+/// not just the library validator. Regression guard for FIR-190.
+#[test]
+fn scaffolded_postures_pass_cli_policy_validate() {
+    for posture in ["strict", "dev", "dev-with-delete-watch"] {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let config_dir = tmp.path().join("config");
+        let state_dir = tmp.path().join("state");
+
+        let out = firma()
+            .args(["config", "--yes", "--posture", posture, "--output-dir"])
+            .arg(&config_dir)
+            .args(["--state-dir"])
+            .arg(&state_dir)
+            .output()
+            .expect("spawn firma config");
+        assert!(
+            out.status.success(),
+            "`firma config --posture {posture}` failed: {}",
+            String::from_utf8_lossy(&out.stderr),
+        );
+
+        for rel in [
+            format!("policies/{posture}.cedar"),
+            "issuance-policies/issuance.cedar".to_string(),
+        ] {
+            let policy = config_dir.join(&rel);
+            assert!(policy.is_file(), "scaffolded policy missing: {rel}");
+
+            let v = firma()
+                .args(["policy", "validate"])
+                .arg(&policy)
+                .output()
+                .expect("spawn firma policy validate");
+            assert!(
+                v.status.success(),
+                "`firma policy validate {rel}` expected exit 0, got {:?}; stderr: {}",
+                v.status,
+                String::from_utf8_lossy(&v.stderr),
+            );
+            assert!(
+                String::from_utf8_lossy(&v.stdout).contains("OK"),
+                "{rel}: validate stdout missing OK",
+            );
+        }
+    }
+}
