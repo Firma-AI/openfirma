@@ -26,7 +26,7 @@
 <br/>
 
 
-## What is OpenFirma?
+## 1. What is OpenFirma?
 
 OpenFirma is a runtime enforcement boundary that sits between your AI agents and the outside world. Every outbound call an agent makes passes through a local Sidecar that decides whether it happens: using Cedar policies you own, evaluated locally, with no model on the hot path.
 
@@ -36,16 +36,9 @@ OpenFirma is a runtime enforcement boundary that sits between your AI agents and
 
 <br/>
 
-## Run your coding agent with OpenFirma
+## 2. Run your coding agent with OpenFirma
 
 ### Install
-
-**macOS:**
-
-```bash
-brew tap Firma-AI/openfirma
-brew install firma
-```
 
 **Linux / other:**
 
@@ -53,32 +46,95 @@ brew install firma
 curl -sSf https://install.openfirma.ai | sh
 ```
 
-**Build from source** (requires Rust 1.86+ and `protoc`):
-
+**Build and install from source** (requires Rust 1.88+ and `protoc`):
+ 
 ```bash
-git clone https://github.com/firma-ai/openfirma
-cd openfirma
+git clone https://github.com/firma-ai/firma-oss
+cd firma-oss
 cargo build --release
+cargo install --path crates/firma
 ```
+
+> macOS Homebrew support releasing in v0.1.1.
 
 ### Quickstart
 
-Wrap your agent with a single command:
+`firma` ships as a single precompiled static binary, no build toolchain or API keys required to get started.
+
+There are two ways to start OpenFirma. Both end up in the same place (your agent running under enforcement) but the first is faster to try, the second gives you more control.
+
+
+**Option A: zero config**
+
+`firma run` autostarts a local Authority and Sidecar for the duration of the session and shuts them down when the agent exits. One command, nothing to configure, nothing left running when you are done. On first launch it prompts once to confirm the autostart; subsequent runs are silent.
 
 ```bash
-firma run --profile claude-code -- claude
+firma run -- claude
 ```
 
-`firma run` autostarts a per-run Sidecar and Mini Authority, applies the `claude-code` policy profile, and tears everything down when the agent exits. On first run with no Authority configured, it prompts once to confirm the local autostart and persists the choice.
-
-To run a persistent stack instead:
+Every outbound call is normalized, checked against your Cedar policy, and either forwarded or denied. Watch decisions live in a second terminal:
 
 ```bash
-firma config              # scaffold keys + config
-firma sidecar start --detach
-firma run --profile claude-code -- claude
-firma monitor             # tail the live audit stream
+firma monitor
 ```
+
+
+**Option B: explicit setup**
+
+`firma sidecar start` boots Authority and Sidecar as persistent daemons that stay alive across sessions. 
+
+```bash
+firma config                       # scaffold once: keys, policy, mappings
+firma sidecar start --detach       # boot Authority + Sidecar as persistent daemons
+firma run -- claude
+firma monitor
+```
+Use this when you want to run multiple agents against the same Authority, keep enforcement running between sessions, or configure posture and mappings upfront with `firma config` before starting anything.
+
+### Policies
+
+Cedar policy files live under `.firma/policies/`. The Authority watches that directory and pushes any change to all connected Sidecars automatically — edit a file, save it, enforcement updates within 30 seconds. No restart needed.
+
+```bash
+firma policy validate .firma/policies/my-policy.cedar  # check before it goes live
+firma policy test     .firma/policies/fixture.toml      # run allow/deny fixtures
+```
+
+**Packs**
+
+`firma config` scaffolds your first policy from a **pack** — a pre-built combination of a posture and one or more mappings. A posture defines what action classes are permitted by default. A mapping translates the raw HTTP calls of a specific service into those action classes. Without a mapping for a service, the Sidecar cannot classify its calls and blocks them.
+
+**Posture packs**, choose one per project:
+
+| Posture | What it permits |
+|---|---|
+| `strict` | `credential.read` and `communication.external.send` only. No code operations. |
+| `dev` | Adds `code.read/write`, issues, package install. No payments or destructive ops. |
+| `dev-with-delete-watch` | `dev` plus `code.destructive` for local-exec and delete-watch scenarios. |
+
+**Mapping packs**, add one per service your agent calls:
+
+| Mapping | Covers |
+|---|---|
+| `anthropic` | `api.anthropic.com` |
+| `openai` | `api.openai.com` |
+| `github` | 44 GitHub REST endpoints → 12 action classes |
+| `gmail` | 41 Gmail REST endpoints → 7 action classes |
+| `stripe` | 88 Stripe REST endpoints → 14 action classes |
+| `npm` | `registry.npmjs.org` |
+| `pypi` | `pypi.org`, `files.pythonhosted.org` |
+| `cargo` | `crates.io` |
+
+```bash
+firma policy list                                        # browse all available packs
+firma config --posture dev --mapping github --mapping stripe
+```
+
+**Live policy update**
+ 
+Edit a Cedar policy file on disk at any point. The Authority picks up the change via file watcher and pushes the updated bundle to all connected Sidecars. No restart needed.
+
+> Full policy reference: [Concepts: Policies](https://firma-ai.github.io/openfirma/concepts/policies/) · [Write your first Cedar policy](https://firma-ai.github.io/openfirma/guides/write-a-cedar-policy/)
 
 ### Different operating models
 
@@ -91,7 +147,7 @@ The **Sidecar** sits next to each agent process and enforces every outbound call
 OpenFirma first looks for an existing Authority. If none is configured, it offers to autostart a local Mini Authority and Sidecar for the session, wraps the agent process, and applies the selected policy profile automatically.
 
 ```bash
-firma run --profile claude-code -- claude
+firma run -- claude
 ```
 
 </td><td>
@@ -108,9 +164,9 @@ The Authority becomes persistent and shared across local agent sessions. Each ne
 firma config
 firma sidecar start --detach
 
-firma run --profile claude-code -- claude   &
-firma run --profile codex       -- codex    &
-firma run --profile generic     -- opencode
+firma run -- claude   &
+firma run -- codex    &
+firma run -- opencode
 ```
 
 </td><td>
@@ -159,25 +215,55 @@ The Authority can be the Mini Authority included in this repo or your own implem
 
 ### CLI reference
 
-| Command                | Description                                                                                         |
-| ---------------------- | --------------------------------------------------------------------------------------------------- |
-| `firma run`            | Wrap an agent process: autostarts Sidecar + Authority, applies a policy profile, tears down on exit |
-| `firma config`         | Scaffold a deployment: writes `firma.toml`, keys, policy dirs, and revocation file                  |
-| `firma sidecar start`  | Boot Authority + Sidecar as one unit. `--detach` forks a supervisor                                 |
-| `firma sidecar stop`   | Graceful shutdown with configurable timeout                                                         |
-| `firma sidecar status` | Per-component pid, listen address, state, and uptime. `--json` for machine output                   |
-| `firma monitor`        | Tail the live audit stream and component logs from a running stack                                  |
-| `firma doctor`         | Structured diagnostic report: installed components, reachable endpoints, config status              |
-| `firma authority`      | Run the Mini Authority: issues capability tokens, streams Cedar policy bundles                      |
-| `firma sidecar`        | Run the Sidecar standalone                                                                          |
-| `firma policy`         | Validate and unit-test Cedar policy bundles                                                         |
-| `firma token`          | Manage local-exec governance tokens (approve / revoke)                                              |
+**Standalone commands** (flags only, no subcommands)
+
+| Command | Description |
+|---|---|
+| `firma run` | Launch an agent in a sandbox via the Sidecar |
+| `firma config` | Scaffold a new agent config directory (`--mode…`) |
+| `firma monitor` | Tail audit decisions and component logs (`--source…`) |
+| `firma doctor` | Diagnose a Firma install |
+| `firma help` | Print help for any command |
+
+**`firma sidecar`** — run and manage the enforcement Sidecar daemon. Bare form (no subcommand) = foreground server.
+
+| Subcommand | Description |
+|---|---|
+| `sidecar start` | Start Sidecar (+ local Authority) as a daemon |
+| `sidecar stop` | Stop the daemon gracefully (`--timeout` fallback) |
+| `sidecar status` | List live Sidecars + health (table or `--json`) |
+
+**`firma authority`** — issue tokens, stream policy bundles and revocations.
+
+| Subcommand | Description |
+|---|---|
+| `authority revocations` | Manage the revocation list (nested group) |
+| `authority generate-key` | Generate a new Ed25519 signing key pair |
+| `authority init-tls` | Bootstrap local CA + Authority↔Sidecar certs |
+| `authority issue` | Sign and emit a capability token to a TOML seed |
+| `authority issue-client-cert` | Sign an mTLS client cert for a Sidecar |
+| `authority generate-client-ca` | Generate a new mTLS client CA key pair |
+
+**`firma policy`** — browse the template catalogue and validate Cedar bundles.
+
+| Subcommand | Description |
+|---|---|
+| `policy list` | Print all posture and mapping templates |
+| `policy validate` | Parse and schema-check a Cedar policy file |
+| `policy test` | Run an allow/deny fixture against a bundle |
+
+**`firma token`** — approve and revoke local-execution governance tokens (HITL).
+
+| Subcommand | Description |
+|---|---|
+| `token approve` | Approve a pending governance token |
+| `token revoke` | Revoke a pending or approved governance token |
 
 > Full CLI reference: [`docs/cli.md`](docs/cli.md)
 
 <br/>
 
-## Architecture
+## 3. Architecture
 
 <div align="center">
   <img src="docs-site/src/assets/product-diagram.svg" alt="OpenFirma flow diagram" width="100%" />
@@ -200,7 +286,7 @@ The Authority can be the Mini Authority included in this repo or your own implem
 
 <br/>
 
-## Repo structure
+## 4. Repo structure
 
 **Infrastructure**
 
@@ -211,7 +297,7 @@ The Authority can be the Mini Authority included in this repo or your own implem
 | [`crates/firma-authority`](crates/firma-authority/) | Mini Authority: file-based trust root for local development                   |
 | [`crates/firma-core`](crates/firma-core/)           | Shared types, Cedar schema, action classes, audit event format                |
 | [`crates/firma-run`](crates/firma-run/)             | Agent process confinement: bwrap backend, profile resolution, autostart       |
-| [`crates/firma-stack`](crates/firma-stack/)         | Stack supervisor: Authority + Sidecar lifecycle as one unit                   |
+| [`crates/firma-stack`](crates/firma-stack/)         | Process supervision primitives used internally by `firma sidecar start`       |
 | [`crates/firma-proto`](crates/firma-proto/)         | Protobuf/gRPC service definitions                                             |
 
 **Examples**
@@ -220,7 +306,7 @@ The Authority can be the Mini Authority included in this repo or your own implem
 | --------------------------------------------------- | ------------------------------------------------------------------- |
 | [`examples/demos`](examples/demos/)                 | TUI demo runner with three self-contained enforcement scenarios     |
 | [`examples/agents`](examples/agents/)               | Intentionally risky demo agents (OpenAI Agents SDK + Google ADK)    |
-| [`examples/generic-agent`](examples/generic-agent/) | `firma run` profile and stack runner for wrapping any agent command |
+| [`examples/e2e`](examples/e2e/)                     | Local stack example: Authority + Sidecar + agent via `HTTP_PROXY`   |
 
 **Docs**
 
@@ -233,4 +319,4 @@ The Authority can be the Mini Authority included in this repo or your own implem
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE).
+Apache 2.0. See [LICENSE](LICENSE)
