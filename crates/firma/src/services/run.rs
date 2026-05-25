@@ -125,7 +125,7 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
     };
     if let Err(error) = scaffold_from_plan(&plan) {
         warn!(%error, "implicit init failed; continuing — firma-run will surface the underlying error");
-        return Err(anyhow::anyhow!("implicit init: {error}"));
+        return Err(error.context("implicit init"));
     }
     Ok(())
 }

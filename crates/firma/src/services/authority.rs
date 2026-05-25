@@ -1,6 +1,6 @@
 //! Runner for `firma authority`.
 
-use std::io::Write;
+use std::io::Write as _;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -199,36 +199,7 @@ pub fn generate_audit_key_if_absent(path: &Path, force: bool) -> Result<()> {
     }
 }
 
-fn create_private_dir_all(path: &Path) -> Result<()> {
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder
-        .create(path)
-        .with_context(|| format!("failed to create {}", path.display()))
-}
 
-fn write_new_file(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
-    let mut opts = std::fs::OpenOptions::new();
-    opts.create_new(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(mode);
-    }
-    #[cfg(not(unix))]
-    let _ = mode;
-    let mut file = opts
-        .open(path)
-        .with_context(|| format!("failed to create {}", path.display()))?;
-    file.write_all(bytes)
-        .with_context(|| format!("failed to write {}", path.display()))?;
-    Ok(())
-}
 
 pub fn run_bootstrap_tls(out_dir: &Path, hosts: &[String]) -> Result<()> {
     let hosts = if hosts.is_empty() {
@@ -241,7 +212,7 @@ pub fn run_bootstrap_tls(out_dir: &Path, hosts: &[String]) -> Result<()> {
         hosts.to_vec()
     };
 
-    create_private_dir_all(out_dir)?;
+    crate::fs::create_private_dir_all(out_dir)?;
 
     let ca_cert_path: PathBuf = out_dir.join("authority-ca.crt");
     let ca_key_path: PathBuf = out_dir.join("authority-ca.key");
@@ -276,14 +247,10 @@ pub fn run_bootstrap_tls(out_dir: &Path, hosts: &[String]) -> Result<()> {
         .signed_by(&server_key, &ca_cert, &ca_key)
         .context("failed to sign server certificate with CA")?;
 
-    write_new_file(&ca_cert_path, ca_cert.pem().as_bytes(), 0o644)?;
-    write_new_file(&ca_key_path, ca_key.serialize_pem().as_bytes(), 0o600)?;
-    write_new_file(&server_cert_path, server_cert.pem().as_bytes(), 0o644)?;
-    write_new_file(
-        &server_key_path,
-        server_key.serialize_pem().as_bytes(),
-        0o600,
-    )?;
+    crate::fs::write_new_file(&ca_cert_path, ca_cert.pem().as_bytes(), 0o644)?;
+    crate::fs::write_new_file(&ca_key_path, ca_key.serialize_pem().as_bytes(), 0o600)?;
+    crate::fs::write_new_file(&server_cert_path, server_cert.pem().as_bytes(), 0o644)?;
+    crate::fs::write_new_file(&server_key_path, server_key.serialize_pem().as_bytes(), 0o600)?;
 
     println!("bootstrapped TLS material:");
     println!("  ca cert : {}", ca_cert_path.display());
