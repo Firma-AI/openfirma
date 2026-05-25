@@ -53,11 +53,11 @@ brew install firma
 curl -sSf https://install.openfirma.ai | sh
 ```
 
-**Build from source** (requires Rust 1.86+ and `protoc`):
+**Build from source** (requires Rust 1.88+ and `protoc`):
 
 ```bash
-git clone https://github.com/firma-ai/openfirma
-cd openfirma
+git clone https://github.com/firma-ai/firma-oss
+cd firma-oss
 cargo build --release
 ```
 
@@ -84,8 +84,8 @@ firma monitor
 If you run more than one agent, or want the Authority and Sidecar to stay alive across sessions rather than restart on every `firma run`, scaffold the project once and start them as persistent background daemons.
 
 ```bash
-firma init                         # scaffold once per project
-firma stack start --detach         # start Authority + Sidecar in the background
+firma config                       # scaffold once per project
+firma sidecar start --detach       # start Authority + Sidecar in the background
 
 firma run -- claude &
 firma run -- codex  &
@@ -127,8 +127,8 @@ firma run --profile claude-code -- claude
 The Authority becomes persistent and shared across local agent sessions. Each new `firma run` attaches to the same trust root and pulls the current policy bundle without restarting existing agents.
 
 ```bash
-firma init
-firma stack start --detach
+firma config
+firma sidecar start --detach
 
 firma run -- claude   &
 firma run -- codex    &
@@ -181,19 +181,49 @@ The Authority can be the Mini Authority included in this repo or your own implem
 
 ### CLI reference
 
-| Command               | Description                                                                                         |
-| --------------------- | --------------------------------------------------------------------------------------------------- |
-| `firma run`           | Wrap an agent process: autostarts Authority + Sidecar, applies a policy profile, tears down on exit |
-| `firma init`          | Scaffold a project: writes `firma.toml`, signing keys, policy dirs                                  |
-| `firma stack start`   | Boot Authority + Sidecar as persistent daemons. `--detach` forks a supervisor                       |
-| `firma stack stop`    | Graceful shutdown with configurable timeout                                                         |
-| `firma stack status`  | Per-component pid, listen address, state, and uptime. `--json` for machine output                   |
-| `firma monitor`       | Tail the live audit stream and component logs                                                       |
-| `firma doctor`        | Structured diagnostic report: installed components, reachable endpoints, config status              |
-| `firma authority`     | Run the Mini Authority: issues capability tokens, streams Cedar policy bundles                      |
-| `firma sidecar`       | Run the Sidecar standalone                                                                          |
-| `firma policy`        | Validate and unit-test Cedar policy bundles                                                         |
-| `firma token`         | Manage local-exec governance tokens (approve / revoke)                                              |
+**Standalone commands** (flags only, no subcommands)
+
+| Command | Description |
+|---|---|
+| `firma run` | Launch an agent in a sandbox via the Sidecar |
+| `firma config` | Scaffold a new agent config directory (`--mode…`) |
+| `firma monitor` | Tail audit decisions and component logs (`--source…`) |
+| `firma doctor` | Diagnose a Firma install |
+| `firma help` | Print help for any command |
+
+**`firma sidecar`** — run and manage the enforcement Sidecar daemon. Bare form (no subcommand) = foreground server.
+
+| Subcommand | Description |
+|---|---|
+| `sidecar start` | Start Sidecar (+ local Authority) as a daemon |
+| `sidecar stop` | Stop the daemon gracefully (`--timeout` fallback) |
+| `sidecar status` | List live Sidecars + health (table or `--json`) |
+
+**`firma authority`** — issue tokens, stream policy bundles and revocations.
+
+| Subcommand | Description |
+|---|---|
+| `authority revocations` | Manage the revocation list (nested group) |
+| `authority generate-key` | Generate a new Ed25519 signing key pair |
+| `authority init-tls` | Bootstrap local CA + Authority↔Sidecar certs |
+| `authority issue` | Sign and emit a capability token to a TOML seed |
+| `authority issue-client-cert` | Sign an mTLS client cert for a Sidecar |
+| `authority generate-client-ca` | Generate a new mTLS client CA key pair |
+
+**`firma policy`** — browse the template catalogue and validate Cedar bundles.
+
+| Subcommand | Description |
+|---|---|
+| `policy list` | Print all posture and mapping templates |
+| `policy validate` | Parse and schema-check a Cedar policy file |
+| `policy test` | Run an allow/deny fixture against a bundle |
+
+**`firma token`** — approve and revoke local-execution governance tokens (HITL).
+
+| Subcommand | Description |
+|---|---|
+| `token approve` | Approve a pending governance token |
+| `token revoke` | Revoke a pending or approved governance token |
 
 > Full CLI reference: [`docs/cli.md`](docs/cli.md)
 
@@ -233,7 +263,7 @@ The Authority can be the Mini Authority included in this repo or your own implem
 | [`crates/firma-authority`](crates/firma-authority/) | Mini Authority: file-based trust root for local development                   |
 | [`crates/firma-core`](crates/firma-core/)           | Shared types, Cedar schema, action classes, audit event format                |
 | [`crates/firma-run`](crates/firma-run/)             | Agent process confinement: bwrap backend, profile resolution, autostart       |
-| [`crates/firma-stack`](crates/firma-stack/)         | Stack supervisor: Authority + Sidecar lifecycle as one unit                   |
+| [`crates/firma-stack`](crates/firma-stack/)         | Process supervision primitives used internally by `firma sidecar start`       |
 | [`crates/firma-proto`](crates/firma-proto/)         | Protobuf/gRPC service definitions                                             |
 
 **Examples**
@@ -242,7 +272,7 @@ The Authority can be the Mini Authority included in this repo or your own implem
 | --------------------------------------------------- | ------------------------------------------------------------------- |
 | [`examples/demos`](examples/demos/)                 | TUI demo runner with three self-contained enforcement scenarios     |
 | [`examples/agents`](examples/agents/)               | Intentionally risky demo agents (OpenAI Agents SDK + Google ADK)    |
-| [`examples/generic-agent`](examples/generic-agent/) | `firma run` profile and stack runner for wrapping any agent command |
+| [`examples/e2e`](examples/e2e/)                     | Local stack example: Authority + Sidecar + agent via `HTTP_PROXY`   |
 
 **Docs**
 
