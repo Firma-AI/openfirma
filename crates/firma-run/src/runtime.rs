@@ -882,9 +882,10 @@ mod tests {
     }
 
     #[test]
-    fn codex_execution_env_clears_no_proxy_in_tcp_mode() {
-        // NO_PROXY="" comes from the codex profile's env_set, not from hardcoded
-        // runtime logic. The test reflects this by including it in the profile.
+    fn execution_env_clears_no_proxy_in_tcp_mode() {
+        // NO_PROXY="" comes from the generic profile's env_set (inherited by all
+        // built-in profiles), not from hardcoded runtime logic. The test reflects
+        // this by including it in the profile.
         let profile = ResolvedProfile {
             id: "codex".to_string(),
             backend: crate::backend::BackendKind::Bwrap,
