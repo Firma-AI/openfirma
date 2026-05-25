@@ -26,7 +26,7 @@
 <br/>
 
 
-## What is OpenFirma?
+## 1. What is OpenFirma?
 
 OpenFirma is a runtime enforcement boundary that sits between your AI agents and the outside world. Every outbound call an agent makes passes through a local Sidecar that decides whether it happens: using Cedar policies you own, evaluated locally, with no model on the hot path.
 
@@ -36,7 +36,7 @@ OpenFirma is a runtime enforcement boundary that sits between your AI agents and
 
 <br/>
 
-## Run your coding agent with OpenFirma
+## 2. Run your coding agent with OpenFirma
 
 ### Install
 
@@ -102,6 +102,51 @@ vim .firma/policies/allow.cedar
 # Authority reloads and pushes to all Sidecars automatically
 ```
 
+### Policies
+
+Policies are Cedar files under `.firma/policies/`. The Sidecar evaluates them locally on every call — default deny, `forbid` overrides `permit`.
+
+`firma config` generates a policy from a **posture** template:
+
+| Posture | What it permits |
+|---|---|
+| `strict` | `credential.read` and `communication.external.send` only |
+| `dev` | Adds `code.read/write`, issues, package install |
+| `dev-with-delete-watch` | `dev` plus `code.destructive` |
+
+Each outbound request is classified into an **action class** by a **mapping**. Eight mappings ship out of the box: `anthropic`, `openai`, `github`, `gmail`, `stripe`, `npm`, `pypi`, `cargo`. Select them during `firma config`, or list all available templates:
+
+```bash
+firma policy list
+```
+
+Write a rule:
+
+```cedar
+// Permit code reads for this agent
+permit (
+    principal == Firma::Agent::"my-agent",
+    action == Firma::Action::"code.read",
+    resource
+);
+
+// Block exfiltration for everyone
+forbid (
+    principal,
+    action == Firma::Action::"communication.external.send",
+    resource == Firma::Resource::"paste.rs/"
+);
+```
+
+Validate before deploying:
+
+```bash
+firma policy validate .firma/policies/my-policy.cedar
+firma policy test     .firma/policies/fixture.toml
+```
+
+> Full policy reference: [Concepts: Policies](https://firma-ai.github.io/openfirma/concepts/policies/) · [Write your first Cedar policy](https://firma-ai.github.io/openfirma/guides/write-a-cedar-policy/)
+
 ### Different operating models
 
 The **Sidecar** sits next to each agent process and enforces every outbound call. The **Authority** is a single trust root: it issues capability tokens and streams policy bundles to one or more Sidecars. A single Authority can govern many agents concurrently; the Sidecar enforces locally without calling back on every request.
@@ -113,7 +158,7 @@ The **Sidecar** sits next to each agent process and enforces every outbound call
 OpenFirma first looks for an existing Authority. If none is configured, it offers to autostart a local Mini Authority and Sidecar for the session, wraps the agent process, and applies the selected policy profile automatically.
 
 ```bash
-firma run --profile claude-code -- claude
+firma run -- claude
 ```
 
 </td><td>
@@ -229,7 +274,7 @@ The Authority can be the Mini Authority included in this repo or your own implem
 
 <br/>
 
-## Architecture
+## 3. Architecture
 
 <div align="center">
   <img src="docs-site/src/assets/product-diagram.svg" alt="OpenFirma flow diagram" width="100%" />
@@ -252,7 +297,7 @@ The Authority can be the Mini Authority included in this repo or your own implem
 
 <br/>
 
-## Repo structure
+## 4. Repo structure
 
 **Infrastructure**
 
