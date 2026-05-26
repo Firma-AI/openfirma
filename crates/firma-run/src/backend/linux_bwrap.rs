@@ -216,6 +216,21 @@ impl SandboxBackend for BwrapBackend {
                 .arg("--bind")
                 .arg(&handle.runtime_dir)
                 .arg(&handle.runtime_dir);
+            // Without runtime_home_isolation, the agent writes to real $HOME
+            // (config, session state, plugins). Rebind it writable so the
+            // ro-bind on / doesn't produce EROFS. mask_home_paths tmpfs
+            // overlays applied next still take precedence.
+            if !hardening.runtime_home_isolation {
+                let home = launch
+                    .env
+                    .get("HOME")
+                    .cloned()
+                    .or_else(|| std::env::var("HOME").ok())
+                    .unwrap_or_default();
+                if !home.is_empty() && home.starts_with('/') {
+                    command.arg("--bind").arg(&home).arg(&home);
+                }
+            }
             mask_sensitive_paths(&mut command, launch, &hardening.mask_home_paths);
         } else {
             command.arg("--bind").arg("/").arg("/");
