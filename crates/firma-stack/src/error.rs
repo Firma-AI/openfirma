@@ -54,17 +54,11 @@ pub enum StackError {
     /// State-dir resolution chain (flag, env, platform default) produced
     /// no usable path. The string carries a human-readable cause.
     #[error("state dir resolution failed: {0}")]
-    StateDir(String),
+    StateDirResolve(String),
 
-    /// Creating the state directory on disk failed.
-    #[error("failed to create state dir '{path}': {source}")]
-    StateDirCreate {
-        /// Path that could not be created.
-        path: PathBuf,
-        /// Underlying I/O error.
-        #[source]
-        source: io::Error,
-    },
+    /// Creating or securing the state directory failed.
+    #[error(transparent)]
+    StateDir(crate::fs::CreatePrivateDirError),
 
     /// Another supervisor already holds the stack lock for this state dir.
     #[error("stack already running (lock held at '{path}')")]

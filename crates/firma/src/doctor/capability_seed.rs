@@ -6,9 +6,14 @@ use crate::doctor::report::Check;
 
 /// Check whether `<state_dir>/capabilities/` exists and is non-empty.
 ///
+/// The seed directory is optional: with the default profile capabilities are
+/// disabled (`CapabilitySource::Disabled`) so it is never created, and even
+/// when enabled it is created on first use. Its absence on a healthy install
+/// is therefore expected and must not be alarming.
+///
 /// - Non-empty directory → `OK` with file count.
-/// - Empty directory → `WARN`.
-/// - Missing directory → `WARN`.
+/// - Empty directory → `OK` (created/populated on first use).
+/// - Missing directory → `OK` (optional; capabilities disabled by default).
 /// - I/O error during read → `FAIL`.
 #[must_use]
 pub fn check(state_dir: &Path) -> Check {
@@ -18,8 +23,11 @@ pub fn check(state_dir: &Path) -> Check {
         Ok(entries) => {
             let files: Vec<_> = entries.filter_map(Result::ok).collect();
             if files.is_empty() {
-                Check::warn("capability seed", format!("{display}: empty"))
-                    .with_detail("path", display)
+                Check::ok(
+                    "capability seed",
+                    format!("{display}: empty (populated on first use)"),
+                )
+                .with_detail("path", display)
             } else {
                 Check::ok(
                     "capability seed",
@@ -29,9 +37,9 @@ pub fn check(state_dir: &Path) -> Check {
                 .with_detail("count", files.len().to_string())
             }
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Check::warn(
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Check::ok(
             "capability seed",
-            format!("{display}: directory does not exist"),
+            format!("{display}: not present (optional; capabilities disabled by default)"),
         )
         .with_detail("path", display),
         Err(error) => Check::fail("capability seed", format!("{display}: {error}"))
@@ -45,19 +53,21 @@ mod tests {
     use crate::doctor::report::Status;
 
     #[test]
-    fn warn_when_directory_missing() {
+    fn ok_when_directory_missing_because_optional() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let c = check(tmp.path());
-        assert_eq!(c.status, Status::Warn);
-        assert!(c.reason.contains("does not exist"));
+        // Absence is expected on a healthy install (capabilities disabled by
+        // default; seed created on first use). Must not be alarming.
+        assert_eq!(c.status, Status::Ok);
+        assert!(c.reason.contains("not present"));
     }
 
     #[test]
-    fn warn_when_directory_empty() {
+    fn ok_when_directory_empty() {
         let tmp = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(tmp.path().join("capabilities")).expect("mkdir");
         let c = check(tmp.path());
-        assert_eq!(c.status, Status::Warn);
+        assert_eq!(c.status, Status::Ok);
         assert!(c.reason.contains("empty"));
     }
 

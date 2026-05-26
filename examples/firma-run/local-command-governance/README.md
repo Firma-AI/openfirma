@@ -74,8 +74,8 @@ backend = "bwrap"
 sidecar_endpoint = "unix:///tmp/firma-sidecar.sock"
 
 [profiles.generic.seccomp_policy]
-source_policy_path = "/home/dario/Work/Firma/firma-oss/crates/firma-run/policies/generic-local-command-v1.toml"
-artifact_dir = "/home/dario/Work/Firma/firma-oss/.artifacts/seccomp-artifacts"
+source_policy_path = "/home/dario/Work/Firma/openfirma/crates/firma-run/policies/generic-local-command-v1.toml"
+artifact_dir = "/home/dario/Work/Firma/openfirma/.artifacts/seccomp-artifacts"
 verify_checksum = true
 runtime_mode = "compile_on_launch"
 

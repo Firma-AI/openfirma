@@ -23,17 +23,14 @@ const STOP_GRACE: Duration = Duration::from_secs(5);
 #[cfg(unix)]
 const MAX_BIND_ATTEMPTS: usize = 8;
 #[cfg(unix)]
-const AUTOSTART_LOCAL_DEVELOPER_POLICY: &str = r#"// Local autostart profile for `firma run`.
+const AUTOSTART_LOCAL_DEVELOPER_POLICY: &str = r"// Local autostart profile for `firma run`.
 //
-// Keeps default operation strict while allowing outbound communication flows
-// that are further constrained by sidecar mapping, capability scope, and
-// session-bound issued tokens.
-permit(
-    principal,
-    action == Firma::Action::"communication.external.send",
-    resource
-);
-"#;
+// Governs token *issuance* only. Runtime enforcement is handled by the
+// sidecar's Cedar policy bundle (dev.cedar). All registered action classes
+// are permitted here so the sidecar can classify and enforce without the
+// Authority becoming the bottleneck for local dev.
+permit(principal, action, resource);
+";
 
 /// Inputs to [`AuthoritySupervisor::spawn`].
 #[doc(hidden)]
@@ -113,8 +110,8 @@ impl AuthoritySupervisor {
             }
         })?;
 
-        std::fs::create_dir_all(&req.marker_dir)
-            .map_err(|e| RunError::Internal(format!("mkdir {}: {e}", req.marker_dir.display())))?;
+        firma_stack::fs::create_private_dir_all(&req.marker_dir)
+            .map_err(|e| RunError::Internal(e.to_string()))?;
 
         let policy_dir = req.marker_dir.join("policy_dir");
         let keys_dir = req.marker_dir.join("keys");
@@ -126,10 +123,10 @@ impl AuthoritySupervisor {
         let pid_path = req.marker_dir.join("authority.pid");
         let metadata_path = req.marker_dir.join("metadata.toml");
 
-        std::fs::create_dir_all(&policy_dir)
-            .map_err(|e| RunError::Internal(format!("mkdir {}: {e}", policy_dir.display())))?;
-        std::fs::create_dir_all(&keys_dir)
-            .map_err(|e| RunError::Internal(format!("mkdir {}: {e}", keys_dir.display())))?;
+        firma_stack::fs::create_private_dir_all(&policy_dir)
+            .map_err(|e| RunError::Internal(e.to_string()))?;
+        firma_stack::fs::create_private_dir_all(&keys_dir)
+            .map_err(|e| RunError::Internal(e.to_string()))?;
 
         let cedar_text = if req.profile_name == firma_authority::DEFAULT_PROFILE {
             AUTOSTART_LOCAL_DEVELOPER_POLICY

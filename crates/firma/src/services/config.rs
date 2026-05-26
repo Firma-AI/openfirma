@@ -11,6 +11,7 @@ use clap::ValueEnum as _;
 use dialoguer::theme::ColorfulTheme;
 
 use crate::args::config::{InitArgs, Mapping, Mode, Posture};
+use crate::fs::create_private_dir_all;
 use doc::DocInputs;
 
 struct AuthorityInputs {
@@ -101,8 +102,8 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
         )?;
     }
 
-    if has_sidecar {
-        write_if_absent(&state.join("revocations.txt"), b"", args.force)?;
+    if has_server {
+        write_revocations(state, args.force)?;
         crate::services::authority::generate_audit_key_if_absent(
             &state.join("audit.key"),
             args.force,
@@ -132,21 +133,31 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn write_revocations(state_dir: &Path, force: bool) -> Result<()> {
+    let path = state_dir.join("revocations.txt");
+    if force {
+        Ok(crate::fs::write_file(&path, b"", 0o600)?)
+    } else {
+        Ok(crate::fs::write_new_file(&path, b"", 0o600).or_else(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })?)
+    }
+}
+
 fn create_scaffold_dirs(cfg: &Path, state: &Path) -> Result<()> {
     for dir in [
         cfg,
         &cfg.join("policies"),
         &cfg.join("issuance-policies"),
         &cfg.join("mappings"),
+        state,
+        &state.join("generated-firma-ca"),
     ] {
-        std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
-        #[cfg(unix)]
-        set_dir_mode_0700(dir).with_context(|| format!("chmod {}", dir.display()))?;
-    }
-    for dir in [state, &state.join("generated-firma-ca")] {
-        std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
-        #[cfg(unix)]
-        set_dir_mode_0700(dir).with_context(|| format!("chmod {}", dir.display()))?;
+        create_private_dir_all(dir)?;
     }
     Ok(())
 }
@@ -983,20 +994,6 @@ fn prompt_mappings_with_default(
     Ok(chosen)
 }
 
-#[cfg(unix)]
-fn set_dir_mode_0700(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-        .with_context(|| format!("chmod 0700 {}", path.display()))
-}
-
-fn write_if_absent(path: &Path, content: &[u8], force: bool) -> Result<()> {
-    if !force && path.exists() {
-        return Ok(());
-    }
-    std::fs::write(path, content).with_context(|| format!("write {}", path.display()))
-}
-
 /// Delete posture cedar files left behind by previous postures.
 ///
 /// Posture is a closed set of `(cedar file, requested_actions)` presets.
@@ -1094,6 +1091,40 @@ pub fn resolve_state_dir(flag: Option<PathBuf>) -> Result<PathBuf, String> {
     resolve_state_dir_with_default(flag, None)
 }
 
+/// Resolve the audit log path for `firma monitor`.
+///
+/// Priority: explicit `--state-dir` → `sidecar.audit.file_path` from a
+/// discovered `firma.toml` → `<state_dir>/audit.jsonl`.
+pub fn resolve_audit_log_path(state_dir_flag: Option<&PathBuf>) -> Result<PathBuf, String> {
+    let state_dir = resolve_state_dir(state_dir_flag.cloned())?;
+    if state_dir_flag.is_some() {
+        return Ok(state_dir.join("audit.jsonl"));
+    }
+
+    if let Ok(resolved) = firma_config::resolve_config("monitor", None, &firma_config::SystemDirs) {
+        let firma_toml = resolved.config_dir.join(firma_config::CONFIG_FILE_NAME);
+        if firma_toml.is_file() {
+            let text = std::fs::read_to_string(&firma_toml).map_err(|error| {
+                format!("read discovered config {}: {error}", firma_toml.display())
+            })?;
+            let value: toml::Value = toml::from_str(&text).map_err(|error| {
+                format!("parse discovered config {}: {error}", firma_toml.display())
+            })?;
+            if let Some(path) = value
+                .get("sidecar")
+                .and_then(|sidecar| sidecar.get("audit"))
+                .and_then(|audit| audit.get("file_path"))
+                .and_then(toml::Value::as_str)
+                .filter(|path| !path.is_empty())
+            {
+                return Ok(PathBuf::from(path));
+            }
+        }
+    }
+
+    Ok(state_dir.join("audit.jsonl"))
+}
+
 fn resolve_state_dir_with_default(
     flag: Option<PathBuf>,
     default: Option<PathBuf>,
@@ -1118,7 +1149,7 @@ fn resolve_state_dir_with_default(
 /// # Errors
 /// Returns a formatted string on any filesystem or key-generation failure.
 #[allow(clippy::too_many_lines)]
-pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
+pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
     let mappings = provider_to_mappings(&plan.provider);
     let (mode, authority) = match &plan.authority {
         AuthorityShape::Local => {
@@ -1160,7 +1191,7 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
         config_dir: plan.config_dir.clone(),
         state_dir: plan.state_dir.clone(),
     };
-    let files = generate_files(&inputs).map_err(|e| format!("generate files: {e}"))?;
+    let files = generate_files(&inputs).context("generate files")?;
 
     for dir in [
         plan.config_dir.as_path(),
@@ -1170,32 +1201,30 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
         plan.state_dir.as_path(),
         &plan.state_dir.join("generated-firma-ca"),
     ] {
-        std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+        create_private_dir_all(dir)?;
     }
 
     for (rel, content) in &files {
         let path = plan.config_dir.join(rel);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+                .with_context(|| format!("mkdir {}", parent.display()))?;
         }
         if !plan.force && path.exists() {
             continue;
         }
-        std::fs::write(&path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
+        std::fs::write(&path, content).with_context(|| format!("write {}", path.display()))?;
     }
 
-    write_if_absent(&plan.state_dir.join("revocations.txt"), b"", plan.force)
-        .map_err(|e| e.to_string())?;
+    write_revocations(&plan.state_dir, plan.force)?;
     crate::services::authority::generate_audit_key_if_absent(
         &plan.state_dir.join("audit.key"),
         plan.force,
-    )
-    .map_err(|e| e.to_string())?;
+    )?;
 
     let key_path = plan.state_dir.join("authority.key");
     if plan.force || !key_path.exists() {
-        crate::services::authority::run_generate_key(&key_path).map_err(|e| e.to_string())?;
+        crate::services::authority::run_generate_key(&key_path)?;
     }
 
     let tls_dir = plan.state_dir.join("tls");
@@ -1208,13 +1237,13 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<(), String> {
         ] {
             let p = tls_dir.join(name);
             if p.exists() {
-                std::fs::remove_file(&p).map_err(|e| format!("remove {}: {e}", p.display()))?;
+                std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
             }
         }
     }
     if !tls_dir.join("authority.crt").exists() {
         crate::services::authority::run_bootstrap_tls(&tls_dir, &[])
-            .map_err(|e| format!("generate TLS material: {e}"))?;
+            .context("generate TLS material")?;
     }
 
     Ok(())
@@ -1460,10 +1489,10 @@ mod tests {
     fn anthropic_mapping_has_connect_rule() {
         let rules = parse_rules(Mapping::Anthropic.static_content()).rules;
         assert!(
-            rules.iter().any(
-                |r| r.host == "api.anthropic.com:443" && r.method.as_deref() == Some("CONNECT")
-            ),
-            "expected api.anthropic.com:443 CONNECT rule"
+            rules
+                .iter()
+                .any(|r| r.host == "*.anthropic.com" && r.method.as_deref() == Some("CONNECT")),
+            "expected *.anthropic.com CONNECT rule"
         );
     }
 
@@ -1473,7 +1502,7 @@ mod tests {
         assert!(
             rules
                 .iter()
-                .any(|r| r.host == "api.openai.com:443" && r.method.as_deref() == Some("CONNECT")),
+                .any(|r| r.host == "api.openai.com" && r.method.as_deref() == Some("CONNECT")),
             "expected api.openai.com:443 CONNECT rule"
         );
     }
@@ -1484,7 +1513,7 @@ mod tests {
         assert!(
             rules
                 .iter()
-                .any(|r| r.host == "api.github.com:443" && r.method.as_deref() == Some("CONNECT")),
+                .any(|r| r.host == "api.github.com" && r.method.as_deref() == Some("CONNECT")),
             "CONNECT rule missing from github mapping"
         );
         assert!(
@@ -1501,8 +1530,7 @@ mod tests {
         assert!(
             rules
                 .iter()
-                .any(|r| r.host == "gmail.googleapis.com:443"
-                    && r.method.as_deref() == Some("CONNECT")),
+                .any(|r| r.host == "gmail.googleapis.com" && r.method.as_deref() == Some("CONNECT")),
             "CONNECT rule missing from gmail mapping"
         );
         assert!(
@@ -1547,6 +1575,19 @@ mod tests {
     fn firma_run_toml_is_valid_toml() {
         let files = make_files(&Posture::Dev, &[], &[]);
         let _: toml::Value = toml::from_str(get(&files, "firma-run.toml")).unwrap();
+    }
+
+    #[test]
+    fn firma_run_toml_has_file_audit_sink() {
+        let files = make_files(&Posture::Dev, &[], &[]);
+        let t: toml::Value = toml::from_str(get(&files, "firma-run.toml")).unwrap();
+        assert_eq!(t["audit"]["sink"].as_str(), Some("file"));
+        assert!(
+            t["audit"]["file_path"]
+                .as_str()
+                .is_some_and(|p| !p.is_empty()),
+            "audit.file_path must be set"
+        );
     }
 
     #[test]
@@ -1611,6 +1652,31 @@ mod tests {
         for posture in [Posture::Strict, Posture::Dev, Posture::DevWithDeleteWatch] {
             assert!(!posture.cedar_content().is_empty());
         }
+    }
+
+    #[test]
+    fn shipped_posture_templates_pass_schema_validation() {
+        use cedar_policy::{PolicySet, Schema};
+
+        let (schema, _) = Schema::from_cedarschema_str(firma_core::FIRMA_SCHEMA)
+            .unwrap_or_else(|e| panic!("schema parse: {e}"));
+
+        for posture in Posture::iter() {
+            let set: PolicySet = posture
+                .cedar_content()
+                .parse()
+                .unwrap_or_else(|e| panic!("{posture:?} parse: {e}"));
+            firma_core::validate_policies(&set, &schema).unwrap_or_else(|errs| {
+                panic!("{posture:?} schema validation: {}", errs.join("; "))
+            });
+        }
+
+        // The issuance template ships alongside every posture.
+        let issuance: PolicySet = TPL_CEDAR_ISSUANCE
+            .parse()
+            .unwrap_or_else(|e| panic!("issuance parse: {e}"));
+        firma_core::validate_policies(&issuance, &schema)
+            .unwrap_or_else(|errs| panic!("issuance schema validation: {}", errs.join("; ")));
     }
 
     #[test]

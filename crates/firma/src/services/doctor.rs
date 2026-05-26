@@ -60,6 +60,28 @@ pub fn run(args: Args) -> ExitCode {
     ExitCode::from(report.exit_code())
 }
 
+/// Count per-run sidecars that are currently running, by enumerating the
+/// runtime markers `firma sidecar status` consults. Any error (missing run
+/// dir, unreadable marker) is treated as "none live" — doctor must never fail
+/// because the optional run dir is absent.
+fn count_live_per_run_sidecars(runtime_dir: &std::path::Path) -> usize {
+    firma_stack::sidecar_markers::list(runtime_dir).map_or(0, |entries| {
+        entries
+            .iter()
+            .filter(|e| marker_state_is_live(e.state))
+            .count()
+    })
+}
+
+/// A per-run marker counts as live when its process is alive. An `http_proxy`
+/// per-run sidecar binds a TCP port and has no responding `sidecar.sock`, so
+/// its marker is `Unhealthy` (pid alive, UDS probe fails) rather than
+/// `Running` — both mean an agent is actively running under it.
+fn marker_state_is_live(state: firma_stack::status::State) -> bool {
+    use firma_stack::status::State;
+    matches!(state, State::Running | State::Unhealthy)
+}
+
 /// Internal bundle produced by [`build_report`].
 ///
 /// Carries the [`Report`] and the `--json` flag together so both survive
@@ -76,7 +98,7 @@ async fn build_report(args: Args) -> RenderedReport {
 
     // 2. sandbox backends
     let prober = sandbox::CommandProber::new(timeout);
-    report.extend(sandbox::check_with(sandbox::OsFamily::current(), &prober).await);
+    report.extend(sandbox::check_with(&sandbox::HostProbe::current(), &prober).await);
 
     // 3. config parse — resolves the unified `firma.toml` everyone else
     //    uses, then validates both sections. Runs early so the
@@ -110,6 +132,13 @@ async fn build_report(args: Args) -> RenderedReport {
                 }
             });
 
+    // State dir doubles as the runtime dir on every supported platform, so the
+    // per-run sidecar markers live under it. Resolve it now: checks 4 and 5
+    // cross-check live per-run instances against the configured daemon probe.
+    let state_dir = crate::services::config::resolve_state_dir(args.state_dir.clone())
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let live_running = count_live_per_run_sidecars(&state_dir);
+
     // 4. sidecar reachability
     let sidecar_endpoint = parsed_config.as_ref().and_then(|c| {
         match c.section("sidecar").and_then(|body| {
@@ -122,7 +151,12 @@ async fn build_report(args: Args) -> RenderedReport {
             }
         }
     });
-    report.push(reachability::check_endpoint("sidecar reachable", sidecar_endpoint, timeout).await);
+    let sidecar_daemon =
+        reachability::check_endpoint("sidecar reachable", sidecar_endpoint, timeout).await;
+    report.push(reachability::reconcile_reachability(
+        sidecar_daemon,
+        live_running,
+    ));
 
     // 5. authority reachability
     let authority_endpoint: Option<Endpoint> = parsed_config.as_ref().and_then(|c| {
@@ -131,13 +165,14 @@ async fn build_report(args: Args) -> RenderedReport {
             .and_then(|body| toml::from_str::<firma_authority::AuthorityConfig>(&body).ok())
             .and_then(|ac| reachability::endpoint_from_authority(&ac))
     });
-    report.push(
-        reachability::check_endpoint("authority reachable", authority_endpoint, timeout).await,
-    );
+    let authority_daemon =
+        reachability::check_endpoint("authority reachable", authority_endpoint, timeout).await;
+    report.push(reachability::reconcile_reachability(
+        authority_daemon,
+        live_running,
+    ));
 
     // 6. capability seed
-    let state_dir = crate::services::config::resolve_state_dir(args.state_dir.clone())
-        .unwrap_or_else(|_| PathBuf::from("."));
     report.push(capability_seed::check(&state_dir));
 
     // 7. state directories
@@ -154,4 +189,19 @@ async fn build_report(args: Args) -> RenderedReport {
         "doctor report built"
     );
     RenderedReport(report, args.json)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use firma_stack::status::State;
+
+    #[test]
+    fn live_includes_running_and_unhealthy_but_not_stopped() {
+        // http_proxy per-run sidecars surface as Unhealthy (alive, no UDS).
+        assert!(marker_state_is_live(State::Running));
+        assert!(marker_state_is_live(State::Unhealthy));
+        assert!(!marker_state_is_live(State::Stopped));
+        assert!(!marker_state_is_live(State::Unknown));
+    }
 }
