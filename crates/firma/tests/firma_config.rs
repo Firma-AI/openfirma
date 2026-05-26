@@ -511,11 +511,10 @@ fn agent_remote_to_local_switch_persists_authority_section() {
         after["authority"]["listen_addr"].as_str(),
         Some("127.0.0.1:9443"),
     );
-    // The stale remote connect coords must be stripped (Option 1).
-    assert!(
-        after["sidecar"]["authority"].get("url").is_none(),
-        "remote url must be stripped on switch to local:\n{}",
-        std::fs::read_to_string(&firma_toml_path).unwrap()
+    // Remote connect coords must be replaced with local daemon coordinates.
+    assert_eq!(
+        after["sidecar"]["authority"]["url"].as_str(),
+        Some("https://127.0.0.1:9443"),
     );
 }
 

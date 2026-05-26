@@ -62,15 +62,10 @@ impl DocInputs<'_> {
     }
 
     fn has_connect(&self) -> bool {
-        // Only `AgentRemote` persists `[sidecar.authority].url` /
-        // `ca_cert_path` / `public_key_path` to `firma.toml`. In
-        // `AgentLocal` the URL is overwritten at runtime by
-        // `firma-run::sidecar::config::synthesize` with the
-        // ephemeral URL the supervisor learned from the autostarted
-        // mini-authority — persisting a value here would be
-        // misleading (silently ignored) and conflict with the
-        // `listen_addr = "[::1]:0"` ephemeral-port convention.
-        matches!(self.mode, Mode::AgentRemote)
+        // Persist sidecar→authority connect fields for daemon mode
+        // (`firma sidecar start`) and remote authority. Per-run autostart
+        // may still override the URL with an ephemeral listen address.
+        matches!(self.mode, Mode::AgentLocal | Mode::AgentRemote)
     }
 }
 
@@ -582,22 +577,27 @@ mod tests {
     }
 
     #[test]
-    fn agent_local_omits_sidecar_authority_url() {
+    fn agent_local_emits_sidecar_authority_connect() {
         let inputs = dummy_inputs(&Mode::AgentLocal);
         let out = render_firma_toml("", &inputs).unwrap();
         let parsed: toml::Value = toml::from_str(&out).unwrap();
         let auth = &parsed["sidecar"]["authority"];
-        // The supervisor injects the real URL at runtime; persisting one
-        // here would be silently overridden.
-        assert!(auth.get("url").is_none(), "got: {out}");
-        assert!(auth.get("ca_cert_path").is_none(), "got: {out}");
-        assert!(auth.get("public_key_path").is_none(), "got: {out}");
-        // Timeouts and backoffs still seeded as static defaults.
-        assert!(auth.get("connect_timeout_secs").is_some(), "got: {out}");
+        assert_eq!(
+            auth.get("url").and_then(|v| v.as_str()),
+            Some("https://127.0.0.1:9443")
+        );
+        assert_eq!(
+            auth.get("ca_cert_path").and_then(|v| v.as_str()),
+            Some("/state/tls/authority-ca.crt")
+        );
+        assert_eq!(
+            auth.get("public_key_path").and_then(|v| v.as_str()),
+            Some("/state/authority.pub")
+        );
     }
 
     #[test]
-    fn mode_switch_remote_to_local_strips_stale_connect_keys() {
+    fn mode_switch_remote_to_local_replaces_stale_connect_keys() {
         let existing = "\
 [sidecar.authority]
 url = \"https://stale.example.com:9443\"
@@ -608,9 +608,18 @@ public_key_path = \"/old/pub.key\"
         let out = render_firma_toml(existing, &inputs).unwrap();
         let parsed: toml::Value = toml::from_str(&out).unwrap();
         let auth = &parsed["sidecar"]["authority"];
-        assert!(auth.get("url").is_none(), "got: {out}");
-        assert!(auth.get("ca_cert_path").is_none(), "got: {out}");
-        assert!(auth.get("public_key_path").is_none(), "got: {out}");
+        assert_eq!(
+            auth.get("url").and_then(|v| v.as_str()),
+            Some("https://127.0.0.1:9443")
+        );
+        assert_eq!(
+            auth.get("ca_cert_path").and_then(|v| v.as_str()),
+            Some("/state/tls/authority-ca.crt")
+        );
+        assert_eq!(
+            auth.get("public_key_path").and_then(|v| v.as_str()),
+            Some("/state/authority.pub")
+        );
     }
 
     #[test]
