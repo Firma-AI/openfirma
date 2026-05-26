@@ -3,49 +3,11 @@ title: Quickstart
 description: Install OpenFirma, scaffold a project, and run an agent under enforcement in under five minutes.
 ---
 
-import { Steps, Tabs, TabItem } from '@astrojs/starlight/components';
-
 This quickstart takes you from nothing installed to a real agent running under enforcement: its outbound calls are checked against policy, allowed or denied, and written to the audit log.
 
-The default install path uses a single precompiled static binary. You do not need a build toolchain, or any API keys, unless you choose to build from source.
+OpenFirma is built from source with Cargo. You need a Rust toolchain and `protoc`, but no API keys.
 
 ## Install
-
-OpenFirma can be installed with a one-line script or built from source. The script downloads the right binary for your platform, puts it on your `PATH`, and offers to scaffold your first project.
-
-<Tabs>
-<TabItem label="Precompiled binary">
-
-<Steps>
-
-1. Run the installer.
-
-   On **Linux and macOS**:
-
-   ```bash
-   curl -fsSL https://install.openfirma.ai | sh
-   ```
-
-   On **Windows** (PowerShell):
-
-   ```powershell
-   iwr -useb https://install.openfirma.ai/install.ps1 | iex
-   ```
-
-2. Confirm `firma` is on your `PATH`.
-
-   ```bash
-   firma --version
-   ```
-
-   If the command is not found, open a new terminal so your shell picks up the updated `PATH`, then try again.
-
-</Steps>
-
-The installer drops the binary in `~/.local/bin` by default and adds it to your shell's `PATH`.
-
-</TabItem>
-<TabItem label="From source">
 
 Prerequisites:
 
@@ -67,9 +29,6 @@ cargo install --path crates/firma --bin firma --locked
 ```
 
 This installs `firma` into Cargo's binary directory, usually `~/.cargo/bin`. If `firma --version` is not found, make sure that directory is on your `PATH`.
-
-</TabItem>
-</Tabs>
 
 ## Set up a project
 
