@@ -36,8 +36,10 @@ backend = "bwrap"
 FIRMA_RUN_BWRAP_ROOTFS_MODE = "readonly"
 
 # Point HOME at the per-run runtime dir so the agent cannot read host
-# credentials by expanding $HOME.
-FIRMA_RUN_BWRAP_RUNTIME_HOME = "true"
+# credentials by expanding $HOME. Disabled by default so the agent home
+# persists across runs (MCP config, auth, etc.). Set to "true" to enable
+# full home-dir isolation (planned default when shell governance ships).
+FIRMA_RUN_BWRAP_RUNTIME_HOME = "false"
 
 # Defense-in-depth tmpfs masks on the host HOME paths. Comma-separated,
 # relative to $HOME. Extend per project (e.g. add ".docker", ".npmrc").
