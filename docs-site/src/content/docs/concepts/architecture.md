@@ -35,25 +35,27 @@ These invariants explain behaviors you will encounter while working with OpenFir
 
 ### Fail closed
 
-If anything goes wrong, the call is blocked. Never the opposite.
+**What:** For protected traffic, uncertainty becomes a DENY outcome. Unknown mapping, missing capability, expired token, stale policy, unavailable policy evaluator, malformed request, failed credential fetch: all of these block the request. 
 
-Unknown mapping, missing capability, expired token, stale policy, malformed request, failed credential fetch: all produce a DENY. If you add a new API endpoint but forget the mapping rule, you will see `UnclassifiedIntent` in the audit log, not a silent pass-through. There is no error path that silently allows.
+**Example:** If you add a new SaaS endpoint but forget to add a mapping rule, production should discover that as a denial, not silently let the agent reach it.
 
 ### No network on the hot path
 
-The Sidecar decides on its own, without asking anyone in real time. It already has everything it needs locally: the policy bundle, the capability state, and the revocation cache.
+**What:** Capability validation and Cedar policy evaluation use local Sidecar state. The Sidecar does not ask the Authority during each request decision. The invariant is about authorization: the decision to allow or deny does not depend on a request-time network round trip to the control plane. 
 
-If the Authority goes down mid-session, the Sidecar keeps enforcing against its cached state. Once that state exceeds its freshness threshold, it denies. You will never get a silent pass-through because the control plane is unreachable.
+**Example:** If for some reason the Authority connection drops, the Sidecar can continue using fresh local state until freshness checks say the policy or revocation state is no longer trustworthy. At that point it denies.
 
 ### Determinism
 
-The same call always produces the same decision. There is no model interpreting intent, it is pure logic. Same normalized request, same policy bundle, same local state: same outcome, every time.
+**What:** The enforcement decision is deterministic for the same normalized request, local capability state, runtime signals, and policy bundle. There is no LLM or probabilistic classifier in the Sidecar decision path.
+
+**Example:** If a request was denied because `action_count` exceeded a policy threshold, you can inspect the audit event and the bundle to understand why. You are not trying to reproduce a model judgment.
 
 If a request was denied, you can inspect the audit event and the Cedar bundle and reproduce the exact decision. You are not debugging a model judgment.
 
-### Envelope immutability
+**What:** The Sidecar builds a canonical `ExecutionEnvelope` for the action being evaluated. Policy sees that envelope. Audit records that envelope. Later steps such as credential injection and connector dispatch use derived data rather than rewriting what policy saw.
 
-What the policy sees and what the audit log records is the same thing. Nobody can modify the request after it has been evaluated.
+**Example:** Adding an `Authorization` header after policy allows a request does not change the action class, resource, or parameters that Cedar evaluated.
 
 The Sidecar builds a canonical `ExecutionEnvelope` once, before enforcement. Policy evaluates that envelope. Audit records that envelope. Credential injection happens after the decision and does not rewrite what policy saw.
 

@@ -22,7 +22,9 @@
 //! out of the entity binding.  [`AgentId`] additionally enforces
 //! `[a-zA-Z0-9_-]{1,128}` at construction time as a second defence layer.
 
-use cedar_policy::{EntityId, EntityTypeName, EntityUid};
+use cedar_policy::{
+    EntityId, EntityTypeName, EntityUid, PolicySet, Schema, ValidationMode, Validator,
+};
 
 use crate::agent::AgentId;
 
@@ -34,6 +36,32 @@ use crate::agent::AgentId;
 /// explicit `schema_path` in the Authority config.
 // M-CANONICAL-DOCS: public constant with module-level docs above.
 pub const FIRMA_SCHEMA: &str = include_str!("../firma.cedarschema");
+
+/// Strictly validate a parsed Cedar policy set against a schema.
+///
+/// Runs Cedar's strict validation and returns every validation error as a
+/// human-readable string. An empty policy set is valid. The Authority's bundle
+/// loader calls this to fail closed on an invalid bundle, applying the same
+/// strict-validation contract that the offline `firma policy validate` CLI
+/// enforces (the CLI runs the equivalent strict check separately so it can
+/// render located miette diagnostics).
+///
+/// # Errors
+///
+/// Returns `Err(messages)` with one entry per validation error when the policy
+/// set does not strictly type-check against `schema`. Validation warnings are
+/// not treated as errors.
+pub fn validate_policies(policies: &PolicySet, schema: &Schema) -> Result<(), Vec<String>> {
+    let result = Validator::new(schema.clone()).validate(policies, ValidationMode::Strict);
+    if result.validation_passed() {
+        return Ok(());
+    }
+    let messages: Vec<String> = result
+        .validation_errors()
+        .map(ToString::to_string)
+        .collect();
+    Err(messages)
+}
 
 /// A typed Cedar entity UID in the `Firma` namespace.
 #[derive(Debug, Clone)]
@@ -108,5 +136,36 @@ mod tests {
         let uid = EntityUid::try_from(FirmaEntityUid::Resource(evil.to_string())).unwrap();
         assert_eq!(uid.type_name().to_string(), "Firma::Resource");
         assert_eq!(uid.id().as_ref(), evil);
+    }
+
+    #[test]
+    fn validate_policies_accepts_valid_set() {
+        let (schema, _) = Schema::from_cedarschema_str(FIRMA_SCHEMA).unwrap();
+        let set: PolicySet =
+            "permit(principal, action == Firma::Action::\"filesystem.read\", resource);"
+                .parse()
+                .unwrap();
+        assert!(validate_policies(&set, &schema).is_ok());
+    }
+
+    #[test]
+    fn validate_policies_rejects_unknown_action() {
+        let (schema, _) = Schema::from_cedarschema_str(FIRMA_SCHEMA).unwrap();
+        let set: PolicySet =
+            "forbid(principal, action == Firma::Action::\"payment.payout\", resource);"
+                .parse()
+                .unwrap();
+        let errs = validate_policies(&set, &schema).expect_err("unknown action must fail");
+        assert!(!errs.is_empty());
+        assert!(
+            errs.iter().any(|e| e.contains("payment.payout")),
+            "error should name the unknown action; got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn validate_policies_accepts_empty_set() {
+        let (schema, _) = Schema::from_cedarschema_str(FIRMA_SCHEMA).unwrap();
+        assert!(validate_policies(&PolicySet::new(), &schema).is_ok());
     }
 }

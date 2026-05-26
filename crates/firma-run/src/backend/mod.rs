@@ -1,6 +1,7 @@
 mod firecracker;
 mod linux_bwrap;
 mod macos_vz;
+pub mod platform;
 mod windows_wsl2;
 
 use std::collections::BTreeMap;

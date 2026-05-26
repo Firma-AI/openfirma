@@ -1,6 +1,6 @@
 //! Runner for `firma authority`.
 
-use std::io::Write;
+use std::io::Write as _;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -162,22 +162,41 @@ pub fn run_generate_key(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn write_new_file(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+/// Generate a fresh P-256 ECDSA signing key and write it to `path` in PKCS#8
+/// PEM format. Skips if the file already exists and `force` is false.
+///
+/// # Errors
+///
+/// Returns an error on key generation failure or I/O error.
+pub fn generate_audit_key_if_absent(path: &Path, force: bool) -> Result<()> {
+    use p256::ecdsa::SigningKey;
+    use p256::elliptic_curve::rand_core::OsRng;
+    use p256::pkcs8::EncodePrivateKey as _;
+    let key = SigningKey::random(&mut OsRng);
+    let pem = key
+        .to_pkcs8_pem(p256::pkcs8::LineEnding::default())
+        .context("failed to encode audit key as PKCS#8 PEM")?;
     let mut opts = std::fs::OpenOptions::new();
-    opts.create_new(true).write(true);
+    opts.write(true);
+    if force {
+        // Overwrite unconditionally — truncate any existing file.
+        opts.create(true).truncate(true);
+    } else {
+        // create_new: atomic — fails if another writer raced us to create the file.
+        opts.create_new(true);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(mode);
+        opts.mode(0o600);
     }
-    #[cfg(not(unix))]
-    let _ = mode;
-    let mut file = opts
-        .open(path)
-        .with_context(|| format!("failed to create {}", path.display()))?;
-    file.write_all(bytes)
-        .with_context(|| format!("failed to write {}", path.display()))?;
-    Ok(())
+    match opts.open(path) {
+        Ok(mut file) => file
+            .write_all(pem.as_bytes())
+            .with_context(|| format!("failed to write {}", path.display())),
+        Err(e) if !force && e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("failed to open {}", path.display())),
+    }
 }
 
 pub fn run_bootstrap_tls(out_dir: &Path, hosts: &[String]) -> Result<()> {
@@ -191,8 +210,7 @@ pub fn run_bootstrap_tls(out_dir: &Path, hosts: &[String]) -> Result<()> {
         hosts.to_vec()
     };
 
-    std::fs::create_dir_all(out_dir)
-        .with_context(|| format!("failed to create {}", out_dir.display()))?;
+    crate::fs::create_private_dir_all(out_dir)?;
 
     let ca_cert_path: PathBuf = out_dir.join("authority-ca.crt");
     let ca_key_path: PathBuf = out_dir.join("authority-ca.key");
@@ -227,10 +245,10 @@ pub fn run_bootstrap_tls(out_dir: &Path, hosts: &[String]) -> Result<()> {
         .signed_by(&server_key, &ca_cert, &ca_key)
         .context("failed to sign server certificate with CA")?;
 
-    write_new_file(&ca_cert_path, ca_cert.pem().as_bytes(), 0o644)?;
-    write_new_file(&ca_key_path, ca_key.serialize_pem().as_bytes(), 0o600)?;
-    write_new_file(&server_cert_path, server_cert.pem().as_bytes(), 0o644)?;
-    write_new_file(
+    crate::fs::write_new_file(&ca_cert_path, ca_cert.pem().as_bytes(), 0o644)?;
+    crate::fs::write_new_file(&ca_key_path, ca_key.serialize_pem().as_bytes(), 0o600)?;
+    crate::fs::write_new_file(&server_cert_path, server_cert.pem().as_bytes(), 0o644)?;
+    crate::fs::write_new_file(
         &server_key_path,
         server_key.serialize_pem().as_bytes(),
         0o600,

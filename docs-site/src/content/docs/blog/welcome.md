@@ -13,4 +13,4 @@ We'll use this space for three things:
 - **Design write-ups.** Posts that walk through the rationale behind a specific design choice - why we picked PASETO v4 over JWT, how Stage 1 and Stage 2 stay on the local hot path, and so on.
 - **Operational notes.** Tips for running OpenFirma in production, performance numbers, and lessons from the field.
 
-If you'd like to contribute a post, open a pull request against the [`docs-site/src/content/docs/blog/`](https://github.com/firma-ai/firma-oss/tree/main/docs-site/src/content/docs/blog) directory.
+If you'd like to contribute a post, open a pull request against the [`docs-site/src/content/docs/blog/`](https://github.com/Firma-AI/openfirma/tree/main/docs-site/src/content/docs/blog) directory.

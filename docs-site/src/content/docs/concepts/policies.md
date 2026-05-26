@@ -3,31 +3,16 @@ title: Policies
 description: How Cedar policies decide ALLOW or DENY at issuance time and at request time.
 ---
 
-A capability says "the Authority decided this agent may attempt this kind of action". A **policy** says "given the current world, is this specific attempt OK". OpenFirma uses [Cedar](https://www.cedarpolicy.com/) for both — but it splits them across two evaluation surfaces, and understanding that split is the difference between a tractable policy strategy and a confusing one.
-
-This page assumes you've read [Capabilities](../capabilities/) and [Action classes](../action-classes/). It covers the two policy surfaces, the entity model, what's in the runtime context, and the basic pattern language.
+Policies are Cedar rules that turn a normalized OpenFirma action into an `ALLOW` or `DENY` decision, first when the Authority issues a capability and again when the Sidecar evaluates each request. At this point we assume you've read [Capabilities](../capabilities/) and [Action classes](../action-classes/). It covers the two policy surfaces, the entity model, what's in the runtime context, and the basic pattern language.
 
 ## Two policy surfaces
 
 OpenFirma has two distinct sets of Cedar policies:
 
-| Surface          | Run by    | When                                | Decides                                                         |
+| Surface          | Run by    | When                                 | Decides                                                         |
 | ---------------- | --------- | ------------------------------------ | --------------------------------------------------------------- |
 | **Issuance**     | Authority | Pre-flight, when minting a token     | "Should this agent ever be allowed to attempt this class?"      |
 | **Runtime**      | Sidecar   | On every outbound call, in Stage 2   | "Given current conditions, is this specific call OK right now?" |
-
-In the reference Authority and demo, they live in two separate directories:
-
-```text
-examples/demo/
-  issuance-policies/   # evaluated by the Authority
-    issuance.cedar
-  policies/            # evaluated by the Sidecar (Stage 2)
-    default.cedar
-    example-deny.cedar
-    fixture-deny.cedar
-    schema.cedarschema
-```
 
 The split matters because the two surfaces answer fundamentally different questions:
 
@@ -80,14 +65,6 @@ These are the only signals available to a runtime policy. There is intentionally
 A policy that uses context looks like:
 
 ```cedar
-permit (
-    principal,
-    action == Firma::Action::"communication.external.send",
-    resource
-) when {
-    context.risk_score < 60
-};
-
 forbid (
     principal,
     action == Firma::Action::"communication.external.send",
@@ -96,8 +73,6 @@ forbid (
     context.risk_score >= 80
 };
 ```
-
-The `forbid` overrides the `permit` at high risk, which is the canonical pattern for graduated controls.
 
 ## Basic patterns
 
@@ -173,21 +148,9 @@ bundle_ttl_seconds     = 60   # bundles older than this are considered stale
 enforcement_timeout_ms = 50   # max time Stage 2 will spend evaluating
 ```
 
-If the bundle hasn't been refreshed within `bundle_ttl_seconds` (because the Authority is unreachable, say), Stage 2 returns `PolicyBundleStale` — every request denies. This is fail-closed by design: stale policy is *not* better than no policy, because the world might have changed in ways the stale policy doesn't reflect.
+If the bundle hasn't been refreshed within `bundle_ttl_seconds`, Stage 2 returns `PolicyBundleStale` — every request denies. This is fail-closed by design: stale policy is *not* better than no policy, because the world might have changed in ways the stale policy doesn't reflect.
 
 When the Authority comes back, the next bundle update atomically swaps the evaluator. There's no flush-and-reload window.
-
-## A note on issuance policies
-
-The reference Authority's issuance policy can be as permissive as `permit(principal, action, resource);` for development (this is what `examples/demo/issuance-policies/issuance.cedar` does). In production you'd want it to enforce the agent's mission boundary — for example, refusing to mint `payment.transfer` capabilities for a research agent.
-
-Because issuance is rare (once per session), you can afford richer checks here than in runtime policy. Some patterns this enables:
-
-- "Only mint capabilities for a known list of `agent_id`s."
-- "Only mint `filesystem.write` if the agent is also covered by a recently approved review ticket." (The `principal` and `requested_actions` are available; you bring the rest as Cedar context.)
-- "Refuse to mint `credential.write` outright; force humans to provision."
-
-Anything you can express in Cedar at runtime, you can also express at issuance — but the Authority's perspective is different (no `params`, no `action_count`, no `risk_score`), so issuance rules tend to be coarser.
 
 ## Where to go next
 

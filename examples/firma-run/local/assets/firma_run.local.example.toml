@@ -3,7 +3,7 @@ backend = "bwrap"
 
 [profiles.generic.seccomp_policy]
 # Absolute path to managed Cedar-subset policy source file.
-source_policy_path = "/abs/path/to/firma-oss/crates/firma-run/policies/generic-local-command-v1.toml"
+source_policy_path = "/abs/path/to/openfirma/crates/firma-run/policies/generic-local-command-v1.toml"
 
 # Absolute output directory where versioned seccomp artifacts are generated.
 artifact_dir = "/abs/path/to/.firma/seccomp-artifacts"

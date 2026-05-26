@@ -23,16 +23,16 @@ the daemon, observe what it's doing, and tear it down cleanly.
 
 ## Scaffold the project
 
-`firma init` writes a fresh project layout. Project-local config goes
+`firma config` writes a fresh project layout. Project-local config goes
 under `<workspace>/.firma/`; keys and revocation state go under the
 user-global state directory.
 
 ```bash
 # Interactive wizard.
-firma init
+firma config
 
 # Or scripted with every value supplied.
-firma init --agent codex --provider anthropic \
+firma config --agent codex --provider anthropic \
            --workspace ./proj --authority local --yes
 ```
 
@@ -51,16 +51,16 @@ $XDG_DATA_HOME/firma/   # or %LOCALAPPDATA%\firma on Windows
   # *.listen, audit.jsonl
 ```
 
-`init` writes a single sectioned `firma.toml` (`[project]` +
+`firma config` writes a single sectioned `firma.toml` (`[project]` +
 `[authority]` + `[sidecar.*]`). Existing files are preserved unless
 `--force` is set. `state_dir` is not embedded in the config — it is
 always resolved from `--state-dir` / `FIRMA_STATE_DIR` / XDG.
 
-You can also skip `init` entirely: `firma run <agent>` invokes the
+You can also skip `firma config` entirely: `firma run <agent>` invokes the
 same scaffold implicitly the first time it cannot discover a
 `firma.toml`.
 
-See [Initialize a project with `firma init`](../initialize-a-project/)
+See [Initialize a project with `firma config`](../initialize-a-project/)
 for the full flag table.
 
 ## Start the daemon
@@ -195,7 +195,7 @@ never read from the config file.
 authority is bound to the listen address — most often a previous
 foreground run that was not fully reaped. Run `firma sidecar stop
 --state-dir ...` first, or change the listeners by editing
-`firma.toml` (or re-running `firma init --force` with different
+`firma.toml` (or re-running `firma config --force` with different
 `--authority-listen` / `--sidecar-listen`).
 
 **`sidecar status` reports "stopped" but the pidfile exists.** The
@@ -205,7 +205,7 @@ in this case; the stale pidfile is overwritten once the new process
 registers. If in doubt, `sidecar stop` first.
 
 **`monitor --since 24h` returns nothing.** `audit.jsonl` is
-append-only but is created fresh on each `firma init`. If the state
+append-only but is created fresh on each `firma config`. If the state
 dir was wiped or recreated, there is nothing to backfill. Confirm
 with `ls -l <state_dir>/audit.jsonl`.
 
@@ -227,5 +227,5 @@ Stop it with `firma sidecar stop`, not by killing the terminal.
 
 ## See also
 
-- [Initialize a project with `firma init`](../initialize-a-project/) — start every project here.
+- [Initialize a project with `firma config`](../initialize-a-project/) — start every project here.
 - [Diagnose with `firma doctor`](../firma-doctor/) — first command to run when anything looks off.

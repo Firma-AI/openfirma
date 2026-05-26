@@ -14,7 +14,5 @@ pub const CONFIG_FILE_NAME: &str = "firma.toml";
 pub const CONFIG_SUBDIR: &str = "firma";
 
 pub use provider::{DirProvider, SystemDirs};
-pub use resolver::{
-    ConfigResolveError, ConfigSource, ResolvedConfig, default_config_dir, resolve_config,
-};
+pub use resolver::{ConfigResolveError, ConfigSource, ResolvedConfig, resolve_config};
 pub use schema::{FirmaConfig, load_section};

@@ -64,6 +64,8 @@ fn drop_terminates_child_within_grace() {
         firma_exe: exe,
         startup_timeout: Duration::from_secs(5),
         authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
         use_http_proxy_interceptor: false,
     })
     .expect("supervisor spawned");
@@ -103,6 +105,8 @@ fn marker_files_present_between_ready_and_drop() {
         firma_exe: exe,
         startup_timeout: Duration::from_secs(5),
         authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
         use_http_proxy_interceptor: false,
     })
     .expect("supervisor spawned");

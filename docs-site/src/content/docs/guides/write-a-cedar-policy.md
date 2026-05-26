@@ -188,6 +188,8 @@ The matched-policy id tells you exactly which rule fired. That's the closing of 
 
 For development, the Authority watches the `policy_dir` and pushes updated bundles to the Sidecar. Edit your `.cedar` file, save it, and within `bundle_ttl_seconds` (default 30) the Sidecar swaps the in-memory bundle.
 
+The Authority re-validates the bundle against the schema on every reload, exactly as it does at startup. If your edit fails to parse or fails schema validation, the reload is rejected and logged, and the Authority keeps streaming the previously-loaded valid bundle — a broken edit never reaches the Sidecar. Watch the Authority's stderr for the rejection, fix the file, and save again. To catch the error before you save, run `firma policy validate` on the file (see [Test policies offline](../test-policies-offline/)).
+
 In production this stream is what keeps the bundle fresh. In development it gives you a tight write-test loop without restarting the Sidecar.
 
 ## Patterns to internalize

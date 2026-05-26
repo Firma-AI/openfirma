@@ -14,9 +14,30 @@ export default defineConfig({
   },
   integrations: [
     mermaid({
-      theme: 'neutral',
-      autoTheme: true,
-    }),
+  autoTheme: false,
+  theme: 'base',
+  themeVariables: {
+    background: '#ffffff',
+    primaryColor: '#e3edec',
+    primaryBorderColor: '#5b8a86',
+    primaryTextColor: '#2a3340',
+    secondaryColor: '#e3edec',
+    secondaryBorderColor: '#5b8a86',
+    secondaryTextColor: '#2a3340',
+    tertiaryColor: '#e3edec',
+    tertiaryBorderColor: '#5b8a86',
+    tertiaryTextColor: '#2a3340',
+    lineColor: '#5b8a86',
+    textColor: '#2a3340',
+    edgeLabelBackground: '#f0f5f4',
+    clusterBkg: '#f0f5f4',
+    clusterBorder: '#5b8a86',
+    titleColor: '#2a3340',
+    nodeTextColor: '#2a3340',
+    fontFamily: 'Inter Variable, ui-sans-serif, system-ui, sans-serif',
+    fontSize: '13px',
+  },
+}),
     starlight({
       title: 'OpenFirma',
       description: 'Governed runtime and local policy enforcement for AI agents.',
@@ -27,7 +48,7 @@ export default defineConfig({
       },
       customCss: ['./src/styles/fonts.css', './src/styles/custom.css'],
       editLink: {
-        baseUrl: 'https://github.com/firma-ai/openfirma/edit/main/docs-site/',
+        baseUrl: 'https://github.com/Firma-AI/openfirma/edit/main/docs-site/',
       },
       lastUpdated: true,
       pagefind: true,
@@ -54,7 +75,7 @@ export default defineConfig({
         {
           icon: 'github',
           label: 'GitHub',
-          href: 'https://github.com/firma-ai/openfirma',
+          href: 'https://github.com/Firma-AI/openfirma',
         },
       ],
       sidebar: [
@@ -82,7 +103,7 @@ export default defineConfig({
         {
           label: 'User Guides',
           items: [
-            { label: 'Initialize a project (firma init)', slug: 'guides/initialize-a-project' },
+            { label: 'Initialize a project (firma config)', slug: 'guides/initialize-a-project' },
             { label: 'Run the sidecar standalone', slug: 'guides/run-the-sidecar' },
             { label: 'Inspect live sidecars (firma sidecar status)', slug: 'guides/firma-sidecar-status' },
             { label: 'Start & monitor the daemon (firma sidecar & monitor)', slug: 'guides/manage-the-stack' },
