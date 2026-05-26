@@ -216,20 +216,8 @@ impl SandboxBackend for BwrapBackend {
                 .arg("--bind")
                 .arg(&handle.runtime_dir)
                 .arg(&handle.runtime_dir);
-            // Without runtime_home_isolation, the agent writes to real $HOME
-            // (config, session state, plugins). Rebind it writable so the
-            // ro-bind on / doesn't produce EROFS. mask_home_paths tmpfs
-            // overlays applied next still take precedence.
             if !hardening.runtime_home_isolation {
-                let home = launch
-                    .env
-                    .get("HOME")
-                    .cloned()
-                    .or_else(|| std::env::var("HOME").ok())
-                    .unwrap_or_default();
-                if !home.is_empty() && home.starts_with('/') {
-                    command.arg("--bind").arg(&home).arg(&home);
-                }
+                bind_host_home(&mut command, launch);
             }
             mask_sensitive_paths(&mut command, launch, &hardening.mask_home_paths);
         } else {
@@ -438,6 +426,22 @@ fn parse_truthy(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+/// Rebind real `$HOME` writable when `runtime_home_isolation` is off.
+/// Without this, `--ro-bind /` makes `$HOME` read-only and the agent hits
+/// EROFS writing config/session state. `mask_home_paths` tmpfs overlays
+/// applied afterward still take precedence over this bind.
+fn bind_host_home(command: &mut Command, launch: &LaunchSpec) {
+    let home = launch
+        .env
+        .get("HOME")
+        .cloned()
+        .or_else(|| std::env::var("HOME").ok())
+        .unwrap_or_default();
+    if !home.is_empty() && home.starts_with('/') {
+        command.arg("--bind").arg(&home).arg(&home);
+    }
 }
 
 fn mask_sensitive_paths(command: &mut Command, launch: &LaunchSpec, suffixes: &[String]) {
