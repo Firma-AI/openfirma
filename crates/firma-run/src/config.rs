@@ -960,6 +960,26 @@ mod tests {
         }
     }
 
+    fn non_bwrap_backend_for_current_host() -> BackendKind {
+        #[cfg(target_os = "linux")]
+        {
+            return BackendKind::Firecracker;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            return BackendKind::Vz;
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            return BackendKind::Wsl2;
+        }
+
+        #[allow(unreachable_code)]
+        BackendKind::Firecracker
+    }
+
     #[test]
     fn resolves_generic_defaults() {
         let resolved = resolve_profile(&args("generic")).unwrap_or_else(|e| panic!("{e}"));
@@ -1114,7 +1134,7 @@ approval_policy = "never"
     #[test]
     fn structural_network_defaults_to_false_for_non_bwrap_backends() {
         let mut run_args = args("generic");
-        run_args.backend = Some(BackendKind::Vz);
+        run_args.backend = Some(non_bwrap_backend_for_current_host());
 
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert!(!resolved.network.enforce_network_namespace);
@@ -1125,14 +1145,17 @@ approval_policy = "never"
     fn structural_network_true_on_non_bwrap_backend_is_rejected() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let config_path = tmpdir.path().join("firma-run.toml");
-        let toml = r#"
+        let backend = non_bwrap_backend_for_current_host();
+        let toml = format!(
+            r#"
 [profiles.generic]
-backend = "vz"
+backend = "{backend}"
 
 [profiles.generic.network]
 enforce_network_namespace = true
 fail_closed = true
-"#;
+"#
+        );
         fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
 
         let mut run_args = args("generic");
@@ -1204,10 +1227,11 @@ deny_actions = ["filesystem.delete"]
         let artifact_dir = tmpdir.path().join("artifacts");
 
         let config_path = tmpdir.path().join("firma-run.toml");
+        let backend = non_bwrap_backend_for_current_host();
         let toml = format!(
             r#"
 [profiles.generic]
-backend = "vz"
+backend = "{backend}"
 
 [profiles.generic.seccomp_policy]
 source_policy_path = '{}'

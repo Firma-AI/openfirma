@@ -413,7 +413,6 @@ installed_firma_bin() {
 }
 
 firma_supports_config() {
-    local bin
     bin=$(installed_firma_bin) || return 1
     "$bin" help config >/dev/null 2>&1
 }
