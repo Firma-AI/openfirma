@@ -844,7 +844,7 @@ fn default_managed_seccomp_policy(
     let source_policy_path = std::env::var(MANAGED_POLICY_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .map_or_else(default_managed_policy_path, PathBuf::from);
+        .map_or_else(ensure_managed_policy_path, PathBuf::from);
 
     let artifact_dir = std::env::var(MANAGED_ARTIFACT_DIR_ENV)
         .ok()
@@ -876,9 +876,13 @@ fn parse_managed_runtime_mode(value: &str) -> Result<SeccompRuntimeMode, RunErro
     }
 }
 
+/// Embedded default seccomp policy. Extracted to `XDG_RUNTIME_DIR/firma/seccomp/` on first
+/// use; if the file already exists it is NOT updated — delete it to pick up a newer version.
 const MANAGED_SECCOMP_POLICY: &str = include_str!("../seccomp/generic-local-command-v1.toml");
 
-fn default_managed_policy_path() -> PathBuf {
+/// Ensures the embedded seccomp policy is extracted to the runtime dir and returns its path.
+/// Creates the directory and file with restricted permissions (0o700/0o600) on first run.
+fn ensure_managed_policy_path() -> PathBuf {
     let dir = firma_stack::runtime_paths::default_runtime_dir().join("seccomp");
     let path = dir.join(DEFAULT_MANAGED_POLICY_FILE);
     if !path.exists() {
@@ -895,7 +899,9 @@ fn default_managed_policy_path() -> PathBuf {
 }
 
 fn default_managed_artifact_dir() -> PathBuf {
-    firma_stack::runtime_paths::default_runtime_dir().join("seccomp-artifacts")
+    let dir = firma_stack::runtime_paths::default_runtime_dir().join("seccomp-artifacts");
+    tracing::debug!(path = %dir.display(), "seccomp artifact dir");
+    dir
 }
 
 fn env_truthy(name: &str) -> bool {
