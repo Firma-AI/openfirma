@@ -1,9 +1,9 @@
 //! Per-service runners dispatched by `crate::main`.
 
 pub mod authority;
+pub mod config;
 pub mod dns_stub;
 pub mod doctor;
-pub mod init;
 pub mod monitor;
 pub mod policy;
 pub mod proxy_bridge;

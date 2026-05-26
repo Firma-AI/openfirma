@@ -1,11 +1,12 @@
 //! Wire `firma monitor` CLI args to the tailer and renderer.
 
 use std::io::{self, IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
+use std::time::SystemTime;
 
 use tracing::{debug, info};
 
@@ -14,7 +15,7 @@ use crate::monitor::follow::resolve_follow;
 use crate::monitor::since;
 use crate::monitor::tailer::{self, Source as TailSource};
 
-pub fn run(args: Args) -> ExitCode {
+pub fn run(args: &Args) -> ExitCode {
     let decision_filter = if args.only_deny {
         Some(Decision::Deny)
     } else {
@@ -33,26 +34,22 @@ pub fn run(args: Args) -> ExitCode {
         since = ?args.since,
         "firma monitor starting"
     );
-    let state_dir = match crate::services::init::resolve_state_dir(args.state_dir) {
-        Ok(path) => path,
+
+    let (state_dir, audit_path) = match resolve_paths(args.state_dir.as_ref()) {
+        Ok(paths) => paths,
         Err(error) => {
             eprintln!("firma monitor: {error}");
             return ExitCode::from(2);
         }
     };
+    maybe_print_wait_hint(follow, &audit_path);
 
-    let backfill = match args.since.as_deref() {
-        Some(value) => match since::parse(value) {
-            Ok(time) => {
-                debug!(?time, "parsed --since cutoff");
-                Some(time)
-            }
-            Err(error) => {
-                eprintln!("firma monitor: --since: {error}");
-                return ExitCode::from(2);
-            }
-        },
-        None => None,
+    let backfill = match parse_since(args.since.as_deref()) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("firma monitor: --since: {error}");
+            return ExitCode::from(2);
+        }
     };
 
     let (tx, rx) = channel::<tailer::Line>();
@@ -62,17 +59,7 @@ pub fn run(args: Args) -> ExitCode {
         stop_handler.store(true, Ordering::SeqCst);
     });
 
-    let sources: Vec<(PathBuf, TailSource)> = match args.source {
-        ArgSource::Audit => vec![(state_dir.join("audit.jsonl"), TailSource::Audit)],
-        ArgSource::Authority => vec![(state_dir.join("authority.log"), TailSource::Authority)],
-        ArgSource::Sidecar => vec![(state_dir.join("sidecar.log"), TailSource::Sidecar)],
-        ArgSource::All => vec![
-            (state_dir.join("audit.jsonl"), TailSource::Audit),
-            (state_dir.join("authority.log"), TailSource::Authority),
-            (state_dir.join("sidecar.log"), TailSource::Sidecar),
-        ],
-    };
-
+    let sources = tail_sources(args.source, &state_dir, &audit_path);
     let mut handles = Vec::new();
     for (path, source) in sources {
         debug!(?source, path = %path.display(), "starting tailer thread");
@@ -115,4 +102,46 @@ pub fn run(args: Args) -> ExitCode {
     }
     info!("monitor exited");
     ExitCode::SUCCESS
+}
+
+fn resolve_paths(state_dir_flag: Option<&PathBuf>) -> Result<(PathBuf, PathBuf), String> {
+    let state_dir = crate::services::config::resolve_state_dir(state_dir_flag.cloned())?;
+    let audit_path = crate::services::config::resolve_audit_log_path(state_dir_flag)?;
+    Ok((state_dir, audit_path))
+}
+
+fn maybe_print_wait_hint(follow: bool, audit_path: &Path) {
+    if follow && !audit_path.exists() {
+        eprintln!(
+            "firma monitor: waiting for audit log at {} \
+             (start `firma run` or `firma sidecar start` first)",
+            audit_path.display()
+        );
+    }
+}
+
+fn parse_since(value: Option<&str>) -> Result<Option<SystemTime>, String> {
+    value.map_or(Ok(None), |raw| {
+        since::parse(raw).map(|time| {
+            debug!(?time, "parsed --since cutoff");
+            Some(time)
+        })
+    })
+}
+
+fn tail_sources(
+    source: ArgSource,
+    state_dir: &Path,
+    audit_path: &Path,
+) -> Vec<(PathBuf, TailSource)> {
+    match source {
+        ArgSource::Audit => vec![(audit_path.to_path_buf(), TailSource::Audit)],
+        ArgSource::Authority => vec![(state_dir.join("authority.log"), TailSource::Authority)],
+        ArgSource::Sidecar => vec![(state_dir.join("sidecar.log"), TailSource::Sidecar)],
+        ArgSource::All => vec![
+            (audit_path.to_path_buf(), TailSource::Audit),
+            (state_dir.join("authority.log"), TailSource::Authority),
+            (state_dir.join("sidecar.log"), TailSource::Sidecar),
+        ],
+    }
 }

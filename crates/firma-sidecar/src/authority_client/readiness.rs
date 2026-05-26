@@ -74,6 +74,24 @@ impl ReadinessFlag {
     }
 }
 
+impl ReadinessView {
+    /// Return a lock-free snapshot of current readiness.
+    #[must_use]
+    pub fn snapshot(&self) -> ReadinessState {
+        *self.rx.borrow()
+    }
+
+    /// Construct a view that is already fully ready.
+    #[must_use]
+    pub fn all_ready() -> Self {
+        let (_flag, view) = ReadinessFlag::new(ReadinessState {
+            policy_bundle_ready: true,
+            revocation_ready: true,
+        });
+        view
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, reason = "test-only")]
 mod tests {
@@ -113,23 +131,5 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(50), flag.wait_until_fully_ready())
             .await
             .expect("immediate resolution");
-    }
-}
-
-impl ReadinessView {
-    /// Return a lock-free snapshot of current readiness.
-    #[must_use]
-    pub fn snapshot(&self) -> ReadinessState {
-        *self.rx.borrow()
-    }
-
-    /// Construct a view that is already fully ready.
-    #[must_use]
-    pub fn all_ready() -> Self {
-        let (_flag, view) = ReadinessFlag::new(ReadinessState {
-            policy_bundle_ready: true,
-            revocation_ready: true,
-        });
-        view
     }
 }

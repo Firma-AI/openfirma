@@ -18,7 +18,7 @@ binary to exit before accepting requests.
 
 ## Scaffolded Example
 
-`firma init` writes one sectioned `firma.toml` with all paths
+`firma config` writes one sectioned `firma.toml` with all paths
 absolutised under the resolved config and state directories. The shape is:
 
 ```toml
@@ -597,7 +597,7 @@ Validation:
 
 Tuning for the background Authority stream clients
 (`WatchPolicyBundle`, `WatchRevocations`). Only consulted when
-`policy.authority_url` is set; when unset the sidecar runs in dev
+`authority.url` is set; when unset the sidecar runs in dev
 mode and this section is ignored.
 
 | Field                                  | Type | Default | Description                                                                                                                 |

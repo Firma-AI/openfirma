@@ -35,75 +35,58 @@ Before configuring, list the destinations the agent actually has to reach:
 
 Keep this list as tight as the agent will tolerate. If the agent reaches for github.com to pull docs, list it and decide whether you want it. If it reaches for "random package registry to install something", almost certainly not — that's a signal something's wrong.
 
-## Step 2: Set up the local stack
+## Step 2: Scaffold the config with `firma config`
 
-From the repo root:
+`firma config` creates a complete configuration directory — sidecar + authority config, Cedar policy, mapping rules, authority keypair, and revocations list — in a single command:
 
 ```bash
-examples/firma-run/local/setup.sh
+firma config \
+  --name claude-code \
+  --posture strict \
+  --mapping anthropic
 ```
 
-This creates `.local/` with a working baseline. We're going to swap in the Claude-specific Sidecar config and mapping rules.
+This writes to the **current directory** by default. Pass `--output-dir` to write to a specific path:
 
 ```bash
-cp examples/firma-run/local/assets/firma.local.claude.example.toml \
-   .local/firma.toml
-
-cp examples/firma-run/local/assets/mapping-rules.claude.local.example.toml \
-   .local/mapping-rules.toml
+firma config --name claude-code --posture strict --mapping anthropic --output-dir .local
 ```
 
-Inspect both files. The Sidecar config sets `intercept_hosts` to the Anthropic surface; the mapping rules cover both CONNECT-level (for L4 destination policy) and L7 endpoints under `*.anthropic.com`. `[sidecar.mapping].default_protected = true` — anything not in this list denies.
+`--posture strict` allows only `communication.external.send` (and `credential.read`), which is the right shape for a coding agent that should reach only the LLM endpoint. The `anthropic` mapping covers `api.anthropic.com` via CONNECT — no MITM certificate required for Anthropic's TLS.
 
-## Step 3: Generate the Authority key and capability
+Generated layout:
 
-```bash
-firma authority generate-key -o .local/firma-authority.key
-
-# The setup.sh-generated .local/firma.toml is sidecar-only. Append an
-# [authority] section so the same file serves `firma authority` too.
-cat >> .local/firma.toml <<EOF
-
-[authority]
-listen_addr         = "[::1]:50051"
-policy_dir          = "examples/policies"
-issuance_policy_dir = ".local/issuance"
-revocation_file     = ".local/revocations.txt"
-key_file            = ".local/firma-authority.key"
-max_ttl_seconds     = 28800
-bundle_ttl_seconds  = 60
-log_level           = "info"
-EOF
-
-mkdir -p .local/issuance
-cat > .local/issuance/issuance.cedar <<'EOF'
-permit (
-    principal == Firma::Agent::"claude-code",
-    action == Firma::Action::"communication.external.send",
-    resource
-);
-EOF
-
-touch .local/revocations.txt
+```
+./
+  firma.toml                   — sidecar + authority unified config
+  firma-run.toml               — runtime profiles (workspace mounts)
+  mapping-rules.toml           — base mapping rules
+  mappings/anthropic.toml      — Anthropic endpoint mapping
+  policies/strict.cedar        — Cedar enforcement policy (edit in Step 4)
+  issuance-policies/issuance.cedar
+  .runtime/
+    authority.key              — authority signing keypair (regenerated only with --force)
+    audit.key                  — demo audit signing key
+    revocations.txt
 ```
 
-Mint a capability for `claude-code`:
+## Step 3: Mint a capability for `claude-code`
 
 ```bash
-firma authority -c .local/firma.toml issue \
+firma authority -c ~/.config/firma/firma.toml issue \
   --agent-id claude-code \
   --session-id $(uuidgen) \
   --action communication.external.send \
   --resource-scope '*.anthropic.com*' \
   --ttl-seconds 28800 \
-  --output .local/capability-claude.toml
+  --output ~/.config/firma/.runtime/capability-claude.toml
 ```
 
 Eight hours is a reasonable working session. If you stop and restart the next morning, you'll mint a fresh one.
 
-## Step 4: Write the runtime policy
+## Step 4: Tighten the runtime policy
 
-Create `examples/policies/claude-code.cedar` (or wherever your `policy_dir` points):
+`firma config` generated `~/.config/firma/policies/strict.cedar` with a broad `communication.external.send` permit. Edit it to restrict to Anthropic hosts specifically. Replace the file with:
 
 ```cedar
 // claude-code: a local coding agent.
@@ -138,11 +121,13 @@ forbid (
 
 The `permit` is bound to `claude-code` and a host glob. The `forbid` is unbound — applies to every agent, present and future.
 
+Save the file to `~/.config/firma/policies/strict.cedar`.
+
 ## Step 5: Inject the Anthropic API key
 
-You don't want the agent process to see the key. Put it in the Sidecar's environment instead, and let the connector inject it on the way out:
+You don't want the agent process to see the key. Put it in the Sidecar's environment instead, and let the connector inject it on the way out.
 
-In `.local/firma.toml`:
+In `~/.config/firma/firma.toml`:
 
 ```toml
 [[sidecar.credentials]]
@@ -162,14 +147,14 @@ Three terminals.
 
 ```bash
 ANTHROPIC_API_KEY=  # not needed here; the Sidecar holds it
-firma authority -c .local/firma.toml
+firma authority -c ~/.config/firma/firma.toml
 ```
 
 **Terminal 2: Sidecar.**
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-... \
-firma sidecar -c .local/firma.toml
+firma sidecar -c ~/.config/firma/firma.toml
 ```
 
 The `ANTHROPIC_API_KEY` env var is set on the Sidecar's process only. The agent's process in Terminal 3 does not receive it.
@@ -178,8 +163,9 @@ The `ANTHROPIC_API_KEY` env var is set on the Sidecar's process only. The agent'
 
 ```bash
 firma run \
+  --config ~/.config/firma/firma-run.toml \
   --profile codex \
-  --capability-file .local/capability-claude.toml \
+  --capability-file ~/.config/firma/.runtime/capability-claude.toml \
   -- claude code
 ```
 
@@ -192,7 +178,7 @@ When Claude Code launches, it inherits no LLM API key from your shell. Its outbo
 The audit log is your test rig. From a fresh terminal:
 
 ```bash
-tail -f .local/audit.jsonl | jq 'select(.decision.outcome == "DENY")'
+tail -f ~/.config/firma/.runtime/audit.jsonl | jq 'select(.decision.outcome == "DENY")'
 ```
 
 Now ask Claude Code something innocuous ("explain this function"). You should see no DENY events — its API call to Anthropic was allowed and dispatched.
@@ -215,16 +201,17 @@ Two operational considerations:
 ```bash
 # in ~/.zshrc or wherever
 firma-claude-start() {
-  cd "$1" || return 1
-  firma authority -c .local/firma.toml issue \
+  firma authority -c ~/.config/firma/firma.toml issue \
     --agent-id claude-code \
     --session-id $(uuidgen) \
     --action communication.external.send \
     --resource-scope '*.anthropic.com*' \
     --ttl-seconds 28800 \
-    --output .local/capability-claude.toml
-  firma run --profile codex \
-    --capability-file .local/capability-claude.toml \
+    --output ~/.config/firma/.runtime/capability-claude.toml
+  firma run \
+    --config ~/.config/firma/firma-run.toml \
+    --profile codex \
+    --capability-file ~/.config/firma/.runtime/capability-claude.toml \
     -- claude code
 }
 ```

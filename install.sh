@@ -52,7 +52,7 @@ Options:
                          Env: FIRMA_NO_BREW=1.
   --no-modify-path       Do not edit shell rc files. Print manual hint.
                          Env: FIRMA_NO_MODIFY_PATH=1.
-  --no-init              Do not prompt to run 'firma init'.
+  --no-init              Do not prompt to run 'firma config'.
                          Env: FIRMA_NO_INIT=1.
   --force                Overwrite an existing install without prompting.
                          Env: FIRMA_FORCE=1.
@@ -400,6 +400,31 @@ ensure_path() {
     info "restart your shell or run: source $rc"
 }
 
+installed_firma_bin() {
+    if [ -x "${INSTALL_DIR}/firma" ]; then
+        printf '%s\n' "${INSTALL_DIR}/firma"
+        return 0
+    fi
+    if command -v firma >/dev/null 2>&1; then
+        command -v firma
+        return 0
+    fi
+    return 1
+}
+
+firma_supports_config() {
+    bin=$(installed_firma_bin) || return 1
+    "$bin" help config >/dev/null 2>&1
+}
+
+next_step_cmd() {
+    if firma_supports_config; then
+        printf 'firma config\n'
+    else
+        printf 'firma --help\n'
+    fi
+}
+
 maybe_run_init() {
     if [ "$NO_INIT" = "1" ]; then
         return 1
@@ -408,8 +433,11 @@ maybe_run_init() {
         # Not a terminal (piped through curl|sh). Skip init.
         return 1
     fi
+    if ! firma_supports_config; then
+        return 1
+    fi
     # shellcheck disable=SC2016
-    printf '[firma-installer] run `firma init` now? [Y/n] '
+    printf '[firma-installer] run `firma config` now? [Y/n] '
     read -r ans
     case "$ans" in
         ""|y|Y|yes|YES) return 0 ;;
@@ -422,18 +450,13 @@ post_install() {
     info "quickstart: ${QUICKSTART_URL}"
     if maybe_run_init; then
         if [ "$DRY_RUN" = "1" ]; then
-            info "(dry-run) would exec: firma init"
+            info "(dry-run) would exec: firma config"
             return
         fi
         # Use the freshly installed binary, not whatever was on PATH before.
-        # On the brew branch, prefer brew's PATH; otherwise our install dir.
-        if command -v firma >/dev/null 2>&1; then
-            exec firma init
-        else
-            exec "${INSTALL_DIR}/firma" init
-        fi
+        exec "$(installed_firma_bin)" config
     else
-        info "next step: firma init"
+        info "next step: $(next_step_cmd)"
     fi
 }
 

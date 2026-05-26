@@ -7,28 +7,38 @@ The enforcement pipeline is the request path inside the Sidecar. It takes one ou
 
 **Should this call be allowed to leave the agent's environment?**
 
-This page follows a single request through that path. Each step adds one piece the next step needs: first the Sidecar sees the traffic, then it turns the request into stable policy vocabulary, then it checks whether the agent has authority to attempt the action, then it asks runtime policy whether this exact attempt is acceptable, and only then does the request leave.
+This page follows a single request through that path. Each step adds one piece the next step needs: first the Sidecar sees the traffic, then it turns the request into stable policy vocabulary, then it checks whether the agent has authority to attempt the action, it then asks runtime policy whether this exact attempt is acceptable, and only at the end does the request leave.
 
 ## The Shape Of The Flow
 
 ```mermaid
-flowchart LR
-    agent["Agent"] -->|"Outbound request"| interceptor["Interceptor"]
-    interceptor -->|"RawRequest"| normalizer["Normalizer"]
-    normalizer -->|"NormalizedEnvelope"| capability["Stage 1: Capability validation"]
-    capability -->|"ValidatedCapability"| policy["Stage 2: Runtime policy"]
-    policy -->|"ALLOW"| credentials["Credential injection"]
-    credentials --> connector["Connector"]
-    connector --> upstream["Upstream service"]
+flowchart TB
+    agent["Agent"]
+    interceptor["Interceptor"]
+    normalizer["Normalizer"]
+    capability["Stage 1<br/>Capability validation"]
+    policy["Stage 2<br/>Runtime policy"]
+    credentials["Credential injection"]
+    connector["Connector"]
+    upstream["Upstream service"]
+    audit["Audit event"]
 
-    normalizer -->|"DENY or PASSTHROUGH"| audit["Audit event"]
-    capability -->|"DENY"| audit
-    policy -->|"DENY"| audit
-    credentials -->|"DENY"| audit
-    connector -->|"Dispatch outcome"| audit
+    agent -->|"Outbound request"| interceptor
+    interceptor -->|"RawRequest"| normalizer
+    normalizer -->|"NormalizedEnvelope"| capability
+    capability -->|"ValidatedCapability"| policy
+    policy -->|"ALLOW"| credentials
+    credentials -->|"ALLOW"| connector
+    connector -->|"Forwarded request"| upstream
+
+    normalizer -. "DENY or PASSTHROUGH" .-> audit
+    capability -. "DENY" .-> audit
+    policy -. "DENY" .-> audit
+    credentials -. "DENY" .-> audit
+    connector -. "Dispatch outcome" .-> audit
 ```
 
-All interception modes feed the same Rust entry point, `EnforcementPipeline::enforce`. Once the request is inside the pipeline, the downstream stages do not care whether it arrived through an HTTP proxy, a gRPC hook, or a Unix socket.
+All interception modes feed the same entry point. Once the request is inside the pipeline, the downstream stages do not care whether it arrived through an HTTP proxy, a gRPC hook, or a Unix socket.
 
 That is the first simplifying idea: **transport is an input, not the policy model**.
 
@@ -38,8 +48,8 @@ The hot path is fast because the Sidecar is already holding the state it needs l
 
 Before or around an agent session, the Authority prepares three kinds of material:
 
-- **Capability tokens**: signed PASETO tokens that say what an agent may attempt.
-- **Policy bundles**: compiled Cedar policy and schema used for runtime decisions.
+- **Capability tokens**: signed [PASETO](https://paseto.io/) tokens that say what an agent may attempt.
+- **Policy bundles**: compiled [Cedar](https://docs.cedarpolicy.com/) policy and schema used for runtime decisions.
 - **Revocations**: token ids that are no longer valid even if their expiry is in the future.
 
 The Sidecar keeps those in local memory. It does not ask the Authority, a database, or an LLM for permission during each request. If the local state is not ready or no longer fresh enough to trust, the pipeline denies protected traffic.
@@ -49,6 +59,8 @@ That is why the pipeline can be strict without being slow: request-time enforcem
 ## Step 1: Get The Request Into The Sidecar
 
 The pipeline begins when the Sidecar sees outbound traffic from the agent.
+
+Traffic can enter the Sidecar directly through proxy, gRPC, or Unix socket modes, or indirectly through `firma run`, which uses platform sandboxing and a proxy bridge to force agent egress through the same pipeline.
 
 The intercepted request is represented as a `RawRequest`: method, host, path, headers, optional body, and whether the original transport was HTTP or HTTPS. At this point the request is still transport-shaped:
 
@@ -99,6 +111,22 @@ If the request is not protected, the normalizer can return `PASSTHROUGH`. That m
 If the request is protected but cannot be classified, the pipeline returns `DENY` before capability validation. This is fail-closed behavior: an unclassified protected action is an action policy cannot reason about.
 
 If the request is protected and classified, the pipeline carries a `NormalizedEnvelope` into Stage 1.
+
+For example, suppose your mapping rules contain only this GitHub route:
+
+```toml
+[[rules]]
+method       = "GET"
+host         = "api.github.com"
+path         = "/repos/*"
+action_class = "code.read"
+```
+
+With `default_protected = false`, a request like `GET https://example.com/health` matches no rule and is treated as `PASSTHROUGH`: it is outside the configured enforcement surface.
+
+With `default_protected = true`, a request like `POST https://api.github.com/repos/acme/app/issues` also matches no rule, but it is treated as protected and unclassified, so the pipeline returns `DENY`.
+
+In either stance, `GET https://api.github.com/repos/acme/app` matches the rule, becomes `code.read`, and continues as a `NormalizedEnvelope`.
 
 ## Step 3: Validate The Capability
 
@@ -158,7 +186,7 @@ context:   session_id, timestamp_ms, action_count, params, risk_score, ...
 
 This is the second simplifying idea: **Cedar sees the semantic action, not raw transport trivia**.
 
-The raw request still contributes useful information. The host and path become the resource. The body can become `intent.params`. The session store provides counters such as `action_count`. But those fields are presented to policy in a stable shape, so rules can stay understandable.
+The raw request still contributes useful information. The host and path become the resource. The body can be normalized into `intent.params`, and Cedar receives that value as the `params` field in `context`. The session store provides counters such as `action_count`. But those fields are presented to policy in a stable shape, so rules can stay understandable.
 
 If Cedar denies, the pipeline stops. If Cedar allows, the request has passed both authorization layers:
 
@@ -245,14 +273,17 @@ The connector row is different from the others: by the time connector dispatch h
 
 The pipeline is easiest to remember as a sequence of increasingly meaningful representations:
 
-```text
-RawRequest
-  -> NormalizedEnvelope
-  -> ValidatedCapability
-  -> Cedar decision
-  -> ExecutionEnvelope
-  -> Connector dispatch
-  -> Signed audit event
+```mermaid
+flowchart TB
+    raw["Raw request"]
+    normalized["Normalized envelope"]
+    capability["Validated capability"]
+    cedar["Cedar decision"]
+    envelope["Execution envelope"]
+    dispatch["Connector dispatch"]
+    audit["Signed audit event"]
+
+    raw --> normalized --> capability --> cedar --> envelope --> dispatch --> audit
 ```
 
 Each representation exists because the next decision needs a cleaner input than the previous step had.

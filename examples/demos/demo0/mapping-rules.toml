@@ -46,7 +46,7 @@ action_class = "account.permission.change"
 # inner GET requests are then matched by the rules above.
 [[rules]]
 method = "CONNECT"
-host = "api.github.com:443"
+host = "api.github.com"
 action_class = "code.review.read"
 
 # Local LLM / LM-Studio access (no method = any method)

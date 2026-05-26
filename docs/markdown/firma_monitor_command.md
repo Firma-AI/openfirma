@@ -117,6 +117,6 @@ for new lines.
 
 ## See also
 
-- [`docs/markdown/firma_init_command.md`](firma_init_command.md) — `firma init`.
+- [`docs/markdown/firma_config_command.md`](firma_config_command.md) — `firma config`.
 - [`docs/markdown/firma_sidecar_daemon_command.md`](firma_sidecar_daemon_command.md) — `firma sidecar {start,stop,status}`.
 - [`docs/markdown/firma_action_class_registry.md`](firma_action_class_registry.md) — action class registry referenced by `--action-class`.

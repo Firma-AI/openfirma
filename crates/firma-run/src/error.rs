@@ -60,20 +60,11 @@ pub enum RunError {
     #[error("operation not supported on this platform: {reason}")]
     UnsupportedPlatform { reason: String },
 
-    #[error("no authority configured; pass `--authority local` or `--authority <url>`")]
+    #[error(
+        "no authority configured; pass `--authority local` / `--authority <url>`, \
+         add an `[authority]` section, or set `[sidecar.authority].url` in firma.toml"
+    )]
     MissingAuthority,
-
-    #[error(
-        "authority bootstrap declined; rerun with `--authority local` to bypass the prompt, \
-         start one manually with `firma authority`, or set [authority].type in firma.toml"
-    )]
-    AuthorityDeclined,
-
-    #[error(
-        "stdin is not a TTY; cannot prompt for authority bootstrap. \
-         Pass `--authority local` / `--authority <url>` or set [authority].type in firma.toml"
-    )]
-    AuthorityPromptNoTty,
 
     #[error(
         "authority autostart did not emit 'ready' within {timeout_secs}s; see logs at {}",
@@ -100,4 +91,18 @@ pub enum RunError {
 
     #[error("local command governance denied execution: {0}")]
     Governance(String),
+
+    #[error(
+        "no Authority is configured and stdin is not a terminal; \
+         pass `--authority local` to autostart, `--authority <url>` for a remote, \
+         add an `[authority]` section, or set `[sidecar.authority].url` in firma.toml"
+    )]
+    AuthorityBootstrapNoTty,
+
+    #[error(
+        "local Mini Authority bootstrap declined; \
+         re-run with `--authority local`, run `firma authority start` as a daemon, \
+         or set `[sidecar.authority].url` in firma.toml"
+    )]
+    AuthorityBootstrapDeclined,
 }

@@ -6,6 +6,7 @@ use std::{fs::File, os::fd::AsRawFd};
 #[cfg(target_os = "linux")]
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
+use crate::backend::platform;
 use crate::backend::{
     BackendKind, EnforcementProof, LaunchSpec, PrepareRequest, SandboxBackend, SandboxHandle,
 };
@@ -36,6 +37,10 @@ impl SandboxBackend for BwrapBackend {
         BackendKind::Bwrap
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "sequential preflight checks + mount assembly read more clearly inline"
+    )]
     fn prepare(&self, request: &PrepareRequest) -> Result<SandboxHandle, RunError> {
         if !cfg!(target_os = "linux") {
             return Err(RunError::UnsupportedBackend {
@@ -43,6 +48,8 @@ impl SandboxBackend for BwrapBackend {
                 reason: "bwrap backend is only available on Linux hosts".to_string(),
             });
         }
+
+        preflight_host_support(platform::detect_wsl(), platform::userns_restricted())?;
 
         if !command_available("bwrap") {
             return Err(RunError::Backend {
@@ -116,6 +123,27 @@ impl SandboxBackend for BwrapBackend {
                 ),
             })?;
 
+            // On hosts where /etc/resolv.conf is a managed symlink (e.g. WSL,
+            // systemd-resolved), mount(2) follows the symlink to its canonical
+            // target. We pre-resolve the chain so the bind-mount succeeds even
+            // when the symlink target path differs from /etc/resolv.conf. If
+            // resolution fails (broken/absent symlink) we fall back to the
+            // literal path and let bwrap report any remaining mount error.
+            let resolv_conf_target = resolve_resolv_conf_target();
+
+            if resolv_conf_target != std::path::Path::new("/etc/resolv.conf") {
+                // Mount at the canonical target so reads through the symlink
+                // inside the sandbox see our stub-pointing content.
+                mounts.push(MountSpec {
+                    source: resolv_conf_path.clone(),
+                    target: resolv_conf_target,
+                    read_only: true,
+                });
+            }
+
+            // Always mount at the literal /etc/resolv.conf path so that
+            // processes that open the path directly (not via symlink) also
+            // get our stub-pointing content.
             mounts.push(MountSpec {
                 source: resolv_conf_path,
                 target: PathBuf::from("/etc/resolv.conf"),
@@ -274,6 +302,73 @@ impl SandboxBackend for BwrapBackend {
     fn teardown(&self, handle: SandboxHandle) -> Result<(), RunError> {
         remove_runtime_dir(&handle.runtime_dir);
         Ok(())
+    }
+}
+
+/// Resolve `/etc/resolv.conf` to its canonical on-disk path, following all
+/// symlinks.
+///
+/// On hosts where `/etc/resolv.conf` is a managed symlink (e.g. WSL,
+/// systemd-resolved), `mount(2)` with `MS_BIND` follows the symlink to the
+/// final target. Pre-resolving here lets us provide the explicit target path to
+/// bwrap, preventing bind-mount failures when the symlink points into a managed
+/// location that bwrap cannot otherwise resolve.
+///
+/// Falls back to `/etc/resolv.conf` itself when:
+/// - the path is not a symlink (nothing to resolve)
+/// - `canonicalize` fails (broken symlink, permission error)
+fn resolve_resolv_conf_target() -> PathBuf {
+    resolve_resolv_conf_target_from(std::path::Path::new("/etc/resolv.conf"))
+}
+
+fn resolve_resolv_conf_target_from(resolv_conf: &std::path::Path) -> PathBuf {
+    if !resolv_conf.is_symlink() {
+        return resolv_conf.to_path_buf();
+    }
+    std::fs::canonicalize(resolv_conf).unwrap_or_else(|_| resolv_conf.to_path_buf())
+}
+
+fn preflight_host_support(
+    wsl_kind: platform::WslKind,
+    userns_sysctl: Option<String>,
+) -> Result<(), RunError> {
+    // WSL environments do not support unprivileged user namespaces required
+    // by bubblewrap. Detect early and surface a typed, actionable error
+    // instead of letting bwrap fail silently after spawning.
+    if wsl_kind.is_wsl() {
+        return Err(RunError::UnsupportedBackend {
+            backend: BackendKind::Bwrap.to_string(),
+            reason: "WSL environment detected; bubblewrap requires unprivileged user \
+                     namespaces which are unavailable under WSL. \
+                     Use a non-bwrap backend on this host or run `firma doctor` for \
+                     a full sandbox compatibility report."
+                .to_string(),
+        });
+    }
+
+    // Some kernels (notably Debian/Ubuntu hardened builds) restrict
+    // unprivileged user namespace creation via a sysctl. Detect and report
+    // before bwrap fails without a useful message.
+    if let Some(sysctl) = userns_sysctl {
+        return Err(RunError::UnsupportedBackend {
+            backend: BackendKind::Bwrap.to_string(),
+            reason: format!(
+                "user namespace creation is restricted ({sysctl}=0); {}",
+                userns_remediation(&sysctl)
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+fn userns_remediation(sysctl: &str) -> &'static str {
+    if sysctl.ends_with("/kernel/unprivileged_userns_clone") {
+        "enable it with: sudo sysctl -w kernel.unprivileged_userns_clone=1, or contact your system administrator"
+    } else if sysctl.ends_with("/user/max_user_namespaces") {
+        "raise it with: sudo sysctl -w user.max_user_namespaces=15000, or contact your system administrator"
+    } else {
+        "adjust this sysctl or contact your system administrator"
     }
 }
 
@@ -495,5 +590,59 @@ mod tests {
         assert!(rendered.contains(&format!("--tmpfs {}/.ssh", home.display())));
         assert!(rendered.contains(&format!("--tmpfs {}/.aws", home.display())));
         assert!(rendered.contains(&format!("--tmpfs {}/.config/gcloud", home.display())));
+    }
+
+    // ── resolv.conf target resolution ────────────────────────────────────────
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn resolv_conf_target_is_itself_when_not_a_symlink() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let resolv_conf = dir.path().join("resolv.conf");
+        std::fs::write(&resolv_conf, "nameserver 1.1.1.1\n").expect("write resolv.conf");
+
+        let resolved = super::resolve_resolv_conf_target_from(&resolv_conf);
+        assert_eq!(resolved, resolv_conf);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn resolv_conf_target_follows_symlink() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real_file = dir.path().join("real_resolv.conf");
+        std::fs::write(&real_file, "nameserver 1.1.1.1\n").expect("write real file");
+
+        let symlink_path = dir.path().join("resolv.conf");
+        std::os::unix::fs::symlink(&real_file, &symlink_path).expect("create symlink");
+
+        let resolved = super::resolve_resolv_conf_target_from(&symlink_path);
+        assert_eq!(resolved, real_file.canonicalize().expect("canon real"));
+    }
+
+    #[test]
+    fn preflight_rejects_wsl() {
+        let result = super::preflight_host_support(crate::backend::platform::WslKind::Wsl2, None);
+        let err = result.expect_err("WSL must be rejected for bwrap");
+        let message = err.to_string();
+        assert!(message.contains("bwrap"));
+        assert!(message.to_ascii_lowercase().contains("wsl"));
+    }
+
+    #[test]
+    fn preflight_rejects_restricted_userns_with_specific_fix() {
+        let result = super::preflight_host_support(
+            crate::backend::platform::WslKind::NotWsl,
+            Some("/proc/sys/user/max_user_namespaces".to_string()),
+        );
+        let err = result.expect_err("restricted userns must be rejected");
+        let message = err.to_string();
+        assert!(message.contains("user namespace creation is restricted"));
+        assert!(message.contains("user.max_user_namespaces"));
+    }
+
+    #[test]
+    fn preflight_accepts_native_host_with_userns_available() {
+        let result = super::preflight_host_support(crate::backend::platform::WslKind::NotWsl, None);
+        assert!(result.is_ok());
     }
 }

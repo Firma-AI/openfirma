@@ -103,18 +103,34 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             "backend network enforcement proof"
         );
 
-        // First prefer an explicit CLI path, then a discovered config file
-        // (read path). When nothing is discovered, fall back to the
-        // canonical create path so the bootstrap can persist `[authority]`.
-        let user_config_path = args
-            .user_config_path
-            .clone()
-            .or_else(crate::authority::config::default_user_config_path)
-            .or_else(crate::authority::config::canonical_write_path)
-            .ok_or_else(|| {
-                RunError::Internal("no user config path resolvable on this platform".into())
-            })?;
-        let sidecar_template_path = resolve_sidecar_template_path(args, &user_config_path);
+        // Resolve firma.toml: explicit CLI path > env var > walk up from
+        // cwd for `.firma/firma.toml`. `None` means no config — zero-config
+        // defaults kick in downstream.
+        let resolved_user_config = firma_config::resolve_config(
+            "run",
+            args.user_config_path.as_deref(),
+            &firma_config::SystemDirs,
+        )
+        .ok();
+        let user_config_path: Option<PathBuf> = resolved_user_config.as_ref().map_or_else(
+            || {
+                tracing::info!("no firma.toml found; using zero-config defaults");
+                None
+            },
+            |resolved| {
+                tracing::info!(
+                    path = %resolved.config_file.display(),
+                    source = ?resolved.source,
+                    "loaded firma.toml"
+                );
+                Some(resolved.config_file.clone())
+            },
+        );
+        let user_config_dir = resolved_user_config
+            .as_ref()
+            .map(|resolved| resolved.config_dir.as_path());
+        let sidecar_template_path =
+            resolve_sidecar_template_path(args, user_config_path.as_deref());
         let flags = AutostartFlags {
             sidecar_autostart: matches!(
                 profile.sidecar_selection,
@@ -128,6 +144,8 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
                 args.sidecar_startup_timeout_secs
             }),
             authority_url: None,
+            authority_ca_cert: None,
+            authority_pub_key: None,
             use_http_proxy_sidecar: profile.use_http_proxy_sidecar,
         };
         let firma_exe = std::env::current_exe()
@@ -140,7 +158,8 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             &flags,
             &args.authority_cli,
             &args.authority_profile,
-            &user_config_path,
+            user_config_path.as_deref(),
+            user_config_dir,
             &firma_exe,
             &mut prompt,
         )?;
@@ -209,16 +228,17 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
     combine_run_and_teardown_results(run_result, teardown_result)
 }
 
-fn resolve_sidecar_template_path(args: &RunInput, user_config_path: &Path) -> Option<PathBuf> {
+fn resolve_sidecar_template_path(
+    args: &RunInput,
+    user_config_path: Option<&Path>,
+) -> Option<PathBuf> {
     args.sidecar_template_path
         .clone()
         .or_else(|| args.config.clone())
         .or_else(|| {
-            if user_config_path.is_file() {
-                Some(user_config_path.to_path_buf())
-            } else {
-                None
-            }
+            user_config_path
+                .filter(|p| p.is_file())
+                .map(Path::to_path_buf)
         })
 }
 
@@ -862,9 +882,10 @@ mod tests {
     }
 
     #[test]
-    fn codex_execution_env_clears_no_proxy_in_tcp_mode() {
-        // NO_PROXY="" comes from the codex profile's env_set, not from hardcoded
-        // runtime logic. The test reflects this by including it in the profile.
+    fn execution_env_clears_no_proxy_in_tcp_mode() {
+        // NO_PROXY="" comes from the generic profile's env_set (inherited by all
+        // built-in profiles), not from hardcoded runtime logic. The test reflects
+        // this by including it in the profile.
         let profile = ResolvedProfile {
             id: "codex".to_string(),
             backend: crate::backend::BackendKind::Bwrap,
@@ -1077,8 +1098,10 @@ mod tests {
             authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
             user_config_path: None,
         };
-        let resolved =
-            super::resolve_sidecar_template_path(&args, PathBuf::from("/tmp/user.toml").as_path());
+        let resolved = super::resolve_sidecar_template_path(
+            &args,
+            Some(PathBuf::from("/tmp/user.toml").as_path()),
+        );
         assert_eq!(
             resolved,
             Some(PathBuf::from("/tmp/from-sidecar-config.toml"))
@@ -1108,7 +1131,7 @@ mod tests {
             authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
             user_config_path: None,
         };
-        let resolved = super::resolve_sidecar_template_path(&args, &user_cfg);
+        let resolved = super::resolve_sidecar_template_path(&args, Some(user_cfg.as_path()));
         assert_eq!(resolved, Some(user_cfg));
     }
 }

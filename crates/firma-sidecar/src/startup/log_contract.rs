@@ -16,7 +16,7 @@
 //! 6. `interceptor listening addr="…"`
 //! 7. `ready`
 //!
-//! Line 4 fires unconditionally. When `policy.authority_url` is unset
+//! Line 4 fires unconditionally. When `authority.url` is unset
 //! the endpoint is reported as `"(disabled)"` so the contract surface
 //! stays stable across deployment flavours.
 

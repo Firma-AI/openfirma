@@ -125,6 +125,17 @@ INFO firma_authority: authority ready
 
 Leave it running. The next steps are CLI commands that don't need it (CLI issuance is offline; the Authority binary mints from your config), but the Sidecar in Step 7 will connect to it for policy and revocation streams.
 
+The Authority **schema-validates the runtime bundle at load** against the canonical Firma Cedar schema, strictly. A bundle that fails to parse, or that validates but references something the schema does not declare (an unknown action class, a type mismatch), is a fail-closed startup error — the Authority refuses to come up rather than stream an invalid bundle:
+
+```text
+ERROR firma_authority::startup: runtime bundle failed schema validation
+  caused by: unrecognized action `Firma::Action::"payment.tranfer"` in default.cedar:12
+```
+
+The same check runs on **hot-reload**. When you edit a `.cedar` file in `policy_dir`, the Authority re-validates before swapping the bundle. An invalid edit is rejected and logged; the Authority keeps streaming the previously-loaded valid bundle, so a typo in an editor never takes your Sidecars offline. Fix the file and save again to pick it up.
+
+To catch these errors before they reach the Authority, run `firma policy validate <file.cedar>` as a pre-commit or CI gate — it uses the same embedded schema and exits non-zero on any schema error. See [Test policies offline](../test-policies-offline/).
+
 ## Step 5: Mint a capability
 
 The CLI subcommand:

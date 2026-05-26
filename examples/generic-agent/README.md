@@ -67,7 +67,7 @@ Two options:
    ```bash
    cd /path/to/my-project
    firma run --profile generic \
-     --config /path/to/firma-oss/examples/generic-agent/firma-run.toml \
+     --config /path/to/openfirma/examples/generic-agent/firma-run.toml \
      -- <command>
    ```
 
