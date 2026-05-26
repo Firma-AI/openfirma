@@ -14,12 +14,11 @@ To ensure a positive and inclusive environment, please read our [Code of Conduct
 
 ```bash
 git clone https://github.com/firma-ai/openfirma.git
-cd firma-oss
-cargo build --release
-cargo install --path crates/firma
+cd openfirma
+make install
 ```
 
-See the [README](README.md) for more details on prerequisites and configuration.
+`make install` sets up everything you need: Rust toolchain check, protoc, cargo tools, and docs dependencies. See the [README](README.md) for more details on prerequisites and configuration.
 
 ## Issues
 
@@ -39,13 +38,10 @@ We actively welcome your Pull Requests! A couple of things to keep in mind befor
 Before submitting your PR, please run these checks locally:
 
 ```bash
-cargo build --release   # Ensure the project builds
-cargo test              # Run the test suite
-cargo clippy            # Lint
-cargo fmt --check       # Format check
+make check     # fmt + lint + test + build + audit + dependency check
 ```
 
-Running these before you create the PR will help reduce back and forth during review.
+Running this before you create the PR will help reduce back and forth during review.
 
 ## License
 
