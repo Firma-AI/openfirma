@@ -51,12 +51,12 @@ $XDG_DATA_HOME/firma/   # or %LOCALAPPDATA%\firma on Windows
   # *.listen, audit.jsonl
 ```
 
-`init` writes a single sectioned `firma.toml` (`[project]` +
+`firma config` writes a single sectioned `firma.toml` (`[project]` +
 `[authority]` + `[sidecar.*]`). Existing files are preserved unless
 `--force` is set. `state_dir` is not embedded in the config — it is
 always resolved from `--state-dir` / `FIRMA_STATE_DIR` / XDG.
 
-You can also skip `init` entirely: `firma run <agent>` invokes the
+You can also skip `firma config` entirely: `firma run <agent>` invokes the
 same scaffold implicitly the first time it cannot discover a
 `firma.toml`.
 
