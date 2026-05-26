@@ -23,9 +23,9 @@ flowchart LR
 
 > **Intercepted call types:** plain HTTP, HTTPS (tunnel or transparent MITM), gRPC, Unix domain socket, and local shell commands via `local_exec`.
 
-**Authority** is the trust root. It issues short-lived, cryptographically signed capability tokens for agents, loads Cedar policies from disk, and streams policy bundles and revocation updates to connected Sidecars over persistent gRPC connections. It sits entirely off the enforcement hot path — every allow/deny decision is made locally by the Sidecar without calling back to the Authority.
+**Authority** is the trust root. It issues short-lived, cryptographically signed capability tokens for agents, loads Cedar policies from disk, and streams policy bundles and revocation updates to connected Sidecars over persistent gRPC connections. It sits entirely off the enforcement hot path: every allow/deny decision is made locally by the Sidecar without calling back to the Authority.
 
-**Sidecar** is the local enforcement point. It intercepts every outbound call from the agent process, classifies it into a canonical action class, validates the capability token, evaluates Cedar policy, and on ALLOW injects credentials just-in-time. Fail-closed by construction: any error — unknown mapping, missing capability, stale policy, malformed request — produces a DENY.
+**Sidecar** is the local enforcement point. It intercepts every outbound call from the agent process, classifies it into a canonical action class, validates the capability token, evaluates Cedar policy, and on ALLOW injects credentials just-in-time. Fail-closed by construction: any error (unknown mapping, missing capability, stale policy, malformed request) produces a DENY.
 
 **Audit emitter** runs as a background task inside the Sidecar. It signs and emits a record for every enforcement decision, capturing the agent, session, action class, target resource, the token that authorized the call, the outcome, and timing. Drains into pluggable destinations: stdout, file, remote service, or a local write-ahead log. Every record is independently verifiable.
 
@@ -37,7 +37,7 @@ These invariants explain behaviors you will encounter while working with OpenFir
 
 If anything goes wrong, the call is blocked. Never the opposite.
 
-Unknown mapping, missing capability, expired token, stale policy, malformed request, failed credential fetch — all produce a DENY. If you add a new API endpoint but forget the mapping rule, you will see `UnclassifiedIntent` in the audit log, not a silent pass-through. There is no error path that silently allows.
+Unknown mapping, missing capability, expired token, stale policy, malformed request, failed credential fetch: all produce a DENY. If you add a new API endpoint but forget the mapping rule, you will see `UnclassifiedIntent` in the audit log, not a silent pass-through. There is no error path that silently allows.
 
 ### No network on the hot path
 
@@ -47,7 +47,7 @@ If the Authority goes down mid-session, the Sidecar keeps enforcing against its 
 
 ### Determinism
 
-The same call always produces the same decision. There is no model interpreting intent — it is pure logic. Same normalized request, same policy bundle, same local state: same outcome, every time.
+The same call always produces the same decision. There is no model interpreting intent, it is pure logic. Same normalized request, same policy bundle, same local state: same outcome, every time.
 
 If a request was denied, you can inspect the audit event and the Cedar bundle and reproduce the exact decision. You are not debugging a model judgment.
 
