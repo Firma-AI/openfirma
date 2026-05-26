@@ -11,7 +11,7 @@ Use this when onboarding a developer who needs a known-good setup quickly.
 
 ## Preconditions
 
-- Repo root: `firma-oss`
+- Repo root: `openfirma`
 - `.local/firma.toml` exists
 - `cargo` available
 

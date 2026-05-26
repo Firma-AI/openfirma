@@ -101,11 +101,11 @@ forbid (
 Cedar requires a schema. Copy the demo's schema (it declares all the action classes) into the same directory:
 
 ```bash
-cp $(pwd)/../../path/to/firma-oss/examples/demo/policies/schema.cedarschema \
+cp $(pwd)/../../path/to/openfirma/examples/demo/policies/schema.cedarschema \
    /tmp/firma-standalone/config/policies/
 ```
 
-(Adjust the path to your firma-oss checkout. The schema is at `examples/demo/policies/schema.cedarschema`.)
+(Adjust the path to your openfirma checkout. The schema is at `examples/demo/policies/schema.cedarschema`.)
 
 ## Step 5: Write the sidecar config
 
