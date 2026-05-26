@@ -11,12 +11,12 @@ You should already have a Sidecar running with the `[audit]` block configured ([
 
 The `[sidecar.audit]` block in `firma.toml` selects a sink:
 
-| Sink     | Configuration                                            | Use when                                                            |
-| -------- | -------------------------------------------------------- | ------------------------------------------------------------------- |
-| `stdout` | `sink = "stdout"`                                        | Local dev; pipe into `jq` or a tail tool.                           |
-| `file`   | `sink = "file"`, `file_path = "..."`                     | Single-host deployments with rotation handled outside.              |
-| `wal`    | `sink = "wal"`, `wal_path = "..."`, `wal_max_bytes = N`  | High-throughput; resilient to crashes; consume with a separate tail process. |
-| `grpc`   | `sink = "grpc"`, `grpc_url = "..."`                      | Centralized collector ingesting from many Sidecars.                 |
+| Sink     | Configuration                                           | Use when                                                                     |
+| -------- | ------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `stdout` | `sink = "stdout"`                                       | Local dev; pipe into `jq` or a tail tool.                                    |
+| `file`   | `sink = "file"`, `file_path = "..."`                    | Single-host deployments with rotation handled outside.                       |
+| `wal`    | `sink = "wal"`, `wal_path = "..."`, `wal_max_bytes = N` | High-throughput; resilient to crashes; consume with a separate tail process. |
+| `grpc`   | `sink = "grpc"`, `grpc_url = "..."`                     | Centralized collector ingesting from many Sidecars.                          |
 
 For this guide, assume `sink = "file"` and `file_path = "/tmp/firma-standalone/logs/audit.jsonl"`.
 
@@ -203,7 +203,7 @@ The audit log's value compounds with how easily you can search it. A grep-friend
 
 ## Common gotchas
 
-**`audit.jsonl` is empty after a request.** The audit worker writes asynchronously; events flush every few hundred milliseconds. If the file is *never* written, the Sidecar probably crashed at startup with a permissions error on `signing_key_path` — check stderr.
+**`audit.jsonl` is empty after a request.** The audit worker writes asynchronously; events flush every few hundred milliseconds. If the file is *never* written, the Sidecar probably crashed at startup with a permissions error on `signing_key_path` — check stderr. Note that a per-run sidecar autostarted by `firma run` defaults its audit sink to a file at `<state_dir>/audit.jsonl` (the path `firma monitor` tails) even when the template configures no sink, so a `firma run` decision is monitorable out of the box; an explicit `[sidecar.audit]` sink in your template still wins.
 
 **Signature verification fails for events you didn't tamper with.** Almost always a JSON canonicalization mismatch. The signed bytes are RFC 8785 (JCS) — sorted keys, no whitespace, no trailing newline. Any reformatting of the file (a pretty-printer, a text editor) breaks verification.
 

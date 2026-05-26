@@ -62,8 +62,11 @@ pub fn tail(
         };
         let initial_id = file_id(&path);
         let mut reader = BufReader::new(file);
-        if backfill_since.is_some() {
-            trace!(?source, "seeking to start for backfill");
+        // Seek to EOF only when following without a backfill window: that mode
+        // shows new events as they arrive. A one-shot read (`--no-follow`) must
+        // dump what is already there, otherwise it always reports nothing.
+        if backfill_since.is_some() || !follow {
+            trace!(?source, "reading from start");
             let _ = reader.seek(SeekFrom::Start(0));
         } else {
             trace!(?source, "seeking to EOF");
@@ -168,5 +171,22 @@ mod tests {
         assert_eq!(got.raw, "hello");
         stop.store(true, std::sync::atomic::Ordering::SeqCst);
         handle.join().ok();
+    }
+
+    #[test]
+    fn one_shot_reads_existing_lines_from_start() {
+        // `firma monitor --no-follow` (one-shot, no `--since`) must dump the
+        // records already in the file. Previously it seeked to EOF and showed
+        // nothing even when the audit log was full (FIR-193).
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("audit.jsonl");
+        std::fs::write(&path, "first\nsecond\n").expect("seed");
+        let (tx, rx) = channel::<Line>();
+        let stop = Arc::new(AtomicBool::new(false));
+        // follow = false, backfill_since = None.
+        tail(path, Source::Audit, None, false, tx, stop);
+
+        let lines: Vec<String> = rx.iter().map(|l| l.raw).collect();
+        assert_eq!(lines, vec!["first".to_string(), "second".to_string()]);
     }
 }

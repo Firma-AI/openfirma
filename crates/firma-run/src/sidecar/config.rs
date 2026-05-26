@@ -153,6 +153,13 @@ pub struct SynthesizeRequest<'a> {
     /// and `[sidecar.preflight].authority_pub_key_path`.
     /// `None` leaves any existing template value untouched.
     pub authority_pub_key: Option<&'a Path>,
+    /// Audit log path used as the default `file` sink when the template does
+    /// not configure an audit sink. Set to the shared state/runtime dir's
+    /// `audit.jsonl` so `firma monitor` can tail the per-run sidecar's
+    /// decisions; without it the default `stdout` sink writes to the spawned
+    /// sidecar's null stdout and `firma monitor` shows nothing. `None` leaves
+    /// the audit sink untouched (used by tests that assert template fidelity).
+    pub audit_fallback_path: Option<&'a Path>,
 }
 
 /// Result of template resolution. Returned for tests; production callers
@@ -206,6 +213,9 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
         override_authority_pub_key(&mut value, key)?;
     }
     configure_preflight_capability(&mut value, req.out_path, req.agent_id, req.session_id)?;
+    if let Some(audit_path) = req.audit_fallback_path {
+        ensure_audit_file_sink(&mut value, audit_path)?;
+    }
     ensure_audit_signing_key(&mut value, req.out_path)?;
     ensure_mapping_rules(&mut value, req.out_path)?;
     write_atomic(req.out_path, &value)?;
@@ -448,6 +458,35 @@ fn sidecar_table_mut(value: &mut toml::Value) -> Result<&mut toml::value::Table,
     entry
         .as_table_mut()
         .ok_or_else(|| RunError::Internal("[sidecar] is not a table".into()))
+}
+
+/// Default the audit sink to a file at `audit_path` when the template did not
+/// configure one. The per-run sidecar is spawned with a null stdout, so the
+/// default `stdout` audit sink would silently discard every decision and
+/// `firma monitor` (which tails `<state_dir>/audit.jsonl`) would show nothing.
+/// An explicitly configured sink is left untouched.
+fn ensure_audit_file_sink(value: &mut toml::Value, audit_path: &Path) -> Result<(), RunError> {
+    let sidecar = sidecar_table_mut(value)?;
+    let audit = sidecar
+        .entry("audit".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[sidecar.audit] is not a table".into()))?;
+
+    // Respect any explicitly configured sink.
+    if audit
+        .get("sink")
+        .and_then(toml::Value::as_str)
+        .is_some_and(|v| !v.trim().is_empty())
+    {
+        return Ok(());
+    }
+
+    audit.insert("sink".to_string(), toml::Value::String("file".to_string()));
+    audit
+        .entry("file_path".to_string())
+        .or_insert_with(|| toml::Value::String(audit_path.display().to_string()));
+    Ok(())
 }
 
 fn ensure_audit_signing_key(value: &mut toml::Value, out_path: &Path) -> Result<(), RunError> {
