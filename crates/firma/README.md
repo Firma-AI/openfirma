@@ -155,7 +155,7 @@ firma config --agent codex --provider anthropic \
 when no `firma.toml` is discoverable, so the one-command path works
 from a fresh clone.
 
-Layout written by `init`:
+Layout written by `firma config`:
 
 ```text
 <workspace>/.firma/        # project-local config dir
@@ -168,10 +168,10 @@ Layout written by `init`:
 ```
 
 `firma.toml` is one sectioned file: `[project]`, `[authority]`,
-`[sidecar.*]`. The post-init `next:` hint is `firma run <agent>`
+`[sidecar.*]`. The post-config `next:` hint is `firma run <agent>`
 (or `firma sidecar start` for the daemon path).
 
-`init` flags:
+`firma config` flags:
 
 | Flag                 | Default                     | Description                                            |
 | -------------------- | --------------------------- | ------------------------------------------------------ |

@@ -240,19 +240,43 @@ function Add-FirmaToPath {
     Write-Info 'open a new shell to pick up the updated PATH.'
 }
 
+function Get-InstalledFirmaExe {
+    $local = Join-Path $InstallDir 'firma.exe'
+    if (Test-Path -Path $local -PathType Leaf) { return $local }
+    $cmd = Get-Command firma -ErrorAction SilentlyContinue
+    if ($null -ne $cmd) { return $cmd.Source }
+    return $null
+}
+
+function Test-FirmaSupportsConfig {
+    $exe = Get-InstalledFirmaExe
+    if (-not $exe) { return $false }
+    & $exe help config 2>$null | Out-Null
+    return $LASTEXITCODE -eq 0
+}
+
+function Get-NextStepCmd {
+    if (Test-FirmaSupportsConfig) { return 'firma config' }
+    return 'firma --help'
+}
+
 function Invoke-PostInstall {
     Write-Info 'firma installed.'
     Write-Info "quickstart: $QuickstartUrl"
     if ($NoInit -or -not [Environment]::UserInteractive) {
-        Write-Info 'next step: firma config'
+        Write-Info "next step: $(Get-NextStepCmd)"
+        return
+    }
+    if (-not (Test-FirmaSupportsConfig)) {
+        Write-Info "next step: $(Get-NextStepCmd)"
         return
     }
     $ans = Read-Host '[firma-installer] run `firma config` now? [Y/n]'
     if ($ans -match '^(y|Y|yes|YES|)$') {
         if ($DryRun) { Write-Info '(dry-run) would invoke: firma config'; return }
-        & (Join-Path $InstallDir 'firma.exe') init
+        & (Get-InstalledFirmaExe) config
     } else {
-        Write-Info 'next step: firma config'
+        Write-Info "next step: $(Get-NextStepCmd)"
     }
 }
 

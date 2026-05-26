@@ -582,17 +582,38 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
 }
 
 fn resolve_backend(configured_backend: Option<BackendKind>) -> BackendKind {
-    if let Some(backend) = configured_backend {
+    let backend = configured_backend.unwrap_or_else(default_backend_for_host);
+
+    if backend_supported_on_host(backend) {
         return backend;
     }
 
+    let fallback = BackendKind::default_for_current_host();
+    tracing::warn!(
+        configured = %backend,
+        fallback = %fallback,
+        "configured sandbox backend is unsupported on this host; using platform default"
+    );
+    fallback
+}
+
+fn default_backend_for_host() -> BackendKind {
     #[cfg(target_os = "linux")]
     {
-        resolve_backend_for_linux(configured_backend, detect_wsl())
+        resolve_backend_for_linux(None, detect_wsl())
     }
-
     #[cfg(not(target_os = "linux"))]
-    BackendKind::default_for_current_host()
+    {
+        BackendKind::default_for_current_host()
+    }
+}
+
+fn backend_supported_on_host(kind: BackendKind) -> bool {
+    match kind {
+        BackendKind::Bwrap | BackendKind::Firecracker => cfg!(target_os = "linux"),
+        BackendKind::Vz => cfg!(target_os = "macos"),
+        BackendKind::Wsl2 => cfg!(target_os = "windows"),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -939,6 +960,26 @@ mod tests {
         }
     }
 
+    fn non_bwrap_backend_for_current_host() -> BackendKind {
+        #[cfg(target_os = "linux")]
+        {
+            return BackendKind::Firecracker;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            return BackendKind::Vz;
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            return BackendKind::Wsl2;
+        }
+
+        #[allow(unreachable_code)]
+        BackendKind::Firecracker
+    }
+
     #[test]
     fn resolves_generic_defaults() {
         let resolved = resolve_profile(&args("generic")).unwrap_or_else(|e| panic!("{e}"));
@@ -1010,7 +1051,12 @@ profiles:
         run_args.config = Some(config_path);
 
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(resolved.backend, BackendKind::Bwrap);
+        let expected_backend = if cfg!(target_os = "linux") {
+            BackendKind::Bwrap
+        } else {
+            BackendKind::default_for_current_host()
+        };
+        assert_eq!(resolved.backend, expected_backend);
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::HostUser);
         assert!(resolved.env_passthrough.contains("HOME"));
         assert_eq!(
@@ -1064,6 +1110,18 @@ approval_policy = "never"
     }
 
     #[test]
+    fn configured_bwrap_backend_falls_back_on_non_linux() {
+        if cfg!(target_os = "linux") {
+            return;
+        }
+        let mut run_args = args("generic");
+        run_args.backend = Some(BackendKind::Bwrap);
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(resolved.backend, BackendKind::default_for_current_host());
+    }
+
+    #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn structural_network_defaults_to_true_for_bwrap_backend() {
         let mut run_args = args("generic");
         run_args.backend = Some(BackendKind::Bwrap);
@@ -1076,7 +1134,7 @@ approval_policy = "never"
     #[test]
     fn structural_network_defaults_to_false_for_non_bwrap_backends() {
         let mut run_args = args("generic");
-        run_args.backend = Some(BackendKind::Vz);
+        run_args.backend = Some(non_bwrap_backend_for_current_host());
 
         let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert!(!resolved.network.enforce_network_namespace);
@@ -1087,14 +1145,17 @@ approval_policy = "never"
     fn structural_network_true_on_non_bwrap_backend_is_rejected() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let config_path = tmpdir.path().join("firma-run.toml");
-        let toml = r#"
+        let backend = non_bwrap_backend_for_current_host();
+        let toml = format!(
+            r#"
 [profiles.generic]
-backend = "vz"
+backend = "{backend}"
 
 [profiles.generic.network]
 enforce_network_namespace = true
 fail_closed = true
-"#;
+"#
+        );
         fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
 
         let mut run_args = args("generic");
@@ -1110,6 +1171,7 @@ fail_closed = true
     }
 
     #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn seccomp_policy_resolves_when_configured_for_bwrap() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let policy_path = tmpdir.path().join("policy.toml");
@@ -1165,10 +1227,11 @@ deny_actions = ["filesystem.delete"]
         let artifact_dir = tmpdir.path().join("artifacts");
 
         let config_path = tmpdir.path().join("firma-run.toml");
+        let backend = non_bwrap_backend_for_current_host();
         let toml = format!(
             r#"
 [profiles.generic]
-backend = "vz"
+backend = "{backend}"
 
 [profiles.generic.seccomp_policy]
 source_policy_path = '{}'
@@ -1190,6 +1253,7 @@ artifact_dir = '{}'
     }
 
     #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn seccomp_policy_runtime_mode_parses_precompiled_only() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let policy_path = tmpdir.path().join("policy.toml");
@@ -1275,6 +1339,7 @@ verify_checksum = false
     }
 
     #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn sidecar_local_exec_parses_unix_endpoint() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let policy_path = tmpdir.path().join("policy.toml");
@@ -1321,6 +1386,7 @@ timeout_ms = 700
     }
 
     #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn sidecar_local_exec_rejects_relative_unix_path() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let policy_path = tmpdir.path().join("policy.toml");
@@ -1366,6 +1432,7 @@ timeout_ms = 500
     }
 
     #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn sidecar_local_exec_rejects_empty_allowlist_when_enforced() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let policy_path = tmpdir.path().join("policy.toml");
@@ -1417,6 +1484,7 @@ enforce_known_executables = true
     }
 
     #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn sidecar_local_exec_parses_async_hitl_mode_and_allowlist() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let policy_path = tmpdir.path().join("policy.toml");
@@ -1474,6 +1542,7 @@ allowed_executables = ["codex", "claude", "bash"]
     }
 
     #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn sidecar_local_exec_derives_unix_tools_endpoint() {
         let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let policy_path = tmpdir.path().join("policy.toml");

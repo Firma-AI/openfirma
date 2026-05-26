@@ -1091,6 +1091,40 @@ pub fn resolve_state_dir(flag: Option<PathBuf>) -> Result<PathBuf, String> {
     resolve_state_dir_with_default(flag, None)
 }
 
+/// Resolve the audit log path for `firma monitor`.
+///
+/// Priority: explicit `--state-dir` → `sidecar.audit.file_path` from a
+/// discovered `firma.toml` → `<state_dir>/audit.jsonl`.
+pub fn resolve_audit_log_path(state_dir_flag: Option<&PathBuf>) -> Result<PathBuf, String> {
+    let state_dir = resolve_state_dir(state_dir_flag.cloned())?;
+    if state_dir_flag.is_some() {
+        return Ok(state_dir.join("audit.jsonl"));
+    }
+
+    if let Ok(resolved) = firma_config::resolve_config("monitor", None, &firma_config::SystemDirs) {
+        let firma_toml = resolved.config_dir.join(firma_config::CONFIG_FILE_NAME);
+        if firma_toml.is_file() {
+            let text = std::fs::read_to_string(&firma_toml).map_err(|error| {
+                format!("read discovered config {}: {error}", firma_toml.display())
+            })?;
+            let value: toml::Value = toml::from_str(&text).map_err(|error| {
+                format!("parse discovered config {}: {error}", firma_toml.display())
+            })?;
+            if let Some(path) = value
+                .get("sidecar")
+                .and_then(|sidecar| sidecar.get("audit"))
+                .and_then(|audit| audit.get("file_path"))
+                .and_then(toml::Value::as_str)
+                .filter(|path| !path.is_empty())
+            {
+                return Ok(PathBuf::from(path));
+            }
+        }
+    }
+
+    Ok(state_dir.join("audit.jsonl"))
+}
+
 fn resolve_state_dir_with_default(
     flag: Option<PathBuf>,
     default: Option<PathBuf>,

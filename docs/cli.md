@@ -349,7 +349,7 @@ FIR-104.
 ## Config Discovery
 
 When `--config` is **omitted**, every subcommand — `sidecar`
-(`start`/`stop`/`status`), `authority`, `run`, `init`, `monitor`, and
+(`start`/`stop`/`status`), `authority`, `run`, `config`, `monitor`, and
 `doctor` — discovers the same single shared `firma.toml` from
 platform-standard directories. That one file holds top-level
 `[project]` / `[sidecar]` / `[authority]` / `[run]` sections; each
