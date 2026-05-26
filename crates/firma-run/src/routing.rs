@@ -362,7 +362,14 @@ pub fn resolve_authority(
                 return Ok(ResolvedAuthority {
                     url: format!("http://{target}"),
                     ca_cert_path,
-                    pub_key_path,
+                    pub_key_path: pub_key_path.or_else(|| {
+                        let marker = firma_stack::runtime_paths::run_entry_from(
+                            runtime_dir,
+                            &identity.sandbox_id,
+                        )
+                        .join("authority");
+                        Some(marker.join("keys").join("authority.pub"))
+                    }),
                     supervisor: None,
                 });
             }
