@@ -307,7 +307,7 @@ fn merge_firma_run_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result
 
         let env_set = ensure_table(generic, "env_set")?;
         set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_ROOTFS_MODE", "readonly");
-        set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_RUNTIME_HOME", "true");
+        set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_RUNTIME_HOME", "false");
         set_str_if_absent(
             env_set,
             "FIRMA_RUN_BWRAP_MASK_HOME_PATHS",
