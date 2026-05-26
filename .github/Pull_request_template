@@ -1,0 +1,93 @@
+## Thinking Path
+
+<!--
+  Required. Trace your reasoning from the top of the project down to this
+  specific change. Start with what OpenFirma is, then narrow through the
+  subsystem, the problem, and why this PR exists.
+  Aim for 5–8 steps.
+-->
+
+> - OpenFirma is a runtime enforcement boundary — every outbound agent call passes through a local Sidecar that evaluates Cedar policies and either allows or denies it
+> - [Which crate or subsystem is involved: firma-core / firma-sidecar / firma-authority / firma-proto / firma-run / …]
+> - [What problem, gap, or invariant violation prompted this change]
+> - [Why it needs to be addressed now]
+> - This pull request …
+> - The benefit is …
+
+## What Changed
+
+<!-- Bullet list of concrete changes. One bullet per logical unit. -->
+
+-
+
+## Verification
+
+<!--
+  How can a reviewer confirm this works?
+  Include the exact commands you ran and their output.
+  For TUI / diagram changes, include before/after screenshots or recordings.
+-->
+
+```bash
+make check          # fmt + toml-fmt + lint + test + build + audit + deny (CI parity)
+
+# Single crate (if applicable):
+cargo test -p <crate-name>
+
+# Single test (if applicable):
+cargo test -p <crate-name> <module>::tests::<test_name>
+```
+
+-
+
+## Security Considerations
+
+<!--
+  OpenFirma sits on a security boundary. Answer each question — or write
+  "None apply" if this PR genuinely does not touch these areas.
+
+  • Does this change touch the hot path (normalizer → Stage 1 → Stage 2)?
+  • Is fail-closed behaviour preserved on every error path (errors → DENY, not silent ALLOW)?
+  • Does this introduce or remove a network call on the hot path?
+  • Are there new or changed trust boundaries (token verification, Cedar eval, audit signing)?
+  • Does this affect capability token issuance, revocation, or scope matching?
+-->
+
+-
+
+## Risks
+
+<!--
+  What could go wrong? Migration safety, breaking wire format, Cedar policy
+  compatibility, configuration schema changes, behavioural shifts — or
+  "Low risk" if genuinely minor.
+-->
+
+-
+
+## Model Used
+
+<!--
+  Required. Specify which AI model assisted with this change. Include:
+    • Provider and model name (e.g., Claude, GPT, Gemini)
+    • Exact model ID or version (e.g., claude-sonnet-4-6, gpt-4-turbo-2024-04-09)
+    • Reasoning / thinking mode if applicable (e.g., extended thinking)
+    • Tool use or code-execution mode if applicable
+  If no AI model was used, write "None — human-authored".
+-->
+
+-
+
+## Checklist
+
+- [ ] Thinking path traces from project context down to this specific change
+- [ ] `make check` passes locally (fmt + toml-fmt + lint + test + build + audit + deny)
+- [ ] No `.unwrap()`, `.expect()`, `panic!()`, or `unsafe` introduced outside of test code
+- [ ] All error paths are fail-closed — errors produce DENY, not silent ALLOW
+- [ ] No network calls added on the hot path (normalizer → Stage 1 → Stage 2)
+- [ ] Tests added or updated for the changed behaviour
+- [ ] If this touches the normalizer or action-class registry, mapping table tests are updated
+- [ ] If this changes wire format, config schema, or CLI behaviour, docs are updated under `docs/` and `docs-site/`
+- [ ] Security considerations are documented above (or "None apply" is stated explicitly)
+- [ ] Model used is specified with version and capability details
+- [ ] I will address all reviewer comments before requesting merge
