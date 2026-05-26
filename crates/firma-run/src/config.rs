@@ -891,7 +891,9 @@ fn ensure_managed_policy_path() -> PathBuf {
             return path;
         }
         match firma_stack::fs::write_private_file(&path, MANAGED_SECCOMP_POLICY.as_bytes()) {
-            Ok(()) => tracing::info!(path = %path.display(), "extracted default managed seccomp policy"),
+            Ok(()) => {
+                tracing::info!(path = %path.display(), "extracted default managed seccomp policy");
+            }
             Err(error) => tracing::warn!(%error, "failed to extract default seccomp policy"),
         }
     }
