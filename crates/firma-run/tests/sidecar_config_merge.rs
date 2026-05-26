@@ -22,6 +22,100 @@ fn read(path: &std::path::Path) -> toml::Value {
     toml::from_str(&text).expect("parse synthesized")
 }
 
+/// Reads `[sidecar.audit]` from a synthesized config file.
+fn audit_table(value: &toml::Value) -> &toml::value::Table {
+    value
+        .as_table()
+        .and_then(|t| t.get("sidecar"))
+        .and_then(|v| v.as_table())
+        .and_then(|s| s.get("audit"))
+        .and_then(|v| v.as_table())
+        .expect("sidecar.audit table")
+}
+
+#[test]
+fn minimal_template_defaults_audit_to_monitorable_file_sink() {
+    // With no template, the synthesized per-run sidecar must default its audit
+    // sink to a file at the shared state dir so `firma monitor` can tail it.
+    // Otherwise the default `stdout` sink writes to the spawned sidecar's null
+    // stdout and `firma monitor` shows nothing (FIR-193).
+    let tmp = TempDir::new().expect("tmp");
+    let out = tmp.path().join("sidecar.toml");
+    let sock = tmp.path().join("sidecar.sock");
+    let audit = tmp.path().join("audit.jsonl");
+    synthesize(SynthesizeRequest {
+        agent_id: "generic",
+        session_id: "sess",
+        explicit_template: None,
+        env_template: None,
+        cwd_template: None,
+        socket_path: &sock,
+        listen_addr: None,
+        out_path: &out,
+        authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
+        audit_fallback_path: Some(&audit),
+    })
+    .expect("synthesize");
+
+    let value = read(&out);
+    let audit_tbl = audit_table(&value);
+    assert_eq!(
+        audit_tbl.get("sink").and_then(toml::Value::as_str),
+        Some("file")
+    );
+    assert_eq!(
+        audit_tbl.get("file_path").and_then(toml::Value::as_str),
+        Some(audit.display().to_string()).as_deref()
+    );
+}
+
+#[test]
+fn explicit_audit_sink_is_not_overridden_by_fallback() {
+    // An operator-configured audit sink must win over the fallback default.
+    let tmp = TempDir::new().expect("tmp");
+    let template = tmp.path().join("template.toml");
+    fs::write(
+        &template,
+        r#"
+[audit]
+sink = "stdout"
+"#,
+    )
+    .expect("write template");
+    let out = tmp.path().join("sidecar.toml");
+    let sock = tmp.path().join("sidecar.sock");
+    let audit = tmp.path().join("audit.jsonl");
+    synthesize(SynthesizeRequest {
+        agent_id: "generic",
+        session_id: "sess",
+        explicit_template: Some(&template),
+        env_template: None,
+        cwd_template: None,
+        socket_path: &sock,
+        listen_addr: None,
+        out_path: &out,
+        authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
+        audit_fallback_path: Some(&audit),
+    })
+    .expect("synthesize");
+
+    let value = read(&out);
+    let audit_tbl = audit_table(&value);
+    assert_eq!(
+        audit_tbl.get("sink").and_then(toml::Value::as_str),
+        Some("stdout"),
+        "explicit stdout sink must be preserved"
+    );
+    assert!(
+        audit_tbl.get("file_path").is_none(),
+        "fallback must not inject file_path over an explicit sink"
+    );
+}
+
 #[test]
 fn missing_template_writes_minimal_config() {
     let tmp = TempDir::new().expect("tmp");
@@ -39,6 +133,7 @@ fn missing_template_writes_minimal_config() {
         authority_url: None,
         authority_ca_cert: None,
         authority_pub_key: None,
+        audit_fallback_path: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Minimal);
@@ -109,6 +204,7 @@ paths = ["/etc/firma/cap.toml"]
         authority_url: None,
         authority_ca_cert: None,
         authority_pub_key: None,
+        audit_fallback_path: None,
     })
     .expect("synthesize");
 
@@ -176,6 +272,7 @@ fn priority_order_explicit_over_env_over_cwd() {
         authority_url: None,
         authority_ca_cert: None,
         authority_pub_key: None,
+        audit_fallback_path: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Explicit(explicit));
@@ -192,6 +289,7 @@ fn priority_order_explicit_over_env_over_cwd() {
         authority_url: None,
         authority_ca_cert: None,
         authority_pub_key: None,
+        audit_fallback_path: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Env(env));
@@ -208,6 +306,7 @@ fn priority_order_explicit_over_env_over_cwd() {
         authority_url: None,
         authority_ca_cert: None,
         authority_pub_key: None,
+        audit_fallback_path: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Cwd(cwd));
@@ -279,6 +378,7 @@ paths = ["seeds/dev.toml", "{abs_seed}"]
         authority_url: None,
         authority_ca_cert: None,
         authority_pub_key: None,
+        audit_fallback_path: None,
     })
     .expect("synthesize");
 
@@ -401,6 +501,7 @@ fn nonexistent_template_paths_fall_through_to_minimal() {
         authority_url: None,
         authority_ca_cert: None,
         authority_pub_key: None,
+        audit_fallback_path: None,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Minimal);

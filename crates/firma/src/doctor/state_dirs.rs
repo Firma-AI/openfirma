@@ -39,9 +39,10 @@ pub fn resolve_data_dir(
 #[must_use]
 pub fn check(state_dir: &Path, data_dir: Option<&Path>) -> Vec<Check> {
     let mut out = Vec::with_capacity(2);
-    out.push(check_one("state dir", state_dir));
+    out.push(check_one("state dir", state_dir, false));
     match data_dir {
-        Some(p) => out.push(check_one("data dir", p)),
+        // The data dir is created on demand; treat its absence as expected.
+        Some(p) => out.push(check_one("data dir", p, true)),
         None => out.push(Check::warn(
             "data dir",
             "could not resolve XDG_DATA_HOME / fallback",
@@ -50,10 +51,21 @@ pub fn check(state_dir: &Path, data_dir: Option<&Path>) -> Vec<Check> {
     out
 }
 
-fn check_one(label: &'static str, path: &Path) -> Check {
+/// Check a single directory. When `optional` is set, a missing directory is
+/// reported as `OK` (created on first use) rather than `WARN`, so expected
+/// absences on a healthy install do not look like failures.
+fn check_one(label: &'static str, path: &Path, optional: bool) -> Check {
     let display = path.display().to_string();
     if !path.exists() {
-        return Check::warn(label, format!("{display}: not present")).with_detail("path", display);
+        let check = if optional {
+            Check::ok(
+                label,
+                format!("{display}: not present (created on first use)"),
+            )
+        } else {
+            Check::warn(label, format!("{display}: not present"))
+        };
+        return check.with_detail("path", display);
     }
     #[cfg(unix)]
     {
@@ -100,6 +112,23 @@ mod tests {
         let checks = check(&missing, None);
         assert_eq!(checks[0].status, Status::Warn);
         assert!(checks[0].reason.contains("not present"));
+    }
+
+    #[test]
+    fn data_dir_ok_when_missing_because_created_on_demand() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = tmp.path().join("state");
+        std::fs::create_dir_all(&state).expect("mkdir");
+        let data_missing = tmp.path().join("data-not-yet-created");
+        let checks = check(&state, Some(&data_missing));
+        let data = checks
+            .iter()
+            .find(|c| c.category == "data dir")
+            .expect("data dir check");
+        // The persistent XDG data dir is created on demand; absence on a fresh
+        // install is expected, not a warning.
+        assert_eq!(data.status, Status::Ok);
+        assert!(data.reason.contains("created on first use"));
     }
 
     #[cfg(unix)]

@@ -56,6 +56,10 @@ pub struct SpawnRequest<'a> {
     /// When `true`, synthesize an `http_proxy` interceptor instead of a
     /// Unix-domain socket. Set from [`ResolvedProfile::use_http_proxy_sidecar`].
     pub use_http_proxy_interceptor: bool,
+    /// Default audit log path (`<state_dir>/audit.jsonl`) injected as a `file`
+    /// sink when the template configures none, so `firma monitor` can tail the
+    /// per-run sidecar's decisions. `None` leaves the audit sink untouched.
+    pub audit_fallback_path: Option<PathBuf>,
 }
 
 /// Captured values from the seven-line ready sequence.
@@ -153,6 +157,7 @@ impl SidecarSupervisor {
                 authority_url: req.authority_url,
                 authority_ca_cert: req.authority_ca_cert.as_deref(),
                 authority_pub_key: req.authority_pub_key.as_deref(),
+                audit_fallback_path: req.audit_fallback_path.as_deref(),
             })?;
 
             let mut child = std::process::Command::new(&req.firma_exe)

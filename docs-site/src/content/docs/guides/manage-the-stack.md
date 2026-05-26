@@ -166,6 +166,15 @@ firma monitor --state-dir /var/run/firma \
 are silently ignored for `authority` and `sidecar` log lines. The
 tailer detects log rotation by inode and reopens automatically.
 
+Follow vs. one-shot:
+
+- **Follow** (default when stdout is a TTY, or forced with `--tail`) starts at
+  end-of-file and prints new records as they are appended.
+- **One-shot** (`--no-follow`, or the default when stdout is piped) reads the
+  file from the **start** and exits. This dumps the records already on disk —
+  so `firma monitor --no-follow` after a `firma run` shows that run's
+  decisions, rather than nothing. Combine with `--since` to bound the window.
+
 For everything you can do with the underlying audit JSONL — signature
 verification, structured search, debugging surprise denies — see
 [Read & verify the audit log](../audit-log/).
