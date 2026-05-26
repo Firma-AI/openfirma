@@ -11,7 +11,7 @@ use tokio::net::TcpStream;
 use tokio::net::UnixStream;
 use tokio::time::timeout as tokio_timeout;
 
-use crate::doctor::report::Check;
+use crate::doctor::report::{Check, Status};
 
 /// Try to TCP-connect to `addr`. Returns `Ok(())` on success or `Err(reason)`
 /// on any error (including timeout).
@@ -123,6 +123,39 @@ pub async fn check_endpoint(
                 }
             }
         }
+    }
+}
+
+/// Reconcile a configured-daemon reachability [`Check`] against the number of
+/// live per-run instances discovered from runtime markers.
+///
+/// `firma doctor` originally probed only the configured/daemon endpoint, so a
+/// pure `firma run` workflow (no long-lived daemon, ephemeral per-run
+/// sidecar/authority) produced an alarming `[FAIL]` even while an agent was
+/// actively running. This reconciliation:
+///
+/// - reports `OK` reflecting live per-run instances when any are running (AC1);
+/// - downgrades an unreachable/unconfigured daemon to an informational `Check`
+///   when no daemon is expected — never a hard `[FAIL]` (AC3);
+/// - preserves a successful daemon probe untouched.
+#[must_use]
+pub fn reconcile_reachability(daemon: Check, live_running: usize) -> Check {
+    let label = daemon.category;
+    if live_running > 0 {
+        let plural = if live_running == 1 { "" } else { "s" };
+        return Check::ok(
+            label,
+            format!("{live_running} live per-run instance{plural} (firma run)"),
+        )
+        .with_detail("live_instances", live_running.to_string());
+    }
+    match daemon.status {
+        Status::Ok => daemon,
+        _ => Check::warn(
+            label,
+            "no long-lived daemon reachable (normal if you only use firma run)",
+        )
+        .with_detail("daemon", daemon.reason),
     }
 }
 
@@ -327,6 +360,47 @@ mod tests {
         .await;
         assert_eq!(check.status, Status::Ok);
         drop(listener);
+    }
+
+    // -- reconcile_reachability -----------------------------------------------
+
+    #[test]
+    fn reconcile_reports_ok_when_live_per_run_instances_present() {
+        // Daemon probe failed, but a per-run sidecar is live (AC1).
+        let daemon = Check::fail("sidecar reachable", "127.0.0.1:9443: Connection refused");
+        let reconciled = reconcile_reachability(daemon, 2);
+        assert_eq!(reconciled.status, Status::Ok);
+        assert!(
+            reconciled.reason.contains("per-run"),
+            "got {}",
+            reconciled.reason
+        );
+        assert_eq!(
+            reconciled.detail.get("live_instances").map(String::as_str),
+            Some("2")
+        );
+    }
+
+    #[test]
+    fn reconcile_downgrades_failed_daemon_to_warn_when_no_live_instances() {
+        // No daemon, no live per-run instance: normal for a firma-run-only
+        // workflow — must not be a hard FAIL (AC3).
+        let daemon = Check::fail("authority reachable", "127.0.0.1:9443: Connection refused");
+        let reconciled = reconcile_reachability(daemon, 0);
+        assert_eq!(reconciled.status, Status::Warn);
+        assert!(
+            reconciled.reason.contains("firma run"),
+            "got {}",
+            reconciled.reason
+        );
+    }
+
+    #[test]
+    fn reconcile_keeps_reachable_daemon_ok() {
+        let daemon = Check::ok("sidecar reachable", "127.0.0.1:9443");
+        let reconciled = reconcile_reachability(daemon, 0);
+        assert_eq!(reconciled.status, Status::Ok);
+        assert_eq!(reconciled.reason, "127.0.0.1:9443");
     }
 
     #[cfg(unix)]

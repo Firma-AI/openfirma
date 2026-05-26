@@ -55,6 +55,7 @@ fn returns_ready_timeout_when_no_ready_line_observed() {
         authority_ca_cert: None,
         authority_pub_key: None,
         use_http_proxy_interceptor: false,
+        audit_fallback_path: None,
     });
     let Err(err) = result else {
         panic!("expected timeout, got Ok");

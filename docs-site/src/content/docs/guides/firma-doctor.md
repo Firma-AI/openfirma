@@ -56,19 +56,42 @@ firma doctor
 =============
 [OK]   firma binary           /usr/local/bin/firma (v0.1.0)
 [OK]   sandbox bwrap          bubblewrap 0.8.0 available
-[WARN] sandbox vz             framework available on macOS 13+; run-time probe not implemented
-[WARN] sandbox wsl2           not supported on linux
+[WARN] sandbox vz             not used on linux
+[WARN] sandbox wsl2           not used on native Linux (runtime selects bwrap)
 [OK]   sandbox firecracker    Firecracker v1.7.0 available
-[OK]   sidecar reachable      127.0.0.1:8080
-[FAIL] authority reachable    127.0.0.1:50051: connection refused
+[OK]   sidecar reachable      2 live per-run instances (firma run)
+[OK]   authority reachable    2 live per-run instances (firma run)
 [OK]   config parsed          ~/.config/firma/firma.toml
-[WARN] capability seed        /run/user/1000/firma/capabilities: directory does not exist
+[OK]   capability seed        not present (optional; capabilities disabled by default)
 [OK]   state dir              /run/user/1000/firma: mode 0700
-[WARN] data dir               could not resolve XDG_DATA_HOME / fallback
+[OK]   data dir               ~/.local/share/firma: not present (created on first use)
 ```
 
 Categories are emitted in a fixed order; columns are padded so a diff between
 two runs only shows lines that actually changed.
+
+### Verdicts match what `firma run` actually does
+
+Doctor does not rely on a static OS → backend table, and does not probe only
+the configured daemon. Its verdicts mirror the runtime:
+
+- **Sandbox backends** use the same selection and preflight logic as
+  `firma run`. On WSL, `sandbox bwrap` is **not** `OK` (the runtime refuses
+  bubblewrap there — unprivileged user namespaces are unavailable) and
+  `sandbox wsl2` is `OK` (the backend the runtime auto-selects), instead of the
+  misleading "not supported on linux". On a hardened native-Linux kernel where
+  unprivileged user namespaces are disabled by sysctl, `sandbox bwrap` is
+  `FAIL` — matching the error `firma run` would raise.
+- **Live per-run instances** are cross-checked against the same runtime markers
+  `firma sidecar status` reads. While an agent runs under `firma run`,
+  `sidecar reachable` and `authority reachable` report the live per-run
+  instances as `OK` even though no long-lived daemon is listening.
+- **No long-lived daemon** is not a failure in a `firma run`-only workflow.
+  When nothing is reachable and no per-run instance is live, these checks are a
+  `WARN` ("no long-lived daemon reachable (normal if you only use firma run)"),
+  never a `FAIL`.
+- **Optional, created-on-demand paths** (capability seed, data dir) report `OK`
+  when absent — they are expected to be missing on a healthy install.
 
 ### JSON (`--json`)
 
