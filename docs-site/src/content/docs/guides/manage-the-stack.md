@@ -51,12 +51,12 @@ $XDG_DATA_HOME/firma/   # or %LOCALAPPDATA%\firma on Windows
   # *.listen, audit.jsonl
 ```
 
-`init` writes a single sectioned `firma.toml` (`[project]` +
+`firma config` writes a single sectioned `firma.toml` (`[project]` +
 `[authority]` + `[sidecar.*]`). Existing files are preserved unless
 `--force` is set. `state_dir` is not embedded in the config — it is
 always resolved from `--state-dir` / `FIRMA_STATE_DIR` / XDG.
 
-You can also skip `init` entirely: `firma run <agent>` invokes the
+You can also skip `firma config` entirely: `firma run <agent>` invokes the
 same scaffold implicitly the first time it cannot discover a
 `firma.toml`.
 
@@ -165,6 +165,15 @@ firma monitor --state-dir /var/run/firma \
 `--decision` and `--action-class` apply to audit events only — they
 are silently ignored for `authority` and `sidecar` log lines. The
 tailer detects log rotation by inode and reopens automatically.
+
+Follow vs. one-shot:
+
+- **Follow** (default when stdout is a TTY, or forced with `--tail`) starts at
+  end-of-file and prints new records as they are appended.
+- **One-shot** (`--no-follow`, or the default when stdout is piped) reads the
+  file from the **start** and exits. This dumps the records already on disk —
+  so `firma monitor --no-follow` after a `firma run` shows that run's
+  decisions, rather than nothing. Combine with `--since` to bound the window.
 
 For everything you can do with the underlying audit JSONL — signature
 verification, structured search, debugging surprise denies — see

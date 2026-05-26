@@ -426,7 +426,7 @@ starlight-menu-button {
   border-bottom: 1px solid var(--sl-color-hairline);
 }
 
-/* Mermaid diagrams - make sure they breathe and pick up theme bg. */
+/* Mermaid diagrams */
 .mermaid {
   margin-block: 1.5rem;
   padding: 1rem;
@@ -441,6 +441,59 @@ starlight-menu-button {
 .mermaid svg {
   max-width: none;
   height: auto;
+}
+
+/* Light mode: force OpenFirma teal palette on all nodes */
+.mermaid .node rect,
+.mermaid .node circle,
+.mermaid .node ellipse,
+.mermaid .node polygon,
+.mermaid .node path {
+  fill: #e3edec !important;
+  stroke: #5b8a86 !important;
+}
+
+.mermaid .cluster rect {
+  fill: #f0f5f4 !important;
+  stroke: #5b8a86 !important;
+}
+
+.mermaid .label,
+.mermaid .nodeLabel,
+.mermaid text {
+  fill: #2a3340 !important;
+  color: #2a3340 !important;
+}
+
+.mermaid .edgePath .path,
+.mermaid .flowchart-link {
+  stroke: #5b8a86 !important;
+}
+
+.mermaid marker path {
+  fill: #5b8a86 !important;
+  stroke: #5b8a86 !important;
+}
+
+.mermaid .edgeLabel,
+.mermaid .edgeLabel rect {
+  background-color: #f2f3f2 !important;
+  fill: #f2f3f2 !important;
+}
+
+.mermaid .edgeLabel span {
+  color: #55636f !important;
+}
+
+.mermaid svg g.edgeLabel p {
+  background-color: transparent !important;
+  color: #55636f !important;
+  margin: 0 !important;
+}
+
+.mermaid svg g.edgeLabel rect {
+  fill: transparent !important;
+  stroke: none !important;
 }
 
 /* Pagefind search - keep the modal aligned with the new aesthetic. */
@@ -477,4 +530,52 @@ starlight-toc nav ul li a[aria-current='true'] {
   :root {
     --sl-content-pad-x: 1.25rem;
   }
+}
+
+/* ─── Mermaid dark mode override ───────────────────────────────────────────
+ * The Mermaid theme is set to 'base' with light-mode variables in
+ * astro.config.mjs. These selectors flip the diagram colors when the
+ * user switches to dark mode, using the OpenFirma dark palette.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+:root[data-theme='dark'] .mermaid .node rect,
+:root[data-theme='dark'] .mermaid .node circle,
+:root[data-theme='dark'] .mermaid .node ellipse,
+:root[data-theme='dark'] .mermaid .node polygon,
+:root[data-theme='dark'] .mermaid .node path {
+  fill: #173331 !important;
+  stroke: #8fb6b1 !important;
+}
+
+:root[data-theme='dark'] .mermaid .cluster rect {
+  fill: #0f2422 !important;
+  stroke: #2f5d59 !important;
+}
+
+:root[data-theme='dark'] .mermaid .label,
+:root[data-theme='dark'] .mermaid .nodeLabel,
+:root[data-theme='dark'] .mermaid text {
+  fill: #c9d0ce !important;
+  color: #c9d0ce !important;
+}
+
+:root[data-theme='dark'] .mermaid .edgePath .path,
+:root[data-theme='dark'] .mermaid .flowchart-link {
+  stroke: #8fb6b1 !important;
+}
+
+:root[data-theme='dark'] .mermaid marker path {
+  fill: #8fb6b1 !important;
+  stroke: #8fb6b1 !important;
+}
+
+:root[data-theme='dark'] .mermaid .edgeLabel,
+:root[data-theme='dark'] .mermaid .edgeLabel rect {
+  background-color: #0d141d !important;
+  fill: #0d141d !important;
+  color: #c9d0ce !important;
+}
+
+:root[data-theme='dark'] .mermaid .edgeLabel span {
+  color: #c9d0ce !important;
 }

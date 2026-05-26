@@ -41,13 +41,11 @@ OpenFirma is a runtime enforcement boundary that sits between your AI agents and
 ### Build and install from source
  
 ```bash
-git clone https://github.com/firma-ai/firma-oss
-cd firma-oss
+git clone https://github.com/Firma-AI/openfirma
+cd openfirma
 cargo build --release
 cargo install --path crates/firma
 ```
-
-> macOS Homebrew support releasing in v0.1.1.
 
 ### Quickstart
 

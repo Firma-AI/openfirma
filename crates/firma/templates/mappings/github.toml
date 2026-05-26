@@ -1,14 +1,14 @@
-# GitHub REST API mapping — CONNECT tunnel + 44 rules → 12 action classes.
+# GitHub REST API mapping — CONNECT tunnel + 46 rules → 12 action classes.
 # Source of truth: docs/markdown/github_connector.md.
 #
 # MITM required for REST rules (configured via intercept_hosts in firma.toml).
 # Without MITM: only the CONNECT rule below fires — all GitHub traffic → code.review.read.
 # With MITM: individual REST rules classify by method + path.
 
-# Plain CONNECT (no MITM): host carries port.
+# Plain CONNECT (no MITM): bare host, default port stripped by normalizer.
 [[rules]]
 method = "CONNECT"
-host = "api.github.com:443"
+host = "api.github.com"
 action_class = "code.review.read"
 
 # ── REST rules (bare host — post-MITM only) ───────────────────────────────────
@@ -17,7 +17,7 @@ action_class = "code.review.read"
 # each method-specific rule out-ranks the broad `GET /repos/*/*`
 # code.read wildcard via specificity.
 
-# --- code.read (6) ----------------------------------------------------------
+# --- code.read (8) ----------------------------------------------------------
 [[rules]]
 method = "GET"
 host = "api.github.com"
@@ -52,6 +52,18 @@ action_class = "code.read"
 method = "GET"
 host = "api.github.com"
 path = "/repos/*/*/tags"
+action_class = "code.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/orgs/*/repos"
+action_class = "code.read"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/user/repos"
 action_class = "code.read"
 
 # --- code.review.read (7) ---------------------------------------------------

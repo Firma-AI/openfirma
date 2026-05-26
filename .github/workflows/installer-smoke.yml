@@ -27,19 +27,18 @@ jobs:
           FIRMA_NO_BREW: '1'
           FIRMA_NO_INIT: '1'
           FIRMA_NO_MODIFY_PATH: '1'
-          FIRMA_VERSION: v0.0.0
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           INSTALL_DIR="${RUNNER_TEMP}/firma-bin"
           ./install.sh --install-dir "${INSTALL_DIR}"
           "${INSTALL_DIR}/firma" --version
+          "${INSTALL_DIR}/firma" help config
       - name: Re-run (already installed exit path)
         env:
           FIRMA_NO_BREW: '1'
           FIRMA_NO_INIT: '1'
           FIRMA_NO_MODIFY_PATH: '1'
-          FIRMA_VERSION: v0.0.0
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
@@ -57,18 +56,17 @@ jobs:
         env:
           FIRMA_NO_INIT: '1'
           FIRMA_NO_MODIFY_PATH: '1'
-          FIRMA_VERSION: v0.0.0
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'firma-bin'
           .\install.ps1 -InstallDir $dir
           & (Join-Path $dir 'firma.exe') --version
+          & (Join-Path $dir 'firma.exe') help config
       - name: Re-run (already installed exit path)
         shell: pwsh
         env:
           FIRMA_NO_INIT: '1'
           FIRMA_NO_MODIFY_PATH: '1'
-          FIRMA_VERSION: v0.0.0
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'firma-bin'

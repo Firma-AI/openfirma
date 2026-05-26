@@ -60,6 +60,13 @@ impl CedarPolicyStore {
         let (policies_src, policy_set) = read_policies(policy_dir)?;
         let (schema_src, schema) = read_schema(schema_path.as_deref())?;
 
+        if let Err(errors) = firma_core::validate_policies(&policy_set, &schema) {
+            bail!(
+                "policy bundle failed schema validation:\n{}",
+                errors.join("\n")
+            );
+        }
+
         let version = compute_version_hash(&policies_src, &schema_src);
         let bundle = PolicyBundle::new(
             version,
@@ -94,6 +101,14 @@ impl CedarPolicyStore {
     async fn reload(&self) -> Result<()> {
         let (policies_src, new_policy_set) = read_policies(&self.policy_dir)?;
         let (schema_src, new_schema) = read_schema(self.schema_path.as_deref())?;
+
+        if let Err(errors) = firma_core::validate_policies(&new_policy_set, &new_schema) {
+            bail!(
+                "policy bundle failed schema validation:\n{}",
+                errors.join("\n")
+            );
+        }
+
         let new_version = compute_version_hash(&policies_src, &schema_src);
 
         let new_bundle = {
@@ -346,6 +361,18 @@ mod tests {
     }
 
     #[test]
+    fn load_schema_invalid_policy_fails() {
+        // Parses fine, but `payment.payout` is not in the Firma schema, so strict
+        // validation rejects it. Authority load must fail closed.
+        let dir = setup_policy_dir(&[(
+            "bad.cedar",
+            "forbid(principal, action == Firma::Action::\"payment.payout\", resource);",
+        )]);
+        let store = CedarPolicyStore::load(dir.path(), None, 30);
+        assert!(store.is_err());
+    }
+
+    #[test]
     fn nonexistent_dir_fails() {
         let store = CedarPolicyStore::load(Path::new("/nonexistent/path"), None, 30);
         assert!(store.is_err());
@@ -390,6 +417,30 @@ mod tests {
         assert!(result.is_ok());
         let v2 = store.bundle().version;
         assert_ne!(v1, v2);
+    }
+
+    #[tokio::test]
+    async fn reload_schema_invalid_keeps_previous_bundle() {
+        // Start from a valid bundle, then introduce a schema-invalid policy
+        // (`payment.payout` is not in the Firma schema). reload must fail closed
+        // and keep the previously loaded bundle.
+        let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
+        let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap();
+        let v1 = store.bundle().version.clone();
+
+        fs::write(
+            dir.path().join("bad.cedar"),
+            "forbid(principal, action == Firma::Action::\"payment.payout\", resource);",
+        )
+        .unwrap();
+
+        let result = store.reload().await;
+        assert!(result.is_err(), "schema-invalid reload must fail");
+        assert_eq!(
+            store.bundle().version,
+            v1,
+            "previous bundle must be retained after a failed reload"
+        );
     }
 
     #[tokio::test]

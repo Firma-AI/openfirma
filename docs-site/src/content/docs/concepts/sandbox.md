@@ -51,6 +51,23 @@ The choice is mostly an operational one: bwrap is fast to start and lightweight;
 
 `firma run` cannot escalate privileges. On Linux it requires unprivileged user namespaces (which most modern distros enable by default). On WSL hosts, implicit backend selection uses the `wsl2` compatibility backend instead of attempting `bwrap`.
 
+## Platform enforcement matrix
+
+The *strength* of the enforcement boundary differs by platform. This is the most important thing to understand when deploying `firma run` in a security-sensitive context.
+
+| Platform        | Backend        | Enforcement mechanism                          | `structural` | Agent bypass possible?            |
+| --------------- | -------------- | ---------------------------------------------- | :----------: | --------------------------------- |
+| Linux (native)  | `bwrap`        | Network namespace; proxy bridge is only exit   | ✅ Yes       | No                                |
+| Linux (native)  | `firecracker`  | KVM micro-VM network isolation                 | ✅ Yes       | No                                |
+| macOS           | `vz`           | HTTP proxy injection (`HTTP_PROXY`)            | ❌ No        | Yes, if agent ignores `HTTP_PROXY`|
+| Windows / WSL2  | `wsl2`         | HTTP proxy injection (`HTTP_PROXY`)            | ❌ No        | Yes, if agent ignores `HTTP_PROXY`|
+
+**Structural** means the sandbox removes the agent's ability to bypass the proxy at the OS level — no extra cooperation from the agent is required. **Proxy-based** means enforcement depends on the agent (or its HTTP library) respecting `HTTP_PROXY`.
+
+For well-behaved agents — standard HTTP libraries, no raw socket use — proxy-based enforcement is effective in practice. For adversarial or minimally cooperative agents, only the structural backends provide a hard guarantee.
+
+`NO_PROXY` / `no_proxy` are cleared in all built-in profiles to prevent a host-env override from silently routing traffic around the proxy Sidecar on macOS and WSL2.
+
 ## Profiles
 
 A **profile** declares the runtime shape: env injection, sandbox identity, network policy, capability lease behavior. The shipped profiles are:

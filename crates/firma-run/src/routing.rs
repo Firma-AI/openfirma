@@ -280,6 +280,10 @@ fn autostart_sidecar(
         authority_ca_cert: flags.authority_ca_cert.clone(),
         authority_pub_key: flags.authority_pub_key.clone(),
         use_http_proxy_interceptor: flags.use_http_proxy_sidecar,
+        // `runtime_dir` is the state dir `firma monitor` resolves, so a
+        // per-run sidecar with no configured audit sink still writes a
+        // monitorable `<state_dir>/audit.jsonl`.
+        audit_fallback_path: Some(runtime_dir.join("audit.jsonl")),
     })
 }
 

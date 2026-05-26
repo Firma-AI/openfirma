@@ -4,14 +4,9 @@
 // file deletion via API (rm / rmdir / unlink equivalent via code path).
 // Use only in sandboxed environments where the filesystem mount is scoped.
 
-// Cloud metadata endpoint.
-forbid (
-    principal,
-    action,
-    resource
-) when {
-    resource.id like "169.254.169.254*"
-};
+// Cloud metadata endpoint (169.254.169.254) must be blocked at the network
+// layer (iptables / bwrap --unshare-net). The Firma schema has no resource
+// host attribute, so the block cannot be expressed in Cedar.
 
 // Payment — auto-deny.
 forbid (
@@ -19,8 +14,6 @@ forbid (
     action in [
         Firma::Action::"payment.transfer",
         Firma::Action::"payment.purchase",
-        Firma::Action::"payment.refund",
-        Firma::Action::"payment.payout",
         Firma::Action::"browser.purchase"
     ],
     resource

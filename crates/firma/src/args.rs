@@ -44,9 +44,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Run the Authority service: issues capability tokens, streams policy bundles,
-    /// and serves revocations. Local reference implementation for development —
-    /// production deployments swap in their own Authority.
+    /// Run the Authority: issues tokens, streams policy bundles, serves revocations.
     Authority(authority::Args),
     /// Scaffold a new agent config directory interactively.
     Config(config::InitArgs),
@@ -55,31 +53,21 @@ pub enum Command {
     /// Internal sandbox-local DNS stub.
     #[command(name = "__dns-stub", hide = true)]
     DnsStub(run::DnsStubArgs),
-    /// Diagnose a Firma install: detect components, probe Authority and Sidecar
-    /// endpoints, and print the resolved configuration. Run this first when
-    /// `firma run` misbehaves.
+    /// Diagnose a Firma install. Run this first when `firma run` misbehaves.
     Doctor(doctor::Args),
-    /// Tail audit decisions and component logs from a running Firma stack. Default
-    /// tails the audit log; use `--source` to switch to Authority/Sidecar logs or
-    /// interleave all three.
+    /// Tail audit decisions and component logs. Use `--source` to switch log streams.
     Monitor(monitor::Args),
     /// Internal proxy bridge for sandbox.
     #[command(name = "__proxy-bridge", hide = true)]
     ProxyBridge(run::ProxyBridgeArgs),
-    /// Launch an agent process inside a sandbox with all outbound traffic routed
-    /// through the enforcement Sidecar. Auto-starts a per-run Sidecar when none
-    /// is reachable. This is the main entry point for running agents under Firma.
+    /// Launch an agent in a sandbox under enforcement. Main entry point for agents.
     Run(run::RunArgs),
-    /// Run or manage the enforcement Sidecar — the L7 proxy that authorizes every
-    /// outbound agent call against Cedar policies and capability tokens. Bare form
-    /// runs the server in the foreground; `start`/`stop`/`status` manage a
-    /// long-lived daemon.
+    /// Run or manage the enforcement Sidecar. Bare form = foreground server;
+    /// `start`/`stop`/`status` manage a long-lived daemon.
     Sidecar(sidecar::Args),
     /// Internal detached supervisor process.
     #[command(name = "__supervise", hide = true)]
     Supervise(supervise::Args),
-    /// Approve or revoke local-execution governance tokens awaiting human review
-    /// at the Sidecar's human-in-the-loop endpoint. Used to gate high-risk actions
-    /// that policy escalates instead of auto-allowing.
+    /// Approve or revoke HITL governance tokens for high-risk actions.
     Token(token::TokenArgs),
 }
