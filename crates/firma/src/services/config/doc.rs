@@ -62,15 +62,10 @@ impl DocInputs<'_> {
     }
 
     fn has_connect(&self) -> bool {
-        // Only `AgentRemote` persists `[sidecar.authority].url` /
-        // `ca_cert_path` / `public_key_path` to `firma.toml`. In
-        // `AgentLocal` the URL is overwritten at runtime by
-        // `firma-run::sidecar::config::synthesize` with the
-        // ephemeral URL the supervisor learned from the autostarted
-        // mini-authority — persisting a value here would be
-        // misleading (silently ignored) and conflict with the
-        // `listen_addr = "[::1]:0"` ephemeral-port convention.
-        matches!(self.mode, Mode::AgentRemote)
+        // Persist sidecar→authority connect fields for daemon mode
+        // (`firma sidecar start`) and remote authority. Per-run autostart
+        // may still override the URL with an ephemeral listen address.
+        matches!(self.mode, Mode::AgentLocal | Mode::AgentRemote)
     }
 }
 
@@ -166,9 +161,11 @@ fn ensure_authority_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Re
 fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     let sidecar = ensure_table(doc.as_table_mut(), "sidecar")?;
 
-    // sidecar.interceptor.https_mitm.{intercept_hosts, strict_hosts}
+    // sidecar.interceptor.{mode, listen_addr} + https_mitm hosts
     {
         let interceptor = ensure_table(sidecar, "interceptor")?;
+        set_str_if_absent(interceptor, "mode", "http_proxy");
+        set_str_if_absent(interceptor, "listen_addr", "127.0.0.1:8080");
         let https = ensure_table(interceptor, "https_mitm")?;
         set_string_array(https, "intercept_hosts", inputs.mitm_hosts);
         set_string_array(https, "strict_hosts", inputs.mitm_hosts);
@@ -254,6 +251,23 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
 
 // ── firma-run.toml ────────────────────────────────────────────────────────────
 
+fn default_run_backend() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        return "vz";
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return "wsl2";
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return "bwrap";
+    }
+    #[allow(unreachable_code)]
+    "bwrap"
+}
+
 fn merge_firma_run_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     // `[authority]` presence signals "autostart a local Mini Authority".
     // We always emit it on this command path (firma config currently
@@ -289,7 +303,7 @@ fn merge_firma_run_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result
     {
         let profiles = ensure_table(doc.as_table_mut(), "profiles")?;
         let generic = ensure_table(profiles, "generic")?;
-        set_str_if_absent(generic, "backend", "bwrap");
+        set_str_if_absent(generic, "backend", default_run_backend());
 
         let env_set = ensure_table(generic, "env_set")?;
         set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_ROOTFS_MODE", "readonly");
@@ -543,6 +557,14 @@ mod tests {
             parsed["authority"]["listen_addr"].as_str(),
             Some("127.0.0.1:9443")
         );
+        assert_eq!(
+            parsed["sidecar"]["interceptor"]["mode"].as_str(),
+            Some("http_proxy")
+        );
+        assert_eq!(
+            parsed["sidecar"]["interceptor"]["listen_addr"].as_str(),
+            Some("127.0.0.1:8080")
+        );
     }
 
     #[test]
@@ -555,22 +577,27 @@ mod tests {
     }
 
     #[test]
-    fn agent_local_omits_sidecar_authority_url() {
+    fn agent_local_emits_sidecar_authority_connect() {
         let inputs = dummy_inputs(&Mode::AgentLocal);
         let out = render_firma_toml("", &inputs).unwrap();
         let parsed: toml::Value = toml::from_str(&out).unwrap();
         let auth = &parsed["sidecar"]["authority"];
-        // The supervisor injects the real URL at runtime; persisting one
-        // here would be silently overridden.
-        assert!(auth.get("url").is_none(), "got: {out}");
-        assert!(auth.get("ca_cert_path").is_none(), "got: {out}");
-        assert!(auth.get("public_key_path").is_none(), "got: {out}");
-        // Timeouts and backoffs still seeded as static defaults.
-        assert!(auth.get("connect_timeout_secs").is_some(), "got: {out}");
+        assert_eq!(
+            auth.get("url").and_then(|v| v.as_str()),
+            Some("https://127.0.0.1:9443")
+        );
+        assert_eq!(
+            auth.get("ca_cert_path").and_then(|v| v.as_str()),
+            Some("/state/tls/authority-ca.crt")
+        );
+        assert_eq!(
+            auth.get("public_key_path").and_then(|v| v.as_str()),
+            Some("/state/authority.pub")
+        );
     }
 
     #[test]
-    fn mode_switch_remote_to_local_strips_stale_connect_keys() {
+    fn mode_switch_remote_to_local_replaces_stale_connect_keys() {
         let existing = "\
 [sidecar.authority]
 url = \"https://stale.example.com:9443\"
@@ -581,9 +608,18 @@ public_key_path = \"/old/pub.key\"
         let out = render_firma_toml(existing, &inputs).unwrap();
         let parsed: toml::Value = toml::from_str(&out).unwrap();
         let auth = &parsed["sidecar"]["authority"];
-        assert!(auth.get("url").is_none(), "got: {out}");
-        assert!(auth.get("ca_cert_path").is_none(), "got: {out}");
-        assert!(auth.get("public_key_path").is_none(), "got: {out}");
+        assert_eq!(
+            auth.get("url").and_then(|v| v.as_str()),
+            Some("https://127.0.0.1:9443")
+        );
+        assert_eq!(
+            auth.get("ca_cert_path").and_then(|v| v.as_str()),
+            Some("/state/tls/authority-ca.crt")
+        );
+        assert_eq!(
+            auth.get("public_key_path").and_then(|v| v.as_str()),
+            Some("/state/authority.pub")
+        );
     }
 
     #[test]

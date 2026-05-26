@@ -40,22 +40,27 @@ OpenFirma is a runtime enforcement boundary that sits between your AI agents and
 
 ### Install
 
-**Linux / other:**
+**Linux / macOS:**
 
 ```bash
 curl -sSf https://install.openfirma.ai | sh
 ```
 
-**Build and install from source** (requires Rust 1.88+ and `protoc`):
- 
+On macOS with Homebrew installed, the installer uses `brew install firma-ai/openfirma/firma`
+automatically. You can also install directly:
+
 ```bash
-git clone https://github.com/firma-ai/openfirma
+brew install firma-ai/openfirma/firma
+```
+
+**Build and install from source** (requires Rust 1.88+ and `protoc`):
+
+```bash
+git clone https://github.com/Firma-AI/openfirma
 cd openfirma
 cargo build --release
 cargo install --path crates/firma
 ```
-
-> macOS Homebrew support releasing in v0.1.1.
 
 ### Quickstart
 

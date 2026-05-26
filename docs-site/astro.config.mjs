@@ -48,7 +48,7 @@ export default defineConfig({
       },
       customCss: ['./src/styles/fonts.css', './src/styles/custom.css'],
       editLink: {
-        baseUrl: 'https://github.com/firma-ai/openfirma/edit/main/docs-site/',
+        baseUrl: 'https://github.com/Firma-AI/openfirma/edit/main/docs-site/',
       },
       lastUpdated: true,
       pagefind: true,
@@ -75,7 +75,7 @@ export default defineConfig({
         {
           icon: 'github',
           label: 'GitHub',
-          href: 'https://github.com/firma-ai/openfirma',
+          href: 'https://github.com/Firma-AI/openfirma',
         },
       ],
       sidebar: [
