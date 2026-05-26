@@ -1,0 +1,74 @@
+<!--
+  SECURITY VULNERABILITIES — do NOT open a public issue.
+  Report them privately via GitHub Security Advisories.
+  See SECURITY.md for the disclosure process and SLA.
+-->
+
+## Issue Type
+
+<!-- Check one -->
+
+- [ ] Bug — something is broken or behaves incorrectly
+- [ ] Feature — new capability or enhancement
+- [ ] Documentation — missing, incorrect, or unclear docs
+- [ ] Performance — hot-path latency or resource usage concern
+- [ ] Architecture / Design — structural or API design discussion
+
+## Summary
+
+<!-- One sentence: what is wrong or what do you want? -->
+
+## Where in OpenFirma
+
+<!-- Check all that apply -->
+
+- [ ] `firma-core` — shared types and trait contracts
+- [ ] `firma-sidecar` — normalizer, enforcement pipeline (Stage 1 / Stage 2)
+- [ ] `firma-authority` — token issuance, policy bundle distribution
+- [ ] `firma-run` — process supervision and confinement
+- [ ] `firma-proto` — gRPC wire contract
+- [ ] CLI (`firma` binary)
+- [ ] Configuration / mapping rules (TOML)
+- [ ] Documentation / docs-site
+- [ ] CI / build tooling
+- [ ] Other: ______
+
+## Current Behaviour
+
+<!--
+  For bugs: what actually happens?
+    • Paste the full error message, panic output, or relevant audit log lines.
+    • Include your OpenFirma version (`firma --version`), OS, and architecture.
+    • Attach or paste any relevant config snippets — redact credentials and signing keys.
+  For features: what is the current limitation or missing capability?
+-->
+
+## Expected Behaviour
+
+<!--
+  For bugs: what should happen instead?
+  For features: what should the new behaviour look like?
+    If this is a policy-enforcement or normalizer change, describe the
+    action-class / resource shape you expect to be produced or evaluated.
+-->
+
+## Reproduction Steps
+
+<!--
+  For bugs — exact steps to reproduce:
+  1. …
+  2. …
+  3. …
+
+  For features — skip this section or describe a motivating use case.
+-->
+
+## Additional Context
+
+<!--
+  Anything else that helps:
+    • Related issues or PRs
+    • Relevant Cedar policy files or mapping rule snippets
+    • Threat model implications (see SECURITY.md § Known Limitations)
+    • Links to discussion in #dev or design docs
+-->
