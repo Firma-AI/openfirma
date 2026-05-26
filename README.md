@@ -49,8 +49,8 @@ curl -sSf https://install.openfirma.ai | sh
 **Build and install from source** (requires Rust 1.88+ and `protoc`):
  
 ```bash
-git clone https://github.com/firma-ai/firma-oss
-cd firma-oss
+git clone https://github.com/firma-ai/openfirma
+cd openfirma
 cargo build --release
 cargo install --path crates/firma
 ```
