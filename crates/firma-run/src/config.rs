@@ -844,14 +844,7 @@ fn default_managed_seccomp_policy(
     let source_policy_path = std::env::var(MANAGED_POLICY_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .map_or_else(
-            || {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("policies")
-                    .join(DEFAULT_MANAGED_POLICY_FILE)
-            },
-            PathBuf::from,
-        );
+        .map_or_else(default_managed_policy_path, PathBuf::from);
 
     let artifact_dir = std::env::var(MANAGED_ARTIFACT_DIR_ENV)
         .ok()
@@ -883,8 +876,26 @@ fn parse_managed_runtime_mode(value: &str) -> Result<SeccompRuntimeMode, RunErro
     }
 }
 
+const MANAGED_SECCOMP_POLICY: &str = include_str!("../seccomp/generic-local-command-v1.toml");
+
+fn default_managed_policy_path() -> PathBuf {
+    let dir = firma_stack::runtime_paths::default_runtime_dir().join("seccomp");
+    let path = dir.join(DEFAULT_MANAGED_POLICY_FILE);
+    if !path.exists() {
+        if let Err(error) = firma_stack::fs::create_private_dir_all(&dir) {
+            tracing::warn!(%error, "failed to create seccomp policy dir; falling back to unextracted path");
+            return path;
+        }
+        match firma_stack::fs::write_private_file(&path, MANAGED_SECCOMP_POLICY.as_bytes()) {
+            Ok(()) => tracing::info!(path = %path.display(), "extracted default managed seccomp policy"),
+            Err(error) => tracing::warn!(%error, "failed to extract default seccomp policy"),
+        }
+    }
+    path
+}
+
 fn default_managed_artifact_dir() -> PathBuf {
-    std::env::temp_dir().join("firma").join("seccomp-artifacts")
+    firma_stack::runtime_paths::default_runtime_dir().join("seccomp-artifacts")
 }
 
 fn env_truthy(name: &str) -> bool {
@@ -1005,7 +1016,7 @@ mod tests {
             assert!(
                 managed
                     .source_policy_path
-                    .ends_with("policies/generic-local-command-v1.toml"),
+                    .ends_with("seccomp/generic-local-command-v1.toml"),
                 "unexpected managed default policy path: {}",
                 managed.source_policy_path.display()
             );
