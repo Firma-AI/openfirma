@@ -15,7 +15,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::mpsc;
-use std::thread::{self, JoinHandle};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use tracing::{info, warn};
@@ -200,7 +200,7 @@ impl SidecarSupervisor {
 
             let reader = std::io::BufReader::new(stderr);
             let (tx, rx) = mpsc::sync_channel::<ScrapeResult>(1);
-            let tee_handle = thread::Builder::new()
+            let tee_handle = std::thread::Builder::new()
                 .name("firma-sidecar-tee".into())
                 .spawn(move || run_scraper(reader, log_file, tx))
                 .map_err(|error| RunError::SidecarStartupFailed {
@@ -241,7 +241,7 @@ impl SidecarSupervisor {
                 }
             }
             if attempt + 1 < max_attempts {
-                thread::sleep(Duration::from_millis(120));
+                std::thread::sleep(Duration::from_millis(120));
             }
         }
         let Some((child, tee_handle, pid, capture)) = ready else {
