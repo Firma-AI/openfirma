@@ -81,9 +81,11 @@ silently skipped (see [Stale-marker GC](#stale-marker-gc) below).
 
 ### `--sandbox-id <id>`: single entry
 
-Targets one sandbox by ID and performs an active liveness probe (connect to the
-recorded UDS socket). Useful in scripts that monitor a specific `firma run`
-invocation.
+Targets one sandbox by ID and performs an active liveness probe against the
+sidecar's recorded interceptor endpoint. The probe matches the transport the
+per-run sidecar actually bound: a loopback TCP connect for an `http_proxy`
+sidecar, or a UDS connect for a Unix-domain-socket sidecar. Useful in scripts
+that monitor a specific `firma run` invocation.
 
 If `<id>` does not match any marker directory, the result is an empty table
 (or `[]` with `--json`) and the command exits `0` — vacuously, nothing is
@@ -104,12 +106,17 @@ which resolves to `$XDG_RUNTIME_DIR/firma` (fallback `/tmp/firma-$UID`).
 
 ## STATE semantics
 
-| State       | Meaning                                                 |
-| ----------- | ------------------------------------------------------- |
-| `running`   | PID alive and UDS socket responds to a connect probe.   |
-| `unhealthy` | PID alive but UDS socket is closed or unresponsive.     |
-| `stopped`   | PID is dead (or no PID is recorded in the marker).      |
-| `unknown`   | Probe was inconclusive (no socket path recorded, etc.). |
+| State       | Meaning                                                           |
+| ----------- | ----------------------------------------------------------------- |
+| `running`   | PID alive and the interceptor endpoint responds to a connect.     |
+| `unhealthy` | PID alive but the interceptor endpoint is closed or unresponsive. |
+| `stopped`   | PID is dead (or no PID is recorded in the marker).                |
+| `unknown`   | Probe was inconclusive (no endpoint recorded, etc.).              |
+
+The probed endpoint is recorded as `listen` in the marker's `metadata.toml`: a
+`host:port` pair for an `http_proxy` interceptor, or a socket path otherwise.
+Legacy markers written before this field existed fall back to probing
+`<marker_dir>/sidecar.sock`.
 
 ## Exit codes
 

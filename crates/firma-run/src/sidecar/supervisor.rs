@@ -264,6 +264,10 @@ impl SidecarSupervisor {
                 policy_bundle_version: capture.policy_bundle_version,
                 pid,
                 started_at: chrono::Utc::now().to_rfc3339(),
+                // Persist the real interceptor endpoint so `firma sidecar
+                // status` probes the correct transport (FIR-195): a TCP port
+                // for `http_proxy`, the UDS path otherwise.
+                listen: capture.interceptor_addr.clone(),
             },
         )?;
 
