@@ -876,26 +876,27 @@ fn parse_managed_runtime_mode(value: &str) -> Result<SeccompRuntimeMode, RunErro
     }
 }
 
-/// Embedded default seccomp policy. Extracted to `XDG_RUNTIME_DIR/firma/seccomp/` on first
-/// use; if the file already exists it is NOT updated — delete it to pick up a newer version.
+/// Embedded default seccomp policy. Always written to `XDG_RUNTIME_DIR/firma/seccomp/` on
+/// startup so the on-disk copy stays in sync with the running binary. Used only when no
+/// override is set via env var or profile config.
 const MANAGED_SECCOMP_POLICY: &str = include_str!("../seccomp/generic-local-command-v1.toml");
 
-/// Ensures the embedded seccomp policy is extracted to the runtime dir and returns its path.
-/// Creates the directory and file with restricted permissions (0o700/0o600) on first run.
+/// Writes the embedded seccomp policy to the runtime dir and returns its path.
+/// Always overwrites — this is a binary-embedded fallback, not a user-editable file.
+/// To override, set `FIRMA_RUN_MANAGED_SECCOMP_POLICY_PATH` or `seccomp_policy.source_policy_path` in the profile config.
+/// Creates the directory with restricted permissions (0o700/0o600).
 fn ensure_managed_policy_path() -> PathBuf {
     let dir = firma_stack::runtime_paths::default_runtime_dir().join("seccomp");
     let path = dir.join(DEFAULT_MANAGED_POLICY_FILE);
-    if !path.exists() {
-        if let Err(error) = firma_stack::fs::create_private_dir_all(&dir) {
-            tracing::warn!(%error, "failed to create seccomp policy dir; falling back to unextracted path");
-            return path;
+    if let Err(error) = firma_stack::fs::create_private_dir_all(&dir) {
+        tracing::warn!(%error, "failed to create seccomp policy dir; falling back to unextracted path");
+        return path;
+    }
+    match firma_stack::fs::write_private_file(&path, MANAGED_SECCOMP_POLICY.as_bytes()) {
+        Ok(()) => {
+            tracing::debug!(path = %path.display(), "wrote default managed seccomp policy");
         }
-        match firma_stack::fs::write_private_file(&path, MANAGED_SECCOMP_POLICY.as_bytes()) {
-            Ok(()) => {
-                tracing::info!(path = %path.display(), "extracted default managed seccomp policy");
-            }
-            Err(error) => tracing::warn!(%error, "failed to extract default seccomp policy"),
-        }
+        Err(error) => tracing::warn!(%error, "failed to write default seccomp policy"),
     }
     path
 }
