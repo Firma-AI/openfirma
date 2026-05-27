@@ -5,12 +5,17 @@
 //! is a hand-mirrored deserialize twin. Any field change in the writer
 //! must be mirrored here in lockstep.
 
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use serde::Deserialize;
 
 use crate::runtime_paths::{run_dir_from, run_entry_from};
+
+/// Connect timeout for the TCP liveness probe of an `http_proxy` interceptor.
+/// Matches the daemon-mode port probe in [`crate::status`].
+const TCP_PROBE_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// On-disk schema of `<runtime>/run/<sandbox_id>/metadata.toml`.
 /// Mirror of `firma-run::sidecar::metadata::Metadata`.
@@ -30,6 +35,13 @@ pub struct MetadataFile {
     pub pid: u32,
     /// RFC 3339 UTC timestamp of when the sidecar process started.
     pub started_at: String,
+    /// Interceptor listen endpoint to health-probe: a `host:port` pair for an
+    /// `http_proxy` interceptor, or a filesystem path for a Unix-domain-socket
+    /// interceptor. Empty (the `serde` default) for legacy markers written
+    /// before FIR-195, in which case the probe falls back to
+    /// `<marker_dir>/sidecar.sock`.
+    #[serde(default)]
+    pub listen: String,
 }
 
 /// One row of `firma sidecar status`. Serialized verbatim by `--json`.
@@ -68,6 +80,25 @@ fn socket_responds(sock: &Path) -> bool {
 #[cfg(not(unix))]
 fn socket_responds(_sock: &Path) -> bool {
     false
+}
+
+/// Reachability probe for a per-run sidecar's interceptor endpoint.
+///
+/// Per-run sidecars expose one of two interceptor transports depending on the
+/// resolved run profile: an `http_proxy` interceptor bound to a loopback TCP
+/// port, or a Unix-domain socket. `listen_str` is the address recorded in
+/// `metadata.toml`; when it parses as a [`SocketAddr`] the endpoint is probed
+/// with a bounded TCP connect, otherwise `listen_path` is probed as a UDS. A
+/// successful connect means the sidecar is accepting connections.
+///
+/// This is the FIR-195 fix: the previous probe unconditionally connected to
+/// `<marker_dir>/sidecar.sock`, which does not exist for an `http_proxy`
+/// sidecar, so a healthy per-run sidecar was reported `unhealthy`.
+fn endpoint_responds(listen_str: &str, listen_path: &Path) -> bool {
+    listen_str.parse::<SocketAddr>().map_or_else(
+        |_| socket_responds(listen_path),
+        |addr| TcpStream::connect_timeout(&addr, TCP_PROBE_TIMEOUT).is_ok(),
+    )
 }
 
 fn marker_uptime_secs(marker_dir: &Path) -> Option<u64> {
@@ -207,10 +238,16 @@ pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
         source: Box::new(source),
     })?;
 
-    let listen = marker_dir.join("sidecar.sock");
+    // Legacy markers (pre-FIR-195) record no `listen`; fall back to the
+    // conventional UDS path so their probe behavior is unchanged.
+    let listen = if meta.listen.is_empty() {
+        marker_dir.join("sidecar.sock")
+    } else {
+        PathBuf::from(&meta.listen)
+    };
     let state = if !SystemPlatform::is_alive(meta.pid) {
         State::Stopped
-    } else if socket_responds(&listen) {
+    } else if endpoint_responds(&meta.listen, &listen) {
         State::Running
     } else {
         State::Unhealthy
