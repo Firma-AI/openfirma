@@ -43,7 +43,7 @@ fn generic_profile() -> ProfilePatch {
     env_set.insert("FIRMA_RUN_PROFILE".to_string(), "generic".to_string());
     env_set.insert(
         "FIRMA_RUN_BWRAP_RUNTIME_HOME".to_string(),
-        "true".to_string(),
+        "false".to_string(),
     );
     // On macOS (vz) and WSL2 backends, structural network-namespace confinement is
     // unavailable; enforcement is proxy-based. Clear NO_PROXY so host env cannot
