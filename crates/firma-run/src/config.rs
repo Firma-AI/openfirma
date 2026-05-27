@@ -887,8 +887,12 @@ const MANAGED_SECCOMP_POLICY: &str = include_str!("../seccomp/generic-local-comm
 /// Creates the directory with restricted permissions (0o700/0o600).
 fn ensure_managed_policy_path() -> PathBuf {
     let dir = firma_stack::runtime_paths::default_runtime_dir().join("seccomp");
+    write_managed_policy_to_dir(&dir)
+}
+
+fn write_managed_policy_to_dir(dir: &std::path::Path) -> PathBuf {
     let path = dir.join(DEFAULT_MANAGED_POLICY_FILE);
-    if let Err(error) = firma_stack::fs::create_private_dir_all(&dir) {
+    if let Err(error) = firma_stack::fs::create_private_dir_all(dir) {
         tracing::warn!(%error, "failed to create seccomp policy dir; falling back to unextracted path");
         return path;
     }
@@ -1612,5 +1616,25 @@ timeout_ms = 700
                 panic!("expected unix endpoint, got {other:?}")
             }
         }
+    }
+
+    #[test]
+    fn managed_policy_overwrites_stale_content() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let seccomp_dir = tmpdir.path().join("seccomp");
+        fs::create_dir_all(&seccomp_dir).unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = seccomp_dir.join(super::DEFAULT_MANAGED_POLICY_FILE);
+        fs::write(&policy_path, b"stale content from old binary version")
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        let result_path = super::write_managed_policy_to_dir(&seccomp_dir);
+
+        assert_eq!(result_path, policy_path);
+        let written = fs::read_to_string(&policy_path).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            written,
+            super::MANAGED_SECCOMP_POLICY,
+            "stale policy not overwritten by embedded version"
+        );
     }
 }
