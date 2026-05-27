@@ -51,8 +51,11 @@ The knobs the file sets are read by the bwrap backend
 
 - `FIRMA_RUN_BWRAP_ROOTFS_MODE = "readonly"` — `--ro-bind /` + tmpfs on
   `/tmp`, `/var/tmp`.
-- `FIRMA_RUN_BWRAP_RUNTIME_HOME = "true"` — `HOME`, `XDG_CONFIG_HOME`,
-  `XDG_CACHE_HOME` all point at the per-run runtime dir.
+- `FIRMA_RUN_BWRAP_RUNTIME_HOME = "false"` — when `"true"`, `HOME`,
+  `XDG_CONFIG_HOME`, and `XDG_CACHE_HOME` all point at the per-run runtime
+  dir (full home-dir isolation). Disabled by default so the agent retains
+  its config (MCP servers, auth tokens, etc.) across runs. Set to `"true"`
+  to restore isolation when home-dir confinement is required.
 - `FIRMA_RUN_BWRAP_MASK_HOME_PATHS = ".ssh,.gnupg,.aws,.config/gcloud,.env"`
   — defense-in-depth tmpfs masks on the host home paths.
 
