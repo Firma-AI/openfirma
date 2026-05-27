@@ -40,6 +40,24 @@ export default defineConfig({
 }),
     starlight({
       title: 'OpenFirma',
+      head: [
+  {
+    tag: 'script',
+    attrs: {
+      async: true,
+      src: 'https://www.googletagmanager.com/gtag/js?id=G-ZJYB1QZ697',
+    },
+  },
+  {
+    tag: 'script',
+    content: `
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-ZJYB1QZ697');
+    `,
+  },
+],
       description: 'Governed runtime and local policy enforcement for AI agents.',
       logo: {
         src: './src/assets/openfirma-logo.png',
