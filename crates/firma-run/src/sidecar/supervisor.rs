@@ -16,9 +16,10 @@ use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use tracing::{debug, warn};
+use tracing::{info, warn};
+use wait_timeout::ChildExt;
 
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
@@ -267,11 +268,11 @@ impl SidecarSupervisor {
             },
         )?;
 
-        tracing::info!(
+        info!(
             sandbox_id = req.sandbox_id,
             pid,
             endpoint = %capture.interceptor_addr,
-            "autostarted sidecar ready"
+            "sidecar started"
         );
 
         let endpoint = capture.interceptor_addr.parse::<SocketAddr>().map_or_else(
@@ -316,24 +317,19 @@ impl SidecarSupervisor {
 impl Drop for SidecarSupervisor {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            debug!(pid = self.pid, "stopping autostarted sidecar");
             send_sigterm(self.pid);
-            let deadline = Instant::now() + STOP_GRACE;
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,
-                    Ok(None) if Instant::now() >= deadline => {
-                        warn!(pid = self.pid, "sidecar SIGKILL after grace");
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break;
-                    }
-                    Ok(None) => thread::sleep(Duration::from_millis(100)),
-                    Err(error) => {
-                        warn!(%error, "sidecar wait failed");
-                        let _ = child.kill();
-                        break;
-                    }
+            match child.wait_timeout(STOP_GRACE) {
+                Ok(Some(_)) => {
+                    info!(pid = self.pid, "sidecar stopped");
+                }
+                Ok(None) => {
+                    warn!(pid = self.pid, "sidecar SIGKILL after grace");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                Err(error) => {
+                    warn!(%error, "sidecar wait failed");
+                    let _ = child.kill();
                 }
             }
         }
