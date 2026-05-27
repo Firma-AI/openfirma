@@ -1,3 +1,6 @@
+# AUTO-GENERATED — do not edit. This file is overwritten on each startup by firma-run.
+# To override, set the FIRMA_MANAGED_POLICY env var to a custom policy path.
+
 policy_id = "generic-local-command"
 policy_version = "v1"
 default_action = "allow"
