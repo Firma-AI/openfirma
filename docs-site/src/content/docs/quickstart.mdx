@@ -30,6 +30,16 @@ cargo install --path crates/firma --bin firma --locked
 
 This installs `firma` into Cargo's binary directory, usually `~/.cargo/bin`. If `firma --version` is not found, make sure that directory is on your `PATH`.
 
+:::note[Development builds]
+To build without installing — for example to test a local change without overwriting your global `firma` binary:
+ 
+```bash
+cargo build --release
+```
+ 
+The output lands in `target/release/firma`.
+:::
+
 ## Set up a project
 
 Start in the project directory you want to protect. Scaffold the local OpenFirma layout with the defaults:
