@@ -10,8 +10,21 @@ use firma_stack::MetadataFile;
     reason = "test helper: panics are acceptable test failures"
 )]
 fn write_marker(run_dir: &Path, sandbox_id: &str, pid: u32) {
+    write_marker_with_listen(run_dir, sandbox_id, pid, None);
+}
+
+/// Write a marker, optionally recording an explicit `listen` endpoint
+/// (a `host:port` pair for an `http_proxy` interceptor, or a socket path).
+/// `None` omits the field, mirroring a legacy marker written before
+/// FIR-195.
+#[allow(
+    clippy::expect_used,
+    reason = "test helper: panics are acceptable test failures"
+)]
+fn write_marker_with_listen(run_dir: &Path, sandbox_id: &str, pid: u32, listen: Option<&str>) {
     let dir = run_dir.join(sandbox_id);
     fs::create_dir_all(&dir).expect("mkdir marker dir");
+    let listen_line = listen.map_or_else(String::new, |l| format!("listen = \"{l}\"\n"));
     let toml = format!(
         "sandbox_id = \"{sandbox_id}\"\n\
          agent_id = \"codex\"\n\
@@ -19,7 +32,8 @@ fn write_marker(run_dir: &Path, sandbox_id: &str, pid: u32) {
          authority_url = \"https://authority.local\"\n\
          policy_bundle_version = \"deadbeef\"\n\
          pid = {pid}\n\
-         started_at = \"2026-05-18T10:00:00Z\"\n"
+         started_at = \"2026-05-18T10:00:00Z\"\n\
+         {listen_line}"
     );
     fs::write(dir.join("metadata.toml"), toml).expect("write metadata.toml");
 }
@@ -109,6 +123,49 @@ fn uptime_secs_is_some_when_pid_file_exists() {
         entry.uptime_secs.is_some(),
         "uptime_secs should be Some when sidecar.pid is present"
     );
+}
+
+#[test]
+fn http_proxy_listen_with_listening_port_is_running() {
+    use std::net::TcpListener;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let run_dir = tmp.path().join("run");
+    let me = std::process::id();
+
+    // An `http_proxy` per-run sidecar binds a loopback TCP port, not a
+    // Unix socket. Keep a listener bound so the probe's connect succeeds.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind tcp");
+    let addr = listener.local_addr().expect("local addr");
+    write_marker_with_listen(&run_dir, "http-running", me, Some(&addr.to_string()));
+
+    let entry = probe_entry(&run_dir.join("http-running")).expect("probe");
+    assert_eq!(
+        entry.state,
+        State::Running,
+        "a healthy http_proxy per-run sidecar must report Running, not Unhealthy"
+    );
+    assert_eq!(entry.listen, std::path::PathBuf::from(addr.to_string()));
+}
+
+#[test]
+fn http_proxy_listen_with_closed_port_is_unhealthy() {
+    use std::net::TcpListener;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let run_dir = tmp.path().join("run");
+    let me = std::process::id();
+
+    // Bind to grab a free port, then drop the listener so the port is
+    // closed: a live pid whose endpoint refuses connections is Unhealthy.
+    let addr = {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind tcp");
+        listener.local_addr().expect("local addr")
+    };
+    write_marker_with_listen(&run_dir, "http-closed", me, Some(&addr.to_string()));
+
+    let entry = probe_entry(&run_dir.join("http-closed")).expect("probe");
+    assert_eq!(entry.state, State::Unhealthy);
 }
 
 #[cfg(unix)]
