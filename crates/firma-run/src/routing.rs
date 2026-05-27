@@ -360,8 +360,9 @@ pub fn resolve_authority(
                     });
                 }
                 warn!(
-                    target,
-                    "using existing local authority on plaintext loopback (dev mode); mTLS hardening applies to https:// authority deployments"
+                    sandbox_id = identity.sandbox_id,
+                    url = %format!("http://{target}"),
+                    "authority reused: existing local authority on plaintext loopback"
                 );
                 return Ok(ResolvedAuthority {
                     url: format!("http://{target}"),
@@ -398,9 +399,6 @@ pub fn resolve_authority(
             }) {
                 Ok(sup) => {
                     let ephemeral_pub_key = sup.pub_key_path();
-                    warn!(
-                        "autostarted local authority in plaintext loopback mode (dev convenience); mTLS hardening applies to https:// authority deployments"
-                    );
                     Ok(ResolvedAuthority {
                         url: sup.url(),
                         ca_cert_path,
@@ -416,8 +414,9 @@ pub fn resolve_authority(
                             });
                         }
                         warn!(
-                            target,
-                            "authority port became reachable during autostart retry; proceeding with plaintext local authority (dev mode)"
+                            sandbox_id = identity.sandbox_id,
+                            url = %format!("http://{target}"),
+                            "authority reused: port became reachable during autostart retry"
                         );
                         Ok(ResolvedAuthority {
                             url: format!("http://{target}"),

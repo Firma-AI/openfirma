@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use tracing::{debug, warn};
+use tracing::{info, warn};
 use wait_timeout::ChildExt;
 
 use crate::error::RunError;
@@ -293,11 +293,11 @@ impl AuthoritySupervisor {
             },
         )?;
 
-        tracing::info!(
+        info!(
             sandbox_id = req.sandbox_id,
             pid,
             listen_addr = %capture.listen_addr,
-            "autostarted authority ready"
+            "authority started"
         );
 
         Ok(Self {
@@ -337,10 +337,11 @@ impl AuthoritySupervisor {
 impl Drop for AuthoritySupervisor {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            debug!(pid = self.pid, "stopping autostarted authority");
             send_sigterm(self.pid);
             match child.wait_timeout(STOP_GRACE) {
-                Ok(Some(_)) => {}
+                Ok(Some(_)) => {
+                    info!(pid = self.pid, "authority stopped");
+                }
                 Ok(None) => {
                     warn!(pid = self.pid, "authority SIGKILL after grace");
                     let _ = child.kill();
