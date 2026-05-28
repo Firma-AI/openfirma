@@ -50,7 +50,10 @@ fn run_start(args: StartArgs) -> ExitCode {
     match firma_stack::start(&cfg, &state_dir, mode) {
         Ok(_) => {
             if mode == firma_stack::StartMode::Detached {
-                println!("firma sidecar running, state_dir={}", state_dir.display());
+                crate::output::ok(format!(
+                    "sidecar running, state_dir={}",
+                    state_dir.display()
+                ));
             }
             ExitCode::SUCCESS
         }
@@ -75,7 +78,7 @@ fn run_stop(args: StopArgs) -> ExitCode {
 }
 
 fn fail(msg: &str) -> ExitCode {
-    eprintln!("firma sidecar: {msg}");
+    crate::output::err(format!("sidecar: {msg}"));
     ExitCode::from(2)
 }
 

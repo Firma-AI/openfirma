@@ -16,7 +16,7 @@ pub fn run(args: Args) -> ExitCode {
         }
         Err(err) => {
             error!(error = %err, "supervisor failed");
-            eprintln!("firma __supervise: {err}");
+            crate::output::err(format!("__supervise: {err}"));
             ExitCode::from(2)
         }
     }

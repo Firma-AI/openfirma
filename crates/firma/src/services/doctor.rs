@@ -38,7 +38,7 @@ pub fn run(args: Args) -> ExitCode {
     {
         Ok(rt) => rt,
         Err(error) => {
-            eprintln!("firma doctor: tokio runtime: {error}");
+            crate::output::err(format!("doctor: tokio runtime: {error}"));
             return ExitCode::from(2);
         }
     };
@@ -53,7 +53,7 @@ pub fn run(args: Args) -> ExitCode {
     };
     let _ = stdout.flush();
     if let Err(error) = render_result {
-        eprintln!("firma doctor: render: {error}");
+        crate::output::err(format!("doctor: render: {error}"));
         return ExitCode::from(2);
     }
 
