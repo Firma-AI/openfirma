@@ -43,7 +43,7 @@ fn marker_dir_layout_and_developer_cedar() {
 
     let marker = tmp.path().join("marker/authority");
     let sup = AuthoritySupervisor::spawn(SpawnRequest {
-        sandbox_id: "sb1",
+        sandbox_id: &firma_run::identity::SandboxId::from("sb1"),
         agent_id: "agent",
         session_id: "sess",
         marker_dir: marker.clone(),

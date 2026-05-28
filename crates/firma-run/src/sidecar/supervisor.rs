@@ -23,6 +23,7 @@ use wait_timeout::ChildExt;
 
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
+use crate::identity::SandboxId;
 
 /// Per-spec default ready-line wait. CLI flag overrides this value.
 pub const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
@@ -34,7 +35,7 @@ const STOP_GRACE: Duration = Duration::from_secs(5);
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct SpawnRequest<'a> {
-    pub sandbox_id: &'a str,
+    pub sandbox_id: &'a SandboxId,
     pub agent_id: &'a str,
     pub session_id: &'a str,
     pub marker_dir: PathBuf,
@@ -269,7 +270,7 @@ impl SidecarSupervisor {
         )?;
 
         info!(
-            sandbox_id = req.sandbox_id,
+            sandbox_id = req.sandbox_id.compact(),
             pid,
             endpoint = %capture.interceptor_addr,
             "sidecar started"

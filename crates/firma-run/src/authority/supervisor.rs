@@ -14,6 +14,7 @@ use tracing::{info, warn};
 use wait_timeout::ChildExt;
 
 use crate::error::RunError;
+use crate::identity::SandboxId;
 
 /// Per-spec default ready-line wait. CLI flag overrides.
 pub const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
@@ -36,7 +37,7 @@ permit(principal, action, resource);
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct SpawnRequest<'a> {
-    pub sandbox_id: &'a str,
+    pub sandbox_id: &'a SandboxId,
     pub agent_id: &'a str,
     pub session_id: &'a str,
     /// Sub-marker dir (the `authority/` directory inside the sandbox marker).
@@ -294,7 +295,7 @@ impl AuthoritySupervisor {
         )?;
 
         info!(
-            sandbox_id = req.sandbox_id,
+            sandbox_id = req.sandbox_id.compact(),
             pid,
             listen_addr = %capture.listen_addr,
             "authority started"
