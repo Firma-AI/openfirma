@@ -29,13 +29,13 @@ impl SandboxId {
         }
     }
 
-    /// Shortened form for log fields: first 8 hex chars + `-…` for generated
-    /// IDs (e.g. `01970def-…`), full value for custom ones.
+    /// Shortened form for log fields: first 8 hex chars for generated
+    /// IDs (e.g. `01970def`), full value for custom ones.
     #[must_use]
     pub fn compact(&self) -> String {
         match self {
             Self::Custom(s) => s.clone(),
-            Self::Generated(s) => format!("{}…", &s[..9]),
+            Self::Generated(s) => s[..8].to_string(),
         }
     }
 }
