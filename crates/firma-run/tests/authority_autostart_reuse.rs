@@ -56,7 +56,11 @@ fn existing_plaintext_h2_authority_is_reused_without_supervisor() {
 
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join("firma.toml");
-    std::fs::write(&cfg, format!("[authority]\nlisten_addr = \"{authority_address}\"\n")).unwrap();
+    std::fs::write(
+        &cfg,
+        format!("[authority]\nlisten_addr = \"{authority_address}\"\n"),
+    )
+    .unwrap();
     let identity = firma_run::identity::RunIdentity::new("test");
     let runtime_dir = tmp.path().join("runtime");
     let flags = AutostartFlags::default();

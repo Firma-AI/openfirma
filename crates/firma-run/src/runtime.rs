@@ -242,7 +242,7 @@ fn resolve_sidecar_template_path(
 
 fn log_run_start(identity: &RunIdentity, profile: &ResolvedProfile) {
     tracing::info!(
-        sandbox_id = %identity.sandbox_id,
+        sandbox_id = identity.sandbox_id.compact(),
         session_id = %identity.session_id,
         profile = %identity.profile,
         backend = %profile.backend,

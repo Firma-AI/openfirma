@@ -376,7 +376,7 @@ pub fn resolve_authority(
                     });
                 }
                 tracing::info!(
-                    sandbox_id = identity.sandbox_id,
+                    sandbox_id = identity.sandbox_id.compact(),
                     url = %format!("http://{target}"),
                     "authority reused: existing local authority on plaintext loopback"
                 );
@@ -430,7 +430,7 @@ pub fn resolve_authority(
                             });
                         }
                         warn!(
-                            sandbox_id = identity.sandbox_id,
+                            sandbox_id = identity.sandbox_id.compact(),
                             url = %format!("http://{target}"),
                             "authority reused: port became reachable during autostart retry"
                         );
