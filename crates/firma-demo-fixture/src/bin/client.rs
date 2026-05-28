@@ -12,11 +12,12 @@
 //! GitHub Actions job.
 
 use clap::Parser;
-use reqwest::Proxy;
+use reqwest::{Proxy, Url};
 use serde::Deserialize;
 
 const SESSION_HEADER: &str = "x-firma-session-id";
 const SESSION_VALUE: &str = "demo-session";
+const IPV4_LOOPBACK_HOST: &str = "127.0.0.1";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -50,20 +51,31 @@ struct DenyBody {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    let proxy = normalize_loopback_url(&args.proxy)?;
+    let target = normalize_loopback_url(&args.target)?;
     let client = reqwest::Client::builder()
-        .proxy(Proxy::all(&args.proxy)?)
+        .proxy(Proxy::all(proxy.as_str())?)
         .build()?;
 
-    if let Err(err) = run_allow(&client, &args.target).await {
+    if let Err(err) = run_allow(&client, target.as_str()).await {
         eprintln!("[allow] FAIL: {err:#}");
         std::process::exit(1);
     }
-    if let Err(err) = run_deny(&client, &args.target).await {
+    if let Err(err) = run_deny(&client, target.as_str()).await {
         eprintln!("[deny] FAIL: {err:#}");
         std::process::exit(1);
     }
     println!("[ok] ALLOW + DENY round-trips matched expectation.");
     Ok(())
+}
+
+fn normalize_loopback_url(raw: &str) -> anyhow::Result<Url> {
+    let mut url = Url::parse(raw)?;
+    if url.host_str().is_some_and(|host| host == "localhost") {
+        url.set_host(Some(IPV4_LOOPBACK_HOST))
+            .map_err(|err| anyhow::anyhow!("failed to normalize localhost URL {raw}: {err}"))?;
+    }
+    Ok(url)
 }
 
 async fn run_allow(client: &reqwest::Client, target: &str) -> anyhow::Result<()> {
@@ -121,4 +133,33 @@ async fn run_deny(client: &reqwest::Client, target: &str) -> anyhow::Result<()> 
         anyhow::bail!("DENY body missing detail; body={body}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_loopback_url_rewrites_localhost() {
+        let url =
+            normalize_loopback_url("http://localhost:9100").expect("localhost URL should parse");
+
+        assert_eq!(url.as_str(), "http://127.0.0.1:9100/");
+    }
+
+    #[test]
+    fn test_normalize_loopback_url_preserves_ipv4_loopback() {
+        let url = normalize_loopback_url("http://127.0.0.1:9100")
+            .expect("IPv4 loopback URL should parse");
+
+        assert_eq!(url.as_str(), "http://127.0.0.1:9100/");
+    }
+
+    #[test]
+    fn test_normalize_loopback_url_preserves_non_loopback_host() {
+        let url = normalize_loopback_url("http://example.test:9100")
+            .expect("non-loopback URL should parse");
+
+        assert_eq!(url.as_str(), "http://example.test:9100/");
+    }
 }

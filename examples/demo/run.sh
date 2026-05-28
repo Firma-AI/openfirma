@@ -18,6 +18,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEMO="$ROOT/examples/demo"
 LOG_DIR="$DEMO/logs"
 TARGET_DIR="$ROOT/target/release"
+LOOPBACK_HOST="127.0.0.1"
 
 mkdir -p "$LOG_DIR"
 
@@ -61,19 +62,12 @@ poll_tcp() {
   return 1
 }
 
-# Poll a TCP endpoint on either IPv4 or IPv6 loopback.
+# Poll a demo TCP endpoint on IPv4 loopback. The demo services bind IPv4
+# literals, so readiness must not depend on how the host resolves localhost.
 poll_tcp_loopback() {
   local port="$1"
   local label="${2:-loopback:$port}"
-  local deadline=$((SECONDS + 15))
-  while (( SECONDS < deadline )); do
-    if nc -z 127.0.0.1 "$port" >/dev/null 2>&1 || nc -z ::1 "$port" >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.2
-  done
-  echo "[demo] timed out waiting for $label" >&2
-  return 1
+  poll_tcp "$LOOPBACK_HOST" "$port" "$label"
 }
 
 # Poll an HTTP endpoint for a 2xx response.
@@ -110,7 +104,7 @@ ensure_authority_tls() {
     return
   fi
   echo "[demo] bootstrapping authority transport TLS material"
-  (cd "$DEMO" && "$TARGET_DIR/firma" authority init-tls --out-dir . --host 127.0.0.1 --host localhost)
+  (cd "$DEMO" && "$TARGET_DIR/firma" authority init-tls --out-dir . --host "$LOOPBACK_HOST" --host localhost)
 }
 
 ensure_audit_key() {
@@ -178,8 +172,8 @@ echo "[demo] starting firma sidecar (log-filter=debug)"
     --config "$DEMO/firma.toml" \
     >"$LOG_DIR/sidecar.log" 2>&1) &
 SIDE_PID=$!
-poll_http "http://127.0.0.1:9000/healthz" "sidecar /healthz"
-poll_tcp "127.0.0.1" 7474 "sidecar HTTP proxy :7474"
+poll_http "http://$LOOPBACK_HOST:9000/healthz" "sidecar /healthz"
+poll_tcp "$LOOPBACK_HOST" 7474 "sidecar HTTP proxy :7474"
 # Wait for the authority policy bundle stream to push the first
 # bundle so Stage 2 readiness flips. /healthz is liveness only and
 # doesn't surface this state yet.
@@ -194,8 +188,8 @@ case "$MODE" in
     CA_BUNDLE="$DEMO/firma-ca/firma-ca.crt"
     echo "[demo] dispatching scripted Python hero agent (CA=$CA_BUNDLE)"
     (cd "$ROOT/examples/agents/agents_sdk_py" && \
-        HTTPS_PROXY=http://127.0.0.1:7474 \
-        HTTP_PROXY=http://127.0.0.1:7474 \
+        HTTPS_PROXY=http://$LOOPBACK_HOST:7474 \
+        HTTP_PROXY=http://$LOOPBACK_HOST:7474 \
         SSL_CERT_FILE="$CA_BUNDLE" \
         REQUESTS_CA_BUNDLE="$CA_BUNDLE" \
         FIRMA_SESSION_ID=demo-session \
@@ -208,8 +202,8 @@ case "$MODE" in
     CA_BUNDLE="$DEMO/firma-ca/firma-ca.crt"
     echo "[demo] dispatching interactive Python REPL (CA=$CA_BUNDLE)"
     (cd "$ROOT/examples/agents/agents_sdk_py" && \
-        HTTPS_PROXY=http://127.0.0.1:7474 \
-        HTTP_PROXY=http://127.0.0.1:7474 \
+        HTTPS_PROXY=http://$LOOPBACK_HOST:7474 \
+        HTTP_PROXY=http://$LOOPBACK_HOST:7474 \
         SSL_CERT_FILE="$CA_BUNDLE" \
         REQUESTS_CA_BUNDLE="$CA_BUNDLE" \
         FIRMA_SESSION_ID=demo-session \
@@ -217,13 +211,13 @@ case "$MODE" in
     ;;
   ci)
     echo "[demo] starting firma-demo-fixture"
-    "$TARGET_DIR/firma-demo-fixture" --listen-addr 127.0.0.1:9100 \
+    "$TARGET_DIR/firma-demo-fixture" --listen-addr "$LOOPBACK_HOST:9100" \
         >"$LOG_DIR/fixture.log" 2>&1 &
     FIX_PID=$!
-    poll_http "http://127.0.0.1:9100/_ping" "fixture /_ping"
+    poll_http "http://$LOOPBACK_HOST:9100/_ping" "fixture /_ping"
     "$TARGET_DIR/firma-demo-fixture-client" \
-        --proxy "http://127.0.0.1:7474" \
-        --target "http://127.0.0.1:9100"
+        --proxy "http://$LOOPBACK_HOST:7474" \
+        --target "http://$LOOPBACK_HOST:9100"
     ;;
   *)
     echo "[demo] unknown mode '$MODE'; expected hero|repl|ci" >&2
