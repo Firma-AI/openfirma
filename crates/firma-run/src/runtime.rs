@@ -482,19 +482,10 @@ fn build_execution_env(
 }
 
 fn build_attribution_headers(
-    profile: &ResolvedProfile,
+    _profile: &ResolvedProfile,
     identity: &RunIdentity,
 ) -> BTreeMap<String, String> {
-    let mut headers = identity.attribution_headers();
-    let runtime_user = std::env::var("USER")
-        .ok()
-        .or_else(|| std::env::var("USERNAME").ok())
-        .or_else(|| std::env::var("LOGNAME").ok())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    headers.insert("x-firma-agent".to_string(), profile.id.clone());
-    headers.insert("x-firma-user".to_string(), runtime_user);
-    headers
+    identity.full_attribution_headers()
 }
 
 fn maybe_apply_claude_settings(

@@ -47,6 +47,27 @@ impl RunIdentity {
         headers.insert("x-firma-profile".to_string(), self.profile.clone());
         headers
     }
+
+    /// Full set of attribution headers including agent and host-user identity.
+    ///
+    /// Used by the host-side proxy bridge (non-structural / macOS path) and by
+    /// `FIRMA_RUN_ATTR_HEADERS_JSON` (structural / bwrap path) to stamp every
+    /// outbound request with consistent attribution.  Mirrors what the sandboxed
+    /// `firma __proxy-bridge` subprocess injects when `FIRMA_RUN_ATTR_HEADERS_JSON`
+    /// is set in its environment.
+    #[must_use]
+    pub fn full_attribution_headers(&self) -> BTreeMap<String, String> {
+        let mut headers = self.attribution_headers();
+        let user = std::env::var("USER")
+            .ok()
+            .or_else(|| std::env::var("USERNAME").ok())
+            .or_else(|| std::env::var("LOGNAME").ok())
+            .unwrap_or_else(|| "unknown".to_string());
+        // `profile` equals the resolved `ResolvedProfile::id` (set at construction).
+        headers.insert("x-firma-agent".to_string(), self.profile.clone());
+        headers.insert("x-firma-user".to_string(), user);
+        headers
+    }
 }
 
 fn read_identity_override(key: &str) -> Option<String> {
