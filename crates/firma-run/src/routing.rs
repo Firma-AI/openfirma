@@ -144,7 +144,7 @@ pub fn prepare_network_runtime(
             env_overrides,
             sidecar_endpoint: effective_endpoint,
             #[cfg(unix)]
-            _host_bridge: host_bridge,
+            _host_bridge: Some(host_bridge),
             #[cfg(unix)]
             _adapter: None,
             _sidecar_supervisor: sidecar_supervisor,
@@ -219,20 +219,19 @@ pub fn prepare_network_runtime(
 /// subprocess is never run, so without this host-side bridge the sidecar
 /// receives an empty `session_id` and denies every request.
 ///
-/// Returns `None` (with a warning) when the endpoint is a Unix socket, which
-/// does not occur on the macOS path in practice.
 #[cfg(unix)]
 fn setup_host_bridge(
     endpoint: &SidecarEndpoint,
     identity: &RunIdentity,
     env_overrides: &mut BTreeMap<String, String>,
-) -> Result<Option<crate::proxy_bridge::HostBridgeHandle>, RunError> {
+) -> Result<crate::proxy_bridge::HostBridgeHandle, RunError> {
     let SidecarEndpoint::Tcp { addr } = endpoint else {
-        tracing::warn!(
-            "non-structural network path with a Unix socket sidecar endpoint: \
-            host bridge not started, attribution headers will not be injected"
-        );
-        return Ok(None);
+        return Err(RunError::UnsupportedBackend {
+            backend: "non_structural_proxy_bridge".to_string(),
+            reason:
+                "non-structural networking requires a TCP sidecar endpoint so the host bridge can inject attribution headers"
+                    .to_string(),
+        });
     };
 
     let bridge =
@@ -252,7 +251,7 @@ fn setup_host_bridge(
     env_overrides.insert("ALL_PROXY".to_string(), format!("http://{bridge_addr}"));
     env_overrides.insert("all_proxy".to_string(), format!("http://{bridge_addr}"));
 
-    Ok(Some(bridge))
+    Ok(bridge)
 }
 
 fn sidecar_trust_env_overrides(
@@ -789,27 +788,42 @@ fn relay_unix_to_unix(client: &UnixStream, target: &UnixStream) -> io::Result<()
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod non_structural_env_tests {
     use std::collections::BTreeMap;
-    use std::net::TcpListener;
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::str::FromStr;
+    use std::time::Duration;
 
+    use crate::backend::{BackendKind, SandboxHandle};
+    use crate::config::NetworkPolicy;
     use crate::config::SidecarEndpoint;
     use crate::identity::RunIdentity;
 
-    use super::setup_host_bridge;
+    use super::{AutostartFlags, ResolvedAuthority, prepare_network_runtime, setup_host_bridge};
+
+    fn bind_loopback_optional() -> Option<TcpListener> {
+        match TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => Some(listener),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => None,
+            Err(error) => panic!("bind: {error}"),
+        }
+    }
 
     /// Verifies that `setup_host_bridge` inserts all proxy env vars pointing
     /// to the bridge, and that the bridge port is distinct from the sidecar
     /// port (FIR-213 regression guard).
     #[test]
     fn non_structural_tcp_overrides_http_proxy_to_bridge_port() {
-        let fake_sidecar = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let Some(fake_sidecar) = bind_loopback_optional() else {
+            eprintln!("skipping test: loopback bind is not permitted in this environment");
+            return;
+        };
         let sidecar_addr = fake_sidecar.local_addr().expect("local_addr");
         let endpoint = SidecarEndpoint::Tcp { addr: sidecar_addr };
         let identity = RunIdentity::new("test-agent");
         let mut env = BTreeMap::new();
 
         let bridge = setup_host_bridge(&endpoint, &identity, &mut env)
-            .expect("setup_host_bridge should succeed")
-            .expect("bridge should be Some for TCP endpoint");
+            .expect("setup_host_bridge should succeed");
 
         // All six proxy variants must be present.
         for key in &[
@@ -845,23 +859,124 @@ mod non_structural_env_tests {
         );
     }
 
-    /// Verifies that a Unix socket endpoint on the non-structural path returns
-    /// `None` without error (and does not insert proxy env vars).
+    /// Verifies that a Unix socket endpoint on the non-structural path fails
+    /// closed because no host bridge can be started.
     #[test]
-    fn non_structural_unix_endpoint_returns_none_without_env_overrides() {
+    fn non_structural_unix_endpoint_fails_closed() {
         let endpoint = SidecarEndpoint::Unix {
             path: std::path::PathBuf::from("/tmp/test.sock"),
         };
         let identity = RunIdentity::new("test-agent");
         let mut env = BTreeMap::new();
 
-        let bridge = setup_host_bridge(&endpoint, &identity, &mut env)
-            .expect("setup_host_bridge should not error on Unix endpoint");
-
-        assert!(bridge.is_none(), "Unix endpoint should not start a bridge");
+        let Err(error) = setup_host_bridge(&endpoint, &identity, &mut env) else {
+            panic!("Unix endpoint should fail closed on non-structural path");
+        };
+        let rendered = error.to_string();
         assert!(
-            env.is_empty(),
-            "No proxy env vars should be inserted for Unix endpoint"
+            rendered.contains("requires a TCP sidecar endpoint"),
+            "unexpected error: {rendered}"
+        );
+        assert!(env.is_empty(), "No proxy env vars should be inserted");
+    }
+
+    /// Integration-style FIR-213 regression test across `prepare_network_runtime`:
+    /// non-structural mode must wire an HTTP proxy bridge that injects
+    /// `x-firma-session-id` on CONNECT before traffic reaches the sidecar.
+    #[test]
+    fn prepare_network_runtime_non_structural_injects_session_id_for_connect() {
+        let Some(upstream_listener) = bind_loopback_optional() else {
+            eprintln!("skipping test: loopback bind is not permitted in this environment");
+            return;
+        };
+        let upstream_addr: SocketAddr = upstream_listener.local_addr().expect("local_addr");
+
+        let received_request = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let received_clone = received_request.clone();
+        let upstream_thread = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = upstream_listener.accept() {
+                stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                    }
+                }
+                *received_clone.lock().expect("lock") = buf;
+                let _ = stream.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n");
+            }
+        });
+
+        let handle = SandboxHandle {
+            backend: BackendKind::Vz,
+            runtime_dir: std::env::temp_dir().join("firma-routing-test-runtime"),
+            identity: RunIdentity::new("test-agent"),
+            mounts: Vec::new(),
+            network_policy: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+        };
+        let identity = RunIdentity::new("test-agent");
+        let flags = AutostartFlags {
+            sidecar_autostart: false,
+            no_autostart: true,
+            template_path: None,
+            startup_timeout: Duration::from_secs(1),
+            authority_url: None,
+            authority_ca_cert: None,
+            authority_pub_key: None,
+            use_http_proxy_sidecar: false,
+        };
+        let authority = ResolvedAuthority {
+            url: "https://authority.test".to_string(),
+            ca_cert_path: None,
+            pub_key_path: None,
+            supervisor: None,
+        };
+        let runtime = prepare_network_runtime(
+            &handle,
+            &SidecarEndpoint::Tcp {
+                addr: upstream_addr,
+            },
+            &identity,
+            &flags,
+            authority,
+        )
+        .expect("prepare_network_runtime should succeed");
+
+        let http_proxy = runtime
+            .env_overrides()
+            .get("HTTP_PROXY")
+            .expect("HTTP_PROXY must be set");
+        let proxy_addr = http_proxy
+            .strip_prefix("http://")
+            .expect("HTTP_PROXY must use http:// scheme");
+        let proxy_sock = SocketAddr::from_str(proxy_addr).expect("valid proxy socket addr");
+
+        let connect_req =
+            "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n";
+        let mut client = TcpStream::connect(proxy_sock).expect("connect");
+        client.set_read_timeout(Some(Duration::from_secs(2))).ok();
+        client.write_all(connect_req.as_bytes()).expect("write");
+        let mut resp = [0u8; 256];
+        let _ = client.read(&mut resp);
+        drop(client);
+        drop(runtime);
+        upstream_thread.join().expect("upstream join");
+
+        let captured = received_request.lock().expect("lock").clone();
+        let captured_str = String::from_utf8_lossy(&captured);
+        assert!(
+            captured_str.contains("x-firma-session-id:"),
+            "CONNECT request did not carry x-firma-session-id; got:\n{captured_str}"
         );
     }
 }
