@@ -50,25 +50,16 @@ fn spawn_plaintext_h2_stub(listener: TcpListener) {
 
 #[test]
 fn existing_plaintext_h2_authority_is_reused_without_supervisor() {
-    let Ok(listener) = TcpListener::bind("[::1]:50051") else {
-        eprintln!("skip: [::1]:50051 not free");
-        return;
-    };
+    let listener = TcpListener::bind("[::1]:0").unwrap();
+    let authority_address = listener.local_addr().unwrap();
     spawn_plaintext_h2_stub(listener);
 
     let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("firma.toml");
+    std::fs::write(&cfg, format!("[authority]\nlisten_addr = \"{authority_address}\"\n")).unwrap();
     let identity = firma_run::identity::RunIdentity::new("test");
     let runtime_dir = tmp.path().join("runtime");
-    let flags = AutostartFlags {
-        sidecar_autostart: false,
-        no_autostart: false,
-        template_path: None,
-        startup_timeout: Duration::from_secs(2),
-        authority_url: None,
-        authority_ca_cert: None,
-        authority_pub_key: None,
-        use_http_proxy_sidecar: false,
-    };
+    let flags = AutostartFlags::default();
     let mut prompt = NoPrompt;
     let result = resolve_authority(
         &identity,
@@ -76,8 +67,8 @@ fn existing_plaintext_h2_authority_is_reused_without_supervisor() {
         &flags,
         &AuthorityCli::Unset,
         "developer",
-        None,
-        None,
+        Some(&cfg),
+        cfg.parent(),
         &PathBuf::from("/bin/false"),
         &mut prompt,
     );
@@ -87,5 +78,5 @@ fn existing_plaintext_h2_authority_is_reused_without_supervisor() {
         resolved.supervisor.is_none(),
         "reuse path must not spawn a supervisor"
     );
-    assert_eq!(resolved.url, "http://[::1]:50051");
+    assert_eq!(resolved.url, format!("http://{authority_address}"));
 }
