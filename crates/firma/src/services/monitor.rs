@@ -38,7 +38,7 @@ pub fn run(args: &Args) -> ExitCode {
     let (state_dir, audit_path) = match resolve_paths(args.state_dir.as_ref()) {
         Ok(paths) => paths,
         Err(error) => {
-            eprintln!("firma monitor: {error}");
+            crate::output::err(format!("monitor: {error}"));
             return ExitCode::from(2);
         }
     };
@@ -47,7 +47,7 @@ pub fn run(args: &Args) -> ExitCode {
     let backfill = match parse_since(args.since.as_deref()) {
         Ok(value) => value,
         Err(error) => {
-            eprintln!("firma monitor: --since: {error}");
+            crate::output::err(format!("monitor: --since: {error}"));
             return ExitCode::from(2);
         }
     };
@@ -89,7 +89,7 @@ pub fn run(args: &Args) -> ExitCode {
             if error.kind() == io::ErrorKind::BrokenPipe {
                 break;
             }
-            eprintln!("firma monitor: render: {error}");
+            crate::output::err(format!("monitor: render: {error}"));
             return ExitCode::from(2);
         }
         let _ = out.flush();
@@ -112,11 +112,10 @@ fn resolve_paths(state_dir_flag: Option<&PathBuf>) -> Result<(PathBuf, PathBuf),
 
 fn maybe_print_wait_hint(follow: bool, audit_path: &Path) {
     if follow && !audit_path.exists() {
-        eprintln!(
-            "firma monitor: waiting for audit log at {} \
-             (start `firma run` or `firma sidecar start` first)",
+        crate::output::warn(format!(
+            "monitor: waiting for audit log at {} (start `firma run` or `firma sidecar start` first)",
             audit_path.display()
-        );
+        ));
     }
 }
 
