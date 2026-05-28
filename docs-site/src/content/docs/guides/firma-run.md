@@ -189,17 +189,17 @@ Flags:
 
 ```
 2026-05-27T10:00:01Z  INFO firma_run::authority::supervisor: authority started
-    sandbox_id="01970def-…" pid=84231 listen_addr="[::1]:54321"
+    sandbox_id="01970def" pid=84231 listen_addr="[::1]:54321"
 
 2026-05-27T10:00:02Z  INFO firma_run::sidecar::supervisor: sidecar started
-    sandbox_id="01970def-…" pid=84235 endpoint="127.0.0.1:18080"
+    sandbox_id="01970def" pid=84235 endpoint="127.0.0.1:18080"
 ```
 
 If a local authority was already reachable before the run, you see an `INFO` instead:
 
 ```
 2026-05-27T10:00:01Z  INFO firma_run::routing: authority reused: existing local authority on plaintext loopback
-    sandbox_id="01970def-…" url="http://[::1]:50051"
+    sandbox_id="01970def" url="http://[::1]:50051"
 ```
 
 On exit, each autostarted component logs a stopping notice:
