@@ -104,7 +104,7 @@ async fn run_revoke(config: &AuthorityConfig, token_id: TokenId, reason: &str) -
             config.revocation_file.display()
         )
     })?;
-    println!("revoked token: {token_id}");
+    crate::output::ok(format!("revoked token: {token_id}"));
     Ok(())
 }
 
@@ -123,7 +123,7 @@ async fn run_compact(config: &AuthorityConfig) -> Result<()> {
             config.revocation_file.display()
         )
     })?;
-    println!("compacted: {}", config.revocation_file.display());
+    crate::output::ok(format!("compacted: {}", config.revocation_file.display()));
     Ok(())
 }
 
@@ -298,7 +298,7 @@ async fn run_issue(config: &AuthorityConfig, args: &IssueArgs) -> Result<()> {
     let toml_body = SeedFile::from_issuance(&out).to_toml()?;
     std::fs::write(&args.output, toml_body)
         .with_context(|| format!("failed to write {}", args.output.display()))?;
-    println!("issued capability to {}", args.output.display());
+    crate::output::ok(format!("issued capability to {}", args.output.display()));
     Ok(())
 }
 

@@ -40,7 +40,7 @@ pub fn run(path: &Path) -> anyhow::Result<ExitCode> {
     if let Some(diagnostic) = diagnostic {
         eprint!("{diagnostic}");
     } else {
-        println!("OK");
+        crate::output::ok("policy validated");
     }
     Ok(code)
 }

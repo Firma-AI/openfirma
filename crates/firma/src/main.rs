@@ -3,6 +3,7 @@ mod doctor;
 mod fs;
 mod log;
 mod monitor;
+mod output;
 mod policy;
 mod services;
 mod signal;
@@ -17,7 +18,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     if let Err(e) = log::init(&cli.log_filter, cli.log_file.as_deref()) {
-        eprintln!("error: {e}");
+        output::err(format!("{e}"));
         return ExitCode::from(1);
     }
 
@@ -38,7 +39,7 @@ fn main() -> ExitCode {
     match result {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("error: {e:#}");
+            output::err(format!("{e:#}"));
             ExitCode::from(1)
         }
     }
