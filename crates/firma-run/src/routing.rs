@@ -136,7 +136,9 @@ pub fn prepare_network_runtime(
     let autostart_trust_env = sidecar_trust_env_overrides(sidecar_supervisor.as_ref());
 
     if !handle.network_policy.enforce_network_namespace {
-        let mut env_overrides = autostart_trust_env;
+        let env_overrides = autostart_trust_env;
+        #[cfg(unix)]
+        let mut env_overrides = env_overrides;
         #[cfg(unix)]
         let host_bridge = setup_host_bridge(&effective_endpoint, identity, &mut env_overrides)?;
 
