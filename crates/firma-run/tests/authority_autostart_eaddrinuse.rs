@@ -11,7 +11,6 @@
 
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
 use firma_run::routing::{AutostartFlags, resolve_authority};
@@ -28,27 +27,15 @@ impl AuthorityPromptIo for PanicPrompt {
 
 #[test]
 fn pre_bound_port_without_plaintext_h2_fails_closed() {
-    let Ok(_listener) = TcpListener::bind("[::1]:50051") else {
-        eprintln!("skip: port 50051 not free for the test");
-        return;
-    };
+    let listener = TcpListener::bind("[::1]:0").unwrap();
+    let address = listener.local_addr().unwrap();
 
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join("firma.toml");
-    std::fs::write(&cfg, "[authority]\nlisten_addr = \"127.0.0.1:50051\"\n").unwrap();
-
+    std::fs::write(&cfg, format!("[authority]\nlisten_addr = \"{address}\"\n")).unwrap();
     let identity = firma_run::identity::RunIdentity::new("test");
     let runtime_dir = tmp.path().join("runtime");
-    let flags = AutostartFlags {
-        sidecar_autostart: false,
-        no_autostart: false,
-        template_path: None,
-        startup_timeout: Duration::from_secs(2),
-        authority_url: None,
-        authority_ca_cert: None,
-        authority_pub_key: None,
-        use_http_proxy_sidecar: false,
-    };
+    let flags = AutostartFlags::default();
     let mut prompt = PanicPrompt;
     let result = resolve_authority(
         &identity,
@@ -56,7 +43,7 @@ fn pre_bound_port_without_plaintext_h2_fails_closed() {
         &flags,
         &AuthorityCli::Unset,
         "developer",
-        Some(cfg.as_path()),
+        Some(&cfg),
         cfg.parent(),
         &PathBuf::from("/bin/false"),
         &mut prompt,

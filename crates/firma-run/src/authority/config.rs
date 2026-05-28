@@ -23,13 +23,25 @@ pub struct AuthorityConnectSection {
 }
 
 /// Snapshot of routing-relevant sections.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthoritySection {
     /// `true` when `[authority]` is present — the file declares a
     /// co-located Mini Authority that `firma run` should autostart.
     pub local: bool,
+    /// Parsed `[authority].listen_addr`, defaulting to `[::1]:50051`.
+    pub listen_addr: std::net::SocketAddr,
     /// Client-side connect coordinates lifted from `[sidecar.authority]`.
     pub connect: Option<AuthorityConnectSection>,
+}
+
+impl Default for AuthoritySection {
+    fn default() -> Self {
+        Self {
+            local: false,
+            listen_addr: default_listen_addr(),
+            connect: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -48,10 +60,20 @@ struct SidecarOnDisk {
     authority: Option<SidecarAuthorityOnDisk>,
 }
 
+fn default_listen_addr() -> std::net::SocketAddr {
+    std::net::SocketAddr::new(std::net::Ipv6Addr::LOCALHOST.into(), 50051)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AuthorityOnDisk {
+    #[serde(default = "default_listen_addr")]
+    listen_addr: std::net::SocketAddr,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 struct UserConfig {
     #[serde(default)]
-    authority: Option<toml::value::Table>,
+    authority: Option<AuthorityOnDisk>,
     #[serde(default)]
     sidecar: Option<SidecarOnDisk>,
 }
@@ -81,6 +103,9 @@ pub fn read_authority(path: &Path) -> Result<Option<AuthoritySection>, RunError>
         reason: e.to_string(),
     })?;
     let local = parsed.authority.is_some();
+    let listen_addr = parsed
+        .authority
+        .map_or_else(default_listen_addr, |a| a.listen_addr);
     let connect = parsed
         .sidecar
         .and_then(|s| s.authority)
@@ -93,7 +118,11 @@ pub fn read_authority(path: &Path) -> Result<Option<AuthoritySection>, RunError>
     if !local && connect.is_none() {
         return Ok(None);
     }
-    Ok(Some(AuthoritySection { local, connect }))
+    Ok(Some(AuthoritySection {
+        local,
+        listen_addr,
+        connect,
+    }))
 }
 
 #[cfg(test)]
