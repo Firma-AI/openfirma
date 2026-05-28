@@ -367,7 +367,7 @@ fn compute_request_fingerprint(
     }
     hasher.update(session_id.as_bytes());
     hasher.update(b"\0");
-    hasher.update(sandbox_id.to_string().as_bytes());
+    hasher.update(AsRef::<str>::as_ref(sandbox_id).as_bytes());
     hasher.update(b"\0");
     if let Some(aid) = agent_id {
         hasher.update(aid.as_bytes());
