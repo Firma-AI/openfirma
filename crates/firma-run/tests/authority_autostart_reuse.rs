@@ -1,5 +1,6 @@
-//! When a plaintext H2 listener is already up on `[::1]:50051`, `resolve_authority`
-//! must take the reuse path: return `supervisor: None` and not attempt autostart.
+//! When a plaintext H2 listener is already up on the configured listen address,
+//! `resolve_authority` must take the reuse path: return `supervisor: None` and
+//! not attempt autostart.
 
 #![allow(
     clippy::unwrap_used,

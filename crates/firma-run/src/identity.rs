@@ -29,13 +29,13 @@ impl SandboxId {
         }
     }
 
-    /// Shortened form for log fields: first 8 hex chars + `…` for generated
-    /// IDs, full value for custom ones.
+    /// Shortened form for log fields: first 8 hex chars + `-…` for generated
+    /// IDs (e.g. `01970def-…`), full value for custom ones.
     #[must_use]
     pub fn compact(&self) -> String {
         match self {
             Self::Custom(s) => s.clone(),
-            Self::Generated(s) => format!("{}…", &s[..8]),
+            Self::Generated(s) => format!("{}…", &s[..9]),
         }
     }
 }
@@ -83,6 +83,8 @@ impl Serialize for SandboxId {
 }
 
 impl<'de> Deserialize<'de> for SandboxId {
+    // Origin is not preserved across serialization boundaries; deserialized
+    // values always become `Custom`.
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Ok(Self::Custom(String::deserialize(deserializer)?))
     }
