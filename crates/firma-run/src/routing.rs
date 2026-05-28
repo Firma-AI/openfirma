@@ -18,7 +18,6 @@ use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 use crate::sidecar::supervisor::{SidecarSupervisor, SpawnRequest};
-use tracing::warn;
 
 #[cfg(unix)]
 fn structural_proxy_listen_addr() -> &'static str {
@@ -429,7 +428,7 @@ pub fn resolve_authority(
                                 endpoint: format!("http://{target}"),
                             });
                         }
-                        warn!(
+                        tracing::info!(
                             sandbox_id = identity.sandbox_id.compact(),
                             url = %format!("http://{target}"),
                             "authority reused: port became reachable during autostart retry"
