@@ -754,6 +754,7 @@ fn default_https_mitm_intercept_hosts() -> Vec<String> {
         "api.stripe.com".to_string(),
         "api.slack.com".to_string(),
         "hooks.slack.com".to_string(),
+        "github.com".to_string(),
         "api.github.com".to_string(),
         "uploads.github.com".to_string(),
     ]
