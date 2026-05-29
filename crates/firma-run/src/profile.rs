@@ -80,6 +80,7 @@ fn generic_profile() -> ProfilePatch {
         executable_policies: BTreeMap::new(),
         codex_cli: None,
         use_http_proxy_sidecar: true,
+        allow_non_structural: false,
     }
 }
 

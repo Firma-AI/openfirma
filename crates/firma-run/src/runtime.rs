@@ -19,6 +19,7 @@ use crate::supervisor::wait_with_signal_forwarding;
 /// Lib-level input for [`execute_run`]. The CLI layer (in the `firma`
 /// host crate) builds this from its `clap`-derived args struct.
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct RunInput {
     /// Built-in profile id to use.
     pub profile: String,
@@ -52,6 +53,10 @@ pub struct RunInput {
     /// Optional override of the user-config path. Default
     /// `dirs::config_dir()/firma/firma.toml`. Tests inject a tmp path.
     pub user_config_path: Option<PathBuf>,
+    /// When true, allow non-structural (proxy-only) backends without
+    /// failing closed. Required for macOS vz and WSL2 backends when
+    /// structural enforcement is not available.
+    pub allow_non_structural: bool,
 }
 
 /// Execute `firma run`.
@@ -68,12 +73,16 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
     if args.command.is_empty() {
         return Err(RunError::MissingCommand);
     }
+
     ensure_required_session_identity()?;
 
     let profile = resolve_profile(args)?;
     if args.print_effective_config {
         print_effective_config(&profile)?;
     }
+
+    let allow_non_structural =
+        profile.allow_non_structural || crate::config::env_truthy("FIRMA_RUN_ALLOW_NON_STRUCTURAL");
 
     let identity = RunIdentity::new(profile.id.clone());
     log_run_start(&identity, &profile);
@@ -96,12 +105,35 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         let proof = backend.enforce_network(handle_ref, &profile.network)?;
         backend.verify_fail_closed(handle_ref, &proof)?;
 
-        tracing::info!(
-            structural = proof.structural,
-            fail_closed = proof.fail_closed,
-            detail = %proof.detail,
-            "backend network enforcement proof"
-        );
+        if !proof.structural && !allow_non_structural {
+            return Err(RunError::NonStructuralBackendRequiresOptIn {
+                backend: proof.backend.to_string(),
+            });
+        }
+
+        if proof.structural {
+            tracing::info!(
+                structural = proof.structural,
+                fail_closed = proof.fail_closed,
+                detail = %proof.detail,
+                "backend network enforcement proof"
+            );
+        } else {
+            tracing::warn!(
+                structural = false,
+                mode = "proxy_only",
+                enforced = false,
+                backend = %proof.backend,
+                profile = %profile.id,
+                fail_closed = proof.fail_closed,
+                http_proxy_injected = profile.use_http_proxy_sidecar,
+                detail = %proof.detail,
+                "backend compatibility proof — proxy-only mode; \
+                 agent egress is NOT mandatorily confined; \
+                 raw sockets, proxy-env-unset children, and clients \
+                 ignoring HTTP_PROXY may bypass the Sidecar"
+            );
+        }
 
         // Resolve firma.toml: explicit CLI path > env var > walk up from
         // cwd for `.firma/firma.toml`. `None` means no config — zero-config
@@ -644,6 +676,7 @@ mod tests {
     };
 
     use super::{RunIdentity, build_execution_env};
+    use crate::backend::SandboxHandle;
 
     #[test]
     fn execution_env_includes_identity_and_proxy() {
@@ -672,6 +705,7 @@ mod tests {
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: false,
+            allow_non_structural: false,
         };
 
         let identity = RunIdentity::new("generic");
@@ -729,6 +763,7 @@ mod tests {
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: false,
+            allow_non_structural: false,
         };
 
         let identity = RunIdentity::new("generic");
@@ -779,6 +814,7 @@ mod tests {
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: false,
+            allow_non_structural: false,
         };
 
         let identity = RunIdentity::new("generic");
@@ -839,6 +875,7 @@ mod tests {
             },
             sidecar_local_exec: None,
             use_http_proxy_sidecar: true,
+            allow_non_structural: false,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
@@ -914,6 +951,7 @@ mod tests {
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: true,
+            allow_non_structural: false,
         };
         let identity = RunIdentity::new("codex");
         let lease = crate::capability::CapabilityLeaseManager::new(&profile.capability)
@@ -955,6 +993,7 @@ mod tests {
             },
             sidecar_local_exec: None,
             use_http_proxy_sidecar: true,
+            allow_non_structural: false,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
@@ -1032,6 +1071,7 @@ mod tests {
             },
             sidecar_local_exec: None,
             use_http_proxy_sidecar: true,
+            allow_non_structural: false,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
@@ -1097,6 +1137,7 @@ mod tests {
             authority_cli: crate::authority::AuthorityCli::Unset,
             authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
             user_config_path: None,
+            allow_non_structural: true,
         };
         let resolved = super::resolve_sidecar_template_path(
             &args,
@@ -1130,8 +1171,118 @@ mod tests {
             authority_cli: crate::authority::AuthorityCli::Unset,
             authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
             user_config_path: None,
+            allow_non_structural: true,
         };
         let resolved = super::resolve_sidecar_template_path(&args, Some(user_cfg.as_path()));
         assert_eq!(resolved, Some(user_cfg));
+    }
+
+    #[test]
+    fn enforce_network_proof_is_structural_for_bwrap() {
+        let backend = crate::backend::build_backend(crate::backend::BackendKind::Bwrap);
+        let handle = SandboxHandle {
+            backend: crate::backend::BackendKind::Bwrap,
+            runtime_dir: PathBuf::from("/tmp/firma-test"),
+            identity: RunIdentity::new("generic"),
+            mounts: vec![],
+            network_policy: NetworkPolicy {
+                enforce_network_namespace: true,
+                fail_closed: true,
+            },
+        };
+        let proof = backend
+            .enforce_network(&handle, &handle.network_policy)
+            .unwrap();
+        assert!(
+            proof.structural,
+            "bwrap backend must report structural=true"
+        );
+    }
+
+    #[test]
+    fn enforce_network_proof_is_non_structural_for_vz() {
+        let backend = crate::backend::build_backend(crate::backend::BackendKind::Vz);
+        let handle = SandboxHandle {
+            backend: crate::backend::BackendKind::Vz,
+            runtime_dir: PathBuf::from("/tmp/firma-test"),
+            identity: RunIdentity::new("generic"),
+            mounts: vec![],
+            network_policy: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+        };
+        let result = backend.enforce_network(&handle, &handle.network_policy);
+        if cfg!(target_os = "macos") {
+            let proof = result.unwrap();
+            assert!(!proof.structural, "vz backend must report structural=false");
+        }
+    }
+
+    #[test]
+    fn enforce_network_proof_is_non_structural_for_wsl2() {
+        let backend = crate::backend::build_backend(crate::backend::BackendKind::Wsl2);
+        let handle = SandboxHandle {
+            backend: crate::backend::BackendKind::Wsl2,
+            runtime_dir: PathBuf::from("/tmp/firma-test"),
+            identity: RunIdentity::new("generic"),
+            mounts: vec![],
+            network_policy: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+        };
+        let result = backend.enforce_network(&handle, &handle.network_policy);
+        if cfg!(target_os = "linux") || cfg!(target_os = "windows") {
+            let proof = result.unwrap();
+            assert!(
+                !proof.structural,
+                "wsl2 backend must report structural=false"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_profile_keeps_use_http_proxy_sidecar_on_non_structural_backend() {
+        let run_args = super::RunInput {
+            profile: "generic".to_string(),
+            config: None,
+            backend: Some(non_bwrap_backend_for_current_host()),
+            sidecar_cli: crate::sidecar::SidecarCli::Unset,
+            capability_file: None,
+            identity_mode: None,
+            preserve_host_user: false,
+            print_effective_config: false,
+            no_autostart: false,
+            sidecar_template_path: None,
+            sidecar_startup_timeout_secs: 10,
+            command: vec!["echo".to_string(), "ok".to_string()],
+            authority_cli: crate::authority::AuthorityCli::Unset,
+            authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
+            user_config_path: None,
+            allow_non_structural: true,
+        };
+        let resolved = crate::config::resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            resolved.use_http_proxy_sidecar,
+            "generic profile must keep use_http_proxy_sidecar=true on non-structural backend"
+        );
+    }
+
+    fn non_bwrap_backend_for_current_host() -> crate::backend::BackendKind {
+        #[cfg(target_os = "linux")]
+        {
+            return crate::backend::BackendKind::Firecracker;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            return crate::backend::BackendKind::Vz;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            return crate::backend::BackendKind::Wsl2;
+        }
+        #[allow(unreachable_code)]
+        crate::backend::BackendKind::Firecracker
     }
 }

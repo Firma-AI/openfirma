@@ -10,6 +10,7 @@ use firma_run::config::SandboxIdentityMode;
 
 /// Arguments for `firma run`.
 #[derive(Debug, Args)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct RunArgs {
     /// Built-in agent profile (e.g. `generic`, `codex`, `claude`) that selects
     /// default backend, identity mode and policy bundle.
@@ -81,6 +82,16 @@ pub struct RunArgs {
     /// Ignored when Authority is remote or already reachable.
     #[arg(long, default_value = firma_authority::DEFAULT_PROFILE)]
     pub authority_profile: String,
+
+    /// Allow non-structural (proxy-only) backends (macOS vz, WSL2) to run without
+    /// structural network enforcement. Without this flag, firma run fails closed
+    /// when the selected backend cannot provide mandatory OS-level network
+    /// confinement. This is intentional: proxy-only enforcement can be bypassed
+    /// by clients that ignore `HTTP_PROXY`, open raw sockets, or spawn children
+    /// with a clean environment. Set `run.allow_non_structural = true` in
+    /// firma.toml as a persistent alternative to this flag.
+    #[arg(long, default_value_t = false)]
+    pub allow_non_structural: bool,
 
     /// Wrapped command and args (pass after `--`).
     #[arg(required = true, num_args = 1.., allow_hyphen_values = true)]
