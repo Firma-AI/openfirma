@@ -140,6 +140,7 @@ impl ConstraintEnforcer {
                 ),
                 detail: "policy bundle unavailable; failing closed".to_string(),
                 envelope: Some(envelope.clone()),
+                identity: None,
             });
         }
 
@@ -152,6 +153,7 @@ impl ConstraintEnforcer {
                 ),
                 detail: "policy bundle unavailable or stale".to_string(),
                 envelope: Some(envelope.clone()),
+                identity: None,
             });
         }
 
@@ -177,6 +179,7 @@ impl ConstraintEnforcer {
                     envelope.intent.action_class, resource_display
                 ),
                 envelope: Some(envelope.clone()),
+                identity: None,
             }),
             Err(err) => Err(EnforcementDecision::Deny {
                 reason: DenyReason::FailClosed,
@@ -185,6 +188,7 @@ impl ConstraintEnforcer {
                 ),
                 detail: format!("policy evaluation failed; failing closed: {err}"),
                 envelope: Some(envelope.clone()),
+                identity: None,
             }),
         }
     }
@@ -221,6 +225,7 @@ impl ConstraintEnforcer {
                 ),
                 detail: "policy bundle unavailable; failing closed".to_string(),
                 envelope: Some(envelope.clone()),
+                identity: None,
             });
         }
 
@@ -233,6 +238,7 @@ impl ConstraintEnforcer {
                 ),
                 detail: "policy bundle unavailable or stale".to_string(),
                 envelope: Some(envelope.clone()),
+                identity: None,
             });
         }
 
@@ -258,6 +264,7 @@ impl ConstraintEnforcer {
                     timeout.as_millis()
                 ),
                 envelope: Some(envelope.clone()),
+                identity: None,
             })?
             .map_err(|join_err| EnforcementDecision::Deny {
                 reason: DenyReason::FailClosed,
@@ -266,6 +273,7 @@ impl ConstraintEnforcer {
                 ),
                 detail: format!("policy evaluation task failed; failing closed: {join_err}"),
                 envelope: Some(envelope.clone()),
+                identity: None,
             })?;
 
         match eval_result {
@@ -281,6 +289,7 @@ impl ConstraintEnforcer {
                     envelope.intent.resource_display()
                 ),
                 envelope: Some(envelope.clone()),
+                identity: None,
             }),
             Err(err) => Err(EnforcementDecision::Deny {
                 reason: DenyReason::FailClosed,
@@ -289,6 +298,7 @@ impl ConstraintEnforcer {
                 ),
                 detail: format!("policy evaluation failed; failing closed: {err}"),
                 envelope: Some(envelope.clone()),
+                identity: None,
             }),
         }
     }
@@ -322,6 +332,7 @@ impl ConstraintEnforcer {
                     resource, claims.resource_scope
                 ),
                 envelope: Some(envelope.clone()),
+                identity: None,
             });
         }
 
@@ -339,6 +350,7 @@ impl ConstraintEnforcer {
                     resource, claims.resource_scope
                 ),
                 envelope: Some(envelope.clone()),
+                identity: None,
             });
         }
 
@@ -350,6 +362,7 @@ impl ConstraintEnforcer {
                 action, claims.action_set
             ),
             envelope: Some(envelope.clone()),
+            identity: None,
         })
     }
 
