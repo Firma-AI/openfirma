@@ -490,10 +490,9 @@ fn strip_ansi(input: &str) -> String {
 
 fn line_marks_ready(line: &str) -> bool {
     let trimmed = line.trim_end();
-    // tracing-fmt default formatter emits `<ts> <LEVEL> <target>: ready`.
-    // Earlier lines carry key=value fields after the message, so a plain
-    // `: ready` suffix uniquely identifies the seventh line.
-    trimmed.ends_with(": ready") || trimmed == "ready"
+    // tracing default: `<ts> <LEVEL> <target>: ready`
+    // CompactFormatter (no --log-file): `[INFO] ready`
+    trimmed.ends_with(": ready") || trimmed == "ready" || trimmed.ends_with("] ready")
 }
 
 fn extract_kv(line: &str, key: &str) -> Option<String> {
