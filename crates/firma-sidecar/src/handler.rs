@@ -488,6 +488,42 @@ impl RequestHandler {
         }
     }
 
+    /// Emits a synthetic DENY audit event for a network-layer denial
+    /// raised before the enforcement pipeline runs.
+    ///
+    /// Covers fail-closed paths an interceptor rejects up front —
+    /// malformed requests and strict-MITM preflight failures — that
+    /// otherwise return 403 to the client with no audit trail, leaving
+    /// the deny invisible to `firma monitor` (FIR-208). No capability was
+    /// validated on these paths, so `agent_id` / `token_id` are empty.
+    pub async fn emit_synthetic_deny(
+        &self,
+        session_id: &str,
+        action: &str,
+        resource: &str,
+        reason: DenyReason,
+        detail: &str,
+    ) {
+        let payload = AuditPayload {
+            session_id: session_id.to_string(),
+            token_id: String::new(),
+            agent_id: String::new(),
+            action: action.to_string(),
+            resource: resource.to_string(),
+            decision: crate::pipeline::DECISION_DENY,
+            deny_reason: format!("{reason}: {detail}"),
+            enforcement_latency_us: 0,
+            context_hash: String::new(),
+            bundle_version: String::new(),
+            dispatch_status: 0,
+            dispatch_latency_us: 0,
+            response_size: 0,
+        };
+        if let Err(err) = self.audit_sink_sender.send(payload).await {
+            tracing::error!("failed to send audit event: {err}");
+        }
+    }
+
     /// Dispatches an approved call through the connector registry.
     ///
     /// Returns the [`HandledResponse`] plus a [`DispatchOutcome`] that
@@ -1279,6 +1315,49 @@ pub(crate) mod tests {
         assert_eq!(payload.decision, 1);
         assert!(rx.try_recv().is_err());
         upstream_cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn test_emit_synthetic_deny_sends_deny_audit_event() {
+        // Regression (FIR-208): pre-pipeline network-layer denials
+        // (malformed request, strict-MITM preflight fail-closed) return
+        // 403 to the client but historically emitted NO audit event, so
+        // they never surfaced in `firma monitor`. emit_synthetic_deny
+        // gives those paths an audit record.
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline(vec![allow_rule()], true, false),
+            test_connector_registry(),
+            tx,
+        );
+
+        handler
+            .emit_synthetic_deny(
+                "sess_x",
+                "network.connect",
+                "exa_mple.com/",
+                DenyReason::FailClosed,
+                "HTTPS_MITM_SETUP_FAILED: dns resolution failed",
+            )
+            .await;
+
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
+        assert_eq!(payload.decision, crate::pipeline::DECISION_DENY);
+        assert_eq!(payload.session_id, "sess_x");
+        assert_eq!(payload.action, "network.connect");
+        assert_eq!(payload.resource, "exa_mple.com/");
+        assert!(
+            payload.deny_reason.contains("HTTPS_MITM_SETUP_FAILED"),
+            "deny_reason should carry the detail, got {:?}",
+            payload.deny_reason
+        );
+        assert!(
+            payload.agent_id.is_empty() && payload.token_id.is_empty(),
+            "pre-validation denial has no known identity"
+        );
+        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]

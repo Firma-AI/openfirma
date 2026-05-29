@@ -190,6 +190,19 @@ The bundle is older than `bundle_ttl_seconds`. Either the Authority is unreachab
 
 The decision was ALLOW; the connector tried to dispatch and failed. The audit event is `decision.outcome = "ALLOW"` with a `connector.error` field set. The agent saw a 502 — but from the policy's perspective, the call was permitted. This split is intentional; see [Connectors](../../concepts/connectors/).
 
+## Scope: events the audit log does not capture (V0.1)
+
+The audit log and `firma monitor` cover the **network / L7 layer only**. Every ALLOW and DENY the enforcement pipeline makes — Stage 1 and Stage 2 — plus the fail-closed rejections the proxy raises before the pipeline runs (malformed request, strict-MITM preflight failure) produce an audit event you can see in monitor. Network-layer denials carry the validated `agent_id` and `token_id` when a capability was checked, so `firma monitor --agent <id>` keeps them.
+
+**Below-network denials are not surfaced in V0.1.** When an agent runs under `firma run`, the process sandbox enforces two boundaries the audit log does not observe:
+
+- **seccomp syscall denials** — blocked syscalls during `run_shell`. The filter returns `EPERM` to the sandboxed process (`SECCOMP_RET_ERRNO`); the kernel does not notify the parent, so `firma run` never sees the denial.
+- **filesystem write denials** — writes outside the agent's allowlisted paths. The sandbox enforces these with read-only bind mounts; the sandboxed process gets `EROFS`, again with no parent-observable signal.
+
+This is a **documented limitation, not a silent omission**. There is no feedback channel from the process sandbox into the Sidecar's audit pipe in V0.1, and the Sidecar is the sole producer of audit events. Surfacing seccomp and filesystem denials would require switching seccomp to `SECCOMP_RET_USER_NOTIF` (or an equivalent notification path) plus an IPC channel from `firma run` into the audit pipeline — deferred post-V1. See ADR-56 for the process-level enforcement scope boundary.
+
+To confirm a below-network block in V0.1, observe it from the agent side instead: the blocked syscall surfaces as `EPERM` and the blocked write as `EROFS` in the agent's own output.
+
 ## Building a useful workflow
 
 A small stack that catches most operational issues:

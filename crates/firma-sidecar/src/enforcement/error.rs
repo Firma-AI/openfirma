@@ -61,6 +61,7 @@ impl EnforcementError {
             stage,
             detail,
             envelope: None,
+            identity: None,
         }
     }
 }
