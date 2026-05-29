@@ -105,4 +105,14 @@ pub enum RunError {
          or set `[sidecar.authority].url` in firma.toml"
     )]
     AuthorityBootstrapDeclined,
+
+    #[error(
+        "backend '{backend}' provides proxy-only (non-structural) network enforcement; \
+         agent egress is mediated only for cooperative HTTP clients that honor HTTP_PROXY; \
+         raw sockets, proxy-env-unset children, and non-HTTP protocols may bypass the Sidecar; \
+         to proceed, either: (1) switch to a structural backend (Linux bwrap), or \
+         (2) pass --allow-non-structural (or set run.allow_non_structural = true in firma.toml) \
+         to acknowledge the limitations of proxy-only mode"
+    )]
+    NonStructuralBackendRequiresOptIn { backend: String },
 }
