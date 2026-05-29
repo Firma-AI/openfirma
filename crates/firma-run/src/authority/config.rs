@@ -56,11 +56,17 @@ pub fn read_authority(path: &Path) -> Result<Option<AuthoritySection>, RunError>
         .and_then(toml::Value::as_table)
         .and_then(|s| s.get("authority"))
         .and_then(toml::Value::as_table)
-        .and_then(|a| {
-            toml::to_string(a)
-                .ok()
-                .and_then(|s| toml::from_str::<SidecarAuthorityConfig>(&s).ok())
+        .map(|a| {
+            let s = toml::to_string(a).map_err(|e| RunError::ConfigParse {
+                path: path.to_path_buf(),
+                reason: format!("serialize [sidecar.authority]: {e}"),
+            })?;
+            toml::from_str::<SidecarAuthorityConfig>(&s).map_err(|e| RunError::ConfigParse {
+                path: path.to_path_buf(),
+                reason: format!("[sidecar.authority]: {e}"),
+            })
         })
+        .transpose()?
         .filter(|c| c.url.is_some());
 
     if !local && connect.is_none() {

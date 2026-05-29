@@ -897,11 +897,21 @@ fn env_truthy(name: &str) -> bool {
 }
 
 fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
-    let section =
-        firma_config::load_section(path, "run").map_err(|reason| RunError::ConfigParse {
+    let section = firma_config::load_section(path, "run").map_err(|reason| {
+        // load_section prefixes the path; strip it to avoid doubling in the
+        // RunError::ConfigParse display ("{path}: {reason}").
+        let prefix = format!("{}: ", path.display());
+        let reason = reason.strip_prefix(&prefix).unwrap_or(&reason).to_string();
+        let hint = if reason.contains("missing required") {
+            "; run `firma config` to add a [run] section"
+        } else {
+            ""
+        };
+        RunError::ConfigParse {
             path: path.to_path_buf(),
-            reason,
-        })?;
+            reason: format!("{reason}{hint}"),
+        }
+    })?;
 
     let parsed = toml::from_str::<FileConfig>(&section).map_err(|error| RunError::ConfigParse {
         path: path.to_path_buf(),
