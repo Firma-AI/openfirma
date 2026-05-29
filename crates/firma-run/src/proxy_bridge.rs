@@ -710,7 +710,6 @@ fn find_crlf(buffer: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::io;
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::time::Duration;
@@ -718,14 +717,6 @@ mod tests {
     #[cfg(unix)]
     use super::HostBridgeHandle;
     use super::{BodyKind, append_missing_headers, find_header_terminator, parse_request_metadata};
-
-    fn bind_loopback_optional() -> Option<TcpListener> {
-        match TcpListener::bind("127.0.0.1:0") {
-            Ok(listener) => Some(listener),
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => None,
-            Err(error) => panic!("upstream bind: {error}"),
-        }
-    }
 
     #[test]
     fn finds_header_terminator() {
@@ -772,10 +763,7 @@ mod tests {
     fn host_bridge_injects_session_id_into_http_request() {
         // ── upstream mock ──────────────────────────────────────────────────
         // Captures the raw bytes of the first request, then closes.
-        let Some(upstream_listener) = bind_loopback_optional() else {
-            eprintln!("skipping test: loopback bind is not permitted in this environment");
-            return;
-        };
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("upstream bind");
         let upstream_addr: SocketAddr = upstream_listener.local_addr().expect("local_addr");
 
         let received_request = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
@@ -843,10 +831,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn host_bridge_injects_session_id_into_connect_request() {
-        let Some(upstream_listener) = bind_loopback_optional() else {
-            eprintln!("skipping test: loopback bind is not permitted in this environment");
-            return;
-        };
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("upstream bind");
         let upstream_addr: SocketAddr = upstream_listener.local_addr().expect("local_addr");
 
         let received_request = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
@@ -908,10 +893,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn host_bridge_does_not_duplicate_existing_session_id() {
-        let Some(upstream_listener) = bind_loopback_optional() else {
-            eprintln!("skipping test: loopback bind is not permitted in this environment");
-            return;
-        };
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("upstream bind");
         let upstream_addr: SocketAddr = upstream_listener.local_addr().expect("local_addr");
 
         let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));

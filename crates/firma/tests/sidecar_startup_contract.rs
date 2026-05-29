@@ -38,15 +38,11 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 -----END PRIVATE KEY-----
 ";
 
-fn pick_free_port() -> Option<u16> {
-    let listener = match TcpListener::bind("127.0.0.1:0") {
-        Ok(listener) => listener,
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return None,
-        Err(error) => panic!("bind failed: {error}"),
-    };
-    let port = listener.local_addr().expect("local_addr").port();
+fn pick_free_port() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
     drop(listener);
-    Some(port)
+    port
 }
 
 fn firma_bin() -> std::path::PathBuf {
@@ -82,14 +78,8 @@ action_class = "communication.external.send"
     let audit_key = tmp.path().join("audit.key");
     std::fs::write(&audit_key, TEST_AUDIT_KEY_PEM).unwrap();
 
-    let Some(interceptor_port) = pick_free_port() else {
-        eprintln!("skipping test: restricted environment disallows loopback bind");
-        return;
-    };
-    let Some(health_port) = pick_free_port() else {
-        eprintln!("skipping test: restricted environment disallows loopback bind");
-        return;
-    };
+    let interceptor_port = pick_free_port();
+    let health_port = pick_free_port();
     let sidecar_toml = tmp.path().join("firma.toml");
     std::fs::write(
         &sidecar_toml,
@@ -160,14 +150,6 @@ signing_key_path = '{audit_key}'
 
     let _ = child.kill();
     let _ = child.wait();
-    if lines
-        .iter()
-        .any(|line| line.contains("Operation not permitted"))
-    {
-        eprintln!("skipping test: restricted environment disallows sidecar listener bind");
-        return;
-    }
-
     let mut idx = 0usize;
     for line in &lines {
         if idx >= CONTRACT_PREFIXES.len() {

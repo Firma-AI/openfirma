@@ -802,23 +802,12 @@ mod non_structural_env_tests {
 
     use super::{AutostartFlags, ResolvedAuthority, prepare_network_runtime, setup_host_bridge};
 
-    fn bind_loopback_optional() -> Option<TcpListener> {
-        match TcpListener::bind("127.0.0.1:0") {
-            Ok(listener) => Some(listener),
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => None,
-            Err(error) => panic!("bind: {error}"),
-        }
-    }
-
     /// Verifies that `setup_host_bridge` inserts all proxy env vars pointing
     /// to the bridge, and that the bridge port is distinct from the sidecar
     /// port (FIR-213 regression guard).
     #[test]
     fn non_structural_tcp_overrides_http_proxy_to_bridge_port() {
-        let Some(fake_sidecar) = bind_loopback_optional() else {
-            eprintln!("skipping test: loopback bind is not permitted in this environment");
-            return;
-        };
+        let fake_sidecar = TcpListener::bind("127.0.0.1:0").expect("bind");
         let sidecar_addr = fake_sidecar.local_addr().expect("local_addr");
         let endpoint = SidecarEndpoint::Tcp { addr: sidecar_addr };
         let identity = RunIdentity::new("test-agent");
@@ -887,10 +876,7 @@ mod non_structural_env_tests {
     /// `HTTP_PROXY` at that bridge (not directly at the sidecar endpoint).
     #[test]
     fn prepare_network_runtime_non_structural_injects_session_id_for_connect() {
-        let Some(upstream_listener) = bind_loopback_optional() else {
-            eprintln!("skipping test: loopback bind is not permitted in this environment");
-            return;
-        };
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let upstream_addr: SocketAddr = upstream_listener.local_addr().expect("local_addr");
 
         let _upstream_thread = std::thread::spawn(move || {

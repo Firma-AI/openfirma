@@ -127,7 +127,7 @@ struct MtlsTestServer {
 
 impl MtlsTestServer {
     /// Start an mTLS Authority with the given certs and allow-list.
-    async fn start(certs: &MtlsCerts, allowed_identities: &[&str]) -> Option<Self> {
+    async fn start(certs: &MtlsCerts, allowed_identities: &[&str]) -> Self {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
 
         // Write cert files.
@@ -192,17 +192,9 @@ impl MtlsTestServer {
             let _ = shutdown_rx.await;
         };
 
-        let server = match Server::try_new(config, shutdown_signal).await {
-            Ok(server) => server,
-            Err(error)
-                if error.to_string().contains("Operation not permitted")
-                    || error.to_string().contains("failed to bind to 127.0.0.1:0") =>
-            {
-                eprintln!("skipping test: restricted environment disallows loopback bind");
-                return None;
-            }
-            Err(error) => panic!("failed to create mTLS server: {error}"),
-        };
+        let server = Server::try_new(config, shutdown_signal)
+            .await
+            .expect("failed to create mTLS server");
         let port = server.port();
 
         tokio::spawn(async move {
@@ -212,11 +204,11 @@ impl MtlsTestServer {
         // Brief delay for the server to become ready.
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        Some(Self {
+        Self {
             port,
             _temp_dir: temp_dir,
             shutdown_tx,
-        })
+        }
     }
 
     fn stop(self) {
@@ -274,9 +266,7 @@ async fn mtls_allow_listed_client_receives_policy_bundle() {
         &certs.client_ca_key,
     );
 
-    let Some(server) = MtlsTestServer::start(&certs, &[&client.identity]).await else {
-        return;
-    };
+    let server = MtlsTestServer::start(&certs, &[&client.identity]).await;
     let channel = build_mtls_channel(
         &server.url(),
         &certs.server_ca_cert,
@@ -319,9 +309,7 @@ async fn mtls_allow_listed_client_receives_policy_bundle() {
 async fn mtls_non_allow_listed_client_rejected_at_handshake() {
     let certs = generate_mtls_certs();
     // Server allows "authorized-sidecar" only.
-    let Some(server) = MtlsTestServer::start(&certs, &["authorized-sidecar"]).await else {
-        return;
-    };
+    let server = MtlsTestServer::start(&certs, &["authorized-sidecar"]).await;
 
     // Client presents "unauthorized-sidecar" identity.
     let client = generate_client_cert(
@@ -361,9 +349,7 @@ async fn mtls_non_allow_listed_client_rejected_at_handshake() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mtls_missing_client_cert_rejected_at_handshake() {
     let certs = generate_mtls_certs();
-    let Some(server) = MtlsTestServer::start(&certs, &["authorized-sidecar"]).await else {
-        return;
-    };
+    let server = MtlsTestServer::start(&certs, &["authorized-sidecar"]).await;
 
     // Build a channel WITHOUT client identity — only the server CA cert.
     let channel = build_tls_only_channel(&server.url(), &certs.server_ca_cert)
@@ -399,9 +385,7 @@ async fn mtls_cn_identity_matched_when_no_san() {
         &certs.client_ca_key,
     );
 
-    let Some(server) = MtlsTestServer::start(&certs, &["cn-only-sidecar"]).await else {
-        return;
-    };
+    let server = MtlsTestServer::start(&certs, &["cn-only-sidecar"]).await;
 
     let channel = build_mtls_channel(
         &server.url(),
@@ -456,9 +440,7 @@ async fn mtls_wrong_client_ca_rejected_at_handshake() {
     );
 
     // Server trusts the original client CA, not the rogue one.
-    let Some(server) = MtlsTestServer::start(&certs, &["authorized-sidecar"]).await else {
-        return;
-    };
+    let server = MtlsTestServer::start(&certs, &["authorized-sidecar"]).await;
 
     let channel = build_mtls_channel(
         &server.url(),
