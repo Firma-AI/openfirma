@@ -155,4 +155,11 @@ fn marker_files_present_between_ready_and_drop() {
         started_at.contains('T') && (started_at.ends_with('Z') || started_at.contains('+')),
         "started_at not RFC 3339: {started_at}"
     );
+    // The interceptor endpoint from the ready log must be persisted so
+    // `firma sidecar status` can health-probe the right transport (FIR-195).
+    assert_eq!(
+        table.get("listen").and_then(|v| v.as_str()),
+        Some("x.sock"),
+        "listen endpoint from the ready log must be recorded in metadata"
+    );
 }

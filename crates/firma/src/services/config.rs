@@ -185,10 +185,10 @@ fn write_scaffold_files(
         let should_overwrite =
             force || is_merged_toml || (overwrite_policy && rel.starts_with("policies/"));
         if !should_overwrite && path.exists() {
-            eprintln!(
+            crate::output::warn(format!(
                 "skip (exists): {} — use --force to overwrite",
                 path.display()
-            );
+            ));
             continue;
         }
         std::fs::write(&path, content.as_bytes())
@@ -430,9 +430,8 @@ fn confirm_keep_local_authority(
         return Ok(false);
     }
 
-    eprintln!(
-        "Warning: this configuration includes a local [authority] section. \
-         If you keep it, firma run starts the Authority locally instead of using only the remote Authority."
+    crate::output::warn(
+        "this configuration includes a local [authority] section. If you keep it, firma run starts the Authority locally instead of using only the remote Authority.",
     );
     if !interactive || args.dry_run {
         return Ok(false);
@@ -1032,16 +1031,16 @@ fn cleanup_stale_posture_files(
                     .with_context(|| format!("remove {}", path.display()))?;
                 println!("  removed {}", path.display());
             } else {
-                eprintln!(
-                    "  kept {} — sidecar will load it alongside the active posture",
+                crate::output::warn(format!(
+                    "kept {} — sidecar will load it alongside the active posture",
                     path.display()
-                );
+                ));
             }
         } else {
-            eprintln!(
-                "  kept {} (locally modified) — pass --force to delete",
+            crate::output::warn(format!(
+                "kept {} (locally modified) — pass --force to delete",
                 path.display()
-            );
+            ));
         }
     }
     Ok(())

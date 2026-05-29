@@ -77,17 +77,17 @@ fn send_management(action: &str, args: &TokenActionArgs) -> anyhow::Result<ExitC
         match outcome {
             "ok" => {
                 if let Some(r) = reason {
-                    println!("{action} {}: ok — {r}", args.token_id);
+                    crate::output::ok(format!("{action} {}: {r}", args.token_id));
                 } else {
-                    println!("{action} {}: ok", args.token_id);
+                    crate::output::ok(format!("{action} {}", args.token_id));
                 }
                 Ok(ExitCode::SUCCESS)
             }
             other => {
                 if let Some(r) = reason {
-                    eprintln!("error: {other} — {r}");
+                    crate::output::err(format!("{other} — {r}"));
                 } else {
-                    eprintln!("error: {other}");
+                    crate::output::err(other);
                 }
                 Ok(ExitCode::from(1))
             }

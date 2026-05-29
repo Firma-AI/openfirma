@@ -38,6 +38,11 @@ pub struct ResolvedProfile {
     /// interceptor mode (TCP listener). When `false`, UDS interceptor mode.
     /// Set for profiles whose agent tool uses standard HTTP proxy env vars.
     pub use_http_proxy_sidecar: bool,
+    /// When `true`, allow non-structural (proxy-only) backends to run without
+    /// failing closed. Comes from config `[defaults] allow_non_structural = true`
+    /// and is OR'd with the CLI `--allow-non-structural` flag and env var
+    /// `FIRMA_RUN_ALLOW_NON_STRUCTURAL`.
+    pub allow_non_structural: bool,
 }
 
 impl ResolvedProfile {
@@ -345,6 +350,12 @@ pub(crate) struct ProfilePatch {
     /// Should be `true` for profiles whose agent uses standard HTTP proxy env vars.
     #[serde(default)]
     pub(crate) use_http_proxy_sidecar: bool,
+    /// Allow non-structural (proxy-only) backends to run without failing closed.
+    /// Intentional opt-in: proxy-only enforcement can be bypassed by clients
+    /// that ignore `HTTP_PROXY`, open raw sockets, or spawn children with
+    /// a clean environment.
+    #[serde(default)]
+    pub(crate) allow_non_structural: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -444,6 +455,7 @@ impl ProfilePatch {
             executable_policies,
             codex_cli: higher.codex_cli.or(self.codex_cli),
             use_http_proxy_sidecar: higher.use_http_proxy_sidecar || self.use_http_proxy_sidecar,
+            allow_non_structural: higher.allow_non_structural || self.allow_non_structural,
         }
     }
 }
@@ -563,6 +575,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         sidecar_local_exec,
         executable_policies,
         use_http_proxy_sidecar: patch.use_http_proxy_sidecar,
+        allow_non_structural: patch.allow_non_structural,
     };
 
     if matches!(
@@ -656,6 +669,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
         executable_policies: BTreeMap::new(),
         codex_cli: None,
         use_http_proxy_sidecar: false,
+        allow_non_structural: args.allow_non_structural,
     }
 }
 
@@ -844,14 +858,7 @@ fn default_managed_seccomp_policy(
     let source_policy_path = std::env::var(MANAGED_POLICY_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .map_or_else(
-            || {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("policies")
-                    .join(DEFAULT_MANAGED_POLICY_FILE)
-            },
-            PathBuf::from,
-        );
+        .map_or_else(ensure_managed_policy_path, PathBuf::from);
 
     let artifact_dir = std::env::var(MANAGED_ARTIFACT_DIR_ENV)
         .ok()
@@ -883,11 +890,42 @@ fn parse_managed_runtime_mode(value: &str) -> Result<SeccompRuntimeMode, RunErro
     }
 }
 
-fn default_managed_artifact_dir() -> PathBuf {
-    std::env::temp_dir().join("firma").join("seccomp-artifacts")
+/// Embedded default seccomp policy. Always written to `XDG_RUNTIME_DIR/firma/seccomp/` on
+/// startup so the on-disk copy stays in sync with the running binary. Used only when no
+/// override is set via env var or profile config.
+const MANAGED_SECCOMP_POLICY: &str = include_str!("../seccomp/generic-local-command-v1.toml");
+
+/// Writes the embedded seccomp policy to the runtime dir and returns its path.
+/// Always overwrites — this is a binary-embedded fallback, not a user-editable file.
+/// To override, set `FIRMA_RUN_MANAGED_SECCOMP_POLICY_PATH` or `seccomp_policy.source_policy_path` in the profile config.
+/// Creates the directory with restricted permissions (0o700/0o600).
+fn ensure_managed_policy_path() -> PathBuf {
+    let dir = firma_stack::runtime_paths::default_runtime_dir().join("seccomp");
+    write_managed_policy_to_dir(&dir)
 }
 
-fn env_truthy(name: &str) -> bool {
+fn write_managed_policy_to_dir(dir: &std::path::Path) -> PathBuf {
+    let path = dir.join(DEFAULT_MANAGED_POLICY_FILE);
+    if let Err(error) = firma_stack::fs::create_private_dir_all(dir) {
+        tracing::warn!(%error, "failed to create seccomp policy dir; falling back to unextracted path");
+        return path;
+    }
+    match firma_stack::fs::write_private_file(&path, MANAGED_SECCOMP_POLICY.as_bytes()) {
+        Ok(()) => {
+            tracing::debug!(path = %path.display(), "wrote default managed seccomp policy");
+        }
+        Err(error) => tracing::warn!(%error, "failed to write default seccomp policy"),
+    }
+    path
+}
+
+fn default_managed_artifact_dir() -> PathBuf {
+    let dir = firma_stack::runtime_paths::default_runtime_dir().join("seccomp-artifacts");
+    tracing::debug!(path = %dir.display(), "seccomp artifact dir");
+    dir
+}
+
+pub(crate) fn env_truthy(name: &str) -> bool {
     std::env::var(name).ok().is_some_and(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
@@ -955,6 +993,7 @@ mod tests {
             authority_cli: crate::authority::AuthorityCli::Unset,
             authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
             user_config_path: None,
+            allow_non_structural: true,
         }
     }
 
@@ -1000,7 +1039,7 @@ mod tests {
             assert!(
                 managed
                     .source_policy_path
-                    .ends_with("policies/generic-local-command-v1.toml"),
+                    .ends_with("seccomp/generic-local-command-v1.toml"),
                 "unexpected managed default policy path: {}",
                 managed.source_policy_path.display()
             );
@@ -1576,5 +1615,25 @@ timeout_ms = 700
                 panic!("expected unix endpoint, got {other:?}")
             }
         }
+    }
+
+    #[test]
+    fn managed_policy_overwrites_stale_content() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let seccomp_dir = tmpdir.path().join("seccomp");
+        fs::create_dir_all(&seccomp_dir).unwrap_or_else(|e| panic!("{e}"));
+        let policy_path = seccomp_dir.join(super::DEFAULT_MANAGED_POLICY_FILE);
+        fs::write(&policy_path, b"stale content from old binary version")
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        let result_path = super::write_managed_policy_to_dir(&seccomp_dir);
+
+        assert_eq!(result_path, policy_path);
+        let written = fs::read_to_string(&policy_path).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            written,
+            super::MANAGED_SECCOMP_POLICY,
+            "stale policy not overwritten by embedded version"
+        );
     }
 }
