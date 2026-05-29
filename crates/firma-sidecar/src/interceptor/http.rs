@@ -237,9 +237,22 @@ async fn handle_request(
         .await;
     }
 
+    // Capture host + session before `req` is consumed so a malformed
+    // request can still emit an attributable deny audit event (FIR-208).
+    let malformed_host = host_with_default_port(&req, false);
+    let session_hint = header_session_id(&req);
     let raw = match build_raw_request(req, max_request_body_bytes).await {
         Ok(raw) => raw,
-        Err(detail) => return Ok(deny_response(StatusCode::FORBIDDEN, &detail)),
+        Err(detail) => {
+            return Ok(deny_malformed(
+                &handler,
+                &session_hint,
+                "raw.http",
+                &malformed_host,
+                &detail,
+            )
+            .await);
+        }
     };
     let session_id = raw
         .headers
@@ -276,6 +289,58 @@ async fn handle_request(
     Ok(response)
 }
 
+/// Preflights the TLS acceptor for a MITM-candidate CONNECT target.
+///
+/// Always preflighted so a fallback to a blind CONNECT tunnel cannot
+/// bypass enforcement. Strict hosts fail closed — on preflight failure
+/// this emits a fail-closed deny audit event (FIR-208) and returns the
+/// 403 to send back via `Err`. Non-strict hosts fall back to a blind
+/// tunnel (returning `effective_mitm = None`) but only after the
+/// CONNECT-level decision is enforced by the caller.
+async fn preflight_mitm_acceptor(
+    handler: &RequestHandler,
+    session_id: &str,
+    target_info: &ConnectTargetInfo,
+    mitm_candidate: Option<Arc<HttpsMitmRuntime>>,
+    strict_mitm: bool,
+) -> Result<(Option<TlsAcceptor>, Option<Arc<HttpsMitmRuntime>>), Response<Full<Bytes>>> {
+    let mut prepared_acceptor: Option<TlsAcceptor> = None;
+    let mut effective_mitm = mitm_candidate;
+    if let Some(runtime) = effective_mitm.as_ref() {
+        match runtime.tls_acceptor_for_host(&target_info.host).await {
+            Ok(acceptor) => prepared_acceptor = Some(acceptor),
+            Err(e) => {
+                let detail = format!("HTTPS_MITM_SETUP_FAILED: {e}");
+                if strict_mitm {
+                    tracing::error!(
+                        host = %target_info.host,
+                        "strict MITM preflight failed: {detail}"
+                    );
+                    handler
+                        .emit_synthetic_deny(
+                            session_id,
+                            "network.connect",
+                            &resource_label_from_host(&target_info.host),
+                            DenyReason::FailClosed,
+                            &detail,
+                        )
+                        .await;
+                    return Err(deny_json_response(
+                        StatusCode::FORBIDDEN,
+                        crate::handler::deny_body_json(DenyReason::FailClosed, &detail),
+                    ));
+                }
+                tracing::warn!(
+                    host = %target_info.host,
+                    "non-strict MITM preflight failed; enforcing CONNECT and falling back to blind tunnel: {detail}"
+                );
+                effective_mitm = None;
+            }
+        }
+    }
+    Ok((prepared_acceptor, effective_mitm))
+}
+
 async fn handle_connect_request(
     req: &mut Request<Incoming>,
     handler: Arc<RequestHandler>,
@@ -285,7 +350,17 @@ async fn handle_connect_request(
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let raw = match build_raw_request_head(req, true) {
         Ok(raw) => raw,
-        Err(detail) => return Ok(deny_response(StatusCode::FORBIDDEN, &detail)),
+        Err(detail) => {
+            let host = host_with_default_port(req, true);
+            return Ok(deny_malformed(
+                &handler,
+                &header_session_id(req),
+                "network.connect",
+                &host,
+                &detail,
+            )
+            .await);
+        }
     };
     let session_id = raw
         .headers
@@ -301,35 +376,18 @@ async fn handle_connect_request(
         .as_ref()
         .is_some_and(|runtime| runtime.is_strict_host(&target_info.host));
 
-    // Always preflight the TLS acceptor when MITM is a candidate so a fallback
-    // to a blind CONNECT tunnel cannot bypass enforcement. Strict hosts fail
-    // closed; non-strict hosts fall back to blind tunnel BUT only after the
-    // CONNECT-level decision is enforced below.
-    let mut prepared_acceptor: Option<TlsAcceptor> = None;
-    let mut effective_mitm = mitm_candidate;
-    if let Some(runtime) = effective_mitm.as_ref() {
-        match runtime.tls_acceptor_for_host(&target_info.host).await {
-            Ok(acceptor) => prepared_acceptor = Some(acceptor),
-            Err(e) => {
-                let detail = format!("HTTPS_MITM_SETUP_FAILED: {e}");
-                if strict_mitm {
-                    tracing::error!(
-                        host = %target_info.host,
-                        "strict MITM preflight failed: {detail}"
-                    );
-                    return Ok(deny_json_response(
-                        StatusCode::FORBIDDEN,
-                        crate::handler::deny_body_json(DenyReason::FailClosed, &detail),
-                    ));
-                }
-                tracing::warn!(
-                    host = %target_info.host,
-                    "non-strict MITM preflight failed; enforcing CONNECT and falling back to blind tunnel: {detail}"
-                );
-                effective_mitm = None;
-            }
-        }
-    }
+    let (prepared_acceptor, effective_mitm) = match preflight_mitm_acceptor(
+        &handler,
+        &session_id,
+        &target_info,
+        mitm_candidate,
+        strict_mitm,
+    )
+    .await
+    {
+        Ok(pair) => pair,
+        Err(response) => return Ok(response),
+    };
 
     // MITM-intercepted hosts (preflight succeeded): by default skip CONNECT-level
     // enforcement because each decrypted inner request is enforced at L7.
@@ -923,10 +981,17 @@ async fn handle_mitm_https_request(
     max_request_body_bytes: usize,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     if req.method() == Method::CONNECT {
-        return Ok(deny_response(
-            StatusCode::BAD_REQUEST,
-            "MALFORMED_REQUEST: nested CONNECT is not supported",
-        ));
+        let detail = "MALFORMED_REQUEST: nested CONNECT is not supported";
+        handler
+            .emit_synthetic_deny(
+                connect_session_id,
+                "network.connect",
+                &resource_label_from_host(&target.host),
+                DenyReason::MalformedRequest,
+                detail,
+            )
+            .await;
+        return Ok(deny_response(StatusCode::BAD_REQUEST, detail));
     }
 
     if is_websocket_upgrade_request(&req) {
@@ -941,7 +1006,16 @@ async fn handle_mitm_https_request(
 
     let raw = match build_raw_https_request(req, &target, max_request_body_bytes).await {
         Ok(raw) => raw,
-        Err(detail) => return Ok(deny_response(StatusCode::FORBIDDEN, &detail)),
+        Err(detail) => {
+            return Ok(deny_malformed(
+                &handler,
+                connect_session_id,
+                "raw.http",
+                &target.host,
+                &detail,
+            )
+            .await);
+        }
     };
 
     let session_id = raw
@@ -990,7 +1064,16 @@ async fn handle_mitm_websocket_upgrade_request(
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let raw = match build_raw_https_request_head(req, &target) {
         Ok(raw) => raw,
-        Err(detail) => return Ok(deny_response(StatusCode::FORBIDDEN, &detail)),
+        Err(detail) => {
+            return Ok(deny_malformed(
+                &handler,
+                connect_session_id,
+                "raw.http",
+                &target.host,
+                &detail,
+            )
+            .await);
+        }
     };
     let session_id = raw
         .headers
@@ -1461,6 +1544,48 @@ fn host_with_default_port(req: &Request<Incoming>, is_connect: bool) -> String {
         .unwrap_or_default()
 }
 
+/// Builds a `host/` resource label for a synthetic deny audit event,
+/// falling back to `?` when the host could not be determined.
+fn resource_label_from_host(host: &str) -> String {
+    if host.is_empty() {
+        "?".to_string()
+    } else {
+        format!("{host}/")
+    }
+}
+
+/// Best-effort extraction of the `x-firma-session-id` header for audit
+/// attribution on pre-pipeline denials.
+fn header_session_id(req: &Request<Incoming>) -> String {
+    req.headers()
+        .get("x-firma-session-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Emits a malformed-request DENY audit event and builds the 403 to
+/// return, so pre-pipeline rejections still surface in `firma monitor`
+/// (FIR-208).
+async fn deny_malformed(
+    handler: &RequestHandler,
+    session_id: &str,
+    action: &str,
+    host: &str,
+    detail: &str,
+) -> Response<Full<Bytes>> {
+    handler
+        .emit_synthetic_deny(
+            session_id,
+            action,
+            &resource_label_from_host(host),
+            DenyReason::MalformedRequest,
+            detail,
+        )
+        .await;
+    deny_response(StatusCode::FORBIDDEN, detail)
+}
+
 fn connect_target(host: &str) -> String {
     host.parse::<hyper::http::uri::Authority>().map_or_else(
         |_| host.to_string(),
@@ -1779,6 +1904,23 @@ mod tests {
             crate::handler::tests::test_connector_registry(),
             tx,
         ))
+    }
+
+    /// Like [`test_handler`] but returns the audit receiver so tests can
+    /// assert which audit events the proxy emitted.
+    fn test_handler_with_audit(
+        pipeline: Arc<EnforcementPipeline>,
+    ) -> (
+        Arc<RequestHandler>,
+        tokio::sync::mpsc::Receiver<crate::audit::AuditPayload>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::channel(10);
+        let handler = Arc::new(RequestHandler::new(
+            pipeline,
+            crate::handler::tests::test_connector_registry(),
+            tx,
+        ));
+        (handler, rx)
     }
 
     /// Starts a minimal HTTP server that always returns `200 OK`.
@@ -2755,6 +2897,59 @@ Content-Length: 10\r\n\
         assert!(
             response.contains("HTTPS_MITM_SETUP_FAILED"),
             "expected MITM setup failure detail, got: {response}"
+        );
+
+        cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_proxy_connect_strict_mitm_preflight_failure_emits_deny_audit() {
+        // Regression (FIR-208): a strict-MITM preflight failure is a
+        // fail-closed network-layer DENY. It must surface in monitor, so
+        // the proxy has to emit an audit event — not just return 403.
+        let ca_tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let proxy_addr = free_addr();
+        let (handler, mut audit_rx) = test_handler_with_audit(test_pipeline_allow_connect());
+        let cancel = CancellationToken::new();
+        let invalid_dns_host = "exa_mple.com".to_string();
+        let connect_authority = format!("{invalid_dns_host}:443");
+
+        let mitm_config = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec![invalid_dns_host.clone()],
+            strict_hosts: vec![invalid_dns_host.clone()],
+            cert_ttl_secs: 300,
+            cert_cache_capacity: 16,
+            ..HttpsMitmConfig::default()
+        };
+
+        let server_handle = start_proxy_with_mitm(
+            proxy_addr,
+            handler,
+            cancel.clone(),
+            mitm_config,
+            ca_tempdir.path().to_path_buf(),
+        )
+        .await;
+
+        let request =
+            format!("CONNECT {connect_authority} HTTP/1.1\r\nHost: {connect_authority}\r\n\r\n");
+        let _ = proxy_response(proxy_addr, &request).await;
+
+        let payload = audit_rx.try_recv().unwrap_or_else(|e| {
+            panic!("expected a deny audit event for fail-closed preflight: {e}")
+        });
+        assert_eq!(payload.decision, crate::pipeline::DECISION_DENY);
+        assert!(
+            payload.deny_reason.contains("HTTPS_MITM_SETUP_FAILED"),
+            "deny audit should carry the fail-closed detail, got {:?}",
+            payload.deny_reason
+        );
+        assert!(
+            payload.resource.contains(&invalid_dns_host),
+            "deny audit should identify the target host, got {:?}",
+            payload.resource
         );
 
         cancel.cancel();
