@@ -126,10 +126,10 @@ fn merge_firma_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()>
 
     if inputs.has_sidecar() {
         ensure_sidecar_section(doc, inputs)?;
-        ensure_run_profiles_section(doc, inputs)?;
     } else {
         doc.as_table_mut().remove("sidecar");
     }
+    ensure_run_profiles_section(doc, inputs)?;
     Ok(())
 }
 
@@ -156,8 +156,18 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
         set_str_if_absent(interceptor, "mode", "http_proxy");
         set_str_if_absent(interceptor, "listen_addr", "127.0.0.1:8080");
         let https = ensure_table(interceptor, "https_mitm")?;
-        set_string_array(https, "intercept_hosts", inputs.mitm_hosts);
-        set_string_array(https, "strict_hosts", inputs.mitm_hosts);
+        if inputs.mitm_hosts.is_empty() {
+            // No MITM mappings selected: disable MITM and clear any stale host
+            // lists from a previous run. Writing empty arrays would leave
+            // `enabled = true` (the sidecar default) with no hosts — invalid.
+            https.insert("enabled", value(false));
+            https.remove("intercept_hosts");
+            https.remove("strict_hosts");
+        } else {
+            https.insert("enabled", value(true));
+            set_string_array(https, "intercept_hosts", inputs.mitm_hosts);
+            set_string_array(https, "strict_hosts", inputs.mitm_hosts);
+        }
     }
 
     {
@@ -679,6 +689,50 @@ rules_paths = [\"mappings/stale.toml\"]
             .filter_map(|v| v.as_str())
             .collect();
         assert_eq!(paths_out, vec!["mappings/anthropic.toml"]);
+    }
+
+    #[test]
+    fn mitm_disabled_when_hosts_cleared_on_merge() {
+        // Existing config had MITM hosts; re-run with no MITM mappings should
+        // set enabled = false and remove stale host lists.
+        let mut inputs = dummy_inputs(&Mode::AgentLocal);
+        inputs.mitm_hosts = &[];
+        let existing = "\
+[sidecar.interceptor.https_mitm]
+enabled = true
+intercept_hosts = [\"api.github.com\"]
+strict_hosts = [\"api.github.com\"]
+";
+        let out = render_firma_toml(existing, &inputs).unwrap();
+        let parsed: toml::Value = toml::from_str(&out).unwrap();
+        let https_mitm = &parsed["sidecar"]["interceptor"]["https_mitm"];
+        assert_eq!(https_mitm["enabled"].as_bool(), Some(false));
+        assert!(https_mitm.get("intercept_hosts").is_none());
+        assert!(https_mitm.get("strict_hosts").is_none());
+    }
+
+    #[test]
+    fn mitm_enabled_when_hosts_added_on_merge() {
+        // Existing config had MITM disabled; re-run with hosts should
+        // set enabled = true and write host lists.
+        let mut inputs = dummy_inputs(&Mode::AgentLocal);
+        let mitm = ["api.github.com"];
+        inputs.mitm_hosts = &mitm;
+        let existing = "\
+[sidecar.interceptor.https_mitm]
+enabled = false
+";
+        let out = render_firma_toml(existing, &inputs).unwrap();
+        let parsed: toml::Value = toml::from_str(&out).unwrap();
+        let https_mitm = &parsed["sidecar"]["interceptor"]["https_mitm"];
+        assert_eq!(https_mitm["enabled"].as_bool(), Some(true));
+        let hosts: Vec<&str> = https_mitm["intercept_hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(hosts, vec!["api.github.com"]);
     }
 
     #[test]

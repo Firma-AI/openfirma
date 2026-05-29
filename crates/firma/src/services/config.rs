@@ -1395,10 +1395,10 @@ mod tests {
     fn firma_toml_no_mitm_hosts_when_only_anthropic() {
         let files = make_files(&Posture::Dev, &[Mapping::Anthropic], &[]);
         let t: toml::Value = toml::from_str(get(&files, "firma.toml")).unwrap();
-        let hosts = t["sidecar"]["interceptor"]["https_mitm"]["intercept_hosts"]
-            .as_array()
-            .unwrap();
-        assert!(hosts.is_empty());
+        let https_mitm = &t["sidecar"]["interceptor"]["https_mitm"];
+        // No MITM hosts → MITM disabled, host lists absent.
+        assert_eq!(https_mitm["enabled"].as_bool(), Some(false));
+        assert!(https_mitm.get("intercept_hosts").is_none());
     }
 
     #[test]
