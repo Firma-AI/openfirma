@@ -58,10 +58,10 @@ impl RunIdentity {
     #[must_use]
     pub fn full_attribution_headers(&self) -> BTreeMap<String, String> {
         let mut headers = self.attribution_headers();
-        let user = std::env::var("USER")
+        let user = std::env::var("LOGNAME")
             .ok()
+            .or_else(|| std::env::var("USER").ok())
             .or_else(|| std::env::var("USERNAME").ok())
-            .or_else(|| std::env::var("LOGNAME").ok())
             .unwrap_or_else(|| "unknown".to_string());
         // `profile` equals the resolved `ResolvedProfile::id` (set at construction).
         headers.insert("x-firma-agent".to_string(), self.profile.clone());
@@ -89,5 +89,16 @@ mod tests {
         assert!(env.contains_key("FIRMA_RUN_SANDBOX_ID"));
         assert!(env.contains_key("FIRMA_RUN_SESSION_ID"));
         assert_eq!(env.get("FIRMA_RUN_PROFILE"), Some(&"generic".to_string()));
+    }
+
+    #[test]
+    fn full_headers_include_agent_user_and_session() {
+        let identity = RunIdentity::new("generic");
+        let headers = identity.full_attribution_headers();
+
+        assert_eq!(headers.get("x-firma-agent"), Some(&"generic".to_string()));
+        assert!(headers.contains_key("x-firma-session-id"));
+        assert!(headers.contains_key("x-firma-user"));
+        assert!(!headers["x-firma-user"].trim().is_empty());
     }
 }
