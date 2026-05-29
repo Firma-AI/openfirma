@@ -419,7 +419,7 @@ pub struct HttpsMitmConfig {
     #[serde(default = "default_https_mitm_cert_cache_capacity")]
     pub cert_cache_capacity: usize,
     /// Host patterns that must be intercepted; failures are hard deny.
-    #[serde(default)]
+    #[serde(default = "default_https_mitm_strict_hosts")]
     pub strict_hosts: Vec<String>,
 }
 
@@ -463,7 +463,7 @@ impl Default for HttpsMitmConfig {
             bypass_hosts: Vec::new(),
             cert_ttl_secs: default_https_mitm_cert_ttl_secs(),
             cert_cache_capacity: default_https_mitm_cert_cache_capacity(),
-            strict_hosts: Vec::new(),
+            strict_hosts: default_https_mitm_strict_hosts(),
         }
     }
 }
@@ -757,7 +757,12 @@ fn default_https_mitm_intercept_hosts() -> Vec<String> {
         "github.com".to_string(),
         "api.github.com".to_string(),
         "uploads.github.com".to_string(),
+        "downloads.claude.ai".to_string(),
     ]
+}
+
+fn default_https_mitm_strict_hosts() -> Vec<String> {
+    default_https_mitm_intercept_hosts()
 }
 
 /// Sentinel: unset `policy.dir`.
