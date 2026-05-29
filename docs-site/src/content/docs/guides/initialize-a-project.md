@@ -56,7 +56,7 @@ firma config [--mode <mode>]
 | `--mapping`                  | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                     |
 | `--requested-action`         | derived from posture     | Preflight requested actions — repeat or comma-separate               |
 | `--extra-hosts`              | none                     | Comma-separated extra hosts the agent may reach                      |
-| `--workspace`                | CWD                      | Agent RW path written to `firma-run.toml` bwrap mount                |
+| `--workspace`                | CWD                      | Agent RW path written to `firma.toml` `[run.profiles.generic]` bwrap mount |
 | `--output-dir` / `-o`        | `.firma` in CWD          | Where `firma.toml`, policies, and mappings are written               |
 | `--state-dir`                | `$FIRMA_STATE_DIR` / XDG | Keys, revocations, generated CA                                      |
 | `--authority-listen`         | `127.0.0.1:9443`         | gRPC listen address (`agent-local` / `authority` modes only)         |
@@ -74,11 +74,9 @@ preserved unless `--force` is set.
 
 ## Re-running on an existing config
 
-When `firma config` finds `firma.toml` or `firma-run.toml` in the target
-directory, it reads the current values and uses them as defaults for every
-prompt and non-interactive run. Pass only the flags you want to change;
-everything else is preserved. The existing `firma-run.toml` is preserved
-verbatim (including manual edits) unless `--workspace` overrides it.
+When `firma config` finds `firma.toml` in the target directory, it reads the
+current values and uses them as defaults for every prompt and non-interactive
+run. Pass only the flags you want to change; everything else is preserved.
 
 Changing an existing local-authority config to `--mode agent-remote`
 normally removes the top-level `[authority]` section from the generated
@@ -100,8 +98,7 @@ firma config --yes --dry-run
 
 ```
 <output-dir>/                    # project-local config dir
-  firma.toml                    # unified config (authority + sidecar)
-  firma-run.toml                # runtime sandbox profile
+  firma.toml                    # unified config (authority + sidecar + run profiles)
   mapping-rules.toml            # base routing rules
   mappings/<name>.toml          # one file per selected mapping
   policies/<posture>.cedar      # Cedar enforcement policy

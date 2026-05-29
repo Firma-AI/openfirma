@@ -121,7 +121,7 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     match inputs.mode {
         Mode::AgentLocal | Mode::AgentRemote => {
             println!(
-                "  firma run --config {}/firma-run.toml -- <agent-command>",
+                "  firma run --config {}/firma.toml -- <agent-command>",
                 cfg.display()
             );
         }
@@ -174,18 +174,14 @@ fn write_scaffold_files(
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("mkdir {}", parent.display()))?;
         }
-        // `firma.toml`, `firma-run.toml`, and `mapping-rules.toml` are
-        // produced by the toml_edit merge layer: the input was read from
-        // disk, modified in place, and re-serialized. Writing the
-        // resulting bytes back is non-destructive — unknown sections,
-        // user-tuned defaults, and comments are preserved. Skipping the
-        // write here would silently swallow mode changes (e.g. switching
-        // from agent-remote to agent-local would not persist the new
+        // `firma.toml` and `mapping-rules.toml` are produced by the toml_edit
+        // merge layer: the input was read from disk, modified in place, and
+        // re-serialized. Writing the resulting bytes back is non-destructive —
+        // unknown sections, user-tuned defaults, and comments are preserved.
+        // Skipping the write here would silently swallow mode changes (e.g.
+        // switching from agent-remote to agent-local would not persist the new
         // `[authority]` section).
-        let is_merged_toml = matches!(
-            rel.as_str(),
-            "firma.toml" | "firma-run.toml" | "mapping-rules.toml"
-        );
+        let is_merged_toml = matches!(rel.as_str(), "firma.toml" | "mapping-rules.toml");
         let should_overwrite =
             force || is_merged_toml || (overwrite_policy && rel.starts_with("policies/"));
         if !should_overwrite && path.exists() {
@@ -325,11 +321,7 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
         let mapping_rules = render_for(&inputs.config_dir, "mapping-rules.toml", |text| {
             doc::render_mapping_rules_toml(text, &doc_inputs)
         })?;
-        let firma_run = render_for(&inputs.config_dir, "firma-run.toml", |text| {
-            doc::render_firma_run_toml(text, &doc_inputs)
-        })?;
         files.push(("mapping-rules.toml".into(), mapping_rules));
-        files.push(("firma-run.toml".into(), firma_run));
         for mapping in &inputs.sidecar.mappings {
             files.push((
                 format!("mappings/{}.toml", mapping.as_str()),
@@ -518,12 +510,7 @@ fn load_existing_defaults(config_dir: &Path) -> Result<ExistingConfigDefaults> {
     defaults.mappings = mappings_from_rules_paths(&value);
     defaults.state_dir = infer_state_dir(&value);
 
-    let firma_run_path = config_dir.join("firma-run.toml");
-    if firma_run_path.exists()
-        && let Ok(run_text) = std::fs::read_to_string(&firma_run_path)
-    {
-        defaults.workspace = workspace_from_firma_run(&run_text);
-    }
+    defaults.workspace = workspace_from_firma_toml(&value);
 
     Ok(defaults)
 }
@@ -610,9 +597,9 @@ fn infer_state_dir(value: &toml::Value) -> Option<PathBuf> {
     get_path(value, &["sidecar", "ca", "dir"]).and_then(|path| path.parent().map(Path::to_path_buf))
 }
 
-fn workspace_from_firma_run(toml_text: &str) -> Option<PathBuf> {
-    let value: toml::Value = toml::from_str(toml_text).ok()?;
+fn workspace_from_firma_toml(value: &toml::Value) -> Option<PathBuf> {
     let mounts = value
+        .get("run")?
         .get("profiles")?
         .get("generic")?
         .get("mounts")?
@@ -1569,32 +1556,25 @@ mod tests {
         }
     }
 
-    // ── firma-run.toml ───────────────────────────────────────────────────────
+    // ── [run.profiles.generic] in firma.toml ─────────────────────────────────
 
     #[test]
-    fn firma_run_toml_is_valid_toml() {
+    fn firma_toml_has_run_profiles_section() {
         let files = make_files(&Posture::Dev, &[], &[]);
-        let _: toml::Value = toml::from_str(get(&files, "firma-run.toml")).unwrap();
-    }
-
-    #[test]
-    fn firma_run_toml_has_file_audit_sink() {
-        let files = make_files(&Posture::Dev, &[], &[]);
-        let t: toml::Value = toml::from_str(get(&files, "firma-run.toml")).unwrap();
-        assert_eq!(t["audit"]["sink"].as_str(), Some("file"));
+        let t: toml::Value = toml::from_str(get(&files, "firma.toml")).unwrap();
         assert!(
-            t["audit"]["file_path"]
-                .as_str()
-                .is_some_and(|p| !p.is_empty()),
-            "audit.file_path must be set"
+            t.get("run").and_then(|r| r.get("profiles")).is_some(),
+            "[run.profiles] missing from firma.toml"
         );
     }
 
     #[test]
-    fn firma_run_toml_workspace_mount_matches_input() {
+    fn run_profiles_workspace_mount_matches_input() {
         let files = make_files(&Posture::Dev, &[], &[]);
-        let t: toml::Value = toml::from_str(get(&files, "firma-run.toml")).unwrap();
-        let mounts = t["profiles"]["generic"]["mounts"].as_array().unwrap();
+        let t: toml::Value = toml::from_str(get(&files, "firma.toml")).unwrap();
+        let mounts = t["run"]["profiles"]["generic"]["mounts"]
+            .as_array()
+            .unwrap();
         assert_eq!(mounts[0]["source"].as_str(), Some(TEST_WORKSPACE));
         assert_eq!(mounts[0]["target"].as_str(), Some(TEST_WORKSPACE));
         assert_eq!(mounts[0]["read_only"].as_bool(), Some(false));
@@ -1620,9 +1600,11 @@ mod tests {
         })
         .unwrap();
 
-        let text = std::fs::read_to_string(config_dir.join("firma-run.toml")).unwrap();
+        let text = std::fs::read_to_string(config_dir.join("firma.toml")).unwrap();
         let t: toml::Value = toml::from_str(&text).unwrap();
-        let mounts = t["profiles"]["generic"]["mounts"].as_array().unwrap();
+        let mounts = t["run"]["profiles"]["generic"]["mounts"]
+            .as_array()
+            .unwrap();
         assert_eq!(
             mounts[0]["source"].as_str(),
             Some(workspace.to_string_lossy().as_ref())
