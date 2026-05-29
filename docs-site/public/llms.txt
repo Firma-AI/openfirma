@@ -9,4 +9,4 @@ OpenFirma docs highlights for LLM-based retrieval:
 - Plain http:// authority_url is only allowed by default for loopback hosts; remote plaintext requires explicit authority.allow_insecure_remote_authority = true.
 - TLS mismatch on Authority stream keeps sidecar fail-closed (no policy bundle readiness).
 - On WSL hosts, implicit `firma run` backend selection uses `wsl2` compatibility mode instead of Linux `bwrap`.
-- `firma config` reads existing target `firma.toml` and `firma-run.toml` values as defaults; CLI flags override only supplied fields.
+- `firma config` reads existing target `firma.toml` values as defaults; CLI flags override only supplied fields.

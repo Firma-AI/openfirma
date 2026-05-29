@@ -92,8 +92,7 @@ Generated layout:
 
 ```
 ./
-  firma.toml                   — sidecar + authority unified config
-  firma-run.toml               — runtime profiles (workspace mounts, identity)
+  firma.toml                   — unified config (authority + sidecar + run profiles)
   mapping-rules.toml           — base mapping rules
   mappings/anthropic.toml      — Anthropic endpoint mapping
   policies/dev.cedar           — Cedar enforcement policy
@@ -262,7 +261,7 @@ firma authority -c ~/.config/firma/firma.toml issue \
   --output ~/.config/firma/.runtime/capability-local-dev.toml
 
 firma run \
-  --config ~/.config/firma/firma-run.toml \
+  --config ~/.config/firma/firma.toml \
   --profile generic \
   --capability-file ~/.config/firma/.runtime/capability-local-dev.toml \
   -- curl https://example.com

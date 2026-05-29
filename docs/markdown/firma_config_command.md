@@ -56,7 +56,7 @@ firma config [--mode <mode>]
 | `--mapping <mapping>`        |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                                  |
 | `--requested-action <val>`   |       | derived from posture     | Preflight requested actions — repeat or comma-separate; overrides posture default |
 | `--extra-hosts <hosts>`      |       | none                     | Comma-separated extra hosts the agent may reach                                   |
-| `--workspace <dir>`          |       | CWD                      | Agent RW path written to `firma-run.toml` bwrap mount                             |
+| `--workspace <dir>`          |       | CWD                      | Agent RW path written to `firma.toml` `[run.profiles.generic]` bwrap mount        |
 | `--output-dir <dir>`         | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings are written                   |
 | `--state-dir <dir>`          |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                                       |
 | `--authority-listen <addr>`  |       | `127.0.0.1:9443`         | gRPC listen address written to `[authority]` (`agent-local` / `authority` only)   |
@@ -97,8 +97,7 @@ preserved unless `--force` is set.
 
 ```text
 <output-dir>/                    # project-local config dir
-  firma.toml                    # unified config (authority + sidecar)
-  firma-run.toml                # runtime sandbox profile
+  firma.toml                    # unified config (authority + sidecar + run profiles)
   mapping-rules.toml            # base routing rules
   mappings/<name>.toml          # one file per selected mapping
   policies/<posture>.cedar      # Cedar enforcement policy

@@ -128,7 +128,7 @@ if [[ ${#AGENT_CMD[@]} -gt 0 ]]; then
     cd "$WORKSPACE_DIR"
     "$REPO_ROOT/$FIRMA_BIN" run \
       --profile generic \
-      --config "$REPO_ROOT/$DIR/firma-run.toml" \
+      --config "$REPO_ROOT/$DIR/firma.toml" \
       --sidecar external \
       --sidecar-endpoint "$SIDECAR_ENDPOINT" \
       --authority "$AUTHORITY_URL" \

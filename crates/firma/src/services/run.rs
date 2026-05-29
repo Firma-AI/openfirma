@@ -40,11 +40,11 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     // one-command path (`firma run codex`) working from a fresh clone.
     maybe_implicit_init(&args)?;
 
-    // Auto-discover firma-run.toml alongside firma.toml when --config is not set.
+    // Auto-discover firma.toml when --config is not set.
     let run_config = args.config.clone().or_else(|| {
         firma_config::resolve_config("run", None, &firma_config::SystemDirs)
             .ok()
-            .map(|r| r.config_dir.join("firma-run.toml"))
+            .map(|r| r.config_dir.join(firma_config::CONFIG_FILE_NAME))
             .filter(|p| p.is_file())
     });
 

@@ -5,55 +5,20 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
-
-use serde::Deserialize;
+use std::path::Path;
 
 use crate::error::RunError;
 
-/// Client-side connect coordinates lifted from `[sidecar.authority]`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AuthorityConnectSection {
-    /// Authority gRPC URL (e.g. `https://127.0.0.1:9443`).
-    pub url: Option<String>,
-    /// Path to the PEM CA certificate that signed the authority's TLS cert.
-    pub ca_cert_path: Option<PathBuf>,
-    /// Path to the authority's Ed25519 public key for PASETO token verification.
-    pub public_key_path: Option<PathBuf>,
-}
+pub use firma_sidecar::config::AuthorityConfig as SidecarAuthorityConfig;
 
-/// Snapshot of routing-relevant sections.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Snapshot of routing-relevant sections from `firma.toml`.
+#[derive(Debug, Clone, Default)]
 pub struct AuthoritySection {
     /// `true` when `[authority]` is present — the file declares a
     /// co-located Mini Authority that `firma run` should autostart.
     pub local: bool,
     /// Client-side connect coordinates lifted from `[sidecar.authority]`.
-    pub connect: Option<AuthorityConnectSection>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct SidecarAuthorityOnDisk {
-    #[serde(default)]
-    url: Option<String>,
-    #[serde(default)]
-    ca_cert_path: Option<PathBuf>,
-    #[serde(default)]
-    public_key_path: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct SidecarOnDisk {
-    #[serde(default)]
-    authority: Option<SidecarAuthorityOnDisk>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct UserConfig {
-    #[serde(default)]
-    authority: Option<toml::value::Table>,
-    #[serde(default)]
-    sidecar: Option<SidecarOnDisk>,
+    pub connect: Option<SidecarAuthorityConfig>,
 }
 
 /// Read the routing snapshot from `firma.toml`.
@@ -76,20 +41,28 @@ pub fn read_authority(path: &Path) -> Result<Option<AuthoritySection>, RunError>
             )));
         }
     };
-    let parsed: UserConfig = toml::from_str(&text).map_err(|e| RunError::ConfigParse {
-        path: path.to_path_buf(),
-        reason: e.to_string(),
-    })?;
-    let local = parsed.authority.is_some();
-    let connect = parsed
-        .sidecar
-        .and_then(|s| s.authority)
-        .map(|a| AuthorityConnectSection {
-            url: a.url,
-            ca_cert_path: a.ca_cert_path,
-            public_key_path: a.public_key_path,
+
+    let table: toml::Table = text
+        .parse()
+        .map_err(|e: toml::de::Error| RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason: e.to_string(),
+        })?;
+
+    let local = table.contains_key("authority");
+
+    let connect = table
+        .get("sidecar")
+        .and_then(toml::Value::as_table)
+        .and_then(|s| s.get("authority"))
+        .and_then(toml::Value::as_table)
+        .and_then(|a| {
+            toml::to_string(a)
+                .ok()
+                .and_then(|s| toml::from_str::<SidecarAuthorityConfig>(&s).ok())
         })
-        .filter(|c| c.url.is_some() || c.ca_cert_path.is_some() || c.public_key_path.is_some());
+        .filter(|c| c.url.is_some());
+
     if !local && connect.is_none() {
         return Ok(None);
     }
@@ -106,7 +79,7 @@ mod tests {
     fn read_authority_returns_none_when_file_missing() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("nope/firma.toml");
-        assert_eq!(read_authority(&path).unwrap(), None);
+        assert!(read_authority(&path).unwrap().is_none());
     }
 
     #[test]
@@ -114,7 +87,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("firma.toml");
         fs::write(&path, "[other]\nkeep = true\n").unwrap();
-        assert_eq!(read_authority(&path).unwrap(), None);
+        assert!(read_authority(&path).unwrap().is_none());
     }
 
     #[test]

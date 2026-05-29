@@ -83,18 +83,6 @@ pub fn render_firma_toml(text: &str, inputs: &DocInputs<'_>) -> Result<String> {
     Ok(doc.to_string())
 }
 
-/// Parse `text` as a `firma-run.toml` document, merge `inputs`, and
-/// return the serialized result.
-///
-/// # Errors
-///
-/// Returns the parse error if `text` is not valid TOML.
-pub fn render_firma_run_toml(text: &str, inputs: &DocInputs<'_>) -> Result<String> {
-    let mut doc = parse_or_empty(text)?;
-    merge_firma_run_toml(&mut doc, inputs)?;
-    Ok(doc.to_string())
-}
-
 /// Parse `text` as a `mapping-rules.toml` document, merge `inputs`, and
 /// return the serialized result.
 ///
@@ -138,6 +126,7 @@ fn merge_firma_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()>
 
     if inputs.has_sidecar() {
         ensure_sidecar_section(doc, inputs)?;
+        ensure_run_profiles_section(doc, inputs)?;
     } else {
         doc.as_table_mut().remove("sidecar");
     }
@@ -249,7 +238,7 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
     Ok(())
 }
 
-// ── firma-run.toml ────────────────────────────────────────────────────────────
+// ── [run] section ─────────────────────────────────────────────────────────────
 
 fn default_run_backend() -> &'static str {
     #[cfg(target_os = "macos")]
@@ -268,55 +257,23 @@ fn default_run_backend() -> &'static str {
     "bwrap"
 }
 
-fn merge_firma_run_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
-    // `[authority]` presence signals "autostart a local Mini Authority".
-    // We always emit it on this command path (firma config currently
-    // ships an agent that wraps a local mini-authority via firma run);
-    // ephemeral port is picked by the supervisor at runtime.
-    {
-        let auth = ensure_table(doc.as_table_mut(), "authority")?;
-        set_str_if_absent(auth, "listen_addr", "[::1]:0");
-    }
+fn ensure_run_profiles_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
+    let run = ensure_table(doc.as_table_mut(), "run")?;
+    let profiles = ensure_table(run, "profiles")?;
+    let generic = ensure_table(profiles, "generic")?;
+    set_str_if_absent(generic, "backend", default_run_backend());
 
-    {
-        let audit = ensure_table(doc.as_table_mut(), "audit")?;
-        set_str_if_absent(audit, "sink", "file");
-        set_str(audit, "file_path", inputs.audit_file);
-        set_str(audit, "signing_key_path", inputs.audit_key);
-    }
+    let env_set = ensure_table(generic, "env_set")?;
+    set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_ROOTFS_MODE", "readonly");
+    set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_RUNTIME_HOME", "false");
+    set_str_if_absent(
+        env_set,
+        "FIRMA_RUN_BWRAP_MASK_HOME_PATHS",
+        ".ssh,.gnupg,.aws,.config/gcloud,.env",
+    );
 
-    {
-        let mapping = ensure_table(doc.as_table_mut(), "mapping")?;
-        set_str_if_absent(mapping, "rules_path", "mapping-rules.toml");
-        set_str_array(mapping, "rules_paths", inputs.mapping_paths);
-        set_bool_if_absent(mapping, "default_protected", true);
-    }
-
-    {
-        let pre = ensure_table(doc.as_table_mut(), "preflight")?;
-        set_str_if_absent(pre, "agent_id", inputs.name);
-        set_str_array(pre, "requested_actions", inputs.requested_actions);
-        set_str_if_absent(pre, "resource_scope", "*");
-        set_int_if_absent(pre, "ttl_seconds", 900);
-    }
-
-    {
-        let profiles = ensure_table(doc.as_table_mut(), "profiles")?;
-        let generic = ensure_table(profiles, "generic")?;
-        set_str_if_absent(generic, "backend", default_run_backend());
-
-        let env_set = ensure_table(generic, "env_set")?;
-        set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_ROOTFS_MODE", "readonly");
-        set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_RUNTIME_HOME", "false");
-        set_str_if_absent(
-            env_set,
-            "FIRMA_RUN_BWRAP_MASK_HOME_PATHS",
-            ".ssh,.gnupg,.aws,.config/gcloud,.env",
-        );
-
-        let mounts = ensure_array_of_tables(generic, "mounts")?;
-        replace_workspace_mount(mounts, inputs.workspace);
-    }
+    let mounts = ensure_array_of_tables(generic, "mounts")?;
+    replace_workspace_mount(mounts, inputs.workspace);
     Ok(())
 }
 
@@ -725,29 +682,31 @@ rules_paths = [\"mappings/stale.toml\"]
     }
 
     #[test]
-    fn firma_run_workspace_mount_replaced_on_merge() {
+    fn run_profiles_workspace_mount_replaced_on_merge() {
         let mut inputs = dummy_inputs(&Mode::AgentLocal);
         inputs.workspace = "/new/ws";
         let existing = "\
 [authority]
 listen_addr = \"[::1]:0\"
 
-[profiles.generic]
+[run.profiles.generic]
 backend = \"bwrap\"
 
-[[profiles.generic.mounts]]
+[[run.profiles.generic.mounts]]
 source = \"/old/ws\"
 target = \"/old/ws\"
 read_only = false
 
-[[profiles.generic.mounts]]
+[[run.profiles.generic.mounts]]
 source = \"/some/read-only/lib\"
 target = \"/some/read-only/lib\"
 read_only = true
 ";
-        let out = render_firma_run_toml(existing, &inputs).unwrap();
+        let out = render_firma_toml(existing, &inputs).unwrap();
         let parsed: toml::Value = toml::from_str(&out).unwrap();
-        let mounts = parsed["profiles"]["generic"]["mounts"].as_array().unwrap();
+        let mounts = parsed["run"]["profiles"]["generic"]["mounts"]
+            .as_array()
+            .unwrap();
         let sources: Vec<&str> = mounts
             .iter()
             .map(|m| m["source"].as_str().unwrap_or_default())
