@@ -940,7 +940,7 @@ fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
         // RunError::ConfigParse display ("{path}: {reason}").
         let prefix = format!("{}: ", path.display());
         let reason = reason.strip_prefix(&prefix).unwrap_or(&reason).to_string();
-        let hint = if reason.contains("missing required") {
+        let hint = if reason.contains("[run]") {
             "; run `firma config` to add a [run] section"
         } else {
             ""
