@@ -512,7 +512,7 @@ fn ensure_audit_signing_key(value: &mut toml::Value, out_path: &Path) -> Result<
         return Ok(());
     }
     // If a path is configured AND the file exists, keep it.
-    if configured_path.is_some_and(|p| p.is_file()) {
+    if configured_path.is_some_and(Path::is_file) {
         return Ok(());
     }
     // Either no path or the path doesn't exist: generate an ephemeral key in
