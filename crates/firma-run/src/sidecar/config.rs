@@ -497,17 +497,28 @@ fn ensure_audit_signing_key(value: &mut toml::Value, out_path: &Path) -> Result<
         .as_table_mut()
         .ok_or_else(|| RunError::Internal("[sidecar.audit] is not a table".into()))?;
 
-    let has_path = audit
+    let configured_path = audit
         .get("signing_key_path")
         .and_then(toml::Value::as_str)
-        .is_some_and(|v| !v.trim().is_empty());
+        .filter(|v| !v.trim().is_empty())
+        .map(Path::new);
     let has_env = audit
         .get("signing_key_env")
         .and_then(toml::Value::as_str)
         .is_some_and(|v| !v.trim().is_empty());
-    if has_path || has_env {
+
+    // If an env var source is configured, trust it.
+    if has_env {
         return Ok(());
     }
+    // If a path is configured AND the file exists, keep it.
+    if configured_path.is_some_and(|p| p.is_file()) {
+        return Ok(());
+    }
+    // Either no path or the path doesn't exist: generate an ephemeral key in
+    // the marker dir so the synthesized sidecar is self-contained.
+    // (Happens when firma.toml references a long-lived key that hasn't been
+    // provisioned yet, e.g. on a fresh checkout.)
 
     let parent = out_path.parent().ok_or_else(|| {
         RunError::Internal(format!(
@@ -623,12 +634,14 @@ fn configure_preflight_capability(
             toml::Value::String(agent_id.to_string()),
         );
     }
-    if !preflight.contains_key("session_id") {
-        preflight.insert(
-            "session_id".to_string(),
-            toml::Value::String(session_id.to_string()),
-        );
-    }
+    // Always override session_id with the runtime value so the issued token's
+    // session_id matches the attribution headers on each request. A static
+    // value like "preflight-session" from a template would cause every
+    // CapabilityMap::select to skip the token (session_id mismatch → DENY).
+    preflight.insert(
+        "session_id".to_string(),
+        toml::Value::String(session_id.to_string()),
+    );
     if !preflight.contains_key("requested_actions") {
         preflight.insert(
             "requested_actions".to_string(),
