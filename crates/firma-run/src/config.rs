@@ -1130,7 +1130,36 @@ approval_policy = "never"
     fn resolves_claude_code_profile() {
         let resolved = resolve_profile(&args("claude-code")).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(resolved.id, "claude-code");
+        assert!(resolved.use_http_proxy_sidecar);
+        assert!(matches!(
+            resolved.sidecar_endpoint,
+            SidecarEndpoint::Tcp { .. }
+        ));
         assert!(resolved.env_passthrough.contains("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn resolves_codex_profile_with_proxy_sidecar() {
+        let resolved = resolve_profile(&args("codex")).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(resolved.id, "codex");
+        assert!(resolved.use_http_proxy_sidecar);
+        assert!(matches!(
+            resolved.sidecar_endpoint,
+            SidecarEndpoint::Tcp { .. }
+        ));
+    }
+
+    #[test]
+    fn resolves_generic_profile_with_proxy_sidecar() {
+        let mut run_args = args("generic");
+        run_args.backend = Some(non_bwrap_backend_for_current_host());
+        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(resolved.id, "generic");
+        assert!(resolved.use_http_proxy_sidecar);
+        assert!(matches!(
+            resolved.sidecar_endpoint,
+            SidecarEndpoint::Tcp { .. }
+        ));
     }
 
     #[test]
