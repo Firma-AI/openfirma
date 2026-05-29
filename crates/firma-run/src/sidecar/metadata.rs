@@ -21,6 +21,12 @@ pub struct Metadata {
     pub policy_bundle_version: String,
     pub pid: u32,
     pub started_at: String,
+    /// Interceptor listen endpoint, as captured from the sidecar's ready log:
+    /// a `host:port` pair for an `http_proxy` interceptor, or a socket path for
+    /// a Unix-domain-socket interceptor. `firma sidecar status` health-probes
+    /// this endpoint to distinguish a healthy per-run sidecar from a dead one
+    /// (FIR-195).
+    pub listen: String,
 }
 
 /// Serialize `meta` and write it atomically to `out`. Creates parent

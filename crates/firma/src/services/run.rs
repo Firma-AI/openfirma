@@ -74,6 +74,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         authority_cli,
         authority_profile: args.authority_profile,
         user_config_path: None,
+        allow_non_structural: args.allow_non_structural,
     };
     match execute_run(&input) {
         Ok(code) => Ok(exit_code(code)),

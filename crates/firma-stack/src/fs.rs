@@ -22,6 +22,34 @@ pub enum CreatePrivateDirError {
     },
 }
 
+/// Write `contents` to `path` with mode 0600 on Unix (owner read/write only, umask-independent).
+///
+/// Uses `O_CREAT | O_TRUNC` so the mode is set atomically on creation with no write-then-chmod
+/// race. Falls back to [`std::fs::write`] on non-Unix platforms.
+///
+/// # Errors
+///
+/// Returns an [`io::Error`] on any I/O failure.
+pub fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(contents)?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, contents)
+    }
+}
+
 /// Create `path` and all parents with mode 0700 on Unix (umask-independent).
 /// Also enforces 0700 on pre-existing directories.
 /// On Windows, falls back to `create_dir_all` without explicit mode.

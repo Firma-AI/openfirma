@@ -88,7 +88,7 @@ pub fn run(args: &StatusArgs) -> anyhow::Result<ExitCode> {
     let rows = match collect(args) {
         Ok(rows) => rows,
         Err(e) => {
-            eprintln!("firma sidecar status: {e}");
+            crate::output::err(format!("sidecar status: {e}"));
             return Ok(ExitCode::from(2));
         }
     };
@@ -97,7 +97,7 @@ pub fn run(args: &StatusArgs) -> anyhow::Result<ExitCode> {
         match serde_json::to_string_pretty(&rows) {
             Ok(json) => println!("{json}"),
             Err(e) => {
-                eprintln!("firma sidecar status: json: {e}");
+                crate::output::err(format!("sidecar status: json: {e}"));
                 return Ok(ExitCode::from(2));
             }
         }

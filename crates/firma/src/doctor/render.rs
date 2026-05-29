@@ -2,6 +2,8 @@
 
 use std::io::{self, Write};
 
+use owo_colors::{OwoColorize as _, Stream};
+
 use crate::doctor::report::{Check, Report, Status};
 
 /// Render `report` in pretty form to `out`.
@@ -15,10 +17,21 @@ pub fn pretty(report: &Report, out: &mut dyn Write) -> io::Result<()> {
 }
 
 fn format_check(check: &Check) -> String {
+    // Color is gated on stdout being a TTY via owo-colors' `if_supports_color`,
+    // so captured buffers (tests, `firma doctor | tee log`) stay plain ASCII.
     let tag = match check.status {
-        Status::Ok => "[OK]  ",
-        Status::Warn => "[WARN]",
-        Status::Fail => "[FAIL]",
+        Status::Ok => format!(
+            "{}",
+            "[OK]  ".if_supports_color(Stream::Stdout, |t| t.green())
+        ),
+        Status::Warn => format!(
+            "{}",
+            "[WARN]".if_supports_color(Stream::Stdout, |t| t.yellow())
+        ),
+        Status::Fail => format!(
+            "{}",
+            "[FAIL]".if_supports_color(Stream::Stdout, |t| t.bright_red())
+        ),
     };
     format!("{tag} {:<22} {}", check.category, check.reason)
 }
