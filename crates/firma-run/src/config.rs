@@ -38,6 +38,11 @@ pub struct ResolvedProfile {
     /// interceptor mode (TCP listener). When `false`, UDS interceptor mode.
     /// Set for profiles whose agent tool uses standard HTTP proxy env vars.
     pub use_http_proxy_sidecar: bool,
+    /// When `true`, allow non-structural (proxy-only) backends to run without
+    /// failing closed. Comes from config `[defaults] allow_non_structural = true`
+    /// and is OR'd with the CLI `--allow-non-structural` flag and env var
+    /// `FIRMA_RUN_ALLOW_NON_STRUCTURAL`.
+    pub allow_non_structural: bool,
 }
 
 impl ResolvedProfile {
@@ -345,6 +350,12 @@ pub(crate) struct ProfilePatch {
     /// Should be `true` for profiles whose agent uses standard HTTP proxy env vars.
     #[serde(default)]
     pub(crate) use_http_proxy_sidecar: bool,
+    /// Allow non-structural (proxy-only) backends to run without failing closed.
+    /// Intentional opt-in: proxy-only enforcement can be bypassed by clients
+    /// that ignore `HTTP_PROXY`, open raw sockets, or spawn children with
+    /// a clean environment.
+    #[serde(default)]
+    pub(crate) allow_non_structural: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -444,6 +455,7 @@ impl ProfilePatch {
             executable_policies,
             codex_cli: higher.codex_cli.or(self.codex_cli),
             use_http_proxy_sidecar: higher.use_http_proxy_sidecar || self.use_http_proxy_sidecar,
+            allow_non_structural: higher.allow_non_structural || self.allow_non_structural,
         }
     }
 }
@@ -563,6 +575,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         sidecar_local_exec,
         executable_policies,
         use_http_proxy_sidecar: patch.use_http_proxy_sidecar,
+        allow_non_structural: patch.allow_non_structural,
     };
 
     if matches!(
@@ -656,6 +669,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
         executable_policies: BTreeMap::new(),
         codex_cli: None,
         use_http_proxy_sidecar: false,
+        allow_non_structural: args.allow_non_structural,
     }
 }
 
@@ -911,7 +925,7 @@ fn default_managed_artifact_dir() -> PathBuf {
     dir
 }
 
-fn env_truthy(name: &str) -> bool {
+pub(crate) fn env_truthy(name: &str) -> bool {
     std::env::var(name).ok().is_some_and(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
@@ -981,6 +995,7 @@ mod tests {
             authority_cli: crate::authority::AuthorityCli::Unset,
             authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
             user_config_path: None,
+            allow_non_structural: true,
         }
     }
 
