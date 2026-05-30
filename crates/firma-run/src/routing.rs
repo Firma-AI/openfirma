@@ -470,21 +470,23 @@ fn maybe_regen_tls(ca_cert_path: Option<&Path>, firma_exe: &Path) -> Result<(), 
         tls_dir = %out_dir.display(),
         "authority CA cert missing; regenerating TLS material (likely post-reboot tmpfs wipe)"
     );
-    let status = std::process::Command::new(firma_exe)
+    let output = std::process::Command::new(firma_exe)
         .args(["authority", "init-tls", "--out-dir"])
         .arg(out_dir)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
+        .stderr(std::process::Stdio::piped())
+        .output()
         .map_err(|e| RunError::Internal(format!("spawn firma authority init-tls: {e}")))?;
-    if status.success() {
+    if output.status.success() {
         tracing::info!(tls_dir = %out_dir.display(), "TLS material regenerated");
         Ok(())
     } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         Err(RunError::Internal(format!(
-            "firma authority init-tls --out-dir {} exited with {status}",
-            out_dir.display()
+            "firma authority init-tls --out-dir {} exited with {}: {stderr}",
+            out_dir.display(),
+            output.status,
         )))
     }
 }
