@@ -454,7 +454,9 @@ pub fn resolve_authority(
 /// absent (common after a tmpfs reboot wipe of `$XDG_RUNTIME_DIR`).
 /// Only called for local authority configurations.
 fn maybe_regen_tls(ca_cert_path: Option<&Path>, firma_exe: &Path) -> Result<(), RunError> {
-    let Some(path) = ca_cert_path else { return Ok(()) };
+    let Some(path) = ca_cert_path else {
+        return Ok(());
+    };
     if path.is_file() {
         return Ok(());
     }
