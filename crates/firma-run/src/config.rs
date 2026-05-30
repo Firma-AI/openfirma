@@ -315,8 +315,8 @@ pub enum CapabilitySource {
 /// Top-level file config.
 #[derive(Debug, Clone, Deserialize, Default)]
 struct FileConfig {
-    #[allow(dead_code)]
-    schema_version: Option<u32>,
+    /// Profile used by `firma run` when `--profile` is not supplied.
+    profile: Option<String>,
     #[serde(default)]
     defaults: ProfilePatch,
     #[serde(default)]
@@ -356,6 +356,10 @@ pub(crate) struct ProfilePatch {
     /// a clean environment.
     #[serde(default)]
     pub(crate) allow_non_structural: bool,
+    /// Home-relative paths to mask with a tmpfs overlay inside the bwrap sandbox.
+    /// Overrides the built-in `DEFAULT_SENSITIVE_HOME_SUFFIXES` for this profile.
+    /// Example: `[".ssh", ".gnupg", ".aws"]` leaves `.config` accessible.
+    pub(crate) mask_home_paths: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -456,6 +460,7 @@ impl ProfilePatch {
             codex_cli: higher.codex_cli.or(self.codex_cli),
             use_http_proxy_sidecar: higher.use_http_proxy_sidecar || self.use_http_proxy_sidecar,
             allow_non_structural: higher.allow_non_structural || self.allow_non_structural,
+            mask_home_paths: higher.mask_home_paths.or(self.mask_home_paths),
         }
     }
 }
@@ -516,6 +521,14 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         .filter(|item: &String| !item.trim().is_empty())
         .collect::<BTreeSet<_>>();
 
+    let mut env_set = patch.env_set;
+    if let Some(paths) = patch.mask_home_paths {
+        env_set.insert(
+            "FIRMA_RUN_BWRAP_MASK_HOME_PATHS".to_string(),
+            paths.join(","),
+        );
+    }
+
     let mounts = patch
         .mounts
         .into_iter()
@@ -565,7 +578,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         sidecar_endpoint,
         sidecar_selection,
         env_passthrough,
-        env_set: patch.env_set,
+        env_set,
         mounts,
         seccomp_policy,
         allowed_domains: patch.allowed_domains,
@@ -670,6 +683,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
         codex_cli: None,
         use_http_proxy_sidecar: false,
         allow_non_structural: args.allow_non_structural,
+        mask_home_paths: None,
     }
 }
 
@@ -958,6 +972,28 @@ fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
 
     let profile_patch = parsed.profiles.get(profile).cloned().unwrap_or_default();
     Ok(parsed.defaults.merge(profile_patch))
+}
+
+/// Read `[run].profile` from `firma.toml`, if present.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read or the `[run]` section
+/// cannot be parsed as `FileConfig`.
+pub fn read_configured_profile(path: &Path) -> Result<Option<String>, RunError> {
+    let section = firma_config::load_section(path, "run").map_err(|reason| {
+        let prefix = format!("{}: ", path.display());
+        let reason = reason.strip_prefix(&prefix).unwrap_or(&reason).to_string();
+        RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason,
+        }
+    })?;
+    let parsed = toml::from_str::<FileConfig>(&section).map_err(|error| RunError::ConfigParse {
+        path: path.to_path_buf(),
+        reason: error.to_string(),
+    })?;
+    Ok(parsed.profile)
 }
 
 #[cfg(test)]

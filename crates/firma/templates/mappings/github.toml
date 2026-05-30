@@ -11,6 +11,13 @@ method = "CONNECT"
 host = "api.github.com"
 action_class = "code.review.read"
 
+# Git HTTPS transport (clone/push/pull) — cannot be classified further at
+# CONNECT level; code.write covers both read and write git directions.
+[[rules]]
+method = "CONNECT"
+host = "github.com"
+action_class = "code.write"
+
 # ── REST rules (bare host — post-MITM only) ───────────────────────────────────
 
 # Branch-protection subtree is fanned out across GET/PUT/POST/DELETE so

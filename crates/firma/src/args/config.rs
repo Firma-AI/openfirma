@@ -46,6 +46,11 @@ pub struct InitArgs {
     #[arg(long, short = 'n')]
     pub name: Option<String>,
 
+    /// Built-in agent profile written to `[run].profile` in `firma.toml`
+    /// (e.g. `generic`, `codex`, `claude-code`).
+    #[arg(long)]
+    pub profile: Option<String>,
+
     /// Cedar policy posture to write under `policies/`.
     #[arg(long, value_enum)]
     pub posture: Option<Posture>,

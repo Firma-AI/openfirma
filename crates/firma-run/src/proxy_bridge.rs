@@ -504,7 +504,8 @@ mod tests {
         // that the rebuilt block ends with `\r\n` so that one extra `\r\n`
         // produces exactly the correct HTTP blank-line separator — not a
         // spurious extra blank line that would corrupt CONNECT tunnels.
-        let mut req_head = b"CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n".to_vec();
+        let mut req_head =
+            b"CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n".to_vec();
         let mut headers = BTreeMap::new();
         headers.insert("x-firma-session-id".to_string(), "sess_001".to_string());
         append_missing_headers(&mut req_head, &headers).expect("append headers");
