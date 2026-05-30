@@ -9,7 +9,7 @@ pub enum AgentProfile {
     /// `OpenAI` Codex CLI.
     Codex,
     /// Anthropic Claude Code CLI.
-    #[cfg_attr(feature = "clap", value(name = "claude-code"))]
+    #[cfg_attr(feature = "clap", value(name = "claude-code", alias = "claude"))]
     ClaudeCode,
 }
 
@@ -30,7 +30,7 @@ impl AgentProfile {
         match s {
             "generic" => Some(Self::Generic),
             "codex" => Some(Self::Codex),
-            "claude-code" => Some(Self::ClaudeCode),
+            "claude-code" | "claude" => Some(Self::ClaudeCode),
             _ => None,
         }
     }
