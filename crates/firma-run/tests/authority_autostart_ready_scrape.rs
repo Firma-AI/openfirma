@@ -19,7 +19,7 @@ fn ready_signalled_with_listen_addr_capture() {
 2026-05-14T12:00:00Z  INFO firma_authority: config loaded policy_dir=\"/tmp\" listen_addr=\"[::1]:50051\"\n\
 2026-05-14T12:00:00Z  INFO firma_authority: policy bundle loaded policies=1\n\
 2026-05-14T12:00:00Z  INFO firma_authority: listening addr=\"[::1]:50051\"\n\
-2026-05-14T12:00:00Z  INFO firma_authority: ready\n\
+2026-05-14T12:00:00Z  INFO firma_authority: authority ready\n\
 ";
     let reader = Cursor::new(stderr.to_vec());
     let log: Vec<u8> = Vec::new();
