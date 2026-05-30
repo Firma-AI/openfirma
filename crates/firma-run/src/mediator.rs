@@ -12,14 +12,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{CommandMediatorConfig, CommandMediatorEndpoint, CommandMediatorHitlMode};
 use crate::error::RunError;
-use crate::identity::RunIdentity;
+use crate::identity::{RunIdentity, SandboxId};
 
 #[derive(Debug, Serialize)]
 struct MediatorRequest<'a> {
     action: &'static str,
     executable: &'a str,
     args: &'a [String],
-    sandbox_id: &'a str,
+    sandbox_id: &'a SandboxId,
     session_id: &'a str,
     /// Agent identity forwarded from `FIRMA_AGENT_ID` env var when present.
     /// Used by the sidecar to bind approval tokens to the issuing agent.
@@ -99,7 +99,7 @@ pub fn enforce_local_command_governance(
             "allow" => {
                 tracing::info!(
                     executable,
-                    sandbox_id = %identity.sandbox_id,
+                    sandbox_id = identity.sandbox_id.compact(),
                     session_id = %identity.session_id,
                     "local command governance: allowed"
                 );
@@ -112,7 +112,7 @@ pub fn enforce_local_command_governance(
                 tracing::warn!(
                     reason = %reason,
                     executable,
-                    sandbox_id = %identity.sandbox_id,
+                    sandbox_id = identity.sandbox_id.compact(),
                     session_id = %identity.session_id,
                     "local command governance: denied"
                 );
@@ -355,7 +355,7 @@ fn compute_request_fingerprint(
     executable: &str,
     args: &[String],
     session_id: &str,
-    sandbox_id: &str,
+    sandbox_id: &SandboxId,
     agent_id: Option<&str>,
 ) -> String {
     let mut hasher = sha2::Sha256::new();
@@ -367,7 +367,7 @@ fn compute_request_fingerprint(
     }
     hasher.update(session_id.as_bytes());
     hasher.update(b"\0");
-    hasher.update(sandbox_id.as_bytes());
+    hasher.update(AsRef::<str>::as_ref(sandbox_id).as_bytes());
     hasher.update(b"\0");
     if let Some(aid) = agent_id {
         hasher.update(aid.as_bytes());
@@ -400,7 +400,7 @@ mod tests {
 
     fn identity() -> RunIdentity {
         RunIdentity {
-            sandbox_id: "sbx".to_string(),
+            sandbox_id: SandboxId::Custom("sbx".to_string()),
             session_id: "sess".to_string(),
             profile: "generic".to_string(),
         }
