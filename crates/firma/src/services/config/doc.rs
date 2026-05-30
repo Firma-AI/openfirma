@@ -252,7 +252,6 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
     {
         let pre = ensure_table(sidecar, "preflight")?;
         set_str(pre, "agent_id", inputs.name);
-        set_str_if_absent(pre, "session_id", "preflight-session");
         set_string_array(
             pre,
             "requested_actions",
