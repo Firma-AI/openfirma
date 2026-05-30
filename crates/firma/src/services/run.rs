@@ -125,7 +125,7 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
             .profile
             .clone()
             .unwrap_or_else(|| "my-agent".to_string()),
-        provider: "anthropic".into(),
+        provider: profile_to_provider(args.profile.as_deref()),
         authority,
     };
     if let Err(error) = scaffold_from_plan(&plan) {
@@ -210,6 +210,13 @@ fn resolve_profile_name(
         return p;
     }
     "generic".to_string()
+}
+
+fn profile_to_provider(profile: Option<&str>) -> String {
+    profile
+        .and_then(firma_config::AgentProfile::from_name)
+        .map_or("anthropic", firma_config::AgentProfile::provider)
+        .to_string()
 }
 
 fn exit_code(code: i32) -> ExitCode {

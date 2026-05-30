@@ -35,6 +35,15 @@ impl AgentProfile {
         }
     }
 
+    /// Provider identifier used for mapping selection (`"anthropic"`, `"openai"`).
+    #[must_use]
+    pub fn provider(self) -> &'static str {
+        match self {
+            Self::Generic | Self::ClaudeCode => "anthropic",
+            Self::Codex => "openai",
+        }
+    }
+
     /// Human-readable description for interactive prompts.
     #[must_use]
     pub fn description(self) -> &'static str {

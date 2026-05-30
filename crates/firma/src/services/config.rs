@@ -1311,10 +1311,13 @@ fn provider_to_mappings(provider: &str) -> Vec<Mapping> {
 }
 
 fn provider_to_profile(provider: &str) -> String {
+    use firma_config::AgentProfile;
     match provider {
-        "openai" => "codex".to_string(),
-        "anthropic" => "claude-code".to_string(),
-        _ => "generic".to_string(),
+        p if AgentProfile::Codex.provider() == p => AgentProfile::Codex.as_str().to_string(),
+        p if AgentProfile::ClaudeCode.provider() == p => {
+            AgentProfile::ClaudeCode.as_str().to_string()
+        }
+        _ => AgentProfile::Generic.as_str().to_string(),
     }
 }
 
