@@ -48,6 +48,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
             .filter(|p| p.is_file())
     });
 
+    let profile = resolve_profile_name(args.profile.as_deref(), run_config.as_deref());
     let authority_cli = match args.authority.as_deref() {
         None => firma_run::authority::AuthorityCli::Unset,
         Some("local") => firma_run::authority::AuthorityCli::Local,
@@ -59,7 +60,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         Some(endpoint) => firma_run::sidecar::SidecarCli::Remote(endpoint.to_string()),
     };
     let input = RunInput {
-        profile: args.profile,
+        profile,
         config: run_config,
         backend: args.backend.map(Into::into),
         capability_file: args.capability_file,
@@ -120,7 +121,7 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
         workspace: cwd,
         force: false,
         authority_listen: "127.0.0.1:50051".into(),
-        agent: args.profile.clone(),
+        agent: args.profile.clone().unwrap_or_else(|| "my-agent".to_string()),
         provider: "anthropic".into(),
         authority,
     };
@@ -191,6 +192,21 @@ fn validate_sidecar_endpoint_flag(args: &RunArgs) -> anyhow::Result<()> {
     )
     .map(|_| ())
     .map_err(|error| anyhow::anyhow!("{error}"))
+}
+
+fn resolve_profile_name(
+    cli_profile: Option<&str>,
+    config_path: Option<&std::path::Path>,
+) -> String {
+    if let Some(p) = cli_profile {
+        return p.to_string();
+    }
+    if let Some(path) = config_path
+        && let Ok(Some(p)) = firma_run::config::read_configured_profile(path)
+    {
+        return p;
+    }
+    "generic".to_string()
 }
 
 fn exit_code(code: i32) -> ExitCode {

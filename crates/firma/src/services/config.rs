@@ -42,6 +42,7 @@ struct CollectedInputs {
     sidecar: SidecarInputs,
     config_dir: PathBuf,
     state_dir: PathBuf,
+    profile: String,
 }
 
 #[derive(Debug, Default)]
@@ -57,6 +58,7 @@ struct ExistingConfigDefaults {
     requested_actions: Option<Vec<String>>,
     mappings: Option<Vec<Mapping>>,
     workspace: Option<PathBuf>,
+    profile: Option<String>,
 }
 
 static TPL_CEDAR_ISSUANCE: &str = include_str!("../../templates/issuance.cedar");
@@ -282,6 +284,7 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
         mode: &inputs.mode,
         keep_local_authority: inputs.keep_local_authority,
         name: &inputs.sidecar.name,
+        profile: &inputs.profile,
         authority_listen: &inputs.authority.listen,
         authority_url: &inputs.authority.connect_url,
         authority_ca_cert: &inputs.authority.connect_ca_cert,
@@ -381,6 +384,8 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
     let authority =
         collect_authority_inputs(args, &existing, &mode, interactive, &theme, &state_dir)?;
 
+    let profile = collect_profile(args, &existing, interactive, &theme)?;
+
     let has_sidecar = matches!(mode, Mode::AgentLocal | Mode::AgentRemote);
     let sidecar = collect_sidecar_inputs(
         args,
@@ -389,6 +394,7 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         interactive,
         &theme,
         &config_dir,
+        &profile,
     )?;
 
     Ok(CollectedInputs {
@@ -398,6 +404,7 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         sidecar,
         config_dir,
         state_dir,
+        profile,
     })
 }
 
@@ -510,6 +517,7 @@ fn load_existing_defaults(config_dir: &Path) -> Result<ExistingConfigDefaults> {
     defaults.state_dir = infer_state_dir(&value);
 
     defaults.workspace = workspace_from_firma_toml(&value);
+    defaults.profile = get_str(&value, &["run", "profile"]);
 
     Ok(defaults)
 }
@@ -799,6 +807,7 @@ fn collect_sidecar_inputs(
     interactive: bool,
     theme: &ColorfulTheme,
     config_dir: &Path,
+    profile: &str,
 ) -> Result<SidecarInputs> {
     let overwrite_policy = args.posture.is_some() || interactive;
     let posture = match (&args.posture, &existing.posture) {
@@ -845,6 +854,7 @@ fn collect_sidecar_inputs(
         existing.requested_actions.clone()
     };
 
+    let profile_default_mappings = profile_default_mappings(profile);
     let mappings = if !args.mapping.is_empty() {
         args.mapping.clone()
     } else if let Some(mappings) = &existing.mappings
@@ -852,9 +862,13 @@ fn collect_sidecar_inputs(
     {
         mappings.clone()
     } else if interactive {
-        prompt_mappings_with_default(theme, existing.mappings.as_deref())?
+        let mapping_default = existing
+            .mappings
+            .as_deref()
+            .unwrap_or(&profile_default_mappings);
+        prompt_mappings_with_default(theme, Some(mapping_default))?
     } else {
-        vec![Mapping::Anthropic]
+        profile_default_mappings
     };
 
     let extra_hosts_raw: String = match args.extra_hosts.as_deref() {
@@ -978,6 +992,67 @@ fn prompt_mappings_with_default(
             .join(", ")
     );
     Ok(chosen)
+}
+
+fn collect_profile(
+    args: &InitArgs,
+    existing: &ExistingConfigDefaults,
+    interactive: bool,
+    theme: &ColorfulTheme,
+) -> Result<String> {
+    if let Some(p) = &args.profile {
+        return Ok(p.clone());
+    }
+    Ok(match (existing.profile.as_deref(), interactive) {
+        (Some(p), false) => p.to_string(),
+        (Some(p), true) => prompt_profile_with_default(theme, p)?,
+        (None, true) => prompt_profile_with_default(theme, "generic")?,
+        (None, false) => "generic".to_string(),
+    })
+}
+
+fn prompt_profile_with_default(theme: &ColorfulTheme, default: &str) -> Result<String> {
+    let profiles: &[(&str, &str)] = &[
+        (
+            "generic",
+            "general-purpose sandbox, no agent-specific defaults",
+        ),
+        (
+            "codex",
+            "OpenAI Codex CLI — sets up OpenAI mapping by default",
+        ),
+        (
+            "claude-code",
+            "Anthropic Claude Code — sets up Anthropic mapping by default",
+        ),
+    ];
+    let items: Vec<String> = profiles
+        .iter()
+        .map(|(name, desc)| format!("{name:<16}  {desc}"))
+        .collect();
+    let selection = dialoguer::Select::with_theme(theme)
+        .with_prompt("Agent profile")
+        .items(&items)
+        .default(
+            profiles
+                .iter()
+                .position(|(n, _)| *n == default)
+                .unwrap_or(0),
+        )
+        .report(false)
+        .interact()
+        .context("profile prompt")?;
+    let chosen = profiles[selection].0.to_string();
+    eprintln!("  Profile  · {chosen}");
+    Ok(chosen)
+}
+
+fn profile_default_mappings(profile: &str) -> Vec<Mapping> {
+    if profile == "codex" {
+        vec![Mapping::Openai]
+    } else {
+        vec![Mapping::Anthropic]
+    }
 }
 
 /// Delete posture cedar files left behind by previous postures.
@@ -1176,6 +1251,7 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
         },
         config_dir: plan.config_dir.clone(),
         state_dir: plan.state_dir.clone(),
+        profile: provider_to_profile(&plan.provider),
     };
     let files = generate_files(&inputs).context("generate files")?;
 
@@ -1242,6 +1318,14 @@ fn provider_to_mappings(provider: &str) -> Vec<Mapping> {
     }
 }
 
+fn provider_to_profile(provider: &str) -> String {
+    match provider {
+        "openai" => "codex".to_string(),
+        "anthropic" => "claude-code".to_string(),
+        _ => "generic".to_string(),
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
@@ -1277,6 +1361,7 @@ mod tests {
             },
             config_dir: PathBuf::from(TEST_WORKSPACE),
             state_dir: PathBuf::from("/tmp/test-state"),
+            profile: "generic".to_string(),
         };
         generate_files(&inputs).unwrap()
     }

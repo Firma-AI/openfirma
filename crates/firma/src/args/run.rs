@@ -12,10 +12,12 @@ use firma_run::config::SandboxIdentityMode;
 #[derive(Debug, Args)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct RunArgs {
-    /// Built-in agent profile (e.g. `generic`, `codex`, `claude`) that selects
+    /// Built-in agent profile (e.g. `generic`, `codex`, `claude-code`) that selects
     /// default backend, identity mode and policy bundle.
-    #[arg(long, default_value = "generic")]
-    pub profile: String,
+    /// When omitted, falls back to `[run].default_profile` in `firma.toml`,
+    /// then to `generic`.
+    #[arg(long)]
+    pub profile: Option<String>,
 
     /// Path to a runtime config file (`.toml`, `.yaml`, `.yml`) layered on top
     /// of the selected profile.

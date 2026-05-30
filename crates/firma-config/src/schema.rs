@@ -150,5 +150,4 @@ mod tests {
         let err = load_section(&p, "sidecar.authority").unwrap_err();
         assert!(err.contains("sidecar.authority"), "error: {err}");
     }
-
 }

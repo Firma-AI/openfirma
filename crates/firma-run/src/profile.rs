@@ -81,6 +81,7 @@ fn generic_profile() -> ProfilePatch {
         codex_cli: None,
         use_http_proxy_sidecar: true,
         allow_non_structural: false,
+        mask_home_paths: None,
     }
 }
 

@@ -41,6 +41,7 @@ pub struct DocInputs<'a> {
     pub mode: &'a Mode,
     pub keep_local_authority: bool,
     pub name: &'a str,
+    pub profile: &'a str,
     pub authority_listen: &'a str,
     pub authority_url: &'a str,
     pub authority_ca_cert: &'a str,
@@ -137,6 +138,9 @@ fn merge_firma_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()>
         doc.as_table_mut().remove("sidecar");
     }
     ensure_run_profiles_section(doc, inputs)?;
+    // [run].profile is user-driven → always overwrite on re-run.
+    let run = ensure_table(doc.as_table_mut(), "run")?;
+    set_str(run, "profile", inputs.profile);
     Ok(())
 }
 
@@ -528,6 +532,7 @@ mod tests {
             mode,
             keep_local_authority: false,
             name: "test-agent",
+            profile: "generic",
             authority_listen: "127.0.0.1:9443",
             authority_url: "https://127.0.0.1:9443",
             authority_ca_cert: "/state/tls/authority-ca.crt",
