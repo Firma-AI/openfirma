@@ -10,10 +10,11 @@ use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use tracing::{debug, warn};
+use tracing::{info, warn};
 use wait_timeout::ChildExt;
 
 use crate::error::RunError;
+use crate::identity::SandboxId;
 
 /// Per-spec default ready-line wait. CLI flag overrides.
 pub const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
@@ -36,7 +37,7 @@ permit(principal, action, resource);
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct SpawnRequest<'a> {
-    pub sandbox_id: &'a str,
+    pub sandbox_id: &'a SandboxId,
     pub agent_id: &'a str,
     pub session_id: &'a str,
     /// Sub-marker dir (the `authority/` directory inside the sandbox marker).
@@ -293,11 +294,11 @@ impl AuthoritySupervisor {
             },
         )?;
 
-        tracing::info!(
-            sandbox_id = req.sandbox_id,
+        info!(
+            sandbox_id = req.sandbox_id.compact(),
             pid,
             listen_addr = %capture.listen_addr,
-            "autostarted authority ready"
+            "authority started"
         );
 
         Ok(Self {
@@ -337,10 +338,11 @@ impl AuthoritySupervisor {
 impl Drop for AuthoritySupervisor {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            debug!(pid = self.pid, "stopping autostarted authority");
             send_sigterm(self.pid);
             match child.wait_timeout(STOP_GRACE) {
-                Ok(Some(_)) => {}
+                Ok(Some(_)) => {
+                    info!(pid = self.pid, "authority stopped");
+                }
                 Ok(None) => {
                     warn!(pid = self.pid, "authority SIGKILL after grace");
                     let _ = child.kill();
