@@ -9,6 +9,8 @@ static POSTURE_DEV: &str = include_str!("../../templates/policies/dev.cedar");
 static POSTURE_DEV_DELETE: &str =
     include_str!("../../templates/policies/dev-with-delete-watch.cedar");
 
+pub use firma_config::AgentProfile;
+
 /// What component to scaffold.
 #[derive(Debug, Clone, ValueEnum)]
 #[cfg_attr(test, derive(strum::EnumIter))]
@@ -46,10 +48,9 @@ pub struct InitArgs {
     #[arg(long, short = 'n')]
     pub name: Option<String>,
 
-    /// Built-in agent profile written to `[run].profile` in `firma.toml`
-    /// (e.g. `generic`, `codex`, `claude-code`).
-    #[arg(long)]
-    pub profile: Option<String>,
+    /// Built-in agent profile written to `[run].profile` in `firma.toml`.
+    #[arg(long, value_enum)]
+    pub profile: Option<AgentProfile>,
 
     /// Cedar policy posture to write under `policies/`.
     #[arg(long, value_enum)]
