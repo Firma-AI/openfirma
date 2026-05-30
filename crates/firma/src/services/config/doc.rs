@@ -19,6 +19,13 @@
 //!   actions, extra-host rules) are fully replaced because they reflect
 //!   the *current* selection — keeping stale entries would silently widen
 //!   the policy surface.
+//! - **`strict_hosts`** is the exception: it is *merged*, not replaced.
+//!   Newly intercepted hosts are appended, but existing operator-edited
+//!   entries are preserved. It is decoupled from `intercept_hosts` so an
+//!   operator can add a single strict host by hand without re-listing the
+//!   whole set, and a re-run of `firma config` will not wipe that edit.
+//!   Keeping a strict entry only *narrows* the egress surface (fail-closed),
+//!   so preserving it is safe.
 
 use std::path::Path;
 
@@ -165,8 +172,13 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
             https.remove("strict_hosts");
         } else {
             https.insert("enabled", value(true));
+            // intercept_hosts reflects the current selection → full replace.
             set_string_array(https, "intercept_hosts", inputs.mitm_hosts);
-            set_string_array(https, "strict_hosts", inputs.mitm_hosts);
+            // strict_hosts is decoupled: merge (not replace) so operator
+            // hand-added hosts survive while newly intercepted hosts are still
+            // seeded. Adding a single strict host never requires re-listing the
+            // whole set. See the module-level field-policy note.
+            merge_string_array(https, "strict_hosts", inputs.mitm_hosts);
         }
     }
 
@@ -472,6 +484,28 @@ fn set_string_array(table: &mut Table, key: &str, items: &[&str]) {
     table.insert(key, value(arr));
 }
 
+/// Merge `items` into an existing string array, preserving existing entries
+/// and their order and appending only the items not already present. Used for
+/// `strict_hosts`, which narrows the egress surface: keeping the operator's
+/// hand-added hosts while still seeding any newly intercepted ones is safe
+/// (fail-closed) and lets an operator add one host without re-listing the set.
+fn merge_string_array(table: &mut Table, key: &str, items: &[&str]) {
+    let mut arr = table
+        .get(key)
+        .and_then(Item::as_array)
+        .map_or_else(Array::new, Clone::clone);
+    let present: Vec<String> = arr
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect();
+    for item in items {
+        if !present.iter().any(|p| p == item) {
+            arr.push(Value::from(*item));
+        }
+    }
+    table.insert(key, value(arr));
+}
+
 fn set_str_array(table: &mut Table, key: &str, items: &[String]) {
     let mut arr = Array::new();
     for item in items {
@@ -682,6 +716,16 @@ rules_paths = [\"mappings/stale.toml\"]
             .collect();
         assert_eq!(mitm_out, vec!["api.github.com"]);
 
+        // strict_hosts is decoupled from intercept_hosts: existing operator
+        // entries are preserved and the newly intercepted host is merged in.
+        let strict_out: Vec<&str> = parsed["sidecar"]["interceptor"]["https_mitm"]["strict_hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(strict_out, vec!["old.example.com", "api.github.com"]);
+
         let paths_out: Vec<&str> = parsed["sidecar"]["mapping"]["rules_paths"]
             .as_array()
             .unwrap()
@@ -733,6 +777,66 @@ enabled = false
             .filter_map(|v| v.as_str())
             .collect();
         assert_eq!(hosts, vec!["api.github.com"]);
+    }
+
+    #[test]
+    fn strict_hosts_seeded_to_intercept_on_initial_render() {
+        let mut inputs = dummy_inputs(&Mode::AgentLocal);
+        let mitm = ["api.github.com", "gmail.googleapis.com"];
+        inputs.mitm_hosts = &mitm;
+        let out = render_firma_toml("", &inputs).unwrap();
+        let parsed: toml::Value = toml::from_str(&out).unwrap();
+        let strict: Vec<&str> = parsed["sidecar"]["interceptor"]["https_mitm"]["strict_hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        // Seeded fail-closed: defaults to the intercepted hosts.
+        assert_eq!(strict, vec!["api.github.com", "gmail.googleapis.com"]);
+    }
+
+    #[test]
+    fn hand_added_strict_host_survives_rerun() {
+        // Operator added a strict host by hand (api.anthropic.com) that is not
+        // in the current intercept selection. A re-run must preserve it and
+        // merge in the newly intercepted hosts — no entry dropped.
+        let mut inputs = dummy_inputs(&Mode::AgentLocal);
+        let mitm = ["api.github.com", "gmail.googleapis.com"];
+        inputs.mitm_hosts = &mitm;
+        let existing = "\
+[sidecar.interceptor.https_mitm]
+enabled = true
+intercept_hosts = [\"api.github.com\"]
+strict_hosts = [\"api.github.com\", \"api.anthropic.com\"]
+";
+        let out = render_firma_toml(existing, &inputs).unwrap();
+        let parsed: toml::Value = toml::from_str(&out).unwrap();
+        let https_mitm = &parsed["sidecar"]["interceptor"]["https_mitm"];
+        // intercept_hosts reflects the new (wider) selection — full replace.
+        let intercept: Vec<&str> = https_mitm["intercept_hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(intercept, vec!["api.github.com", "gmail.googleapis.com"]);
+        // strict_hosts merged: existing (incl. hand-added) kept in order,
+        // newly intercepted gmail appended, github not duplicated.
+        let strict: Vec<&str> = https_mitm["strict_hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(
+            strict,
+            vec![
+                "api.github.com",
+                "api.anthropic.com",
+                "gmail.googleapis.com"
+            ]
+        );
     }
 
     #[test]
