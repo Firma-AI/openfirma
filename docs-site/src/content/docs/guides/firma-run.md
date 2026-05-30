@@ -182,6 +182,53 @@ Flags:
 
 `--no-autostart --authority local` is a typed argument-conflict error.
 
+### Autostart startup notices
+
+`firma run` logs a structured `INFO` line to stderr for every autostart and reuse event so you can see exactly what was started, at what address, and under which run ID. With the default log filter (`info`), you will see lines like:
+
+```
+2026-05-27T10:00:01Z  INFO firma_run::authority::supervisor: authority started
+    sandbox_id="01970def" pid=84231 listen_addr="[::1]:54321"
+
+2026-05-27T10:00:02Z  INFO firma_run::sidecar::supervisor: sidecar started
+    sandbox_id="01970def" pid=84235 endpoint="127.0.0.1:18080"
+```
+
+If a local authority was already reachable before the run, you see an `INFO` instead:
+
+```
+2026-05-27T10:00:01Z  INFO firma_run::routing: authority reused: existing local authority on plaintext loopback
+    sandbox_id="01970def" url="http://[::1]:50051"
+```
+
+On exit, each autostarted component logs a stopping notice:
+
+```
+2026-05-27T10:00:10Z  INFO firma_run::sidecar::supervisor: sidecar stopped pid=84235
+2026-05-27T10:00:10Z  INFO firma_run::authority::supervisor: authority stopped pid=84231
+```
+
+**Key fields:**
+
+| Field | Meaning |
+|---|---|
+| `sandbox_id` | UUIDv7 run identifier — unique per `firma run` invocation |
+| `pid` | OS process ID of the autostarted component |
+| `listen_addr` / `endpoint` | Address the component is reachable at |
+| `url` | Full URL (authority reuse path) |
+
+**Controlling log visibility:**
+
+Log output goes to stderr by default. Use `--log-filter` (or `FIRMA_LOG_FILTER`) to adjust verbosity. Use `--log-file` (or `FIRMA_LOG_FILE`) to redirect logs to a file:
+
+```bash
+# Quiet: suppress info, keep warnings
+firma run --log-filter warn -- my-agent
+
+# Redirect to file (startup notices go to the file, not the terminal)
+firma run --log-file /tmp/firma.log -- my-agent
+```
+
 ## Step 4: What `firma run` does
 
 Everything after `--` is the command and its arguments. `firma run`:

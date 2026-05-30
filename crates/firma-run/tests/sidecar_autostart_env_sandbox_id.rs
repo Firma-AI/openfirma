@@ -49,7 +49,7 @@ fn spawned_sidecar_inherits_sandbox_id_env() {
     let marker = tmp.path().join("run").join("sandbox-env-1");
 
     let _supervisor = SidecarSupervisor::spawn(SpawnRequest {
-        sandbox_id: "sandbox-env-1",
+        sandbox_id: &firma_run::identity::SandboxId::from("sandbox-env-1"),
         agent_id: "generic",
         session_id: "session-env",
         marker_dir: marker,

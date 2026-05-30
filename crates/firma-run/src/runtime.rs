@@ -175,10 +175,8 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             } else {
                 args.sidecar_startup_timeout_secs
             }),
-            authority_url: None,
-            authority_ca_cert: None,
-            authority_pub_key: None,
             use_http_proxy_sidecar: profile.use_http_proxy_sidecar,
+            ..Default::default()
         };
         let firma_exe = std::env::current_exe()
             .map_err(|e| RunError::Internal(format!("resolve current_exe: {e}")))?;
@@ -276,7 +274,7 @@ fn resolve_sidecar_template_path(
 
 fn log_run_start(identity: &RunIdentity, profile: &ResolvedProfile) {
     tracing::info!(
-        sandbox_id = %identity.sandbox_id,
+        sandbox_id = identity.sandbox_id.compact(),
         session_id = %identity.session_id,
         profile = %identity.profile,
         backend = %profile.backend,

@@ -54,7 +54,7 @@ fn drop_terminates_child_within_grace() {
     let marker = tmp.path().join("run").join("sandbox-1");
 
     let supervisor = SidecarSupervisor::spawn(SpawnRequest {
-        sandbox_id: "sandbox-1",
+        sandbox_id: &firma_run::identity::SandboxId::from("sandbox-1"),
         agent_id: "generic",
         session_id: "session-1",
         marker_dir: marker.clone(),
@@ -96,7 +96,7 @@ fn marker_files_present_between_ready_and_drop() {
     let marker = tmp.path().join("run").join("sandbox-2");
 
     let supervisor = SidecarSupervisor::spawn(SpawnRequest {
-        sandbox_id: "sandbox-2",
+        sandbox_id: &firma_run::identity::SandboxId::from("sandbox-2"),
         agent_id: "claude-code",
         session_id: "session-7",
         marker_dir: marker,

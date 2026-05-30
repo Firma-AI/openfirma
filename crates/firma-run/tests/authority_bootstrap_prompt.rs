@@ -13,9 +13,7 @@
     reason = "test code"
 )]
 
-use std::net::TcpStream;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
 use firma_run::error::RunError;
@@ -48,39 +46,12 @@ impl AuthorityPromptIo for RecordingPrompt {
     }
 }
 
-fn flags() -> AutostartFlags {
-    AutostartFlags {
-        sidecar_autostart: false,
-        no_autostart: false,
-        template_path: None,
-        startup_timeout: Duration::from_millis(200),
-        authority_url: None,
-        authority_ca_cert: None,
-        authority_pub_key: None,
-        use_http_proxy_sidecar: false,
-    }
-}
-
-/// Skip the test when something already serves `[::1]:50051` — the
-/// resolver short-circuits in that case and never reaches the prompt.
-fn skip_if_port_bound() -> bool {
-    TcpStream::connect_timeout(
-        &"[::1]:50051".parse().expect("parse ipv6 addr"),
-        Duration::from_millis(100),
-    )
-    .is_ok()
-}
-
 fn fake_firma_exe(tmp: &std::path::Path) -> PathBuf {
     tmp.join("does-not-exist-firma")
 }
 
 #[test]
 fn prompt_fires_when_no_commit_and_persists_on_yes() {
-    if skip_if_port_bound() {
-        eprintln!("skip: [::1]:50051 already in use");
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join("firma.toml");
     let identity = RunIdentity::new("test");
@@ -90,7 +61,7 @@ fn prompt_fires_when_no_commit_and_persists_on_yes() {
     let err = resolve_authority(
         &identity,
         &runtime_dir,
-        &flags(),
+        &AutostartFlags::default(),
         &AuthorityCli::Unset,
         "developer",
         Some(cfg.as_path()),
@@ -123,10 +94,6 @@ fn prompt_fires_when_no_commit_and_persists_on_yes() {
 
 #[test]
 fn prompt_declined_returns_typed_error_and_does_not_persist() {
-    if skip_if_port_bound() {
-        eprintln!("skip: [::1]:50051 already in use");
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join("firma.toml");
     let identity = RunIdentity::new("test");
@@ -136,7 +103,7 @@ fn prompt_declined_returns_typed_error_and_does_not_persist() {
     let err = resolve_authority(
         &identity,
         &runtime_dir,
-        &flags(),
+        &AutostartFlags::default(),
         &AuthorityCli::Unset,
         "developer",
         Some(cfg.as_path()),
@@ -157,10 +124,6 @@ fn prompt_declined_returns_typed_error_and_does_not_persist() {
 
 #[test]
 fn no_tty_returns_typed_error_without_calling_confirm() {
-    if skip_if_port_bound() {
-        eprintln!("skip: [::1]:50051 already in use");
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join("firma.toml");
     let identity = RunIdentity::new("test");
@@ -170,7 +133,7 @@ fn no_tty_returns_typed_error_without_calling_confirm() {
     let err = resolve_authority(
         &identity,
         &runtime_dir,
-        &flags(),
+        &AutostartFlags::default(),
         &AuthorityCli::Unset,
         "developer",
         Some(cfg.as_path()),
@@ -188,10 +151,6 @@ fn no_tty_returns_typed_error_without_calling_confirm() {
 
 #[test]
 fn cli_local_skips_prompt_even_without_config() {
-    if skip_if_port_bound() {
-        eprintln!("skip: [::1]:50051 already in use");
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join("firma.toml");
     let identity = RunIdentity::new("test");
@@ -201,7 +160,7 @@ fn cli_local_skips_prompt_even_without_config() {
     let err = resolve_authority(
         &identity,
         &runtime_dir,
-        &flags(),
+        &AutostartFlags::default(),
         &AuthorityCli::Local,
         "developer",
         Some(cfg.as_path()),
@@ -228,10 +187,6 @@ fn cli_local_skips_prompt_even_without_config() {
 
 #[test]
 fn config_authority_section_skips_prompt() {
-    if skip_if_port_bound() {
-        eprintln!("skip: [::1]:50051 already in use");
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join("firma.toml");
     std::fs::write(&cfg, "[authority]\nlisten_addr = \"[::1]:0\"\n").unwrap();
@@ -242,7 +197,7 @@ fn config_authority_section_skips_prompt() {
     let err = resolve_authority(
         &identity,
         &runtime_dir,
-        &flags(),
+        &AutostartFlags::default(),
         &AuthorityCli::Unset,
         "developer",
         Some(cfg.as_path()),

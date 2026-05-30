@@ -18,7 +18,6 @@ use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 use crate::sidecar::supervisor::{SidecarSupervisor, SpawnRequest};
-use tracing::warn;
 
 #[cfg(unix)]
 fn structural_proxy_listen_addr() -> &'static str {
@@ -87,6 +86,21 @@ pub struct AutostartFlags {
     /// When `true`, the autostarted sidecar is started in HTTP proxy
     /// interceptor mode rather than Unix socket mode.
     pub use_http_proxy_sidecar: bool,
+}
+
+impl Default for AutostartFlags {
+    fn default() -> Self {
+        Self {
+            sidecar_autostart: false,
+            no_autostart: false,
+            template_path: None,
+            startup_timeout: std::time::Duration::from_secs(2),
+            authority_url: None,
+            authority_ca_cert: None,
+            authority_pub_key: None,
+            use_http_proxy_sidecar: false,
+        }
+    }
 }
 
 /// Resolved Authority for the current run.
@@ -290,7 +304,7 @@ fn autostart_sidecar(
 /// Step 0: resolve the Authority before any sidecar work.
 ///
 /// CLI > persisted > prompt (only when both empty and TTY). On Local
-/// selection, probe `[::1]:50051`; on miss, spawn an
+/// selection, probe `[authority].listen_addr` (default `[::1]:50051`); on miss, spawn an
 /// `AuthoritySupervisor`. Local mode is a dev convenience path and
 /// intentionally uses plaintext loopback (`http://`), not TLS/mTLS.
 /// EADDRINUSE recovery: on any spawn error, re-probe once; if the port
@@ -325,21 +339,22 @@ pub fn resolve_authority(
     // `local` flag (to distinguish a committed local choice from the
     // fall-through default that triggers the first-run prompt) and the
     // connect coordinates (ca/pub key) regardless of selection mode.
-    let section_snapshot = user_config_path
+    let section = user_config_path
         .map(crate::authority::config::read_authority)
         .transpose()?
-        .flatten();
-    let ca_cert_path = section_snapshot
+        .flatten()
+        .unwrap_or_default();
+    let ca_cert_path = section
+        .connect
         .as_ref()
-        .and_then(|s| s.connect.as_ref())
         .and_then(|c| c.ca_cert_path.as_deref())
         .map(|path| rebase_config_relative_path(path, user_config_dir));
-    let pub_key_path = section_snapshot
+    let pub_key_path = section
+        .connect
         .as_ref()
-        .and_then(|s| s.connect.as_ref())
         .and_then(|c| c.public_key_path.as_deref())
         .map(|path| rebase_config_relative_path(path, user_config_dir));
-    let config_committed_local = section_snapshot.as_ref().is_some_and(|s| s.local);
+    let config_committed_local = section.local;
 
     match selection {
         crate::authority::AuthoritySelection::Remote(url) => {
@@ -352,16 +367,17 @@ pub fn resolve_authority(
             })
         }
         crate::authority::AuthoritySelection::Local => {
-            let target = "[::1]:50051";
+            let target = section.listen_addr;
             if probe_authority_tcp(target).is_ok() {
                 if probe_authority_plaintext_h2(target).is_err() {
                     return Err(RunError::AuthorityTransportAmbiguous {
                         endpoint: format!("http://{target}"),
                     });
                 }
-                warn!(
-                    target,
-                    "using existing local authority on plaintext loopback (dev mode); mTLS hardening applies to https:// authority deployments"
+                tracing::info!(
+                    sandbox_id = identity.sandbox_id.compact(),
+                    url = %format!("http://{target}"),
+                    "authority reused: existing local authority on plaintext loopback"
                 );
                 return Ok(ResolvedAuthority {
                     url: format!("http://{target}"),
@@ -398,9 +414,6 @@ pub fn resolve_authority(
             }) {
                 Ok(sup) => {
                     let ephemeral_pub_key = sup.pub_key_path();
-                    warn!(
-                        "autostarted local authority in plaintext loopback mode (dev convenience); mTLS hardening applies to https:// authority deployments"
-                    );
                     Ok(ResolvedAuthority {
                         url: sup.url(),
                         ca_cert_path,
@@ -415,9 +428,10 @@ pub fn resolve_authority(
                                 endpoint: format!("http://{target}"),
                             });
                         }
-                        warn!(
-                            target,
-                            "authority port became reachable during autostart retry; proceeding with plaintext local authority (dev mode)"
+                        tracing::info!(
+                            sandbox_id = identity.sandbox_id.compact(),
+                            url = %format!("http://{target}"),
+                            "authority reused: port became reachable during autostart retry"
                         );
                         Ok(ResolvedAuthority {
                             url: format!("http://{target}"),
@@ -442,18 +456,16 @@ fn rebase_config_relative_path(path: &Path, config_dir: Option<&Path>) -> PathBu
     }
 }
 
-fn probe_authority_tcp(addr: &str) -> Result<(), String> {
-    let socket: std::net::SocketAddr = addr.parse().map_err(|e| format!("parse {addr}: {e}"))?;
-    std::net::TcpStream::connect_timeout(&socket, std::time::Duration::from_millis(500))
+fn probe_authority_tcp(addr: std::net::SocketAddr) -> Result<(), String> {
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500))
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
 
-fn probe_authority_plaintext_h2(addr: &str) -> Result<(), String> {
+fn probe_authority_plaintext_h2(addr: std::net::SocketAddr) -> Result<(), String> {
     const H2_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
-    let socket: std::net::SocketAddr = addr.parse().map_err(|e| format!("parse {addr}: {e}"))?;
     let mut stream =
-        std::net::TcpStream::connect_timeout(&socket, std::time::Duration::from_millis(500))
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500))
             .map_err(|e| e.to_string())?;
     stream
         .set_write_timeout(Some(std::time::Duration::from_millis(500)))

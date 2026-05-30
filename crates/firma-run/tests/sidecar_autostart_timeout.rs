@@ -42,7 +42,7 @@ fn returns_ready_timeout_when_no_ready_line_observed() {
     let marker = tmp.path().join("run").join("sandbox-xyz");
 
     let result = SidecarSupervisor::spawn(SpawnRequest {
-        sandbox_id: "sandbox-xyz",
+        sandbox_id: &firma_run::identity::SandboxId::from("sandbox-xyz"),
         agent_id: "generic",
         session_id: "session-1",
         marker_dir: marker.clone(),

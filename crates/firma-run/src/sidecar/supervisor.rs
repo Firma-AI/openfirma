@@ -15,13 +15,15 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::mpsc;
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
-use tracing::{debug, warn};
+use tracing::{info, warn};
+use wait_timeout::ChildExt;
 
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
+use crate::identity::SandboxId;
 
 /// Per-spec default ready-line wait. CLI flag overrides this value.
 pub const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
@@ -33,7 +35,7 @@ const STOP_GRACE: Duration = Duration::from_secs(5);
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct SpawnRequest<'a> {
-    pub sandbox_id: &'a str,
+    pub sandbox_id: &'a SandboxId,
     pub agent_id: &'a str,
     pub session_id: &'a str,
     pub marker_dir: PathBuf,
@@ -199,7 +201,7 @@ impl SidecarSupervisor {
 
             let reader = std::io::BufReader::new(stderr);
             let (tx, rx) = mpsc::sync_channel::<ScrapeResult>(1);
-            let tee_handle = thread::Builder::new()
+            let tee_handle = std::thread::Builder::new()
                 .name("firma-sidecar-tee".into())
                 .spawn(move || run_scraper(reader, log_file, tx))
                 .map_err(|error| RunError::SidecarStartupFailed {
@@ -240,7 +242,7 @@ impl SidecarSupervisor {
                 }
             }
             if attempt + 1 < max_attempts {
-                thread::sleep(Duration::from_millis(120));
+                std::thread::sleep(Duration::from_millis(120));
             }
         }
         let Some((child, tee_handle, pid, capture)) = ready else {
@@ -271,11 +273,11 @@ impl SidecarSupervisor {
             },
         )?;
 
-        tracing::info!(
-            sandbox_id = req.sandbox_id,
+        info!(
+            sandbox_id = req.sandbox_id.compact(),
             pid,
             endpoint = %capture.interceptor_addr,
-            "autostarted sidecar ready"
+            "sidecar started"
         );
 
         let endpoint = capture.interceptor_addr.parse::<SocketAddr>().map_or_else(
@@ -320,24 +322,19 @@ impl SidecarSupervisor {
 impl Drop for SidecarSupervisor {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            debug!(pid = self.pid, "stopping autostarted sidecar");
             send_sigterm(self.pid);
-            let deadline = Instant::now() + STOP_GRACE;
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,
-                    Ok(None) if Instant::now() >= deadline => {
-                        warn!(pid = self.pid, "sidecar SIGKILL after grace");
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break;
-                    }
-                    Ok(None) => thread::sleep(Duration::from_millis(100)),
-                    Err(error) => {
-                        warn!(%error, "sidecar wait failed");
-                        let _ = child.kill();
-                        break;
-                    }
+            match child.wait_timeout(STOP_GRACE) {
+                Ok(Some(_)) => {
+                    info!(pid = self.pid, "sidecar stopped");
+                }
+                Ok(None) => {
+                    warn!(pid = self.pid, "sidecar SIGKILL after grace");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                Err(error) => {
+                    warn!(%error, "sidecar wait failed");
+                    let _ = child.kill();
                 }
             }
         }
