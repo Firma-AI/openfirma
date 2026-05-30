@@ -115,17 +115,26 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
     let state_dir = firma_stack::resolve_state_dir(None)
         .map_err(|e| anyhow::anyhow!("resolve state_dir for implicit init: {e}"))?;
 
+    // Infer profile from --profile flag, falling back to the command name so
+    // `firma run -- codex` auto-selects the codex profile without requiring
+    // an explicit --profile flag.
+    let inferred_profile = args.profile.as_deref().or_else(|| {
+        let cmd = args.command.first()?;
+        let name = std::path::Path::new(cmd)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(cmd.as_str());
+        firma_config::AgentProfile::from_name(name).map(|_| name)
+    });
+
     let plan = ScaffoldPlan {
         config_dir: resolved,
         state_dir,
         workspace: cwd,
         force: false,
         authority_listen: "127.0.0.1:50051".into(),
-        agent: args
-            .profile
-            .clone()
-            .unwrap_or_else(|| "my-agent".to_string()),
-        provider: profile_to_provider(args.profile.as_deref()),
+        agent: inferred_profile.unwrap_or("my-agent").to_string(),
+        provider: profile_to_provider(inferred_profile),
         authority,
     };
     if let Err(error) = scaffold_from_plan(&plan) {
