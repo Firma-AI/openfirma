@@ -356,9 +356,7 @@ pub fn resolve_authority(
         .map(|path| rebase_config_relative_path(path, user_config_dir));
     let config_committed_local = section.local;
 
-    if section.local {
-        maybe_regen_tls(ca_cert_path.as_deref(), firma_exe)?;
-    }
+    maybe_regen_tls(ca_cert_path.as_deref(), firma_exe)?;
 
     match selection {
         crate::authority::AuthoritySelection::Remote(url) => {
@@ -457,7 +455,7 @@ pub fn resolve_authority(
 /// Only called for local authority configurations.
 fn maybe_regen_tls(ca_cert_path: Option<&Path>, firma_exe: &Path) -> Result<(), RunError> {
     let Some(path) = ca_cert_path else { return Ok(()) };
-    if path.exists() {
+    if path.is_file() {
         return Ok(());
     }
     let out_dir = path.parent().ok_or_else(|| {
