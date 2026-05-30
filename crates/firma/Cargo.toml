@@ -31,7 +31,7 @@ clap = { workspace = true, features = [
 ctrlc = { workspace = true }
 dialoguer = { workspace = true }
 firma-authority = { workspace = true }
-firma-config = { workspace = true }
+firma-config = { workspace = true, features = ["clap"] }
 firma-core = { workspace = true }
 firma-run = { workspace = true }
 firma-sidecar = { workspace = true }
