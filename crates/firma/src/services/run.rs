@@ -121,7 +121,10 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
         workspace: cwd,
         force: false,
         authority_listen: "127.0.0.1:50051".into(),
-        agent: args.profile.clone().unwrap_or_else(|| "my-agent".to_string()),
+        agent: args
+            .profile
+            .clone()
+            .unwrap_or_else(|| "my-agent".to_string()),
         provider: "anthropic".into(),
         authority,
     };

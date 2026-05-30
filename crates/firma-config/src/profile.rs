@@ -6,7 +6,7 @@
 pub enum AgentProfile {
     /// General-purpose sandbox, no agent-specific defaults.
     Generic,
-    /// OpenAI Codex CLI.
+    /// `OpenAI` Codex CLI.
     Codex,
     /// Anthropic Claude Code CLI.
     #[cfg_attr(feature = "clap", value(name = "claude-code"))]
