@@ -487,9 +487,9 @@ fn strip_ansi(input: &str) -> String {
 
 fn line_marks_ready(line: &str) -> bool {
     let trimmed = line.trim_end();
-    // tracing default: `<ts> <LEVEL> <target>: ready`
-    // CompactFormatter (no --log-file): `[INFO] ready`
-    trimmed.ends_with(": ready") || trimmed == "ready" || trimmed.ends_with("] ready")
+    // tracing full:    `<ts>  INFO <target>: ready`
+    // CompactFormatter: `[INFO] ready`
+    trimmed.ends_with("[INFO] ready") || trimmed.ends_with("ready")
 }
 
 fn extract_kv(line: &str, key: &str) -> Option<String> {
