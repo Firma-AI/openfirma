@@ -13,6 +13,7 @@ use dialoguer::theme::ColorfulTheme;
 use crate::args::config::{InitArgs, Mapping, Mode, Posture};
 use crate::fs::create_private_dir_all;
 use doc::DocInputs;
+use firma_config::AgentProfile;
 
 struct AuthorityInputs {
     /// gRPC listen address (agent-local + authority modes).
@@ -1001,48 +1002,39 @@ fn collect_profile(
     theme: &ColorfulTheme,
 ) -> Result<String> {
     if let Some(p) = &args.profile {
-        return Ok(p.clone());
+        return Ok(p.as_str().to_string());
     }
-    Ok(match (existing.profile.as_deref(), interactive) {
-        (Some(p), false) => p.to_string(),
-        (Some(p), true) => prompt_profile_with_default(theme, p)?,
-        (None, true) => prompt_profile_with_default(theme, "generic")?,
-        (None, false) => "generic".to_string(),
-    })
+    let default = existing
+        .profile
+        .as_deref()
+        .and_then(AgentProfile::from_name)
+        .unwrap_or(AgentProfile::Generic);
+    if interactive {
+        prompt_profile_with_default(theme, default)
+    } else {
+        Ok(default.as_str().to_string())
+    }
 }
 
-fn prompt_profile_with_default(theme: &ColorfulTheme, default: &str) -> Result<String> {
-    let profiles: &[(&str, &str)] = &[
-        (
-            "generic",
-            "general-purpose sandbox, no agent-specific defaults",
-        ),
-        (
-            "codex",
-            "OpenAI Codex CLI — sets up OpenAI mapping by default",
-        ),
-        (
-            "claude-code",
-            "Anthropic Claude Code — sets up Anthropic mapping by default",
-        ),
-    ];
-    let items: Vec<String> = profiles
+fn prompt_profile_with_default(theme: &ColorfulTheme, default: AgentProfile) -> Result<String> {
+    let variants = AgentProfile::value_variants();
+    let items: Vec<String> = variants
         .iter()
-        .map(|(name, desc)| format!("{name:<16}  {desc}"))
+        .map(|p| format!("{:<16}  {}", p.as_str(), p.description()))
         .collect();
     let selection = dialoguer::Select::with_theme(theme)
         .with_prompt("Agent profile")
         .items(&items)
         .default(
-            profiles
+            variants
                 .iter()
-                .position(|(n, _)| *n == default)
+                .position(|p| p.as_str() == default.as_str())
                 .unwrap_or(0),
         )
         .report(false)
         .interact()
         .context("profile prompt")?;
-    let chosen = profiles[selection].0.to_string();
+    let chosen = variants[selection].as_str().to_string();
     eprintln!("  Profile  · {chosen}");
     Ok(chosen)
 }

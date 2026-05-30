@@ -3,13 +3,14 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use firma_config::AgentProfile;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::BackendKind;
 #[cfg(target_os = "linux")]
 use crate::backend::platform::{WslKind, detect_wsl};
 use crate::error::RunError;
-use crate::profile::{BuiltInProfileId, built_in_profile};
+use crate::profile::built_in_profile;
 use crate::runtime::RunInput;
 
 fn backend_supports_structural_network(backend: BackendKind) -> bool {
@@ -592,8 +593,8 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     };
 
     if matches!(
-        BuiltInProfileId::from_str(&resolved.id),
-        Some(BuiltInProfileId::ClaudeCode)
+        AgentProfile::from_name(&resolved.id),
+        Some(AgentProfile::ClaudeCode)
     ) && resolved.backend != BackendKind::Bwrap
     {
         tracing::warn!(
