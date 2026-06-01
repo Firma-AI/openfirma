@@ -166,6 +166,16 @@ fn run_host_bridge_loop(
         }
         match listener.accept() {
             Ok((client, client_addr)) => {
+                // Listener is non-blocking for stop polling; on some platforms
+                // accepted sockets may inherit non-blocking mode. The relay
+                // path relies on blocking I/O, so normalize the accepted
+                // client socket before handing it to a worker.
+                if let Err(error) = client.set_nonblocking(false) {
+                    tracing::warn!(
+                        "host proxy bridge failed to set blocking mode for {client_addr}: {error}"
+                    );
+                    continue;
+                }
                 let permit = limiter.acquire();
                 let upstream = *upstream;
                 let headers = attribution_headers.clone();
@@ -179,9 +189,7 @@ fn run_host_bridge_loop(
                     if let Err(error) =
                         handle_connection_tcp_upstream(client, upstream, &headers, &listen_addr_str)
                     {
-                        tracing::warn!(
-                            "host proxy bridge connection from {client_addr} failed: {error}"
-                        );
+                        log_host_bridge_connection_error(client_addr, &error);
                     }
                 });
             }
@@ -192,6 +200,25 @@ fn run_host_bridge_loop(
                 tracing::warn!("host proxy bridge accept failed: {error}");
                 thread::sleep(Duration::from_millis(50));
             }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn log_host_bridge_connection_error(client_addr: std::net::SocketAddr, error: &io::Error) {
+    match error.kind() {
+        // Common transient cases when clients close/retry during interactive
+        // agent traffic; keep these at debug to avoid noisy logs.
+        io::ErrorKind::WouldBlock
+        | io::ErrorKind::ConnectionReset
+        | io::ErrorKind::BrokenPipe
+        | io::ErrorKind::UnexpectedEof => {
+            tracing::debug!(
+                "host proxy bridge connection from {client_addr} closed/transient: {error}"
+            );
+        }
+        _ => {
+            tracing::warn!("host proxy bridge connection from {client_addr} failed: {error}");
         }
     }
 }
