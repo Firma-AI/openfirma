@@ -10,6 +10,8 @@ use std::net::{TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 #[cfg(unix)]
+use std::sync::{Arc, Condvar, Mutex};
+#[cfg(unix)]
 use std::sync::mpsc;
 #[cfg(unix)]
 use std::thread::{self, JoinHandle};
@@ -153,19 +155,27 @@ fn run_host_bridge_loop(
     attribution_headers: &BTreeMap<String, String>,
     stop_rx: &mpsc::Receiver<()>,
 ) {
+    // Bound worker concurrency to avoid unbounded thread growth under load.
+    // Extra inbound connections remain queued by the listener backlog until a
+    // worker slot is released.
+    let limiter = Arc::new(ConnectionLimiter::new(128));
+
     loop {
         if stop_rx.try_recv().is_ok() {
             break;
         }
         match listener.accept() {
             Ok((client, client_addr)) => {
+                let permit = limiter.acquire();
                 let upstream = *upstream;
                 let headers = attribution_headers.clone();
                 let listen_addr_str = listener
                     .local_addr()
                     .map(|a| a.to_string())
                     .unwrap_or_default();
+                let _limiter = Arc::clone(&limiter);
                 thread::spawn(move || {
+                    let _permit = permit;
                     if let Err(error) =
                         handle_connection_tcp_upstream(client, upstream, &headers, &listen_addr_str)
                     {
@@ -183,6 +193,64 @@ fn run_host_bridge_loop(
                 thread::sleep(Duration::from_millis(50));
             }
         }
+    }
+}
+
+#[cfg(unix)]
+struct ConnectionLimiter {
+    limit: usize,
+    in_flight: Mutex<usize>,
+    cv: Condvar,
+}
+
+#[cfg(unix)]
+impl ConnectionLimiter {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            in_flight: Mutex::new(0),
+            cv: Condvar::new(),
+        }
+    }
+
+    fn acquire(self: &Arc<Self>) -> ConnectionPermit {
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while *in_flight >= self.limit {
+            in_flight = self
+                .cv
+                .wait(in_flight)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        *in_flight += 1;
+        drop(in_flight);
+        ConnectionPermit {
+            limiter: Arc::clone(self),
+        }
+    }
+
+    fn release(&self) {
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *in_flight = in_flight.saturating_sub(1);
+        drop(in_flight);
+        self.cv.notify_one();
+    }
+}
+
+#[cfg(unix)]
+struct ConnectionPermit {
+    limiter: Arc<ConnectionLimiter>,
+}
+
+#[cfg(unix)]
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.limiter.release();
     }
 }
 
