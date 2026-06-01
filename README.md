@@ -14,8 +14,15 @@
 
 
   [Docs](https://firma-ai.github.io/openfirma)
-  &nbsp;·&nbsp;
-  [Website](https://openfirma.netlify.app/)
+&nbsp;·&nbsp;
+[Website](https://openfirma.netlify.app/)
+
+<br/>
+
+[![CI](https://github.com/Firma-AI/openfirma/actions/workflows/ci.yml/badge.svg)](https://github.com/Firma-AI/openfirma/actions/workflows/ci.yml)
+[![Release](https://github.com/Firma-AI/openfirma/actions/workflows/release.yml/badge.svg)](https://github.com/Firma-AI/openfirma/actions/workflows/release.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Built with Rust](https://img.shields.io/badge/Built_with-Rust-orange.svg)](https://www.rust-lang.org)
 
 </div>
 
