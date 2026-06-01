@@ -1,14 +1,14 @@
 ---
 title: Wrap an agent with firma run
-description: Use the runtime wrapper so an agent's traffic must go through the Sidecar — even traffic the agent doesn't intend to route there.
+description: Use the runtime wrapper to route agent traffic through the Sidecar, with structural confinement on supported backends and explicit compatibility-mode limits elsewhere.
 ---
 
-`firma run` launches an agent inside an OS-level sandbox where every outbound call is forced through the Sidecar. Setting `HTTP_PROXY` is a hint; `firma run` is a constraint. This guide shows you how to use it, and when you should reach for it instead of plain proxy env vars.
+`firma run` launches an agent through a runtime backend and routes outbound calls through the Sidecar. On structural backends, such as Linux `bwrap`, the backend removes the agent's ability to bypass that route. On current macOS `vz` and Windows/WSL2 `wsl2`, enforcement is proxy-only compatibility mode: useful for cooperative agents, but not a hard network boundary. This guide shows you how to use `firma run`, and when you should reach for it instead of plain proxy env vars.
 
 ```mermaid
 flowchart LR
     Run["firma run"]
-    Sandbox["Sandbox backend (Linux: bwrap)"]
+    Sandbox["Sandbox backend"]
     Seccomp["Managed seccomp filter"]
     Agent["Agent process"]
     LocalExec["Sidecar local-exec gate"]
@@ -22,7 +22,7 @@ flowchart LR
     Sandbox -->|"launches"| Agent
     Agent -->|"pre-exec command check (optional)"| LocalExec
     LocalExec -->|"allow only"| Agent
-    Agent -->|"forced outbound traffic"| Sidecar
+    Agent -->|"structural: forced; proxy-only: cooperative"| Sidecar
     Authority -->|"tokens, policies, revocations"| Sidecar
     Sidecar -->|"allowed traffic"| External
     Sidecar -->|"policy decision"| Audit
@@ -35,11 +35,11 @@ You should already have a Sidecar running with a capability for some agent ident
 Reach for `firma run` when one or more of these is true:
 
 - The agent is third-party code or runs prompts you don't fully control (most LLM agents).
-- You want a hard guarantee that nothing escapes the policy boundary.
-- The agent might spawn child processes that don't inherit env vars.
+- You want a hard guarantee that nothing escapes the policy boundary, and you are using a structural backend.
+- The agent might spawn child processes that don't inherit env vars, and you are using a structural backend.
 - You're shipping a managed runtime to others and want enforcement to be part of the product.
 
-For development work, a Sidecar you wrote, or a CI script you trust, plain proxy env vars are fine. For everything else, `firma run` is the answer.
+For development work, a Sidecar you wrote, or a CI script you trust, plain proxy env vars are fine. For everything else, `firma run` is the right wrapper, but the backend determines whether the routing is mandatory or proxy-only.
 
 For the conceptual background, read [The sandbox boundary](../../concepts/sandbox/).
 
@@ -47,11 +47,11 @@ For the conceptual background, read [The sandbox boundary](../../concepts/sandbo
 
 `firma run` uses a different sandbox backend per platform. The defaults are usually right:
 
-| Platform | Default backend | Notes                                                                |
-| -------- | --------------- | -------------------------------------------------------------------- |
-| Linux    | `bwrap`         | Native Linux only; requires unprivileged user namespaces + AppArmor allowance for bwrap |
-| macOS    | `vz`            | Native Apple Virtualization framework                                |
-| Windows  | `wsl2`          | Linux guest under WSL2                                               |
+| Platform | Default backend | Notes |
+| -------- | --------------- | ----- |
+| Linux    | `bwrap`         | Structural mode; requires unprivileged user namespaces + AppArmor allowance for bwrap. |
+| macOS    | `vz`            | Current compatibility mode: host process, `sandbox-exec`, proxy bridge, explicit `--allow-non-structural` opt-in. VZ guest structural work is planned under FIR-72/FIR-112. |
+| Windows  | `wsl2`          | Current compatibility mode; explicit `--allow-non-structural` opt-in. |
 
 Verify the platform default works on your host. On Linux, the bwrap backend
 needs two things: unprivileged user namespaces enabled, and — on AppArmor
@@ -72,7 +72,7 @@ If `unshare --user --pid echo ok` itself fails with a permission error,
 enable unprivileged user namespaces (`sysctl -w kernel.unprivileged_userns_clone=1`
 on some distros) or pick a different backend.
 
-On WSL, `firma run` does not implicitly select `bwrap`; it automatically selects the `wsl2` compatibility backend.
+On macOS and WSL, `firma run` defaults to compatibility mode and fails closed unless you acknowledge the weaker boundary with `--allow-non-structural` or `run.allow_non_structural = true`. On WSL, `firma run` does not implicitly select `bwrap`; it automatically selects the `wsl2` compatibility backend.
 
 ## Step 2: Scaffold a config directory with `firma config`
 
@@ -231,7 +231,9 @@ firma run --log-file /tmp/firma.log -- my-agent
 
 ## Step 4: What `firma run` does
 
-Everything after `--` is the command and its arguments. `firma run`:
+Everything after `--` is the command and its arguments.
+
+On structural backends, `firma run`:
 
 1. Resolves the `generic` profile.
 2. Builds a sandbox using the platform default backend.
@@ -239,7 +241,9 @@ Everything after `--` is the command and its arguments. `firma run`:
 4. Sets `HTTP_PROXY=http://127.0.0.1:18080` (and the HTTPS variant).
 5. Launches `curl https://example.com` inside the sandbox under a sandbox identity.
 
-The Sidecar receives the curl's request, runs it through the pipeline, and either dispatches or denies. The `curl` invocation never sees a token; it just talks to the proxy.
+The Sidecar receives the curl's request, runs it through the pipeline, and either dispatches or denies. With sidecar-seeded capabilities, the `curl` invocation never sees a token; it just talks to the proxy. If you use `--capability-file`, current `firma run` exports capability material into the wrapped process environment for compatibility, so do not use that mode when token non-exposure is a hard requirement.
+
+On current macOS `vz` and Windows/WSL2 `wsl2`, `firma run` instead starts a host-side proxy bridge, injects proxy environment variables, clears `NO_PROXY`, and refuses to launch unless non-structural mode is explicitly allowed. A cooperative HTTP client is mediated and audited; a non-cooperative client can still bypass by ignoring proxy variables or opening direct sockets. The runtime logs this as a `backend compatibility proof`, not a structural proof.
 
 ## `firma run` execution flow (Linux: `bwrap` + seccomp + Sidecar governance)
 
@@ -344,7 +348,7 @@ This prints the resolved profile as JSON: which backend, which env vars are inje
 
 ## What does and does not pass through
 
-Inside the sandbox, the agent sees:
+On structural backends, the agent sees:
 
 - A loopback interface where only `127.0.0.1:18080` is reachable.
 - A DNS stub that answers only the hostnames the Sidecar is configured to route.
@@ -353,11 +357,11 @@ Inside the sandbox, the agent sees:
 
 It does *not* see:
 
-- The capability token (handled host-side; the agent never holds it).
+- The capability token when capabilities are pre-seeded into the host-side Sidecar. Current `--capability-file` mode is an exception and exports capability material into the wrapped process environment.
 - Host environment variables (the sandbox starts with a stripped env).
 - Host filesystem outside profile-mounted paths.
 
-This means an agent under `firma run` cannot:
+This means an agent under structural `firma run` cannot:
 
 - Open a raw TCP socket to anything but the proxy bridge.
 - Resolve and connect to `8.8.8.8:53` to do its own DNS.
@@ -365,6 +369,8 @@ This means an agent under `firma run` cannot:
 - Read host files containing secrets.
 
 What it *can* still do is whatever its capability + policy allow it to do *via* the Sidecar. The sandbox is plumbing; the policy is what decides.
+
+On proxy-only compatibility backends, the agent sees proxy variables and `NO_PROXY` clearing, but it does not get a mandatory network namespace or deterministic DNS confinement. That mode is for compatibility and ergonomics; it is not the answer for an adversarial or non-cooperative agent.
 
 ## Common gotchas
 
@@ -392,7 +398,7 @@ What it *can* still do is whatever its capability + policy allow it to do *via* 
 
 **`firma run` exits immediately with a typed backend/config error.** This is expected when the selected backend is incompatible with the host. On WSL, implicit backend selection uses `wsl2` compatibility mode. On explicit `bwrap` selection with unsupported host conditions (for example WSL or restricted user namespaces), you'll get an `UnsupportedBackend` error with remediation guidance.
 
-**The agent sees `HTTP_PROXY` but its calls still fail with DNS errors.** The DNS stub only answers hosts the Sidecar will route. If your mapping rules don't cover the host, the stub returns NXDOMAIN. Add the host to the mapping (and a permitting rule to the policy).
+**The agent sees `HTTP_PROXY` but its calls still fail with DNS errors on a structural backend.** The DNS stub only answers hosts the Sidecar will route. If your mapping rules don't cover the host, the stub returns NXDOMAIN. Add the host to the mapping (and a permitting rule to the policy).
 
 **Tight loops produce `PolicyDenied`.** A coding agent doing one task per second can blow through `action_count` faster than expected. If your policy gates on `action_count`, raise the threshold or scope the rule more narrowly.
 

@@ -11,5 +11,7 @@ OpenFirma docs highlights for LLM-based retrieval:
 - On WSL hosts, implicit `firma run` backend selection uses `wsl2` compatibility mode instead of Linux `bwrap`.
 - Non-structural (proxy-only) backends (macOS `vz`, WSL2 `wsl2`) fail closed by default; pass `--allow-non-structural` or set `run.allow_non_structural = true` in firma.toml to opt into proxy-only compatibility mode.
 - Only Linux `bwrap` and `firecracker` backends provide structural (OS-level) network confinement; `vz` and `wsl2` provide proxy-based enforcement that can be bypassed by non-cooperative clients.
+- FIR-112 macOS strategy: prioritize VZ guest-based structural parity first; treat Endpoint Security Framework (ESF) as selected host hardening/audit, not as standalone sidecar-only egress or DNS confinement.
+- Capability token non-exposure applies when capabilities are pre-seeded into the Sidecar; current `firma run --capability-file` exports capability material into the wrapped process environment for compatibility.
 - Runtime logs for non-structural backends use "backend compatibility proof" with `mode=proxy_only enforced=false` instead of "backend network enforcement proof".
 - `firma config` reads existing target `firma.toml` values as defaults; CLI flags override only supplied fields.
