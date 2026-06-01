@@ -10,9 +10,9 @@ use std::net::{TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 #[cfg(unix)]
-use std::sync::{Arc, Condvar, Mutex};
-#[cfg(unix)]
 use std::sync::mpsc;
+#[cfg(unix)]
+use std::sync::{Arc, Condvar, Mutex};
 #[cfg(unix)]
 use std::thread::{self, JoinHandle};
 #[cfg(unix)]
