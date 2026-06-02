@@ -286,7 +286,10 @@ struct VzGuestLaunchInputs {
 impl VzGuestLaunchInputs {
     fn from_env() -> Result<Self, RunError> {
         let runner = validate_required_file_env(VZ_GUEST_RUNNER_ENV)?;
+        #[cfg(unix)]
         ensure_executable_file(VZ_GUEST_RUNNER_ENV, &runner)?;
+        #[cfg(not(unix))]
+        ensure_executable_file(VZ_GUEST_RUNNER_ENV, &runner);
         Ok(Self {
             runner,
             kernel: validate_required_file_env(VZ_GUEST_KERNEL_ENV)?,
@@ -307,7 +310,7 @@ struct VzGuestLaunchContract {
     command: VzGuestCommandContract,
     mounts: Vec<MountSpec>,
     network: VzGuestNetworkContract,
-    invariants: VzGuestInvariantContract,
+    invariants: Vec<VzGuestInvariantContract>,
 }
 
 impl VzGuestLaunchContract {
@@ -341,14 +344,7 @@ impl VzGuestLaunchContract {
                 &launch.env,
                 handle.identity.full_attribution_headers(),
             )?,
-            invariants: VzGuestInvariantContract {
-                sidecar_only_egress: true,
-                dns_confined: true,
-                fail_closed_startup: handle.network_policy.fail_closed,
-                fail_closed_runtime: true,
-                direct_bypass_resistant: true,
-                preserve_stdio_signals_exit: true,
-            },
+            invariants: VzGuestInvariantContract::required_set(handle.network_policy.fail_closed),
         })
     }
 }
@@ -402,12 +398,53 @@ impl VzGuestNetworkContract {
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 struct VzGuestInvariantContract {
-    sidecar_only_egress: bool,
-    dns_confined: bool,
-    fail_closed_startup: bool,
-    fail_closed_runtime: bool,
-    direct_bypass_resistant: bool,
-    preserve_stdio_signals_exit: bool,
+    name: VzGuestInvariantName,
+    mode: VzGuestInvariantMode,
+}
+
+impl VzGuestInvariantContract {
+    fn required_set(fail_closed_startup: bool) -> Vec<Self> {
+        vec![
+            Self::required(VzGuestInvariantName::SidecarOnlyEgress),
+            Self::required(VzGuestInvariantName::DnsConfined),
+            Self {
+                name: VzGuestInvariantName::FailClosedStartup,
+                mode: if fail_closed_startup {
+                    VzGuestInvariantMode::Required
+                } else {
+                    VzGuestInvariantMode::DisabledByPolicy
+                },
+            },
+            Self::required(VzGuestInvariantName::FailClosedRuntime),
+            Self::required(VzGuestInvariantName::DirectBypassResistant),
+            Self::required(VzGuestInvariantName::PreserveStdioSignalsExit),
+        ]
+    }
+
+    fn required(name: VzGuestInvariantName) -> Self {
+        Self {
+            name,
+            mode: VzGuestInvariantMode::Required,
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum VzGuestInvariantName {
+    SidecarOnlyEgress,
+    DnsConfined,
+    FailClosedStartup,
+    FailClosedRuntime,
+    DirectBypassResistant,
+    PreserveStdioSignalsExit,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum VzGuestInvariantMode {
+    Required,
+    DisabledByPolicy,
 }
 
 fn start_vz_guest_runner(handle: &SandboxHandle, launch: &LaunchSpec) -> Result<Child, RunError> {
@@ -494,25 +531,25 @@ fn read_required_path_env(name: &str) -> Result<PathBuf, RunError> {
     Ok(path)
 }
 
+#[cfg(unix)]
 fn ensure_executable_file(name: &str, path: &Path) -> Result<(), RunError> {
-    #[cfg(unix)]
-    {
-        let metadata = path.metadata().map_err(|error| RunError::Backend {
+    let metadata = path.metadata().map_err(|error| RunError::Backend {
+        backend: BackendKind::Vz.to_string(),
+        reason: format!("failed to inspect {name} {}: {error}", path.display()),
+    })?;
+    if metadata.permissions().mode() & 0o111 == 0 {
+        return Err(RunError::Backend {
             backend: BackendKind::Vz.to_string(),
-            reason: format!("failed to inspect {name} {}: {error}", path.display()),
-        })?;
-        if metadata.permissions().mode() & 0o111 == 0 {
-            return Err(RunError::Backend {
-                backend: BackendKind::Vz.to_string(),
-                reason: format!("{name} must be executable: {}", path.display()),
-            });
-        }
+            reason: format!("{name} must be executable: {}", path.display()),
+        });
     }
 
-    #[cfg(not(unix))]
-    let _ = (name, path);
-
     Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_executable_file(name: &str, path: &Path) {
+    let _ = (name, path);
 }
 
 /// Build the `sandbox-exec` SBPL profile for the given mode.
@@ -764,9 +801,28 @@ mod tests {
             json["network"]["attribution_headers"]["x-firma-profile"],
             "claude-code"
         );
-        assert_eq!(json["invariants"]["sidecar_only_egress"], true);
-        assert_eq!(json["invariants"]["dns_confined"], true);
-        assert_eq!(json["invariants"]["direct_bypass_resistant"], true);
+        let invariants = json["invariants"].as_array().expect("invariants array");
+        assert!(
+            invariants
+                .iter()
+                .any(|invariant| invariant["name"] == "sidecar_only_egress"
+                    && invariant["mode"] == "required"),
+            "sidecar-only egress invariant must be required: {invariants:?}"
+        );
+        assert!(
+            invariants
+                .iter()
+                .any(|invariant| invariant["name"] == "dns_confined"
+                    && invariant["mode"] == "required"),
+            "DNS confinement invariant must be required: {invariants:?}"
+        );
+        assert!(
+            invariants
+                .iter()
+                .any(|invariant| invariant["name"] == "direct_bypass_resistant"
+                    && invariant["mode"] == "required"),
+            "direct-bypass invariant must be required: {invariants:?}"
+        );
     }
 
     // ── EnforcementProof ─────────────────────────────────────────────────────

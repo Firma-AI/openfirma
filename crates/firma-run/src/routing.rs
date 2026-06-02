@@ -13,7 +13,9 @@ use std::sync::mpsc;
 #[cfg(unix)]
 use std::thread::{self, JoinHandle};
 
-use crate::backend::{ConfinementMechanism, EnforcementProof, SandboxHandle};
+#[cfg(unix)]
+use crate::backend::ConfinementMechanism;
+use crate::backend::{EnforcementProof, SandboxHandle};
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 use crate::identity::RunIdentity;
@@ -150,6 +152,9 @@ pub fn prepare_network_runtime(
     flags: &AutostartFlags,
     authority: ResolvedAuthority,
 ) -> Result<NetworkRuntime, RunError> {
+    #[cfg(not(unix))]
+    let _ = proof;
+
     let mut flags = flags.clone();
     flags.authority_url = Some(authority.url.clone());
     flags.authority_ca_cert.clone_from(&authority.ca_cert_path);
