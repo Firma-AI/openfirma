@@ -589,7 +589,7 @@ fn build_sandbox_profile(launch: &LaunchSpec, mode: VzStructuralMode) -> String 
     }
 
     // Sensitive home path masking for claude-code profile.
-    if claude_profile && Path::new(&home).is_absolute() {
+    if claude_profile && is_absolute_sandbox_path(&home) {
         for suffix in crate::backend::DEFAULT_SENSITIVE_HOME_SUFFIXES {
             let path = format!("{home}/{suffix}");
             let escaped = escape_sandbox_path(&path);
@@ -601,6 +601,10 @@ fn build_sandbox_profile(launch: &LaunchSpec, mode: VzStructuralMode) -> String 
         }
     }
     profile
+}
+
+fn is_absolute_sandbox_path(path: &str) -> bool {
+    path.starts_with('/')
 }
 
 fn escape_sandbox_path(path: &str) -> String {
