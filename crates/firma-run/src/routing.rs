@@ -13,7 +13,7 @@ use std::sync::mpsc;
 #[cfg(unix)]
 use std::thread::{self, JoinHandle};
 
-use crate::backend::SandboxHandle;
+use crate::backend::{ConfinementMechanism, EnforcementProof, SandboxHandle};
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 use crate::identity::RunIdentity;
@@ -46,6 +46,10 @@ pub struct NetworkRuntime {
     // order here is load-bearing.
     #[cfg(unix)]
     _host_bridge: Option<crate::proxy_bridge::HostBridgeHandle>,
+    /// Host-side DNS refusal stub for the macOS sandbox-exec structural path
+    /// (FIR-112C). Null on Linux structural and all non-structural paths.
+    #[cfg(unix)]
+    _host_dns_stub: Option<crate::dns_stub::HostDnsStubHandle>,
     #[cfg(unix)]
     _adapter: Option<SidecarAdapter>,
     _sidecar_supervisor: Option<SidecarSupervisor>,
@@ -140,6 +144,7 @@ pub struct ResolvedAuthority {
 /// - [`RunError::Backend`] for adapter socket failures.
 pub fn prepare_network_runtime(
     handle: &SandboxHandle,
+    proof: &EnforcementProof,
     sidecar_endpoint: &SidecarEndpoint,
     identity: &RunIdentity,
     flags: &AutostartFlags,
@@ -161,11 +166,21 @@ pub fn prepare_network_runtime(
         #[cfg(unix)]
         let host_bridge = setup_host_bridge(&effective_endpoint, identity, &mut env_overrides)?;
 
+        // macOS sandbox-exec structural mode (FIR-112C): when the backend
+        // reports structural=true without a kernel network namespace (i.e.
+        // TrustedBSD MAC sandbox-exec network-deny), also start a host-side
+        // DNS refusal stub. The sandbox profile allows loopback, so the agent
+        // can reach the stub; external DNS resolvers are blocked by the policy.
+        #[cfg(unix)]
+        let host_dns_stub = maybe_start_host_dns_stub(proof, &mut env_overrides)?;
+
         return Ok(NetworkRuntime {
             env_overrides,
             sidecar_endpoint: effective_endpoint,
             #[cfg(unix)]
             _host_bridge: Some(host_bridge),
+            #[cfg(unix)]
+            _host_dns_stub: host_dns_stub,
             #[cfg(unix)]
             _adapter: None,
             _sidecar_supervisor: sidecar_supervisor,
@@ -222,6 +237,7 @@ pub fn prepare_network_runtime(
             env_overrides,
             sidecar_endpoint: effective_endpoint,
             _host_bridge: None,
+            _host_dns_stub: None,
             _adapter: Some(adapter),
             _sidecar_supervisor: sidecar_supervisor,
             _authority_supervisor: authority.supervisor,
@@ -273,6 +289,33 @@ fn setup_host_bridge(
     env_overrides.insert("all_proxy".to_string(), format!("http://{bridge_addr}"));
 
     Ok(bridge)
+}
+
+/// Start a host-side DNS refusal stub when the active confinement mechanism
+/// is `MacosSandboxNetworkDeny` (FIR-112C).
+///
+/// On the macOS sandbox-exec structural path the wrapped process can only
+/// reach loopback. The host-side DNS stub refuses all DNS queries from that
+/// loopback address so the agent cannot resolve external hostnames directly
+/// (it must use the proxy bridge, which the Sidecar controls). This function
+/// is a no-op for all other confinement mechanisms.
+#[cfg(unix)]
+fn maybe_start_host_dns_stub(
+    proof: &EnforcementProof,
+    env_overrides: &mut BTreeMap<String, String>,
+) -> Result<Option<crate::dns_stub::HostDnsStubHandle>, RunError> {
+    if proof.confinement_mechanism != ConfinementMechanism::MacosSandboxNetworkDeny {
+        return Ok(None);
+    }
+    let stub = crate::dns_stub::HostDnsStubHandle::start()?;
+    let stub_addr = stub.listen_addr();
+    env_overrides.insert("FIRMA_DNS_STUB_ADDR".to_string(), stub_addr.to_string());
+    tracing::info!(
+        %stub_addr,
+        confinement_mechanism = "macos_sandbox_network_deny",
+        "host DNS refusal stub wired for macOS structural network path"
+    );
+    Ok(Some(stub))
 }
 
 fn sidecar_trust_env_overrides(
@@ -977,8 +1020,16 @@ mod non_structural_env_tests {
             pub_key_path: None,
             supervisor: None,
         };
+        let proof = crate::backend::EnforcementProof {
+            backend: BackendKind::Vz,
+            structural: false,
+            fail_closed: true,
+            detail: "test non-structural".to_string(),
+            confinement_mechanism: crate::backend::ConfinementMechanism::ProxyOnly,
+        };
         let runtime = prepare_network_runtime(
             &handle,
+            &proof,
             &SidecarEndpoint::Tcp {
                 addr: upstream_addr,
             },
@@ -1019,6 +1070,79 @@ mod non_structural_env_tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         assert!(sent, "failed to send CONNECT request to proxy bridge");
+        drop(runtime);
+    }
+
+    /// FIR-112C: when the proof carries `MacosSandboxNetworkDeny`, a host-side
+    /// DNS refusal stub must be started and its address exposed as
+    /// `FIRMA_DNS_STUB_ADDR`.
+    #[test]
+    fn macos_structural_path_starts_dns_stub_and_exposes_env_var() {
+        let fake_sidecar = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let sidecar_addr = fake_sidecar.local_addr().expect("local_addr");
+
+        let handle = SandboxHandle {
+            backend: BackendKind::Vz,
+            runtime_dir: std::env::temp_dir().join("firma-routing-test-dns-stub"),
+            identity: RunIdentity::new("test-agent"),
+            mounts: Vec::new(),
+            network_policy: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+        };
+        let identity = RunIdentity::new("test-agent");
+        let flags = AutostartFlags {
+            sidecar_autostart: false,
+            no_autostart: true,
+            template_path: None,
+            startup_timeout: Duration::from_secs(1),
+            authority_url: None,
+            authority_ca_cert: None,
+            authority_pub_key: None,
+            use_http_proxy_sidecar: false,
+        };
+        let authority = ResolvedAuthority {
+            url: "https://authority.test".to_string(),
+            ca_cert_path: None,
+            pub_key_path: None,
+            supervisor: None,
+        };
+        let structural_proof = crate::backend::EnforcementProof {
+            backend: BackendKind::Vz,
+            structural: true,
+            fail_closed: true,
+            detail: "test macos sandbox network deny".to_string(),
+            confinement_mechanism: crate::backend::ConfinementMechanism::MacosSandboxNetworkDeny,
+        };
+        let runtime = prepare_network_runtime(
+            &handle,
+            &structural_proof,
+            &SidecarEndpoint::Tcp { addr: sidecar_addr },
+            &identity,
+            &flags,
+            authority,
+        )
+        .expect("prepare_network_runtime must succeed for MacosSandboxNetworkDeny proof");
+
+        let overrides = runtime.env_overrides();
+        assert!(
+            overrides.contains_key("FIRMA_DNS_STUB_ADDR"),
+            "FIRMA_DNS_STUB_ADDR must be set when MacosSandboxNetworkDeny is active; \
+             got keys: {:?}",
+            overrides.keys().collect::<Vec<_>>()
+        );
+
+        let stub_addr_str = overrides.get("FIRMA_DNS_STUB_ADDR").expect("present");
+        let stub_addr: SocketAddr = stub_addr_str
+            .parse()
+            .expect("FIRMA_DNS_STUB_ADDR must be a valid SocketAddr");
+        assert!(
+            stub_addr.ip().is_loopback(),
+            "DNS stub must be on loopback: {stub_addr}"
+        );
+        assert_ne!(stub_addr.port(), 0, "DNS stub must have a real port");
+
         drop(runtime);
     }
 }

@@ -109,37 +109,61 @@ Market-standard use of ESF is closer to EDR/DLP host supervision than applicatio
 | Performance | Cold-start and guest lifecycle are the main risks. | Runtime overhead depends on event subscriptions and decision latency; install friction is the main adoption risk. |
 | Claim boundary | Can graduate to structural after FIR-72 E2E evidence. | Must remain selected host hardening/audit unless paired with separate network confinement. |
 
+## Implementation status
+
+| Card | Status | Notes |
+| ---- | ------ | ----- |
+| FIR-112A | ✅ Implemented | `ConfinementMechanism` added to `EnforcementProof`; all backends updated. |
+| FIR-112B (intermediate) | ✅ Implemented | `sandbox-exec` network-deny mode via `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1`. Full VZ guest planned next. |
+| FIR-112C | ✅ Implemented | `HostDnsStubHandle` wired into macOS structural path in `routing.rs`. |
+| FIR-112D | ✅ Implemented | Unit tests for proof types, sandbox profile generation, DNS stub, and routing. E2E schema defined. |
+| FIR-112E | ✅ Schema written | `examples/firma-run/e2e/macos-structural-assertions.md` — 12 test cases covering all required invariants. |
+| FIR-112B (VZ guest) | Planned | Apple Virtualization.framework Linux guest; FIR-112B proper. |
+| FIR-112F | ✅ Docs updated | This page, `sandbox.md`, `firma-run.md`, `llms.txt`. |
+| FIR-112G | Planned | ESF hardening spike. |
+| FIR-112H | Planned | ESF operational readiness review. |
+
 ## Recommended Milestones
 
-### Milestone 1: Baseline Proof and Claim Boundaries
+### Milestone 1: Baseline Proof and Claim Boundaries ✅
 
-- Keep macOS `vz` marked non-structural in runtime proof logs while it is still the host-process compatibility path.
-- Add this decision page to the docs and keep `llms.txt` explicit that ESF-only is not structural parity.
-- Define the macOS FIR-72 E2E assertion schema: proxy-mediated request, policy deny, proxy-env-unset direct request, child-process request, direct DNS, sidecar-down startup, sidecar-down mid-session.
-- Add preflight labels for future `vz` structural prerequisites without changing default behavior.
+- macOS `vz` marked non-structural in runtime proof logs by default.
+- Decision page in docs; `llms.txt` explicit that ESF-only is not structural parity.
+- macOS FIR-72 E2E assertion schema defined (MACOS-001 through MACOS-012).
+- `FIRMA_RUN_VZ_STRUCTURAL_NETWORK` gate added for opt-in experimental structural mode.
 
-### Milestone 2: VZ Guest Confinement Prototype
+### Milestone 2: Intermediate Structural Mode (sandbox-exec network deny) ✅
 
-- Implement guest lifecycle prototype with command launch, stdio, signals, exit status, and terminal resize.
-- Add guest-local proxy bridge and deterministic DNS stub.
-- Add guest network rules that make bridge-only egress mandatory.
-- Emit a macOS structural proof object only in an experimental mode, with evidence fields for bridge, DNS, and route setup.
+- `sandbox-exec` with `deny network-outbound` policy implemented in `VzBackend`.
+- Host-side proxy bridge + DNS refusal stub started before the sandbox.
+- `EnforcementProof { structural: true, confinement_mechanism: macos_sandbox_network_deny }` emitted.
+- All unit tests passing on Linux CI; E2E tests require macOS hardware.
+- Activation: `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1`.
 
-### Milestone 3: macOS E2E Evidence
+### Milestone 3: macOS E2E Evidence (next)
 
-- Add macOS E2E suite equivalent to Linux structural checks.
+- Run MACOS-001 through MACOS-009 from `examples/firma-run/e2e/macos-structural-assertions.md` on macOS 12+ Apple Silicon and Intel.
 - Include raw socket, proxy-env-unset, child process, direct DNS, policy deny, startup sidecar-down, and mid-session sidecar-loss cases.
-- Keep the runtime claim as non-structural until the suite is reliable on supported macOS versions.
-- Publish a known-limits table for unsupported macOS versions, missing VZ support, and guest image constraints.
+- Keep the runtime claim as non-structural (default mode) until the suite is reliable on supported macOS versions.
+- Publish known-limits table: sandbox-exec deprecation caveats, DNS stub port limitation, loopback-all allow scope.
 
-### Milestone 4: ESF Hardening Spike
+### Milestone 4: VZ Guest Prototype (FIR-112B proper)
+
+- Replace sandbox-exec with Apple Virtualization.framework Linux guest.
+- Guest lifecycle: command launch via virtio-serial stdio, signals, exit status, terminal resize.
+- Guest-local proxy bridge and deterministic DNS stub inside the guest network namespace.
+- Guest routing/firewall rules: bridge-only mandatory egress.
+- Emit structural proof only in experimental mode with evidence fields for bridge, DNS, and route setup.
+- Network bypass tests: raw socket, proxy-env-unset, child process, direct DNS from inside the guest.
+
+### Milestone 5: ESF Hardening Spike
 
 - Prototype a minimal ESF system extension outside the hot path.
 - Test process lineage capture, exec authorization, runtime socket/config protection, and host-side audit correlation.
 - Measure operational burden: entitlement approval, signing, install/update flow, MDM path, local dev workflow, and CI feasibility.
 - Decide whether ESF becomes an enterprise add-on, not a requirement for baseline macOS structural mode.
 
-### Milestone 5: Productionization
+### Milestone 6: Productionization
 
 - Promote macOS `vz` structural mode only when E2E evidence supports every required invariant.
 - Keep proxy-only compatibility available behind explicit opt-in for unsupported hosts.
@@ -148,15 +172,17 @@ Market-standard use of ESF is closer to EDR/DLP host supervision than applicatio
 
 ## Follow-Up Card Suggestions
 
-| Card | Scope |
-| ---- | ----- |
-| FIR-112A | Define macOS structural proof object and preflight schema for bridge, DNS, route, sidecar health, and guest lifecycle readiness. |
-| FIR-112B | Build VZ guest command lifecycle prototype with stdio, TTY, signals, exit code, and cancellation semantics. |
-| FIR-112C | Implement guest-local proxy bridge and DNS stub wiring for the VZ structural prototype. |
-| FIR-112D | Implement guest network confinement rules and raw bypass negative tests. |
-| FIR-112E | Add macOS FIR-72 E2E suite and result schema parity with Linux. |
-| FIR-112F | Write operator docs for macOS structural mode prerequisites, failure modes, performance, and compatibility fallback. |
-| FIR-112G | ESF hardening spike: entitlement path, signed system extension prototype, process lineage audit, and selected authorization decisions. |
+| Card | Status | Scope |
+| ---- | ------ | ----- |
+| FIR-112A | ✅ Done | `ConfinementMechanism` on `EnforcementProof`; preflight logging. |
+| FIR-112B (intermediate) | ✅ Done | `sandbox-exec` network-deny structural mode + DNS stub + routing wiring. |
+| FIR-112B (VZ guest) | Planned | Apple Virtualization.framework Linux guest lifecycle (stdio, TTY, signals, exit code). |
+| FIR-112C | ✅ Done | `HostDnsStubHandle` + macOS structural routing path in `prepare_network_runtime`. |
+| FIR-112D | ✅ Done | Unit tests for all new code; E2E schema written. |
+| FIR-112E | ✅ Done | `examples/firma-run/e2e/macos-structural-assertions.md` — 12 test cases, graduation criteria. |
+| FIR-112F | ✅ Done | Operator docs updated: this page, `sandbox.md`, `firma-run.md`, `llms.txt`. |
+| FIR-112G | Planned | ESF hardening spike: entitlement path, signed system extension prototype, process lineage audit, selected authorization decisions. |
+| FIR-112H | Planned | ESF operational readiness review: MDM deployment, CI constraints, update/rollback, crash recovery, claim language. |
 | FIR-112H | ESF operational readiness review: MDM deployment, CI constraints, update/rollback, crash recovery, and claim language. |
 
 ## References

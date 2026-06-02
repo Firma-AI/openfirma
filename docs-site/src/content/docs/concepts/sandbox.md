@@ -70,7 +70,7 @@ Network sandboxing primitives differ across OSes, so `firma run` selects a backe
 | ------------- | -------- | -------------------------------------------- | -------------- |
 | `bwrap`       | Linux    | Unprivileged user namespaces (bubblewrap)    | Structural     |
 | `firecracker` | Linux    | KVM micro-VM                                 | Structural     |
-| `vz`          | macOS    | Host proxy bridge + HTTP proxy injection (`HTTP_PROXY`) | Proxy-only     |
+| `vz`          | macOS    | Host proxy bridge + HTTP proxy injection (`HTTP_PROXY`) | Proxy-only (default); structural via TrustedBSD MAC when `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1` (experimental) |
 | `wsl2`        | Windows  | HTTP proxy injection (`HTTP_PROXY`)         | Proxy-only     |
 
 You can override the platform default with `--backend`:
@@ -91,7 +91,8 @@ The *strength* of the enforcement boundary differs by platform. This is the most
 | --------------- | -------------- | ---------------------------------------------- | :----------: | --------------------------------- | --------------------------------- |
 | Linux (native)  | `bwrap`        | Network namespace; proxy bridge is only exit   | Yes          | No                                | No                                |
 | Linux (native)  | `firecracker`  | KVM micro-VM network isolation                 | Yes          | No                                | No                                |
-| macOS           | `vz`           | Host proxy bridge + HTTP proxy injection       | No           | Yes, if agent ignores `HTTP_PROXY` | Yes                               |
+| macOS `vz` (default) | `vz`    | Host proxy bridge + HTTP proxy injection       | No           | Yes, if agent ignores `HTTP_PROXY` | Yes                               |
+| macOS `vz` (experimental) | `vz` | `sandbox-exec` with `deny network-outbound`; host bridge + DNS stub on loopback | Yes (experimental) | No for IP egress; loopback-all scope is residual caveat | No (once E2E verified) |
 | Windows / WSL2  | `wsl2`         | HTTP proxy injection (`HTTP_PROXY`)            | No           | Yes, if agent ignores `HTTP_PROXY` | Yes                               |
 
 **Structural** means the sandbox removes the agent's ability to bypass the proxy at the OS level — no extra cooperation from the agent is required. **Proxy-only** means enforcement depends on the agent (or its HTTP library) respecting `HTTP_PROXY`. On proxy-only backends, `firma run` fails closed unless you pass `--allow-non-structural` to acknowledge this limitation.

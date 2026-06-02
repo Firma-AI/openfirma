@@ -15,6 +15,29 @@ use crate::config::{MountSpec, NetworkPolicy, ResolvedProfile, SandboxIdentityMo
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 
+/// Identifies the OS-level mechanism that provides network confinement.
+///
+/// Used in [`EnforcementProof`] so operators and audit systems can
+/// distinguish structurally equivalent guarantees achieved by different
+/// primitives.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfinementMechanism {
+    /// Linux unprivileged network namespace (`bwrap --unshare-net`).
+    LinuxNetworkNamespace,
+    /// macOS `TrustedBSD` MAC sandbox with `deny network-outbound` policy.
+    /// Provides kernel-enforced loopback-only egress without a VM guest.
+    MacosSandboxNetworkDeny,
+    /// Apple Virtualization.framework Linux guest with isolated virtio
+    /// networking. Planned for FIR-112B; not yet implemented.
+    MacosVzGuest,
+    /// KVM micro-VM (Firecracker). Planned as enterprise additive path.
+    KvmMicroVm,
+    /// Proxy-only compatibility mode: enforcement depends on `HTTP_PROXY`
+    /// cooperation from the wrapped process. Not structural.
+    ProxyOnly,
+}
+
 pub use firecracker::FirecrackerBackend;
 pub use linux_bwrap::BwrapBackend;
 pub use macos_vz::VzBackend;
@@ -102,6 +125,8 @@ pub struct EnforcementProof {
     pub structural: bool,
     pub fail_closed: bool,
     pub detail: String,
+    /// OS primitive that enforces the structural boundary, if any.
+    pub confinement_mechanism: ConfinementMechanism,
 }
 
 /// Launch payload for wrapped command.

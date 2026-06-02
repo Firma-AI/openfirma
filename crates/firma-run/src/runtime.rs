@@ -119,6 +119,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             tracing::info!(
                 structural = proof.structural,
                 fail_closed = proof.fail_closed,
+                confinement_mechanism = ?proof.confinement_mechanism,
                 detail = %proof.detail,
                 "backend network enforcement proof"
             );
@@ -130,6 +131,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
                 backend = %proof.backend,
                 profile = %profile.id,
                 fail_closed = proof.fail_closed,
+                confinement_mechanism = ?proof.confinement_mechanism,
                 http_proxy_injected = profile.use_http_proxy_sidecar,
                 detail = %proof.detail,
                 "backend compatibility proof — proxy-only mode; \
@@ -201,6 +203,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
 
         let network_runtime = prepare_network_runtime(
             handle_ref,
+            &proof,
             &profile.sidecar_endpoint,
             &identity,
             &flags,

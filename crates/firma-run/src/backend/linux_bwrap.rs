@@ -172,12 +172,18 @@ impl SandboxBackend for BwrapBackend {
         } else {
             "network namespace isolation disabled; cooperative routing mode".to_string()
         };
+        let confinement_mechanism = if structural {
+            crate::backend::ConfinementMechanism::LinuxNetworkNamespace
+        } else {
+            crate::backend::ConfinementMechanism::ProxyOnly
+        };
 
         Ok(EnforcementProof {
             backend: BackendKind::Bwrap,
             structural,
             fail_closed: policy.fail_closed,
             detail,
+            confinement_mechanism,
         })
     }
 
