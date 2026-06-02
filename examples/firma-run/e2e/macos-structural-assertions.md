@@ -1,21 +1,32 @@
-# macOS structural confinement E2E assertion schema (FIR-112E)
+# macOS structural confinement E2E assertion schema
 
 This document defines the acceptance test cases that must pass on macOS before
-`FIRMA_RUN_VZ_STRUCTURAL_NETWORK` graduates from experimental to the default
-backend mode and before macOS can claim structural confinement parity with
-Linux `bwrap`.
+any experimental macOS structural mode graduates to the default backend mode and
+before macOS can claim structural confinement parity with Linux `bwrap`.
 
-The schema mirrors the Linux suite in `run.sh` and the FIR-72 acceptance cases.
-Each assertion maps to one required invariant from the FIR-112 capability matrix.
+The schema mirrors the Linux suite in `run.sh` and the cross-platform structural
+acceptance cases. Each assertion maps to one required runtime invariant.
 
 ## Environment prerequisites
 
 ```
+# Intermediate sandbox-exec structural mode:
 FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1
-firma run --profile generic --allow-non-structural ...   # NOT required once graduated
+firma run --profile generic ...
+
+# VZ guest structural mode:
+FIRMA_RUN_VZ_GUEST=1
+FIRMA_RUN_VZ_GUEST_RUNNER=/Applications/Firma/vz-runner
+FIRMA_RUN_VZ_GUEST_KERNEL=/var/lib/firma/vz/vmlinuz
+FIRMA_RUN_VZ_GUEST_INITRD=/var/lib/firma/vz/initrd.img
+FIRMA_RUN_VZ_GUEST_ROOTFS=/var/lib/firma/vz/rootfs.img
+firma run --profile generic ...
 ```
 
-macOS 12+ (Monterey). Apple Silicon or Intel with sandbox-exec available.
+macOS 12+ (Monterey). Apple Silicon or Intel with sandbox-exec available for
+the intermediate mode. VZ guest mode additionally requires an operator-provided
+runner and guest image bundle that implements the launch contract. Production
+deployment should sign and package the runner for macOS.
 
 ---
 
@@ -227,4 +238,4 @@ Silicon and Intel x86_64), the following changes are permitted:
 1. Remove the `FIRMA_RUN_VZ_STRUCTURAL_NETWORK` gate and make structural mode default on macOS.
 2. Update `EnforcementProof.detail` to reference the verified E2E run.
 3. Update `llms.txt` to note that macOS `vz` now provides structural confinement via TrustedBSD MAC.
-4. Open FIR-112B for the VZ guest path as the next graduation step.
+4. Keep the VZ guest path as the next graduation step for stronger isolation.

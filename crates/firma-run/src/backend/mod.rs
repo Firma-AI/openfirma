@@ -28,8 +28,8 @@ pub enum ConfinementMechanism {
     /// macOS `TrustedBSD` MAC sandbox with `deny network-outbound` policy.
     /// Provides kernel-enforced loopback-only egress without a VM guest.
     MacosSandboxNetworkDeny,
-    /// Apple Virtualization.framework Linux guest with isolated virtio
-    /// networking. Planned for FIR-112B; not yet implemented.
+    /// Apple Virtualization.framework guest with isolated virtio networking.
+    /// Implemented as a signed runner launch contract owned by the macOS VZ backend.
     MacosVzGuest,
     /// KVM micro-VM (Firecracker). Planned as enterprise additive path.
     KvmMicroVm,

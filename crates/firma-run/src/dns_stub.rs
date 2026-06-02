@@ -6,7 +6,7 @@ use std::thread::{self, JoinHandle};
 use crate::error::RunError;
 
 // ---------------------------------------------------------------------------
-// Host-side DNS stub handle (FIR-112C)
+// Host-side DNS stub handle.
 // ---------------------------------------------------------------------------
 
 /// Owning handle for a host-side DNS refusal stub started for the macOS

@@ -50,7 +50,7 @@ For the conceptual background, read [The sandbox boundary](../../concepts/sandbo
 | Platform | Default backend | Notes |
 | -------- | --------------- | ----- |
 | Linux    | `bwrap`         | Structural mode; requires unprivileged user namespaces + AppArmor allowance for bwrap. |
-| macOS    | `vz`            | Current compatibility mode: host process, `sandbox-exec`, proxy bridge, explicit `--allow-non-structural` opt-in. VZ guest structural work is planned under FIR-72/FIR-112. |
+| macOS    | `vz`            | Default compatibility mode: host process, `sandbox-exec`, proxy bridge, explicit `--allow-non-structural` opt-in. Experimental structural modes are available via sandbox-exec network-deny or the VZ guest runner contract. |
 | Windows  | `wsl2`          | Current compatibility mode; explicit `--allow-non-structural` opt-in. |
 
 Verify the platform default works on your host. On Linux, the bwrap backend
@@ -73,6 +73,23 @@ enable unprivileged user namespaces (`sysctl -w kernel.unprivileged_userns_clone
 on some distros) or pick a different backend.
 
 On macOS and WSL, `firma run` defaults to compatibility mode and fails closed unless you acknowledge the weaker boundary with `--allow-non-structural` or `run.allow_non_structural = true`. On WSL, `firma run` does not implicitly select `bwrap`; it automatically selects the `wsl2` compatibility backend.
+
+macOS structural modes are explicit opt-ins:
+
+```bash
+# Intermediate: block external IP egress with sandbox-exec, loopback remains reachable.
+FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1 firma run --profile generic -- curl https://example.com
+
+# Stronger target: launch through an operator-provided Virtualization.framework runner.
+FIRMA_RUN_VZ_GUEST=1 \
+FIRMA_RUN_VZ_GUEST_RUNNER=/Applications/Firma/vz-runner \
+FIRMA_RUN_VZ_GUEST_KERNEL=/var/lib/firma/vz/vmlinuz \
+FIRMA_RUN_VZ_GUEST_INITRD=/var/lib/firma/vz/initrd.img \
+FIRMA_RUN_VZ_GUEST_ROOTFS=/var/lib/firma/vz/rootfs.img \
+firma run --profile generic -- curl https://example.com
+```
+
+Guest mode validates those artifact paths, writes `vz-guest-launch.json` under the run directory, and spawns the runner with `--launch-contract`. The runner is responsible for the Apple Virtualization.framework lifecycle and for enforcing the contract inside the guest.
 
 ## Step 2: Scaffold a config directory with `firma config`
 
@@ -374,7 +391,7 @@ On proxy-only compatibility backends, the agent sees proxy variables and `NO_PRO
 
 ## Common gotchas
 
-**`bwrap: setting up uid map: Permission denied`.** Unprivileged user namespaces are disabled on your kernel. Either enable them or use `--backend firecracker` if available.
+**`bwrap: setting up uid map: Permission denied`.** Unprivileged user namespaces are disabled on your kernel. Enable them or use another supported backend for your environment.
 
 **`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`.** Hits on Ubuntu 24.04 and other distros that ship `kernel.apparmor_restrict_unprivileged_userns=1`. When bwrap enters its unprivileged user namespace, AppArmor transitions it to the `unprivileged_userns` profile, which `audit deny capability` — stripping `CAP_NET_ADMIN`. bwrap then can't add `127.0.0.1/8` to `lo` inside the new netns, and `--unshare-net` fails. Confirm with `sysctl kernel.apparmor_restrict_unprivileged_userns` (expect `1`) and `bwrap --unshare-net --bind / / true` (reproduces the error in isolation). Pick one of:
 
@@ -394,7 +411,7 @@ On proxy-only compatibility backends, the agent sees proxy variables and `NO_PRO
 
 - **Dev-host shortcut:** turn the restriction off globally. `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` (persist with a drop-in under `/etc/sysctl.d/`). Fine for a single-user dev VM; do not do this on shared or production hosts — any user can then create unprivileged user namespaces with full caps.
 
-- **Sidestep bwrap:** use `--backend firecracker` if it's available in your setup. The VM backends don't depend on host AppArmor for namespace setup.
+- **Sidestep bwrap:** use a VM-backed mode if one is available in your setup. VM backends don't depend on host AppArmor for namespace setup.
 
 **`firma run` exits immediately with a typed backend/config error.** This is expected when the selected backend is incompatible with the host. On WSL, implicit backend selection uses `wsl2` compatibility mode. On explicit `bwrap` selection with unsupported host conditions (for example WSL or restricted user namespaces), you'll get an `UnsupportedBackend` error with remediation guidance.
 

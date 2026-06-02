@@ -1214,7 +1214,19 @@ mod tests {
         let result = backend.enforce_network(&handle, &handle.network_policy);
         if cfg!(target_os = "macos") {
             let proof = result.unwrap();
-            assert!(!proof.structural, "vz backend must report structural=false");
+            if crate::config::env_truthy("FIRMA_RUN_VZ_GUEST")
+                || crate::config::env_truthy("FIRMA_RUN_VZ_STRUCTURAL_NETWORK")
+            {
+                assert!(
+                    proof.structural,
+                    "vz backend must report structural=true when macOS structural mode is enabled"
+                );
+            } else {
+                assert!(
+                    !proof.structural,
+                    "vz backend must report structural=false by default"
+                );
+            }
         }
     }
 
