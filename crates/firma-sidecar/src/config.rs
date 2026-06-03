@@ -424,6 +424,20 @@ pub struct HttpsMitmConfig {
 }
 
 impl HttpsMitmConfig {
+    /// Returns `true` when MITM interception is effectively in force.
+    ///
+    /// MITM is active only when explicitly enabled *and* at least one
+    /// `intercept_hosts` pattern is configured. An enabled MITM with an
+    /// empty host list has nothing to intercept, so it is treated as
+    /// disabled rather than as a fatal misconfiguration:
+    /// this lets a `firma config`-scaffolded `firma.toml` — which emits an
+    /// empty `intercept_hosts` — start cleanly under standalone
+    /// `firma sidecar --config`.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.enabled && !self.intercept_hosts.is_empty()
+    }
+
     fn validate(&self) -> Result<(), String> {
         validate_host_patterns(
             "interceptor.https_mitm.intercept_hosts",
@@ -432,16 +446,12 @@ impl HttpsMitmConfig {
         validate_host_patterns("interceptor.https_mitm.bypass_hosts", &self.bypass_hosts)?;
         validate_host_patterns("interceptor.https_mitm.strict_hosts", &self.strict_hosts)?;
 
-        if !self.enabled {
+        // Empty intercept_hosts → MITM inactive (see `is_active`); skip the
+        // active-only invariants below instead of rejecting the config.
+        if !self.is_active() {
             return Ok(());
         }
 
-        if self.intercept_hosts.is_empty() {
-            return Err(
-                "interceptor.https_mitm.intercept_hosts must not be empty when MITM is enabled"
-                    .to_string(),
-            );
-        }
         if self.cert_ttl_secs == 0 {
             return Err("interceptor.https_mitm.cert_ttl_secs must be > 0".to_string());
         }
@@ -1207,23 +1217,41 @@ mod tests {
     }
 
     #[test]
-    fn test_https_mitm_enabled_requires_intercept_hosts() {
+    fn test_https_mitm_enabled_with_empty_intercept_hosts_is_disabled_not_fatal() {
+        // `firma config` emits an empty intercept_hosts list.
+        // Standalone `firma sidecar --config` must not crash on it; an enabled
+        // MITM with no hosts to intercept is treated as effectively disabled.
+        let mitm = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: Vec::new(),
+            ..HttpsMitmConfig::default()
+        };
+        assert!(
+            !mitm.is_active(),
+            "MITM with no intercept hosts must be inactive"
+        );
         let config = SidecarConfig {
             interceptor: InterceptorConfig {
-                https_mitm: HttpsMitmConfig {
-                    enabled: true,
-                    intercept_hosts: Vec::new(),
-                    ..HttpsMitmConfig::default()
-                },
+                https_mitm: mitm,
                 ..InterceptorConfig::default()
             },
             ..SidecarConfig::default()
         };
-        let err = config.validate().unwrap_err();
         assert!(
-            err.contains("intercept_hosts"),
-            "error should mention intercept_hosts: {err}"
+            config.validate().is_ok(),
+            "empty intercept_hosts must not be fatal: {:?}",
+            config.validate()
         );
+    }
+
+    #[test]
+    fn test_https_mitm_enabled_with_intercept_hosts_is_active() {
+        let mitm = HttpsMitmConfig {
+            enabled: true,
+            intercept_hosts: vec!["api.openai.com".to_string()],
+            ..HttpsMitmConfig::default()
+        };
+        assert!(mitm.is_active(), "MITM with intercept hosts must be active");
     }
 
     #[test]

@@ -126,6 +126,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
             startup::run_preflight(
                 pf_config,
                 authority_url,
+                config.authority.public_key_path.as_deref(),
                 ca_cert_pem.as_deref(),
                 client_cert_pem.as_deref(),
                 client_key_pem.as_deref(),

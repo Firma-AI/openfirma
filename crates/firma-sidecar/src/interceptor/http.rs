@@ -144,7 +144,11 @@ impl HttpInterceptor {
         handler: Arc<RequestHandler>,
         cancel: CancellationToken,
     ) -> Result<(), InterceptorError> {
-        let mitm_runtime = if self.https_mitm_config.enabled {
+        // Build the MITM runtime only when interception is effectively active
+        // (enabled with at least one intercept host). An enabled-but-empty
+        // host list is treated as disabled, so we skip loading CA material
+        // entirely.
+        let mitm_runtime = if self.https_mitm_config.is_active() {
             let runtime = HttpsMitmRuntime::new(self.https_mitm_config.clone(), &self.ca_dir)
                 .map_err(InterceptorError::ServerError)?;
             Some(Arc::new(runtime))
