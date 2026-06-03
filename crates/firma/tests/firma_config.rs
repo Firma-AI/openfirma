@@ -65,8 +65,16 @@ fn assert_unified_config_parses(firma_toml: &Path) {
 
     let sbody = firma_config::load_section(firma_toml, "sidecar")
         .unwrap_or_else(|e| panic!("[sidecar] section: {e}"));
-    toml::from_str::<firma_sidecar::config::SidecarConfig>(&sbody)
+    let sidecar: firma_sidecar::config::SidecarConfig = toml::from_str(&sbody)
         .unwrap_or_else(|e| panic!("[sidecar] deserialize: {e}\n---\n{sbody}"));
+
+    // A fresh `firma config` must produce a sidecar config that starts
+    // cleanly under standalone `firma sidecar --config` — i.e. it must pass
+    // strict validation, not merely deserialize. Guards against an empty
+    // `https_mitm.intercept_hosts` being treated as fatal.
+    sidecar
+        .validate()
+        .unwrap_or_else(|e| panic!("[sidecar] validate: {e}\n---\n{sbody}"));
 }
 
 #[test]
@@ -642,6 +650,54 @@ fn init_writes_parseable_config() {
     );
 
     assert_unified_config_parses(&firma_toml);
+}
+
+/// A fresh `firma config` must scaffold a `firma.toml` whose `[sidecar]`
+/// section starts cleanly standalone. Beyond `validate()` (covered by
+/// [`assert_unified_config_parses`]) this pins the scaffold contract for the
+/// listen address and the preflight public-key fallback.
+#[test]
+fn scaffold_supports_standalone_sidecar_startup() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+
+    run_init(&config_dir, &state_dir);
+
+    let firma_toml = config_dir.join("firma.toml");
+    let text = std::fs::read_to_string(&firma_toml).unwrap();
+    let value: toml::Value = toml::from_str(&text).unwrap();
+
+    // interceptor listen_addr is scaffolded, so the stack readiness probe
+    // (`read_sidecar_listen_addr`) and standalone bind both resolve.
+    assert!(
+        value["sidecar"]["interceptor"]["listen_addr"]
+            .as_str()
+            .is_some(),
+        "scaffold must emit [sidecar.interceptor].listen_addr:\n{text}"
+    );
+
+    // preflight key path is intentionally not scaffolded, but the authority
+    // public key it falls back to must be present.
+    assert!(
+        value["sidecar"]["preflight"]
+            .get("authority_pub_key_path")
+            .is_none(),
+        "scaffold should not emit preflight.authority_pub_key_path:\n{text}"
+    );
+    assert!(
+        value["sidecar"]["authority"]["public_key_path"]
+            .as_str()
+            .is_some(),
+        "scaffold must emit [sidecar.authority].public_key_path as preflight fallback:\n{text}"
+    );
+
+    // The whole section must pass strict validation.
+    let sbody = firma_config::load_section(&firma_toml, "sidecar").unwrap();
+    let sidecar: firma_sidecar::config::SidecarConfig = toml::from_str(&sbody).unwrap();
+    sidecar
+        .validate()
+        .unwrap_or_else(|e| panic!("standalone sidecar config invalid: {e}\n---\n{sbody}"));
 }
 
 #[test]
