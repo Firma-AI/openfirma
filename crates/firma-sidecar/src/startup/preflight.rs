@@ -6,6 +6,8 @@
 //! the sidecar config the sidecar falls back to the stub verifier (always
 //! deny) and an empty map — useful for unit-testing but not for demos.
 
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use firma_core::TokenVerifier;
 use firma_core::token::paseto::PasetoV4Verifier;
@@ -24,26 +26,54 @@ pub struct PreflightResult {
     pub token_verifier: Box<dyn TokenVerifier + Send + Sync>,
 }
 
-/// Call `IssueCapability` on the Authority and return a populated
-/// `CapabilityMap` and matching `PasetoV4Verifier`.
+/// Resolve the authority public-key path used for pre-flight verification.
+///
+/// Prefers the explicit `[sidecar.preflight].authority_pub_key_path`; when it
+/// is absent, falls back to `fallback` — the `[sidecar.authority].public_key_path`.
+/// `firma config` does not scaffold the preflight key path (it is normally
+/// injected at runtime by `firma run`), so standalone `firma sidecar --config`
+/// reuses the authority key instead of failing.
 ///
 /// # Errors
 ///
-/// Returns an error if the public key file cannot be read, the gRPC call
-/// fails, the Authority denies the capability request, or the issued token
-/// cannot be verified with the provided key.
+/// Returns an error when neither source provides a path.
+fn resolve_authority_pub_key_path<'a>(
+    config: &'a PreflightConfig,
+    fallback: Option<&'a Path>,
+) -> Result<&'a Path> {
+    config
+        .authority_pub_key_path
+        .as_deref()
+        .or(fallback)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "preflight.authority_pub_key_path is not configured and no \
+                 [sidecar.authority].public_key_path fallback is available"
+            )
+        })
+}
+
+/// Call `IssueCapability` on the Authority and return a populated
+/// `CapabilityMap` and matching `PasetoV4Verifier`.
+///
+/// `authority_pub_key_fallback` supplies the `[sidecar.authority].public_key_path`
+/// used when `[sidecar.preflight].authority_pub_key_path` is unset.
+///
+/// # Errors
+///
+/// Returns an error if no authority public key path can be resolved, the public
+/// key file cannot be read, the gRPC call fails, the Authority denies the
+/// capability request, or the issued token cannot be verified with the key.
 pub async fn run_preflight(
     config: &PreflightConfig,
     authority_url: &str,
+    authority_pub_key_fallback: Option<&Path>,
     ca_cert_pem: Option<&[u8]>,
     client_cert_pem: Option<&[u8]>,
     client_key_pem: Option<&[u8]>,
 ) -> Result<PreflightResult> {
     // Load authority public key (32-byte Ed25519 public key).
-    let key_path = config
-        .authority_pub_key_path
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("preflight.authority_pub_key_path is not configured"))?;
+    let key_path = resolve_authority_pub_key_path(config, authority_pub_key_fallback)?;
     let pub_key_bytes = std::fs::read(key_path).with_context(|| {
         format!(
             "failed to read authority public key from '{}'",
@@ -120,4 +150,56 @@ pub async fn run_preflight(
         capability_map,
         token_verifier: Box::new(verifier),
     })
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    reason = "test code: unwrap is an acceptable failure"
+)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::resolve_authority_pub_key_path;
+    use crate::config::PreflightConfig;
+
+    fn preflight_config(authority_pub_key_path: Option<PathBuf>) -> PreflightConfig {
+        PreflightConfig {
+            agent_id: "test-agent".to_string(),
+            session_id: "preflight-session".to_string(),
+            requested_actions: vec!["communication.external.send".to_string()],
+            resource_scope: "*".to_string(),
+            authority_pub_key_path,
+            ttl_seconds: 900,
+        }
+    }
+
+    #[test]
+    fn prefers_explicit_preflight_path_over_fallback() {
+        let config = preflight_config(Some(PathBuf::from("/preflight/key.pub")));
+        let resolved =
+            resolve_authority_pub_key_path(&config, Some(Path::new("/authority/key.pub"))).unwrap();
+        assert_eq!(resolved, Path::new("/preflight/key.pub"));
+    }
+
+    #[test]
+    fn falls_back_to_authority_public_key_when_preflight_path_absent() {
+        // `firma config` omits preflight.authority_pub_key_path;
+        // standalone sidecar must reuse [sidecar.authority].public_key_path.
+        let config = preflight_config(None);
+        let resolved =
+            resolve_authority_pub_key_path(&config, Some(Path::new("/authority/key.pub"))).unwrap();
+        assert_eq!(resolved, Path::new("/authority/key.pub"));
+    }
+
+    #[test]
+    fn errors_when_neither_preflight_nor_authority_key_present() {
+        let config = preflight_config(None);
+        let err = resolve_authority_pub_key_path(&config, None).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("authority_pub_key_path") && msg.contains("public_key_path"),
+            "error should name both sources: {msg}"
+        );
+    }
 }

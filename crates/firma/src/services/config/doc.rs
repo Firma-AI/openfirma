@@ -276,10 +276,24 @@ fn default_run_backend() -> &'static str {
     }
     #[cfg(target_os = "linux")]
     {
-        return "bwrap";
+        return backend_for_linux(firma_run::backend::platform::detect_wsl());
     }
     #[allow(unreachable_code)]
     "bwrap"
+}
+
+/// Select the scaffold backend for a Linux host.
+///
+/// WSL is a Linux build target, so the compile-time `target_os` gating in
+/// [`default_run_backend`] cannot distinguish it from native Linux. WSL
+/// kernels reject `bwrap` (FIR-184 preflight refuses it), so a WSL host must
+/// scaffold the `wsl2` backend; native Linux keeps `bwrap`.
+//
+// Only invoked from the Linux branch of `default_run_backend`; on other
+// targets it is exercised solely by unit tests, so silence dead-code there.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn backend_for_linux(wsl: firma_run::backend::platform::WslKind) -> &'static str {
+    if wsl.is_wsl() { "wsl2" } else { "bwrap" }
 }
 
 fn ensure_run_profiles_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
@@ -549,6 +563,26 @@ mod tests {
             workspace: "/workspace",
             extra_hosts: &[],
         }
+    }
+
+    // ── Linux scaffold backend selection ─────────────────────────────────────
+
+    #[test]
+    fn native_linux_scaffolds_bwrap() {
+        use firma_run::backend::platform::WslKind;
+        assert_eq!(backend_for_linux(WslKind::NotWsl), "bwrap");
+    }
+
+    #[test]
+    fn wsl_scaffolds_wsl2() {
+        use firma_run::backend::platform::WslKind;
+        assert_eq!(backend_for_linux(WslKind::Wsl), "wsl2");
+    }
+
+    #[test]
+    fn wsl2_scaffolds_wsl2() {
+        use firma_run::backend::platform::WslKind;
+        assert_eq!(backend_for_linux(WslKind::Wsl2), "wsl2");
     }
 
     #[test]

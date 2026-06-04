@@ -150,7 +150,6 @@ signing_key_path = '{audit_key}'
 
     let _ = child.kill();
     let _ = child.wait();
-
     let mut idx = 0usize;
     for line in &lines {
         if idx >= CONTRACT_PREFIXES.len() {
