@@ -50,6 +50,16 @@ firma config --yes
 
 This creates `.firma/` with a `firma.toml` config file, signing keys, empty policy directories, and a placeholder mapping file.
 
+The scaffolded `generic` run profile picks a sandbox backend matched to your host, so `firma run` works out of the box without a manual `--backend` override:
+
+| Host  | Default backend |
+| ----- | --------------- |
+| Linux | `bwrap`         |
+| WSL   | `wsl2`          |
+| macOS | `vz`            |
+
+To override, pass `firma run --backend <name>` or edit `backend` under `[profiles.generic]` in `.firma/firma-run.toml`.
+
 Now make the generated profile work for this demo, where we are going to enforce a simple `curl` command.
 
 1. Create the audit directory that `firma monitor` will tail.
