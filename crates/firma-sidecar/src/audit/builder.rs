@@ -328,6 +328,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             ),
             detail: "token has expired".to_string(),
             envelope: Some(test_normalized_envelope()),
+            identity: None,
         };
 
         let payload = payload_from_decision(&decision, "sess_deny", Duration::from_micros(42));
@@ -534,6 +535,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             stage: EnforcementStage::Normalization,
             detail: "no matching rule".to_string(),
             envelope: None,
+            identity: None,
         };
 
         let payload = payload_from_decision(&decision, "sess_no_env", Duration::from_micros(10));

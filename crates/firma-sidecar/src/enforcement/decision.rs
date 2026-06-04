@@ -46,6 +46,36 @@ pub enum EnforcementStage {
     CredentialInjection,
 }
 
+/// Verified agent/token attribution carried by a [`EnforcementDecision::Deny`]
+/// raised after capability validation.
+///
+/// The enforcement pipeline discards the validated `CapabilityClaims` on the
+/// denial path, so without this the audit record for a Stage-2 (policy) or
+/// credential-injection denial has empty `agent_id`/`token_id`. That made
+/// `firma monitor --agent <id>` drop every deny while keeping allows — the
+/// gap reported in FIR-208.
+#[derive(Debug, Clone)]
+pub struct DenyIdentity {
+    /// Verified token id.
+    pub token_id: String,
+    /// Verified agent id.
+    pub agent_id: String,
+    /// Context hash bound to the verified capability.
+    pub context_hash: String,
+}
+
+impl DenyIdentity {
+    /// Builds a [`DenyIdentity`] from verified capability claims.
+    #[must_use]
+    pub fn from_claims(claims: &CapabilityClaims) -> Self {
+        Self {
+            token_id: claims.token_id.to_string(),
+            agent_id: claims.agent_id.to_string(),
+            context_hash: claims.context_hash.clone(),
+        }
+    }
+}
+
 /// Unified result of the enforcement pipeline.
 ///
 /// Every `enforce()` call produces exactly one of these. Carries enough
@@ -68,12 +98,30 @@ pub enum EnforcementDecision {
         stage: EnforcementStage,
         detail: String,
         envelope: Option<NormalizedEnvelope>,
+        /// Verified agent/token attribution, present only when the
+        /// denial is raised AFTER capability validation (Stage 2,
+        /// credential injection). `None` for pre-validation denials
+        /// (malformed intent, token invalid/expired) where no identity
+        /// is known. Carried into the audit record so denies remain
+        /// filterable by `--agent` in `firma monitor` (FIR-208).
+        identity: Option<DenyIdentity>,
     },
     /// Non-protected traffic. Forward the request without enforcement.
     Passthrough { detail: String },
 }
 
 impl EnforcementDecision {
+    /// Attaches verified [`DenyIdentity`] to a `Deny` decision so the
+    /// audit record carries agent/token attribution. No-op for `Allow`
+    /// and `Passthrough`.
+    #[must_use]
+    pub fn with_identity(mut self, identity: DenyIdentity) -> Self {
+        if let Self::Deny { identity: slot, .. } = &mut self {
+            *slot = Some(identity);
+        }
+        self
+    }
+
     #[must_use]
     pub fn is_allow(&self) -> bool {
         matches!(self, Self::Allow { .. })
@@ -120,6 +168,7 @@ mod tests {
             ),
             detail: "token has expired".to_string(),
             envelope: None,
+            identity: None,
         };
         assert!(decision.is_deny());
         assert!(!decision.is_allow());
@@ -212,6 +261,7 @@ mod tests {
                 stage,
                 detail: "test".to_string(),
                 envelope: None,
+                identity: None,
             };
             assert_eq!(decision.stage(), Some(stage));
         }

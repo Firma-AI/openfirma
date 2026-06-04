@@ -68,6 +68,8 @@ What each list does:
 
 Hosts not in any list use the configured default behavior — typically CONNECT-only.
 
+`enabled = true` with an empty `intercept_hosts` is treated as MITM **disabled**, not as an error: there is nothing to intercept, so the Sidecar starts and falls back to CONNECT-only tunnels. This is why a freshly scaffolded `firma config` (which emits an empty `intercept_hosts`) starts cleanly under standalone `firma sidecar --config`. To actually intercept, add at least one host.
+
 Restart the Sidecar. The startup log will list how many MITM hosts are configured.
 
 ## Step 3: Trust the CA on the agent host

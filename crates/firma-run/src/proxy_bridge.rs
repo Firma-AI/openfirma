@@ -10,7 +10,13 @@ use std::net::{TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 #[cfg(unix)]
-use std::thread;
+use std::sync::mpsc;
+#[cfg(unix)]
+use std::sync::{Arc, Condvar, Mutex};
+#[cfg(unix)]
+use std::thread::{self, JoinHandle};
+#[cfg(unix)]
+use std::time::Duration;
 
 use crate::error::RunError;
 
@@ -49,6 +55,319 @@ pub fn execute_proxy_bridge(args: &ProxyBridgeInput) -> Result<i32, RunError> {
         })
     }
 }
+
+/// Owning handle for a host-side proxy bridge started on the non-structural
+/// (macOS / proxy-mediated) path.
+///
+/// The bridge listens on an ephemeral loopback TCP port, injects attribution
+/// headers (including `x-firma-session-id`) into every outbound HTTP/CONNECT
+/// request, and relays the enriched traffic to the sidecar's TCP endpoint.
+/// [`Drop`] signals the listener thread to stop and joins it.
+///
+/// On the structural (Linux/bwrap) path the equivalent bridge is launched as a
+/// subprocess inside the sandbox by `bwrap_entrypoint.sh`.  On the
+/// non-structural path no entrypoint script is run, so the bridge must live on
+/// the host side.
+#[cfg(unix)]
+pub struct HostBridgeHandle {
+    listen_addr: std::net::SocketAddr,
+    stop_tx: Option<mpsc::Sender<()>>,
+    task: Option<JoinHandle<()>>,
+}
+
+#[cfg(unix)]
+impl HostBridgeHandle {
+    /// Start a host-side proxy bridge.
+    ///
+    /// Binds an ephemeral loopback TCP port, spawns the listener thread, and
+    /// returns immediately.  Attribution headers are baked into the thread
+    /// closure and injected into every request before it reaches `upstream`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RunError::Spawn`] if the listener cannot be bound or the
+    /// thread cannot be spawned.
+    pub fn start(
+        upstream: std::net::SocketAddr,
+        attribution_headers: BTreeMap<String, String>,
+    ) -> Result<Self, RunError> {
+        let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| {
+            RunError::Spawn(format!("failed to bind host proxy bridge: {error}"))
+        })?;
+        let listen_addr = listener.local_addr().map_err(|error| {
+            RunError::Spawn(format!(
+                "failed to read host proxy bridge listen addr: {error}"
+            ))
+        })?;
+        listener.set_nonblocking(true).map_err(|error| {
+            RunError::Spawn(format!(
+                "failed to set host proxy bridge listener non-blocking: {error}"
+            ))
+        })?;
+
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+
+        let task = thread::Builder::new()
+            .name("firma-run-host-proxy-bridge".to_string())
+            .spawn(move || {
+                run_host_bridge_loop(&listener, &upstream, &attribution_headers, &stop_rx);
+            })
+            .map_err(|error| {
+                RunError::Spawn(format!("failed to spawn host proxy bridge thread: {error}"))
+            })?;
+
+        Ok(Self {
+            listen_addr,
+            stop_tx: Some(stop_tx),
+            task: Some(task),
+        })
+    }
+
+    /// TCP address the bridge is listening on.
+    #[must_use]
+    pub fn listen_addr(&self) -> std::net::SocketAddr {
+        self.listen_addr
+    }
+}
+
+#[cfg(unix)]
+impl Drop for HostBridgeHandle {
+    fn drop(&mut self) {
+        if let Some(stop_tx) = self.stop_tx.take() {
+            let _ = stop_tx.send(());
+        }
+        // Wake the accept loop so it sees the stop signal within one poll cycle.
+        let _ = TcpStream::connect_timeout(&self.listen_addr, Duration::from_millis(200));
+        if let Some(task) = self.task.take() {
+            let _ = task.join();
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Host-side bridge loop (TCP → TCP with header injection)
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+fn run_host_bridge_loop(
+    listener: &TcpListener,
+    upstream: &std::net::SocketAddr,
+    attribution_headers: &BTreeMap<String, String>,
+    stop_rx: &mpsc::Receiver<()>,
+) {
+    // Bound worker concurrency to avoid unbounded thread growth under load.
+    // Extra inbound connections remain queued by the listener backlog until a
+    // worker slot is released.
+    let limiter = Arc::new(ConnectionLimiter::new(128));
+
+    loop {
+        if stop_rx.try_recv().is_ok() {
+            break;
+        }
+        match listener.accept() {
+            Ok((client, client_addr)) => {
+                // Listener is non-blocking for stop polling; on some platforms
+                // accepted sockets may inherit non-blocking mode. The relay
+                // path relies on blocking I/O, so normalize the accepted
+                // client socket before handing it to a worker.
+                if let Err(error) = client.set_nonblocking(false) {
+                    tracing::warn!(
+                        "host proxy bridge failed to set blocking mode for {client_addr}: {error}"
+                    );
+                    continue;
+                }
+                let permit = limiter.acquire();
+                let upstream = *upstream;
+                let headers = attribution_headers.clone();
+                let listen_addr_str = listener
+                    .local_addr()
+                    .map(|a| a.to_string())
+                    .unwrap_or_default();
+                let _limiter = Arc::clone(&limiter);
+                thread::spawn(move || {
+                    let _permit = permit;
+                    if let Err(error) =
+                        handle_connection_tcp_upstream(client, upstream, &headers, &listen_addr_str)
+                    {
+                        log_host_bridge_connection_error(client_addr, &error);
+                    }
+                });
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) => {
+                tracing::warn!("host proxy bridge accept failed: {error}");
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn log_host_bridge_connection_error(client_addr: std::net::SocketAddr, error: &io::Error) {
+    match error.kind() {
+        // Common transient cases when clients close/retry during interactive
+        // agent traffic; keep these at debug to avoid noisy logs.
+        io::ErrorKind::WouldBlock
+        | io::ErrorKind::ConnectionReset
+        | io::ErrorKind::BrokenPipe
+        | io::ErrorKind::UnexpectedEof => {
+            tracing::debug!(
+                "host proxy bridge connection from {client_addr} closed/transient: {error}"
+            );
+        }
+        _ => {
+            tracing::warn!("host proxy bridge connection from {client_addr} failed: {error}");
+        }
+    }
+}
+
+#[cfg(unix)]
+struct ConnectionLimiter {
+    limit: usize,
+    in_flight: Mutex<usize>,
+    cv: Condvar,
+}
+
+#[cfg(unix)]
+impl ConnectionLimiter {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            in_flight: Mutex::new(0),
+            cv: Condvar::new(),
+        }
+    }
+
+    fn acquire(self: &Arc<Self>) -> ConnectionPermit {
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while *in_flight >= self.limit {
+            in_flight = self
+                .cv
+                .wait(in_flight)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        *in_flight += 1;
+        drop(in_flight);
+        ConnectionPermit {
+            limiter: Arc::clone(self),
+        }
+    }
+
+    fn release(&self) {
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *in_flight = in_flight.saturating_sub(1);
+        drop(in_flight);
+        self.cv.notify_one();
+    }
+}
+
+#[cfg(unix)]
+struct ConnectionPermit {
+    limiter: Arc<ConnectionLimiter>,
+}
+
+#[cfg(unix)]
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.limiter.release();
+    }
+}
+
+/// Handle one inbound client connection via a TCP upstream (sidecar).
+///
+/// Mirrors [`handle_connection`] but uses a `TcpStream` upstream instead of a
+/// `UnixStream`, which is the topology on the non-structural macOS path.
+#[cfg(unix)]
+fn handle_connection_tcp_upstream(
+    mut client: TcpStream,
+    upstream_addr: std::net::SocketAddr,
+    attribution_headers: &BTreeMap<String, String>,
+    bridge_listen_addr: &str,
+) -> io::Result<()> {
+    client.set_nodelay(true)?;
+    let mut upstream = connect_tcp_with_retry_addr(upstream_addr).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "failed to reach sidecar at {upstream_addr}: {error}; \
+clients may report connection failures via http://{bridge_listen_addr} (pre-sidecar mediation)"
+            ),
+        )
+    })?;
+    upstream.set_nodelay(true)?;
+
+    if attribution_headers.is_empty() {
+        return relay_tcp_to_tcp(&client, &upstream);
+    }
+
+    let mut upstream_read = upstream.try_clone()?;
+    let mut client_write = client.try_clone()?;
+    let response_copy = thread::spawn(move || io::copy(&mut upstream_read, &mut client_write));
+
+    let forward_result =
+        forward_requests_with_header_injection(&mut client, &mut upstream, attribution_headers);
+    let reverse_result = response_copy
+        .join()
+        .map_err(|_| io::Error::other("host proxy bridge response copy panic"))?;
+
+    forward_result?;
+    reverse_result?;
+    Ok(())
+}
+
+/// TCP-to-TCP bidirectional relay (no header injection).
+#[cfg(unix)]
+fn relay_tcp_to_tcp(client: &TcpStream, upstream: &TcpStream) -> io::Result<()> {
+    let mut client_read = client.try_clone()?;
+    let mut client_write = client.try_clone()?;
+    let mut upstream_read = upstream.try_clone()?;
+    let mut upstream_write = upstream.try_clone()?;
+
+    let c_to_u = thread::spawn(move || io::copy(&mut client_read, &mut upstream_write));
+    let u_to_c = thread::spawn(move || io::copy(&mut upstream_read, &mut client_write));
+
+    c_to_u
+        .join()
+        .map_err(|_| io::Error::other("relay panic"))??;
+    u_to_c
+        .join()
+        .map_err(|_| io::Error::other("relay panic"))??;
+    Ok(())
+}
+
+/// Connect to a TCP address, retrying briefly on `ECONNREFUSED` to smooth
+/// out the startup race when the sidecar is still binding its port.
+#[cfg(unix)]
+fn connect_tcp_with_retry_addr(addr: std::net::SocketAddr) -> io::Result<TcpStream> {
+    const ATTEMPTS: usize = 20;
+    const SLEEP_BETWEEN: Duration = Duration::from_millis(50);
+    let mut last_error: Option<io::Error> = None;
+    for attempt in 0..ATTEMPTS {
+        match TcpStream::connect_timeout(&addr, Duration::from_millis(250)) {
+            Ok(stream) => return Ok(stream),
+            Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
+                last_error = Some(error);
+                if attempt + 1 < ATTEMPTS {
+                    thread::sleep(SLEEP_BETWEEN);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| io::Error::other("tcp connect failed")))
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox proxy bridge (Unix socket upstream)
+// ---------------------------------------------------------------------------
 
 #[cfg(unix)]
 fn run_proxy_bridge_unix(args: &ProxyBridgeInput) -> Result<(), RunError> {
@@ -90,6 +409,7 @@ fn run_proxy_bridge_unix(args: &ProxyBridgeInput) -> Result<(), RunError> {
     }
 }
 
+/// Handle one inbound client connection via a Unix-socket upstream.
 #[cfg(unix)]
 fn handle_connection(
     mut client: TcpStream,
@@ -160,12 +480,26 @@ fn load_attr_headers_from_env() -> BTreeMap<String, String> {
     serde_json::from_str::<BTreeMap<String, String>>(&raw).unwrap_or_default()
 }
 
+// ---------------------------------------------------------------------------
+// HTTP/1.1 request header injection — generic over upstream write sink
+// ---------------------------------------------------------------------------
+
+/// Parse HTTP/1.1 request headers from `client`, inject any missing
+/// attribution headers, and relay the enriched bytes to `upstream`.
+/// Handles `Content-Length`, chunked bodies, and `CONNECT` tunnels.
+///
+/// The function is generic over the upstream write type so it can serve both
+/// the Unix-socket path (structural / bwrap sandbox) and the TCP path
+/// (non-structural / macOS host bridge).
 #[cfg(unix)]
-fn forward_requests_with_header_injection(
+fn forward_requests_with_header_injection<W>(
     client: &mut TcpStream,
-    upstream: &mut UnixStream,
+    upstream: &mut W,
     attribution_headers: &BTreeMap<String, String>,
-) -> io::Result<()> {
+) -> io::Result<()>
+where
+    W: Write,
+{
     let mut buffer = Vec::new();
     loop {
         let header_end = read_until_header_block(client, &mut buffer)?;
@@ -369,11 +703,10 @@ fn parse_request_metadata(header_block: &[u8]) -> io::Result<RequestMetadata> {
 }
 
 #[cfg(unix)]
-fn copy_exact_bytes(
-    client: &mut TcpStream,
-    upstream: &mut UnixStream,
-    mut left: usize,
-) -> io::Result<()> {
+fn copy_exact_bytes<W>(client: &mut TcpStream, upstream: &mut W, mut left: usize) -> io::Result<()>
+where
+    W: Write,
+{
     let mut chunk = [0_u8; 8192];
     while left > 0 {
         let to_read = chunk.len().min(left);
@@ -391,11 +724,14 @@ fn copy_exact_bytes(
 }
 
 #[cfg(unix)]
-fn forward_chunked_body(
+fn forward_chunked_body<W>(
     client: &mut TcpStream,
-    upstream: &mut UnixStream,
+    upstream: &mut W,
     buffer: &mut Vec<u8>,
-) -> io::Result<()> {
+) -> io::Result<()>
+where
+    W: Write,
+{
     loop {
         let line_end = read_until_crlf(client, buffer)?;
         let line = &buffer[..line_end];
@@ -474,7 +810,12 @@ fn find_crlf(buffer: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::time::Duration;
 
+    #[cfg(unix)]
+    use super::HostBridgeHandle;
     use super::{BodyKind, append_missing_headers, find_header_terminator, parse_request_metadata};
 
     #[test]
@@ -532,5 +873,206 @@ mod tests {
         let req = b"POST http://example.com/upload HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n";
         let meta = parse_request_metadata(req).expect("metadata");
         assert_eq!(meta.body, BodyKind::Chunked);
+    }
+
+    /// Verifies that `HostBridgeHandle` injects `x-firma-session-id` into a
+    /// plain HTTP request routed through the bridge.
+    ///
+    /// This is the regression test for FIR-213: on macOS (non-structural path)
+    /// the bridge was never started, so the sidecar received an empty
+    /// `session_id` and denied every request.
+    #[cfg(unix)]
+    #[test]
+    fn host_bridge_injects_session_id_into_http_request() {
+        // ── upstream mock ──────────────────────────────────────────────────
+        // Captures the raw bytes of the first request, then closes.
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("upstream bind");
+        let upstream_addr: SocketAddr = upstream_listener.local_addr().expect("local_addr");
+
+        let received_request = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let received_clone = received_request.clone();
+        let upstream_thread = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = upstream_listener.accept() {
+                stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            // Stop once we have the full header block.
+                            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                    }
+                }
+                *received_clone.lock().expect("lock") = buf;
+                // Minimal HTTP response so the client doesn't hang.
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            }
+        });
+
+        // ── bridge ─────────────────────────────────────────────────────────
+        let mut headers = BTreeMap::new();
+        headers.insert(
+            "x-firma-session-id".to_string(),
+            "sess_test_fir213".to_string(),
+        );
+        headers.insert("x-firma-agent".to_string(), "claude-code".to_string());
+        let bridge = HostBridgeHandle::start(upstream_addr, headers).expect("bridge start");
+        let bridge_addr = bridge.listen_addr();
+
+        // ── client ─────────────────────────────────────────────────────────
+        let request =
+            "GET http://api.anthropic.com/v1/messages HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n";
+        let mut client = TcpStream::connect(bridge_addr).expect("client connect");
+        client.write_all(request.as_bytes()).expect("write");
+        // Drain the response so the upstream thread's write_all succeeds.
+        let mut resp = [0u8; 256];
+        let _ = client.read(&mut resp);
+        drop(client);
+
+        upstream_thread.join().expect("upstream join");
+        drop(bridge);
+
+        let captured = received_request.lock().expect("lock").clone();
+        let captured_str = String::from_utf8_lossy(&captured);
+        assert!(
+            captured_str.contains("x-firma-session-id: sess_test_fir213"),
+            "upstream did not receive x-firma-session-id; got:\n{captured_str}"
+        );
+        assert!(
+            captured_str.contains("x-firma-agent: claude-code"),
+            "upstream did not receive x-firma-agent; got:\n{captured_str}"
+        );
+    }
+
+    /// Verifies that `HostBridgeHandle` injects `x-firma-session-id` into the
+    /// CONNECT request that Claude Code issues for HTTPS destinations.
+    #[cfg(unix)]
+    #[test]
+    fn host_bridge_injects_session_id_into_connect_request() {
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("upstream bind");
+        let upstream_addr: SocketAddr = upstream_listener.local_addr().expect("local_addr");
+
+        let received_request = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let received_clone = received_request.clone();
+        let upstream_thread = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = upstream_listener.accept() {
+                stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                    }
+                }
+                *received_clone.lock().expect("lock") = buf;
+                // Reply with 200 Connection established (sidecar CONNECT allow response).
+                let _ = stream.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n");
+            }
+        });
+
+        let mut headers = BTreeMap::new();
+        headers.insert(
+            "x-firma-session-id".to_string(),
+            "sess_connect_fir213".to_string(),
+        );
+        let bridge = HostBridgeHandle::start(upstream_addr, headers).expect("bridge start");
+        let bridge_addr = bridge.listen_addr();
+
+        // Send a CONNECT request as Claude Code would for api.anthropic.com:443.
+        let connect_req =
+            "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n";
+        let mut client = TcpStream::connect(bridge_addr).expect("client connect");
+        client.set_read_timeout(Some(Duration::from_secs(2))).ok();
+        client.write_all(connect_req.as_bytes()).expect("write");
+        // Read the tunnel-established response so the bridge write doesn't block.
+        let mut resp = [0u8; 256];
+        let _ = client.read(&mut resp);
+        drop(client);
+
+        upstream_thread.join().expect("upstream join");
+        drop(bridge);
+
+        let captured = received_request.lock().expect("lock").clone();
+        let captured_str = String::from_utf8_lossy(&captured);
+        assert!(
+            captured_str.contains("x-firma-session-id: sess_connect_fir213"),
+            "upstream CONNECT did not receive x-firma-session-id; got:\n{captured_str}"
+        );
+    }
+
+    /// Verifies that an existing `x-firma-session-id` header is not
+    /// duplicated when the client already carries one.
+    #[cfg(unix)]
+    #[test]
+    fn host_bridge_does_not_duplicate_existing_session_id() {
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("upstream bind");
+        let upstream_addr: SocketAddr = upstream_listener.local_addr().expect("local_addr");
+
+        let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let received_clone = received.clone();
+        let upstream_thread = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = upstream_listener.accept() {
+                stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                    }
+                }
+                *received_clone.lock().expect("lock") = buf;
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            }
+        });
+
+        let mut headers = BTreeMap::new();
+        headers.insert(
+            "x-firma-session-id".to_string(),
+            "sess_bridge_value".to_string(),
+        );
+        let bridge = HostBridgeHandle::start(upstream_addr, headers).expect("bridge start");
+        let bridge_addr = bridge.listen_addr();
+
+        // Client sends its own session-id; bridge must NOT override it.
+        let request = "GET http://api.anthropic.com/ HTTP/1.1\r\nHost: api.anthropic.com\r\nx-firma-session-id: sess_client_value\r\n\r\n";
+        let mut client = TcpStream::connect(bridge_addr).expect("connect");
+        client.write_all(request.as_bytes()).expect("write");
+        let mut resp = [0u8; 256];
+        let _ = client.read(&mut resp);
+        drop(client);
+
+        upstream_thread.join().expect("upstream join");
+        drop(bridge);
+
+        let captured = received.lock().expect("lock").clone();
+        let captured_str = String::from_utf8_lossy(&captured);
+        // The client's own value must be preserved.
+        assert!(
+            captured_str.contains("x-firma-session-id: sess_client_value"),
+            "client's session-id was lost; got:\n{captured_str}"
+        );
+        // The bridge's injected value must NOT appear a second time.
+        let occurrences = captured_str.matches("x-firma-session-id").count();
+        assert_eq!(
+            occurrences, 1,
+            "x-firma-session-id appears {occurrences} times (expected 1); got:\n{captured_str}"
+        );
     }
 }

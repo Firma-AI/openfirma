@@ -30,7 +30,7 @@ pub use crate::enforcement::capability_map::CapabilityMap;
 pub use crate::enforcement::capability_validation::CapabilityValidator;
 pub use crate::enforcement::constraint_enforcement::{ConstraintEnforcer, PolicyEvaluation};
 pub use crate::enforcement::decision::EnforcementDecision;
-use crate::enforcement::decision::EnforcementStage;
+use crate::enforcement::decision::{DenyIdentity, EnforcementStage};
 pub use crate::enforcement::registry::ActionClassRegistry;
 pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
 
@@ -194,7 +194,11 @@ impl EnforcementPipeline {
                 .evaluate(&normalized, &capability.claims, &signals),
         };
         if let Err(deny) = stage2_result {
-            return deny;
+            // Stage 2 runs after capability validation, so the verified
+            // identity is known. Attach it so the audit record is
+            // attributable and `firma monitor --agent <id>` keeps the
+            // deny (FIR-208).
+            return deny.with_identity(DenyIdentity::from_claims(&capability.claims));
         }
 
         // All stages passed — assemble the fully populated envelope.
@@ -245,6 +249,9 @@ impl EnforcementPipeline {
                     stage: EnforcementStage::CredentialInjection,
                     detail: format!("connector {connector_id}: {reason}"),
                     envelope: None,
+                    // Credential injection runs post-validation; carry
+                    // the verified identity into the audit record.
+                    identity: Some(DenyIdentity::from_claims(&capability.claims)),
                 };
             }
         };
@@ -274,6 +281,7 @@ impl EnforcementPipeline {
                 ),
                 detail: "policy bundle has not been loaded".to_string(),
                 envelope: None,
+                identity: None,
             });
         }
         if !readiness.revocation_ready {
@@ -284,6 +292,7 @@ impl EnforcementPipeline {
                 ),
                 detail: "revocation cache has not completed initial sync".to_string(),
                 envelope: None,
+                identity: None,
             });
         }
         Ok(())
@@ -338,6 +347,7 @@ pub fn audit_payload_from_decision(
             reason,
             detail,
             envelope,
+            identity,
             ..
         } => {
             let (action, resource) = envelope.as_ref().map_or_else(
@@ -355,14 +365,19 @@ pub fn audit_payload_from_decision(
                 },
             );
 
+            // Carry the verified agent/token attribution when the denial
+            // was raised after capability validation; pre-validation
+            // denials have no known identity (FIR-208).
+            let (token_id, agent_id, context_hash) = deny_identity_fields(identity.as_ref());
+
             (
-                String::new(),
-                String::new(),
+                token_id,
+                agent_id,
                 action,
                 resource,
                 DECISION_DENY,
                 sanitize_audit_reason(&format!("{reason}: {detail}")),
-                String::new(),
+                context_hash,
                 String::new(),
             )
         }
@@ -402,6 +417,22 @@ pub fn audit_payload_from_decision(
         dispatch_latency_us: 0,
         response_size: 0,
     }
+}
+
+/// Destructures the optional [`DenyIdentity`] into the
+/// `(token_id, agent_id, context_hash)` audit fields, defaulting to
+/// empty strings for pre-validation denials with no known identity.
+fn deny_identity_fields(identity: Option<&DenyIdentity>) -> (String, String, String) {
+    identity.map_or_else(
+        || (String::new(), String::new(), String::new()),
+        |id| {
+            (
+                id.token_id.clone(),
+                id.agent_id.clone(),
+                id.context_hash.clone(),
+            )
+        },
+    )
 }
 
 fn raw_request_action_label(request: &RawRequest) -> String {
@@ -857,6 +888,84 @@ mod tests {
         let (decision, _payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
         assert_eq!(decision.deny_reason(), Some(DenyReason::PolicyDenied));
+    }
+
+    #[tokio::test]
+    async fn test_stage2_policy_deny_audit_carries_validated_identity() {
+        // Regression (FIR-208): a Stage-2 Cedar policy DENY happens AFTER
+        // capability validation, so the agent/token identity is known.
+        // The audit payload MUST carry it — otherwise `firma monitor
+        // --agent <id>` filters every deny out and the operator sees only
+        // allows, exactly the gap reported during 0.1.0 pre-release.
+        struct DenyAllPolicy;
+        impl PolicyEvaluation for DenyAllPolicy {
+            fn evaluate(
+                &self,
+                _: &AgentId,
+                _: &str,
+                _: &str,
+                _: &serde_json::Value,
+            ) -> Result<bool, String> {
+                Ok(false)
+            }
+            fn is_fresh(&self) -> bool {
+                true
+            }
+            fn version(&self) -> Option<String> {
+                Some("test".to_string())
+            }
+        }
+
+        let claims = test_claims();
+        let normalizer = IntentNormalizer::new(test_mapping_table(&default_rules()));
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test_token".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier {
+                claims: claims.clone(),
+            }),
+            std::sync::Arc::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(DenyAllPolicy));
+        let pipeline = EnforcementPipeline::new(PipelineArgs {
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
+        });
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "api.openai.com".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: Some(b"{}".to_vec()),
+            is_https: true,
+        };
+
+        let (decision, payload) = pipeline.enforce(&request, "sess_001").await;
+        assert!(decision.is_deny());
+        assert_eq!(payload.decision, DECISION_DENY);
+        assert_eq!(
+            payload.agent_id,
+            claims.agent_id.to_string(),
+            "deny audit must carry the validated agent_id"
+        );
+        assert_eq!(
+            payload.token_id,
+            claims.token_id.to_string(),
+            "deny audit must carry the validated token_id"
+        );
+        assert_eq!(
+            payload.context_hash, claims.context_hash,
+            "deny audit must carry the validated context_hash"
+        );
     }
 
     // ===== Fail-closed discipline tests =====
