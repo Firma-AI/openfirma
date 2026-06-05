@@ -414,6 +414,8 @@ pub fn resolve_authority(
         .map(|path| rebase_config_relative_path(path, user_config_dir));
     let config_committed_local = section.local;
 
+    maybe_regen_tls(ca_cert_path.as_deref(), firma_exe)?;
+
     match selection {
         crate::authority::AuthoritySelection::Remote(url) => {
             probe_authority_url(&url)?;
@@ -503,6 +505,47 @@ pub fn resolve_authority(
                 }
             }
         }
+    }
+}
+
+/// Regenerate TLS material in-place when `ca_cert_path` is configured but
+/// absent (common after a tmpfs reboot wipe of `$XDG_RUNTIME_DIR`).
+/// Only called for local authority configurations.
+fn maybe_regen_tls(ca_cert_path: Option<&Path>, firma_exe: &Path) -> Result<(), RunError> {
+    let Some(path) = ca_cert_path else {
+        return Ok(());
+    };
+    if path.is_file() {
+        return Ok(());
+    }
+    let out_dir = path.parent().ok_or_else(|| {
+        RunError::Internal(format!(
+            "cannot resolve TLS dir from ca_cert_path {}",
+            path.display()
+        ))
+    })?;
+    tracing::warn!(
+        tls_dir = %out_dir.display(),
+        "authority CA cert missing; regenerating TLS material (likely post-reboot tmpfs wipe)"
+    );
+    let output = std::process::Command::new(firma_exe)
+        .args(["authority", "init-tls", "--out-dir"])
+        .arg(out_dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| RunError::Internal(format!("spawn firma authority init-tls: {e}")))?;
+    if output.status.success() {
+        tracing::info!(tls_dir = %out_dir.display(), "TLS material regenerated");
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(RunError::Internal(format!(
+            "firma authority init-tls --out-dir {} exited with {}: {stderr}",
+            out_dir.display(),
+            output.status,
+        )))
     }
 }
 

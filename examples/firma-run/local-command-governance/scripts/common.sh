@@ -39,16 +39,16 @@ gen_config() {
   local allowlist_csv="$5"
 
   cat >"${config_path}" <<CFG
-[profiles.generic]
+[run.profiles.generic]
 backend = "bwrap"
 
-[profiles.generic.seccomp_policy]
+[run.profiles.generic.seccomp_policy]
 source_policy_path = "${POLICY_PATH}"
 artifact_dir = "${artifact_dir}"
 verify_checksum = true
 runtime_mode = "compile_on_launch"
 
-[profiles.generic.sidecar_local_exec]
+[run.profiles.generic.sidecar_local_exec]
 endpoint = "${MEDIATOR_ENDPOINT}"
 timeout_ms = 600
 hitl_mode = "${hitl_mode}"

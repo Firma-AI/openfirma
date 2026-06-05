@@ -116,6 +116,10 @@ strict_hosts    = ["api.github.com"]
 
 Hosts not in any list use the configured default (typically CONNECT-only).
 
+:::note
+`firma config` **merges** `strict_hosts` rather than overwriting it. On the first run it seeds the list to the intercepted hosts (fail-closed); on a re-run it appends any newly intercepted hosts but preserves entries you added by hand. So you can harden a single host by adding one line to `strict_hosts` without re-listing the whole set, and re-running `firma config` will not wipe that edit. (`intercept_hosts`, by contrast, is fully replaced to reflect the current selection.)
+:::
+
 For the operator-side workflow — generating the CA, trusting it on the agent host, choosing what to MITM — see [Enable HTTPS MITM](../../guides/https-mitm/).
 
 ## The CA: the most security-sensitive piece

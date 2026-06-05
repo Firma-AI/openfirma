@@ -516,8 +516,13 @@ where
         let meta = parse_request_metadata(&request)?;
         append_missing_headers(&mut request, attribution_headers)?;
 
+        // `request` already ends with \r\n (the CRLF of the last header
+        // line). Write one more \r\n to complete the blank-line terminator.
+        // Writing \r\n\r\n here would produce three CRLFs, injecting a
+        // spurious blank line into the stream (e.g. into a CONNECT tunnel
+        // before the TLS ClientHello, corrupting the TLS handshake).
         upstream.write_all(&request)?;
-        upstream.write_all(b"\r\n\r\n")?;
+        upstream.write_all(b"\r\n")?;
 
         match meta.body {
             BodyKind::None => {}
@@ -830,6 +835,29 @@ mod tests {
         let rendered = String::from_utf8(req_head).expect("utf8");
         assert!(rendered.contains("x-firma-session-id: sess_001\r\n"));
         assert!(rendered.contains("x-firma-profile: claude-code\r\n"));
+    }
+
+    #[test]
+    fn header_block_ends_with_single_crlf_for_terminator() {
+        // `append_missing_headers` rebuilds the header block and always
+        // ends with `\r\n`. The caller then writes exactly one more `\r\n`
+        // to complete the blank-line terminator (`\r\n\r\n` total). Verify
+        // that the rebuilt block ends with `\r\n` so that one extra `\r\n`
+        // produces exactly the correct HTTP blank-line separator — not a
+        // spurious extra blank line that would corrupt CONNECT tunnels.
+        let mut req_head =
+            b"CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n".to_vec();
+        let mut headers = BTreeMap::new();
+        headers.insert("x-firma-session-id".to_string(), "sess_001".to_string());
+        append_missing_headers(&mut req_head, &headers).expect("append headers");
+        assert!(
+            req_head.ends_with(b"\r\n"),
+            "header block must end with \\r\\n so caller can append one more \\r\\n"
+        );
+        assert!(
+            !req_head.ends_with(b"\r\n\r\n"),
+            "header block must NOT already contain the blank-line terminator"
+        );
     }
 
     #[test]

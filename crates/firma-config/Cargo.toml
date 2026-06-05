@@ -10,7 +10,11 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+clap = ["dep:clap"]
+
 [dependencies]
+clap = { workspace = true, optional = true, features = ["derive"] }
 dirs = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

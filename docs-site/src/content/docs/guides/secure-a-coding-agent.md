@@ -58,8 +58,7 @@ Generated layout:
 
 ```
 ./
-  firma.toml                   — sidecar + authority unified config
-  firma-run.toml               — runtime profiles (workspace mounts)
+  firma.toml                   — unified config (authority + sidecar + run profiles)
   mapping-rules.toml           — base mapping rules
   mappings/anthropic.toml      — Anthropic endpoint mapping
   policies/strict.cedar        — Cedar enforcement policy (edit in Step 4)
@@ -163,7 +162,7 @@ The `ANTHROPIC_API_KEY` env var is set on the Sidecar's process only. The agent'
 
 ```bash
 firma run \
-  --config ~/.config/firma/firma-run.toml \
+  --config ~/.config/firma/firma.toml \
   --profile codex \
   --capability-file ~/.config/firma/.runtime/capability-claude.toml \
   -- claude code
@@ -209,7 +208,7 @@ firma-claude-start() {
     --ttl-seconds 28800 \
     --output ~/.config/firma/.runtime/capability-claude.toml
   firma run \
-    --config ~/.config/firma/firma-run.toml \
+    --config ~/.config/firma/firma.toml \
     --profile codex \
     --capability-file ~/.config/firma/.runtime/capability-claude.toml \
     -- claude code
