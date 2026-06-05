@@ -103,8 +103,7 @@ fn render_audit_pretty(parsed: &AuditLite) -> String {
         line.push_str("  sandbox=");
         line.push_str(sandbox);
     }
-    if parsed.decision == Some(2)
-        && let Some(reason) = parsed.deny_reason.as_deref()
+    if let Some(reason) = parsed.deny_reason.as_deref()
         && !reason.is_empty()
     {
         line.push_str("  reason=");

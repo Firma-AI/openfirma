@@ -39,6 +39,26 @@ use serde::Deserialize;
 // Top-level sidecar configuration
 // ---------------------------------------------------------------------------
 
+/// Enforcement mode for the sidecar.
+///
+/// `enforce` (default): normal fail-closed operation — DENY blocks the call.
+/// `monitor`: observe-only — all calls are allowed through, but the pipeline
+/// still classifies and evaluates every request. Decisions that would have
+/// been DENY are logged as ALLOW with a `monitor_mode: <reason>` annotation
+/// so operators can audit traffic before tightening policy.
+///
+/// **Never deploy `monitor` to production.** The sidecar emits a startup
+/// warning when this mode is active.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SidecarMode {
+    /// Normal fail-closed enforcement (default).
+    #[default]
+    Enforce,
+    /// Observe-only: classify and log every call, but never block.
+    Monitor,
+}
+
 /// Top-level sidecar configuration deserialized from TOML.
 ///
 /// Contains both infrastructure settings (interceptor, policy, CA,
@@ -47,6 +67,12 @@ use serde::Deserialize;
 /// [`EnforcementConfig`].
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SidecarConfig {
+    /// Enforcement mode: `"enforce"` (default) or `"monitor"`.
+    ///
+    /// Set `mode = "monitor"` in `firma.toml` to enable observe-only mode.
+    /// Never use in production.
+    #[serde(default)]
+    pub mode: SidecarMode,
     /// Interceptor settings (mode, listen address or socket path,
     /// drain timeout).
     #[serde(default)]
