@@ -48,8 +48,23 @@ OpenFirma is a runtime enforcement boundary that sits between your AI agents and
 
 ## 2. Run your coding agent with OpenFirma
 
-### Build and install from source
- 
+### Install
+
+**Linux / macOS:**
+
+```bash
+curl -fsSL https://install.openfirma.ai | sh
+```
+
+On macOS with Homebrew installed, the installer uses `brew install firma-ai/openfirma/firma`
+automatically. You can also install directly:
+
+```bash
+brew install firma-ai/openfirma/firma
+```
+
+**Build and install from source** (requires Rust 1.88+ and `protoc`):
+
 ```bash
 git clone https://github.com/Firma-AI/openfirma
 cd openfirma
