@@ -103,6 +103,8 @@ fn render_audit_pretty(parsed: &AuditLite) -> String {
         line.push_str("  sandbox=");
         line.push_str(sandbox);
     }
+    // No decision guard: monitor-mode ALLOWs carry a non-empty deny_reason
+    // ("monitor_mode: <original>") that must still be surfaced.
     if let Some(reason) = parsed.deny_reason.as_deref()
         && !reason.is_empty()
     {

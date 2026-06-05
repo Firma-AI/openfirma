@@ -467,17 +467,17 @@ fn sidecar_table_mut(value: &mut toml::Value) -> Result<&mut toml::value::Table,
         .ok_or_else(|| RunError::Internal("[sidecar] is not a table".into()))
 }
 
-/// Default the audit sink to a file at `audit_path` when the template did not
-/// configure one. The per-run sidecar is spawned with a null stdout, so the
-/// default `stdout` audit sink would silently discard every decision and
-/// `firma monitor` (which tails `<state_dir>/audit.jsonl`) would show nothing.
-/// An explicitly configured sink is left untouched.
 fn override_sidecar_mode(value: &mut toml::Value, mode: &str) -> Result<(), RunError> {
     let sidecar = sidecar_table_mut(value)?;
     sidecar.insert("mode".to_string(), toml::Value::String(mode.to_string()));
     Ok(())
 }
 
+/// Default the audit sink to a file at `audit_path` when the template did not
+/// configure one. The per-run sidecar is spawned with a null stdout, so the
+/// default `stdout` audit sink would silently discard every decision and
+/// `firma monitor` (which tails `<state_dir>/audit.jsonl`) would show nothing.
+/// An explicitly configured sink is left untouched.
 fn ensure_audit_file_sink(value: &mut toml::Value, audit_path: &Path) -> Result<(), RunError> {
     let sidecar = sidecar_table_mut(value)?;
     let audit = sidecar
