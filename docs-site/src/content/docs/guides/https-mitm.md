@@ -169,7 +169,7 @@ Don't try to "fix" a pinning error by changing the pin — pinning is a security
 
 **Sidecar logs `mitm_handshake_failed`.** The agent's TLS client rejected the cert the Sidecar minted. Usually means the agent doesn't trust your CA — re-check trust setup. If the host is sensitive, add it to `strict_hosts` so the failure denies instead of falling back.
 
-**Audit log shows `decision = 1` but the agent reports a TLS error.** The Sidecar terminated TLS to the agent fine, then the upstream rejected the Sidecar's outbound TLS connection. Look for `ConnectorNetworkError` in nearby Sidecar logs or DENY events.
+**Audit log shows `decision = 3` and the agent reports a TLS error.** The Sidecar terminated TLS to the agent fine, then the upstream rejected the Sidecar's outbound TLS connection. Look for `CONNECTOR_FAILURE` in nearby Sidecar logs or ABORT events.
 
 **You regenerated the CA and now nothing works.** Don't. The fix is to find your old CA in a backup. If you genuinely have to start over, you must re-trust the new CA on every agent host before they can talk again.
 

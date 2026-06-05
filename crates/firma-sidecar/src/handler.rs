@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use firma_core::{
-    ActionParams, AgentId, ConnectorError, ConnectorResponse, DenyReason, ExecutionEnvelope,
-    ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams, InjectedCredentials, SessionId,
-    TransportView,
+    AbortReason, ActionParams, AgentId, ConnectorError, ConnectorResponse, DenyReason,
+    ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams,
+    InjectedCredentials, SessionId, TransportView,
 };
 use tokio::sync::mpsc;
 
@@ -72,6 +72,13 @@ pub enum ConnectDecision {
         /// Human-readable denial detail.
         detail: String,
     },
+    /// CONNECT target was authorized, then blocked by a post-ALLOW abort.
+    Abort {
+        /// Abort reason selected by the enforcement pipeline.
+        reason: AbortReason,
+        /// Human-readable abort detail.
+        detail: String,
+    },
 }
 
 /// Authorization result for HTTP upgrade requests (for example WebSocket
@@ -93,31 +100,13 @@ pub enum UpgradeAuthorization {
         /// Human-readable denial detail.
         detail: String,
     },
-}
-
-/// Reason an approved call was aborted before producing a target
-/// response.
-///
-/// The variant surface is intentionally small in V1. Later tasks (009)
-/// add authority-driven and revocation-driven aborts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AbortReason {
-    /// Connector exceeded its configured timeout.
-    ///
-    /// Covers both upstream call timeouts and rate-limiter queue
-    /// waits bounded by the connector timeout.
-    ConnectorTimeout,
-}
-
-impl AbortReason {
-    /// Canonical reason code string used in audit events and in the
-    /// JSON body returned to the agent.
-    #[must_use]
-    pub const fn code(self) -> &'static str {
-        match self {
-            Self::ConnectorTimeout => "CONNECTOR_TIMEOUT",
-        }
-    }
+    /// Upgrade request blocked by a post-ALLOW abort.
+    Abort {
+        /// Abort reason selected by the enforcement pipeline.
+        reason: AbortReason,
+        /// Human-readable abort detail.
+        detail: String,
+    },
 }
 
 /// Structural context of a denial.
@@ -239,14 +228,14 @@ struct DecisionOverride {
 }
 
 impl DispatchOutcome {
-    /// Produces a [`DispatchOutcome`] for a connector-originated DENY
-    /// (network / invalid-request). No upstream response was received,
-    /// so the numeric fields stay zero.
-    fn deny_from_connector(reason: DenyReason, detail: &str) -> Self {
+    /// Produces a [`DispatchOutcome`] for a connector-originated ABORT.
+    ///
+    /// No upstream response was received, so the numeric fields stay zero.
+    fn abort_from_connector(reason: AbortReason, detail: &str) -> Self {
         Self {
             decision_override: Some(DecisionOverride {
-                decision: crate::pipeline::DECISION_DENY,
-                deny_reason: format!("{reason}: {detail}"),
+                decision: crate::pipeline::DECISION_ABORT,
+                deny_reason: format!("{}: {detail}", reason.code()),
             }),
             dispatch_status: 0,
             dispatch_latency_us: 0,
@@ -382,6 +371,9 @@ impl RequestHandler {
                     context,
                 }
             }
+            EnforcementDecision::Abort { reason, detail, .. } => {
+                HandledResponse::Aborted { reason, detail }
+            }
         };
 
         if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
@@ -405,6 +397,9 @@ impl RequestHandler {
             }
             EnforcementDecision::Deny { reason, detail, .. } => {
                 ConnectDecision::Deny { reason, detail }
+            }
+            EnforcementDecision::Abort { reason, detail, .. } => {
+                ConnectDecision::Abort { reason, detail }
             }
         };
 
@@ -442,6 +437,12 @@ impl RequestHandler {
                 }
                 UpgradeAuthorization::Deny { reason, detail }
             }
+            EnforcementDecision::Abort { reason, detail, .. } => {
+                if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
+                    tracing::error!("failed to send audit event: {err}");
+                }
+                UpgradeAuthorization::Abort { reason, detail }
+            }
         }
     }
 
@@ -455,6 +456,29 @@ impl RequestHandler {
         payload.dispatch_status = i32::from(dispatch_status);
         payload.dispatch_latency_us = 0;
         payload.response_size = i64::try_from(response_size).unwrap_or(i64::MAX);
+        if let Err(err) = self.audit_sink_sender.send(payload).await {
+            tracing::error!("failed to send audit event: {err}");
+        }
+    }
+
+    /// Emits an ABORT audit event when an upgrade was policy-allowed but
+    /// the upstream relay failed before producing a target response.
+    ///
+    /// Reuses the verified ALLOW payload (so `agent_id` / `token_id` are
+    /// preserved, as the post-ALLOW abort always has an identity) and rewrites
+    /// the decision to `DECISION_ABORT`. No upstream response was produced, so
+    /// the dispatch fields stay zero.
+    pub async fn emit_upgrade_abort_audit(
+        &self,
+        mut payload: AuditPayload,
+        reason: AbortReason,
+        detail: &str,
+    ) {
+        payload.decision = crate::pipeline::DECISION_ABORT;
+        payload.deny_reason = format!("{}: {detail}", reason.code());
+        payload.dispatch_status = 0;
+        payload.dispatch_latency_us = 0;
+        payload.response_size = 0;
         if let Err(err) = self.audit_sink_sender.send(payload).await {
             tracing::error!("failed to send audit event: {err}");
         }
@@ -538,10 +562,6 @@ impl RequestHandler {
         let resource_display = envelope.intent().resource_display();
         let host = extract_host(&resource_display).unwrap_or_default();
         let connector = self.connector_registry.select(&host);
-        // Derive the denial context up-front: `TransportView::new`
-        // consumes the envelope below, and connector-originated
-        // denials need the context to build the response.
-        let dispatch_context = denial_context_from_params(&envelope.intent().params);
         let view = TransportView::new(envelope, credentials);
         match connector.dispatch(&view).await {
             Ok(response) => {
@@ -576,29 +596,25 @@ impl RequestHandler {
                 )
             }
             Err(ConnectorError::Network(detail)) => {
-                let outcome = DispatchOutcome::deny_from_connector(
-                    DenyReason::ConnectorNetworkError,
-                    &detail,
-                );
+                let outcome =
+                    DispatchOutcome::abort_from_connector(AbortReason::ConnectorFailure, &detail);
                 (
-                    HandledResponse::Deny {
-                        reason: DenyReason::ConnectorNetworkError,
+                    HandledResponse::Aborted {
+                        reason: AbortReason::ConnectorFailure,
                         detail,
-                        context: dispatch_context,
                     },
                     outcome,
                 )
             }
             Err(ConnectorError::InvalidRequest(detail)) => {
-                let outcome = DispatchOutcome::deny_from_connector(
-                    DenyReason::ConnectorInvalidRequest,
+                let outcome = DispatchOutcome::abort_from_connector(
+                    AbortReason::ConnectorInvalidRequest,
                     &detail,
                 );
                 (
-                    HandledResponse::Deny {
-                        reason: DenyReason::ConnectorInvalidRequest,
+                    HandledResponse::Aborted {
+                        reason: AbortReason::ConnectorInvalidRequest,
                         detail,
-                        context: dispatch_context,
                     },
                     outcome,
                 )
@@ -697,8 +713,12 @@ pub(crate) mod tests {
     use std::net::SocketAddr;
     use std::time::Duration;
 
+    use async_trait::async_trait;
     use chrono::Utc;
-    use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenId, TokenVerifier};
+    use firma_core::{
+        CapabilityClaims, Connector, RevocationStore, TokenError, TokenId, TokenVerifier,
+        TransportView,
+    };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio_util::sync::CancellationToken;
@@ -761,6 +781,37 @@ pub(crate) mod tests {
         }
     }
 
+    struct FailingCredentialInjector;
+
+    #[async_trait]
+    impl crate::credential::CredentialInjector for FailingCredentialInjector {
+        async fn inject(
+            &self,
+            _envelope: &ExecutionEnvelope,
+            connector_id: &str,
+            _target: &str,
+        ) -> Result<InjectedCredentials, crate::credential::CredentialInjectionError> {
+            Err(crate::credential::CredentialInjectionError::FetchFailed {
+                connector_id: connector_id.to_string(),
+                reason: "vault unavailable".to_string(),
+            })
+        }
+    }
+
+    struct InvalidRequestConnector;
+
+    #[async_trait]
+    impl Connector for InvalidRequestConnector {
+        async fn dispatch(
+            &self,
+            _view: &TransportView,
+        ) -> Result<ConnectorResponse, ConnectorError> {
+            Err(ConnectorError::InvalidRequest(
+                "cannot translate request".to_string(),
+            ))
+        }
+    }
+
     fn test_claims_for_session(session_id: &str) -> CapabilityClaims {
         CapabilityClaims {
             token_id: "3713c5fc-b569-650c-c780-c64051473370"
@@ -815,6 +866,35 @@ pub(crate) mod tests {
             ),
             constraint_enforcer: ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy)),
             credential_injector: Box::new(NullCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
+        }))
+    }
+
+    fn test_pipeline_with_failing_credentials(
+        rules: Vec<MappingRuleConfig>,
+        session_id: &str,
+    ) -> Arc<EnforcementPipeline> {
+        let claims = test_claims_for_session(session_id);
+        let registry = ActionClassRegistry::v0_1();
+        let file = MappingRulesFile { rules };
+        let table =
+            MappingTable::from_config(&file, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+
+        Arc::new(EnforcementPipeline::new(PipelineArgs {
+            normalizer: IntentNormalizer::new(table),
+            capability_validator: CapabilityValidator::new(
+                CapabilityMap::new(vec![CapabilityEntry {
+                    raw_token: "v4.public.test_token".to_string(),
+                    claims: claims.clone(),
+                }]),
+                Box::new(MockVerifier { claims }),
+                std::sync::Arc::new(NoRevocations),
+                Duration::from_secs(0),
+            ),
+            constraint_enforcer: ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy)),
+            credential_injector: Box::new(FailingCredentialInjector),
             session_state_store: std::sync::Arc::new(
                 crate::enforcement::LruSessionStateStore::new(16),
             ),
@@ -994,7 +1074,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_connector_network_error_denies() {
+    async fn test_handle_connector_network_error_aborts() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
             test_pipeline_for_session(vec![allow_rule()], true, true, "sess_net"),
@@ -1011,17 +1091,21 @@ pub(crate) mod tests {
             .await;
 
         match response {
-            HandledResponse::Deny { reason, .. } => {
-                assert_eq!(reason, DenyReason::ConnectorNetworkError);
+            HandledResponse::Aborted { reason, .. } => {
+                assert_eq!(reason, AbortReason::ConnectorFailure);
             }
-            other => panic!("expected network deny, got {other:?}"),
+            other => panic!("expected network abort, got {other:?}"),
         }
 
         let payload = rx
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
-        assert_eq!(payload.decision, 2);
-        assert!(payload.deny_reason.contains("connector network error"));
+        assert_eq!(payload.decision, 3);
+        assert!(
+            payload.deny_reason.starts_with("CONNECTOR_FAILURE"),
+            "deny_reason should carry CONNECTOR_FAILURE prefix, got {:?}",
+            payload.deny_reason
+        );
         assert_eq!(payload.dispatch_status, 0);
     }
 
@@ -1084,6 +1168,44 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_connector_invalid_request_aborts() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_for_session(vec![allow_rule()], true, true, "sess_invalid"),
+            Arc::new(crate::connector::ConnectorRegistry::new(Arc::new(
+                InvalidRequestConnector,
+            ))),
+            tx,
+        );
+
+        let response = handler
+            .handle(
+                raw_request("api.invalid-request.test".to_string(), "POST"),
+                "sess_invalid",
+            )
+            .await;
+
+        match response {
+            HandledResponse::Aborted { reason, detail } => {
+                assert_eq!(reason, AbortReason::ConnectorInvalidRequest);
+                assert_eq!(detail, "cannot translate request");
+            }
+            other => panic!("expected invalid-request abort, got {other:?}"),
+        }
+
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
+        assert_eq!(payload.decision, crate::pipeline::DECISION_ABORT);
+        assert!(
+            payload.deny_reason.starts_with("CONNECTOR_INVALID_REQUEST"),
+            "deny_reason should carry CONNECTOR_INVALID_REQUEST prefix, got {:?}",
+            payload.deny_reason
+        );
+        assert_eq!(payload.dispatch_status, 0);
+    }
+
+    #[tokio::test]
     async fn test_handle_target_5xx_relayed_as_ok() {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
@@ -1130,6 +1252,16 @@ pub(crate) mod tests {
         assert_eq!(parsed["aborted"], serde_json::Value::Bool(true));
         assert_eq!(parsed["reason"], "CONNECTOR_TIMEOUT");
         assert_eq!(parsed["detail"], "timeout after 100ms");
+    }
+
+    #[test]
+    fn test_abort_body_json_supports_connector_failure_reason() {
+        let body = abort_body_json(AbortReason::ConnectorFailure, "connection refused");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&body).expect("body should be valid JSON");
+        assert_eq!(parsed["aborted"], serde_json::Value::Bool(true));
+        assert_eq!(parsed["reason"], "CONNECTOR_FAILURE");
+        assert_eq!(parsed["detail"], "connection refused");
     }
 
     #[test]
@@ -1361,6 +1493,61 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn test_emit_upgrade_abort_audit_rewrites_decision_and_keeps_identity() {
+        // A websocket upgrade is authorized (ALLOW payload with verified
+        // identity), then the upstream relay fails. The abort audit must
+        // rewrite the decision to ABORT and carry the reason code while
+        // preserving the verified agent/token attribution.
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline(vec![allow_rule()], true, false),
+            test_connector_registry(),
+            tx,
+        );
+
+        let allow_payload = AuditPayload {
+            session_id: "sess_ws".to_string(),
+            token_id: "tok_ws".to_string(),
+            agent_id: "agent_ws".to_string(),
+            action: "communication.external.send".to_string(),
+            resource: "api.openai.com/".to_string(),
+            // Inbound ALLOW decision (wire value 1); the helper rewrites it.
+            decision: 1,
+            deny_reason: String::new(),
+            enforcement_latency_us: 0,
+            context_hash: "ctx".to_string(),
+            bundle_version: "v1".to_string(),
+            dispatch_status: 0,
+            dispatch_latency_us: 0,
+            response_size: 0,
+        };
+
+        handler
+            .emit_upgrade_abort_audit(
+                allow_payload,
+                AbortReason::ConnectorFailure,
+                "upstream websocket connect failed: connection refused",
+            )
+            .await;
+
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
+        assert_eq!(payload.decision, crate::pipeline::DECISION_ABORT);
+        assert!(
+            payload.deny_reason.starts_with("CONNECTOR_FAILURE"),
+            "deny_reason should carry CONNECTOR_FAILURE prefix, got {:?}",
+            payload.deny_reason
+        );
+        // Verified identity from the ALLOW payload is preserved.
+        assert_eq!(payload.agent_id, "agent_ws");
+        assert_eq!(payload.token_id, "tok_ws");
+        assert_eq!(payload.session_id, "sess_ws");
+        assert_eq!(payload.dispatch_status, 0);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn test_handle_connect_allow_emits_audit() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
         let handler = RequestHandler::new(
@@ -1437,7 +1624,7 @@ pub(crate) mod tests {
             ConnectDecision::Deny { reason, .. } => {
                 assert_eq!(reason, DenyReason::TokenInvalid);
             }
-            other @ ConnectDecision::Allow => panic!("expected connect deny, got {other:?}"),
+            other => panic!("expected connect deny, got {other:?}"),
         }
 
         let payload = rx
@@ -1445,5 +1632,98 @@ pub(crate) mod tests {
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_001");
         assert_eq!(payload.decision, 2);
+    }
+
+    #[tokio::test]
+    async fn test_handle_connect_abort_blocks_tunnel_and_emits_audit() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_with_failing_credentials(
+                vec![MappingRuleConfig {
+                    method: Some("CONNECT".to_string()),
+                    host: "*".to_string(),
+                    path: Some("/".to_string()),
+                    action_class: "communication.external.send".to_string(),
+                }],
+                "sess_connect_abort",
+            ),
+            test_connector_registry(),
+            tx,
+        );
+
+        let outcome = handler
+            .handle_connect(
+                RawRequest {
+                    method: "CONNECT".to_string(),
+                    host: "api.openai.com:443".to_string(),
+                    path: "/".to_string(),
+                    headers: HashMap::new(),
+                    body: None,
+                    is_https: true,
+                },
+                "sess_connect_abort",
+            )
+            .await;
+
+        match outcome {
+            ConnectDecision::Abort { reason, detail } => {
+                assert_eq!(reason, AbortReason::CredentialInjectionFailed);
+                assert!(detail.contains("vault unavailable"));
+            }
+            other => panic!("expected connect abort, got {other:?}"),
+        }
+
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
+        assert_eq!(payload.session_id, "sess_connect_abort");
+        assert_eq!(payload.decision, crate::pipeline::DECISION_ABORT);
+        assert!(
+            payload
+                .deny_reason
+                .starts_with("CREDENTIAL_INJECTION_FAILED"),
+            "deny_reason should carry credential abort code, got {:?}",
+            payload.deny_reason
+        );
+        assert_eq!(payload.dispatch_status, 0);
+    }
+
+    #[tokio::test]
+    async fn test_authorize_upgrade_abort_blocks_upgrade_and_emits_audit() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline_with_failing_credentials(vec![allow_rule()], "sess_upgrade_abort"),
+            test_connector_registry(),
+            tx,
+        );
+
+        let authorization = handler
+            .authorize_upgrade(
+                raw_request("api.openai.com".to_string(), "POST"),
+                "sess_upgrade_abort",
+            )
+            .await;
+
+        match authorization {
+            UpgradeAuthorization::Abort { reason, detail } => {
+                assert_eq!(reason, AbortReason::CredentialInjectionFailed);
+                assert!(detail.contains("vault unavailable"));
+            }
+            other => panic!("expected upgrade abort, got {other:?}"),
+        }
+
+        let payload = rx
+            .try_recv()
+            .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
+        assert_eq!(payload.session_id, "sess_upgrade_abort");
+        assert_eq!(payload.decision, crate::pipeline::DECISION_ABORT);
+        assert!(
+            payload
+                .deny_reason
+                .starts_with("CREDENTIAL_INJECTION_FAILED"),
+            "deny_reason should carry credential abort code, got {:?}",
+            payload.deny_reason
+        );
+        assert_eq!(payload.dispatch_status, 0);
     }
 }
