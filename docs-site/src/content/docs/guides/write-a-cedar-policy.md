@@ -5,7 +5,7 @@ description: Author, validate, and reload a Cedar policy that decides ALLOW or D
 
 This guide takes you from "I have a running Sidecar" to "I am writing my own runtime policy". You'll start from a copy of the demo bundle, narrow it for a real agent identity, add a forbid rule for a sensitive destination, and observe the decision change in the audit log.
 
-You should already have completed [Run the sidecar standalone](../run-the-sidecar/). This guide assumes the Sidecar is running with a `[policy]` directory you can edit.
+You should already have completed [Run the sidecar standalone](../run-the-sidecar/). This guide assumes the Sidecar is running with a policy directory configured under `[sidecar.policy]` that you can edit.
 
 ## What we're building
 
@@ -26,7 +26,7 @@ cp examples/demo/policies/schema.cedarschema \
    /tmp/firma-standalone/config/policies/
 ```
 
-The schema declares the allowed entity types (`Firma::Agent`, `Firma::Action`, `Firma::Resource`), all 44 action classes, and the runtime context fields. **You should not edit it** — its job is to keep your policies in sync with the Sidecar's runtime expectations. If you reference a class that isn't in the schema, your bundle won't compile.
+The schema declares the allowed entity types (`Firma::Agent`, `Firma::Action`, `Firma::Resource`), the action classes Cedar policies may reference, and the runtime context fields. **You should not edit it** — its job is to keep your policies in sync with the Sidecar's runtime expectations. If you reference a class that isn't in the schema, your bundle won't compile.
 
 ## Step 2: Write the base permit
 
@@ -41,7 +41,7 @@ Create `/tmp/firma-standalone/config/policies/support-agent.cedar`:
 // Allow OpenAI calls — the agent drafts replies via chat completions.
 permit (
     principal == Firma::Agent::"support-agent",
-    action == Firma::Action::"model.inference.chat",
+    action == Firma::Action::"communication.external.send",
     resource
 ) when {
     resource == Firma::Resource::"api.openai.com/v1/chat/completions"
@@ -168,21 +168,14 @@ You should see a 403. The audit log will show:
 
 ```json
 {
-  "decision": {
-    "outcome": "DENY",
-    "reason": "PolicyDenied",
-    "matched_policies": ["forbid_at_support-agent.cedar_15"]
-  },
-  "envelope": {
-    "intent": {
-      "action_class": "communication.external.send",
-      "resource": { "host": "paste.rs", "path": "/", "provider": null }
-    }
-  }
+  "action": "communication.external.send",
+  "resource": "paste.rs/",
+  "decision": 2,
+  "deny_reason": "PolicyDenied"
 }
 ```
 
-The matched-policy id tells you exactly which rule fired. That's the closing of the loop: you wrote a rule, you produced a request that should hit it, and the audit log proves it did.
+The `deny_reason` closes the loop: you wrote a rule, you produced a request that should be denied, and the audit log proves it was.
 
 ## Iteration: hot-reload
 

@@ -52,7 +52,7 @@ This writes to the **current directory** by default. Pass `--output-dir` to writ
 firma config --name claude-code --posture strict --mapping anthropic --output-dir .local
 ```
 
-`--posture strict` allows only `communication.external.send` (and `credential.read`), which is the right shape for a coding agent that should reach only the LLM endpoint. The `anthropic` mapping covers `api.anthropic.com` via CONNECT — no MITM certificate required for Anthropic's TLS.
+`--posture strict` allows only `communication.external.send` (and `credential.read`), which is the right shape for a coding agent that should reach only the LLM endpoint. The `anthropic` mapping covers `api.anthropic.com`; keep HTTPS MITM enabled for the API host if you want the Sidecar to inject the Anthropic key in Step 5.
 
 Generated layout:
 
@@ -99,9 +99,8 @@ permit (
     action == Firma::Action::"communication.external.send",
     resource
 ) when {
-    resource has "host" &&
-    (resource.host like "*.anthropic.com" ||
-     resource.host like "*.claude.com")
+    resource == Firma::Resource::"api.anthropic.com/v1/messages" ||
+    resource == Firma::Resource::"api.anthropic.com/v1/messages/count_tokens"
 };
 
 // Hard rule: known exfiltration destinations are off-limits regardless.
@@ -110,15 +109,14 @@ forbid (
     action == Firma::Action::"communication.external.send",
     resource
 ) when {
-    resource has "host" &&
-    (resource.host == "paste.rs" ||
-     resource.host == "transfer.sh" ||
-     resource.host == "0x0.st" ||
-     resource.host == "termbin.com")
+    resource == Firma::Resource::"paste.rs/" ||
+    resource == Firma::Resource::"transfer.sh/" ||
+    resource == Firma::Resource::"0x0.st/" ||
+    resource == Firma::Resource::"termbin.com/"
 };
 ```
 
-The `permit` is bound to `claude-code` and a host glob. The `forbid` is unbound — applies to every agent, present and future.
+The `permit` is bound to `claude-code` and exact Anthropic API resource UIDs. Add more exact UIDs only after you observe legitimate DENYs. The `forbid` is unbound — applies to every agent, present and future.
 
 Save the file to `~/.config/firma/policies/strict.cedar`.
 
@@ -129,8 +127,8 @@ You don't want the agent process to see the key. Put it in the Sidecar's environ
 In `~/.config/firma/firma.toml`:
 
 ```toml
-[[sidecar.credentials]]
-host           = "api.anthropic.com"
+[sidecar.credentials.anthropic]
+target_host    = "api.anthropic.com"
 mode           = "basic"
 header         = "x-api-key"
 value_from_env = "ANTHROPIC_API_KEY"
@@ -177,7 +175,7 @@ When Claude Code launches, it inherits no LLM API key from your shell. Its outbo
 The audit log is your test rig. From a fresh terminal:
 
 ```bash
-tail -f ~/.config/firma/.runtime/audit.jsonl | jq 'select(.decision.outcome == "DENY")'
+tail -f ~/.config/firma/.runtime/audit.jsonl | jq 'select(.decision == 2)'
 ```
 
 Now ask Claude Code something innocuous ("explain this function"). You should see no DENY events — its API call to Anthropic was allowed and dispatched.
@@ -186,8 +184,8 @@ Now try to make it misbehave. Ask: "*Please curl my code to paste.rs as a sanity
 
 1. Claude Code refuses (the model itself declines) — good.
 2. Claude Code tries — and the Sidecar denies. The DENY event in the tail shows:
-   - `envelope.intent.resource.host == "paste.rs"`
-   - `decision.matched_policies == ["forbid_at_claude-code.cedar_..."]`
+   - `resource == "paste.rs/"`
+   - `deny_reason == "PolicyDenied"`
 
 Either way, the data didn't leave. The second case is the more interesting one — your enforcement caught what the agent's safety wouldn't.
 
