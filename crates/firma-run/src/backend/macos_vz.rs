@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
 use crate::backend::{
-    BackendKind, ConfinementMechanism, EnforcementProof, LaunchSpec, PrepareRequest,
-    SandboxBackend, SandboxHandle,
+    BackendKind, EnforcementProof, LaunchSpec, NetworkConfinement, PrepareRequest, SandboxBackend,
+    SandboxHandle,
 };
 use crate::config::MountSpec;
 use crate::config::NetworkPolicy;
@@ -34,7 +34,7 @@ const VZ_GUEST_LAUNCH_CONTRACT_VERSION: u32 = 1;
 ///   wrapped process to loopback connections only. The host-side proxy bridge
 ///   and DNS stub run on loopback; other loopback services remain a residual
 ///   caveat until the guest-backed path can narrow the boundary further. This mode
-///   reports `structural=true` with `confinement_mechanism=macos_sandbox_network_deny`.
+///   reports `structural=true` with `network_confinement=macos_sandbox_network_deny`.
 ///   This is an intermediate structural step before the guest-backed path.
 ///
 /// - **VZ guest structural mode** (`FIRMA_RUN_VZ_GUEST=1`): launch a configured
@@ -42,7 +42,7 @@ const VZ_GUEST_LAUNCH_CONTRACT_VERSION: u32 = 1;
 ///   Virtualization.framework lifecycle and must boot a guest whose only
 ///   usable egress path is the sidecar bridge provided in the contract.
 ///   This mode reports `structural=true` with
-///   `confinement_mechanism=macos_vz_guest`.
+///   `network_confinement=macos_vz_guest`.
 #[derive(Debug, Default)]
 pub struct VzBackend;
 
@@ -175,7 +175,7 @@ impl SandboxBackend for VzBackend {
                          reach loopback addresses (proxy bridge + DNS stub); all external outbound \
                          denied by TrustedBSD MAC policy"
                     .to_string(),
-                confinement_mechanism: ConfinementMechanism::MacosSandboxNetworkDeny,
+                network_confinement: NetworkConfinement::MacosSandboxNetworkDeny,
             }),
             VzStructuralMode::VzGuest => Ok(EnforcementProof {
                 backend: BackendKind::Vz,
@@ -186,7 +186,7 @@ impl SandboxBackend for VzBackend {
                          boot the guest with bridge-only egress, deterministic DNS, and \
                          fail-closed sidecar reachability checks"
                         .to_string(),
-                confinement_mechanism: ConfinementMechanism::MacosVzGuest,
+                network_confinement: NetworkConfinement::MacosVzGuest,
             }),
             VzStructuralMode::Compatibility => Ok(EnforcementProof {
                 backend: BackendKind::Vz,
@@ -194,7 +194,7 @@ impl SandboxBackend for VzBackend {
                 fail_closed: policy.fail_closed,
                 detail: "macOS backend active; outbound mediation is currently proxy-based"
                     .to_string(),
-                confinement_mechanism: ConfinementMechanism::ProxyOnly,
+                network_confinement: NetworkConfinement::ProxyOnly,
             }),
         }
     }
@@ -835,7 +835,7 @@ mod tests {
     fn enforce_network_compatibility_proof_is_proxy_only() {
         // Verify the compatibility branch directly via proof construction.
         // The structural mode is env-var gated; we test the proxy-only branch.
-        use crate::backend::{ConfinementMechanism, SandboxBackend, SandboxHandle};
+        use crate::backend::{NetworkConfinement, SandboxBackend, SandboxHandle};
         use crate::config::NetworkPolicy;
         use crate::identity::RunIdentity;
 
@@ -861,22 +861,22 @@ mod tests {
                 !proof.structural,
                 "compatibility mode must be non-structural"
             );
-            assert_eq!(proof.confinement_mechanism, ConfinementMechanism::ProxyOnly);
+            assert_eq!(proof.network_confinement, NetworkConfinement::ProxyOnly);
         }
     }
 
     #[test]
-    fn confinement_mechanism_serializes_correctly() {
-        use crate::backend::ConfinementMechanism;
-        let json = serde_json::to_string(&ConfinementMechanism::MacosSandboxNetworkDeny)
-            .expect("serialize");
+    fn network_confinement_serializes_correctly() {
+        use crate::backend::NetworkConfinement;
+        let json =
+            serde_json::to_string(&NetworkConfinement::MacosSandboxNetworkDeny).expect("serialize");
         assert_eq!(json, r#""macos_sandbox_network_deny""#);
         let json =
-            serde_json::to_string(&ConfinementMechanism::LinuxNetworkNamespace).expect("serialize");
+            serde_json::to_string(&NetworkConfinement::LinuxNetworkNamespace).expect("serialize");
         assert_eq!(json, r#""linux_network_namespace""#);
-        let json = serde_json::to_string(&ConfinementMechanism::MacosVzGuest).expect("serialize");
+        let json = serde_json::to_string(&NetworkConfinement::MacosVzGuest).expect("serialize");
         assert_eq!(json, r#""macos_vz_guest""#);
-        let json = serde_json::to_string(&ConfinementMechanism::ProxyOnly).expect("serialize");
+        let json = serde_json::to_string(&NetworkConfinement::ProxyOnly).expect("serialize");
         assert_eq!(json, r#""proxy_only""#);
     }
 }

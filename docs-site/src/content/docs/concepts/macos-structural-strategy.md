@@ -143,7 +143,7 @@ Recommendation from scoring: pursue Option A as the primary path, keep ESF as an
 
 | Area | Status | Notes |
 | ---- | ------ | ----- |
-| Proof metadata | Implemented | `ConfinementMechanism` added to `EnforcementProof`; all backends updated. |
+| Proof metadata | Implemented | `NetworkConfinement` added to `EnforcementProof`; all backends updated. |
 | Intermediate macOS structural mode | Experimental | `sandbox-exec` network-deny mode via `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1`. It blocks external IP egress but still allows host loopback. |
 | VZ guest runner contract | Experimental | `FIRMA_RUN_VZ_GUEST=1` validates runner/kernel/initrd/rootfs paths, checks runner executability, emits `macos_vz_guest` proof metadata, writes `vz-guest-launch.json`, and spawns the configured runner. |
 | Host DNS refusal stub | Implemented | `HostDnsStubHandle` wired into macOS structural routing paths and exposed to the VZ guest contract. |
@@ -165,7 +165,7 @@ Recommendation from scoring: pursue Option A as the primary path, keep ESF as an
 
 - `sandbox-exec` with `deny network-outbound` policy implemented in `VzBackend`.
 - Host-side proxy bridge + DNS refusal stub started before the sandbox.
-- `EnforcementProof { structural: true, confinement_mechanism: macos_sandbox_network_deny }` emitted.
+- `EnforcementProof { structural: true, network_confinement: macos_sandbox_network_deny }` emitted.
 - All unit tests passing on Linux CI; E2E tests require macOS hardware.
 - Activation: `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1`.
 - Residual caveat: the policy is loopback-scoped, not port-scoped, so other host loopback services remain reachable.
@@ -180,7 +180,7 @@ Recommendation from scoring: pursue Option A as the primary path, keep ESF as an
 ### Milestone 4: VZ Guest Runner Contract
 
 - Add `FIRMA_RUN_VZ_GUEST=1` mode with fail-closed validation for runner and guest image artifacts.
-- Emit `EnforcementProof { structural: true, confinement_mechanism: macos_vz_guest }` only when guest mode is selected.
+- Emit `EnforcementProof { structural: true, network_confinement: macos_vz_guest }` only when guest mode is selected.
 - Write a versioned launch contract containing command, env, cwd, mounts, sidecar proxy URL, DNS stub address, attribution headers, and required invariants.
 - Spawn the configured runner with `--launch-contract <path>` so existing process supervision preserves the `firma run` wait path.
 - Keep claim language experimental until the runner and guest image prove every invariant on macOS hardware.
@@ -212,7 +212,7 @@ Recommendation from scoring: pursue Option A as the primary path, keep ESF as an
 
 | Suggested card | Milestone | Status | Scope |
 | -------------- | --------- | ------ | ----- |
-| Structural proof metadata | Baseline proof | Done | `ConfinementMechanism` on `EnforcementProof`; preflight logging. |
+| Structural proof metadata | Baseline proof | Done | `NetworkConfinement` on `EnforcementProof`; preflight logging. |
 | Intermediate macOS network-deny mode | Intermediate structural mode | Done | `sandbox-exec` network-deny structural mode + DNS stub + routing wiring. |
 | VZ guest runner contract | VZ contract | Done | Fail-closed artifact validation, `macos_vz_guest` proof, launch-contract JSON, runner spawn path. |
 | VZ runner implementation | VZ runner | Planned | Apple Virtualization.framework guest lifecycle with stdio, TTY, signals, terminal resize, and exit code preservation. |

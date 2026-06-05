@@ -228,7 +228,7 @@ Expected:
 | DNS confine via denial only | `/etc/resolv.conf` cannot be bind-mounted (no namespace). DNS confinement works by denying UDP/TCP to non-loopback, not via a controlled resolver. An agent could read `/etc/hosts` for `.local` names. |
 | Port 53 stub not on standard port | Host DNS stub runs on an ephemeral port; `FIRMA_DNS_STUB_ADDR` is set but agents that hardcode port 53 will get ECONNREFUSED (blocked) rather than a REFUSED DNS response. |
 | Loopback allows all of 127.0.0.1 | The sandbox profile allows any connection to `127.0.0.1`, not just the specific bridge port. A compromised agent could reach other host services on loopback. |
-| No structural proof until E2E green | The runtime logs `confinement_mechanism=macos_sandbox_network_deny` but the docs claim boundary remains non-structural until MACOS-001 through MACOS-009 are verified on supported hardware. |
+| No structural proof until E2E green | The runtime logs `network_confinement=macos_sandbox_network_deny` but the docs claim boundary remains non-structural until MACOS-001 through MACOS-009 are verified on supported hardware. |
 
 ## Graduation criteria
 

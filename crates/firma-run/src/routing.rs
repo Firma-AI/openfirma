@@ -14,7 +14,7 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 #[cfg(unix)]
-use crate::backend::{BackendKind, ConfinementMechanism};
+use crate::backend::{BackendKind, NetworkConfinement};
 use crate::backend::{EnforcementProof, SandboxHandle};
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
@@ -302,7 +302,7 @@ fn setup_host_bridge(
 /// loopback. On the VZ guest path the runner must expose this endpoint as the
 /// guest resolver. The stub refuses all DNS queries so the agent cannot resolve
 /// external hostnames directly; it must use the proxy bridge, which the Sidecar
-/// controls. This function is a no-op for all other confinement mechanisms.
+/// controls. This function is a no-op for all other network confinement modes.
 #[cfg(unix)]
 fn maybe_start_host_dns_stub(
     handle: &SandboxHandle,
@@ -313,8 +313,8 @@ fn maybe_start_host_dns_stub(
         return Ok(None);
     }
     if !matches!(
-        proof.confinement_mechanism,
-        ConfinementMechanism::MacosSandboxNetworkDeny | ConfinementMechanism::MacosVzGuest
+        proof.network_confinement,
+        NetworkConfinement::MacosSandboxNetworkDeny | NetworkConfinement::MacosVzGuest
     ) {
         return Ok(None);
     }
@@ -323,7 +323,7 @@ fn maybe_start_host_dns_stub(
     env_overrides.insert("FIRMA_DNS_STUB_ADDR".to_string(), stub_addr.to_string());
     tracing::info!(
         %stub_addr,
-        confinement_mechanism = ?proof.confinement_mechanism,
+        network_confinement = ?proof.network_confinement,
         "host DNS refusal stub wired for macOS structural network path"
     );
     Ok(Some(stub))
@@ -1036,7 +1036,7 @@ mod non_structural_env_tests {
             structural: false,
             fail_closed: true,
             detail: "test non-structural".to_string(),
-            confinement_mechanism: crate::backend::ConfinementMechanism::ProxyOnly,
+            network_confinement: crate::backend::NetworkConfinement::ProxyOnly,
         };
         let runtime = prepare_network_runtime(
             &handle,
@@ -1114,8 +1114,8 @@ mod non_structural_env_tests {
             use_http_proxy_sidecar: false,
         };
         for mechanism in [
-            crate::backend::ConfinementMechanism::MacosSandboxNetworkDeny,
-            crate::backend::ConfinementMechanism::MacosVzGuest,
+            crate::backend::NetworkConfinement::MacosSandboxNetworkDeny,
+            crate::backend::NetworkConfinement::MacosVzGuest,
         ] {
             let authority = ResolvedAuthority {
                 url: "https://authority.test".to_string(),
@@ -1128,7 +1128,7 @@ mod non_structural_env_tests {
                 structural: true,
                 fail_closed: true,
                 detail: format!("test {mechanism:?}"),
-                confinement_mechanism: mechanism.clone(),
+                network_confinement: mechanism.clone(),
             };
             let runtime = prepare_network_runtime(
                 &handle,
@@ -1199,7 +1199,7 @@ mod non_structural_env_tests {
             structural: true,
             fail_closed: true,
             detail: "miswired macOS-looking proof on non-vz backend".to_string(),
-            confinement_mechanism: crate::backend::ConfinementMechanism::MacosVzGuest,
+            network_confinement: crate::backend::NetworkConfinement::MacosVzGuest,
         };
 
         let runtime = prepare_network_runtime(

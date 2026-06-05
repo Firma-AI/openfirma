@@ -88,7 +88,7 @@ impl SandboxBackend for Wsl2Backend {
             structural: false,
             fail_closed: policy.fail_closed,
             detail: "WSL2 backend active; command executes in default WSL distro with proxy-based mediation".to_string(),
-            confinement_mechanism: crate::backend::ConfinementMechanism::ProxyOnly,
+            network_confinement: crate::backend::NetworkConfinement::ProxyOnly,
         })
     }
 

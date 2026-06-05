@@ -22,14 +22,14 @@ use crate::identity::RunIdentity;
 /// primitives.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ConfinementMechanism {
+pub enum NetworkConfinement {
     /// Linux unprivileged network namespace (`bwrap --unshare-net`).
     LinuxNetworkNamespace,
     /// macOS `TrustedBSD` MAC sandbox with `deny network-outbound` policy.
     /// Provides kernel-enforced loopback-only egress without a VM guest.
     MacosSandboxNetworkDeny,
     /// Apple Virtualization.framework guest with isolated virtio networking.
-    /// Implemented as a signed runner launch contract owned by the macOS VZ backend.
+    /// Implemented as a runner launch contract owned by the macOS VZ backend.
     MacosVzGuest,
     /// KVM micro-VM (Firecracker). Planned as enterprise additive path.
     KvmMicroVm,
@@ -125,8 +125,8 @@ pub struct EnforcementProof {
     pub structural: bool,
     pub fail_closed: bool,
     pub detail: String,
-    /// OS primitive that enforces the structural boundary, if any.
-    pub confinement_mechanism: ConfinementMechanism,
+    /// OS primitive that enforces the network boundary, if any.
+    pub network_confinement: NetworkConfinement,
 }
 
 /// Launch payload for wrapped command.
