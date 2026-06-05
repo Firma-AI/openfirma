@@ -162,8 +162,8 @@ impl EnforcementPipeline {
         // Monitor mode: override DENY → ALLOW (Passthrough) so the call goes
         // through, but preserve the original deny reason in the audit record
         // so operators can see what enforcement would have blocked.
-        if self.mode == SidecarMode::Monitor {
-            if let EnforcementDecision::Deny { .. } = &decision {
+        if self.mode == SidecarMode::Monitor
+            && let EnforcementDecision::Deny { .. } = &decision {
                 let original_reason = std::mem::take(&mut payload.deny_reason);
                 payload.decision = DECISION_ALLOW;
                 payload.deny_reason = format!("monitor_mode: {original_reason}");
@@ -174,7 +174,6 @@ impl EnforcementPipeline {
                     payload,
                 );
             }
-        }
 
         (decision, payload)
     }
