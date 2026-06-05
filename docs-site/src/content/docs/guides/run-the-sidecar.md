@@ -142,7 +142,7 @@ A few notes on what's *not* here:
 
 - No `[sidecar.authority].url`. With no Authority configured, the Sidecar runs in **policy-only** mode — Stage 1 (capability validation) is effectively bypassed for unmapped/protected actions. We use `default_protected = false` so unmapped traffic passes through, and we will only see Stage 2 decisions for the mapped routes. This is fine for first-touch experimentation; production workloads should run with an Authority and `default_protected = true`.
 - No `[sidecar.ca]` section. We're not using HTTPS MITM. CONNECT-style HTTPS will pass through but we won't see L7 details for it. See [Enable HTTPS MITM](../https-mitm/) when you're ready.
-- If you later set `authority.url = "http://..."`, note that plain HTTP is only accepted by default for loopback Authority hosts (`localhost`/`127.0.0.1`/`::1`). Non-loopback plaintext requires explicit opt-in with `authority.allow_insecure_remote_authority = true`.
+- If you later set `[sidecar.authority].url = "http://..."`, note that plain HTTP is only accepted by default for loopback Authority hosts (`localhost`/`127.0.0.1`/`::1`). Non-loopback plaintext requires explicit opt-in with `[sidecar.authority].allow_insecure_remote_authority = true`.
 - `bundle_ttl_seconds = 3600` is generous; without an Authority pushing fresh bundles, you don't want the bundle to go stale.
 
 ## Step 6: Start the Sidecar
@@ -165,7 +165,7 @@ INFO firma_sidecar: sidecar ready
 
 The `sidecar ready` line is your signal that the Sidecar accepted the config and is enforcing.
 
-When `authority.url` is set, `ready` is held back until both the
+When `[sidecar.authority].url` is set, `ready` is held back until both the
 policy-bundle and revocation streams have hydrated — so the line also means
 policy is in place and the first request through the proxy can't race ahead of
 it. With no Authority configured, the streams are pre-seeded ready and the line
@@ -193,11 +193,11 @@ tail -n 5 /tmp/firma-standalone/logs/audit.jsonl | python3 -m json.tool
 
 You'll see two records (one per curl), each with:
 
-- `decision.outcome`: `"ALLOW"` or `"DENY"`.
-- `envelope.intent.action_class`: `"communication.external.send"` for both.
-- `envelope.intent.resource.host` / `.path` for the call destination.
-- `decision.matched_policies`: which Cedar rules fired.
-- A signature block (`signature`) that you can verify with the public side of `audit.key`.
+- `decision`: `1` for ALLOW or `2` for DENY.
+- `action`: `"communication.external.send"` for both.
+- `resource`: the normalized host+path, such as `"wttr.in/london"` or `"paste.rs/"`.
+- `deny_reason`: empty for ALLOW, `"PolicyDenied"` for the forbidden paste.
+- `signature`: DER bytes that you can verify with the public side of `audit.key`.
 
 For verifying the signature, see [Read & verify the audit log](../audit-log/).
 
@@ -207,7 +207,7 @@ For verifying the signature, see [Read & verify the audit log](../audit-log/).
 
 **`PolicyBundleStale` denies after ~an hour.** Without an Authority, the bundle is loaded once at startup and never refreshed; once `bundle_ttl_seconds` elapses, every Stage 2 evaluation denies. Either bump the TTL very high for development, or run a local Authority that pushes refreshes.
 
-**`MappingNotFound` for unfamiliar destinations.** With `default_protected = true`, anything you didn't map denies. That's the right shape in production; for development, leave `default_protected = false` until you've enumerated the rules you actually want.
+**`UnclassifiedIntent` for unfamiliar destinations.** With `default_protected = true`, anything you didn't map denies. That's the right shape in production; for development, leave `default_protected = false` until you've enumerated the rules you actually want.
 
 **Permission denied on `audit.key`.** The Sidecar reads it at startup; `chmod 600` is fine. If the key is unreadable, startup fails fast and prints the path it tried.
 
