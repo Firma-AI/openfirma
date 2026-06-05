@@ -3,13 +3,14 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use firma_config::AgentProfile;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::BackendKind;
 #[cfg(target_os = "linux")]
 use crate::backend::platform::{WslKind, detect_wsl};
 use crate::error::RunError;
-use crate::profile::{BuiltInProfileId, built_in_profile};
+use crate::profile::built_in_profile;
 use crate::runtime::RunInput;
 
 fn backend_supports_structural_network(backend: BackendKind) -> bool {
@@ -315,8 +316,8 @@ pub enum CapabilitySource {
 /// Top-level file config.
 #[derive(Debug, Clone, Deserialize, Default)]
 struct FileConfig {
-    #[allow(dead_code)]
-    schema_version: Option<u32>,
+    /// Profile used by `firma run` when `--profile` is not supplied.
+    profile: Option<String>,
     #[serde(default)]
     defaults: ProfilePatch,
     #[serde(default)]
@@ -356,6 +357,10 @@ pub(crate) struct ProfilePatch {
     /// a clean environment.
     #[serde(default)]
     pub(crate) allow_non_structural: bool,
+    /// Home-relative paths to mask with a tmpfs overlay inside the bwrap sandbox.
+    /// Overrides the built-in `DEFAULT_SENSITIVE_HOME_SUFFIXES` for this profile.
+    /// Example: `[".ssh", ".gnupg", ".aws"]` leaves `.config` accessible.
+    pub(crate) mask_home_paths: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -456,6 +461,7 @@ impl ProfilePatch {
             codex_cli: higher.codex_cli.or(self.codex_cli),
             use_http_proxy_sidecar: higher.use_http_proxy_sidecar || self.use_http_proxy_sidecar,
             allow_non_structural: higher.allow_non_structural || self.allow_non_structural,
+            mask_home_paths: higher.mask_home_paths.or(self.mask_home_paths),
         }
     }
 }
@@ -516,6 +522,14 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         .filter(|item: &String| !item.trim().is_empty())
         .collect::<BTreeSet<_>>();
 
+    let mut env_set = patch.env_set;
+    if let Some(paths) = patch.mask_home_paths {
+        env_set.insert(
+            "FIRMA_RUN_BWRAP_MASK_HOME_PATHS".to_string(),
+            paths.join(","),
+        );
+    }
+
     let mounts = patch
         .mounts
         .into_iter()
@@ -565,7 +579,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         sidecar_endpoint,
         sidecar_selection,
         env_passthrough,
-        env_set: patch.env_set,
+        env_set,
         mounts,
         seccomp_policy,
         allowed_domains: patch.allowed_domains,
@@ -579,8 +593,8 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     };
 
     if matches!(
-        BuiltInProfileId::from_str(&resolved.id),
-        Some(BuiltInProfileId::ClaudeCode)
+        AgentProfile::from_name(&resolved.id),
+        Some(AgentProfile::ClaudeCode)
     ) && resolved.backend != BackendKind::Bwrap
     {
         tracing::warn!(
@@ -670,6 +684,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
         codex_cli: None,
         use_http_proxy_sidecar: false,
         allow_non_structural: args.allow_non_structural,
+        mask_home_paths: None,
     }
 }
 
@@ -935,31 +950,51 @@ pub(crate) fn env_truthy(name: &str) -> bool {
 }
 
 fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
-    let content = std::fs::read_to_string(path).map_err(|error| RunError::ConfigParse {
+    let section = firma_config::load_section(path, "run").map_err(|reason| {
+        // load_section prefixes the path; strip it to avoid doubling in the
+        // RunError::ConfigParse display ("{path}: {reason}").
+        let prefix = format!("{}: ", path.display());
+        let reason = reason.strip_prefix(&prefix).unwrap_or(&reason).to_string();
+        let hint = if reason.contains("[run]") {
+            "; run `firma config` to add a [run] section"
+        } else {
+            ""
+        };
+        RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason: format!("{reason}{hint}"),
+        }
+    })?;
+
+    let parsed = toml::from_str::<FileConfig>(&section).map_err(|error| RunError::ConfigParse {
         path: path.to_path_buf(),
         reason: error.to_string(),
     })?;
 
-    let ext = path
-        .extension()
-        .and_then(std::ffi::OsStr::to_str)
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-
-    let parsed = if ext == "yaml" || ext == "yml" {
-        serde_yaml::from_str::<FileConfig>(&content).map_err(|error| RunError::ConfigParse {
-            path: path.to_path_buf(),
-            reason: error.to_string(),
-        })?
-    } else {
-        toml::from_str::<FileConfig>(&content).map_err(|error| RunError::ConfigParse {
-            path: path.to_path_buf(),
-            reason: error.to_string(),
-        })?
-    };
-
     let profile_patch = parsed.profiles.get(profile).cloned().unwrap_or_default();
     Ok(parsed.defaults.merge(profile_patch))
+}
+
+/// Read `[run].profile` from `firma.toml`, if present.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read or the `[run]` section
+/// cannot be parsed as `FileConfig`.
+pub fn read_configured_profile(path: &Path) -> Result<Option<String>, RunError> {
+    let section = firma_config::load_section(path, "run").map_err(|reason| {
+        let prefix = format!("{}: ", path.display());
+        let reason = reason.strip_prefix(&prefix).unwrap_or(&reason).to_string();
+        RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason,
+        }
+    })?;
+    let parsed = toml::from_str::<FileConfig>(&section).map_err(|error| RunError::ConfigParse {
+        path: path.to_path_buf(),
+        reason: error.to_string(),
+    })?;
+    Ok(parsed.profile)
 }
 
 #[cfg(test)]
@@ -1022,13 +1057,13 @@ mod tests {
 
     #[test]
     fn resolves_generic_defaults() {
-        let resolved = resolve_profile(&args("generic")).unwrap_or_else(|e| panic!("{e}"));
+        let resolved = resolve_profile(&args("generic")).unwrap();
         assert_eq!(resolved.id, "generic");
         assert_eq!(resolved.backend, BackendKind::default_for_current_host());
         assert_eq!(
             resolved.sidecar_endpoint,
             SidecarEndpoint::Tcp {
-                addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}"))
+                addr: "127.0.0.1:8080".parse().unwrap()
             }
         );
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::SandboxUser);
@@ -1036,10 +1071,7 @@ mod tests {
             && resolved.backend == BackendKind::Bwrap
             && !super::env_truthy(super::MANAGED_DEFAULT_DISABLE_ENV)
         {
-            let managed = resolved
-                .seccomp_policy
-                .as_ref()
-                .unwrap_or_else(|| panic!("missing managed seccomp default"));
+            let managed = resolved.seccomp_policy.as_ref().unwrap();
             assert!(managed.verify_checksum);
             assert_eq!(managed.runtime_mode, SeccompRuntimeMode::CompileOnLaunch);
             assert!(
@@ -1067,30 +1099,30 @@ mod tests {
     }
 
     #[test]
-    fn yaml_config_overrides_profile() {
-        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let config_path = tmpdir.path().join("firma-run.yaml");
+    fn toml_config_overrides_profile() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join("firma.toml");
 
-        let yaml = r#"
-defaults:
-  sidecar_endpoint: "tcp://127.0.0.1:18080"
-profiles:
-  codex:
-    backend: bwrap
-    identity_mode: host_user
-    env_passthrough:
-      - HOME
-    capability:
-      kind: file
-      path: /tmp/capability.token
+        let toml = r#"
+[run.defaults]
+sidecar_endpoint = "tcp://127.0.0.1:18080"
+
+[run.profiles.codex]
+backend = "bwrap"
+identity_mode = "host_user"
+env_passthrough = ["HOME"]
+
+[run.profiles.codex.capability]
+kind = "file"
+path = "/tmp/capability.token"
 "#
         .to_string();
-        fs::write(&config_path, yaml).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&config_path, toml).unwrap();
 
         let mut run_args = args("codex");
         run_args.config = Some(config_path);
 
-        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        let resolved = resolve_profile(&run_args).unwrap();
         let expected_backend = if cfg!(target_os = "linux") {
             BackendKind::Bwrap
         } else {
@@ -1109,24 +1141,21 @@ profiles:
 
     #[test]
     fn legacy_codex_cli_config_maps_to_executable_policy() {
-        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let config_path = tmpdir.path().join("firma-run.toml");
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join("firma.toml");
         let toml = r#"
-[profiles.codex.codex_cli]
+[run.profiles.codex.codex_cli]
 enforce_wrapper_defaults = true
 sandbox_mode = "workspace-write"
 approval_policy = "never"
 "#;
-        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&config_path, toml).unwrap();
 
         let mut run_args = args("codex");
         run_args.config = Some(config_path);
-        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        let resolved = resolve_profile(&run_args).unwrap();
 
-        let policy = resolved
-            .executable_policies
-            .get("codex")
-            .unwrap_or_else(|| panic!("missing codex executable policy"));
+        let policy = resolved.executable_policies.get("codex").unwrap();
         assert!(policy.enforce_wrapper_defaults);
         assert_eq!(policy.sandbox_mode.as_deref(), Some("workspace-write"));
         assert_eq!(policy.approval_policy.as_deref(), Some("never"));
@@ -1138,13 +1167,13 @@ approval_policy = "never"
         run_args.identity_mode = Some(SandboxIdentityMode::SandboxUser);
         run_args.preserve_host_user = true;
 
-        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        let resolved = resolve_profile(&run_args).unwrap();
         assert_eq!(resolved.identity_mode, SandboxIdentityMode::HostUser);
     }
 
     #[test]
     fn resolves_claude_code_profile() {
-        let resolved = resolve_profile(&args("claude-code")).unwrap_or_else(|e| panic!("{e}"));
+        let resolved = resolve_profile(&args("claude-code")).unwrap();
         assert_eq!(resolved.id, "claude-code");
         assert!(resolved.use_http_proxy_sidecar);
         assert!(matches!(
@@ -1185,7 +1214,7 @@ approval_policy = "never"
         }
         let mut run_args = args("generic");
         run_args.backend = Some(BackendKind::Bwrap);
-        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        let resolved = resolve_profile(&run_args).unwrap();
         assert_eq!(resolved.backend, BackendKind::default_for_current_host());
     }
 
@@ -1195,7 +1224,7 @@ approval_policy = "never"
         let mut run_args = args("generic");
         run_args.backend = Some(BackendKind::Bwrap);
 
-        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        let resolved = resolve_profile(&run_args).unwrap();
         assert!(resolved.network.enforce_network_namespace);
         assert!(resolved.network.fail_closed);
     }
@@ -1205,27 +1234,27 @@ approval_policy = "never"
         let mut run_args = args("generic");
         run_args.backend = Some(non_bwrap_backend_for_current_host());
 
-        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        let resolved = resolve_profile(&run_args).unwrap();
         assert!(!resolved.network.enforce_network_namespace);
         assert!(resolved.network.fail_closed);
     }
 
     #[test]
     fn structural_network_true_on_non_bwrap_backend_is_rejected() {
-        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let config_path = tmpdir.path().join("firma-run.toml");
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join("firma.toml");
         let backend = non_bwrap_backend_for_current_host();
         let toml = format!(
             r#"
-[profiles.generic]
+[run.profiles.generic]
 backend = "{backend}"
 
-[profiles.generic.network]
+[run.profiles.generic.network]
 enforce_network_namespace = true
 fail_closed = true
 "#
         );
-        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&config_path, toml).unwrap();
 
         let mut run_args = args("generic");
         run_args.config = Some(config_path);
@@ -1242,7 +1271,7 @@ fail_closed = true
     #[test]
     #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn seccomp_policy_resolves_when_configured_for_bwrap() {
-        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let tmpdir = tempfile::tempdir().unwrap();
         let policy_path = tmpdir.path().join("policy.toml");
         fs::write(
             &policy_path,
@@ -1253,17 +1282,17 @@ default_action = "allow"
 deny_actions = ["filesystem.delete"]
 "#,
         )
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
 
-        let config_path = tmpdir.path().join("firma-run.toml");
+        let config_path = tmpdir.path().join("firma.toml");
         let toml = format!(
             r#"
-[profiles.generic]
+[run.profiles.generic]
 backend = "bwrap"
 sidecar_endpoint = "unix:///tmp/sidecar.sock"
 
-[profiles.generic.seccomp_policy]
+[run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
 verify_checksum = true
@@ -1271,17 +1300,17 @@ verify_checksum = true
             policy_path.display(),
             artifact_dir.display()
         );
-        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&config_path, toml).unwrap();
 
         let mut run_args = args("generic");
         run_args.config = Some(config_path);
-        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
+        let resolved = resolve_profile(&run_args).unwrap();
         assert!(resolved.seccomp_policy.is_some());
     }
 
     #[test]
     fn seccomp_policy_rejected_for_non_bwrap_backend() {
-        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let tmpdir = tempfile::tempdir().unwrap();
         let policy_path = tmpdir.path().join("policy.toml");
         fs::write(
             &policy_path,
@@ -1292,24 +1321,24 @@ default_action = "allow"
 deny_actions = ["filesystem.delete"]
 "#,
         )
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
 
-        let config_path = tmpdir.path().join("firma-run.toml");
+        let config_path = tmpdir.path().join("firma.toml");
         let backend = non_bwrap_backend_for_current_host();
         let toml = format!(
             r#"
-[profiles.generic]
+[run.profiles.generic]
 backend = "{backend}"
 
-[profiles.generic.seccomp_policy]
+[run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
 "#,
             policy_path.display(),
             artifact_dir.display()
         );
-        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&config_path, toml).unwrap();
 
         let mut run_args = args("generic");
         run_args.config = Some(config_path);
@@ -1324,7 +1353,7 @@ artifact_dir = '{}'
     #[test]
     #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn seccomp_policy_runtime_mode_parses_precompiled_only() {
-        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let tmpdir = tempfile::tempdir().unwrap();
         let policy_path = tmpdir.path().join("policy.toml");
         fs::write(
             &policy_path,
@@ -1335,17 +1364,17 @@ default_action = "allow"
 deny_actions = ["filesystem.delete"]
 "#,
         )
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
 
-        let config_path = tmpdir.path().join("firma-run.toml");
+        let config_path = tmpdir.path().join("firma.toml");
         let toml = format!(
             r#"
-[profiles.generic]
+[run.profiles.generic]
 backend = "bwrap"
 sidecar_endpoint = "unix:///tmp/sidecar.sock"
 
-[profiles.generic.seccomp_policy]
+[run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
 runtime_mode = "precompiled_only"
@@ -1353,20 +1382,18 @@ runtime_mode = "precompiled_only"
             policy_path.display(),
             artifact_dir.display()
         );
-        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&config_path, toml).unwrap();
 
         let mut run_args = args("generic");
         run_args.config = Some(config_path);
-        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
-        let seccomp = resolved
-            .seccomp_policy
-            .unwrap_or_else(|| panic!("missing seccomp policy"));
+        let resolved = resolve_profile(&run_args).unwrap();
+        let seccomp = resolved.seccomp_policy.unwrap();
         assert_eq!(seccomp.runtime_mode, SeccompRuntimeMode::PrecompiledOnly);
     }
 
     #[test]
     fn seccomp_policy_rejects_checksum_disable() {
-        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let tmpdir = tempfile::tempdir().unwrap();
         let policy_path = tmpdir.path().join("policy.toml");
         fs::write(
             &policy_path,
@@ -1377,17 +1404,17 @@ default_action = "allow"
 deny_actions = ["filesystem.delete"]
 "#,
         )
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
 
-        let config_path = tmpdir.path().join("firma-run.toml");
+        let config_path = tmpdir.path().join("firma.toml");
         let toml = format!(
             r#"
-[profiles.generic]
+[run.profiles.generic]
 backend = "bwrap"
 sidecar_endpoint = "unix:///tmp/sidecar.sock"
 
-[profiles.generic.seccomp_policy]
+[run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
 verify_checksum = false
@@ -1395,7 +1422,7 @@ verify_checksum = false
             policy_path.display(),
             artifact_dir.display()
         );
-        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&config_path, toml).unwrap();
 
         let mut run_args = args("generic");
         run_args.config = Some(config_path);
@@ -1410,7 +1437,7 @@ verify_checksum = false
     #[test]
     #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn sidecar_local_exec_parses_unix_endpoint() {
-        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let tmpdir = tempfile::tempdir().unwrap();
         let policy_path = tmpdir.path().join("policy.toml");
         fs::write(
             &policy_path,
@@ -1421,22 +1448,22 @@ default_action = "allow"
 deny_actions = ["filesystem.delete"]
 "#,
         )
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
         let socket_path = tmpdir.path().join("mediator.sock");
-        let config_path = tmpdir.path().join("firma-run.toml");
+        let config_path = tmpdir.path().join("firma.toml");
         let toml = format!(
             r#"
-[profiles.generic]
+[run.profiles.generic]
 backend = "bwrap"
 sidecar_endpoint = "unix:///tmp/sidecar.sock"
 
-[profiles.generic.seccomp_policy]
+[run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
-[profiles.generic.sidecar_local_exec]
+[run.profiles.generic.sidecar_local_exec]
 endpoint = 'unix://{}'
 timeout_ms = 700
 "#,
@@ -1444,20 +1471,18 @@ timeout_ms = 700
             artifact_dir.display(),
             socket_path.display()
         );
-        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&config_path, toml).unwrap();
         let mut run_args = args("generic");
         run_args.config = Some(config_path);
-        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
-        let mediator = resolved
-            .sidecar_local_exec
-            .unwrap_or_else(|| panic!("missing sidecar local-exec governance config"));
+        let resolved = resolve_profile(&run_args).unwrap();
+        let mediator = resolved.sidecar_local_exec.unwrap();
         assert_eq!(mediator.timeout_ms, 700);
     }
 
     #[test]
     #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn sidecar_local_exec_rejects_relative_unix_path() {
-        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let tmpdir = tempfile::tempdir().unwrap();
         let policy_path = tmpdir.path().join("policy.toml");
         fs::write(
             &policy_path,
@@ -1468,28 +1493,28 @@ default_action = "allow"
 deny_actions = ["filesystem.delete"]
 "#,
         )
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
-        let config_path = tmpdir.path().join("firma-run.toml");
+        let config_path = tmpdir.path().join("firma.toml");
         let toml = format!(
             r#"
-[profiles.generic]
+[run.profiles.generic]
 backend = "bwrap"
 sidecar_endpoint = "unix:///tmp/sidecar.sock"
 
-[profiles.generic.seccomp_policy]
+[run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
-[profiles.generic.sidecar_local_exec]
+[run.profiles.generic.sidecar_local_exec]
 endpoint = "unix://relative.sock"
 timeout_ms = 500
 "#,
             policy_path.display(),
             artifact_dir.display()
         );
-        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&config_path, toml).unwrap();
         let mut run_args = args("generic");
         run_args.config = Some(config_path);
         let err = resolve_profile(&run_args).expect_err("expected validation failure");
@@ -1503,7 +1528,7 @@ timeout_ms = 500
     #[test]
     #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn sidecar_local_exec_rejects_empty_allowlist_when_enforced() {
-        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let tmpdir = tempfile::tempdir().unwrap();
         let policy_path = tmpdir.path().join("policy.toml");
         fs::write(
             &policy_path,
@@ -1514,9 +1539,9 @@ default_action = "allow"
 deny_actions = ["filesystem.delete"]
 "#,
         )
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
-        let config_path = tmpdir.path().join("firma-run.toml");
+        let config_path = tmpdir.path().join("firma.toml");
         let endpoint = if cfg!(target_family = "unix") {
             "unix:///tmp/sidecar-local-exec.sock"
         } else {
@@ -1524,16 +1549,16 @@ deny_actions = ["filesystem.delete"]
         };
         let toml = format!(
             r#"
-[profiles.generic]
+[run.profiles.generic]
 backend = "bwrap"
 sidecar_endpoint = "unix:///tmp/sidecar.sock"
 
-[profiles.generic.seccomp_policy]
+[run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
-[profiles.generic.sidecar_local_exec]
+[run.profiles.generic.sidecar_local_exec]
 endpoint = "{endpoint}"
 timeout_ms = 500
 enforce_known_executables = true
@@ -1541,7 +1566,7 @@ enforce_known_executables = true
             policy_path.display(),
             artifact_dir.display()
         );
-        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&config_path, toml).unwrap();
         let mut run_args = args("generic");
         run_args.config = Some(config_path);
         let err = resolve_profile(&run_args).expect_err("expected validation failure");
@@ -1555,7 +1580,7 @@ enforce_known_executables = true
     #[test]
     #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn sidecar_local_exec_parses_async_hitl_mode_and_allowlist() {
-        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let tmpdir = tempfile::tempdir().unwrap();
         let policy_path = tmpdir.path().join("policy.toml");
         fs::write(
             &policy_path,
@@ -1566,9 +1591,9 @@ default_action = "allow"
 deny_actions = ["filesystem.delete"]
 "#,
         )
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
-        let config_path = tmpdir.path().join("firma-run.toml");
+        let config_path = tmpdir.path().join("firma.toml");
         let endpoint = if cfg!(target_family = "unix") {
             "unix:///tmp/sidecar-local-exec.sock"
         } else {
@@ -1576,16 +1601,16 @@ deny_actions = ["filesystem.delete"]
         };
         let toml = format!(
             r#"
-[profiles.generic]
+[run.profiles.generic]
 backend = "bwrap"
 sidecar_endpoint = "unix:///tmp/sidecar.sock"
 
-[profiles.generic.seccomp_policy]
+[run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
-[profiles.generic.sidecar_local_exec]
+[run.profiles.generic.sidecar_local_exec]
 endpoint = "{endpoint}"
 timeout_ms = 800
 hitl_mode = "async_token"
@@ -1595,13 +1620,11 @@ allowed_executables = ["codex", "claude", "bash"]
             policy_path.display(),
             artifact_dir.display()
         );
-        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&config_path, toml).unwrap();
         let mut run_args = args("generic");
         run_args.config = Some(config_path);
-        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
-        let mediator = resolved
-            .sidecar_local_exec
-            .unwrap_or_else(|| panic!("missing sidecar local-exec governance config"));
+        let resolved = resolve_profile(&run_args).unwrap();
+        let mediator = resolved.sidecar_local_exec.unwrap();
         assert!(mediator.enforce_known_executables);
         assert!(mediator.allowed_executables.contains("codex"));
         assert_eq!(
@@ -1613,7 +1636,7 @@ allowed_executables = ["codex", "claude", "bash"]
     #[test]
     #[cfg_attr(not(target_os = "linux"), ignore = "bwrap-only")]
     fn sidecar_local_exec_derives_unix_tools_endpoint() {
-        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let tmpdir = tempfile::tempdir().unwrap();
         let policy_path = tmpdir.path().join("policy.toml");
         fs::write(
             &policy_path,
@@ -1624,35 +1647,33 @@ default_action = "allow"
 deny_actions = ["filesystem.delete"]
 "#,
         )
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
-        let config_path = tmpdir.path().join("firma-run.toml");
+        let config_path = tmpdir.path().join("firma.toml");
         let sidecar_sock = tmpdir.path().join("sidecar.sock");
         let toml = format!(
             r#"
-[profiles.generic]
+[run.profiles.generic]
 backend = "bwrap"
 sidecar_endpoint = 'unix://{}'
 
-[profiles.generic.seccomp_policy]
+[run.profiles.generic.seccomp_policy]
 source_policy_path = '{}'
 artifact_dir = '{}'
 runtime_mode = "precompiled_only"
 
-[profiles.generic.sidecar_local_exec]
+[run.profiles.generic.sidecar_local_exec]
 timeout_ms = 700
 "#,
             sidecar_sock.display(),
             policy_path.display(),
             artifact_dir.display()
         );
-        fs::write(&config_path, toml).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&config_path, toml).unwrap();
         let mut run_args = args("generic");
         run_args.config = Some(config_path);
-        let resolved = resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
-        let mediator = resolved
-            .sidecar_local_exec
-            .unwrap_or_else(|| panic!("missing sidecar local-exec governance config"));
+        let resolved = resolve_profile(&run_args).unwrap();
+        let mediator = resolved.sidecar_local_exec.unwrap();
         match mediator.endpoint {
             super::CommandMediatorEndpoint::Unix { path } => {
                 assert!(path.ends_with("sidecar-tools.sock"));

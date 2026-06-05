@@ -32,18 +32,20 @@ user-global state directory.
 firma config
 
 # Or scripted with every value supplied.
-firma config --agent codex --provider anthropic \
-           --workspace ./proj --authority local --yes
+firma config --name codex --mapping anthropic \
+           --workspace ./proj --output-dir ./proj/.firma --yes
 ```
 
 Layout written:
 
 ```text
 ./proj/.firma/
-  firma.toml            authority.key       audit.key
-  mapping-rules.toml    policies/           issuance-policies/
+  firma.toml            mapping-rules.toml
+  mappings/             policies/
+  issuance-policies/
 
 $XDG_DATA_HOME/firma/   # or %LOCALAPPDATA%\firma on Windows
+  authority.key         authority.pub       audit.key
   revocations.txt
   generated-firma-ca/
   # populated by sidecar start: authority.pid, sidecar.pid, stack.pid,
@@ -51,8 +53,8 @@ $XDG_DATA_HOME/firma/   # or %LOCALAPPDATA%\firma on Windows
   # *.listen, audit.jsonl
 ```
 
-`firma config` writes a single sectioned `firma.toml` (`[project]` +
-`[authority]` + `[sidecar.*]`). Existing files are preserved unless
+`firma config` writes a single sectioned `firma.toml` (`[authority]` +
+`[sidecar.*]`). Existing files are preserved unless
 `--force` is set. `state_dir` is not embedded in the config — it is
 always resolved from `--state-dir` / `FIRMA_STATE_DIR` / XDG.
 
@@ -155,7 +157,7 @@ firma monitor --state-dir /var/run/firma \
 | ---------------- | -------- | -------------------------------------------------------- |
 | `--config`       | _unset_  | Accepted for compatibility; not used to resolve state.   |
 | `--state-dir`    | resolved | State dir override.                                      |
-| `--source`       | `all`    | `audit`, `authority`, `sidecar`, or `all`.               |
+| `--source`       | `audit`  | `audit`, `authority`, `sidecar`, or `all`.               |
 | `--no-follow`    | _off_    | Read once and exit; default is to follow tail.           |
 | `--decision`     | _unset_  | Audit-only: `allow`, `deny`, `passthrough`.              |
 | `--action-class` | _unset_  | Audit-only: exact match on `intent.action_class`.        |
@@ -204,8 +206,8 @@ never read from the config file.
 authority is bound to the listen address — most often a previous
 foreground run that was not fully reaped. Run `firma sidecar stop
 --state-dir ...` first, or change the listeners by editing
-`firma.toml` (or re-running `firma config --force` with different
-`--authority-listen` / `--sidecar-listen`).
+`firma.toml` (or re-running `firma config --force` with a different
+`--authority-listen`; edit `[sidecar.interceptor].listen_addr` for the Sidecar).
 
 **`sidecar status` reports "stopped" but the pidfile exists.** The
 process is gone but the file was not cleaned up (sigkill from

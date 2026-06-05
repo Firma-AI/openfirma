@@ -469,8 +469,7 @@ fn strip_ansi(input: &str) -> String {
 }
 
 fn line_marks_ready(line: &str) -> bool {
-    let trimmed = line.trim_end();
-    trimmed.ends_with(": ready") || trimmed == "ready"
+    line.trim_end().ends_with("authority ready")
 }
 
 fn extract_kv(line: &str, key: &str) -> Option<String> {

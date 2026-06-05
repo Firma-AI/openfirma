@@ -79,6 +79,29 @@ reconnect_max_backoff_secs = 30
 revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false
 
+# ── Run profiles ─────────────────────────────────────────────────────────────
+# Sandbox profile for `firma run --profile generic`.
+
+[run.profiles.generic]
+backend = "bwrap"
+
+[run.profiles.generic.env_set]
+# Bind / read-only and tmpfs over /tmp, /var/tmp. Without this the rootfs is
+# bind-mounted RW.
+FIRMA_RUN_BWRAP_ROOTFS_MODE = "readonly"
+
+# Point HOME at the per-run runtime dir so the agent cannot read host
+# credentials by expanding $HOME. Disabled by default so the agent home
+# persists across runs (MCP config, auth, etc.). Set to "true" to enable
+# full home-dir isolation (planned default when shell governance ships).
+FIRMA_RUN_BWRAP_RUNTIME_HOME = "false"
+
+# Defense-in-depth tmpfs masks on the host HOME paths. Comma-separated,
+# relative to $HOME.
+FIRMA_RUN_BWRAP_MASK_HOME_PATHS = ".ssh,.gnupg,.aws,.config/gcloud,.env"
+
+# ── Sidecar preflight ────────────────────────────────────────────────────────
+
 [sidecar.preflight]
 agent_id = "generic-agent"
 session_id = "preflight-session"

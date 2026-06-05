@@ -31,7 +31,7 @@ fn marker_dir_layout_and_developer_cedar() {
                echo 'firma_authority: config loaded policy_dir=\"/x\" listen_addr=\"[::1]:50051\"' >&2\n\
                echo 'firma_authority: policy bundle loaded policies=1' >&2\n\
                echo 'firma_authority: listening addr=\"[::1]:50051\"' >&2\n\
-               echo 'firma_authority: ready' >&2\n\
+               echo 'firma_authority: authority ready' >&2\n\
                exec sleep 60;;\n\
            esac;;\n\
          esac\n",

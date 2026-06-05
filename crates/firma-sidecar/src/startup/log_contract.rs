@@ -14,7 +14,7 @@
 //! 4. `authority stream connected endpoint="…"`
 //! 5. `connector registry built hosts=N default_timeout_ms=T`
 //! 6. `interceptor listening addr="…"`
-//! 7. `ready`
+//! 7. `sidecar ready`
 //!
 //! Line 4 fires unconditionally. When `authority.url` is unset
 //! the endpoint is reported as `"(disabled)"` so the contract surface
@@ -80,7 +80,7 @@ pub fn log_pre_ready_sequence(report: &StartupReport<'_>) {
 /// Emit contract line 7 (`ready`). Callers must have already emitted
 /// the pre-ready sequence via [`log_pre_ready_sequence`].
 pub fn log_ready_line() {
-    tracing::info!("ready");
+    tracing::info!("sidecar ready");
 }
 
 /// Compute the deterministic policy bundle version.
