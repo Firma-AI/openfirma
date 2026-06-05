@@ -12,12 +12,12 @@
 )]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use firma_run::sidecar::config::testing::{SynthesizeRequest, TemplateSource, synthesize};
 use tempfile::TempDir;
 
-fn read(path: &std::path::Path) -> toml::Value {
+fn read(path: &Path) -> toml::Value {
     let text = fs::read_to_string(path).expect("read synthesized");
     toml::from_str(&text).expect("parse synthesized")
 }
@@ -33,6 +33,26 @@ fn audit_table(value: &toml::Value) -> &toml::value::Table {
         .expect("sidecar.audit table")
 }
 
+/// Default [`SynthesizeRequest`] for tests. Override specific fields with
+/// struct-update syntax: `SynthesizeRequest { monitor_mode: true, ..req(&sock, &out) }`.
+fn req<'a>(sock: &'a Path, out: &'a Path) -> SynthesizeRequest<'a> {
+    SynthesizeRequest {
+        agent_id: "generic",
+        session_id: "sess",
+        explicit_template: None,
+        env_template: None,
+        cwd_template: None,
+        socket_path: sock,
+        listen_addr: None,
+        out_path: out,
+        authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
+        audit_fallback_path: None,
+        monitor_mode: false,
+    }
+}
+
 #[test]
 fn minimal_template_defaults_audit_to_monitorable_file_sink() {
     // With no template, the synthesized per-run sidecar must default its audit
@@ -44,19 +64,8 @@ fn minimal_template_defaults_audit_to_monitorable_file_sink() {
     let sock = tmp.path().join("sidecar.sock");
     let audit = tmp.path().join("audit.jsonl");
     synthesize(SynthesizeRequest {
-        agent_id: "generic",
-        session_id: "sess",
-        explicit_template: None,
-        env_template: None,
-        cwd_template: None,
-        socket_path: &sock,
-        listen_addr: None,
-        out_path: &out,
-        authority_url: None,
-        authority_ca_cert: None,
-        authority_pub_key: None,
         audit_fallback_path: Some(&audit),
-        monitor_mode: false,
+        ..req(&sock, &out)
     })
     .expect("synthesize");
 
@@ -89,19 +98,9 @@ sink = "stdout"
     let sock = tmp.path().join("sidecar.sock");
     let audit = tmp.path().join("audit.jsonl");
     synthesize(SynthesizeRequest {
-        agent_id: "generic",
-        session_id: "sess",
         explicit_template: Some(&template),
-        env_template: None,
-        cwd_template: None,
-        socket_path: &sock,
-        listen_addr: None,
-        out_path: &out,
-        authority_url: None,
-        authority_ca_cert: None,
-        authority_pub_key: None,
         audit_fallback_path: Some(&audit),
-        monitor_mode: false,
+        ..req(&sock, &out)
     })
     .expect("synthesize");
 
@@ -123,22 +122,7 @@ fn missing_template_writes_minimal_config() {
     let tmp = TempDir::new().expect("tmp");
     let out = tmp.path().join("sidecar.toml");
     let sock = tmp.path().join("sidecar.sock");
-    let source = synthesize(SynthesizeRequest {
-        agent_id: "generic",
-        session_id: "sess",
-        explicit_template: None,
-        env_template: None,
-        cwd_template: None,
-        socket_path: &sock,
-        listen_addr: None,
-        out_path: &out,
-        authority_url: None,
-        authority_ca_cert: None,
-        authority_pub_key: None,
-        audit_fallback_path: None,
-        monitor_mode: false,
-    })
-    .expect("synthesize");
+    let source = synthesize(req(&sock, &out)).expect("synthesize");
     assert_eq!(source, TemplateSource::Minimal);
     let value = read(&out);
     let sidecar = value
@@ -196,19 +180,8 @@ paths = ["/etc/firma/cap.toml"]
     let out = tmp.path().join("sidecar.toml");
     let sock = tmp.path().join("sidecar.sock");
     let source = synthesize(SynthesizeRequest {
-        agent_id: "generic",
-        session_id: "sess",
         explicit_template: Some(&template),
-        env_template: None,
-        cwd_template: None,
-        socket_path: &sock,
-        listen_addr: None,
-        out_path: &out,
-        authority_url: None,
-        authority_ca_cert: None,
-        authority_pub_key: None,
-        audit_fallback_path: None,
-        monitor_mode: false,
+        ..req(&sock, &out)
     })
     .expect("synthesize");
 
@@ -265,55 +238,25 @@ fn priority_order_explicit_over_env_over_cwd() {
     let sock = tmp.path().join("sidecar.sock");
 
     let source = synthesize(SynthesizeRequest {
-        agent_id: "generic",
-        session_id: "sess",
         explicit_template: Some(&explicit),
         env_template: Some(env.clone()),
         cwd_template: Some(cwd.clone()),
-        socket_path: &sock,
-        listen_addr: None,
-        out_path: &out,
-        authority_url: None,
-        authority_ca_cert: None,
-        authority_pub_key: None,
-        audit_fallback_path: None,
-        monitor_mode: false,
+        ..req(&sock, &out)
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Explicit(explicit));
 
     let source = synthesize(SynthesizeRequest {
-        agent_id: "generic",
-        session_id: "sess",
-        explicit_template: None,
         env_template: Some(env.clone()),
         cwd_template: Some(cwd.clone()),
-        socket_path: &sock,
-        listen_addr: None,
-        out_path: &out,
-        authority_url: None,
-        authority_ca_cert: None,
-        authority_pub_key: None,
-        audit_fallback_path: None,
-        monitor_mode: false,
+        ..req(&sock, &out)
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Env(env));
 
     let source = synthesize(SynthesizeRequest {
-        agent_id: "generic",
-        session_id: "sess",
-        explicit_template: None,
-        env_template: None,
         cwd_template: Some(cwd.clone()),
-        socket_path: &sock,
-        listen_addr: None,
-        out_path: &out,
-        authority_url: None,
-        authority_ca_cert: None,
-        authority_pub_key: None,
-        audit_fallback_path: None,
-        monitor_mode: false,
+        ..req(&sock, &out)
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Cwd(cwd));
@@ -374,19 +317,8 @@ paths = ["seeds/dev.toml", "{abs_seed}"]
     let sock = marker.join("sidecar.sock");
 
     synthesize(SynthesizeRequest {
-        agent_id: "generic",
-        session_id: "sess",
         explicit_template: Some(&template),
-        env_template: None,
-        cwd_template: None,
-        socket_path: &sock,
-        listen_addr: None,
-        out_path: &out,
-        authority_url: None,
-        authority_ca_cert: None,
-        authority_pub_key: None,
-        audit_fallback_path: None,
-        monitor_mode: false,
+        ..req(&sock, &out)
     })
     .expect("synthesize");
 
@@ -497,20 +429,12 @@ fn nonexistent_template_paths_fall_through_to_minimal() {
     let tmp = TempDir::new().expect("tmp");
     let out = tmp.path().join("sidecar.toml");
     let sock = tmp.path().join("sidecar.sock");
+    let explicit = PathBuf::from("/does/not/exist/explicit.toml");
     let source = synthesize(SynthesizeRequest {
-        agent_id: "generic",
-        session_id: "sess",
-        explicit_template: Some(&PathBuf::from("/does/not/exist/explicit.toml")),
+        explicit_template: Some(&explicit),
         env_template: Some(PathBuf::from("/does/not/exist/env.toml")),
         cwd_template: Some(PathBuf::from("/does/not/exist/cwd.toml")),
-        socket_path: &sock,
-        listen_addr: None,
-        out_path: &out,
-        authority_url: None,
-        authority_ca_cert: None,
-        authority_pub_key: None,
-        audit_fallback_path: None,
-        monitor_mode: false,
+        ..req(&sock, &out)
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Minimal);
@@ -522,19 +446,8 @@ fn monitor_mode_injects_mode_monitor_into_sidecar_section() {
     let out = tmp.path().join("sidecar.toml");
     let sock = tmp.path().join("sidecar.sock");
     synthesize(SynthesizeRequest {
-        agent_id: "generic",
-        session_id: "sess",
-        explicit_template: None,
-        env_template: None,
-        cwd_template: None,
-        socket_path: &sock,
-        listen_addr: None,
-        out_path: &out,
-        authority_url: None,
-        authority_ca_cert: None,
-        authority_pub_key: None,
-        audit_fallback_path: None,
         monitor_mode: true,
+        ..req(&sock, &out)
     })
     .expect("synthesize");
 
@@ -556,22 +469,7 @@ fn no_monitor_mode_does_not_inject_mode_field() {
     let tmp = TempDir::new().expect("tmp");
     let out = tmp.path().join("sidecar.toml");
     let sock = tmp.path().join("sidecar.sock");
-    synthesize(SynthesizeRequest {
-        agent_id: "generic",
-        session_id: "sess",
-        explicit_template: None,
-        env_template: None,
-        cwd_template: None,
-        socket_path: &sock,
-        listen_addr: None,
-        out_path: &out,
-        authority_url: None,
-        authority_ca_cert: None,
-        authority_pub_key: None,
-        audit_fallback_path: None,
-        monitor_mode: false,
-    })
-    .expect("synthesize");
+    synthesize(req(&sock, &out)).expect("synthesize");
 
     let value = read(&out);
     let sidecar = value
