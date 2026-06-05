@@ -52,7 +52,7 @@ firma config --yes \
   --extra-hosts api.github.com
 ```
 
-This creates `.firma/` with `firma.toml`, `firma-run.toml`, mapping files, policy files, and local signing material under the platform state directory. The GitHub mapping enables HTTPS interception for `api.github.com`; `--extra-hosts` adds a catch-all rule for the public profile endpoint used below.
+This creates `.firma/` with a unified `firma.toml` (authority, sidecar, and run profiles), mapping files, policy files, and local signing material under the platform state directory. The GitHub mapping enables HTTPS interception for `api.github.com`; `--extra-hosts` adds a catch-all rule for the public profile endpoint used below.
 
 ## Run an agent under enforcement
 
@@ -61,7 +61,7 @@ This creates `.firma/` with `firma.toml`, `firma-run.toml`, mapping files, polic
 Pass any command you want to wrap after the `--` marker:
 
 ```bash
-firma run --config .firma/firma-run.toml -- \
+firma run --config .firma/firma.toml -- \
   curl -kfsS https://api.github.com/users/firma-ai
 ```
 
