@@ -62,6 +62,10 @@ pub struct SpawnRequest<'a> {
     /// sink when the template configures none, so `firma monitor` can tail the
     /// per-run sidecar's decisions. `None` leaves the audit sink untouched.
     pub audit_fallback_path: Option<PathBuf>,
+    /// When `true`, override `[sidecar].mode = "monitor"` in the synthesized
+    /// config regardless of the operator template value. Passed through from
+    /// `--monitor` on the `firma run` CLI.
+    pub monitor_mode: bool,
 }
 
 /// Captured values from the seven-line ready sequence.
@@ -160,6 +164,7 @@ impl SidecarSupervisor {
                 authority_ca_cert: req.authority_ca_cert.as_deref(),
                 authority_pub_key: req.authority_pub_key.as_deref(),
                 audit_fallback_path: req.audit_fallback_path.as_deref(),
+                monitor_mode: req.monitor_mode,
             })?;
 
             let mut child = std::process::Command::new(&req.firma_exe)

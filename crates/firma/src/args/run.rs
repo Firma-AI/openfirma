@@ -93,6 +93,13 @@ pub struct RunArgs {
     #[arg(long, default_value_t = false)]
     pub allow_non_structural: bool,
 
+    /// Start the sidecar in monitor mode: every call is allowed through and
+    /// audit records carry the original deny reason prefixed with
+    /// `monitor_mode:`. Equivalent to `mode = "monitor"` in firma.toml but
+    /// scoped to this run only. Never use in production.
+    #[arg(long, default_value_t = false)]
+    pub monitor: bool,
+
     /// Wrapped command and args (pass after `--`).
     #[arg(required = true, num_args = 1.., allow_hyphen_values = true)]
     pub command: Vec<String>,

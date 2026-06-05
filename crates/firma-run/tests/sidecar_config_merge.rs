@@ -56,6 +56,7 @@ fn minimal_template_defaults_audit_to_monitorable_file_sink() {
         authority_ca_cert: None,
         authority_pub_key: None,
         audit_fallback_path: Some(&audit),
+        monitor_mode: false,
     })
     .expect("synthesize");
 
@@ -100,6 +101,7 @@ sink = "stdout"
         authority_ca_cert: None,
         authority_pub_key: None,
         audit_fallback_path: Some(&audit),
+        monitor_mode: false,
     })
     .expect("synthesize");
 
@@ -134,6 +136,7 @@ fn missing_template_writes_minimal_config() {
         authority_ca_cert: None,
         authority_pub_key: None,
         audit_fallback_path: None,
+        monitor_mode: false,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Minimal);
@@ -205,6 +208,7 @@ paths = ["/etc/firma/cap.toml"]
         authority_ca_cert: None,
         authority_pub_key: None,
         audit_fallback_path: None,
+        monitor_mode: false,
     })
     .expect("synthesize");
 
@@ -273,6 +277,7 @@ fn priority_order_explicit_over_env_over_cwd() {
         authority_ca_cert: None,
         authority_pub_key: None,
         audit_fallback_path: None,
+        monitor_mode: false,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Explicit(explicit));
@@ -290,6 +295,7 @@ fn priority_order_explicit_over_env_over_cwd() {
         authority_ca_cert: None,
         authority_pub_key: None,
         audit_fallback_path: None,
+        monitor_mode: false,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Env(env));
@@ -307,6 +313,7 @@ fn priority_order_explicit_over_env_over_cwd() {
         authority_ca_cert: None,
         authority_pub_key: None,
         audit_fallback_path: None,
+        monitor_mode: false,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Cwd(cwd));
@@ -379,6 +386,7 @@ paths = ["seeds/dev.toml", "{abs_seed}"]
         authority_ca_cert: None,
         authority_pub_key: None,
         audit_fallback_path: None,
+        monitor_mode: false,
     })
     .expect("synthesize");
 
@@ -502,6 +510,7 @@ fn nonexistent_template_paths_fall_through_to_minimal() {
         authority_ca_cert: None,
         authority_pub_key: None,
         audit_fallback_path: None,
+        monitor_mode: false,
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Minimal);
