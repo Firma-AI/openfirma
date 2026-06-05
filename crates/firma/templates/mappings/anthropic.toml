@@ -11,6 +11,11 @@ method = "CONNECT"
 host = "*.claude.com"
 action_class = "communication.external.send"
 
+[[rules]]
+method = "CONNECT"
+host = "*.claude.ai"
+action_class = "communication.external.send"
+
 # REST fallback (plain HTTP proxy or post-MITM).
 [[rules]]
 host = "*.anthropic.com"
@@ -19,5 +24,10 @@ action_class = "communication.external.send"
 
 [[rules]]
 host = "*.claude.com"
+path = "*"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.claude.ai"
 path = "*"
 action_class = "communication.external.send"

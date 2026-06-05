@@ -4,6 +4,12 @@
 # Branch-protection subtree is fanned out across GET/PUT/POST/DELETE so
 # each method-specific rule out-ranks the broad `GET /repos/*/*`
 # code.read wildcard via specificity.
+#
+# CONNECT rules cover non-MITM proxy mode where the sidecar sees only the
+# tunnel-establishment request, not the inner HTTPS traffic. Without these
+# rules every git operation and gh CLI call over HTTPS would DENY because the
+# inner GET/POST/… rules never match — they are only reachable when MITM is
+# enabled and the sidecar decrypts each inner request.
 
 # --- code.read (8) ----------------------------------------------------------
 [[rules]]
@@ -290,3 +296,4 @@ action_class = "notification.manage"
 host = "api.github.com"
 path = "/repos/*/*/subscription"
 action_class = "notification.manage"
+

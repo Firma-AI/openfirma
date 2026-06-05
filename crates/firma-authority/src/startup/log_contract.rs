@@ -10,7 +10,7 @@
 //! 1. `config loaded         policy_dir="…" listen_addr="…"`
 //! 2. `policy bundle loaded  policies=N`
 //! 3. `listening              addr="…"`
-//! 4. `ready`
+//! 4. `authority ready`
 
 use std::path::Path;
 
@@ -35,7 +35,7 @@ pub fn log_ready_sequence(report: &StartupReport<'_>) {
     );
     tracing::info!(policies = report.policy_count, "policy bundle loaded");
     tracing::info!(addr = %report.effective_listen_addr, "listening");
-    tracing::info!("ready");
+    tracing::info!("authority ready");
 }
 
 #[cfg(test)]

@@ -145,7 +145,6 @@ firma authority -c /tmp/firma-standalone/config/firma.toml issue \
   --agent-id support-agent \
   --session-id session-001 \
   --action communication.external.send \
-  --action model.inference.chat \
   --resource-scope '*' \
   --ttl-seconds 3600 \
   --output /tmp/firma-standalone/capability-support.toml
@@ -154,8 +153,8 @@ firma authority -c /tmp/firma-standalone/config/firma.toml issue \
 What just happened:
 
 1. The Authority CLI loaded the issuance bundle.
-2. It evaluated `(principal=support-agent, action=communication.external.send, resource=*)` against the bundle. Same for the second `--action`.
-3. Both passed (we wrote a permissive issuance policy in Step 2).
+2. It evaluated `(principal=support-agent, action=communication.external.send, resource=*)` against the bundle.
+3. The request passed (we wrote a permissive issuance policy in Step 2).
 4. It assembled a `CapabilityClaims` with these fields, signed it as a PASETO v4 token using `firma-authority.key`, and wrote both the raw token and the parsed claims to the output file.
 
 Inspect the result:
@@ -176,6 +175,7 @@ Edit the `[sidecar.*]` tables in `firma.toml` to add:
 
 ```toml
 [sidecar.authority]
+url             = "http://[::1]:50051"
 public_key_path = "/tmp/firma-standalone/firma-authority.pub"
 
 [sidecar.capability_seed]
@@ -192,7 +192,7 @@ INFO firma_sidecar::startup::authority: connected to authority [::1]:50051
 INFO firma_sidecar: sidecar ready
 ```
 
-During startup the Sidecar reads each configured seed, verifies the `raw_token` with `[authority].public_key_path`, and compares the signed claims with the TOML fields. This is fail-closed: a seed that cannot be verified, was signed by a different Authority key, is expired, or has mirrored claims that differ from the signed token prevents the Sidecar from becoming ready.
+During startup the Sidecar reads each configured seed, verifies the `raw_token` with `[sidecar.authority].public_key_path`, and compares the signed claims with the TOML fields. This is fail-closed: a seed that cannot be verified, was signed by a different Authority key, is expired, or has mirrored claims that differ from the signed token prevents the Sidecar from becoming ready.
 
 ## Step 7: See Stage 1 in action
 
@@ -205,21 +205,21 @@ curl --proxy http://127.0.0.1:8080 \
   -d '{"model":"gpt-4","messages":[]}'
 ```
 
-The audit event for this call will include a `capability` block:
+The audit event for this call will include the capability identity at the top level:
 
 ```json
 {
-  "capability": {
-    "token_id":   "79dd9ffb-…",
-    "agent_id":   "support-agent",
-    "session_id": "session-001",
-    "action_set": ["communication.external.send", "model.inference.chat"]
-  },
-  "decision": { "outcome": "ALLOW", "matched_policies": ["…"] }
+  "token_id": "79dd9ffb-ebc8-4883-8f1e-72eb74a26e33",
+  "agent_id": "support-agent",
+  "session_id": "session-001",
+  "action": "communication.external.send",
+  "resource": "api.openai.com/v1/chat/completions",
+  "decision": 1,
+  "deny_reason": ""
 }
 ```
 
-If you delete the capability seed file and restart, the same call returns a 403 with `decision.reason = "CapabilityNotFound"`. That's Stage 1 doing its job.
+If you delete the capability seed file and restart, the same call returns a 403 with `deny_reason` containing `"token invalid"`. That's Stage 1 doing its job.
 
 ## Revocation
 
@@ -229,7 +229,7 @@ To kill a specific capability immediately:
 firma authority -c /tmp/firma-standalone/config/firma.toml revocations add 79dd9ffb-ebc8-4883-8f1e-72eb74a26e33
 ```
 
-The Authority appends the `token_id` to `revocations.txt` and broadcasts it on its gRPC stream. Connected Sidecars update their bloom filter + LRU cache within seconds. The next attempt by that capability gets `CapabilityRevoked`.
+The Authority appends the `token_id` to `revocations.txt` and broadcasts it on its gRPC stream. Connected Sidecars update their bloom filter + LRU cache within seconds. The next attempt by that capability gets `TokenRevoked`.
 
 For housekeeping, clean expired entries periodically:
 
@@ -239,17 +239,17 @@ firma authority -c /tmp/firma-standalone/config/firma.toml revocations compact
 
 ## Common gotchas
 
-**`CapabilityNotFound` for matching agent.** The map is keyed by `(session_id, action_class, resource)`. If the request's normalized resource doesn't fall inside `resource_scope`, the lookup misses. Loosen `--resource-scope` or add multiple capabilities for different scopes.
+**`TokenInvalid` for matching agent.** The map is keyed by `(session_id, action_class, resource)`. If the request's normalized resource doesn't fall inside `resource_scope`, the lookup misses. Loosen `--resource-scope` or add multiple capabilities for different scopes.
 
-**`CapabilityExpired` right after issuance.** Clock drift between Authority and Sidecar. Set `[capability_validation].clock_skew_tolerance_seconds` (default 5) higher if your clocks aren't tight.
+**`TokenExpired` right after issuance.** Clock drift between Authority and Sidecar. Set `[sidecar.capability_validation].clock_skew_tolerance_seconds` (default 0) higher if your clocks aren't tight.
 
 **Authority refuses to mint.** Issuance policy denied the request. Check the Authority's stderr for the matched policy id. Loosen issuance policy or pick a different action class.
 
-**Sidecar fails startup with `raw_token claims do not match seed claims`.** The seed file's TOML mirror no longer matches the signed PASETO payload. Common causes are editing `action_set` or `resource_scope` by hand, copying a `raw_token` from one seed into another, or deploying a stale seed next to a regenerated one. Treat the seed as immutable: re-run `firma authority ... issue` with the desired flags, deploy the complete new TOML file, and make sure `[authority].public_key_path` points at the public key for the private key that signed it.
+**Sidecar fails startup with `raw_token claims do not match seed claims`.** The seed file's TOML mirror no longer matches the signed PASETO payload. Common causes are editing `action_set` or `resource_scope` by hand, copying a `raw_token` from one seed into another, or deploying a stale seed next to a regenerated one. Treat the seed as immutable: re-run `firma authority ... issue` with the desired flags, deploy the complete new TOML file, and make sure `[sidecar.authority].public_key_path` points at the public key for the private key that signed it.
 
 **Sidecar fails startup with `raw_token failed PASETO verification`.** The token cannot be parsed or its signature does not verify with the configured Authority public key. Check that `public_key_path` is the `.pub` file from the same keypair used by the Authority config's `key_file`, and replace any truncated or manually copied seed file with a freshly issued one.
 
-**`bundle_ttl_seconds` mismatch.** If the Authority is down for longer than the Sidecar's `[constraint_enforcement].bundle_ttl_seconds`, the Sidecar starts denying with `PolicyBundleStale`. Run the Authority next to the Sidecar; restart it before the deadline.
+**`bundle_ttl_seconds` mismatch.** If the Authority is down for longer than the Sidecar's `[sidecar.constraint_enforcement].bundle_ttl_seconds`, the Sidecar starts denying with `PolicyBundleStale`. Run the Authority next to the Sidecar; restart it before the deadline.
 
 ## What's next
 

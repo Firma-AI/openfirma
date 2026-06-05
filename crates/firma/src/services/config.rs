@@ -13,6 +13,7 @@ use dialoguer::theme::ColorfulTheme;
 use crate::args::config::{InitArgs, Mapping, Mode, Posture};
 use crate::fs::create_private_dir_all;
 use doc::DocInputs;
+use firma_config::AgentProfile;
 
 struct AuthorityInputs {
     /// gRPC listen address (agent-local + authority modes).
@@ -42,6 +43,7 @@ struct CollectedInputs {
     sidecar: SidecarInputs,
     config_dir: PathBuf,
     state_dir: PathBuf,
+    profile: String,
 }
 
 #[derive(Debug, Default)]
@@ -57,6 +59,7 @@ struct ExistingConfigDefaults {
     requested_actions: Option<Vec<String>>,
     mappings: Option<Vec<Mapping>>,
     workspace: Option<PathBuf>,
+    profile: Option<String>,
 }
 
 static TPL_CEDAR_ISSUANCE: &str = include_str!("../../templates/issuance.cedar");
@@ -121,7 +124,7 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
     match inputs.mode {
         Mode::AgentLocal | Mode::AgentRemote => {
             println!(
-                "  firma run --config {}/firma-run.toml -- <agent-command>",
+                "  firma run --config {}/firma.toml -- <agent-command>",
                 cfg.display()
             );
         }
@@ -174,18 +177,14 @@ fn write_scaffold_files(
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("mkdir {}", parent.display()))?;
         }
-        // `firma.toml`, `firma-run.toml`, and `mapping-rules.toml` are
-        // produced by the toml_edit merge layer: the input was read from
-        // disk, modified in place, and re-serialized. Writing the
-        // resulting bytes back is non-destructive — unknown sections,
-        // user-tuned defaults, and comments are preserved. Skipping the
-        // write here would silently swallow mode changes (e.g. switching
-        // from agent-remote to agent-local would not persist the new
+        // `firma.toml` and `mapping-rules.toml` are produced by the toml_edit
+        // merge layer: the input was read from disk, modified in place, and
+        // re-serialized. Writing the resulting bytes back is non-destructive —
+        // unknown sections, user-tuned defaults, and comments are preserved.
+        // Skipping the write here would silently swallow mode changes (e.g.
+        // switching from agent-remote to agent-local would not persist the new
         // `[authority]` section).
-        let is_merged_toml = matches!(
-            rel.as_str(),
-            "firma.toml" | "firma-run.toml" | "mapping-rules.toml"
-        );
+        let is_merged_toml = matches!(rel.as_str(), "firma.toml" | "mapping-rules.toml");
         let should_overwrite =
             force || is_merged_toml || (overwrite_policy && rel.starts_with("policies/"));
         if !should_overwrite && path.exists() {
@@ -286,6 +285,7 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
         mode: &inputs.mode,
         keep_local_authority: inputs.keep_local_authority,
         name: &inputs.sidecar.name,
+        profile: &inputs.profile,
         authority_listen: &inputs.authority.listen,
         authority_url: &inputs.authority.connect_url,
         authority_ca_cert: &inputs.authority.connect_ca_cert,
@@ -325,11 +325,7 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
         let mapping_rules = render_for(&inputs.config_dir, "mapping-rules.toml", |text| {
             doc::render_mapping_rules_toml(text, &doc_inputs)
         })?;
-        let firma_run = render_for(&inputs.config_dir, "firma-run.toml", |text| {
-            doc::render_firma_run_toml(text, &doc_inputs)
-        })?;
         files.push(("mapping-rules.toml".into(), mapping_rules));
-        files.push(("firma-run.toml".into(), firma_run));
         for mapping in &inputs.sidecar.mappings {
             files.push((
                 format!("mappings/{}.toml", mapping.as_str()),
@@ -389,6 +385,8 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
     let authority =
         collect_authority_inputs(args, &existing, &mode, interactive, &theme, &state_dir)?;
 
+    let profile = collect_profile(args, &existing, interactive, &theme)?;
+
     let has_sidecar = matches!(mode, Mode::AgentLocal | Mode::AgentRemote);
     let sidecar = collect_sidecar_inputs(
         args,
@@ -397,6 +395,7 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         interactive,
         &theme,
         &config_dir,
+        &profile,
     )?;
 
     Ok(CollectedInputs {
@@ -406,6 +405,7 @@ fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
         sidecar,
         config_dir,
         state_dir,
+        profile,
     })
 }
 
@@ -517,12 +517,8 @@ fn load_existing_defaults(config_dir: &Path) -> Result<ExistingConfigDefaults> {
     defaults.mappings = mappings_from_rules_paths(&value);
     defaults.state_dir = infer_state_dir(&value);
 
-    let firma_run_path = config_dir.join("firma-run.toml");
-    if firma_run_path.exists()
-        && let Ok(run_text) = std::fs::read_to_string(&firma_run_path)
-    {
-        defaults.workspace = workspace_from_firma_run(&run_text);
-    }
+    defaults.workspace = workspace_from_firma_toml(&value);
+    defaults.profile = get_str(&value, &["run", "profile"]);
 
     Ok(defaults)
 }
@@ -609,9 +605,9 @@ fn infer_state_dir(value: &toml::Value) -> Option<PathBuf> {
     get_path(value, &["sidecar", "ca", "dir"]).and_then(|path| path.parent().map(Path::to_path_buf))
 }
 
-fn workspace_from_firma_run(toml_text: &str) -> Option<PathBuf> {
-    let value: toml::Value = toml::from_str(toml_text).ok()?;
+fn workspace_from_firma_toml(value: &toml::Value) -> Option<PathBuf> {
     let mounts = value
+        .get("run")?
         .get("profiles")?
         .get("generic")?
         .get("mounts")?
@@ -745,7 +741,7 @@ fn collect_authority_inputs(
                 existing
                     .authority_listen
                     .clone()
-                    .unwrap_or_else(|| "0.0.0.0:9443".to_string()),
+                    .unwrap_or_else(|| "0.0.0.0:50051".to_string()),
             )
             .interact_text()
             .context("authority listen address prompt")?,
@@ -755,11 +751,11 @@ fn collect_authority_inputs(
                 existing
                     .authority_listen
                     .clone()
-                    .unwrap_or_else(|| "127.0.0.1:9443".to_string()),
+                    .unwrap_or_else(|| "127.0.0.1:50051".to_string()),
             )
             .interact_text()
             .context("authority listen address prompt")?,
-        _ => "127.0.0.1:9443".to_string(),
+        _ => "127.0.0.1:50051".to_string(),
     };
 
     let (connect_url, connect_ca_cert, connect_pub_key) = match mode {
@@ -812,6 +808,7 @@ fn collect_sidecar_inputs(
     interactive: bool,
     theme: &ColorfulTheme,
     config_dir: &Path,
+    profile: &str,
 ) -> Result<SidecarInputs> {
     let overwrite_policy = args.posture.is_some() || interactive;
     let posture = match (&args.posture, &existing.posture) {
@@ -858,6 +855,7 @@ fn collect_sidecar_inputs(
         existing.requested_actions.clone()
     };
 
+    let profile_default_mappings = profile_default_mappings(profile);
     let mappings = if !args.mapping.is_empty() {
         args.mapping.clone()
     } else if let Some(mappings) = &existing.mappings
@@ -865,9 +863,13 @@ fn collect_sidecar_inputs(
     {
         mappings.clone()
     } else if interactive {
-        prompt_mappings_with_default(theme, existing.mappings.as_deref())?
+        let mapping_default = existing
+            .mappings
+            .as_deref()
+            .unwrap_or(&profile_default_mappings);
+        prompt_mappings_with_default(theme, Some(mapping_default))?
     } else {
-        vec![Mapping::Anthropic]
+        profile_default_mappings
     };
 
     let extra_hosts_raw: String = match args.extra_hosts.as_deref() {
@@ -991,6 +993,58 @@ fn prompt_mappings_with_default(
             .join(", ")
     );
     Ok(chosen)
+}
+
+fn collect_profile(
+    args: &InitArgs,
+    existing: &ExistingConfigDefaults,
+    interactive: bool,
+    theme: &ColorfulTheme,
+) -> Result<String> {
+    if let Some(p) = &args.profile {
+        return Ok(p.as_str().to_string());
+    }
+    let default = existing
+        .profile
+        .as_deref()
+        .and_then(AgentProfile::from_name)
+        .unwrap_or(AgentProfile::Generic);
+    if interactive {
+        prompt_profile_with_default(theme, default)
+    } else {
+        Ok(default.as_str().to_string())
+    }
+}
+
+fn prompt_profile_with_default(theme: &ColorfulTheme, default: AgentProfile) -> Result<String> {
+    let variants = AgentProfile::value_variants();
+    let items: Vec<String> = variants
+        .iter()
+        .map(|p| format!("{:<16}  {}", p.as_str(), p.description()))
+        .collect();
+    let selection = dialoguer::Select::with_theme(theme)
+        .with_prompt("Agent profile")
+        .items(&items)
+        .default(
+            variants
+                .iter()
+                .position(|p| p.as_str() == default.as_str())
+                .unwrap_or(0),
+        )
+        .report(false)
+        .interact()
+        .context("profile prompt")?;
+    let chosen = variants[selection].as_str().to_string();
+    eprintln!("  Profile  · {chosen}");
+    Ok(chosen)
+}
+
+fn profile_default_mappings(profile: &str) -> Vec<Mapping> {
+    if profile == "codex" {
+        vec![Mapping::Openai]
+    } else {
+        vec![Mapping::Anthropic]
+    }
 }
 
 /// Delete posture cedar files left behind by previous postures.
@@ -1189,6 +1243,7 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
         },
         config_dir: plan.config_dir.clone(),
         state_dir: plan.state_dir.clone(),
+        profile: provider_to_profile(&plan.provider),
     };
     let files = generate_files(&inputs).context("generate files")?;
 
@@ -1255,6 +1310,17 @@ fn provider_to_mappings(provider: &str) -> Vec<Mapping> {
     }
 }
 
+fn provider_to_profile(provider: &str) -> String {
+    use firma_config::AgentProfile;
+    match provider {
+        p if AgentProfile::Codex.provider() == p => AgentProfile::Codex.as_str().to_string(),
+        p if AgentProfile::ClaudeCode.provider() == p => {
+            AgentProfile::ClaudeCode.as_str().to_string()
+        }
+        _ => AgentProfile::Generic.as_str().to_string(),
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
@@ -1274,8 +1340,8 @@ mod tests {
             mode: Mode::AgentLocal,
             keep_local_authority: false,
             authority: AuthorityInputs {
-                listen: "127.0.0.1:9443".to_string(),
-                connect_url: "https://127.0.0.1:9443".to_string(),
+                listen: "127.0.0.1:50051".to_string(),
+                connect_url: "http://127.0.0.1:50051".to_string(),
                 connect_ca_cert: "/tmp/test-state/tls/authority-ca.crt".to_string(),
                 connect_pub_key: "/tmp/test-state/authority.pub".to_string(),
             },
@@ -1290,6 +1356,7 @@ mod tests {
             },
             config_dir: PathBuf::from(TEST_WORKSPACE),
             state_dir: PathBuf::from("/tmp/test-state"),
+            profile: "generic".to_string(),
         };
         generate_files(&inputs).unwrap()
     }
@@ -1407,10 +1474,10 @@ mod tests {
     fn firma_toml_no_mitm_hosts_when_only_anthropic() {
         let files = make_files(&Posture::Dev, &[Mapping::Anthropic], &[]);
         let t: toml::Value = toml::from_str(get(&files, "firma.toml")).unwrap();
-        let hosts = t["sidecar"]["interceptor"]["https_mitm"]["intercept_hosts"]
-            .as_array()
-            .unwrap();
-        assert!(hosts.is_empty());
+        let https_mitm = &t["sidecar"]["interceptor"]["https_mitm"];
+        // No MITM hosts → MITM disabled, host lists absent.
+        assert_eq!(https_mitm["enabled"].as_bool(), Some(false));
+        assert!(https_mitm.get("intercept_hosts").is_none());
     }
 
     #[test]
@@ -1568,32 +1635,25 @@ mod tests {
         }
     }
 
-    // ── firma-run.toml ───────────────────────────────────────────────────────
+    // ── [run.profiles.generic] in firma.toml ─────────────────────────────────
 
     #[test]
-    fn firma_run_toml_is_valid_toml() {
+    fn firma_toml_has_run_profiles_section() {
         let files = make_files(&Posture::Dev, &[], &[]);
-        let _: toml::Value = toml::from_str(get(&files, "firma-run.toml")).unwrap();
-    }
-
-    #[test]
-    fn firma_run_toml_has_file_audit_sink() {
-        let files = make_files(&Posture::Dev, &[], &[]);
-        let t: toml::Value = toml::from_str(get(&files, "firma-run.toml")).unwrap();
-        assert_eq!(t["audit"]["sink"].as_str(), Some("file"));
+        let t: toml::Value = toml::from_str(get(&files, "firma.toml")).unwrap();
         assert!(
-            t["audit"]["file_path"]
-                .as_str()
-                .is_some_and(|p| !p.is_empty()),
-            "audit.file_path must be set"
+            t.get("run").and_then(|r| r.get("profiles")).is_some(),
+            "[run.profiles] missing from firma.toml"
         );
     }
 
     #[test]
-    fn firma_run_toml_workspace_mount_matches_input() {
+    fn run_profiles_workspace_mount_matches_input() {
         let files = make_files(&Posture::Dev, &[], &[]);
-        let t: toml::Value = toml::from_str(get(&files, "firma-run.toml")).unwrap();
-        let mounts = t["profiles"]["generic"]["mounts"].as_array().unwrap();
+        let t: toml::Value = toml::from_str(get(&files, "firma.toml")).unwrap();
+        let mounts = t["run"]["profiles"]["generic"]["mounts"]
+            .as_array()
+            .unwrap();
         assert_eq!(mounts[0]["source"].as_str(), Some(TEST_WORKSPACE));
         assert_eq!(mounts[0]["target"].as_str(), Some(TEST_WORKSPACE));
         assert_eq!(mounts[0]["read_only"].as_bool(), Some(false));
@@ -1619,9 +1679,11 @@ mod tests {
         })
         .unwrap();
 
-        let text = std::fs::read_to_string(config_dir.join("firma-run.toml")).unwrap();
+        let text = std::fs::read_to_string(config_dir.join("firma.toml")).unwrap();
         let t: toml::Value = toml::from_str(&text).unwrap();
-        let mounts = t["profiles"]["generic"]["mounts"].as_array().unwrap();
+        let mounts = t["run"]["profiles"]["generic"]["mounts"]
+            .as_array()
+            .unwrap();
         assert_eq!(
             mounts[0]["source"].as_str(),
             Some(workspace.to_string_lossy().as_ref())

@@ -24,7 +24,7 @@ const FULL: &str = "\
 2026-05-13T10:00:00Z  INFO firma_sidecar::startup::log_contract: authority stream connected endpoint=\"(disabled)\"\n\
 2026-05-13T10:00:00Z  INFO firma_sidecar::startup::log_contract: connector registry built hosts=12 default_timeout_ms=5000\n\
 2026-05-13T10:00:00Z  INFO firma_sidecar::startup::log_contract: interceptor listening addr=\"/run/firma/abc/sidecar.sock\"\n\
-2026-05-13T10:00:00Z  INFO firma_sidecar::startup::log_contract: ready\n\
+2026-05-13T10:00:00Z  INFO firma_sidecar::startup::log_contract: sidecar ready\n\
 2026-05-13T10:00:01Z  INFO firma_sidecar::pipeline: serving request id=42\n";
 
 #[test]
@@ -62,7 +62,7 @@ INFO firma_sidecar::startup::log_contract: policy bundle loaded version=\"deadbe
 INFO firma_sidecar::startup::log_contract: authority stream connected endpoint=\"https://authority.example:8443\"\n\
 INFO firma_sidecar::startup::log_contract: connector registry built hosts=5 default_timeout_ms=5000\n\
 INFO firma_sidecar::startup::log_contract: interceptor listening addr=\"127.0.0.1:8080\"\n\
-INFO firma_sidecar::startup::log_contract: ready\n";
+INFO firma_sidecar::startup::log_contract: sidecar ready\n";
 
     let (tx, rx) = mpsc::sync_channel(1);
     let mut sink = Vec::<u8>::new();
@@ -103,7 +103,7 @@ fn ready_line_detected_through_ansi_escapes() {
 \u{1b}[2m2026-05-13T11:52:25.306036Z\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m \u{1b}[2mfirma_sidecar::startup::log_contract\u{1b}[0m\u{1b}[2m:\u{1b}[0m \u{1b}[2m61:\u{1b}[0m authority stream connected \u{1b}[3mendpoint\u{1b}[0m\u{1b}[2m=\u{1b}[0mhttp://127.0.0.1:50051\n\
 \u{1b}[2m2026-05-13T11:52:25.306041Z\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m \u{1b}[2mfirma_sidecar::startup::log_contract\u{1b}[0m\u{1b}[2m:\u{1b}[0m \u{1b}[2m62:\u{1b}[0m connector registry built \u{1b}[3mhosts\u{1b}[0m\u{1b}[2m=\u{1b}[0m0 \u{1b}[3mdefault_timeout_ms\u{1b}[0m\u{1b}[2m=\u{1b}[0m30000\n\
 \u{1b}[2m2026-05-13T11:52:25.306046Z\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m \u{1b}[2mfirma_sidecar::startup::log_contract\u{1b}[0m\u{1b}[2m:\u{1b}[0m \u{1b}[2m67:\u{1b}[0m interceptor listening \u{1b}[3maddr\u{1b}[0m\u{1b}[2m=\u{1b}[0m/tmp/firma-501/sidecar.sock\n\
-\u{1b}[2m2026-05-13T11:52:25.306051Z\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m \u{1b}[2mfirma_sidecar::startup::log_contract\u{1b}[0m\u{1b}[2m:\u{1b}[0m \u{1b}[2m68:\u{1b}[0m ready\n";
+\u{1b}[2m2026-05-13T11:52:25.306051Z\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m \u{1b}[2mfirma_sidecar::startup::log_contract\u{1b}[0m\u{1b}[2m:\u{1b}[0m \u{1b}[2m68:\u{1b}[0m sidecar ready\n";
 
     let (tx, rx) = mpsc::sync_channel(1);
     let mut sink = Vec::<u8>::new();
@@ -133,7 +133,7 @@ INFO firma_sidecar::startup::log_contract: policy bundle loaded version=\"v1\" p
 INFO firma_sidecar::startup::log_contract: authority stream connected endpoint=\"(disabled)\"\n\
 INFO firma_sidecar::startup::log_contract: connector registry built hosts=0 default_timeout_ms=5000\n\
 INFO firma_sidecar::startup::log_contract: interceptor listening addr=\"127.0.0.1:8080\"\n\
-INFO firma_sidecar::startup::log_contract: ready\n";
+INFO firma_sidecar::startup::log_contract: sidecar ready\n";
 
     let (tx, rx) = mpsc::sync_channel(1);
     let mut sink = Vec::<u8>::new();

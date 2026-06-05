@@ -7,7 +7,7 @@ A capability proves an agent is *authorized* to make a call. A **credential** is
 
 This is one of the highest-value reasons to deploy a Sidecar at all: a compromised agent that never touches the credential cannot exfiltrate it.
 
-You should already have a Sidecar running with HTTPS MITM enabled for the relevant hosts ([Enable HTTPS MITM](../https-mitm/)). MITM is required because credential injection happens at L7 — the Sidecar must be able to decrypt and modify the request.
+You should already have a Sidecar running with HTTPS MITM enabled for the relevant hosts ([Enable HTTPS MITM](../https-mitm/)). MITM is required because credential injection happens at L7 — the Sidecar must be able to decrypt and modify the request. `firma config --mapping anthropic` (or `openai`) scaffolds CONNECT mappings with **empty** `intercept_hosts` by default — add `api.anthropic.com` / `api.openai.com` to `[sidecar.interceptor.https_mitm].intercept_hosts` before expecting injection to work.
 
 ## Step 1: Decide what you're injecting and where
 
@@ -15,7 +15,7 @@ Three pieces of information per credential:
 
 1. **Which host** the credential is for. Injection is host-scoped to prevent cross-host leakage.
 2. **Which header** the upstream expects. Most often `Authorization`, sometimes a custom header.
-3. **Where the secret lives** at the Sidecar host. Two modes today: a host environment variable (`basic` mode) or a Vault path (`vault` mode).
+3. **Where the secret lives** at the Sidecar host. Two modes today: a host environment variable (`basic` mode) or a file rendered by Vault Agent (`vault` mode).
 
 A typical setup for OpenAI:
 
@@ -28,18 +28,18 @@ value source:   $OPENAI_API_KEY
 
 ## Step 2: Configure with `basic` mode (env-var-backed)
 
-Add `[[sidecar.credentials]]` blocks to `firma.toml`:
+Add keyed `[sidecar.credentials.<label>]` tables to `firma.toml`:
 
 ```toml
-[[sidecar.credentials]]
-host           = "api.openai.com"
+[sidecar.credentials.openai]
+target_host    = "api.openai.com"
 mode           = "basic"
 header         = "Authorization"
 value_from_env = "OPENAI_API_KEY"
 prefix         = "Bearer "
 
-[[sidecar.credentials]]
-host           = "api.anthropic.com"
+[sidecar.credentials.anthropic]
+target_host    = "api.anthropic.com"
 mode           = "basic"
 header         = "x-api-key"
 value_from_env = "ANTHROPIC_API_KEY"
@@ -47,7 +47,7 @@ value_from_env = "ANTHROPIC_API_KEY"
 
 Field-by-field:
 
-- **`host`** — exact match. Wildcards aren't supported here; if you need cross-subdomain injection, list each host.
+- **`target_host`** — exact match. Wildcards aren't supported here; if you need cross-subdomain injection, list each host.
 - **`mode`** — `"basic"` reads from an env var. `"vault"` covered below.
 - **`header`** — name of the HTTP header to attach.
 - **`value_from_env`** — the name of the environment variable on the Sidecar host that holds the secret. The Sidecar reads it once at startup and keeps it in memory.
@@ -74,52 +74,38 @@ The Sidecar attached `Authorization: Bearer sk-...` after Stage 2 allowed the ca
 
 ## Step 3: Configure with `vault` mode
 
-For production, env vars on the Sidecar host are still secrets-on-disk that an attacker with shell could read. `vault` mode keeps the secret in HashiCorp Vault and the Sidecar fetches it lazily.
+For production, env vars on the Sidecar host are still secrets-on-disk that an attacker with shell could read. `vault` mode reads the secret from a local file that Vault Agent renders and refreshes.
 
 ```toml
-[[sidecar.credentials]]
-host        = "api.openai.com"
+[sidecar.credentials.openai]
+target_host = "api.openai.com"
 mode        = "vault"
 header      = "Authorization"
 prefix      = "Bearer "
-secret_path = "secret/data/openai/api-key"
-secret_key  = "value"
+secret_path = "/run/secrets/openai-api-key"
 ```
 
-Plus a `[sidecar.credentials.vault]` block for connection details:
+Configure Vault Agent separately to render the secret value into `/run/secrets/openai-api-key` with permissions readable only by the Sidecar process.
 
-```toml
-[sidecar.credentials.vault]
-addr     = "https://vault.internal:8200"
-token    = "<vault-token>"   # or AppRole auth via separate config
-namespace = "agents"          # optional, for Vault Enterprise
-```
-
-The Sidecar reads `secret/data/openai/api-key` and uses the value of the `value` field. If Vault is unreachable when a request comes in, the connector returns `CredentialUnavailable` and the call denies — fail-closed by design.
+The Sidecar reads the file per call. If the file is missing or unreadable when a request comes in, the connector returns `CredentialInjectionFailed` and the call denies — fail-closed by design.
 
 For the development workflow, `basic` is simpler. For production, `vault` is the answer. Don't mix them in a single deployment unless you have a clear reason.
 
-## Step 4: Verify injection in the audit log
+## Step 4: Verify injection
 
-The audit event records *that* injection happened, but **not the value**:
+The audit event records the allowed dispatch, but not whether a credential was injected and never the credential value:
 
 ```json
 {
-  "envelope": {
-    "intent": {
-      "action_class": "model.inference.chat",
-      "resource": { "host": "api.openai.com", "path": "/v1/chat/completions" }
-    }
-  },
-  "decision": { "outcome": "ALLOW" },
-  "connector": {
-    "credential_injected": true,
-    "credential_source": "basic"
-  }
+  "action": "communication.external.send",
+  "resource": "api.openai.com/v1/chat/completions",
+  "decision": 1,
+  "deny_reason": "",
+  "dispatch_status": 200
 }
 ```
 
-If `credential_injected` is `false` for a host you expected injection on, you have a misconfiguration — usually `host` exact-match mismatch (the request hit `oai.openai.com` and your config has `api.openai.com`).
+If the upstream returns `401` for a host you expected injection on, you have a misconfiguration — usually `target_host` exact-match mismatch (the request hit `oai.openai.com` and your config has `api.openai.com`) or a missing secret source.
 
 ## Where injection sits in the pipeline
 
@@ -149,20 +135,20 @@ If you genuinely need different credentials per *call* (e.g. multi-tenant agent 
 
 **MITM is off for the host.** The Sidecar can't modify a request it never decrypted. Add the host to `intercept_hosts` (see [Enable HTTPS MITM](../https-mitm/)).
 
-**Vault token expired.** The Sidecar reports `CredentialUnavailable` for that host until you refresh the token. In production, configure AppRole auto-rotation rather than long-lived tokens.
+**Vault Agent stopped refreshing the file.** The Sidecar reports `CredentialInjectionFailed` for that host until the rendered file is present and readable again.
 
-**Agent gets a `401` from upstream.** The injected key is wrong, expired, or for the wrong account. The audit log shows `credential_injected: true` — the Sidecar attached *something*, but the upstream rejected it. Check the env var or Vault path.
+**Agent gets a `401` from upstream.** The injected key is wrong, expired, or for the wrong account. Check the env var or rendered Vault Agent file.
 
 ## Operational checklist
 
 For a production deployment:
 
-- [ ] Every host that requires a credential has a `[[sidecar.credentials]]` block.
+- [ ] Every host that requires a credential has a `[sidecar.credentials.<label>]` table.
 - [ ] No production host uses `mode = "basic"`. Vault for everything sensitive.
 - [ ] The Sidecar process has *only* the env vars it needs — no inherited shell env.
 - [ ] The Sidecar host has filesystem permissions tight enough that a shell on it can't read the credentials cache.
 - [ ] Rotation strategy: how do you change the upstream key, and how does the Sidecar pick up the new one?
-- [ ] Audit log review: are `credential_injected` events what you expect for each host?
+- [ ] Audit log review: do allowed calls to credentialed hosts return the expected upstream status?
 
 ## What's next
 

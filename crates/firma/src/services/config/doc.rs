@@ -19,6 +19,13 @@
 //!   actions, extra-host rules) are fully replaced because they reflect
 //!   the *current* selection — keeping stale entries would silently widen
 //!   the policy surface.
+//! - **`strict_hosts`** is the exception: it is *merged*, not replaced.
+//!   Newly intercepted hosts are appended, but existing operator-edited
+//!   entries are preserved. It is decoupled from `intercept_hosts` so an
+//!   operator can add a single strict host by hand without re-listing the
+//!   whole set, and a re-run of `firma config` will not wipe that edit.
+//!   Keeping a strict entry only *narrows* the egress surface (fail-closed),
+//!   so preserving it is safe.
 
 use std::path::Path;
 
@@ -34,6 +41,7 @@ pub struct DocInputs<'a> {
     pub mode: &'a Mode,
     pub keep_local_authority: bool,
     pub name: &'a str,
+    pub profile: &'a str,
     pub authority_listen: &'a str,
     pub authority_url: &'a str,
     pub authority_ca_cert: &'a str,
@@ -83,18 +91,6 @@ pub fn render_firma_toml(text: &str, inputs: &DocInputs<'_>) -> Result<String> {
     Ok(doc.to_string())
 }
 
-/// Parse `text` as a `firma-run.toml` document, merge `inputs`, and
-/// return the serialized result.
-///
-/// # Errors
-///
-/// Returns the parse error if `text` is not valid TOML.
-pub fn render_firma_run_toml(text: &str, inputs: &DocInputs<'_>) -> Result<String> {
-    let mut doc = parse_or_empty(text)?;
-    merge_firma_run_toml(&mut doc, inputs)?;
-    Ok(doc.to_string())
-}
-
 /// Parse `text` as a `mapping-rules.toml` document, merge `inputs`, and
 /// return the serialized result.
 ///
@@ -141,6 +137,10 @@ fn merge_firma_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()>
     } else {
         doc.as_table_mut().remove("sidecar");
     }
+    ensure_run_profiles_section(doc, inputs)?;
+    // [run].profile is user-driven → always overwrite on re-run.
+    let run = ensure_table(doc.as_table_mut(), "run")?;
+    set_str(run, "profile", inputs.profile);
     Ok(())
 }
 
@@ -169,8 +169,23 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
         set_str_if_absent(interceptor, "mode", "http_proxy");
         set_str_if_absent(interceptor, "listen_addr", "127.0.0.1:8080");
         let https = ensure_table(interceptor, "https_mitm")?;
-        set_string_array(https, "intercept_hosts", inputs.mitm_hosts);
-        set_string_array(https, "strict_hosts", inputs.mitm_hosts);
+        if inputs.mitm_hosts.is_empty() {
+            // No MITM mappings selected: disable MITM and clear any stale host
+            // lists from a previous run. Writing empty arrays would leave
+            // `enabled = true` (the sidecar default) with no hosts — invalid.
+            https.insert("enabled", value(false));
+            https.remove("intercept_hosts");
+            https.remove("strict_hosts");
+        } else {
+            https.insert("enabled", value(true));
+            // intercept_hosts reflects the current selection → full replace.
+            set_string_array(https, "intercept_hosts", inputs.mitm_hosts);
+            // strict_hosts is decoupled: merge (not replace) so operator
+            // hand-added hosts survive while newly intercepted hosts are still
+            // seeded. Adding a single strict host never requires re-listing the
+            // whole set. See the module-level field-policy note.
+            merge_string_array(https, "strict_hosts", inputs.mitm_hosts);
+        }
     }
 
     {
@@ -239,7 +254,6 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
     {
         let pre = ensure_table(sidecar, "preflight")?;
         set_str(pre, "agent_id", inputs.name);
-        set_str_if_absent(pre, "session_id", "preflight-session");
         set_string_array(
             pre,
             "requested_actions",
@@ -251,7 +265,7 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
     Ok(())
 }
 
-// ── firma-run.toml ────────────────────────────────────────────────────────────
+// ── [run] section ─────────────────────────────────────────────────────────────
 
 fn default_run_backend() -> &'static str {
     #[cfg(target_os = "macos")]
@@ -284,55 +298,23 @@ fn backend_for_linux(wsl: firma_run::backend::platform::WslKind) -> &'static str
     if wsl.is_wsl() { "wsl2" } else { "bwrap" }
 }
 
-fn merge_firma_run_toml(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
-    // `[authority]` presence signals "autostart a local Mini Authority".
-    // We always emit it on this command path (firma config currently
-    // ships an agent that wraps a local mini-authority via firma run);
-    // ephemeral port is picked by the supervisor at runtime.
-    {
-        let auth = ensure_table(doc.as_table_mut(), "authority")?;
-        set_str_if_absent(auth, "listen_addr", "[::1]:0");
-    }
+fn ensure_run_profiles_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
+    let run = ensure_table(doc.as_table_mut(), "run")?;
+    let profiles = ensure_table(run, "profiles")?;
+    let generic = ensure_table(profiles, "generic")?;
+    set_str_if_absent(generic, "backend", default_run_backend());
 
-    {
-        let audit = ensure_table(doc.as_table_mut(), "audit")?;
-        set_str_if_absent(audit, "sink", "file");
-        set_str(audit, "file_path", inputs.audit_file);
-        set_str(audit, "signing_key_path", inputs.audit_key);
-    }
+    let env_set = ensure_table(generic, "env_set")?;
+    set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_ROOTFS_MODE", "readonly");
+    set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_RUNTIME_HOME", "false");
+    set_str_if_absent(
+        env_set,
+        "FIRMA_RUN_BWRAP_MASK_HOME_PATHS",
+        ".ssh,.gnupg,.aws,.config/gcloud,.env",
+    );
 
-    {
-        let mapping = ensure_table(doc.as_table_mut(), "mapping")?;
-        set_str_if_absent(mapping, "rules_path", "mapping-rules.toml");
-        set_str_array(mapping, "rules_paths", inputs.mapping_paths);
-        set_bool_if_absent(mapping, "default_protected", true);
-    }
-
-    {
-        let pre = ensure_table(doc.as_table_mut(), "preflight")?;
-        set_str_if_absent(pre, "agent_id", inputs.name);
-        set_str_array(pre, "requested_actions", inputs.requested_actions);
-        set_str_if_absent(pre, "resource_scope", "*");
-        set_int_if_absent(pre, "ttl_seconds", 900);
-    }
-
-    {
-        let profiles = ensure_table(doc.as_table_mut(), "profiles")?;
-        let generic = ensure_table(profiles, "generic")?;
-        set_str_if_absent(generic, "backend", default_run_backend());
-
-        let env_set = ensure_table(generic, "env_set")?;
-        set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_ROOTFS_MODE", "readonly");
-        set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_RUNTIME_HOME", "false");
-        set_str_if_absent(
-            env_set,
-            "FIRMA_RUN_BWRAP_MASK_HOME_PATHS",
-            ".ssh,.gnupg,.aws,.config/gcloud,.env",
-        );
-
-        let mounts = ensure_array_of_tables(generic, "mounts")?;
-        replace_workspace_mount(mounts, inputs.workspace);
-    }
+    let mounts = ensure_array_of_tables(generic, "mounts")?;
+    replace_workspace_mount(mounts, inputs.workspace);
     Ok(())
 }
 
@@ -521,6 +503,28 @@ fn set_string_array(table: &mut Table, key: &str, items: &[&str]) {
     table.insert(key, value(arr));
 }
 
+/// Merge `items` into an existing string array, preserving existing entries
+/// and their order and appending only the items not already present. Used for
+/// `strict_hosts`, which narrows the egress surface: keeping the operator's
+/// hand-added hosts while still seeding any newly intercepted ones is safe
+/// (fail-closed) and lets an operator add one host without re-listing the set.
+fn merge_string_array(table: &mut Table, key: &str, items: &[&str]) {
+    let mut arr = table
+        .get(key)
+        .and_then(Item::as_array)
+        .map_or_else(Array::new, Clone::clone);
+    let present: Vec<String> = arr
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect();
+    for item in items {
+        if !present.iter().any(|p| p == item) {
+            arr.push(Value::from(*item));
+        }
+    }
+    table.insert(key, value(arr));
+}
+
 fn set_str_array(table: &mut Table, key: &str, items: &[String]) {
     let mut arr = Array::new();
     for item in items {
@@ -543,8 +547,9 @@ mod tests {
             mode,
             keep_local_authority: false,
             name: "test-agent",
-            authority_listen: "127.0.0.1:9443",
-            authority_url: "https://127.0.0.1:9443",
+            profile: "generic",
+            authority_listen: "127.0.0.1:50051",
+            authority_url: "http://127.0.0.1:50051",
             authority_ca_cert: "/state/tls/authority-ca.crt",
             authority_pub_key: "/state/authority.pub",
             revocation_file: "/state/revocations.txt",
@@ -591,7 +596,7 @@ mod tests {
         assert!(parsed.get("sidecar").is_some(), "got: {out}");
         assert_eq!(
             parsed["authority"]["listen_addr"].as_str(),
-            Some("127.0.0.1:9443")
+            Some("127.0.0.1:50051")
         );
         assert_eq!(
             parsed["sidecar"]["interceptor"]["mode"].as_str(),
@@ -620,7 +625,7 @@ mod tests {
         let auth = &parsed["sidecar"]["authority"];
         assert_eq!(
             auth.get("url").and_then(|v| v.as_str()),
-            Some("https://127.0.0.1:9443")
+            Some("http://127.0.0.1:50051")
         );
         assert_eq!(
             auth.get("ca_cert_path").and_then(|v| v.as_str()),
@@ -646,7 +651,7 @@ public_key_path = \"/old/pub.key\"
         let auth = &parsed["sidecar"]["authority"];
         assert_eq!(
             auth.get("url").and_then(|v| v.as_str()),
-            Some("https://127.0.0.1:9443")
+            Some("http://127.0.0.1:50051")
         );
         assert_eq!(
             auth.get("ca_cert_path").and_then(|v| v.as_str()),
@@ -667,7 +672,7 @@ public_key_path = \"/old/pub.key\"
         assert!(parsed.get("sidecar").is_some());
         assert_eq!(
             parsed["sidecar"]["authority"]["url"].as_str(),
-            Some("https://127.0.0.1:9443")
+            Some("http://127.0.0.1:50051")
         );
     }
 
@@ -708,7 +713,7 @@ custom_user_key = \"keep-me\"
         // User-driven key still updated.
         assert_eq!(
             parsed["authority"]["listen_addr"].as_str(),
-            Some("127.0.0.1:9443")
+            Some("127.0.0.1:50051")
         );
     }
 
@@ -751,6 +756,16 @@ rules_paths = [\"mappings/stale.toml\"]
             .collect();
         assert_eq!(mitm_out, vec!["api.github.com"]);
 
+        // strict_hosts is decoupled from intercept_hosts: existing operator
+        // entries are preserved and the newly intercepted host is merged in.
+        let strict_out: Vec<&str> = parsed["sidecar"]["interceptor"]["https_mitm"]["strict_hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(strict_out, vec!["old.example.com", "api.github.com"]);
+
         let paths_out: Vec<&str> = parsed["sidecar"]["mapping"]["rules_paths"]
             .as_array()
             .unwrap()
@@ -761,29 +776,135 @@ rules_paths = [\"mappings/stale.toml\"]
     }
 
     #[test]
-    fn firma_run_workspace_mount_replaced_on_merge() {
+    fn mitm_disabled_when_hosts_cleared_on_merge() {
+        // Existing config had MITM hosts; re-run with no MITM mappings should
+        // set enabled = false and remove stale host lists.
+        let mut inputs = dummy_inputs(&Mode::AgentLocal);
+        inputs.mitm_hosts = &[];
+        let existing = "\
+[sidecar.interceptor.https_mitm]
+enabled = true
+intercept_hosts = [\"api.github.com\"]
+strict_hosts = [\"api.github.com\"]
+";
+        let out = render_firma_toml(existing, &inputs).unwrap();
+        let parsed: toml::Value = toml::from_str(&out).unwrap();
+        let https_mitm = &parsed["sidecar"]["interceptor"]["https_mitm"];
+        assert_eq!(https_mitm["enabled"].as_bool(), Some(false));
+        assert!(https_mitm.get("intercept_hosts").is_none());
+        assert!(https_mitm.get("strict_hosts").is_none());
+    }
+
+    #[test]
+    fn mitm_enabled_when_hosts_added_on_merge() {
+        // Existing config had MITM disabled; re-run with hosts should
+        // set enabled = true and write host lists.
+        let mut inputs = dummy_inputs(&Mode::AgentLocal);
+        let mitm = ["api.github.com"];
+        inputs.mitm_hosts = &mitm;
+        let existing = "\
+[sidecar.interceptor.https_mitm]
+enabled = false
+";
+        let out = render_firma_toml(existing, &inputs).unwrap();
+        let parsed: toml::Value = toml::from_str(&out).unwrap();
+        let https_mitm = &parsed["sidecar"]["interceptor"]["https_mitm"];
+        assert_eq!(https_mitm["enabled"].as_bool(), Some(true));
+        let hosts: Vec<&str> = https_mitm["intercept_hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(hosts, vec!["api.github.com"]);
+    }
+
+    #[test]
+    fn strict_hosts_seeded_to_intercept_on_initial_render() {
+        let mut inputs = dummy_inputs(&Mode::AgentLocal);
+        let mitm = ["api.github.com", "gmail.googleapis.com"];
+        inputs.mitm_hosts = &mitm;
+        let out = render_firma_toml("", &inputs).unwrap();
+        let parsed: toml::Value = toml::from_str(&out).unwrap();
+        let strict: Vec<&str> = parsed["sidecar"]["interceptor"]["https_mitm"]["strict_hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        // Seeded fail-closed: defaults to the intercepted hosts.
+        assert_eq!(strict, vec!["api.github.com", "gmail.googleapis.com"]);
+    }
+
+    #[test]
+    fn hand_added_strict_host_survives_rerun() {
+        // Operator added a strict host by hand (api.anthropic.com) that is not
+        // in the current intercept selection. A re-run must preserve it and
+        // merge in the newly intercepted hosts — no entry dropped.
+        let mut inputs = dummy_inputs(&Mode::AgentLocal);
+        let mitm = ["api.github.com", "gmail.googleapis.com"];
+        inputs.mitm_hosts = &mitm;
+        let existing = "\
+[sidecar.interceptor.https_mitm]
+enabled = true
+intercept_hosts = [\"api.github.com\"]
+strict_hosts = [\"api.github.com\", \"api.anthropic.com\"]
+";
+        let out = render_firma_toml(existing, &inputs).unwrap();
+        let parsed: toml::Value = toml::from_str(&out).unwrap();
+        let https_mitm = &parsed["sidecar"]["interceptor"]["https_mitm"];
+        // intercept_hosts reflects the new (wider) selection — full replace.
+        let intercept: Vec<&str> = https_mitm["intercept_hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(intercept, vec!["api.github.com", "gmail.googleapis.com"]);
+        // strict_hosts merged: existing (incl. hand-added) kept in order,
+        // newly intercepted gmail appended, github not duplicated.
+        let strict: Vec<&str> = https_mitm["strict_hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(
+            strict,
+            vec![
+                "api.github.com",
+                "api.anthropic.com",
+                "gmail.googleapis.com"
+            ]
+        );
+    }
+
+    #[test]
+    fn run_profiles_workspace_mount_replaced_on_merge() {
         let mut inputs = dummy_inputs(&Mode::AgentLocal);
         inputs.workspace = "/new/ws";
         let existing = "\
 [authority]
 listen_addr = \"[::1]:0\"
 
-[profiles.generic]
+[run.profiles.generic]
 backend = \"bwrap\"
 
-[[profiles.generic.mounts]]
+[[run.profiles.generic.mounts]]
 source = \"/old/ws\"
 target = \"/old/ws\"
 read_only = false
 
-[[profiles.generic.mounts]]
+[[run.profiles.generic.mounts]]
 source = \"/some/read-only/lib\"
 target = \"/some/read-only/lib\"
 read_only = true
 ";
-        let out = render_firma_run_toml(existing, &inputs).unwrap();
+        let out = render_firma_toml(existing, &inputs).unwrap();
         let parsed: toml::Value = toml::from_str(&out).unwrap();
-        let mounts = parsed["profiles"]["generic"]["mounts"].as_array().unwrap();
+        let mounts = parsed["run"]["profiles"]["generic"]["mounts"]
+            .as_array()
+            .unwrap();
         let sources: Vec<&str> = mounts
             .iter()
             .map(|m| m["source"].as_str().unwrap_or_default())

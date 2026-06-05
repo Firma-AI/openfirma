@@ -26,17 +26,17 @@ the sandbox or prints curl smoke-test commands.
 |-------|-----------|------------------------|
 | 1 — Network (host / IP allowlist) | mapping rules + Cedar | covered |
 | 2 — Command / syscall | seccomp-unotify / ESF | deferred (FIR-79) |
-| 3 — Filesystem | firma-run sandbox (bwrap) | covered via `firma-run.toml` |
+| 3 — Filesystem | firma-run sandbox (bwrap) | covered via `[run.profiles.generic]` in `firma.toml` |
 | 4 — Semantic (HTTP action classes) | Cedar policy bundle | covered |
 
 Layer 3 and Layer 2 are enforced outside the sidecar. The Cedar policy
 in `policies/llm-agent.cedar` does not duplicate filesystem path or
 syscall rules — those belong to firma-run / bwrap / seccomp.
 
-## Layer 3 — Filesystem sandbox (`firma-run.toml`)
+## Layer 3 — Filesystem sandbox (`[run.profiles.generic]` in `firma.toml`)
 
-Linux-only. Backend: `bwrap`. Configured by
-`examples/generic-agent/firma-run.toml`.
+Linux-only. Backend: `bwrap`. Configured under `[run.profiles.generic]` in
+`examples/generic-agent/firma.toml`.
 
 | Access | Paths |
 |--------|-------|
@@ -70,12 +70,12 @@ Two options:
    ```bash
    cd /path/to/my-project
    firma run --profile generic \
-     --config /path/to/openfirma/examples/generic-agent/firma-run.toml \
+     --config /path/to/openfirma/examples/generic-agent/firma.toml \
      -- <command>
    ```
 
 2. **Pin an explicit absolute path** by uncommenting the
-   `[[profiles.generic.mounts]]` block in `firma-run.toml` and editing
+   `[[run.profiles.generic.mounts]]` block in `firma.toml` and editing
    both `source` and `target`. Adding any mount entry replaces the cwd
    default, so list every path the agent needs RW access to.
 
@@ -104,11 +104,10 @@ Exits 0 on PASS, non-zero on FAIL. Linux-only; requires `bwrap` and
 
 | File | Purpose |
 |------|---------|
-| `firma.toml` | unified config — `[authority]` points to `policies/` and `issuance-policies/`; `[sidecar.*]` is the HTTP proxy on `:7474`, MITM for github / gmail / pypi, `default_protected = true` |
+| `firma.toml` | unified config — `[authority]`, `[sidecar.*]`, and `[run.profiles.*]` (Layer 3 bwrap profile) |
 | `policies/llm-agent.cedar` | enforcement policy bundle streamed to the sidecar |
 | `issuance-policies/issuance.cedar` | gates capability token issuance at the Authority |
 | `mapping-rules.toml` | supplemental host/method/path → action class rules (CONNECT tunnels, package managers, localhost) |
-| `firma-run.toml` | Layer 3 firma-run profile config (bwrap mounts + sensitive-path masks) |
 | `verify-layer3.sh` | filesystem sandbox acceptance test (workspace RW vs `~/.ssh` denied) |
 | `run.sh` | startup script + curl smoke tests |
 
