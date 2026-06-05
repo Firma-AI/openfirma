@@ -35,7 +35,7 @@ A single line of the JSONL log decodes to something like:
   "action": "communication.external.send",
   "resource": "paste.rs/",
   "decision": 2,
-  "deny_reason": "PolicyDenied",
+  "deny_reason": "policy denied: policy denied action 'communication.external.send' on resource 'paste.rs/'",
   "enforcement_latency_us": 420,
   "context_hash": "sha256:abc123",
   "bundle_version": "local",
@@ -53,7 +53,7 @@ Field-by-field:
 - **`event_id`** — UUIDv7 per event. Sortable by time, unique even across restarts.
 - **`session_id`, `token_id`, `agent_id`** — the session, capability token, and agent identity evaluated by the pipeline.
 - **`action`, `resource`** — the normalized action class and opaque resource UID (`host + path`, for example `paste.rs/`).
-- **`decision`** — numeric outcome (`1` = ALLOW, `2` = DENY). For DENYs, `deny_reason` names the fail-closed reason.
+- **`decision`** — numeric outcome (`1` = ALLOW, `2` = DENY). For DENYs, `deny_reason` is a lowercase string (often `"{reason}: {detail}"`, e.g. `"policy denied: …"`). The troubleshooting headings below use PascalCase labels for readability.
 - **`dispatch_status`, `dispatch_latency_us`, `response_size`** — connector result fields. They are zero when the call never dispatched.
 - **`sandbox_id`** — set for `firma run` sidecars; empty for externally started Sidecars.
 - **`signature`** — DER-encoded ECDSA P-256 signature as a JSON byte array.

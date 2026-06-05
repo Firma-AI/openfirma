@@ -7,7 +7,7 @@ A capability proves an agent is *authorized* to make a call. A **credential** is
 
 This is one of the highest-value reasons to deploy a Sidecar at all: a compromised agent that never touches the credential cannot exfiltrate it.
 
-You should already have a Sidecar running with HTTPS MITM enabled for the relevant hosts ([Enable HTTPS MITM](../https-mitm/)). MITM is required because credential injection happens at L7 — the Sidecar must be able to decrypt and modify the request.
+You should already have a Sidecar running with HTTPS MITM enabled for the relevant hosts ([Enable HTTPS MITM](../https-mitm/)). MITM is required because credential injection happens at L7 — the Sidecar must be able to decrypt and modify the request. `firma config --mapping anthropic` (or `openai`) scaffolds CONNECT mappings with **empty** `intercept_hosts` by default — add `api.anthropic.com` / `api.openai.com` to `[sidecar.interceptor.https_mitm].intercept_hosts` before expecting injection to work.
 
 ## Step 1: Decide what you're injecting and where
 

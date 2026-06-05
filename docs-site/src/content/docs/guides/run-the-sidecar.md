@@ -98,21 +98,39 @@ forbid (
 );
 ```
 
-Cedar requires a schema. Copy the demo's schema (it declares all the action classes) into the same directory:
+The Sidecar evaluates Cedar policies streamed from a running Authority — not
+from `[sidecar.policy].dir` alone. That directory is hashed for startup logs;
+runtime enforcement comes from the Authority bundle stream. Offline validation
+uses the embedded schema via [`firma policy validate`](../test-policies-offline/).
+
+## Step 5: Generate Authority material and write `firma.toml`
+
+Generate the Authority signing key and a permissive issuance policy for this
+dev stack:
 
 ```bash
-cp $(pwd)/../../path/to/openfirma/examples/demo/policies/schema.cedarschema \
-   /tmp/firma-standalone/config/policies/
+firma authority generate-key -o /tmp/firma-standalone/authority.key
+mkdir -p /tmp/firma-standalone/config/issuance
+cat > /tmp/firma-standalone/config/issuance/issuance.cedar <<'EOF'
+permit (principal, action, resource);
+EOF
+touch /tmp/firma-standalone/revocations.txt
 ```
 
-(Adjust the path to your openfirma checkout. The schema is at `examples/demo/policies/schema.cedarschema`.)
-
-## Step 5: Write the sidecar config
-
-Create `/tmp/firma-standalone/config/firma.toml`. Every subcommand reads
-one shared, sectioned `firma.toml`; the Sidecar reads `[sidecar.*]`:
+Create `/tmp/firma-standalone/config/firma.toml`. Every subcommand reads one
+shared, sectioned `firma.toml`:
 
 ```toml
+[authority]
+listen_addr         = "[::1]:50051"
+policy_dir          = "/tmp/firma-standalone/config/policies"
+issuance_policy_dir = "/tmp/firma-standalone/config/issuance"
+revocation_file     = "/tmp/firma-standalone/revocations.txt"
+key_file            = "/tmp/firma-standalone/authority.key"
+max_ttl_seconds     = 3600
+bundle_ttl_seconds  = 30
+log_level           = "info"
+
 [sidecar.interceptor]
 mode               = "http_proxy"
 listen_addr        = "127.0.0.1:8080"
@@ -124,6 +142,16 @@ default_protected = false
 
 [sidecar.policy]
 dir = "/tmp/firma-standalone/config/policies"
+
+[sidecar.authority]
+url             = "http://[::1]:50051"
+public_key_path = "/tmp/firma-standalone/authority.pub"
+
+[sidecar.preflight]
+agent_id          = "standalone-demo"
+session_id        = "standalone-session"
+requested_actions = ["communication.external.send"]
+resource_scope    = "*"
 
 [sidecar.constraint_enforcement]
 bundle_ttl_seconds     = 3600
@@ -138,38 +166,50 @@ signing_key_path = "/tmp/firma-standalone/audit.key"
 level = "info"
 ```
 
-A few notes on what's *not* here:
+Notes:
 
-- No `[sidecar.authority].url`. With no Authority configured, the Sidecar runs in **policy-only** mode — Stage 1 (capability validation) is effectively bypassed for unmapped/protected actions. We use `default_protected = false` so unmapped traffic passes through, and we will only see Stage 2 decisions for the mapped routes. This is fine for first-touch experimentation; production workloads should run with an Authority and `default_protected = true`.
-- No `[sidecar.ca]` section. We're not using HTTPS MITM. CONNECT-style HTTPS will pass through but we won't see L7 details for it. See [Enable HTTPS MITM](../https-mitm/) when you're ready.
-- If you later set `[sidecar.authority].url = "http://..."`, note that plain HTTP is only accepted by default for loopback Authority hosts (`localhost`/`127.0.0.1`/`::1`). Non-loopback plaintext requires explicit opt-in with `[sidecar.authority].allow_insecure_remote_authority = true`.
-- `bundle_ttl_seconds = 3600` is generous; without an Authority pushing fresh bundles, you don't want the bundle to go stale.
+- **`[sidecar.authority].url` is required** for Stage 2 on mapped routes.
+  Without it the Sidecar keeps a deny-all stale evaluator and every protected
+  call becomes `policy bundle stale`.
+- **`[sidecar.preflight]`** asks the Authority for a dev capability at Sidecar
+  startup so Stage 1 passes without hand-minting a seed file. See
+  [Issue capability tokens](../issue-capability-tokens/) for the long-lived
+  seed workflow.
+- **`default_protected = false`** keeps unmapped destinations as passthrough
+  while you experiment. Production stacks should use `true`.
+- No `[sidecar.ca]` section — these demo curls use plain HTTP. See
+  [Enable HTTPS MITM](../https-mitm/) when you need L7 visibility on TLS.
 
-## Step 6: Start the Sidecar
+## Step 6: Start the Authority, then the Sidecar
+
+Two terminals.
+
+**Terminal 1 — Authority:**
+
+```bash
+firma authority -c /tmp/firma-standalone/config/firma.toml
+```
+
+**Terminal 2 — Sidecar:**
 
 ```bash
 firma sidecar -c /tmp/firma-standalone/config/firma.toml
 ```
 
-Expected output (lightly trimmed):
+Expected Sidecar output (lightly trimmed):
 
 ```text
-INFO firma_sidecar::startup: loading mapping rules
-INFO firma_sidecar::startup: loaded 2 mapping rules
-INFO firma_sidecar::startup: loading policy bundle from /tmp/.../policies
-INFO firma_sidecar::startup: bundle compiled (1 file, 2 policies)
-INFO firma_sidecar::interceptor::http: listening on 127.0.0.1:8080
-INFO firma_sidecar::audit: file sink ready /tmp/.../logs/audit.jsonl
-INFO firma_sidecar: sidecar ready
+INFO config loaded path="/tmp/firma-standalone/config/firma.toml"
+INFO mapping table loaded rules=2
+INFO policy bundle loaded version="…" policies=1
+INFO authority stream connected endpoint="http://[::1]:50051"
+INFO connector registry built hosts=0 default_timeout_ms=…
+INFO interceptor listening addr="127.0.0.1:8080"
+INFO ready
 ```
 
-The `sidecar ready` line is your signal that the Sidecar accepted the config and is enforcing.
-
-When `[sidecar.authority].url` is set, `ready` is held back until both the
-policy-bundle and revocation streams have hydrated — so the line also means
-policy is in place and the first request through the proxy can't race ahead of
-it. With no Authority configured, the streams are pre-seeded ready and the line
-fires immediately.
+The `ready` line is held until the Authority policy and revocation streams
+hydrate — so the first proxied request cannot race ahead of enforcement.
 
 ## Step 7: Send traffic through it
 
@@ -196,7 +236,8 @@ You'll see two records (one per curl), each with:
 - `decision`: `1` for ALLOW or `2` for DENY.
 - `action`: `"communication.external.send"` for both.
 - `resource`: the normalized host+path, such as `"wttr.in/london"` or `"paste.rs/"`.
-- `deny_reason`: empty for ALLOW, `"PolicyDenied"` for the forbidden paste.
+- `deny_reason`: empty for ALLOW; for the forbidden paste, a string like
+  `"policy denied: policy denied action 'communication.external.send' on resource 'paste.rs/'"`.
 - `signature`: DER bytes that you can verify with the public side of `audit.key`.
 
 For verifying the signature, see [Read & verify the audit log](../audit-log/).
@@ -205,7 +246,9 @@ For verifying the signature, see [Read & verify the audit log](../audit-log/).
 
 **HTTPS calls show up as method `CONNECT`.** Without MITM, the only thing the Sidecar sees about HTTPS is the CONNECT line. The path is `/` and the action class will be whatever your rule maps `CONNECT host:443` to — probably nothing. To enforce on the inner HTTP details, set up MITM ([guide](../https-mitm/)).
 
-**`PolicyBundleStale` denies after ~an hour.** Without an Authority, the bundle is loaded once at startup and never refreshed; once `bundle_ttl_seconds` elapses, every Stage 2 evaluation denies. Either bump the TTL very high for development, or run a local Authority that pushes refreshes.
+**`policy bundle stale` denies.** This appears when `[sidecar.authority].url` is
+unset, the Authority is down, or the bundle stream has not hydrated before the
+first request. Start the Authority first and wait for `ready` on the Sidecar.
 
 **`UnclassifiedIntent` for unfamiliar destinations.** With `default_protected = true`, anything you didn't map denies. That's the right shape in production; for development, leave `default_protected = false` until you've enumerated the rules you actually want.
 

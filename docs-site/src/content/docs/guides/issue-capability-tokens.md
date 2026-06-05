@@ -175,6 +175,7 @@ Edit the `[sidecar.*]` tables in `firma.toml` to add:
 
 ```toml
 [sidecar.authority]
+url             = "http://[::1]:50051"
 public_key_path = "/tmp/firma-standalone/firma-authority.pub"
 
 [sidecar.capability_seed]
@@ -204,7 +205,7 @@ curl --proxy http://127.0.0.1:8080 \
   -d '{"model":"gpt-4","messages":[]}'
 ```
 
-The audit event for this call will include a `capability` block:
+The audit event for this call will include the capability identity at the top level:
 
 ```json
 {
@@ -218,7 +219,7 @@ The audit event for this call will include a `capability` block:
 }
 ```
 
-If you delete the capability seed file and restart, the same call returns a 403 with `deny_reason = "TokenInvalid"`. That's Stage 1 doing its job.
+If you delete the capability seed file and restart, the same call returns a 403 with `deny_reason` containing `"token invalid"`. That's Stage 1 doing its job.
 
 ## Revocation
 

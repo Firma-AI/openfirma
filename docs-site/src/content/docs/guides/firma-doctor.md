@@ -16,6 +16,15 @@ safe to run against a live stack at any time.
 - **In CI** — gate on exit code 0 to catch configuration drift before tests run.
 - **Any time `firma sidecar status` looks wrong** — doctor tells you *why*.
 
+:::caution[v0.1.0 and earlier]
+OpenFirma **v0.1.0** shipped doctor and monitor behavior that did not match
+what `firma run` actually does: misleading sandbox backend verdicts, false
+`FAIL` on missing long-lived daemons in `firma run`-only workflows, empty
+`firma monitor` output after real decisions, and one-shot reads that skipped
+existing audit records. Upgrade to **v0.1.1** or later before trusting
+doctor/monitor for troubleshooting.
+:::
+
 ## Quickstart
 
 ```bash
@@ -30,7 +39,7 @@ firma doctor --timeout-ms 1500                 # slower network probe (ms)
 
 | Flag           | Env               | Default    | Description                                                    |
 | -------------- | ----------------- | ---------- | -------------------------------------------------------------- |
-| `--config`     | `FIRMA_STACK_CONFIG` | discovered | Unified `firma.toml`. Otherwise auto-discovered.             |
+| `--config`     | `FIRMA_STACK_CONFIG` | discovered | Unified `firma.toml`. When unset, auto-discovery uses `$FIRMA_CONFIG` or walk-up to `<dir>/.firma/firma.toml`. |
 | `--state-dir`  | `FIRMA_STATE_DIR` | resolved   | Override the runtime state directory.                          |
 | `--json`       | —                 | _off_      | Emit a single JSON object instead of pretty text.              |
 | `--timeout-ms` | —                 | `500`      | Per-probe network timeout (TCP / UDS connect) in milliseconds. |
@@ -61,7 +70,7 @@ firma doctor
 [OK]   sandbox firecracker    Firecracker v1.7.0 available
 [OK]   sidecar reachable      2 live per-run instances (firma run)
 [OK]   authority reachable    2 live per-run instances (firma run)
-[OK]   config parsed          ~/.config/firma/firma.toml
+[OK]   config parsed          ./.firma/firma.toml
 [OK]   capability seed        not present (optional; capabilities disabled by default)
 [OK]   state dir              /run/user/1000/firma: mode 0700
 [OK]   data dir               ~/.local/share/firma: not present (created on first use)
