@@ -1,5 +1,36 @@
 use serde::{Deserialize, Serialize};
 
+/// Typed reason code explaining why an already-authorized request was aborted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[cfg_attr(test, derive(strum::EnumIter))]
+pub enum AbortReason {
+    /// Outbound connector exceeded its configured timeout.
+    #[error("connector timeout")]
+    ConnectorTimeout,
+    /// Outbound connector failed before producing a target response.
+    #[error("connector failure")]
+    ConnectorFailure,
+    /// Outbound connector rejected the authorized envelope shape.
+    #[error("connector invalid request")]
+    ConnectorInvalidRequest,
+    /// Sidecar failed to inject credentials after enforcement allowed the call.
+    #[error("credential injection failed")]
+    CredentialInjectionFailed,
+}
+
+impl AbortReason {
+    /// Canonical reason code string used in audit events and agent responses.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::ConnectorTimeout => "CONNECTOR_TIMEOUT",
+            Self::ConnectorFailure => "CONNECTOR_FAILURE",
+            Self::ConnectorInvalidRequest => "CONNECTOR_INVALID_REQUEST",
+            Self::CredentialInjectionFailed => "CREDENTIAL_INJECTION_FAILED",
+        }
+    }
+}
+
 /// Outcome of policy evaluation.
 ///
 /// Every enforcement decision in Firma maps to one of these three variants.
@@ -61,6 +92,10 @@ pub enum DenyReason {
     #[error("enforcement timeout")]
     EnforcementTimeout,
     /// Sidecar failed to inject credentials for Stage 3.
+    ///
+    /// No current producer: credential-injection failure after ALLOW is
+    /// raised as [`AbortReason::CredentialInjectionFailed`] (FIR-46), not a
+    /// DENY. Retained for serialized backward compatibility of this enum.
     #[error("credential injection failed")]
     CredentialInjectionFailed,
     /// Outbound connector timed out.
@@ -71,8 +106,11 @@ pub enum DenyReason {
     #[error("connector network error")]
     ConnectorNetworkError,
     /// Outbound connector could not translate the envelope into a
-    /// well-formed target request. Should be unreachable
-    /// post-enforcement; treated as fail-closed.
+    /// well-formed target request.
+    ///
+    /// No current producer: a connector that fails to build a request after
+    /// ALLOW is raised as [`AbortReason::ConnectorInvalidRequest`] (FIR-46),
+    /// not a DENY. Retained for serialized backward compatibility of this enum.
     #[error("connector invalid request")]
     ConnectorInvalidRequest,
     /// Protected action could not be mapped to any canonical action class.
@@ -111,6 +149,23 @@ mod tests {
             reason: "fatal error".to_string(),
         };
         assert!(matches!(d, Decision::Abort { .. }));
+    }
+
+    #[test]
+    fn test_abort_reason_code_all_variants() {
+        use strum::IntoEnumIterator;
+        // Exhaustive match: a new `AbortReason` variant fails to compile
+        // here until its canonical code is added, so the registry can
+        // never silently drift.
+        for reason in AbortReason::iter() {
+            let expected = match reason {
+                AbortReason::ConnectorTimeout => "CONNECTOR_TIMEOUT",
+                AbortReason::ConnectorFailure => "CONNECTOR_FAILURE",
+                AbortReason::ConnectorInvalidRequest => "CONNECTOR_INVALID_REQUEST",
+                AbortReason::CredentialInjectionFailed => "CREDENTIAL_INJECTION_FAILED",
+            };
+            assert_eq!(reason.code(), expected);
+        }
     }
 
     #[test]
@@ -189,6 +244,12 @@ mod tests {
     fn test_deny_reason_is_display() {
         fn assert_display<T: Display>() {}
         assert_display::<DenyReason>();
+    }
+
+    #[test]
+    fn test_abort_reason_is_display() {
+        fn assert_display<T: Display>() {}
+        assert_display::<AbortReason>();
     }
 
     #[test]

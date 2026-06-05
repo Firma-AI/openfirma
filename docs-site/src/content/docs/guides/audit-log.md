@@ -183,9 +183,21 @@ If you expected a *permit* to fire and a *forbid* fired instead, remember: `forb
 
 The bundle is older than `bundle_ttl_seconds`. Either the Authority is unreachable, or the bundle TTL is too tight. Check the Sidecar's connection log to the Authority and the configured TTL.
 
-### Connector: `ConnectorTimeout`, `ConnectorNetworkError`, or `ConnectorInvalidRequest`
+### ABORT: `CONNECTOR_TIMEOUT`, `CONNECTOR_FAILURE`, `CONNECTOR_INVALID_REQUEST`, or `CREDENTIAL_INJECTION_FAILED`
 
-The connector tried to dispatch and failed. The agent saw a 502-style failure — but from the policy's perspective, the request had already cleared enforcement. This split is intentional; see [Connectors](../../concepts/connectors/).
+The call cleared enforcement, then could not complete. This is not a policy DENY. The Sidecar records `decision = 3`, keeps `dispatch_status = 0` when no upstream response was produced, and sends the agent a gateway-timeout-class response.
+
+For HTTP-facing interceptors the body is:
+
+```json
+{
+  "aborted": true,
+  "reason": "CONNECTOR_FAILURE",
+  "detail": "connection refused"
+}
+```
+
+DENY means the request shape, token, scope, or policy was rejected before execution. ABORT means the request was allowed and then killed or failed locally before completion. The capability token remains active after ABORT. See [Connectors](../../concepts/connectors/) and [Pipeline](../../concepts/pipeline/).
 
 ## Scope: events the audit log does not capture (V0.1)
 

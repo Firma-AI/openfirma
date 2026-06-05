@@ -1,15 +1,18 @@
 //! Enforcement decision types.
 //!
 //! Every `enforce()` call produces exactly one [`EnforcementDecision`]:
-//! ALLOW or DENY. ALLOW carries the verified claims and normalized envelope
+//! ALLOW, DENY, ABORT, or PASSTHROUGH. ALLOW carries the verified claims and normalized envelope
 //! for downstream use (credential injection, connector dispatch, audit).
 //! DENY carries a structured reason, the originating stage, and a detail
 //! message for audit and agent error reporting.
 //!
-//! ABORT is an asynchronous in-flight kill signal emitted by the Authority
-//! via `WatchAborts`, not produced by the enforcement pipeline itself.
+//! ABORT may be produced by the pipeline only for post-ALLOW local failures
+//! such as credential injection. Authority-pushed ABORT remains out of scope
+//! for V1.
 
-use firma_core::{CapabilityClaims, DenyReason, ExecutionEnvelope, InjectedCredentials};
+use firma_core::{
+    AbortReason, CapabilityClaims, DenyReason, ExecutionEnvelope, InjectedCredentials,
+};
 
 use crate::normalizer::NormalizedEnvelope;
 
@@ -106,6 +109,14 @@ pub enum EnforcementDecision {
         /// filterable by `--agent` in `firma monitor` (FIR-208).
         identity: Option<DenyIdentity>,
     },
+    /// Request was authorized, then aborted before completion.
+    Abort {
+        reason: AbortReason,
+        detail: String,
+        /// Verified agent/token attribution. ABORT is only raised after
+        /// capability validation, so this should be present for audit.
+        identity: Option<DenyIdentity>,
+    },
     /// Non-protected traffic. Forward the request without enforcement.
     Passthrough { detail: String },
 }
@@ -116,8 +127,11 @@ impl EnforcementDecision {
     /// and `Passthrough`.
     #[must_use]
     pub fn with_identity(mut self, identity: DenyIdentity) -> Self {
-        if let Self::Deny { identity: slot, .. } = &mut self {
-            *slot = Some(identity);
+        match &mut self {
+            Self::Deny { identity: slot, .. } | Self::Abort { identity: slot, .. } => {
+                *slot = Some(identity);
+            }
+            Self::Allow { .. } | Self::Passthrough { .. } => {}
         }
         self
     }
@@ -133,6 +147,11 @@ impl EnforcementDecision {
     }
 
     #[must_use]
+    pub fn is_abort(&self) -> bool {
+        matches!(self, Self::Abort { .. })
+    }
+
+    #[must_use]
     pub fn is_passthrough(&self) -> bool {
         matches!(self, Self::Passthrough { .. })
     }
@@ -141,7 +160,7 @@ impl EnforcementDecision {
     pub fn deny_reason(&self) -> Option<DenyReason> {
         match self {
             Self::Deny { reason, .. } => Some(*reason),
-            Self::Allow { .. } | Self::Passthrough { .. } => None,
+            Self::Allow { .. } | Self::Abort { .. } | Self::Passthrough { .. } => None,
         }
     }
 
@@ -149,7 +168,7 @@ impl EnforcementDecision {
     pub fn stage(&self) -> Option<EnforcementStage> {
         match self {
             Self::Deny { stage, .. } => Some(*stage),
-            Self::Allow { .. } | Self::Passthrough { .. } => None,
+            Self::Allow { .. } | Self::Abort { .. } | Self::Passthrough { .. } => None,
         }
     }
 }
@@ -179,6 +198,22 @@ mod tests {
                 CapabilityValidationStage::TokenValidation
             ))
         );
+    }
+
+    #[test]
+    fn test_abort_helpers() {
+        let decision = EnforcementDecision::Abort {
+            reason: AbortReason::CredentialInjectionFailed,
+            detail: "connector api.openai.com: vault unavailable".to_string(),
+            identity: None,
+        };
+
+        assert!(decision.is_abort());
+        assert!(!decision.is_allow());
+        assert!(!decision.is_deny());
+        assert!(!decision.is_passthrough());
+        assert_eq!(decision.deny_reason(), None);
+        assert_eq!(decision.stage(), None);
     }
 
     #[test]
@@ -226,6 +261,7 @@ mod tests {
 
         assert!(decision.is_allow());
         assert!(!decision.is_deny());
+        assert!(!decision.is_abort());
         assert!(!decision.is_passthrough());
         assert_eq!(decision.deny_reason(), None);
         assert_eq!(decision.stage(), None);
@@ -240,6 +276,7 @@ mod tests {
         assert!(decision.is_passthrough());
         assert!(!decision.is_allow());
         assert!(!decision.is_deny());
+        assert!(!decision.is_abort());
         assert_eq!(decision.deny_reason(), None);
         assert_eq!(decision.stage(), None);
     }

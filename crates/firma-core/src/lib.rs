@@ -15,7 +15,7 @@ pub use agent::AgentId;
 pub use cedar::{FIRMA_SCHEMA, FirmaEntityUid, validate_policies};
 pub use connector::{Connector, ConnectorError, ConnectorResponse};
 pub use credential::InjectedCredentials;
-pub use decision::{Decision, DenyReason};
+pub use decision::{AbortReason, Decision, DenyReason};
 pub use envelope::{
     ActionParams, DbQueryParams, ExecutionContext, ExecutionEnvelope, ExecutionIntent,
     ExecutionMetadata, HttpMethod, HttpParams, ToolUseParams,

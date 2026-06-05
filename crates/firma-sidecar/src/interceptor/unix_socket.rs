@@ -416,6 +416,62 @@ mod tests {
         }))
     }
 
+    struct FailingCredentialInjector;
+
+    #[async_trait::async_trait]
+    impl crate::credential::CredentialInjector for FailingCredentialInjector {
+        async fn inject(
+            &self,
+            _envelope: &ExecutionEnvelope,
+            connector_id: &str,
+            _target: &str,
+        ) -> Result<InjectedCredentials, crate::credential::CredentialInjectionError> {
+            Err(crate::credential::CredentialInjectionError::FetchFailed {
+                connector_id: connector_id.to_string(),
+                reason: "vault unavailable".to_string(),
+            })
+        }
+    }
+
+    /// Builds an ALLOW pipeline whose credential injection always fails,
+    /// so `enforce()` returns ABORT after the call is authorized.
+    fn test_pipeline_abort(path: &str) -> Arc<EnforcementPipeline> {
+        let claims = test_claims();
+        let registry = ActionClassRegistry::v0_1();
+        let rules = MappingRulesFile {
+            rules: vec![MappingRuleConfig {
+                method: Some("POST".to_string()),
+                host: "*".to_string(),
+                path: Some(path.to_string()),
+                action_class: "communication.external.send".to_string(),
+            }],
+        };
+        let table =
+            MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+
+        let normalizer = IntentNormalizer::new(table);
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test_token".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier { claims }),
+            std::sync::Arc::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
+
+        Arc::new(EnforcementPipeline::new(PipelineArgs {
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            credential_injector: Box::new(FailingCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
+        }))
+    }
+
     /// Builds a pipeline where only `api.openai.com` is mapped and
     /// `default_protected` is false, so unmapped hosts pass through.
     fn test_pipeline_passthrough() -> Arc<EnforcementPipeline> {
@@ -643,6 +699,31 @@ mod tests {
         let (status, body) = uds_request(&sock, request).await;
         assert_eq!(status, 403, "expected 403 for denied request");
         assert!(!body.is_empty(), "deny body should contain reason");
+
+        cancel.cancel();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_uds_aborts_returns_gateway_timeout() {
+        let sock = temp_socket_path("abort");
+        let handler = test_handler(test_pipeline_abort("/v1/chat/completions"));
+        let cancel = CancellationToken::new();
+        let handle = start_interceptor(&sock, handler, cancel.clone()).await;
+
+        let request = "POST /v1/chat/completions HTTP/1.1\r\n\
+                        Host: api.openai.com\r\n\
+                        X-Firma-Session-Id: _test_\r\n\
+                        Content-Length: 2\r\n\
+                        \r\n\
+                        {}";
+
+        let (status, body) = uds_request(&sock, request).await;
+        assert_eq!(status, 504, "post-ALLOW abort should return 504");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).expect("abort body should be valid JSON");
+        assert_eq!(parsed["aborted"], serde_json::Value::Bool(true));
+        assert_eq!(parsed["reason"], "CREDENTIAL_INJECTION_FAILED");
 
         cancel.cancel();
         let _ = handle.await;
