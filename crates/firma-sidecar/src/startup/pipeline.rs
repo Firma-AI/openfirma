@@ -143,6 +143,13 @@ pub fn build_pipeline_runtime(
     let session_state_store: Arc<dyn crate::enforcement::SessionStateStore> =
         Arc::new(crate::enforcement::LruSessionStateStore::with_default_capacity());
 
+    if config.mode == config::SidecarMode::Monitor {
+        tracing::warn!(
+            "MONITOR MODE ACTIVE — enforcement is observing only; \
+             all calls are allowed through. Never use in production."
+        );
+    }
+
     let pipeline = pipeline::EnforcementPipeline::new(pipeline::PipelineArgs {
         normalizer,
         capability_validator,
@@ -150,7 +157,8 @@ pub fn build_pipeline_runtime(
         credential_injector,
         session_state_store,
     })
-    .with_readiness(readiness_view);
+    .with_readiness(readiness_view)
+    .with_mode(config.mode.clone());
     tracing::debug!("enforcement pipeline initialized");
 
     Ok(PipelineRuntime {
