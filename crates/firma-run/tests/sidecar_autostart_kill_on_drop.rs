@@ -68,6 +68,7 @@ fn drop_terminates_child_within_grace() {
         authority_pub_key: None,
         use_http_proxy_interceptor: false,
         audit_fallback_path: None,
+        monitor_mode: false,
     })
     .expect("supervisor spawned");
 
@@ -110,6 +111,7 @@ fn marker_files_present_between_ready_and_drop() {
         authority_pub_key: None,
         use_http_proxy_interceptor: false,
         audit_fallback_path: None,
+        monitor_mode: false,
     })
     .expect("supervisor spawned");
 

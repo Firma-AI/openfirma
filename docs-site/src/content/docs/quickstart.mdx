@@ -67,6 +67,37 @@ firma run --config .firma/firma.toml -- \
 
 Every outbound call the wrapped command makes is normalized, checked against its capability, and evaluated against the Cedar policy bundle supplied by the Authority. The `-k` flag keeps the demo short by letting `curl` accept the local HTTPS interception certificate; for real workloads, install the generated CA instead.
 
+## Try observe-only mode first
+
+If you want to see what firma would classify and deny before writing mapping rules, use **monitor mode**. In this mode every request is allowed through — the enforcement pipeline still runs and classifies the call, but any DENY is overridden to ALLOW. `firma monitor` shows the original deny reason prefixed with `monitor_mode:` so you can see exactly what would have been blocked.
+
+Enable it for a single run without editing any file:
+
+```bash
+firma run --monitor -- curl https://api.github.com/users/firma-ai
+```
+
+Or set it permanently in `.firma/firma.toml`:
+
+```toml
+[sidecar]
+mode = "monitor"
+```
+
+When active, the sidecar prints a warning at startup:
+
+```
+MONITOR MODE ACTIVE — enforcement is observing only; all calls are allowed through. Never use in production.
+```
+
+In `firma monitor`, overridden decisions appear with the original reason:
+
+```
+2024-05-08T14:15:51Z  ALLOW    GET  api.github.com/users/firma-ai  class=communication.external.send  agent=generic  reason=monitor_mode: scope_mismatch
+```
+
+Switch back to enforcing mode by removing the `mode` line or changing it to `mode = "enforce"`.
+
 ## Watch the decisions
 
 After the command exits, read the audit log:

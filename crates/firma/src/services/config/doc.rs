@@ -161,6 +161,8 @@ fn ensure_authority_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Re
 fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     let sidecar = ensure_table(doc.as_table_mut(), "sidecar")?;
 
+    set_str_if_absent(sidecar, "mode", "enforce");
+
     // sidecar.interceptor.{mode, listen_addr} + https_mitm hosts
     {
         let interceptor = ensure_table(sidecar, "interceptor")?;
@@ -985,5 +987,30 @@ action_class = \"communication.external.send\"
         let a = render_firma_toml("", &inputs).unwrap();
         let b = render_firma_toml("", &inputs).unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn sidecar_section_seeds_mode_enforce_when_absent() {
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let out = render_firma_toml("", &inputs).unwrap();
+        let parsed: toml::Value = toml::from_str(&out).unwrap();
+        assert_eq!(
+            parsed["sidecar"]["mode"].as_str(),
+            Some("enforce"),
+            "scaffolded firma.toml must seed mode = \"enforce\""
+        );
+    }
+
+    #[test]
+    fn sidecar_section_preserves_existing_mode_on_merge() {
+        let existing = "[sidecar]\nmode = \"monitor\"\n";
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let out = render_firma_toml(existing, &inputs).unwrap();
+        let parsed: toml::Value = toml::from_str(&out).unwrap();
+        assert_eq!(
+            parsed["sidecar"]["mode"].as_str(),
+            Some("monitor"),
+            "merge must not overwrite a user-set mode"
+        );
     }
 }

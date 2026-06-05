@@ -70,6 +70,7 @@ impl NetworkRuntime {
 
 /// Inputs to [`prepare_network_runtime`] that gate autostart behaviour.
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct AutostartFlags {
     /// `true` when the selection resolved to local autostart.
     pub sidecar_autostart: bool,
@@ -89,6 +90,9 @@ pub struct AutostartFlags {
     /// When `true`, the autostarted sidecar is started in HTTP proxy
     /// interceptor mode rather than Unix socket mode.
     pub use_http_proxy_sidecar: bool,
+    /// When `true`, inject `mode = "monitor"` into the synthesized sidecar
+    /// config. Passed through from `RunInput.monitor_mode`.
+    pub monitor_mode: bool,
 }
 
 impl Default for AutostartFlags {
@@ -102,6 +106,7 @@ impl Default for AutostartFlags {
             authority_ca_cert: None,
             authority_pub_key: None,
             use_http_proxy_sidecar: false,
+            monitor_mode: false,
         }
     }
 }
@@ -352,6 +357,7 @@ fn autostart_sidecar(
         authority_ca_cert: flags.authority_ca_cert.clone(),
         authority_pub_key: flags.authority_pub_key.clone(),
         use_http_proxy_interceptor: flags.use_http_proxy_sidecar,
+        monitor_mode: flags.monitor_mode,
         // `runtime_dir` is the state dir `firma monitor` resolves, so a
         // per-run sidecar with no configured audit sink still writes a
         // monitorable `<state_dir>/audit.jsonl`.
@@ -963,6 +969,7 @@ mod non_structural_env_tests {
             authority_ca_cert: None,
             authority_pub_key: None,
             use_http_proxy_sidecar: false,
+            monitor_mode: false,
         };
         let authority = ResolvedAuthority {
             url: "https://authority.test".to_string(),
