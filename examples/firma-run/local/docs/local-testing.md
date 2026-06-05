@@ -148,28 +148,23 @@ Codex wrapper-default policy (now default for `--profile codex`):
 This keeps tool-initiated commands inside the governed sandbox path by default
 instead of escalating outside.
 
-Override example (`firma-run.yaml`):
+Override example (`firma.toml`):
 
-```yaml
-profiles:
-  codex:
-    executable_policies:
-      codex:
-        enforce_wrapper_defaults: true
-        sandbox_mode: workspace-write
-        approval_policy: never
-        config_overrides:
-          sandbox_workspace_write.network_access: "true"
+```toml
+[run.profiles.codex.executable_policies.codex]
+enforce_wrapper_defaults = true
+sandbox_mode = "workspace-write"
+approval_policy = "never"
+
+[run.profiles.codex.executable_policies.codex.config_overrides]
+"sandbox_workspace_write.network_access" = "true"
 ```
 
 Disable wrapper argument injection for codex (if needed):
 
-```yaml
-profiles:
-  codex:
-    executable_policies:
-      codex:
-        enforce_wrapper_defaults: false
+```toml
+[run.profiles.codex.executable_policies.codex]
+enforce_wrapper_defaults = false
 ```
 
 PowerShell helper wrapper:
@@ -201,12 +196,11 @@ Compatibility override:
 cargo run -p firma -- run --profile codex --preserve-host-user -- codex
 ```
 
-Config override (`firma-run.yaml`):
+Config override (`firma.toml`):
 
-```yaml
-profiles:
-  codex:
-    identity_mode: host_user
+```toml
+[run.profiles.codex]
+identity_mode = "host_user"
 ```
 
 Backend defaults by host OS:

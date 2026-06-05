@@ -37,7 +37,7 @@ fi
 command -v cargo  >/dev/null 2>&1 || fail "cargo not found"
 command -v bwrap  >/dev/null 2>&1 || fail "bwrap not found"
 
-CFG_SRC="$ROOT_DIR/examples/generic-agent/firma-run.toml"
+CFG_SRC="$ROOT_DIR/examples/generic-agent/firma.toml"
 [[ -f "$CFG_SRC" ]] || fail "missing $CFG_SRC"
 
 echo "building firma..."

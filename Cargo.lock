@@ -1626,6 +1626,7 @@ dependencies = [
 name = "firma-config"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "dirs",
  "pretty_assertions",
  "serde",
@@ -1719,6 +1720,7 @@ dependencies = [
  "dirs",
  "firma-authority",
  "firma-config",
+ "firma-sidecar",
  "firma-stack",
  "hex",
  "nix 0.31.3",
@@ -1726,7 +1728,6 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.18",

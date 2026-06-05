@@ -29,7 +29,7 @@ echo 'INFO firma_sidecar::startup::log_contract: policy bundle loaded version=\"
 echo 'INFO firma_sidecar::startup::log_contract: authority stream connected endpoint=\"(disabled)\"' 1>&2\n\
 echo 'INFO firma_sidecar::startup::log_contract: connector registry built hosts=12 default_timeout_ms=5000' 1>&2\n\
 echo 'INFO firma_sidecar::startup::log_contract: interceptor listening addr=\"x.sock\"' 1>&2\n\
-echo 'INFO firma_sidecar::startup::log_contract: ready' 1>&2\n\
+echo 'INFO firma_sidecar::startup::log_contract: sidecar ready' 1>&2\n\
 exec sleep 60\n",
         captured = capture_path.display(),
     );

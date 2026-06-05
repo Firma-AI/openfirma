@@ -125,13 +125,19 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         toml::to_string_pretty(&existing_config).unwrap(),
     )
     .unwrap();
-    let firma_run_path = config_dir.join("firma-run.toml");
-    let mut existing_firma_run = std::fs::read_to_string(&firma_run_path).unwrap();
-    existing_firma_run = existing_firma_run.replace(
+    // Add a custom env_set key inside [run.profiles.generic.env_set] so the
+    // merge contract test can verify it survives subsequent firma config runs.
+    let mut existing_firma_toml_text = std::fs::read_to_string(&firma_toml_path).unwrap();
+    existing_firma_toml_text = existing_firma_toml_text.replace(
         "FIRMA_RUN_BWRAP_ROOTFS_MODE = \"readonly\"",
         "FIRMA_RUN_BWRAP_ROOTFS_MODE = \"readonly\"\nCUSTOM_WRAPPER_DEFAULT = \"kept\"",
     );
-    std::fs::write(&firma_run_path, existing_firma_run).unwrap();
+    std::fs::write(
+        &firma_toml_path,
+        toml::to_string_pretty(&toml::from_str::<toml::Value>(&existing_firma_toml_text).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
 
     let defaults = firma()
         .args(["config", "--yes", "--dry-run", "--output-dir"])
@@ -144,9 +150,8 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         String::from_utf8_lossy(&defaults.stdout),
         String::from_utf8_lossy(&defaults.stderr),
     );
-    let firma_toml = extract_dry_run_file(&defaults.stdout, "firma.toml");
-    let firma_run_toml = extract_dry_run_file(&defaults.stdout, "firma-run.toml");
-    let value: toml::Value = toml::from_str(&firma_toml).unwrap();
+    let firma_toml_out = extract_dry_run_file(&defaults.stdout, "firma.toml");
+    let value: toml::Value = toml::from_str(&firma_toml_out).unwrap();
     assert_eq!(
         value["authority"]["listen_addr"].as_str(),
         Some("127.0.0.1:9555"),
@@ -181,16 +186,16 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         "custom preflight actions should not be replaced by inferred posture"
     );
     assert!(
-        toml::from_str::<toml::Value>(&firma_run_toml).unwrap()["profiles"]["generic"]["mounts"]
+        value["run"]["profiles"]["generic"]["mounts"]
             .as_array()
             .unwrap()
             .iter()
             .any(|m| m["source"].as_str() == Some(workspace.to_string_lossy().as_ref())),
-        "workspace should be preserved in firma-run.toml:\n{firma_run_toml}"
+        "workspace should be preserved in firma.toml [run.profiles.generic]:\n{firma_toml_out}"
     );
     assert!(
-        firma_run_toml.contains("CUSTOM_WRAPPER_DEFAULT = \"kept\""),
-        "existing wrapper config should be preserved when no wrapper flag overrides it:\n{firma_run_toml}"
+        firma_toml_out.contains("CUSTOM_WRAPPER_DEFAULT = \"kept\""),
+        "existing wrapper config should be preserved when no wrapper flag overrides it:\n{firma_toml_out}"
     );
 
     let override_output = firma()
@@ -216,9 +221,8 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         String::from_utf8_lossy(&override_output.stdout),
         String::from_utf8_lossy(&override_output.stderr),
     );
-    let firma_toml = extract_dry_run_file(&override_output.stdout, "firma.toml");
-    let firma_run_toml = extract_dry_run_file(&override_output.stdout, "firma-run.toml");
-    let value: toml::Value = toml::from_str(&firma_toml).unwrap();
+    let firma_toml_out = extract_dry_run_file(&override_output.stdout, "firma.toml");
+    let value: toml::Value = toml::from_str(&firma_toml_out).unwrap();
     assert_eq!(
         value["authority"]["listen_addr"].as_str(),
         Some("127.0.0.1:9666"),
@@ -245,29 +249,29 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         "explicit dev posture should override existing strict posture"
     );
     assert!(
-        toml::from_str::<toml::Value>(&firma_run_toml).unwrap()["profiles"]["generic"]["mounts"]
+        value["run"]["profiles"]["generic"]["mounts"]
             .as_array()
             .unwrap()
             .iter()
             .any(|m| m["source"].as_str() == Some(override_workspace.to_string_lossy().as_ref())),
-        "workspace override should be rendered in firma-run.toml:\n{firma_run_toml}"
+        "workspace override should be rendered in firma.toml [run.profiles.generic]:\n{firma_toml_out}"
     );
     // toml_edit merge contract: workspace override changes only the
-    // [[profiles.generic.mounts]] entry — independent env_set
+    // [[run.profiles.generic.mounts]] entry — independent env_set
     // customizations the operator added by hand survive.
     assert!(
-        firma_run_toml.contains("CUSTOM_WRAPPER_DEFAULT = \"kept\""),
-        "merge must preserve unrelated env_set customizations across workspace override:\n{firma_run_toml}"
+        firma_toml_out.contains("CUSTOM_WRAPPER_DEFAULT = \"kept\""),
+        "merge must preserve unrelated env_set customizations across workspace override:\n{firma_toml_out}"
     );
     // The previous workspace mount must be gone so the agent does not
     // accidentally retain RW access to the old path.
     assert!(
-        !toml::from_str::<toml::Value>(&firma_run_toml).unwrap()["profiles"]["generic"]["mounts"]
+        !value["run"]["profiles"]["generic"]["mounts"]
             .as_array()
             .unwrap()
             .iter()
             .any(|m| m["source"].as_str() == Some(workspace.to_string_lossy().as_ref())),
-        "previous workspace mount should be dropped on override:\n{firma_run_toml}"
+        "previous workspace mount should be dropped on override:\n{firma_toml_out}"
     );
 }
 
