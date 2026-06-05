@@ -121,16 +121,8 @@ In the audit log, MITM-intercepted calls show full L7 details:
 
 ```json
 {
-  "envelope": {
-    "intent": {
-      "action_class": "model.inference.chat",
-      "resource": {
-        "host": "api.openai.com",
-        "path": "/v1/models",
-        "provider": null
-      }
-    }
-  }
+  "action": "communication.external.send",
+  "resource": "api.openai.com/v1/models"
 }
 ```
 
@@ -138,12 +130,8 @@ CONNECT-only calls show only the host:
 
 ```json
 {
-  "envelope": {
-    "intent": {
-      "action_class": null,
-      "resource": { "host": "api.openai.com:443" }
-    }
-  }
+  "action": "",
+  "resource": "api.openai.com:443/"
 }
 ```
 
@@ -155,7 +143,7 @@ A reasonable default policy:
 
 | Host class                                                | MITM?                |
 | --------------------------------------------------------- | -------------------- |
-| LLM provider APIs (OpenAI, Anthropic, Mistral)            | Yes                  |
+| LLM provider APIs (OpenAI, Anthropic, Mistral)            | Optional — shipped mappings tunnel via CONNECT; enable MITM when you need L7 policy or credential injection ([Inject credentials](../inject-credentials/)) |
 | SaaS APIs you have admin access to (Stripe, Slack, GitHub)| Yes                  |
 | Your own services / internal SaaS                         | Yes                  |
 | Third-party SaaS where MITM violates terms                | No (CONNECT-only)    |
@@ -181,7 +169,7 @@ Don't try to "fix" a pinning error by changing the pin — pinning is a security
 
 **Sidecar logs `mitm_handshake_failed`.** The agent's TLS client rejected the cert the Sidecar minted. Usually means the agent doesn't trust your CA — re-check trust setup. If the host is sensitive, add it to `strict_hosts` so the failure denies instead of falling back.
 
-**Audit log shows `decision.outcome=ALLOW` but the agent reports a TLS error.** The Sidecar terminated TLS to the agent fine, then the upstream rejected the Sidecar's outbound TLS connection. Look for `connector_network_error` in the same event.
+**Audit log shows `decision = 1` but the agent reports a TLS error.** The Sidecar terminated TLS to the agent fine, then the upstream rejected the Sidecar's outbound TLS connection. Look for `ConnectorNetworkError` in nearby Sidecar logs or DENY events.
 
 **You regenerated the CA and now nothing works.** Don't. The fix is to find your old CA in a backup. If you genuinely have to start over, you must re-trust the new CA on every agent host before they can talk again.
 

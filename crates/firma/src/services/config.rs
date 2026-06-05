@@ -741,7 +741,7 @@ fn collect_authority_inputs(
                 existing
                     .authority_listen
                     .clone()
-                    .unwrap_or_else(|| "0.0.0.0:9443".to_string()),
+                    .unwrap_or_else(|| "0.0.0.0:50051".to_string()),
             )
             .interact_text()
             .context("authority listen address prompt")?,
@@ -751,11 +751,11 @@ fn collect_authority_inputs(
                 existing
                     .authority_listen
                     .clone()
-                    .unwrap_or_else(|| "127.0.0.1:9443".to_string()),
+                    .unwrap_or_else(|| "127.0.0.1:50051".to_string()),
             )
             .interact_text()
             .context("authority listen address prompt")?,
-        _ => "127.0.0.1:9443".to_string(),
+        _ => "127.0.0.1:50051".to_string(),
     };
 
     let (connect_url, connect_ca_cert, connect_pub_key) = match mode {
@@ -1340,8 +1340,8 @@ mod tests {
             mode: Mode::AgentLocal,
             keep_local_authority: false,
             authority: AuthorityInputs {
-                listen: "127.0.0.1:9443".to_string(),
-                connect_url: "https://127.0.0.1:9443".to_string(),
+                listen: "127.0.0.1:50051".to_string(),
+                connect_url: "http://127.0.0.1:50051".to_string(),
                 connect_ca_cert: "/tmp/test-state/tls/authority-ca.crt".to_string(),
                 connect_pub_key: "/tmp/test-state/authority.pub".to_string(),
             },

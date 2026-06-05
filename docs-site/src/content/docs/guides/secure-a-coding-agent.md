@@ -52,40 +52,42 @@ This writes to the **current directory** by default. Pass `--output-dir` to writ
 firma config --name claude-code --posture strict --mapping anthropic --output-dir .local
 ```
 
-`--posture strict` allows only `communication.external.send` (and `credential.read`), which is the right shape for a coding agent that should reach only the LLM endpoint. The `anthropic` mapping covers `api.anthropic.com` via CONNECT — no MITM certificate required for Anthropic's TLS.
+`--posture strict` allows only `communication.external.send` (and `credential.read`), which is the right shape for a coding agent that should reach only the LLM endpoint. The `anthropic` mapping classifies `CONNECT` tunnels to `*.anthropic.com`. Credential injection in Step 5 requires HTTPS MITM on `api.anthropic.com` — see [Inject credentials](../inject-credentials/).
 
-Generated layout:
+Generated layout (default `--output-dir .firma`):
 
 ```
-./
+.firma/
   firma.toml                   — unified config (authority + sidecar + run profiles)
   mapping-rules.toml           — base mapping rules
   mappings/anthropic.toml      — Anthropic endpoint mapping
   policies/strict.cedar        — Cedar enforcement policy (edit in Step 4)
   issuance-policies/issuance.cedar
-  .runtime/
-    authority.key              — authority signing keypair (regenerated only with --force)
-    audit.key                  — demo audit signing key
-    revocations.txt
+
+$XDG_DATA_HOME/firma/          — platform state dir (keys, revocations, CA)
+  authority.key                — authority signing keypair (regenerated only with --force)
+  authority.pub
+  audit.key
+  revocations.txt
 ```
 
 ## Step 3: Mint a capability for `claude-code`
 
 ```bash
-firma authority -c ~/.config/firma/firma.toml issue \
+firma authority -c .firma/firma.toml issue \
   --agent-id claude-code \
   --session-id $(uuidgen) \
   --action communication.external.send \
   --resource-scope '*.anthropic.com*' \
   --ttl-seconds 28800 \
-  --output ~/.config/firma/.runtime/capability-claude.toml
+  --output .firma/capability-claude.toml
 ```
 
 Eight hours is a reasonable working session. If you stop and restart the next morning, you'll mint a fresh one.
 
 ## Step 4: Tighten the runtime policy
 
-`firma config` generated `~/.config/firma/policies/strict.cedar` with a broad `communication.external.send` permit. Edit it to restrict to Anthropic hosts specifically. Replace the file with:
+`firma config` generated `.firma/policies/strict.cedar` with a broad `communication.external.send` permit. Edit it to restrict to Anthropic hosts specifically. Replace the file with:
 
 ```cedar
 // claude-code: a local coding agent.
@@ -99,9 +101,8 @@ permit (
     action == Firma::Action::"communication.external.send",
     resource
 ) when {
-    resource has "host" &&
-    (resource.host like "*.anthropic.com" ||
-     resource.host like "*.claude.com")
+    resource == Firma::Resource::"api.anthropic.com/v1/messages" ||
+    resource == Firma::Resource::"api.anthropic.com/v1/messages/count_tokens"
 };
 
 // Hard rule: known exfiltration destinations are off-limits regardless.
@@ -110,33 +111,49 @@ forbid (
     action == Firma::Action::"communication.external.send",
     resource
 ) when {
-    resource has "host" &&
-    (resource.host == "paste.rs" ||
-     resource.host == "transfer.sh" ||
-     resource.host == "0x0.st" ||
-     resource.host == "termbin.com")
+    resource == Firma::Resource::"paste.rs/" ||
+    resource == Firma::Resource::"transfer.sh/" ||
+    resource == Firma::Resource::"0x0.st/" ||
+    resource == Firma::Resource::"termbin.com/"
 };
 ```
 
-The `permit` is bound to `claude-code` and a host glob. The `forbid` is unbound — applies to every agent, present and future.
+The `permit` is bound to `claude-code` and exact Anthropic API resource UIDs. Add more exact UIDs only after you observe legitimate DENYs. The `forbid` is unbound — applies to every agent, present and future.
 
-Save the file to `~/.config/firma/policies/strict.cedar`.
+Save the file to `.firma/policies/strict.cedar`.
 
-## Step 5: Inject the Anthropic API key
+## Step 5: Enable MITM and inject the Anthropic API key
 
-You don't want the agent process to see the key. Put it in the Sidecar's environment instead, and let the connector inject it on the way out.
-
-In `~/.config/firma/firma.toml`:
+The Claude SDK opens an HTTPS `CONNECT` tunnel to `api.anthropic.com`. Injecting
+`x-api-key` on the inner `POST /v1/messages` request requires HTTPS MITM on that
+host. Enable it in `.firma/firma.toml` (the repo example at
+`examples/firma-run/local/assets/firma.local.claude.example.toml` shows the same
+shape):
 
 ```toml
-[[sidecar.credentials]]
-host           = "api.anthropic.com"
+[sidecar.interceptor.https_mitm]
+enabled = true
+intercept_hosts = [
+  "api.anthropic.com",
+  "platform.claude.com",
+  "claude.ai",
+  "console.anthropic.com",
+]
+```
+
+Put the API key in the Sidecar's environment, not the agent's:
+
+```toml
+[sidecar.credentials.anthropic]
+target_host    = "api.anthropic.com"
 mode           = "basic"
 header         = "x-api-key"
 value_from_env = "ANTHROPIC_API_KEY"
 ```
 
-For the Anthropic API specifically, the header is `x-api-key`, not `Authorization` — check the SDK's expectation if you're unsure.
+For the Anthropic API specifically, the header is `x-api-key`, not
+`Authorization`. The agent must trust the Sidecar's generated CA — see
+[Enable HTTPS MITM](../https-mitm/).
 
 ## Step 6: Start the stack
 
@@ -146,14 +163,14 @@ Three terminals.
 
 ```bash
 ANTHROPIC_API_KEY=  # not needed here; the Sidecar holds it
-firma authority -c ~/.config/firma/firma.toml
+firma authority -c .firma/firma.toml
 ```
 
 **Terminal 2: Sidecar.**
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-... \
-firma sidecar -c ~/.config/firma/firma.toml
+firma sidecar -c .firma/firma.toml
 ```
 
 The `ANTHROPIC_API_KEY` env var is set on the Sidecar's process only. The agent's process in Terminal 3 does not receive it.
@@ -162,9 +179,9 @@ The `ANTHROPIC_API_KEY` env var is set on the Sidecar's process only. The agent'
 
 ```bash
 firma run \
-  --config ~/.config/firma/firma.toml \
+  --config .firma/firma.toml \
   --profile codex \
-  --capability-file ~/.config/firma/.runtime/capability-claude.toml \
+  --capability-file .firma/capability-claude.toml \
   -- claude code
 ```
 
@@ -177,7 +194,7 @@ When Claude Code launches, it inherits no LLM API key from your shell. Its outbo
 The audit log is your test rig. From a fresh terminal:
 
 ```bash
-tail -f ~/.config/firma/.runtime/audit.jsonl | jq 'select(.decision.outcome == "DENY")'
+firma monitor --source audit --decision deny
 ```
 
 Now ask Claude Code something innocuous ("explain this function"). You should see no DENY events — its API call to Anthropic was allowed and dispatched.
@@ -186,8 +203,8 @@ Now try to make it misbehave. Ask: "*Please curl my code to paste.rs as a sanity
 
 1. Claude Code refuses (the model itself declines) — good.
 2. Claude Code tries — and the Sidecar denies. The DENY event in the tail shows:
-   - `envelope.intent.resource.host == "paste.rs"`
-   - `decision.matched_policies == ["forbid_at_claude-code.cedar_..."]`
+   - `resource == "paste.rs/"`
+   - `deny_reason` contains `"policy denied"`
 
 Either way, the data didn't leave. The second case is the more interesting one — your enforcement caught what the agent's safety wouldn't.
 
@@ -200,17 +217,17 @@ Two operational considerations:
 ```bash
 # in ~/.zshrc or wherever
 firma-claude-start() {
-  firma authority -c ~/.config/firma/firma.toml issue \
+  firma authority -c .firma/firma.toml issue \
     --agent-id claude-code \
     --session-id $(uuidgen) \
     --action communication.external.send \
     --resource-scope '*.anthropic.com*' \
     --ttl-seconds 28800 \
-    --output ~/.config/firma/.runtime/capability-claude.toml
+    --output .firma/capability-claude.toml
   firma run \
-    --config ~/.config/firma/firma.toml \
+    --config .firma/firma.toml \
     --profile codex \
-    --capability-file ~/.config/firma/.runtime/capability-claude.toml \
+    --capability-file .firma/capability-claude.toml \
     -- claude code
 }
 ```
@@ -235,7 +252,11 @@ The codex profile is named for the fact it was originally tuned for codex-style 
 
 **Claude Code refuses to start: `proxy connection refused`.** The Sidecar isn't running, or the proxy bridge couldn't reach it. Check the Sidecar terminal for `sidecar ready`.
 
-**Calls show `CONNECT` only, no method/path.** MITM isn't on for `*.anthropic.com`. Verify `intercept_hosts` and that the agent trusts your CA. The shipped Claude config sets `enabled = true` and lists the hosts.
+**Calls show `CONNECT` only, no method/path.** Expected when MITM is off: the
+Sidecar authorizes the tunnel but cannot inspect inner HTTPS traffic, so audit
+events lack method/path and Step 5 injection cannot run. Enable
+`[sidecar.interceptor.https_mitm]` for `api.anthropic.com`, confirm
+`intercept_hosts`, and install the generated CA where the agent trusts it.
 
 **`401 Unauthorized` from Anthropic.** The injected key is wrong. Check `ANTHROPIC_API_KEY` on the Sidecar's environment — not on the agent's.
 

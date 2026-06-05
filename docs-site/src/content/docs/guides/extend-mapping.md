@@ -58,7 +58,7 @@ Field-by-field:
 - **`method`** — uppercase HTTP verb. For HTTPS-tunneled traffic where you only have CONNECT-level visibility, use `"CONNECT"` here (see [HTTPS MITM](../https-mitm/) for the difference).
 - **`host`** — exact match unless prefixed with `*.` for a single-label wildcard (`*.acme-saas.com` matches `api.acme-saas.com` and `auth.acme-saas.com` but *not* `api.dev.acme-saas.com`).
 - **`path`** — exact match, with `*` as a wildcard for any single segment, and trailing `*` for "anything from here".
-- **`action_class`** — must match an identifier the schema declares.
+- **`action_class`** — must match an identifier from the action-class registry.
 
 For wildcards, prefer specificity. `path = "*"` matches everything; `path = "/api/v1/*"` matches just under v1; `path = "/api/v1/users/*/notify"` matches a precise shape.
 
@@ -103,20 +103,12 @@ The audit event should show:
 
 ```json
 {
-  "envelope": {
-    "intent": {
-      "action_class": "credential.read",
-      "resource": {
-        "host": "api.acme-saas.com",
-        "path": "/api/v1/users/42",
-        "provider": null
-      }
-    }
-  }
+  "action": "credential.read",
+  "resource": "api.acme-saas.com/api/v1/users/42"
 }
 ```
 
-Note that `provider` is `null` — the provider field is set only for hosts in the Sidecar's known-allowlist (currently `github`, `stripe`, `gmail`). For your own destinations, the provider stays unset and policies key on `host` directly. That's fine and intentional; the registry of known providers is curated, not extensible at runtime.
+Note that the audit event records the resource as an opaque UID. The internal `provider` hint is set only for hosts in the Sidecar's known allowlist (currently `github`, `stripe`, `gmail`). For your own destinations, policies should key on the exact resource UID.
 
 ## When to use `default_protected = true` vs `false`
 
@@ -152,7 +144,7 @@ These vendor files are reviewed and tested. Use them as-is; if you need to overr
 
 ## Common gotchas
 
-**`unknown action class 'communications.external.send'` at startup.** Typo. The class is `communication.external.send` (singular). The schema is the source of truth — open `examples/demo/policies/schema.cedarschema` for the canonical list.
+**`unknown action class 'communications.external.send'` at startup.** Typo. The class is `communication.external.send` (singular). The action-class registry is the source of truth.
 
 **`duplicate rule (POST, api.acme-saas.com, /api/v1/users/*)` at startup.** Two files disagree. Find the duplicate, decide which one wins, remove the loser.
 
