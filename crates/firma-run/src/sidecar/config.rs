@@ -160,6 +160,10 @@ pub struct SynthesizeRequest<'a> {
     /// sidecar's null stdout and `firma monitor` shows nothing. `None` leaves
     /// the audit sink untouched (used by tests that assert template fidelity).
     pub audit_fallback_path: Option<&'a Path>,
+    /// When `true`, override `[sidecar].mode = "monitor"` regardless of the
+    /// operator template. Enables `firma run --monitor` for a single-run
+    /// observe-only mode without editing firma.toml.
+    pub monitor_mode: bool,
 }
 
 /// Result of template resolution. Returned for tests; production callers
@@ -215,6 +219,9 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
     configure_preflight_capability(&mut value, req.out_path, req.agent_id, req.session_id)?;
     if let Some(audit_path) = req.audit_fallback_path {
         ensure_audit_file_sink(&mut value, audit_path)?;
+    }
+    if req.monitor_mode {
+        override_sidecar_mode(&mut value, "monitor")?;
     }
     ensure_audit_signing_key(&mut value, req.out_path)?;
     ensure_mapping_rules(&mut value, req.out_path)?;
@@ -465,6 +472,12 @@ fn sidecar_table_mut(value: &mut toml::Value) -> Result<&mut toml::value::Table,
 /// default `stdout` audit sink would silently discard every decision and
 /// `firma monitor` (which tails `<state_dir>/audit.jsonl`) would show nothing.
 /// An explicitly configured sink is left untouched.
+fn override_sidecar_mode(value: &mut toml::Value, mode: &str) -> Result<(), RunError> {
+    let sidecar = sidecar_table_mut(value)?;
+    sidecar.insert("mode".to_string(), toml::Value::String(mode.to_string()));
+    Ok(())
+}
+
 fn ensure_audit_file_sink(value: &mut toml::Value, audit_path: &Path) -> Result<(), RunError> {
     let sidecar = sidecar_table_mut(value)?;
     let audit = sidecar

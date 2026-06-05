@@ -38,9 +38,7 @@ pub struct PipelineRuntime {
 }
 
 /// Load and merge mapping rule files from `config`.
-fn load_mapping_rules(
-    config: &config::SidecarConfig,
-) -> anyhow::Result<config::MappingRulesFile> {
+fn load_mapping_rules(config: &config::SidecarConfig) -> anyhow::Result<config::MappingRulesFile> {
     let mut all_rules: Vec<config::MappingRuleConfig> = Vec::new();
 
     let primary_path = &config.enforcement.mapping.rules_path;

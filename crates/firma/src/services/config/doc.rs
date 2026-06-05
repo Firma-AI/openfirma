@@ -161,6 +161,8 @@ fn ensure_authority_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Re
 fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     let sidecar = ensure_table(doc.as_table_mut(), "sidecar")?;
 
+    set_str_if_absent(sidecar, "mode", "enforce");
+
     // sidecar.interceptor.{mode, listen_addr} + https_mitm hosts
     {
         let interceptor = ensure_table(sidecar, "interceptor")?;
