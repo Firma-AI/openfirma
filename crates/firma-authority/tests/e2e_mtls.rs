@@ -256,7 +256,7 @@ fn build_tls_only_channel(url: &str, server_ca_cert_pem: &[u8]) -> anyhow::Resul
 
 /// An allow-listed Sidecar with a valid client cert can connect and receives
 /// the initial policy bundle.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn mtls_allow_listed_client_receives_policy_bundle() {
     let certs = generate_mtls_certs();
     let client = generate_client_cert(
@@ -305,7 +305,7 @@ async fn mtls_allow_listed_client_receives_policy_bundle() {
 
 /// A Sidecar whose client cert CN/SAN is NOT in the allow-list is rejected
 /// at the TLS handshake level before any gRPC traffic flows.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn mtls_non_allow_listed_client_rejected_at_handshake() {
     let certs = generate_mtls_certs();
     // Server allows "authorized-sidecar" only.
@@ -346,7 +346,7 @@ async fn mtls_non_allow_listed_client_rejected_at_handshake() {
 
 /// A Sidecar that presents NO client certificate is rejected at the TLS
 /// handshake because `client_auth_mandatory()` returns `true`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn mtls_missing_client_cert_rejected_at_handshake() {
     let certs = generate_mtls_certs();
     let server = MtlsTestServer::start(&certs, &["authorized-sidecar"]).await;
@@ -375,7 +375,7 @@ async fn mtls_missing_client_cert_rejected_at_handshake() {
 }
 
 /// With a CN-based identity (no SAN), the CN is matched against the allow-list.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn mtls_cn_identity_matched_when_no_san() {
     let certs = generate_mtls_certs();
     let client = generate_client_cert(
@@ -415,7 +415,7 @@ async fn mtls_cn_identity_matched_when_no_san() {
 
 /// A valid client cert signed by the WRONG CA is rejected (chain validation
 /// fails before the allow-list check).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn mtls_wrong_client_ca_rejected_at_handshake() {
     let certs = generate_mtls_certs();
 
