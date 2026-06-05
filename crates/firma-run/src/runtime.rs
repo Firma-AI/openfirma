@@ -57,6 +57,10 @@ pub struct RunInput {
     /// failing closed. Required for macOS vz and WSL2 backends when
     /// structural enforcement is not available.
     pub allow_non_structural: bool,
+    /// When true, inject `mode = "monitor"` into the synthesized sidecar
+    /// config, overriding any value in the operator template. Equivalent
+    /// to `mode = "monitor"` in firma.toml but scoped to this run only.
+    pub monitor_mode: bool,
 }
 
 /// Execute `firma run`.
@@ -176,6 +180,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
                 args.sidecar_startup_timeout_secs
             }),
             use_http_proxy_sidecar: profile.use_http_proxy_sidecar,
+            monitor_mode: args.monitor_mode,
             ..Default::default()
         };
         let firma_exe = std::env::current_exe()
@@ -1127,6 +1132,7 @@ mod tests {
             authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
             user_config_path: None,
             allow_non_structural: true,
+            monitor_mode: false,
         };
         let resolved = super::resolve_sidecar_template_path(
             &args,
@@ -1161,6 +1167,7 @@ mod tests {
             authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
             user_config_path: None,
             allow_non_structural: true,
+            monitor_mode: false,
         };
         let resolved = super::resolve_sidecar_template_path(&args, Some(user_cfg.as_path()));
         assert_eq!(resolved, Some(user_cfg));
@@ -1250,6 +1257,7 @@ mod tests {
             authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
             user_config_path: None,
             allow_non_structural: true,
+            monitor_mode: false,
         };
         let resolved = crate::config::resolve_profile(&run_args).unwrap_or_else(|e| panic!("{e}"));
         assert!(

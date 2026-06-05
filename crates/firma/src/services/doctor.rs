@@ -139,18 +139,33 @@ async fn build_report(args: Args) -> RenderedReport {
         .unwrap_or_else(|_| PathBuf::from("."));
     let live_running = count_live_per_run_sidecars(&state_dir);
 
-    // 4. sidecar reachability
-    let sidecar_endpoint = parsed_config.as_ref().and_then(|c| {
-        match c.section("sidecar").and_then(|body| {
-            toml::from_str::<firma_sidecar::config::SidecarConfig>(&body).map_err(|e| e.to_string())
-        }) {
-            Ok(sc) => Some(reachability::endpoint_from_sidecar(&sc)),
-            Err(error) => {
-                warn!(?error, "could not load sidecar config");
-                None
+    // 4. sidecar mode + reachability
+    let parsed_sidecar: Option<firma_sidecar::config::SidecarConfig> =
+        parsed_config.as_ref().and_then(|c| {
+            match c.section("sidecar").and_then(|body| {
+                toml::from_str::<firma_sidecar::config::SidecarConfig>(&body)
+                    .map_err(|e| e.to_string())
+            }) {
+                Ok(sc) => Some(sc),
+                Err(error) => {
+                    warn!(?error, "could not load sidecar config");
+                    None
+                }
             }
-        }
-    });
+        });
+    if let Some(ref sc) = parsed_sidecar {
+        use firma_sidecar::config::SidecarMode;
+        report.push(match sc.mode {
+            SidecarMode::Monitor => Check::warn(
+                "sidecar mode",
+                "monitor — observe-only, never deploy to production",
+            ),
+            SidecarMode::Enforce => Check::ok("sidecar mode", "enforce"),
+        });
+    }
+    let sidecar_endpoint = parsed_sidecar
+        .as_ref()
+        .map(reachability::endpoint_from_sidecar);
     let sidecar_daemon =
         reachability::check_endpoint("sidecar reachable", sidecar_endpoint, timeout).await;
     report.push(reachability::reconcile_reachability(

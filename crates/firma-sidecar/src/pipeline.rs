@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use crate::audit::AuditPayload;
 use crate::authority_client::readiness::ReadinessView;
+use crate::config::SidecarMode;
 use crate::credential::{CredentialInjectionError, CredentialInjector};
 use crate::enforcement::SessionStateStore;
 pub use crate::enforcement::capability_map::CapabilityMap;
@@ -80,6 +81,10 @@ pub struct EnforcementPipeline {
     readiness: ReadinessView,
     stage2_timeout: Option<Duration>,
     session_state_store: Arc<dyn SessionStateStore>,
+    /// When `Monitor`, DENY decisions are overridden to ALLOW (Passthrough)
+    /// and the original deny reason is preserved in the audit record as
+    /// `monitor_mode: <reason>`. The pipeline still classifies every call.
+    mode: SidecarMode,
 }
 
 impl EnforcementPipeline {
@@ -95,7 +100,16 @@ impl EnforcementPipeline {
             readiness: ReadinessView::all_ready(),
             stage2_timeout: None,
             session_state_store: args.session_state_store,
+            mode: SidecarMode::Enforce,
         }
+    }
+
+    /// Set the enforcement mode. Use [`SidecarMode::Monitor`] for observe-only
+    /// operation where DENY decisions are overridden to ALLOW.
+    #[must_use]
+    pub fn with_mode(mut self, mode: SidecarMode) -> Self {
+        self.mode = mode;
+        self
     }
 
     /// Install a readiness view for Authority-backed runtime state.
@@ -137,13 +151,30 @@ impl EnforcementPipeline {
         let bundle_version = self.constraint_enforcer.policy_version();
 
         let decision = self.enforce_inner(request, session_id).await;
-        let payload = audit_payload_from_decision(
+        let mut payload = audit_payload_from_decision(
             &decision,
             request,
             session_id,
             start.elapsed(),
             bundle_version.as_deref(),
         );
+
+        // Monitor mode: override DENY → ALLOW (Passthrough) so the call goes
+        // through, but preserve the original deny reason in the audit record
+        // so operators can see what enforcement would have blocked.
+        if self.mode == SidecarMode::Monitor
+            && let EnforcementDecision::Deny { .. } = &decision
+        {
+            let original_reason = std::mem::take(&mut payload.deny_reason);
+            payload.decision = DECISION_ALLOW;
+            payload.deny_reason = format!("monitor_mode: {original_reason}");
+            return (
+                EnforcementDecision::Passthrough {
+                    detail: "monitor_mode".to_string(),
+                },
+                payload,
+            );
+        }
 
         (decision, payload)
     }
@@ -1819,5 +1850,74 @@ mod tests {
                 .action_count,
             0
         );
+    }
+
+    // ===== Monitor mode tests =====
+
+    #[tokio::test]
+    async fn monitor_mode_converts_deny_to_passthrough() {
+        // Unclassified intent would DENY in enforce mode.
+        let pipeline = test_pipeline().with_mode(SidecarMode::Monitor);
+        let request = test_request("DELETE", "api.openai.com/v1/files/abc");
+
+        let (decision, payload) = pipeline.enforce(&request, "sess_monitor").await;
+
+        assert!(
+            decision.is_passthrough(),
+            "monitor mode must convert DENY to Passthrough"
+        );
+        assert_eq!(payload.decision, DECISION_ALLOW, "audit must record ALLOW");
+        assert!(
+            payload.deny_reason.starts_with("monitor_mode:"),
+            "audit reason must carry monitor_mode prefix, got: {}",
+            payload.deny_reason
+        );
+    }
+
+    #[tokio::test]
+    async fn monitor_mode_audit_reason_contains_original_deny_reason() {
+        let pipeline = test_pipeline().with_mode(SidecarMode::Monitor);
+        // Unclassified intent → DenyReason::UnclassifiedIntent in enforce mode.
+        let request = test_request("DELETE", "api.openai.com/v1/files/abc");
+
+        let (_, payload) = pipeline.enforce(&request, "sess_monitor").await;
+
+        assert!(
+            payload.deny_reason.contains("unclassified intent"),
+            "original deny reason must be embedded, got: {}",
+            payload.deny_reason
+        );
+    }
+
+    #[tokio::test]
+    async fn monitor_mode_allows_normal_allows_unchanged() {
+        // Requests that would ALLOW in enforce mode stay ALLOW in monitor mode.
+        let pipeline = test_pipeline().with_mode(SidecarMode::Monitor);
+        let request = test_request("POST", "api.openai.com/v1/chat/completions");
+
+        let (decision, payload) = pipeline.enforce(&request, "sess_001").await;
+
+        assert!(decision.is_allow(), "normal ALLOWs must remain Allow");
+        assert_eq!(payload.decision, DECISION_ALLOW);
+        assert!(
+            payload.deny_reason.is_empty(),
+            "deny_reason must be empty for genuine ALLOWs"
+        );
+    }
+
+    #[tokio::test]
+    async fn enforce_mode_still_denies() {
+        // Sanity: enforce mode (default) must still produce DENY.
+        let pipeline = test_pipeline();
+        let request = test_request("DELETE", "api.openai.com/v1/files/abc");
+
+        let (decision, payload) = pipeline.enforce(&request, "sess_001").await;
+
+        assert!(
+            decision.is_deny(),
+            "enforce mode must deny unclassified intent"
+        );
+        assert_eq!(payload.decision, DECISION_DENY);
+        assert!(!payload.deny_reason.is_empty(), "deny_reason must be set");
     }
 }

@@ -106,7 +106,8 @@ pub struct AuditPayload {
     /// Enforcement outcome (proto wire value: 1 = ALLOW, 2 = DENY).
     pub decision: i32,
     /// Human-readable reason when decision is DENY or ABORT. Empty on
-    /// ALLOW.
+    /// ALLOW, except in monitor mode where an overridden DENY carries
+    /// `"monitor_mode: <original_deny_reason>"`.
     pub deny_reason: String,
     /// Wall-clock time spent in the enforcement pipeline, in
     /// microseconds.
@@ -146,7 +147,8 @@ pub struct ExecutionEvent {
     /// Enforcement outcome.
     pub decision: i32,
     /// Human-readable reason when decision is DENY or ABORT. Empty on
-    /// ALLOW.
+    /// ALLOW, except in monitor mode where an overridden DENY carries
+    /// `"monitor_mode: <original_deny_reason>"`.
     pub deny_reason: String,
     /// Wall-clock time spent in the enforcement pipeline, in
     /// microseconds.

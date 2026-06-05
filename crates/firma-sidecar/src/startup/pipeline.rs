@@ -37,18 +37,8 @@ pub struct PipelineRuntime {
     pub mapping_rules_loaded: usize,
 }
 
-/// Build the enforcement pipeline plus stream-client shared state.
-///
-/// Pass a [`PreflightResult`] to populate Stage 1 with a real token and
-/// verifier. Without it, Stage 1 uses the stub verifier (always deny).
-///
-/// # Errors
-///
-/// Returns an error when pipeline component construction fails.
-pub fn build_pipeline_runtime(
-    config: &config::SidecarConfig,
-    preflight: Option<PreflightResult>,
-) -> anyhow::Result<PipelineRuntime> {
+/// Load and merge mapping rule files from `config`.
+fn load_mapping_rules(config: &config::SidecarConfig) -> anyhow::Result<config::MappingRulesFile> {
     let mut all_rules: Vec<config::MappingRuleConfig> = Vec::new();
 
     let primary_path = &config.enforcement.mapping.rules_path;
@@ -73,8 +63,23 @@ pub fn build_pipeline_runtime(
         all_rules.extend(extra_file.rules);
     }
 
-    let merged_file = config::MappingRulesFile { rules: all_rules };
-    let mapping_rules_loaded = merged_file.rules.len();
+    Ok(config::MappingRulesFile { rules: all_rules })
+}
+
+/// Build the enforcement pipeline plus stream-client shared state.
+///
+/// Pass a [`PreflightResult`] to populate Stage 1 with a real token and
+/// verifier. Without it, Stage 1 uses the stub verifier (always deny).
+///
+/// # Errors
+///
+/// Returns an error when pipeline component construction fails.
+pub fn build_pipeline_runtime(
+    config: &config::SidecarConfig,
+    preflight: Option<PreflightResult>,
+) -> anyhow::Result<PipelineRuntime> {
+    let merged_file = load_mapping_rules(config)?;
+    let mapping_rules_loaded = merged_file.rule_count();
 
     let registry = pipeline::ActionClassRegistry::v0_1();
     let table = pipeline::MappingTable::from_config(
@@ -143,6 +148,13 @@ pub fn build_pipeline_runtime(
     let session_state_store: Arc<dyn crate::enforcement::SessionStateStore> =
         Arc::new(crate::enforcement::LruSessionStateStore::with_default_capacity());
 
+    if config.mode == config::SidecarMode::Monitor {
+        tracing::warn!(
+            "MONITOR MODE ACTIVE — enforcement is observing only; \
+             all calls are allowed through. Never use in production."
+        );
+    }
+
     let pipeline = pipeline::EnforcementPipeline::new(pipeline::PipelineArgs {
         normalizer,
         capability_validator,
@@ -150,7 +162,8 @@ pub fn build_pipeline_runtime(
         credential_injector,
         session_state_store,
     })
-    .with_readiness(readiness_view);
+    .with_readiness(readiness_view)
+    .with_mode(config.mode.clone());
     tracing::debug!("enforcement pipeline initialized");
 
     Ok(PipelineRuntime {

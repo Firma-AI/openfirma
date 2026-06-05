@@ -63,6 +63,7 @@ fn spawned_sidecar_inherits_sandbox_id_env() {
         authority_pub_key: None,
         use_http_proxy_interceptor: false,
         audit_fallback_path: None,
+        monitor_mode: false,
     })
     .expect("supervisor spawned");
 

@@ -173,6 +173,12 @@ pub struct MappingRulesFile {
 }
 
 impl MappingRulesFile {
+    /// Total number of mapping rules in this file.
+    #[must_use]
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
+    }
+
     /// Validate all rules in the file.
     ///
     /// # Errors
