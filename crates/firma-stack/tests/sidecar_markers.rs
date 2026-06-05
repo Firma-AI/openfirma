@@ -156,13 +156,13 @@ fn http_proxy_listen_with_closed_port_is_unhealthy() {
     let run_dir = tmp.path().join("run");
     let me = std::process::id();
 
-    // Bind to grab a free port, then drop the listener so the port is
-    // closed: a live pid whose endpoint refuses connections is Unhealthy.
-    let addr = {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind tcp");
-        listener.local_addr().expect("local addr")
-    };
+    // Bind to grab a free port. Keep the listener alive until just before the
+    // probe so the OS cannot reassign the port to another concurrent test's
+    // listener between the drop and the connect_timeout call.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind tcp");
+    let addr = listener.local_addr().expect("local addr");
     write_marker_with_listen(&run_dir, "http-closed", me, Some(&addr.to_string()));
+    drop(listener); // port is now closed
 
     let entry = probe_entry(&run_dir.join("http-closed")).expect("probe");
     assert_eq!(entry.state, State::Unhealthy);
