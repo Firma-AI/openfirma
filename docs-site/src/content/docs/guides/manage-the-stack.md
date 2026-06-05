@@ -53,8 +53,8 @@ $XDG_DATA_HOME/firma/   # or %LOCALAPPDATA%\firma on Windows
   # *.listen, audit.jsonl
 ```
 
-`firma config` writes a single sectioned `firma.toml` (`[project]` +
-`[authority]` + `[sidecar.*]`). Existing files are preserved unless
+`firma config` writes a single sectioned `firma.toml` (`[authority]` +
+`[sidecar.*]`). Existing files are preserved unless
 `--force` is set. `state_dir` is not embedded in the config — it is
 always resolved from `--state-dir` / `FIRMA_STATE_DIR` / XDG.
 

@@ -17,16 +17,12 @@ A small policy bundle for an agent identified as `support-agent`:
 
 This is a realistic shape for a "customer support" agent that drafts replies and posts updates but has no business moving money.
 
-## Step 1: Copy the schema
+## Step 1: Understand the schema
 
-Cedar requires a schema to validate against. Copy the demo schema into your policy directory:
-
-```bash
-cp examples/demo/policies/schema.cedarschema \
-   /tmp/firma-standalone/config/policies/
-```
-
-The schema declares the allowed entity types (`Firma::Agent`, `Firma::Action`, `Firma::Resource`), the action classes Cedar policies may reference, and the runtime context fields. **You should not edit it** — its job is to keep your policies in sync with the Sidecar's runtime expectations. If you reference a class that isn't in the schema, your bundle won't compile.
+The Sidecar evaluates bundles streamed from the Authority using the embedded
+`FIRMA_SCHEMA` — you do not copy `schema.cedarschema` into the policy directory
+for runtime enforcement. Use [`firma policy validate`](../test-policies-offline/)
+to catch schema errors before the Authority hot-reloads your edits.
 
 ## Step 2: Write the base permit
 
@@ -94,23 +90,16 @@ The first `forbid` is bound to `support-agent`: the rule is part of the agent's 
 
 ## Step 4: Validate the bundle
 
-Restart the Sidecar (or wait for the next bundle reload). On startup, the Sidecar parses the bundle, validates it against the schema, and refuses to start if anything fails. Look for:
+With the Authority running, edit `.cedar` files under the Authority's
+`policy_dir`. The Authority validates each reload against the embedded schema
+and streams the bundle to the Sidecar. Rejected reloads are logged on the
+Authority and the previous valid bundle keeps streaming.
 
-```text
-INFO firma_sidecar::startup: bundle compiled (1 file, 4 policies)
+Catch errors before save with:
+
+```bash
+firma policy validate /tmp/firma-standalone/config/policies/support-agent.cedar
 ```
-
-If the parse fails, you'll see something like:
-
-```text
-ERROR firma_sidecar::startup: failed to compile policy bundle
-  caused by: unknown action type 'Firma::Action::"communication.exterrnal.send"'
-  in support-agent.cedar:9
-```
-
-Cedar errors are precise — line number plus offending identifier. Fix and restart.
-
-The fail-loud behavior at startup is deliberate. A malformed bundle never reaches the hot path, and an unwilling-to-start Sidecar is much safer than one that is silently mis-enforcing.
 
 ## Step 5: Test with a real call
 
@@ -152,6 +141,7 @@ Add `[sidecar.authority]` and `[sidecar.capability_seed]` sections to `firma.tom
 
 ```toml
 [sidecar.authority]
+url             = "http://[::1]:50051"
 public_key_path = "/tmp/firma-standalone/firma-authority.pub"
 
 [sidecar.capability_seed]
@@ -171,7 +161,7 @@ You should see a 403. The audit log will show:
   "action": "communication.external.send",
   "resource": "paste.rs/",
   "decision": 2,
-  "deny_reason": "PolicyDenied"
+  "deny_reason": "policy denied: policy denied action 'communication.external.send' on resource 'paste.rs/'"
 }
 ```
 

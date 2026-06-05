@@ -143,7 +143,7 @@ A reasonable default policy:
 
 | Host class                                                | MITM?                |
 | --------------------------------------------------------- | -------------------- |
-| LLM provider APIs (OpenAI, Anthropic, Mistral)            | Yes                  |
+| LLM provider APIs (OpenAI, Anthropic, Mistral)            | Optional — shipped mappings tunnel via CONNECT; enable MITM when you need L7 policy or credential injection ([Inject credentials](../inject-credentials/)) |
 | SaaS APIs you have admin access to (Stripe, Slack, GitHub)| Yes                  |
 | Your own services / internal SaaS                         | Yes                  |
 | Third-party SaaS where MITM violates terms                | No (CONNECT-only)    |
