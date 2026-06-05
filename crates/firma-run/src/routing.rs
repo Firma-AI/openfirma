@@ -1015,15 +1015,9 @@ mod non_structural_env_tests {
         };
         let identity = RunIdentity::new("test-agent");
         let flags = AutostartFlags {
-            sidecar_autostart: false,
             no_autostart: true,
-            template_path: None,
             startup_timeout: Duration::from_secs(1),
-            authority_url: None,
-            authority_ca_cert: None,
-            authority_pub_key: None,
-            use_http_proxy_sidecar: false,
-            monitor_mode: false,
+            ..AutostartFlags::default()
         };
         let authority = ResolvedAuthority {
             url: "https://authority.test".to_string(),
@@ -1104,14 +1098,9 @@ mod non_structural_env_tests {
         };
         let identity = RunIdentity::new("test-agent");
         let flags = AutostartFlags {
-            sidecar_autostart: false,
             no_autostart: true,
-            template_path: None,
             startup_timeout: Duration::from_secs(1),
-            authority_url: None,
-            authority_ca_cert: None,
-            authority_pub_key: None,
-            use_http_proxy_sidecar: false,
+            ..AutostartFlags::default()
         };
         for mechanism in [
             crate::backend::NetworkConfinement::MacosSandboxNetworkDeny,
@@ -1179,14 +1168,9 @@ mod non_structural_env_tests {
         };
         let identity = RunIdentity::new("test-agent");
         let flags = AutostartFlags {
-            sidecar_autostart: false,
             no_autostart: true,
-            template_path: None,
             startup_timeout: Duration::from_secs(1),
-            authority_url: None,
-            authority_ca_cert: None,
-            authority_pub_key: None,
-            use_http_proxy_sidecar: false,
+            ..AutostartFlags::default()
         };
         let authority = ResolvedAuthority {
             url: "https://authority.test".to_string(),
