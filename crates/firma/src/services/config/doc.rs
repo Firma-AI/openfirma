@@ -867,4 +867,29 @@ action_class = \"communication.external.send\"
         let b = render_firma_toml("", &inputs).unwrap();
         assert_eq!(a, b);
     }
+
+    #[test]
+    fn sidecar_section_seeds_mode_enforce_when_absent() {
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let out = render_firma_toml("", &inputs).unwrap();
+        let parsed: toml::Value = toml::from_str(&out).unwrap();
+        assert_eq!(
+            parsed["sidecar"]["mode"].as_str(),
+            Some("enforce"),
+            "scaffolded firma.toml must seed mode = \"enforce\""
+        );
+    }
+
+    #[test]
+    fn sidecar_section_preserves_existing_mode_on_merge() {
+        let existing = "[sidecar]\nmode = \"monitor\"\n";
+        let inputs = dummy_inputs(&Mode::AgentLocal);
+        let out = render_firma_toml(existing, &inputs).unwrap();
+        let parsed: toml::Value = toml::from_str(&out).unwrap();
+        assert_eq!(
+            parsed["sidecar"]["mode"].as_str(),
+            Some("monitor"),
+            "merge must not overwrite a user-set mode"
+        );
+    }
 }

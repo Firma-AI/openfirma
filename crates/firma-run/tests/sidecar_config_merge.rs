@@ -515,3 +515,72 @@ fn nonexistent_template_paths_fall_through_to_minimal() {
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Minimal);
 }
+
+#[test]
+fn monitor_mode_injects_mode_monitor_into_sidecar_section() {
+    let tmp = TempDir::new().expect("tmp");
+    let out = tmp.path().join("sidecar.toml");
+    let sock = tmp.path().join("sidecar.sock");
+    synthesize(SynthesizeRequest {
+        agent_id: "generic",
+        session_id: "sess",
+        explicit_template: None,
+        env_template: None,
+        cwd_template: None,
+        socket_path: &sock,
+        listen_addr: None,
+        out_path: &out,
+        authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
+        audit_fallback_path: None,
+        monitor_mode: true,
+    })
+    .expect("synthesize");
+
+    let value = read(&out);
+    let sidecar = value
+        .as_table()
+        .and_then(|t| t.get("sidecar"))
+        .and_then(|v| v.as_table())
+        .expect("sidecar table");
+    assert_eq!(
+        sidecar.get("mode").and_then(toml::Value::as_str),
+        Some("monitor"),
+        "monitor_mode=true must inject mode = \"monitor\" into [sidecar]"
+    );
+}
+
+#[test]
+fn no_monitor_mode_does_not_inject_mode_field() {
+    let tmp = TempDir::new().expect("tmp");
+    let out = tmp.path().join("sidecar.toml");
+    let sock = tmp.path().join("sidecar.sock");
+    synthesize(SynthesizeRequest {
+        agent_id: "generic",
+        session_id: "sess",
+        explicit_template: None,
+        env_template: None,
+        cwd_template: None,
+        socket_path: &sock,
+        listen_addr: None,
+        out_path: &out,
+        authority_url: None,
+        authority_ca_cert: None,
+        authority_pub_key: None,
+        audit_fallback_path: None,
+        monitor_mode: false,
+    })
+    .expect("synthesize");
+
+    let value = read(&out);
+    let sidecar = value
+        .as_table()
+        .and_then(|t| t.get("sidecar"))
+        .and_then(|v| v.as_table())
+        .expect("sidecar table");
+    assert!(
+        sidecar.get("mode").is_none(),
+        "monitor_mode=false must not inject a mode field"
+    );
+}
