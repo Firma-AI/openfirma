@@ -88,19 +88,20 @@ This writes to the **current directory** by default. To write to a specific dire
 firma config --name my-agent --posture dev --mapping anthropic --output-dir .local
 ```
 
-Generated layout:
+Generated layout (default `--output-dir .firma`):
 
 ```
-./
+.firma/
   firma.toml                   — unified config (authority + sidecar + run profiles)
   mapping-rules.toml           — base mapping rules
   mappings/anthropic.toml      — Anthropic endpoint mapping
   policies/dev.cedar           — Cedar enforcement policy
   issuance-policies/issuance.cedar
-  .runtime/
-    authority.key              — authority signing keypair (preserved on re-run)
-    audit.key                  — demo audit signing key
-    revocations.txt
+
+$XDG_DATA_HOME/firma/          — platform state dir (keys, revocations, CA)
+  authority.key                — authority signing keypair (preserved on re-run)
+  audit.key                    — demo audit signing key
+  revocations.txt
 ```
 
 `firma config` is idempotent — re-running preserves existing files including the authority keypair; pass `--force` to overwrite everything. Skip all interactive prompts with `--yes`. Preview without writing:
@@ -141,7 +142,7 @@ or operate with a pre-managed sidecar (systemd / `firma sidecar start`).
 In a dedicated terminal:
 
 ```bash
-firma sidecar -c ~/.config/firma/firma.toml
+firma sidecar -c .firma/firma.toml
 ```
 
 Wait for the `sidecar ready` line.
@@ -160,9 +161,8 @@ Precedence:
 
 1. `--authority local` / `--authority <url>` — CLI override.
 2. `[authority]` section present in the discovered `firma.toml`
-   (`~/.config/firma/firma.toml` on Linux/macOS,
-   `%USERPROFILE%\.firma\firma.toml` on Windows) — autostart a local
-   Mini Authority.
+   (walk-up from the current directory to `<dir>/.firma/firma.toml`, or
+   `$FIRMA_CONFIG`) — autostart a local Mini Authority.
 3. `[sidecar.authority].url` set — connect to that remote Authority.
 4. Nothing configured — `firma run` falls back to local autostart so
    zero-config works. The spawned Authority uses an ephemeral signing
@@ -301,16 +301,16 @@ For Stage 1 to allow the call, the Sidecar must have a capability matching `(ses
 **Per-run capability.** Pass `--capability-file` to `firma run`. The wrapper writes the file to a host-side path the Sidecar reads. Right for one-off invocations.
 
 ```bash
-firma authority -c ~/.config/firma/firma.toml issue \
+firma authority -c .firma/firma.toml issue \
   --agent-id local-dev \
   --session-id $(uuidgen) \
   --action communication.external.send \
-  --output ~/.config/firma/.runtime/capability-local-dev.toml
+  --output .firma/capability-local-dev.toml
 
 firma run \
-  --config ~/.config/firma/firma.toml \
+  --config .firma/firma.toml \
   --profile generic \
-  --capability-file ~/.config/firma/.runtime/capability-local-dev.toml \
+  --capability-file .firma/capability-local-dev.toml \
   -- curl https://example.com
 ```
 
@@ -393,7 +393,7 @@ What it *can* still do is whatever its capability + policy allow it to do *via* 
 
 **The agent sees `HTTP_PROXY` but its calls still fail with DNS errors.** The DNS stub only answers hosts the Sidecar will route. If your mapping rules don't cover the host, the stub returns NXDOMAIN. Add the host to the mapping (and a permitting rule to the policy).
 
-**Tight loops produce `CapabilityScopeMismatch`.** A coding agent doing one task per second can blow through `action_count` faster than expected. If your policy gates on `action_count`, raise the threshold or scope the rule more narrowly.
+**Tight loops produce `PolicyDenied`.** A coding agent doing one task per second can blow through `action_count` faster than expected. If your policy gates on `action_count`, raise the threshold or scope the rule more narrowly.
 
 ## What's next
 

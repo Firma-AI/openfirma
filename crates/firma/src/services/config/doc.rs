@@ -546,8 +546,8 @@ mod tests {
             keep_local_authority: false,
             name: "test-agent",
             profile: "generic",
-            authority_listen: "127.0.0.1:9443",
-            authority_url: "https://127.0.0.1:9443",
+            authority_listen: "127.0.0.1:50051",
+            authority_url: "http://127.0.0.1:50051",
             authority_ca_cert: "/state/tls/authority-ca.crt",
             authority_pub_key: "/state/authority.pub",
             revocation_file: "/state/revocations.txt",
@@ -594,7 +594,7 @@ mod tests {
         assert!(parsed.get("sidecar").is_some(), "got: {out}");
         assert_eq!(
             parsed["authority"]["listen_addr"].as_str(),
-            Some("127.0.0.1:9443")
+            Some("127.0.0.1:50051")
         );
         assert_eq!(
             parsed["sidecar"]["interceptor"]["mode"].as_str(),
@@ -623,7 +623,7 @@ mod tests {
         let auth = &parsed["sidecar"]["authority"];
         assert_eq!(
             auth.get("url").and_then(|v| v.as_str()),
-            Some("https://127.0.0.1:9443")
+            Some("http://127.0.0.1:50051")
         );
         assert_eq!(
             auth.get("ca_cert_path").and_then(|v| v.as_str()),
@@ -649,7 +649,7 @@ public_key_path = \"/old/pub.key\"
         let auth = &parsed["sidecar"]["authority"];
         assert_eq!(
             auth.get("url").and_then(|v| v.as_str()),
-            Some("https://127.0.0.1:9443")
+            Some("http://127.0.0.1:50051")
         );
         assert_eq!(
             auth.get("ca_cert_path").and_then(|v| v.as_str()),
@@ -670,7 +670,7 @@ public_key_path = \"/old/pub.key\"
         assert!(parsed.get("sidecar").is_some());
         assert_eq!(
             parsed["sidecar"]["authority"]["url"].as_str(),
-            Some("https://127.0.0.1:9443")
+            Some("http://127.0.0.1:50051")
         );
     }
 
@@ -711,7 +711,7 @@ custom_user_key = \"keep-me\"
         // User-driven key still updated.
         assert_eq!(
             parsed["authority"]["listen_addr"].as_str(),
-            Some("127.0.0.1:9443")
+            Some("127.0.0.1:50051")
         );
     }
 

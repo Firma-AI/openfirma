@@ -42,105 +42,40 @@ The output lands in `target/release/firma`.
 
 ## Set up a project
 
-Start in the project directory you want to protect. Scaffold the local OpenFirma layout with the defaults:
+Start in the project directory you want to protect. Scaffold a local OpenFirma layout for this demo:
 
 ```bash
-firma config --yes
+firma config --yes \
+  --name quickstart \
+  --posture dev \
+  --mapping github \
+  --extra-hosts api.github.com
 ```
 
-This creates `.firma/` with a `firma.toml` config file, signing keys, empty policy directories, and a placeholder mapping file.
-
-The scaffolded `generic` run profile picks a sandbox backend matched to your host, so `firma run` works out of the box without a manual `--backend` override:
-
-| Host  | Default backend |
-| ----- | --------------- |
-| Linux | `bwrap`         |
-| WSL   | `wsl2`          |
-| macOS | `vz`            |
-
-To override, pass `firma run --backend <name>` or edit `backend` under `[profiles.generic]` in `.firma/firma-run.toml`.
-
-Now make the generated profile work for this demo, where we are going to enforce a simple `curl` command.
-
-1. Create the audit directory that `firma monitor` will tail.
-
-   ```bash
-   mkdir -p /tmp/openfirma-quickstart
-   ```
-
-2. Edit `.firma/firma.toml`.
-
-   In the existing `[sidecar.audit]` section, add `sink` and `file_path` below the generated `signing_key_path`:
-
-   ```toml
-   sink = "file"
-   file_path = "/tmp/openfirma-quickstart/audit.jsonl"
-   ```
-
-   Then append this section to the end of the same file:
-
-   ```toml
-   [sidecar.preflight]
-   session_id = "quickstart-session"
-   resource_scope = "api.github.com/"
-   ```
-
-   The preflight settings pin a stable session ID and grant that session access to the GitHub resource used below. The `generic` profile routes traffic through the HTTP proxy Sidecar by default — no extra config needed.
-
-3. Replace the placeholder contents of `.firma/mapping-rules.toml` with the two rules for the GitHub request:
-
-   ```toml
-   [[rules]]
-   method = "CONNECT"
-   host = "api.github.com"
-   path = "/"
-   action_class = "communication.external.send"
-
-   [[rules]]
-   method = "GET"
-   host = "api.github.com"
-   path = "/users/firma-ai"
-   action_class = "communication.external.send"
-   ```
-
-You do not need to add a Cedar policy file for this demo. `firma run` starts a local development Authority with a temporary policy bundle that permits `communication.external.send`.
+This creates `.firma/` with a unified `firma.toml` (authority, sidecar, and run profiles), mapping files, policy files, and local signing material under the platform state directory. The GitHub mapping enables HTTPS interception for `api.github.com`; `--extra-hosts` adds a catch-all rule for the public profile endpoint used below.
 
 ## Run an agent under enforcement
 
-`firma run` launches a command inside a sandbox and forces all of its outbound traffic through the enforcement Sidecar. It autostarts a local Sidecar and the local Authority that `firma config` configured in your `firma.toml`, then tears both down when the command exits.
+`firma run` launches a command inside a sandbox and routes its outbound traffic through the enforcement Sidecar. It autostarts a local Sidecar and local Authority from the generated run config, then tears both down when the command exits.
 
 Pass any command you want to wrap after the `--` marker:
 
 ```bash
-FIRMA_RUN_SESSION_ID=quickstart-session firma run --config .firma/firma.toml -- \
-  curl -kfsS \
-    --proxy-header 'x-firma-session-id: quickstart-session' \
-    https://api.github.com/users/firma-ai
+firma run --config .firma/firma.toml -- \
+  curl -kfsS https://api.github.com/users/firma-ai
 ```
 
-Every outbound call the wrapped command makes is normalized, checked against its capability, and evaluated against the Cedar policy bundle supplied by the Authority. In this quickstart, `firma run` starts a local development Authority and uses a temporary policy bundle for the run. The `-k` flag keeps the demo short by letting `curl` accept the local HTTPS interception certificate; for real workloads, install the generated CA instead.
-
-### Using a different Authority
-
-The `[authority]` section `firma config` wrote makes `firma run` autostart a local Authority. To use an Authority you already run instead, point at it with `--authority`:
-
-```bash
-firma run --authority https://authority.internal:50051 --config .firma/firma.toml -- <command>
-```
-
-In CI or any non-interactive context, pass `--no-autostart` to fail with a typed error instead of silently starting a local Authority or Sidecar.
-
-This is the real entry point for running agents — swap `curl ...` for whatever agent command you actually run (a coding agent, a script, a shell).
+Every outbound call the wrapped command makes is normalized, checked against its capability, and evaluated against the Cedar policy bundle supplied by the Authority. The `-k` flag keeps the demo short by letting `curl` accept the local HTTPS interception certificate; for real workloads, install the generated CA instead.
 
 ## Watch the decisions
 
-Open a second terminal and tail the audit log to see ALLOW and DENY decisions as they happen:
+After the command exits, read the audit log:
 
 ```bash
-firma monitor --state-dir /tmp/openfirma-quickstart --tail
+firma monitor --no-follow --format json
 ```
 
-Each line is one decision: the action class, the resource, and the outcome.
+Each line is one signed execution event. For the GitHub call, expect ALLOW events (`"decision":1`) for resources like `api.github.com/` and `api.github.com/users/firma-ai`.
 
 ## What just happened
 

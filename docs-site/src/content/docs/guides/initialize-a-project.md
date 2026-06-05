@@ -59,7 +59,7 @@ firma config [--mode <mode>]
 | `--workspace`                | CWD                      | Agent RW path written to `firma.toml` `[run.profiles.generic]` bwrap mount |
 | `--output-dir` / `-o`        | `.firma` in CWD          | Where `firma.toml`, policies, and mappings are written               |
 | `--state-dir`                | `$FIRMA_STATE_DIR` / XDG | Keys, revocations, generated CA                                      |
-| `--authority-listen`         | `127.0.0.1:9443`         | gRPC listen address (`agent-local` / `authority` modes only)         |
+| `--authority-listen`         | `127.0.0.1:50051`        | gRPC listen address (`agent-local` / `authority` modes only)         |
 | `--authority-url`            | wizard prompt            | Authority URL for `agent-remote` mode                                |
 | `--authority-ca-cert`        | wizard prompt            | Authority CA cert PEM path for `agent-remote` mode                   |
 | `--authority-pub-key`        | derived from state dir   | Authority public key path                                            |
@@ -122,12 +122,12 @@ firma config --yes --dry-run
 
 ```toml
 [authority]                   # agent-local and authority modes
-listen_addr   = "127.0.0.1:9443"
+listen_addr   = "127.0.0.1:50051"
 key_file      = "/path/to/state/authority.key"
 # ...
 
 [sidecar.authority]           # agent-local and agent-remote modes
-url             = "https://127.0.0.1:9443"
+url             = "http://127.0.0.1:50051"
 ca_cert_path    = "/path/to/state/tls/authority-ca.crt"
 public_key_path = "/path/to/state/authority.pub"
 # ... plus connect_timeout_secs / reconnect_* / revocation_* tuning

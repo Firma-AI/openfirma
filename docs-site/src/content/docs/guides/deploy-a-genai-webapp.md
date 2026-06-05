@@ -84,10 +84,7 @@ This is the policy that decides whether the app can ever mint a capability. It r
 // Tenant-scoped agents may request these classes.
 permit (
     principal,
-    action in [
-        Firma::Action::"model.inference.chat",
-        Firma::Action::"communication.external.send"
-    ],
+    action == Firma::Action::"communication.external.send",
     resource
 ) when {
     // tenant ids we recognize
@@ -114,11 +111,10 @@ The tenant list itself is declarative. When you onboard a new tenant, you add a 
 // LLM calls: permitted to OpenAI for known tenants.
 permit (
     principal,
-    action == Firma::Action::"model.inference.chat",
+    action == Firma::Action::"communication.external.send",
     resource
 ) when {
-    resource has "host" &&
-    resource.host == "api.openai.com"
+    resource == Firma::Resource::"api.openai.com/v1/chat/completions"
 };
 
 // Vendor SaaS: permitted to one specific endpoint, with rate limits
@@ -128,8 +124,7 @@ permit (
     action == Firma::Action::"communication.external.send",
     resource
 ) when {
-    resource has "host" &&
-    resource.host == "api.acme-vendor.com" &&
+    resource == Firma::Resource::"api.acme-vendor.com/api/v1/assistant" &&
     context.action_count <= 100
 };
 
@@ -139,10 +134,9 @@ forbid (
     action == Firma::Action::"communication.external.send",
     resource
 ) when {
-    resource has "host" &&
-    (resource.host == "paste.rs" ||
-     resource.host == "transfer.sh" ||
-     resource.host == "0x0.st")
+    resource == Firma::Resource::"paste.rs/" ||
+    resource == Firma::Resource::"transfer.sh/" ||
+    resource == Firma::Resource::"0x0.st/"
 };
 ```
 
@@ -174,7 +168,6 @@ default_protected = true                      # production!
 
 [sidecar.policy]
 dir           = "/etc/firma/cache/policies"   # populated by Authority stream
-authority_url = "https://firma-authority.internal:50051"
 
 [sidecar.constraint_enforcement]
 bundle_ttl_seconds     = 90
@@ -184,6 +177,7 @@ enforcement_timeout_ms = 50
 paths = []                                   # capabilities arrive via gRPC, not seed files
 
 [sidecar.authority]
+url             = "https://firma-authority.internal:50051"
 public_key_path = "/etc/firma/firma-authority.pub"
 ca_cert_path    = "/etc/firma/authority-ca.crt"
 
@@ -202,24 +196,18 @@ rps        = 50
 burst      = 10
 timeout_ms = 15000
 
-[[sidecar.credentials]]
-host           = "api.openai.com"
+[sidecar.credentials.openai]
+target_host    = "api.openai.com"
 mode           = "vault"
 header         = "Authorization"
 prefix         = "Bearer "
-secret_path    = "secret/data/openai/api-key"
-secret_key     = "value"
+secret_path    = "/run/secrets/openai-api-key"
 
-[[sidecar.credentials]]
-host           = "api.acme-vendor.com"
+[sidecar.credentials.acme_vendor]
+target_host    = "api.acme-vendor.com"
 mode           = "vault"
 header         = "x-api-key"
-secret_path    = "secret/data/acme-vendor/api-key"
-secret_key     = "value"
-
-[sidecar.credentials.vault]
-addr = "https://vault.internal:8200"
-# token via AppRole, configured via env
+secret_path    = "/run/secrets/acme-vendor-api-key"
 
 [sidecar.audit]
 sink             = "grpc"
@@ -233,9 +221,9 @@ level = "info"
 A few things worth highlighting:
 
 - **`default_protected = true`** — anything not in mapping rules denies. Production posture.
-- **`authority_url` uses `https://` + `authority.ca_cert_path`** — sidecar verifies Authority identity before trusting streamed bundles/revocations.
+- **`[sidecar.authority].url` uses `https://` + `[sidecar.authority].ca_cert_path`** — sidecar verifies Authority identity before trusting streamed bundles/revocations.
 - **`grpc` audit sink** — events go to a centralized collector, not to a local file. Multiple Sidecars feed one collector.
-- **Vault for credentials** — no API keys on disk. The Sidecar pulls them on first use and caches in memory.
+- **Vault Agent for credentials** — no API keys in the app. Vault Agent renders short-lived files and the Sidecar reads them per call.
 - **`strict_hosts` on the vendor** — if MITM fails (e.g. cert mismatch), the call denies rather than falling back to weaker CONNECT-only policy.
 
 ## Step 6: Per-session capability issuance
@@ -256,7 +244,6 @@ def issue_capability_for_session(tenant_id: str, user_session_id: str):
         agent_id=f"tenant-{tenant_id}",
         session_id=user_session_id,
         requested_actions=[
-            "model.inference.chat",
             "communication.external.send",
         ],
         resource_scope="*",
@@ -331,13 +318,13 @@ Offboarding is the inverse: remove the entries from issuance + runtime policy, p
 
 **`PolicyBundleStale` denials in production.** Your Sidecars lost contact with the Authority. Check the network path, the Authority's health, and consider raising `bundle_ttl_seconds` slightly to give yourself headroom for transient blips.
 
-**`CapabilityScopeMismatch` for legitimate calls.** The capability's `resource_scope` doesn't match the request. Either tighten the scope at issuance time or loosen it. Match the scope to the agent's mission, not to a wildcard — `'*'` is a smell in production.
+**`ScopeViolation` for legitimate calls.** The capability's `resource_scope` doesn't match the request. Either tighten the scope at issuance time or loosen it. Match the scope to the agent's mission, not to a wildcard — `'*'` is a smell in production.
 
 **Audit volume.** A busy app produces a lot of events. Plan for the storage and the cost of shipping them. `grpc` sink + a horizontally scaled collector is the right shape.
 
 **Vault token rotation.** AppRole renewal needs to happen before the token expires; the Sidecar does not auto-renew. Use a sidecar-of-the-sidecar (e.g. Vault Agent) to keep credentials fresh.
 
-**Sidecar restart drops in-memory capabilities.** When a pod restarts, the Sidecar comes back with no `CapabilityMap` entries until sessions issue new ones. The app should retry on `CapabilityNotFound` by re-issuing.
+**Sidecar restart drops in-memory capabilities.** When a pod restarts, the Sidecar comes back with no `CapabilityMap` entries until sessions issue new ones. The app should retry on `TokenInvalid` by re-issuing.
 
 ## What's next
 
