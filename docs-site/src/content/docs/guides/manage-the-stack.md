@@ -40,8 +40,8 @@ Layout written:
 
 ```text
 ./proj/.firma/
-  firma.toml            firma-run.toml
-  mapping-rules.toml    mappings/           policies/
+  firma.toml            mapping-rules.toml
+  mappings/             policies/
   issuance-policies/
 
 $XDG_DATA_HOME/firma/   # or %LOCALAPPDATA%\firma on Windows
