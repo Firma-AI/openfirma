@@ -1243,7 +1243,10 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
         },
         config_dir: plan.config_dir.clone(),
         state_dir: plan.state_dir.clone(),
-        profile: provider_to_profile(&plan.provider),
+        profile: firma_config::AgentProfile::from_name(&plan.agent).map_or_else(
+            || provider_to_profile(&plan.provider),
+            |p| p.as_str().to_string(),
+        ),
     };
     let files = generate_files(&inputs).context("generate files")?;
 
@@ -1681,8 +1684,8 @@ mod tests {
 
         let text = std::fs::read_to_string(config_dir.join("firma.toml")).unwrap();
         let t: toml::Value = toml::from_str(&text).unwrap();
-        // provider="anthropic" → profile="claude-code" → section is [run.profiles.claude-code]
-        let mounts = t["run"]["profiles"]["claude-code"]["mounts"]
+        // agent="generic" is a recognized profile → section is [run.profiles.generic]
+        let mounts = t["run"]["profiles"]["generic"]["mounts"]
             .as_array()
             .unwrap();
         assert_eq!(
