@@ -1002,6 +1002,8 @@ mod tests {
                 "read-only".to_string(),
                 "--ask-for-approval".to_string(),
                 "on-request".to_string(),
+                "--config".to_string(),
+                "shell_environment_policy.inherit=none".to_string(),
                 "exec".to_string(),
                 "hi".to_string(),
             ],
@@ -1009,12 +1011,12 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "--config".to_string(),
-                "shell_environment_policy.inherit=all".to_string(),
                 "--sandbox".to_string(),
                 "read-only".to_string(),
                 "--ask-for-approval".to_string(),
                 "on-request".to_string(),
+                "--config".to_string(),
+                "shell_environment_policy.inherit=none".to_string(),
                 "exec".to_string(),
                 "hi".to_string(),
             ]
