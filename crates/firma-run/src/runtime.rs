@@ -874,18 +874,12 @@ mod tests {
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
                     enforce_wrapper_defaults: true,
-                    sandbox_mode: Some("workspace-write".to_string()),
+                    sandbox_mode: Some("danger-full-access".to_string()),
                     approval_policy: Some("never".to_string()),
-                    config_overrides: BTreeMap::from([
-                        (
-                            "sandbox_workspace_write.network_access".to_string(),
-                            "true".to_string(),
-                        ),
-                        (
-                            "shell_environment_policy.inherit".to_string(),
-                            "all".to_string(),
-                        ),
-                    ]),
+                    config_overrides: BTreeMap::from([(
+                        "shell_environment_policy.inherit".to_string(),
+                        "all".to_string(),
+                    )]),
                 },
             )]),
         };
@@ -899,11 +893,9 @@ mod tests {
             args,
             vec![
                 "--sandbox".to_string(),
-                "workspace-write".to_string(),
+                "danger-full-access".to_string(),
                 "--ask-for-approval".to_string(),
                 "never".to_string(),
-                "--config".to_string(),
-                "sandbox_workspace_write.network_access=true".to_string(),
                 "--config".to_string(),
                 "shell_environment_policy.inherit=all".to_string(),
                 "exec".to_string(),
@@ -992,18 +984,12 @@ mod tests {
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
                     enforce_wrapper_defaults: true,
-                    sandbox_mode: Some("workspace-write".to_string()),
+                    sandbox_mode: Some("danger-full-access".to_string()),
                     approval_policy: Some("never".to_string()),
-                    config_overrides: BTreeMap::from([
-                        (
-                            "sandbox_workspace_write.network_access".to_string(),
-                            "true".to_string(),
-                        ),
-                        (
-                            "shell_environment_policy.inherit".to_string(),
-                            "all".to_string(),
-                        ),
-                    ]),
+                    config_overrides: BTreeMap::from([(
+                        "shell_environment_policy.inherit".to_string(),
+                        "all".to_string(),
+                    )]),
                 },
             )]),
         };
@@ -1017,7 +1003,7 @@ mod tests {
                 "--ask-for-approval".to_string(),
                 "on-request".to_string(),
                 "--config".to_string(),
-                "sandbox_workspace_write.network_access=true".to_string(),
+                "shell_environment_policy.inherit=none".to_string(),
                 "exec".to_string(),
                 "hi".to_string(),
             ],
@@ -1025,14 +1011,12 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "--config".to_string(),
-                "shell_environment_policy.inherit=all".to_string(),
                 "--sandbox".to_string(),
                 "read-only".to_string(),
                 "--ask-for-approval".to_string(),
                 "on-request".to_string(),
                 "--config".to_string(),
-                "sandbox_workspace_write.network_access=true".to_string(),
+                "shell_environment_policy.inherit=none".to_string(),
                 "exec".to_string(),
                 "hi".to_string(),
             ]
@@ -1070,18 +1054,12 @@ mod tests {
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
                     enforce_wrapper_defaults: true,
-                    sandbox_mode: Some("workspace-write".to_string()),
+                    sandbox_mode: Some("danger-full-access".to_string()),
                     approval_policy: Some("never".to_string()),
-                    config_overrides: BTreeMap::from([
-                        (
-                            "sandbox_workspace_write.network_access".to_string(),
-                            "true".to_string(),
-                        ),
-                        (
-                            "shell_environment_policy.inherit".to_string(),
-                            "all".to_string(),
-                        ),
-                    ]),
+                    config_overrides: BTreeMap::from([(
+                        "shell_environment_policy.inherit".to_string(),
+                        "all".to_string(),
+                    )]),
                 },
             )]),
         };
@@ -1091,7 +1069,7 @@ mod tests {
             "codex",
             vec![
                 "--config".to_string(),
-                "sandbox_workspace_write.network_access=false".to_string(),
+                "shell_environment_policy.inherit=none".to_string(),
                 "exec".to_string(),
                 "hi".to_string(),
             ],
@@ -1100,13 +1078,11 @@ mod tests {
             args,
             vec![
                 "--sandbox".to_string(),
-                "workspace-write".to_string(),
+                "danger-full-access".to_string(),
                 "--ask-for-approval".to_string(),
                 "never".to_string(),
                 "--config".to_string(),
-                "shell_environment_policy.inherit=all".to_string(),
-                "--config".to_string(),
-                "sandbox_workspace_write.network_access=false".to_string(),
+                "shell_environment_policy.inherit=none".to_string(),
                 "exec".to_string(),
                 "hi".to_string(),
             ]

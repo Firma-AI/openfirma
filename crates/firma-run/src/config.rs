@@ -1140,11 +1140,11 @@ path = "/tmp/capability.token"
     }
 
     #[test]
-    fn legacy_codex_cli_config_maps_to_executable_policy() {
+    fn user_executable_policy_overrides_builtin_sandbox_mode() {
         let tmpdir = tempfile::tempdir().unwrap();
         let config_path = tmpdir.path().join("firma.toml");
         let toml = r#"
-[run.profiles.codex.codex_cli]
+[run.profiles.codex.executable_policies.codex]
 enforce_wrapper_defaults = true
 sandbox_mode = "workspace-write"
 approval_policy = "never"

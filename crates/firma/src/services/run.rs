@@ -48,7 +48,11 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
             .filter(|p| p.is_file())
     });
 
-    let profile = resolve_profile_name(args.profile.as_deref(), run_config.as_deref());
+    let profile = resolve_profile_name(
+        args.profile.as_deref(),
+        run_config.as_deref(),
+        &args.command,
+    );
     let authority_cli = match args.authority.as_deref() {
         None => firma_run::authority::AuthorityCli::Unset,
         Some("local") => firma_run::authority::AuthorityCli::Local,
@@ -119,14 +123,10 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
     // Infer profile from --profile flag, falling back to the command name so
     // `firma run -- codex` auto-selects the codex profile without requiring
     // an explicit --profile flag.
-    let inferred_profile = args.profile.as_deref().or_else(|| {
-        let cmd = args.command.first()?;
-        let name = std::path::Path::new(cmd)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(cmd.as_str());
-        firma_config::AgentProfile::from_name(name).map(|_| name)
-    });
+    let inferred_profile = args
+        .profile
+        .as_deref()
+        .or_else(|| profile_from_command(&args.command));
 
     let plan = ScaffoldPlan {
         config_dir: resolved,
@@ -210,6 +210,7 @@ fn validate_sidecar_endpoint_flag(args: &RunArgs) -> anyhow::Result<()> {
 fn resolve_profile_name(
     cli_profile: Option<&str>,
     config_path: Option<&std::path::Path>,
+    command: &[String],
 ) -> String {
     if let Some(p) = cli_profile {
         return p.to_string();
@@ -219,7 +220,19 @@ fn resolve_profile_name(
     {
         return p;
     }
+    if let Some(p) = profile_from_command(command) {
+        return p.to_string();
+    }
     "generic".to_string()
+}
+
+fn profile_from_command(command: &[String]) -> Option<&'static str> {
+    let cmd = command.first()?;
+    let name = std::path::Path::new(cmd)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(cmd.as_str());
+    firma_config::AgentProfile::from_name(name).map(firma_config::AgentProfile::as_str)
 }
 
 fn profile_to_provider(profile: Option<&str>) -> String {
