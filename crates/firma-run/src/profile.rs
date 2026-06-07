@@ -68,6 +68,16 @@ fn generic_profile() -> ProfilePatch {
     }
 }
 
+fn nested_bwrap_restricted() -> bool {
+    if std::fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone")
+        .is_ok_and(|s| s.trim() == "0")
+    {
+        return true;
+    }
+    std::fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+        .is_ok_and(|s| s.trim() == "1")
+}
+
 fn codex_profile() -> ProfilePatch {
     let mut base = generic_profile();
     base.env_set
@@ -77,20 +87,42 @@ fn codex_profile() -> ProfilePatch {
         "ANTHROPIC_API_KEY".to_string(),
         "CODEX_HOME".to_string(),
     ]);
+
+    // When nested bwrap is restricted (Ubuntu, Debian ≥12, hardened kernels),
+    // codex's internal bwrap sandbox cannot run inside firma's outer sandbox.
+    // danger-full-access disables codex's internal sandbox; firma's outer
+    // sandbox provides equivalent isolation. Elsewhere keep workspace-write.
+    let (sandbox_mode, config_overrides) = if nested_bwrap_restricted() {
+        (
+            "danger-full-access".to_string(),
+            BTreeMap::from([(
+                "shell_environment_policy.inherit".to_string(),
+                "all".to_string(),
+            )]),
+        )
+    } else {
+        (
+            "workspace-write".to_string(),
+            BTreeMap::from([
+                (
+                    "sandbox_workspace_write.network_access".to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    "shell_environment_policy.inherit".to_string(),
+                    "all".to_string(),
+                ),
+            ]),
+        )
+    };
+
     base.executable_policies.insert(
         "codex".to_string(),
         ExecutableLaunchPolicyPatch {
             enforce_wrapper_defaults: Some(true),
-            // Ubuntu's AppArmor `unpriv_bwrap` profile denies CAP_SYS_ADMIN to any
-            // process spawned inside a bwrap sandbox, so codex's own bwrap-based sandbox
-            // cannot nest inside firma's. danger-full-access disables codex's internal
-            // sandbox; firma's outer sandbox provides the equivalent isolation.
-            sandbox_mode: Some("danger-full-access".to_string()),
+            sandbox_mode: Some(sandbox_mode),
             approval_policy: Some("never".to_string()),
-            config_overrides: BTreeMap::from([(
-                "shell_environment_policy.inherit".to_string(),
-                "all".to_string(),
-            )]),
+            config_overrides,
         },
     );
     base
