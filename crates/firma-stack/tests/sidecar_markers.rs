@@ -151,18 +151,26 @@ fn http_proxy_listen_with_listening_port_is_running() {
 #[test]
 fn http_proxy_listen_with_closed_port_is_unhealthy() {
     use std::net::TcpListener;
+    use std::time::{Duration, Instant};
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let run_dir = tmp.path().join("run");
     let me = std::process::id();
 
-    // Bind to grab a free port. Keep the listener alive until just before the
-    // probe so the OS cannot reassign the port to another concurrent test's
-    // listener between the drop and the connect_timeout call.
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind tcp");
     let addr = listener.local_addr().expect("local addr");
     write_marker_with_listen(&run_dir, "http-closed", me, Some(&addr.to_string()));
-    drop(listener); // port is now closed
+    drop(listener);
+
+    // macOS may briefly accept TCP handshakes on a recently
+    // closed port. Wait until connect() fails before probing.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(10)).is_err() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 
     let entry = probe_entry(&run_dir.join("http-closed")).expect("probe");
     assert_eq!(entry.state, State::Unhealthy);
