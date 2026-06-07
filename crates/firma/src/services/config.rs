@@ -1681,7 +1681,8 @@ mod tests {
 
         let text = std::fs::read_to_string(config_dir.join("firma.toml")).unwrap();
         let t: toml::Value = toml::from_str(&text).unwrap();
-        let mounts = t["run"]["profiles"]["generic"]["mounts"]
+        // provider="anthropic" → profile="claude-code" → section is [run.profiles.claude-code]
+        let mounts = t["run"]["profiles"]["claude-code"]["mounts"]
             .as_array()
             .unwrap();
         assert_eq!(

@@ -301,10 +301,10 @@ fn backend_for_linux(wsl: firma_run::backend::platform::WslKind) -> &'static str
 fn ensure_run_profiles_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Result<()> {
     let run = ensure_table(doc.as_table_mut(), "run")?;
     let profiles = ensure_table(run, "profiles")?;
-    let generic = ensure_table(profiles, "generic")?;
-    set_str_if_absent(generic, "backend", default_run_backend());
+    let profile_table = ensure_table(profiles, inputs.profile)?;
+    set_str_if_absent(profile_table, "backend", default_run_backend());
 
-    let env_set = ensure_table(generic, "env_set")?;
+    let env_set = ensure_table(profile_table, "env_set")?;
     set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_ROOTFS_MODE", "readonly");
     set_str_if_absent(env_set, "FIRMA_RUN_BWRAP_RUNTIME_HOME", "false");
     set_str_if_absent(
@@ -313,7 +313,7 @@ fn ensure_run_profiles_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) ->
         ".ssh,.gnupg,.aws,.config/gcloud,.env",
     );
 
-    let mounts = ensure_array_of_tables(generic, "mounts")?;
+    let mounts = ensure_array_of_tables(profile_table, "mounts")?;
     replace_workspace_mount(mounts, inputs.workspace);
     Ok(())
 }

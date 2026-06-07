@@ -68,16 +68,6 @@ fn generic_profile() -> ProfilePatch {
     }
 }
 
-fn nested_bwrap_restricted() -> bool {
-    if std::fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone")
-        .is_ok_and(|s| s.trim() == "0")
-    {
-        return true;
-    }
-    std::fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
-        .is_ok_and(|s| s.trim() == "1")
-}
-
 fn codex_profile() -> ProfilePatch {
     let mut base = generic_profile();
     base.env_set
@@ -92,7 +82,15 @@ fn codex_profile() -> ProfilePatch {
     // codex's internal bwrap sandbox cannot run inside firma's outer sandbox.
     // danger-full-access disables codex's internal sandbox; firma's outer
     // sandbox provides equivalent isolation. Elsewhere keep workspace-write.
-    let (sandbox_mode, config_overrides) = if nested_bwrap_restricted() {
+    base.executable_policies.insert(
+        "codex".to_string(),
+        codex_executable_policy(crate::backend::platform::nested_userns_restricted()),
+    );
+    base
+}
+
+fn codex_executable_policy(restricted: bool) -> ExecutableLaunchPolicyPatch {
+    let (sandbox_mode, config_overrides) = if restricted {
         (
             "danger-full-access".to_string(),
             BTreeMap::from([(
@@ -115,17 +113,12 @@ fn codex_profile() -> ProfilePatch {
             ]),
         )
     };
-
-    base.executable_policies.insert(
-        "codex".to_string(),
-        ExecutableLaunchPolicyPatch {
-            enforce_wrapper_defaults: Some(true),
-            sandbox_mode: Some(sandbox_mode),
-            approval_policy: Some("never".to_string()),
-            config_overrides,
-        },
-    );
-    base
+    ExecutableLaunchPolicyPatch {
+        enforce_wrapper_defaults: Some(true),
+        sandbox_mode: Some(sandbox_mode),
+        approval_policy: Some("never".to_string()),
+        config_overrides,
+    }
 }
 
 fn claude_code_profile() -> ProfilePatch {
@@ -149,4 +142,44 @@ fn claude_code_profile() -> ProfilePatch {
     ]);
     base.use_http_proxy_sidecar = true;
     base
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_policy_workspace_write_includes_network_access() {
+        let policy = codex_executable_policy(false);
+        assert_eq!(policy.sandbox_mode, Some("workspace-write".to_string()));
+        assert_eq!(
+            policy
+                .config_overrides
+                .get("sandbox_workspace_write.network_access"),
+            Some(&"true".to_string())
+        );
+        assert_eq!(
+            policy
+                .config_overrides
+                .get("shell_environment_policy.inherit"),
+            Some(&"all".to_string())
+        );
+    }
+
+    #[test]
+    fn codex_policy_danger_full_access_omits_network_access() {
+        let policy = codex_executable_policy(true);
+        assert_eq!(policy.sandbox_mode, Some("danger-full-access".to_string()));
+        assert!(
+            !policy
+                .config_overrides
+                .contains_key("sandbox_workspace_write.network_access")
+        );
+        assert_eq!(
+            policy
+                .config_overrides
+                .get("shell_environment_policy.inherit"),
+            Some(&"all".to_string())
+        );
+    }
 }
