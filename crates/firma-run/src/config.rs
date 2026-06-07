@@ -1157,7 +1157,7 @@ approval_policy = "never"
 
         let policy = resolved.executable_policies.get("codex").unwrap();
         assert!(policy.enforce_wrapper_defaults);
-        assert_eq!(policy.sandbox_mode.as_deref(), Some("workspace-write"));
+        assert_eq!(policy.sandbox_mode.as_deref(), Some("danger-full-access"));
         assert_eq!(policy.approval_policy.as_deref(), Some("never"));
     }
 

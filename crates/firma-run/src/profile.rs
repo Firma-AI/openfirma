@@ -81,18 +81,16 @@ fn codex_profile() -> ProfilePatch {
         "codex".to_string(),
         ExecutableLaunchPolicyPatch {
             enforce_wrapper_defaults: Some(true),
-            sandbox_mode: Some("workspace-write".to_string()),
+            // Ubuntu's AppArmor `unpriv_bwrap` profile denies CAP_SYS_ADMIN to any
+            // process spawned inside a bwrap sandbox, so codex's own bwrap-based sandbox
+            // cannot nest inside firma's. danger-full-access disables codex's internal
+            // sandbox; firma's outer sandbox provides the equivalent isolation.
+            sandbox_mode: Some("danger-full-access".to_string()),
             approval_policy: Some("never".to_string()),
-            config_overrides: BTreeMap::from([
-                (
-                    "sandbox_workspace_write.network_access".to_string(),
-                    "true".to_string(),
-                ),
-                (
-                    "shell_environment_policy.inherit".to_string(),
-                    "all".to_string(),
-                ),
-            ]),
+            config_overrides: BTreeMap::from([(
+                "shell_environment_policy.inherit".to_string(),
+                "all".to_string(),
+            )]),
         },
     );
     base
