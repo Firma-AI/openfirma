@@ -38,4 +38,10 @@ ignore = [
     # Path: firma-demo-tui → tui-markdown → syntect → yaml-rust
     # Demo crate only; same root cause as bincode
     "RUSTSEC-2024-0320",
+
+    # proc-macro-error2 2.0.1 — unmaintained
+    # Path: firma-sidecar → pingora-proxy → pingora-cache → cf-rustracing-jaeger
+    #     → local-ip-address → neli → getset → proc-macro-error2
+    # Fix: blocked on pingora upstream
+    "RUSTSEC-2026-0173",
 ]
