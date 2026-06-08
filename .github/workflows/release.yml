@@ -126,7 +126,7 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 "dist/$name.zip").Hash.ToLower()
           "$hash  $name.zip" | Out-File -Encoding ascii "dist/$name.zip.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: firma-${{ matrix.target }}
           path: dist/firma-*
@@ -150,7 +150,7 @@ jobs:
         env:
           OUTPUT: CHANGELOG.md
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: changelog
           path: CHANGELOG.md

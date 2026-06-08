@@ -53,7 +53,7 @@ jobs:
 
       - name: Upload demo logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: demo-logs
           path: examples/demo/logs/
