@@ -92,7 +92,7 @@ export FIRMA_PROXY_LISTEN_ADDR=127.0.0.1:18181
 cargo run -p firma -- run -- "your command"
 ```
 
-Strict capability workflow (session-bound tokens):
+Strict capability workflow (session-bound tokens, legacy operator path):
 
 ```bash
 export FIRMA_RUN_SESSION_ID=demo-session
@@ -101,7 +101,9 @@ cargo run -p firma -- run --profile codex -- codex
 ```
 
 This prevents late `TokenInvalid` denials caused by runtime-generated session
-ids drifting from pre-issued capability seed session ids.
+ids drifting from pre-issued capability seed session ids. In the automatic
+`firma run` mint flow, `FIRMA_RUN_SESSION_ID` is still honoured and passed to
+the Authority as the session id for the live-minted capability.
 
 When a sidecar MITM CA certificate is detected, `firma run` automatically exports trust env vars for common runtimes:
 
@@ -173,7 +175,8 @@ PowerShell helper wrapper:
 pwsh ./examples/firma-run/local/run.ps1 -- codex
 ```
 
-Capability token renewal helper (to prevent `TokenExpired` interruptions):
+Capability token renewal helper — **legacy operator path** (pre-provisioned seed
+tokens; superseded by automatic `firma run` mint):
 
 ```bash
 examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID"

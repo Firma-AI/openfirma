@@ -5,6 +5,16 @@ description: Stand up a local Authority, mint a capability for an agent, and see
 
 A capability token is what an agent needs to clear [Stage 1](../../concepts/pipeline/) of the enforcement pipeline. This guide walks you through running an Authority, minting a capability with the right scope, and getting it loaded into a Sidecar.
 
+> **Note: this is the legacy operator path.** The primary way capabilities are
+> issued today is automatic: `firma run` mints a per-session capability live via
+> the Authority's `IssueCapability` gRPC call and writes it to
+> `$XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml`; the sidecar picks it
+> up without any operator intervention. The manual `firma authority issue` +
+> `[capability_seed]` workflow documented in this guide is kept working but is
+> **deprecated** — use it only when you need to pre-provision a fixed, long-lived
+> session outside of `firma run` (for example, a daemon or a CI agent with a
+> known identity and scope that does not use the autostart flow).
+
 By the end you will have:
 
 - A running Authority with its own signing keypair and issuance policy.

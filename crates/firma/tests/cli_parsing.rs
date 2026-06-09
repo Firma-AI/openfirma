@@ -116,8 +116,6 @@ fn parse_config_scripted() {
     parse_ok(&[
         "config",
         "--yes",
-        "--name",
-        "codex",
         "--posture",
         "dev",
         "--mapping",

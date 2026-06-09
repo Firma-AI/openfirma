@@ -43,11 +43,6 @@ pub struct InitArgs {
     #[arg(long, value_enum)]
     pub mode: Option<Mode>,
 
-    /// Agent slug used as the `agent_id` in the generated config (e.g. "my-agent").
-    /// Not used in `authority` mode.
-    #[arg(long, short = 'n')]
-    pub name: Option<String>,
-
     /// Built-in agent profile written to `[run].profile` in `firma.toml`.
     #[arg(long, value_enum)]
     pub profile: Option<AgentProfile>,
@@ -63,10 +58,6 @@ pub struct InitArgs {
     /// Comma-separated extra hosts the agent is allowed to reach.
     #[arg(long)]
     pub extra_hosts: Option<String>,
-
-    /// Capability actions requested during preflight; may be repeated or comma-separated.
-    #[arg(long = "requested-action", value_delimiter = ',')]
-    pub requested_actions: Vec<String>,
 
     /// Absolute path the agent may write to (bwrap RW mount).
     /// Defaults to the output directory.
@@ -155,38 +146,6 @@ impl Posture {
             Self::Dev => "Adds code.read/write, issues, package install",
             Self::DevWithDeleteWatch => {
                 "Dev + code.destructive allowed (local-exec / delete-watch)"
-            }
-        }
-    }
-
-    /// Actions requested in the preflight token for this posture.
-    pub fn requested_actions(&self) -> Vec<&'static str> {
-        match self {
-            Self::Strict => vec![
-                "credential.read",
-                "communication.external.send",
-                "communication.internal.send",
-            ],
-            Self::Dev | Self::DevWithDeleteWatch => {
-                let mut actions = vec![
-                    "system.install",
-                    "credential.read",
-                    "code.read",
-                    "code.review.read",
-                    "code.review.submit",
-                    "code.write",
-                    "code.merge",
-                    "issue.read",
-                    "issue.write",
-                    "security.alert.read",
-                    "notification.manage",
-                    "communication.external.send",
-                    "communication.internal.send",
-                ];
-                if matches!(self, Self::DevWithDeleteWatch) {
-                    actions.push("code.destructive");
-                }
-                actions
             }
         }
     }

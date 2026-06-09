@@ -20,7 +20,7 @@ mod supervisor;
 
 pub use config::{StackConfig, resolve_stack_config};
 pub use error::StackError;
-pub use runtime_paths::{default_runtime_dir, run_dir_from, run_entry_from};
+pub use runtime_paths::{capabilities_dir_from, default_runtime_dir, run_dir_from, run_entry_from};
 pub use sidecar_markers::{MetadataFile, SidecarEntry, gc_stale, get, list};
 pub use start::{StackHandle, StartMode, spawn_stack, start, supervise};
 pub use state_dir::resolve_state_dir;

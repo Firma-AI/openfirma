@@ -15,10 +15,10 @@
 //!   `firma config`.
 //! - **static defaults** are only seeded when absent; an operator's manual
 //!   tweak (e.g. `bundle_ttl_seconds = 60`) survives.
-//! - **array selections** (intercept hosts, mapping paths, requested
-//!   actions, extra-host rules) are fully replaced because they reflect
-//!   the *current* selection — keeping stale entries would silently widen
-//!   the policy surface.
+//! - **array selections** (intercept hosts, mapping paths, extra-host
+//!   rules) are fully replaced because they reflect the *current*
+//!   selection — keeping stale entries would silently widen the policy
+//!   surface.
 //! - **`strict_hosts`** is the exception: it is *merged*, not replaced.
 //!   Newly intercepted hosts are appended, but existing operator-edited
 //!   entries are preserved. It is decoupled from `intercept_hosts` so an
@@ -40,7 +40,6 @@ use crate::args::config::Mode;
 pub struct DocInputs<'a> {
     pub mode: &'a Mode,
     pub keep_local_authority: bool,
-    pub name: &'a str,
     pub profile: &'a str,
     pub authority_listen: &'a str,
     pub authority_url: &'a str,
@@ -53,7 +52,6 @@ pub struct DocInputs<'a> {
     pub audit_key: &'a str,
     pub tls_cert_path: &'a str,
     pub tls_key_path: &'a str,
-    pub requested_actions: &'a [String],
     pub mapping_paths: &'a [String],
     pub mitm_hosts: &'a [&'a str],
     pub workspace: &'a str,
@@ -251,17 +249,6 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
         set_bool_if_absent(auth, "revocation_fail_closed_on_disconnect", false);
     }
 
-    {
-        let pre = ensure_table(sidecar, "preflight")?;
-        set_str(pre, "agent_id", inputs.name);
-        set_string_array(
-            pre,
-            "requested_actions",
-            &string_slice(inputs.requested_actions),
-        );
-        set_str_if_absent(pre, "resource_scope", "*");
-        set_int_if_absent(pre, "ttl_seconds", 3600);
-    }
     Ok(())
 }
 
@@ -533,10 +520,6 @@ fn set_str_array(table: &mut Table, key: &str, items: &[String]) {
     table.insert(key, value(arr));
 }
 
-fn string_slice(items: &[String]) -> Vec<&str> {
-    items.iter().map(String::as_str).collect()
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 mod tests {
@@ -546,7 +529,6 @@ mod tests {
         DocInputs {
             mode,
             keep_local_authority: false,
-            name: "test-agent",
             profile: "generic",
             authority_listen: "127.0.0.1:50051",
             authority_url: "http://127.0.0.1:50051",
@@ -559,7 +541,6 @@ mod tests {
             audit_key: "/state/audit.key",
             tls_cert_path: "/state/tls/authority.crt",
             tls_key_path: "/state/tls/authority.key",
-            requested_actions: &[],
             mapping_paths: &[],
             mitm_hosts: &[],
             workspace: "/workspace",
@@ -720,17 +701,12 @@ custom_user_key = \"keep-me\"
     #[test]
     fn array_fields_fully_replace_on_merge() {
         let mut inputs = dummy_inputs(&Mode::AgentLocal);
-        let actions = vec!["communication.external.send".to_string()];
         let mappings = vec!["mappings/anthropic.toml".to_string()];
         let mitm = ["api.github.com"];
-        inputs.requested_actions = &actions;
         inputs.mapping_paths = &mappings;
         inputs.mitm_hosts = &mitm;
 
         let existing = "\
-[sidecar.preflight]
-requested_actions = [\"stale.action\"]
-
 [sidecar.interceptor.https_mitm]
 intercept_hosts = [\"old.example.com\"]
 strict_hosts = [\"old.example.com\"]
@@ -740,13 +716,6 @@ rules_paths = [\"mappings/stale.toml\"]
 ";
         let out = render_firma_toml(existing, &inputs).unwrap();
         let parsed: toml::Value = toml::from_str(&out).unwrap();
-        let actions_out: Vec<&str> = parsed["sidecar"]["preflight"]["requested_actions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|v| v.as_str())
-            .collect();
-        assert_eq!(actions_out, vec!["communication.external.send"]);
 
         let mitm_out: Vec<&str> = parsed["sidecar"]["interceptor"]["https_mitm"]["intercept_hosts"]
             .as_array()

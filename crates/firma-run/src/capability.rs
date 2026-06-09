@@ -1,3 +1,6 @@
+pub mod guard;
+pub mod issue;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, mpsc};
 use std::thread::{self, JoinHandle};
