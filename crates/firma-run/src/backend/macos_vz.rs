@@ -556,9 +556,9 @@ fn ensure_executable_file(name: &str, path: &Path) {
 ///
 /// In `SandboxExecNetworkDeny` mode the profile adds `deny network-outbound`
 /// after the default `allow`, then re-allows loopback. This means the wrapped
-/// process can only make outbound connections to `127.0.0.1` (the host-side
-/// proxy bridge and DNS stub live there), and all external IP connections are
-/// denied by `TrustedBSD` MAC at the socket layer — including raw sockets,
+/// process can only make outbound connections to localhost loopback endpoints
+/// (the host-side proxy bridge and DNS stub live there), and all external IP
+/// connections are denied by `TrustedBSD` MAC at the socket layer — including raw sockets,
 /// direct TCP/UDP, Unix-domain socket connects, and UDP-based DNS to external
 /// resolvers. This is not port-scoped: other host loopback services are a
 /// known residual caveat.
@@ -584,7 +584,8 @@ fn build_sandbox_profile(launch: &LaunchSpec, mode: VzStructuralMode) -> String 
         profile.push_str(
             "; macOS structural: deny all outbound, allow loopback only\n\
              (deny network-outbound)\n\
-             (allow network-outbound (remote ip4 \"127.0.0.1\"))\n",
+             (allow network-outbound (remote ip4 \"localhost:*\"))\n\
+             (allow network-outbound (remote ip6 \"localhost:*\"))\n",
         );
     }
 
@@ -716,8 +717,16 @@ mod tests {
         let launch = test_launch("generic");
         let profile = build_sandbox_profile(&launch, VzStructuralMode::SandboxExecNetworkDeny);
         assert!(
-            profile.contains("(allow network-outbound (remote ip4 \"127.0.0.1\"))"),
-            "structural mode must allow loopback: {profile}"
+            profile.contains("(allow network-outbound (remote ip4 \"localhost:*\"))"),
+            "structural mode must allow IPv4 localhost loopback: {profile}"
+        );
+        assert!(
+            profile.contains("(allow network-outbound (remote ip6 \"localhost:*\"))"),
+            "structural mode must allow IPv6 localhost loopback: {profile}"
+        );
+        assert!(
+            !profile.contains("(remote ip4 \"127.0.0.1\")"),
+            "sandbox-exec rejects loopback rules without a port: {profile}"
         );
     }
 
@@ -744,7 +753,7 @@ mod tests {
             "needs network deny"
         );
         assert!(
-            profile.contains("(allow network-outbound (remote ip4 \"127.0.0.1\"))"),
+            profile.contains("(allow network-outbound (remote ip4 \"localhost:*\"))"),
             "needs loopback allow"
         );
         assert!(
