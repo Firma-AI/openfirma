@@ -131,12 +131,15 @@ impl WalAuditSink {
         let total = lines.len() as u64;
 
         // Walk backwards from the newest event and keep lines until we
-        // would exceed the target size.
+        // would exceed the target size. Always keep at least the newest
+        // event so compaction can never produce an empty WAL — losing the
+        // most recent audit signal is strictly worse than exceeding the
+        // soft target.
         let mut kept = Vec::new();
         let mut kept_bytes = 0u64;
         for line in lines.iter().rev() {
             let line_bytes = (line.len() + 1) as u64; // +1 for newline
-            if kept_bytes + line_bytes > target_bytes {
+            if kept_bytes + line_bytes > target_bytes && !kept.is_empty() {
                 break;
             }
             kept.push(*line);
@@ -579,24 +582,21 @@ mod tests {
         let wal_path = dir.path().join("compact.jsonl");
 
         // Build concrete events first, then size the cap from their
-        // actual serialized lengths. This keeps the trigger condition
-        // deterministic across platforms/runs even if line sizes differ.
+        // actual serialized lengths.
         let event_a = sample_event("a");
         let event_b = sample_event("b");
         let event_c = sample_event("c");
 
-        let first_line_len = (serde_json::to_string(&event_a)
+        let one_line_len = (serde_json::to_string(&event_a)
             .unwrap_or_else(|e| panic!("serialize a: {e}"))
             .len()
             + 1) as u64; // +1 for newline
-        let second_line_len = (serde_json::to_string(&event_b)
-            .unwrap_or_else(|e| panic!("serialize b: {e}"))
-            .len()
-            + 1) as u64; // +1 for newline
 
-        // Cap to exactly the first two appends. The third append must
-        // exceed this and therefore trigger compaction.
-        let cap = first_line_len + second_line_len;
+        // Cap holds at least 2 lines (with spare bytes to avoid an exact
+        // boundary) but NOT 3. This guarantees the 3rd append triggers
+        // compaction while giving the compaction target enough room to
+        // keep exactly 1 line unambiguously.
+        let cap = 2 * one_line_len + one_line_len / 2;
 
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
@@ -609,34 +609,90 @@ mod tests {
 
         let mut wal_size = 0u64;
 
-        // Append three events.
-        WalAuditSink::wal_append(&mut file, &mut wal_size, cap, &event_a).await;
-        WalAuditSink::wal_append(&mut file, &mut wal_size, cap, &event_b).await;
-        let _dropped = WalAuditSink::wal_append(&mut file, &mut wal_size, cap, &event_c).await;
+        // Append three events. The first two should fit within cap;
+        // the third triggers compaction.
+        let dropped_a = WalAuditSink::wal_append(&mut file, &mut wal_size, cap, &event_a).await;
+        assert_eq!(dropped_a, 0, "first append should not trigger compaction");
+        let dropped_b = WalAuditSink::wal_append(&mut file, &mut wal_size, cap, &event_b).await;
+        assert_eq!(dropped_b, 0, "second append should not trigger compaction");
+        let dropped_c = WalAuditSink::wal_append(&mut file, &mut wal_size, cap, &event_c).await;
+        assert!(
+            dropped_c > 0,
+            "third append should trigger compaction and drop at least one event"
+        );
 
         let contents = tokio::fs::read_to_string(&wal_path)
             .await
             .unwrap_or_else(|e| panic!("read: {e}"));
         let lines: Vec<&str> = contents.lines().collect();
 
-        // After compaction + append of "c", the oldest event(s) should
-        // be gone and "c" should be present.
+        // The newest event must always survive — compaction never
+        // drops the most recent audit signal.
         assert!(
             lines.iter().any(|l| l.contains("\"c\"")),
-            "newest event 'c' should be in WAL"
+            "newest event 'c' should be in WAL, got: {contents}"
         );
+        // The oldest event must have been compacted away.
         assert!(
             !lines.iter().any(|l| l.contains("\"a\"")),
-            "oldest event 'a' should have been compacted away"
+            "oldest event 'a' should have been compacted away, got: {contents}"
         );
         assert!(
-            lines.len() <= 2,
-            "WAL should contain at most 2 lines after compaction, found {}",
+            lines.len() <= 3,
+            "WAL should contain at most 3 lines after compaction + append, found {}",
             lines.len()
         );
         assert!(
             wal_size <= cap,
             "WAL size {wal_size} should be within cap {cap}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wal_compaction_always_keeps_newest_event() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let wal_path = dir.path().join("keep-newest.jsonl");
+
+        // Verify that compaction never produces an empty WAL, even
+        // when the compaction target is smaller than a single line.
+        // This tests the "always keep at least the newest event"
+        // invariant: dropping the most recent audit signal is worse
+        // than briefly exceeding the soft target.
+        let event = sample_event("survivor");
+
+        let one_line_len = (serde_json::to_string(&event)
+            .unwrap_or_else(|e| panic!("serialize: {e}"))
+            .len()
+            + 1) as u64;
+
+        // Cap holds exactly one line. The second append triggers
+        // compaction with target_bytes = cap/2 < one line.
+        let cap = one_line_len;
+
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&wal_path)
+            .await
+            .unwrap_or_else(|e| panic!("open: {e}"));
+
+        let mut wal_size = 0u64;
+        let _dropped_a = WalAuditSink::wal_append(&mut file, &mut wal_size, cap, &event).await;
+        let _dropped_b = WalAuditSink::wal_append(&mut file, &mut wal_size, cap, &event).await;
+
+        let contents = tokio::fs::read_to_string(&wal_path)
+            .await
+            .unwrap_or_else(|e| panic!("read: {e}"));
+        let lines: Vec<&str> = contents.lines().collect();
+        assert!(
+            !lines.is_empty(),
+            "compaction must keep at least the newest event (WAL should not be empty)"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("\"survivor\"")),
+            "newest event should survive compaction even when it exceeds target_bytes"
         );
     }
 
