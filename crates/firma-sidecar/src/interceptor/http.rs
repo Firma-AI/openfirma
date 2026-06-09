@@ -74,13 +74,40 @@ impl BodyBudget {
             .is_ok()
     }
 
-    fn release(&self, n: usize) {
-        if n > 0 {
-            let prev = self.used.fetch_sub(n, Ordering::Relaxed);
-            debug_assert!(
-                prev >= n,
-                "BodyBudget underflow: released {n} but only {prev} were reserved"
-            );
+    fn try_release(&self, n: usize) -> bool {
+        if n == 0 {
+            return true;
+        }
+        self.used
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+                cur.checked_sub(n)
+            })
+            .is_ok()
+    }
+}
+
+struct BudgetGuard {
+    budget: Arc<BodyBudget>,
+    reserved: usize,
+}
+
+impl BudgetGuard {
+    fn new(budget: Arc<BodyBudget>) -> Self {
+        Self {
+            budget,
+            reserved: 0,
+        }
+    }
+
+    fn release(&mut self, n: usize) {
+        self.reserved = n;
+    }
+}
+
+impl Drop for BudgetGuard {
+    fn drop(&mut self) {
+        if self.reserved > 0 {
+            let _ = self.budget.try_release(self.reserved);
         }
     }
 }
@@ -299,19 +326,20 @@ async fn handle_request(
     // request can still emit an attributable deny audit event (FIR-208).
     let malformed_host = host_with_default_port(&req, false);
     let session_hint = header_session_id(&req);
-    let (raw, body_reserved) = match build_raw_request(req, max_request_body_bytes, &budget).await {
-        Ok(result) => result,
-        Err(detail) => {
-            return Ok(deny_malformed(
-                &handler,
-                &session_hint,
-                "raw.http",
-                &malformed_host,
-                &detail,
-            )
-            .await);
-        }
-    };
+    let (raw, body_guard) =
+        match build_raw_request(req, max_request_body_bytes, budget.clone()).await {
+            Ok(result) => result,
+            Err(detail) => {
+                return Ok(deny_malformed(
+                    &handler,
+                    &session_hint,
+                    "raw.http",
+                    &malformed_host,
+                    &detail,
+                )
+                .await);
+            }
+        };
     let session_id = raw
         .headers
         .get("x-firma-session-id")
@@ -344,7 +372,7 @@ async fn handle_request(
         ),
     };
 
-    budget.release(body_reserved);
+    drop(body_guard);
     Ok(response)
 }
 
@@ -1076,8 +1104,8 @@ async fn handle_mitm_https_request(
         .await;
     }
 
-    let (raw, body_reserved) =
-        match build_raw_https_request(req, &target, max_request_body_bytes, &budget).await {
+    let (raw, body_guard) =
+        match build_raw_https_request(req, &target, max_request_body_bytes, budget.clone()).await {
             Ok(result) => result,
             Err(detail) => {
                 return Ok(deny_malformed(
@@ -1125,7 +1153,7 @@ async fn handle_mitm_https_request(
             crate::handler::abort_body_json(reason, &detail),
         ),
     };
-    budget.release(body_reserved);
+    drop(body_guard);
     Ok(response)
 }
 
@@ -1485,13 +1513,13 @@ async fn build_raw_https_request(
     req: Request<Incoming>,
     target: &ConnectTargetInfo,
     max_request_body_bytes: usize,
-    budget: &BodyBudget,
-) -> Result<(RawRequest, usize), String> {
+    budget: Arc<BodyBudget>,
+) -> Result<(RawRequest, BudgetGuard), String> {
     let mut raw = build_raw_https_request_head(&req, target)?;
-    let (body, reserved) =
+    let (body, guard) =
         read_body_with_limit(req.into_body(), max_request_body_bytes, budget).await?;
     raw.body = body;
-    Ok((raw, reserved))
+    Ok((raw, guard))
 }
 
 fn build_raw_https_request_head(
@@ -1540,20 +1568,20 @@ fn host_matches_connect_target(requested: &ConnectTargetInfo, connect: &ConnectT
 async fn build_raw_request(
     req: Request<Incoming>,
     max_request_body_bytes: usize,
-    budget: &BodyBudget,
-) -> Result<(RawRequest, usize), String> {
+    budget: Arc<BodyBudget>,
+) -> Result<(RawRequest, BudgetGuard), String> {
     let mut raw = build_raw_request_head(&req, false)?;
-    let (body, reserved) =
+    let (body, guard) =
         read_body_with_limit(req.into_body(), max_request_body_bytes, budget).await?;
     raw.body = body;
-    Ok((raw, reserved))
+    Ok((raw, guard))
 }
 
 async fn read_body_with_limit(
     mut body: Incoming,
     max_request_body_bytes: usize,
-    budget: &BodyBudget,
-) -> Result<(Option<Vec<u8>>, usize), String> {
+    budget: Arc<BodyBudget>,
+) -> Result<(Option<Vec<u8>>, BudgetGuard), String> {
     if let Some(upper) = body.size_hint().upper()
         && upper > max_request_body_bytes as u64
     {
@@ -1562,37 +1590,31 @@ async fn read_body_with_limit(
         ));
     }
 
+    let mut guard = BudgetGuard::new(budget.clone());
     let mut out = Vec::new();
-    let mut budget_reserved: usize = 0;
     while let Some(frame) = body.frame().await {
-        let frame = frame.map_err(|e| {
-            budget.release(budget_reserved);
-            format!("MALFORMED_REQUEST: failed to read body: {e}")
-        })?;
+        let frame = frame.map_err(|e| format!("MALFORMED_REQUEST: failed to read body: {e}"))?;
         if let Ok(data) = frame.into_data() {
             let new_len = out.len().checked_add(data.len()).ok_or_else(|| {
-                budget.release(budget_reserved);
+                guard.release(out.len());
                 "MALFORMED_REQUEST: request body size overflow".to_string()
             })?;
             if new_len > max_request_body_bytes {
-                budget.release(budget_reserved);
+                guard.release(out.len());
                 return Err(format!(
                     "MALFORMED_REQUEST: request body exceeds {max_request_body_bytes} bytes limit"
                 ));
             }
             if !budget.try_acquire(data.len()) {
-                budget.release(budget_reserved);
+                guard.release(out.len());
                 return Err("MALFORMED_REQUEST: sidecar body budget exceeded".to_string());
             }
-            budget_reserved += data.len();
             out.extend_from_slice(data.as_ref());
         }
     }
 
-    Ok((
-        if out.is_empty() { None } else { Some(out) },
-        budget_reserved,
-    ))
+    guard.release(out.len());
+    Ok((if out.is_empty() { None } else { Some(out) }, guard))
 }
 
 fn build_raw_request_head(req: &Request<Incoming>, is_connect: bool) -> Result<RawRequest, String> {
@@ -3349,7 +3371,7 @@ Content-Length: 10\r\n\
     fn test_body_budget_release_allows_reacquire() {
         let budget = BodyBudget::new(8);
         assert!(budget.try_acquire(8));
-        budget.release(8);
+        assert!(budget.try_release(8));
         assert!(budget.try_acquire(8));
     }
 
@@ -3363,7 +3385,7 @@ Content-Length: 10\r\n\
     fn test_body_budget_release_zero_is_noop() {
         let budget = BodyBudget::new(8);
         assert!(budget.try_acquire(4));
-        budget.release(0);
+        assert!(budget.try_release(0));
         assert!(budget.try_acquire(4));
     }
 
