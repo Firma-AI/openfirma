@@ -3,7 +3,7 @@ title: The sandbox boundary
 description: How firma run contains agent egress, what structural vs proxy-only enforcement means, and what each backend protects against.
 ---
 
-`firma run` wraps an agent in a sandbox, routes its outbound traffic through the Sidecar, and — on structural backends — *removes* the agent's ability to bypass that route. On default macOS and WSL2 paths, enforcement is proxy-based: traffic is mediated only for cooperative HTTP clients that honor `HTTP_PROXY`. macOS also has an experimental sandbox-exec structural path behind an explicit environment gate. This distinction is the most important thing to understand before relying on `firma run` for security enforcement.
+`firma run` wraps an agent in a sandbox, routes its outbound traffic through the Sidecar, and — on structural backends — *removes* the agent's ability to bypass that route. On default macOS and WSL2 paths, enforcement is proxy-based: traffic is mediated only for cooperative HTTP clients that honor `HTTP_PROXY`. macOS also has experimental structural paths behind explicit environment gates. This distinction is the most important thing to understand before relying on `firma run` for security enforcement.
 
 ## The problem with proxy env vars alone
 
@@ -20,7 +20,7 @@ For a cooperative agent on a developer laptop, none of this matters. For a less-
 
 `firma run` has two materially different enforcement modes:
 
-**Structural confinement** (Linux `bwrap`; experimental macOS sandbox-exec mode): The sandbox removes the agent's ability to bypass the proxy at the OS level. In the Linux path, the agent runs in a network namespace where the only reachable destination is the proxy bridge — raw sockets, DNS lookups, and child processes all dead-end inside the sandbox. The macOS sandbox-exec experiment blocks external IP egress but remains loopback-scoped. No extra cooperation from the agent is required once the structural boundary is active.
+**Structural confinement** (Linux `bwrap`; experimental macOS structural modes): The sandbox removes the agent's ability to bypass the proxy at the OS level. In the Linux path, the agent runs in a network namespace where the only reachable destination is the proxy bridge — raw sockets, DNS lookups, and child processes all dead-end inside the sandbox. The macOS sandbox-exec experiment blocks external IP egress but remains loopback-scoped. The macOS VZ guest path emits a strict launch contract for an operator-provided Virtualization.framework runner, which must boot the guest with bridge-only egress. No extra cooperation from the agent is required once the structural boundary is active.
 
 **Proxy-only / compatibility mode** (macOS `vz`, Windows/WSL2 `wsl2`): The agent runs in the host environment with `HTTP_PROXY` and related environment variables injected. Outbound mediation depends on the agent (or its HTTP library) respecting those variables. Raw sockets, proxy-env-unset children, and non-HTTP protocols can bypass the Sidecar.
 
@@ -45,13 +45,13 @@ Without the opt-in, `firma run` prints a typed error explaining that the selecte
 
 ### Structural backends
 
-1. **Network boundary.** On Linux `bwrap`, the agent runs in a network namespace where the only reachable network destination is a host-side process listening on `127.0.0.1:18080` (the proxy bridge). On experimental macOS network-deny mode, the agent is restricted to loopback and external IP egress is blocked.
-2. **Proxy bridge.** A small helper inside the sandbox listens on `127.0.0.1:18080` and forwards bytes over a Unix socket to the host's Sidecar (typically at `$XDG_RUNTIME_DIR/firma/sidecar.sock`). On Linux `bwrap`, the agent's traffic has nowhere else to go. On experimental macOS network-deny mode, external IP egress is blocked but other loopback services remain a caveat.
-3. **DNS stub.** A stub resolver answers DNS queries deterministically. On Linux it runs inside the sandbox path. On macOS sandbox-exec structural mode, `firma run` starts a host-side refusal stub reachable on loopback. Random outbound DNS must not be a successful bypass.
+1. **Network boundary.** On Linux `bwrap`, the agent runs in a network namespace where the only reachable network destination is a host-side process listening on `127.0.0.1:18080` (the proxy bridge). On experimental macOS network-deny mode, the agent is restricted to loopback and external IP egress is blocked. On macOS VZ guest mode, `firma run` writes a launch contract that requires the configured guest runner to expose only the sidecar bridge and DNS stub to the guest.
+2. **Proxy bridge.** A small helper inside the sandbox listens on `127.0.0.1:18080` and forwards bytes over a Unix socket to the host's Sidecar (typically at `$XDG_RUNTIME_DIR/firma/sidecar.sock`). On Linux `bwrap`, the agent's traffic has nowhere else to go. On experimental macOS network-deny mode, external IP egress is blocked but other loopback services remain a caveat. On macOS VZ guest mode, the bridge URL is part of the runner contract.
+3. **DNS stub.** A stub resolver answers DNS queries deterministically. On Linux it runs inside the sandbox path. On macOS structural paths, `firma run` starts a host-side refusal stub; sandbox-exec reaches it on loopback, and the VZ guest runner must wire guest DNS to it. Random outbound DNS must not be a successful bypass.
 4. **`HTTP_PROXY` injection.** For agents that *do* respect proxy env vars, `firma run` sets `HTTP_PROXY=http://127.0.0.1:18080` so they don't need any code change.
 5. **Identity remap.** The agent runs under a sandbox user (configurable via `--identity-mode`), so it can't read host secrets via filesystem.
 
-The result is that an agent running under Linux structural `firma run` can attempt to bypass the proxy in any way it likes — open raw sockets, set its own DNS, fork a child process — and every one of those attempts dead-ends inside the sandbox. Experimental macOS network-deny mode provides a narrower claim: external IP egress is blocked, while host loopback remains a known limit. The stronger macOS VZ guest-backed path remains the planned parity direction.
+The result is that an agent running under Linux structural `firma run` can attempt to bypass the proxy in any way it likes — open raw sockets, set its own DNS, fork a child process — and every one of those attempts dead-ends inside the sandbox. Experimental macOS network-deny mode provides a narrower claim: external IP egress is blocked, while host loopback remains a known limit. Experimental macOS VZ guest mode has the stronger structural target, but depends on a runner and guest image bundle and still needs hardware E2E evidence before it becomes the default claim.
 
 ### Proxy-only backends (vz, wsl2)
 
@@ -70,7 +70,7 @@ Network sandboxing primitives differ across OSes, so `firma run` selects a backe
 | ------------- | -------- | -------------------------------------------- | -------------- |
 | `bwrap`       | Linux    | Unprivileged user namespaces (bubblewrap)    | Structural     |
 | `firecracker` | Linux    | KVM micro-VM                                 | Planned        |
-| `vz`          | macOS    | Host proxy bridge + HTTP proxy injection (`HTTP_PROXY`); optional sandbox-exec network-deny | Proxy-only (default); experimental structural mode via `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1` |
+| `vz`          | macOS    | Host proxy bridge + HTTP proxy injection (`HTTP_PROXY`); optional sandbox-exec network-deny or VZ guest runner contract | Proxy-only (default); experimental structural modes via `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1` or `FIRMA_RUN_VZ_GUEST=1` |
 | `wsl2`        | Windows  | HTTP proxy injection (`HTTP_PROXY`)         | Proxy-only     |
 
 You can override the platform default with `--backend`:
@@ -93,6 +93,7 @@ The *strength* of the enforcement boundary differs by platform. This is the most
 | Linux (native)  | `firecracker`  | KVM micro-VM network isolation                 | Planned      | N/A                               | N/A                               |
 | macOS `vz` (default) | `vz`    | Host proxy bridge + HTTP proxy injection       | No           | Yes, if agent ignores `HTTP_PROXY` | Yes                               |
 | macOS `vz` (experimental) | `vz` | `sandbox-exec` with `deny network-outbound`; host bridge + DNS stub on loopback | Yes (experimental) | No for external IP egress; loopback-all scope is residual caveat | No; requires experimental env opt-in |
+| macOS `vz` guest (experimental) | `vz` | Virtualization.framework runner contract; guest image must enforce bridge-only egress and DNS stub | Yes (experimental) | Target: no; requires runner/guest proof and hardware E2E evidence | No; requires guest env opt-in and artifacts |
 | Windows / WSL2  | `wsl2`         | HTTP proxy injection (`HTTP_PROXY`)            | No           | Yes, if agent ignores `HTTP_PROXY` | Yes                               |
 
 **Structural** means the sandbox removes the agent's ability to bypass the proxy at the OS level — no extra cooperation from the agent is required. The experimental macOS mode is narrower than Linux because it is loopback-scoped rather than bridge-port-scoped. **Proxy-only** means enforcement depends on the agent (or its HTTP library) respecting `HTTP_PROXY`. On proxy-only backends, `firma run` fails closed unless you pass `--allow-non-structural` to acknowledge this limitation.
