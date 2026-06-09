@@ -81,6 +81,13 @@ pub enum RunError {
     #[error("authority unreachable at {url}: {reason}")]
     AuthorityUnreachable { url: String, reason: String },
 
+    #[error("authority denied capability for agent '{agent_id}': {reason} — {message}")]
+    CapabilityDenied {
+        agent_id: String,
+        reason: String,
+        message: String,
+    },
+
     #[error(
         "local authority endpoint {endpoint} is reachable but transport could not be identified as plaintext local gRPC; pass an explicit --authority http://... or https://... URL"
     )]

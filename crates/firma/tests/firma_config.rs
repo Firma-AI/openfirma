@@ -94,8 +94,6 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         .args(["--state-dir"])
         .arg(&state_dir)
         .args([
-            "--name",
-            "existing-agent",
             "--posture",
             "strict",
             "--mapping",
@@ -114,17 +112,6 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         String::from_utf8_lossy(&first.stderr),
     );
     let firma_toml_path = config_dir.join("firma.toml");
-    let mut existing_config: toml::Value =
-        toml::from_str(&std::fs::read_to_string(&firma_toml_path).unwrap()).unwrap();
-    existing_config["sidecar"]["preflight"]["requested_actions"] = toml::Value::Array(vec![
-        toml::Value::String("credential.read".to_string()),
-        toml::Value::String("issue.read".to_string()),
-    ]);
-    std::fs::write(
-        &firma_toml_path,
-        toml::to_string_pretty(&existing_config).unwrap(),
-    )
-    .unwrap();
     // Add a custom env_set key inside [run.profiles.generic.env_set] so the
     // merge contract test can verify it survives subsequent firma config runs.
     let mut existing_firma_toml_text = std::fs::read_to_string(&firma_toml_path).unwrap();
@@ -157,10 +144,6 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         Some("127.0.0.1:9555"),
     );
     assert_eq!(
-        value["sidecar"]["preflight"]["agent_id"].as_str(),
-        Some("existing-agent"),
-    );
-    assert_eq!(
         value["sidecar"]["mapping"]["rules_paths"]
             .as_array()
             .unwrap()
@@ -168,22 +151,6 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
             .filter_map(toml::Value::as_str)
             .collect::<Vec<_>>(),
         vec!["mappings/github.toml"],
-    );
-    assert!(
-        value["sidecar"]["preflight"]["requested_actions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v.as_str() == Some("issue.read")),
-        "custom preflight actions should be preserved"
-    );
-    assert!(
-        !value["sidecar"]["preflight"]["requested_actions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v.as_str() == Some("code.write")),
-        "custom preflight actions should not be replaced by inferred posture"
     );
     assert!(
         value["run"]["profiles"]["generic"]["mounts"]
@@ -202,8 +169,6 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         .args(["config", "--yes", "--dry-run", "--output-dir"])
         .arg(&config_dir)
         .args([
-            "--name",
-            "override-agent",
             "--posture",
             "dev",
             "--mapping",
@@ -228,10 +193,6 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         Some("127.0.0.1:9666"),
     );
     assert_eq!(
-        value["sidecar"]["preflight"]["agent_id"].as_str(),
-        Some("override-agent"),
-    );
-    assert_eq!(
         value["sidecar"]["mapping"]["rules_paths"]
             .as_array()
             .unwrap()
@@ -239,14 +200,6 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
             .filter_map(toml::Value::as_str)
             .collect::<Vec<_>>(),
         vec!["mappings/openai.toml"],
-    );
-    assert!(
-        value["sidecar"]["preflight"]["requested_actions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v.as_str() == Some("code.write")),
-        "explicit dev posture should override existing strict posture"
     );
     assert!(
         value["run"]["profiles"]["generic"]["mounts"]
@@ -659,7 +612,7 @@ fn init_writes_parseable_config() {
 /// A fresh `firma config` must scaffold a `firma.toml` whose `[sidecar]`
 /// section starts cleanly standalone. Beyond `validate()` (covered by
 /// [`assert_unified_config_parses`]) this pins the scaffold contract for the
-/// listen address and the preflight public-key fallback.
+/// interceptor listen address and the authority public-key path.
 #[test]
 fn scaffold_supports_standalone_sidecar_startup() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -681,19 +634,19 @@ fn scaffold_supports_standalone_sidecar_startup() {
         "scaffold must emit [sidecar.interceptor].listen_addr:\n{text}"
     );
 
-    // preflight key path is intentionally not scaffolded, but the authority
-    // public key it falls back to must be present.
-    assert!(
-        value["sidecar"]["preflight"]
-            .get("authority_pub_key_path")
-            .is_none(),
-        "scaffold should not emit preflight.authority_pub_key_path:\n{text}"
-    );
+    // The authority public key path must be present for capability-seed
+    // verification.
     assert!(
         value["sidecar"]["authority"]["public_key_path"]
             .as_str()
             .is_some(),
-        "scaffold must emit [sidecar.authority].public_key_path as preflight fallback:\n{text}"
+        "scaffold must emit [sidecar.authority].public_key_path:\n{text}"
+    );
+
+    // No [sidecar.preflight] section must be emitted; that concept is removed.
+    assert!(
+        value["sidecar"].get("preflight").is_none(),
+        "scaffold must not emit [sidecar.preflight]:\n{text}"
     );
 
     // The whole section must pass strict validation.

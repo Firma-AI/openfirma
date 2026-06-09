@@ -61,6 +61,7 @@ fn spawned_sidecar_inherits_sandbox_id_env() {
         authority_url: None,
         authority_ca_cert: None,
         authority_pub_key: None,
+        capability_seed_path: None,
         use_http_proxy_interceptor: false,
         audit_fallback_path: None,
         monitor_mode: false,

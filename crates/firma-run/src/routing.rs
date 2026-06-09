@@ -50,6 +50,9 @@ pub struct NetworkRuntime {
     _adapter: Option<SidecarAdapter>,
     _sidecar_supervisor: Option<SidecarSupervisor>,
     _authority_supervisor: Option<crate::authority::AuthoritySupervisor>,
+    // Declared last so it drops last: the sidecar reads the seed file, so the
+    // guard that DELETES the file must outlive the sidecar supervisor above.
+    _capability_guard: Option<crate::capability::guard::CapabilityFileGuard>,
 }
 
 impl NetworkRuntime {
@@ -84,9 +87,11 @@ pub struct AutostartFlags {
     /// into `[sidecar.authority].ca_cert_path` during synthesis.
     pub authority_ca_cert: Option<PathBuf>,
     /// Path to the authority's Ed25519 public key — injected into
-    /// `[sidecar.authority].public_key_path` and
-    /// `[sidecar.preflight].authority_pub_key_path` during synthesis.
+    /// `[sidecar.authority].public_key_path` during synthesis so the sidecar
+    /// can verify the per-session capability seed.
     pub authority_pub_key: Option<PathBuf>,
+    /// Path of the per-session capability seed minted by `firma run`.
+    pub capability_seed_path: Option<PathBuf>,
     /// When `true`, the autostarted sidecar is started in HTTP proxy
     /// interceptor mode rather than Unix socket mode.
     pub use_http_proxy_sidecar: bool,
@@ -105,6 +110,7 @@ impl Default for AutostartFlags {
             authority_url: None,
             authority_ca_cert: None,
             authority_pub_key: None,
+            capability_seed_path: None,
             use_http_proxy_sidecar: false,
             monitor_mode: false,
         }
@@ -144,11 +150,19 @@ pub fn prepare_network_runtime(
     identity: &RunIdentity,
     flags: &AutostartFlags,
     authority: ResolvedAuthority,
+    skip_mint: bool,
 ) -> Result<NetworkRuntime, RunError> {
     let mut flags = flags.clone();
     flags.authority_url = Some(authority.url.clone());
     flags.authority_ca_cert.clone_from(&authority.ca_cert_path);
     flags.authority_pub_key.clone_from(&authority.pub_key_path);
+
+    // Mint the per-session capability seed before resolving the endpoint so the
+    // synthesized sidecar config can reference it. The guard is moved into the
+    // returned `NetworkRuntime` so the seed file is removed on Drop — declared
+    // last in the struct so it drops AFTER the sidecar supervisor that reads it.
+    let mut capability_guard =
+        maybe_mint_capability_seed(identity, &mut flags, &authority, skip_mint)?;
 
     let (effective_endpoint, sidecar_supervisor) =
         resolve_effective_endpoint(handle, sidecar_endpoint, identity, &flags)?;
@@ -170,6 +184,7 @@ pub fn prepare_network_runtime(
             _adapter: None,
             _sidecar_supervisor: sidecar_supervisor,
             _authority_supervisor: authority.supervisor,
+            _capability_guard: capability_guard.take(),
         });
     }
 
@@ -225,8 +240,53 @@ pub fn prepare_network_runtime(
             _adapter: Some(adapter),
             _sidecar_supervisor: sidecar_supervisor,
             _authority_supervisor: authority.supervisor,
+            _capability_guard: capability_guard.take(),
         })
     }
+}
+
+/// Mint the per-session capability seed for the autostart path and return a
+/// guard that deletes the seed file on Drop.
+///
+/// Returns `None` (no mint) when not autostarting, when the user supplied their
+/// own capability file (`skip_mint`), or when no authority public key is
+/// available to verify the issued token. On a successful mint the written seed
+/// path is recorded in `flags.capability_seed_path` so synthesis can append it
+/// to `[sidecar.capability_seed].paths`.
+fn maybe_mint_capability_seed(
+    identity: &RunIdentity,
+    flags: &mut AutostartFlags,
+    authority: &ResolvedAuthority,
+    skip_mint: bool,
+) -> Result<Option<crate::capability::guard::CapabilityFileGuard>, RunError> {
+    if !(flags.sidecar_autostart && !skip_mint && flags.authority_pub_key.is_some()) {
+        return Ok(None);
+    }
+    let runtime_dir = firma_stack::runtime_paths::default_runtime_dir();
+    let cap_dir = firma_stack::runtime_paths::capabilities_dir_from(&runtime_dir);
+    let out_path = cap_dir.join(format!("{}.toml", identity.sandbox_id));
+    let pub_key_path = flags
+        .authority_pub_key
+        .clone()
+        .ok_or_else(|| RunError::Internal("authority pub key missing after gate".into()))?;
+    let params = crate::capability::issue::IssueParams {
+        authority_url: authority.url.clone(),
+        authority_pub_key_path: pub_key_path,
+        authority_ca_cert_path: flags.authority_ca_cert.clone(),
+        agent_id: identity.profile.clone(),
+        session_id: identity.session_id.clone(),
+        requested_actions: crate::capability::issue::DEFAULT_REQUESTED_ACTIONS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        resource_scope: crate::capability::issue::DEFAULT_RESOURCE_SCOPE.to_string(),
+        ttl_seconds: crate::capability::issue::DEFAULT_TTL_SECONDS,
+    };
+    let written = crate::capability::issue::mint_and_write(&params, &out_path)?;
+    flags.capability_seed_path = Some(written.clone());
+    Ok(Some(crate::capability::guard::CapabilityFileGuard::new(
+        written,
+    )))
 }
 
 /// Start a host-side proxy bridge for the non-structural (macOS / proxy-mediated)
@@ -356,6 +416,7 @@ fn autostart_sidecar(
         authority_url: flags.authority_url.as_deref(),
         authority_ca_cert: flags.authority_ca_cert.clone(),
         authority_pub_key: flags.authority_pub_key.clone(),
+        capability_seed_path: flags.capability_seed_path.clone(),
         use_http_proxy_interceptor: flags.use_http_proxy_sidecar,
         monitor_mode: flags.monitor_mode,
         // `runtime_dir` is the state dir `firma monitor` resolves, so a
@@ -968,6 +1029,7 @@ mod non_structural_env_tests {
             authority_url: None,
             authority_ca_cert: None,
             authority_pub_key: None,
+            capability_seed_path: None,
             use_http_proxy_sidecar: false,
             monitor_mode: false,
         };
@@ -985,6 +1047,7 @@ mod non_structural_env_tests {
             &identity,
             &flags,
             authority,
+            true,
         )
         .expect("prepare_network_runtime should succeed");
 

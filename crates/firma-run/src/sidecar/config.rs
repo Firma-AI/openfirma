@@ -149,10 +149,14 @@ pub struct SynthesizeRequest<'a> {
     /// CA cert path to inject into `[sidecar.authority].ca_cert_path`.
     /// `None` leaves any existing template value untouched.
     pub authority_ca_cert: Option<&'a Path>,
-    /// Authority pub key path to inject into `[sidecar.authority].public_key_path`
-    /// and `[sidecar.preflight].authority_pub_key_path`.
+    /// Authority pub key path to inject into `[sidecar.authority].public_key_path`.
+    /// The sidecar uses it to verify the per-session capability seed.
     /// `None` leaves any existing template value untouched.
     pub authority_pub_key: Option<&'a Path>,
+    /// Path of the per-session capability seed minted by `firma run`, appended
+    /// to `[sidecar.capability_seed].paths`. `None` when no seed was minted
+    /// (e.g. `--capability-file` was passed).
+    pub capability_seed_path: Option<&'a Path>,
     /// Audit log path used as the default `file` sink when the template does
     /// not configure an audit sink. Set to the shared state/runtime dir's
     /// `audit.jsonl` so `firma monitor` can tail the per-run sidecar's
@@ -216,7 +220,12 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
     if let Some(key) = req.authority_pub_key {
         override_authority_pub_key(&mut value, key)?;
     }
-    configure_preflight_capability(&mut value, req.out_path, req.agent_id, req.session_id)?;
+    // Standalone synthesis (no `authority_pub_key` override, e.g. tests or
+    // operator templates) may still need `[sidecar.authority].public_key_path`
+    // so the sidecar can verify a seed. Fall back to a conventional marker-dir
+    // key only when not already set.
+    ensure_authority_pub_key_fallback(&mut value, req.out_path)?;
+    configure_capability_seed(&mut value, req.capability_seed_path)?;
     if let Some(audit_path) = req.audit_fallback_path {
         ensure_audit_file_sink(&mut value, audit_path)?;
     }
@@ -316,15 +325,6 @@ fn override_authority_pub_key(value: &mut toml::Value, key: &Path) -> Result<(),
         .ok_or_else(|| RunError::Internal("[sidecar.authority] is not a table".into()))?;
     authority.insert(
         "public_key_path".to_string(),
-        toml::Value::String(key.display().to_string()),
-    );
-    let preflight = sidecar_table_mut(value)?
-        .entry("preflight".to_string())
-        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| RunError::Internal("[sidecar.preflight] is not a table".into()))?;
-    preflight.insert(
-        "authority_pub_key_path".to_string(),
         toml::Value::String(key.display().to_string()),
     );
     Ok(())
@@ -601,11 +601,44 @@ fn ensure_mapping_rules(value: &mut toml::Value, out_path: &Path) -> Result<(), 
     Ok(())
 }
 
-fn configure_preflight_capability(
+/// Append the per-session capability seed file to `[capability_seed].paths`
+/// so the autostarted sidecar loads it through its existing verifier path.
+/// No-op when no seed was minted.
+fn configure_capability_seed(
+    value: &mut toml::Value,
+    seed_path: Option<&Path>,
+) -> Result<(), RunError> {
+    let Some(seed_path) = seed_path else {
+        return Ok(());
+    };
+    let sidecar = sidecar_table_mut(value)?;
+    let cap = sidecar
+        .entry("capability_seed".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[sidecar.capability_seed] is not a table".into()))?;
+    let paths = cap
+        .entry("paths".to_string())
+        .or_insert_with(|| toml::Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| {
+            RunError::Internal("[sidecar.capability_seed].paths is not an array".into())
+        })?;
+    let entry = toml::Value::String(seed_path.display().to_string());
+    if !paths.contains(&entry) {
+        paths.push(entry);
+    }
+    Ok(())
+}
+
+/// Set `[sidecar.authority].public_key_path` from a conventional marker-dir
+/// key (`<marker>/authority/keys/authority.pub`) only when no explicit override
+/// was applied and the file exists. Preserves the standalone-synthesis behavior
+/// the removed preflight scaffolding relied on, without resurrecting any
+/// `[preflight]` table. No-op when the key is already set or absent.
+fn ensure_authority_pub_key_fallback(
     value: &mut toml::Value,
     out_path: &Path,
-    agent_id: &str,
-    session_id: &str,
 ) -> Result<(), RunError> {
     let parent = out_path.parent().ok_or_else(|| {
         RunError::Internal(format!(
@@ -617,9 +650,7 @@ fn configure_preflight_capability(
     if !authority_pub.is_file() {
         return Ok(());
     }
-
     let sidecar = sidecar_table_mut(value)?;
-
     let authority = sidecar
         .entry("authority".to_string())
         .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
@@ -635,50 +666,6 @@ fn configure_preflight_capability(
             toml::Value::String(authority_pub.display().to_string()),
         );
     }
-
-    let preflight = sidecar
-        .entry("preflight".to_string())
-        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| RunError::Internal("[sidecar.preflight] is not a table".into()))?;
-    if !preflight.contains_key("agent_id") {
-        preflight.insert(
-            "agent_id".to_string(),
-            toml::Value::String(agent_id.to_string()),
-        );
-    }
-    // Always override session_id with the runtime value so the issued token's
-    // session_id matches the attribution headers on each request. A static
-    // value like "preflight-session" from a template would cause every
-    // CapabilityMap::select to skip the token (session_id mismatch → DENY).
-    preflight.insert(
-        "session_id".to_string(),
-        toml::Value::String(session_id.to_string()),
-    );
-    if !preflight.contains_key("requested_actions") {
-        preflight.insert(
-            "requested_actions".to_string(),
-            toml::Value::Array(vec![toml::Value::String(
-                "communication.external.send".to_string(),
-            )]),
-        );
-    }
-    if !preflight.contains_key("resource_scope") {
-        preflight.insert(
-            "resource_scope".to_string(),
-            toml::Value::String("*".to_string()),
-        );
-    }
-    if !preflight.contains_key("authority_pub_key_path") {
-        preflight.insert(
-            "authority_pub_key_path".to_string(),
-            toml::Value::String(authority_pub.display().to_string()),
-        );
-    }
-    if !preflight.contains_key("ttl_seconds") {
-        preflight.insert("ttl_seconds".to_string(), toml::Value::Integer(900));
-    }
-
     Ok(())
 }
 
@@ -705,4 +692,35 @@ fn write_atomic(out: &Path, value: &toml::Value) -> Result<(), RunError> {
 #[doc(hidden)]
 pub mod testing {
     pub use super::{SynthesizeRequest, TemplateSource, synthesize};
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test module"
+)]
+mod tests {
+    use super::{configure_capability_seed, normalize_to_sectioned_sidecar};
+
+    #[test]
+    fn capability_seed_path_is_injected_and_no_preflight() {
+        let mut value = toml::Value::Table(toml::value::Table::new());
+        normalize_to_sectioned_sidecar(&mut value).unwrap();
+        let seed = std::path::PathBuf::from("/run/firma/capabilities/sb.toml");
+        configure_capability_seed(&mut value, Some(seed.as_path())).unwrap();
+        let sidecar = value.get("sidecar").unwrap().as_table().unwrap();
+        let paths = sidecar
+            .get("capability_seed")
+            .and_then(|c| c.get("paths"))
+            .and_then(toml::Value::as_array)
+            .unwrap();
+        assert!(
+            paths
+                .iter()
+                .any(|p| p.as_str() == Some("/run/firma/capabilities/sb.toml"))
+        );
+        assert!(sidecar.get("preflight").is_none());
+    }
 }

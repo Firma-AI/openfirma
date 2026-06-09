@@ -52,9 +52,13 @@ pub struct SpawnRequest<'a> {
     /// `None` leaves existing value.
     pub authority_ca_cert: Option<PathBuf>,
     /// Authority public key path injected into
-    /// `[sidecar.authority].public_key_path` and
-    /// `[sidecar.preflight].authority_pub_key_path`. `None` leaves existing.
+    /// `[sidecar.authority].public_key_path` so the sidecar can verify the
+    /// per-session capability seed. `None` leaves existing.
     pub authority_pub_key: Option<PathBuf>,
+    /// Path of the per-session capability seed minted by `firma run`, threaded
+    /// into `[sidecar.capability_seed].paths` during synthesis. `None` when no
+    /// seed was minted (e.g. `--capability-file` was passed).
+    pub capability_seed_path: Option<PathBuf>,
     /// When `true`, synthesize an `http_proxy` interceptor instead of a
     /// Unix-domain socket. Set from [`ResolvedProfile::use_http_proxy_sidecar`].
     pub use_http_proxy_interceptor: bool,
@@ -163,6 +167,7 @@ impl SidecarSupervisor {
                 authority_url: req.authority_url,
                 authority_ca_cert: req.authority_ca_cert.as_deref(),
                 authority_pub_key: req.authority_pub_key.as_deref(),
+                capability_seed_path: req.capability_seed_path.as_deref(),
                 audit_fallback_path: req.audit_fallback_path.as_deref(),
                 monitor_mode: req.monitor_mode,
             })?;

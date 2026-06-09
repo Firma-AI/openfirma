@@ -109,7 +109,11 @@ fn issued_token_seeds_capability_map_and_admits_stage1() {
     let seed = CapabilitySeedConfig {
         paths: vec![seed_path],
     };
-    let map = load_capability_map(&seed, verifier.as_ref()).expect("seed must load");
+    // Pass a separate capabilities_dir so the seed path is treated as an
+    // operator seed (outside the runtime capabilities directory).
+    let capabilities_dir = tmp.path().join("capabilities");
+    let map =
+        load_capability_map(&seed, verifier.as_ref(), &capabilities_dir).expect("seed must load");
 
     // 6. Selecting the seeded action class returns the seed entry.
     let entry = map

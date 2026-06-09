@@ -27,10 +27,8 @@ struct AuthorityInputs {
 }
 
 struct SidecarInputs {
-    name: String,
     posture: Posture,
     overwrite_policy: bool,
-    requested_actions: Option<Vec<String>>,
     mappings: Vec<Mapping>,
     extra_hosts: Vec<String>,
     workspace: PathBuf,
@@ -54,9 +52,7 @@ struct ExistingConfigDefaults {
     authority_ca_cert: Option<PathBuf>,
     authority_pub_key: Option<PathBuf>,
     state_dir: Option<PathBuf>,
-    name: Option<String>,
     posture: Option<Posture>,
-    requested_actions: Option<Vec<String>>,
     mappings: Option<Vec<Mapping>>,
     workspace: Option<PathBuf>,
     profile: Option<String>,
@@ -260,15 +256,6 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
         .flat_map(Mapping::mitm_hosts)
         .copied()
         .collect();
-    let requested_actions = inputs.sidecar.requested_actions.clone().unwrap_or_else(|| {
-        inputs
-            .sidecar
-            .posture
-            .requested_actions()
-            .into_iter()
-            .map(String::from)
-            .collect()
-    });
 
     let state_dir = &inputs.state_dir;
     let tls_dir = state_dir.join("tls");
@@ -284,7 +271,6 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
     let doc_inputs = DocInputs {
         mode: &inputs.mode,
         keep_local_authority: inputs.keep_local_authority,
-        name: &inputs.sidecar.name,
         profile: &inputs.profile,
         authority_listen: &inputs.authority.listen,
         authority_url: &inputs.authority.connect_url,
@@ -297,7 +283,6 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
         audit_key: &audit_key,
         tls_cert_path: &tls_cert_path,
         tls_key_path: &tls_key_path,
-        requested_actions: &requested_actions,
         mapping_paths: &mapping_paths,
         mitm_hosts: &mitm_hosts,
         workspace: &workspace_display,
@@ -511,9 +496,7 @@ fn load_existing_defaults(config_dir: &Path) -> Result<ExistingConfigDefaults> {
     defaults.authority_url = get_str(&value, &["sidecar", "authority", "url"]);
     defaults.authority_ca_cert = get_path(&value, &["sidecar", "authority", "ca_cert_path"]);
     defaults.authority_pub_key = get_path(&value, &["sidecar", "authority", "public_key_path"]);
-    defaults.name = get_str(&value, &["sidecar", "preflight", "agent_id"]);
-    defaults.posture = posture_from_preflight_actions(&value);
-    defaults.requested_actions = requested_actions_from_config(&value);
+    defaults.posture = posture_from_policy_dir(config_dir);
     defaults.mappings = mappings_from_rules_paths(&value);
     defaults.state_dir = infer_state_dir(&value);
 
@@ -535,35 +518,21 @@ fn get_path(value: &toml::Value, path: &[&str]) -> Option<PathBuf> {
     get_str(value, path).map(PathBuf::from)
 }
 
-fn posture_from_preflight_actions(value: &toml::Value) -> Option<Posture> {
-    let actions = value
-        .get("sidecar")?
-        .get("preflight")?
-        .get("requested_actions")?
-        .as_array()?;
-    let has_action = |needle: &str| actions.iter().any(|v| v.as_str() == Some(needle));
-    if has_action("code.destructive") {
-        Some(Posture::DevWithDeleteWatch)
-    } else if has_action("code.write") {
-        Some(Posture::Dev)
-    } else {
-        Some(Posture::Strict)
+/// Infer the active posture from the policy files present in `config_dir/policies/`.
+///
+/// Checks for the presence of each posture's cedar file in order of
+/// specificity. Returns `None` when the directory is absent or no
+/// recognised posture file is found, which causes the interactive prompt
+/// (or the CLI `--posture` flag) to take over.
+fn posture_from_policy_dir(config_dir: &Path) -> Option<Posture> {
+    let policies_dir = config_dir.join("policies");
+    for posture in [Posture::DevWithDeleteWatch, Posture::Dev, Posture::Strict] {
+        let path = policies_dir.join(format!("{}.cedar", posture.file_name()));
+        if path.exists() {
+            return Some(posture);
+        }
     }
-}
-
-fn requested_actions_from_config(value: &toml::Value) -> Option<Vec<String>> {
-    let actions = value
-        .get("sidecar")?
-        .get("preflight")?
-        .get("requested_actions")?
-        .as_array()?;
-    Some(
-        actions
-            .iter()
-            .filter_map(toml::Value::as_str)
-            .map(String::from)
-            .collect(),
-    )
+    None
 }
 
 fn mappings_from_rules_paths(value: &toml::Value) -> Option<Vec<Mapping>> {
@@ -821,39 +790,13 @@ fn collect_sidecar_inputs(
 
     if !has_sidecar {
         return Ok(SidecarInputs {
-            name: "authority".to_string(),
             posture,
             overwrite_policy,
-            requested_actions: None,
             mappings: vec![],
             extra_hosts: vec![],
             workspace: config_dir.to_path_buf(),
         });
     }
-
-    let name = match args.name.as_deref() {
-        Some(v) => v.to_string(),
-        None if existing.name.is_some() && !interactive => {
-            existing.name.clone().unwrap_or_default()
-        }
-        None if interactive => dialoguer::Input::with_theme(theme)
-            .with_prompt("Agent name")
-            .default(
-                existing
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| "my-agent".to_string()),
-            )
-            .interact_text()
-            .context("agent name prompt")?,
-        None => "my-agent".to_string(),
-    };
-
-    let requested_actions = if args.posture.is_some() {
-        None
-    } else {
-        existing.requested_actions.clone()
-    };
 
     let profile_default_mappings = profile_default_mappings(profile);
     let mappings = if !args.mapping.is_empty() {
@@ -891,10 +834,8 @@ fn collect_sidecar_inputs(
     let workspace = collect_workspace(args, existing, interactive, theme)?;
 
     Ok(SidecarInputs {
-        name,
         posture,
         overwrite_policy,
-        requested_actions,
         mappings,
         extra_hosts,
         workspace,
@@ -1049,11 +990,10 @@ fn profile_default_mappings(profile: &str) -> Vec<Mapping> {
 
 /// Delete posture cedar files left behind by previous postures.
 ///
-/// Posture is a closed set of `(cedar file, requested_actions)` presets.
-/// Changing posture rewrites `requested_actions` in `firma.toml`, but
-/// each posture lives in its own file under `policies/`, so the old
-/// file lingers and the sidecar (which loads every `.cedar` in the
-/// dir) ends up applying both. Remove stale posture files here.
+/// Each posture lives in its own file under `policies/`, so when the
+/// operator switches posture the old file lingers and the sidecar
+/// (which loads every `.cedar` in the dir) ends up applying both.
+/// Remove stale posture files here.
 ///
 /// Pristine files (content matches the shipped template) are deleted
 /// silently. Files with local edits are kept by default; in
@@ -1233,10 +1173,8 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
         keep_local_authority: false,
         authority,
         sidecar: SidecarInputs {
-            name: plan.agent.clone(),
             posture: Posture::Dev,
             overwrite_policy: false,
-            requested_actions: None,
             mappings,
             extra_hosts: vec![],
             workspace: plan.workspace.clone(),
@@ -1331,7 +1269,6 @@ mod tests {
 
     use super::*;
 
-    const TEST_AGENT: &str = "test-agent";
     const TEST_WORKSPACE: &str = "/tmp/test-workspace";
 
     fn make_files(
@@ -1349,10 +1286,8 @@ mod tests {
                 connect_pub_key: "/tmp/test-state/authority.pub".to_string(),
             },
             sidecar: SidecarInputs {
-                name: TEST_AGENT.to_string(),
                 posture: posture.clone(),
                 overwrite_policy: false,
-                requested_actions: None,
                 mappings: mappings.to_vec(),
                 extra_hosts: extra_hosts.to_vec(),
                 workspace: PathBuf::from(TEST_WORKSPACE),
@@ -1416,16 +1351,6 @@ mod tests {
             let files = make_files(&posture, &[Mapping::Anthropic, Mapping::Github], &[]);
             let _: toml::Value = toml::from_str(get(&files, "firma.toml")).unwrap();
         }
-    }
-
-    #[test]
-    fn firma_toml_agent_id_matches_name() {
-        let files = make_files(&Posture::Dev, &[Mapping::Anthropic], &[]);
-        let t: toml::Value = toml::from_str(get(&files, "firma.toml")).unwrap();
-        assert_eq!(
-            t["sidecar"]["preflight"]["agent_id"].as_str(),
-            Some(TEST_AGENT),
-        );
     }
 
     #[test]

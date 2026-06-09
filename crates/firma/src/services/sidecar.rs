@@ -119,27 +119,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         exit.clone(),
     )?;
 
-    let (ca_cert_pem, client_cert_pem, client_key_pem) =
-        load_authority_tls_material(&config).await?;
-    let preflight = match (&config.preflight, config.authority.url.as_deref()) {
-        (Some(pf_config), Some(authority_url)) => Some(
-            startup::run_preflight(
-                pf_config,
-                authority_url,
-                config.authority.public_key_path.as_deref(),
-                ca_cert_pem.as_deref(),
-                client_cert_pem.as_deref(),
-                client_key_pem.as_deref(),
-            )
-            .await?,
-        ),
-        (Some(_), None) => {
-            anyhow::bail!("[preflight] is configured but authority.url is not set");
-        }
-        (None, _) => None,
-    };
-
-    let pipeline_runtime = startup::build_pipeline_runtime(&config, preflight)?;
+    let pipeline_runtime = startup::build_pipeline_runtime(&config)?;
     let authority_handle =
         startup::spawn_authority_client(&config, &pipeline_runtime, exit.clone())?;
     let connector_registry = startup::build_connector_registry(&config.connector)?;
@@ -240,33 +220,6 @@ async fn spawn_health_server(
     let health_server = health::HealthcheckServer::bind(health_bind_addr, exit).await?;
     tracing::debug!("health check server listening at {}", health_bind_addr);
     Ok(tokio::spawn(health_server.serve()))
-}
-
-type PemTriplet = (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>);
-
-async fn load_authority_tls_material(config: &config::SidecarConfig) -> anyhow::Result<PemTriplet> {
-    let ca_cert_pem = if let Some(ref path) = config.authority.ca_cert_path {
-        Some(tokio::fs::read(path).await.map_err(|e| {
-            anyhow::anyhow!("failed to read authority CA cert {}: {e}", path.display())
-        })?)
-    } else {
-        None
-    };
-    let client_cert_pem = if let Some(ref path) = config.authority.tls_client_cert_path {
-        Some(tokio::fs::read(path).await.map_err(|e| {
-            anyhow::anyhow!("failed to read mTLS client cert {}: {e}", path.display())
-        })?)
-    } else {
-        None
-    };
-    let client_key_pem = if let Some(ref path) = config.authority.tls_client_key_path {
-        Some(tokio::fs::read(path).await.map_err(|e| {
-            anyhow::anyhow!("failed to read mTLS client key {}: {e}", path.display())
-        })?)
-    } else {
-        None
-    };
-    Ok((ca_cert_pem, client_cert_pem, client_key_pem))
 }
 
 fn emit_operator_routing_hints(config: &config::SidecarConfig, interceptor_addr: &str) {

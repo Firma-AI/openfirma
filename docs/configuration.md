@@ -699,9 +699,13 @@ Behavior notes:
 - `[authority].public_key_path` must be set when `paths` is
   non-empty; otherwise the verifier rejects every seeded token with
   `signature invalid: no authority public key configured`.
-- This section is a stop-gap until the sidecar wires the gRPC
-  `IssueCapability` client. Production deployments should not rely
-  on it.
+
+> **Deprecated.** `[capability_seed]` is superseded by per-session capabilities
+> minted live by `firma run`, written to
+> `$XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml`. Operator-configured
+> seed paths still load but emit a deprecation warning at sidecar startup.
+> Removal is scheduled for a later release once examples and install scripts
+> migrate.
 
 ### `[local_exec]`
 
