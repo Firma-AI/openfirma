@@ -87,7 +87,7 @@ secret_path = "/run/secrets/openai-api-key"
 
 Configure Vault Agent separately to render the secret value into `/run/secrets/openai-api-key` with permissions readable only by the Sidecar process.
 
-The Sidecar reads the file per call. If the file is missing or unreadable when a request comes in, the connector returns `CredentialInjectionFailed` and the call denies — fail-closed by design.
+The Sidecar reads the file per call. If the file is missing or unreadable when a request comes in, the Sidecar returns `CREDENTIAL_INJECTION_FAILED` and aborts the already-allowed call — fail-closed by design. The agent receives a `504` with `"aborted": true`; the capability token remains active.
 
 For the development workflow, `basic` is simpler. For production, `vault` is the answer. Don't mix them in a single deployment unless you have a clear reason.
 
@@ -135,7 +135,7 @@ If you genuinely need different credentials per *call* (e.g. multi-tenant agent 
 
 **MITM is off for the host.** The Sidecar can't modify a request it never decrypted. Add the host to `intercept_hosts` (see [Enable HTTPS MITM](../https-mitm/)).
 
-**Vault Agent stopped refreshing the file.** The Sidecar reports `CredentialInjectionFailed` for that host until the rendered file is present and readable again.
+**Vault Agent stopped refreshing the file.** The Sidecar reports `CREDENTIAL_INJECTION_FAILED` for that host until the rendered file is present and readable again.
 
 **Agent gets a `401` from upstream.** The injected key is wrong, expired, or for the wrong account. Check the env var or rendered Vault Agent file.
 

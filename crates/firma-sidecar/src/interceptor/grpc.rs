@@ -348,6 +348,106 @@ mod tests {
         }))
     }
 
+    struct FailingCredentialInjector;
+
+    #[async_trait::async_trait]
+    impl crate::credential::CredentialInjector for FailingCredentialInjector {
+        async fn inject(
+            &self,
+            _envelope: &ExecutionEnvelope,
+            connector_id: &str,
+            _target: &str,
+        ) -> Result<InjectedCredentials, crate::credential::CredentialInjectionError> {
+            Err(crate::credential::CredentialInjectionError::FetchFailed {
+                connector_id: connector_id.to_string(),
+                reason: "vault unavailable".to_string(),
+            })
+        }
+    }
+
+    /// Builds an ALLOW pipeline whose credential injection always fails,
+    /// so `enforce()` returns ABORT after the call is authorized.
+    fn test_pipeline_abort() -> Arc<EnforcementPipeline> {
+        let claims = test_claims();
+        let registry = ActionClassRegistry::v0_1();
+        let rules = MappingRulesFile {
+            rules: vec![MappingRuleConfig {
+                method: Some("POST".to_string()),
+                host: "*".to_string(),
+                path: Some("/v1/chat/completions".to_string()),
+                action_class: "communication.external.send".to_string(),
+            }],
+        };
+        let table =
+            MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+
+        let normalizer = IntentNormalizer::new(table);
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test_token".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier { claims }),
+            std::sync::Arc::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
+
+        Arc::new(EnforcementPipeline::new(PipelineArgs {
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            credential_injector: Box::new(FailingCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
+        }))
+    }
+
+    #[tokio::test]
+    async fn test_intercept_aborts_reports_abort_reason() {
+        let addr = free_addr();
+        let handler = test_handler(test_pipeline_abort());
+        let cancel = CancellationToken::new();
+
+        let interceptor = GrpcInterceptor::new(addr);
+        let cancel_clone = cancel.clone();
+        let server_handle =
+            tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let mut client = InterceptorHookClient::connect(format!("http://{addr}"))
+            .await
+            .map_err(|e| format!("connect failed: {e}"));
+        let client = client.as_mut().unwrap();
+
+        let response = client
+            .intercept(InterceptRequest {
+                method: "POST".to_owned(),
+                host: "api.openai.com".to_owned(),
+                path: "/v1/chat/completions".to_owned(),
+                headers: HashMap::new(),
+                body: b"{}".to_vec(),
+                is_https: true,
+                session_id: "_test_".parse().expect("literal session id"),
+            })
+            .await;
+        let response = response.unwrap().into_inner();
+
+        assert!(!response.allowed, "abort must not allow the call");
+        assert!(
+            response
+                .reason
+                .starts_with("ABORT:CREDENTIAL_INJECTION_FAILED"),
+            "gRPC abort reason should carry the ABORT: prefix and code, got {:?}",
+            response.reason
+        );
+
+        cancel.cancel();
+        server_handle.await.unwrap().unwrap();
+    }
+
     #[tokio::test]
     async fn test_intercept_allows_valid_request() {
         let addr = free_addr();

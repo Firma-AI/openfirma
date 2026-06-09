@@ -68,6 +68,36 @@ pub fn userns_restricted() -> Option<String> {
     )
 }
 
+/// Returns `true` when nested user-namespace creation (bwrap inside bwrap) is blocked.
+///
+/// Probes by running the exact nesting codex performs inside firma's outer sandbox,
+/// catching `AppArmor` sysctls, per-binary profiles, setuid bwrap restrictions, and
+/// any other mechanism. Always returns `false` on non-Linux.
+#[must_use]
+pub fn nested_userns_restricted() -> bool {
+    #[cfg(not(target_os = "linux"))]
+    return false;
+
+    #[cfg(target_os = "linux")]
+    !std::process::Command::new("bwrap")
+        .args([
+            "--unshare-user",
+            "--ro-bind",
+            "/",
+            "/",
+            "bwrap",
+            "--unshare-user",
+            "--ro-bind",
+            "/",
+            "/",
+            "true",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 /// Testable inner function that accepts explicit sysctl paths.
 fn check_sysctl_blocked(
     unprivileged_clone_path: &str,

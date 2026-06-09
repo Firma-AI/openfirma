@@ -853,11 +853,20 @@ fn derive_sidecar_local_exec_endpoint(
     }
 }
 
+/// Decides whether the managed default seccomp policy applies to a given
+/// profile/backend pair. Every recognized agent profile shares the same managed
+/// baseline on the bwrap backend, so all agents enforce `filesystem.delete` and
+/// `credential.write` identically (FIR-274 parity requirement). The OS gate
+/// (`target_os = "linux"`) is applied separately by the caller.
+fn managed_seccomp_applies(profile_id: &str, backend: BackendKind) -> bool {
+    backend == BackendKind::Bwrap && AgentProfile::from_name(profile_id).is_some()
+}
+
 fn default_managed_seccomp_policy(
     profile_id: &str,
     backend: BackendKind,
 ) -> Result<Option<SeccompPolicyConfig>, RunError> {
-    if !cfg!(target_os = "linux") || backend != BackendKind::Bwrap || profile_id != "generic" {
+    if !cfg!(target_os = "linux") || !managed_seccomp_applies(profile_id, backend) {
         return Ok(None);
     }
 
@@ -1085,6 +1094,31 @@ mod tests {
     }
 
     #[test]
+    fn managed_seccomp_applies_to_all_recognized_bwrap_profiles() {
+        // FIR-274: codex and claude-code must get the same managed seccomp
+        // baseline as generic, so every agent enforces filesystem.delete and
+        // credential.write identically under bwrap.
+        for profile in ["generic", "codex", "claude-code"] {
+            assert!(
+                super::managed_seccomp_applies(profile, BackendKind::Bwrap),
+                "managed seccomp must apply to profile '{profile}' on bwrap"
+            );
+        }
+    }
+
+    #[test]
+    fn managed_seccomp_skips_non_bwrap_and_unknown_profiles() {
+        assert!(
+            !super::managed_seccomp_applies("codex", BackendKind::Firecracker),
+            "managed seccomp is bwrap-only; non-bwrap backends must opt out"
+        );
+        assert!(
+            !super::managed_seccomp_applies("not-a-profile", BackendKind::Bwrap),
+            "unrecognized profiles must not receive the managed baseline"
+        );
+    }
+
+    #[test]
     #[cfg(target_os = "linux")]
     fn implicit_backend_selection_uses_wsl2_on_wsl() {
         let backend = super::resolve_backend_for_linux(None, WslKind::Wsl2);
@@ -1140,11 +1174,11 @@ path = "/tmp/capability.token"
     }
 
     #[test]
-    fn legacy_codex_cli_config_maps_to_executable_policy() {
+    fn user_executable_policy_overrides_builtin_sandbox_mode() {
         let tmpdir = tempfile::tempdir().unwrap();
         let config_path = tmpdir.path().join("firma.toml");
         let toml = r#"
-[run.profiles.codex.codex_cli]
+[run.profiles.codex.executable_policies.codex]
 enforce_wrapper_defaults = true
 sandbox_mode = "workspace-write"
 approval_policy = "never"

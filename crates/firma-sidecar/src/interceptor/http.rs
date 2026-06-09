@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use firma_core::DenyReason;
+use firma_core::{AbortReason, DenyReason};
 use http_body::Body as _;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
@@ -417,6 +417,10 @@ async fn handle_connect_request(
                 crate::handler::deny_body_json(reason, &detail),
             ))
         }
+        ConnectDecision::Abort { reason, detail } => Ok(deny_json_response(
+            StatusCode::GATEWAY_TIMEOUT,
+            crate::handler::abort_body_json(reason, &detail),
+        )),
         ConnectDecision::Allow => {
             let relay_mode = if effective_mitm.is_some() {
                 "mitm"
@@ -1114,6 +1118,20 @@ async fn handle_mitm_websocket_upgrade_request(
                 crate::handler::deny_body_json(reason, &detail),
             ));
         }
+        UpgradeAuthorization::Abort { reason, detail } => {
+            tracing::warn!(
+                host = %target.host,
+                port = target.port,
+                session_id = %session_id,
+                reason = ?reason,
+                detail = %detail,
+                "websocket upgrade aborted by guard policy"
+            );
+            return Ok(deny_json_response(
+                StatusCode::GATEWAY_TIMEOUT,
+                crate::handler::abort_body_json(reason, &detail),
+            ));
+        }
     };
 
     let path_and_query = req
@@ -1134,13 +1152,15 @@ async fn handle_mitm_websocket_upgrade_request(
                 detail = %detail,
                 "websocket upstream TLS connect failed"
             );
-            handler.emit_upgrade_audit(audit_payload, 0, 0).await;
+            // Post-ALLOW relay failure: no upstream response was produced,
+            // so this is an ABORT, not a policy DENY (FIR-46).
+            let detail = format!("upstream websocket connect failed: {detail}");
+            handler
+                .emit_upgrade_abort_audit(audit_payload, AbortReason::ConnectorFailure, &detail)
+                .await;
             return Ok(deny_json_response(
-                StatusCode::BAD_GATEWAY,
-                crate::handler::deny_body_json(
-                    DenyReason::ConnectorNetworkError,
-                    &format!("upstream websocket connect failed: {detail}"),
-                ),
+                StatusCode::GATEWAY_TIMEOUT,
+                crate::handler::abort_body_json(AbortReason::ConnectorFailure, &detail),
             ));
         }
     };
@@ -1153,13 +1173,15 @@ async fn handle_mitm_websocket_upgrade_request(
             error = %e,
             "websocket upstream handshake write failed"
         );
-        handler.emit_upgrade_audit(audit_payload, 0, 0).await;
+        // Post-ALLOW relay failure: no upstream response was produced,
+        // so this is an ABORT, not a policy DENY (FIR-46).
+        let detail = format!("upstream websocket handshake write failed: {e}");
+        handler
+            .emit_upgrade_abort_audit(audit_payload, AbortReason::ConnectorFailure, &detail)
+            .await;
         return Ok(deny_json_response(
-            StatusCode::BAD_GATEWAY,
-            crate::handler::deny_body_json(
-                DenyReason::ConnectorNetworkError,
-                &format!("upstream websocket handshake write failed: {e}"),
-            ),
+            StatusCode::GATEWAY_TIMEOUT,
+            crate::handler::abort_body_json(AbortReason::ConnectorFailure, &detail),
         ));
     }
 
@@ -1174,13 +1196,15 @@ async fn handle_mitm_websocket_upgrade_request(
                 detail = %detail,
                 "websocket upstream handshake read failed"
             );
-            handler.emit_upgrade_audit(audit_payload, 0, 0).await;
+            // Post-ALLOW relay failure: no upstream response was produced,
+            // so this is an ABORT, not a policy DENY (FIR-46).
+            let detail = format!("upstream websocket handshake read failed: {detail}");
+            handler
+                .emit_upgrade_abort_audit(audit_payload, AbortReason::ConnectorFailure, &detail)
+                .await;
             return Ok(deny_json_response(
-                StatusCode::BAD_GATEWAY,
-                crate::handler::deny_body_json(
-                    DenyReason::ConnectorNetworkError,
-                    &format!("upstream websocket handshake read failed: {detail}"),
-                ),
+                StatusCode::GATEWAY_TIMEOUT,
+                crate::handler::abort_body_json(AbortReason::ConnectorFailure, &detail),
             ));
         }
     };
@@ -1197,6 +1221,10 @@ async fn handle_mitm_websocket_upgrade_request(
             status = status,
             "websocket upstream rejected protocol upgrade"
         );
+        // Unlike the relay-failure branches above, the upstream produced a
+        // completed response (a non-101 status). That is a relayed upstream
+        // outcome, not a post-ALLOW abort, so it stays on the connector
+        // network-error surface and the ALLOW audit emitted above stands.
         return Ok(deny_json_response(
             StatusCode::BAD_GATEWAY,
             crate::handler::deny_body_json(
@@ -1830,6 +1858,102 @@ mod tests {
         }))
     }
 
+    struct FailingCredentialInjector;
+
+    #[async_trait::async_trait]
+    impl crate::credential::CredentialInjector for FailingCredentialInjector {
+        async fn inject(
+            &self,
+            _envelope: &ExecutionEnvelope,
+            connector_id: &str,
+            _target: &str,
+        ) -> Result<InjectedCredentials, crate::credential::CredentialInjectionError> {
+            Err(crate::credential::CredentialInjectionError::FetchFailed {
+                connector_id: connector_id.to_string(),
+                reason: "vault unavailable".to_string(),
+            })
+        }
+    }
+
+    /// Builds an ALLOW pipeline whose credential injection always fails, so
+    /// `enforce()` returns ABORT after the call is authorized. Drives the
+    /// post-ALLOW abort path through the proxy.
+    fn test_pipeline_abort(path: &str) -> Arc<EnforcementPipeline> {
+        let claims = test_claims();
+        let registry = ActionClassRegistry::v0_1();
+        let rules = MappingRulesFile {
+            rules: vec![MappingRuleConfig {
+                method: Some("POST".to_string()),
+                host: "*".to_string(),
+                path: Some(path.to_string()),
+                action_class: "communication.external.send".to_string(),
+            }],
+        };
+        let table =
+            MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+
+        let normalizer = IntentNormalizer::new(table);
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test_token".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier { claims }),
+            std::sync::Arc::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
+
+        Arc::new(EnforcementPipeline::new(PipelineArgs {
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            credential_injector: Box::new(FailingCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
+        }))
+    }
+
+    /// Like [`test_pipeline_abort`] but for CONNECT, so the tunnel is
+    /// authorized and then aborted by the failing credential injection.
+    fn test_pipeline_abort_connect() -> Arc<EnforcementPipeline> {
+        let claims = test_claims();
+        let registry = ActionClassRegistry::v0_1();
+        let rules = MappingRulesFile {
+            rules: vec![MappingRuleConfig {
+                method: Some("CONNECT".to_string()),
+                host: "*".to_string(),
+                path: Some("/".to_string()),
+                action_class: "communication.external.send".to_string(),
+            }],
+        };
+        let table =
+            MappingTable::from_config(&rules, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+
+        let normalizer = IntentNormalizer::new(table);
+        let capability_validator = CapabilityValidator::new(
+            CapabilityMap::new(vec![CapabilityEntry {
+                raw_token: "v4.public.test_token".to_string(),
+                claims: claims.clone(),
+            }]),
+            Box::new(MockVerifier { claims }),
+            std::sync::Arc::new(NoRevocations),
+            Duration::from_secs(0),
+        );
+        let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
+
+        Arc::new(EnforcementPipeline::new(PipelineArgs {
+            normalizer,
+            capability_validator,
+            constraint_enforcer,
+            credential_injector: Box::new(FailingCredentialInjector),
+            session_state_store: std::sync::Arc::new(
+                crate::enforcement::LruSessionStateStore::new(16),
+            ),
+        }))
+    }
+
     /// Builds a pipeline that DENYs classified requests to `host` (empty
     /// capability map). Uses `default_protected: false` so unmapped hosts
     /// pass through.
@@ -2408,6 +2532,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_proxy_aborts_with_gateway_timeout() {
+        let proxy_addr = free_addr();
+        // Credential injection fails before dispatch, so no upstream is
+        // contacted; any host that matches the wildcard ALLOW rule works.
+        let host = "api.openai.com";
+        let handler = test_handler(test_pipeline_abort("/v1/chat/completions"));
+        let cancel = CancellationToken::new();
+
+        let server_handle = start_proxy(proxy_addr, handler, cancel.clone()).await;
+
+        let request = format!(
+            "POST http://{host}/v1/chat/completions HTTP/1.1\r\n\
+             Host: {host}\r\n\
+             X-Firma-Session-Id: _test_\r\n\
+             Content-Length: 2\r\n\
+             \r\n\
+             {{}}"
+        );
+
+        let response = proxy_response(proxy_addr, &request).await;
+        let status = response
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse::<u16>().ok())
+            .unwrap_or(0);
+        assert_eq!(status, 504, "post-ALLOW abort should return 504");
+        let body = response
+            .find("\r\n\r\n")
+            .map(|i| &response[i + 4..])
+            .unwrap_or_default();
+        let parsed: serde_json::Value =
+            serde_json::from_str(body).unwrap_or_else(|e| panic!("abort body invalid JSON: {e}"));
+        assert_eq!(parsed["aborted"], serde_json::Value::Bool(true));
+        assert_eq!(parsed["reason"], "CREDENTIAL_INJECTION_FAILED");
+
+        cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
     async fn test_proxy_passthrough_for_unmapped_host() {
         let (upstream_addr, upstream_cancel) = mock_upstream().await;
         let proxy_addr = free_addr();
@@ -2498,6 +2663,31 @@ mod tests {
 
         let status = proxy_request(proxy_addr, &request).await;
         assert_eq!(status, 403, "expected 403 for denied CONNECT");
+
+        cancel.cancel();
+        target_cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_proxy_connect_aborts_with_gateway_timeout() {
+        let (target_addr, target_cancel) = mock_connect_target().await;
+        let proxy_addr = free_addr();
+        let host = format!("127.0.0.1:{}", target_addr.port());
+        // CONNECT is authorized, then credential injection fails → ABORT.
+        let handler = test_handler(test_pipeline_abort_connect());
+        let cancel = CancellationToken::new();
+        let server_handle = start_proxy(proxy_addr, handler, cancel.clone()).await;
+
+        let request = format!(
+            "CONNECT {host} HTTP/1.1\r\n\
+             Host: {host}\r\n\
+             X-Firma-Session-Id: _test_\r\n\
+             \r\n"
+        );
+
+        let status = proxy_request(proxy_addr, &request).await;
+        assert_eq!(status, 504, "aborted CONNECT should return 504, not tunnel");
 
         cancel.cancel();
         target_cancel.cancel();

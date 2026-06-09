@@ -7,7 +7,7 @@
 //! The pipeline is the ONLY public entry point for enforcement; callers
 //! never interact with individual stages directly.
 //!
-//! Every code path returns ALLOW, DENY, or PASSTHROUGH.
+//! Every code path returns ALLOW, DENY, ABORT, or PASSTHROUGH.
 //! PASSTHROUGH means the request targets a non-protected host and should
 //! be forwarded without enforcement. The pipeline short-circuits on any
 //! DENY or PASSTHROUGH.
@@ -18,7 +18,9 @@
 
 use std::time::Duration;
 
-use firma_core::{DenyReason, ExecutionEnvelope, ExecutionMetadata, InjectedCredentials};
+use firma_core::{
+    AbortReason, DenyReason, ExecutionEnvelope, ExecutionMetadata, InjectedCredentials,
+};
 
 use std::sync::Arc;
 
@@ -68,7 +70,7 @@ pub struct PipelineArgs {
 /// ```
 ///
 /// Short-circuits on any DENY or PASSTHROUGH. Every code path returns
-/// ALLOW, DENY, or PASSTHROUGH.
+/// ALLOW, DENY, ABORT, or PASSTHROUGH.
 /// The pipeline is stateless per-request — all shared state is accessed
 /// via references injected at construction time.
 ///
@@ -270,18 +272,14 @@ impl EnforcementPipeline {
             // No credentials configured for this connector — proceed
             // with empty headers (passthrough behavior).
             Err(CredentialInjectionError::UnknownConnector { .. }) => InjectedCredentials::empty(),
-            // Credential fetch failed — fail-closed.
+            // Credential fetch failed after enforcement allowed the call.
             Err(CredentialInjectionError::FetchFailed {
                 connector_id,
                 reason,
             }) => {
-                return EnforcementDecision::Deny {
-                    reason: DenyReason::CredentialInjectionFailed,
-                    stage: EnforcementStage::CredentialInjection,
+                return EnforcementDecision::Abort {
+                    reason: AbortReason::CredentialInjectionFailed,
                     detail: format!("connector {connector_id}: {reason}"),
-                    envelope: None,
-                    // Credential injection runs post-validation; carry
-                    // the verified identity into the audit record.
                     identity: Some(DenyIdentity::from_claims(&capability.claims)),
                 };
             }
@@ -351,29 +349,63 @@ pub fn audit_payload_from_decision(
         reason = "duration micros fits i64 for any realistic enforcement latency"
     )]
     let enforcement_latency_us = enforcement_latency.as_micros() as i64;
+    let fields = audit_decision_fields(decision, request, bundle_version);
 
-    let (
-        token_id,
-        agent_id,
-        action,
-        resource,
-        decision_code,
-        deny_reason,
-        context_hash,
-        bundle_version,
-    ) = match decision {
+    let session_id_for_audit = match decision {
+        EnforcementDecision::Allow { envelope, .. } => {
+            envelope.metadata().session_id.as_ref().to_string()
+        }
+        EnforcementDecision::Deny { .. }
+        | EnforcementDecision::Abort { .. }
+        | EnforcementDecision::Passthrough { .. } => session_id.to_string(),
+    };
+
+    AuditPayload {
+        session_id: session_id_for_audit,
+        token_id: fields.token_id,
+        agent_id: fields.agent_id,
+        action: fields.action,
+        resource: fields.resource,
+        decision: fields.decision_code,
+        deny_reason: fields.deny_reason,
+        enforcement_latency_us,
+        context_hash: fields.context_hash,
+        bundle_version: fields.bundle_version,
+        dispatch_status: 0,
+        dispatch_latency_us: 0,
+        response_size: 0,
+    }
+}
+
+struct AuditDecisionFields {
+    token_id: String,
+    agent_id: String,
+    action: String,
+    resource: String,
+    decision_code: i32,
+    deny_reason: String,
+    context_hash: String,
+    bundle_version: String,
+}
+
+fn audit_decision_fields(
+    decision: &EnforcementDecision,
+    request: &RawRequest,
+    bundle_version: Option<&str>,
+) -> AuditDecisionFields {
+    match decision {
         EnforcementDecision::Allow {
             claims, envelope, ..
-        } => (
-            claims.token_id.to_string(),
-            claims.agent_id.to_string(),
-            envelope.intent().action_class.clone(),
-            redact_sensitive_query_params(&envelope.intent().resource_display()),
-            DECISION_ALLOW,
-            String::new(),
-            claims.context_hash.clone(),
-            bundle_version.unwrap_or("").to_string(),
-        ),
+        } => AuditDecisionFields {
+            token_id: claims.token_id.to_string(),
+            agent_id: claims.agent_id.to_string(),
+            action: envelope.intent().action_class.clone(),
+            resource: redact_sensitive_query_params(&envelope.intent().resource_display()),
+            decision_code: DECISION_ALLOW,
+            deny_reason: String::new(),
+            context_hash: claims.context_hash.clone(),
+            bundle_version: bundle_version.unwrap_or("").to_string(),
+        },
         EnforcementDecision::Deny {
             reason,
             detail,
@@ -401,52 +433,44 @@ pub fn audit_payload_from_decision(
             // denials have no known identity (FIR-208).
             let (token_id, agent_id, context_hash) = deny_identity_fields(identity.as_ref());
 
-            (
+            AuditDecisionFields {
                 token_id,
                 agent_id,
                 action,
                 resource,
-                DECISION_DENY,
-                sanitize_audit_reason(&format!("{reason}: {detail}")),
+                decision_code: DECISION_DENY,
+                deny_reason: sanitize_audit_reason(&format!("{reason}: {detail}")),
                 context_hash,
-                String::new(),
-            )
+                bundle_version: String::new(),
+            }
         }
-        EnforcementDecision::Passthrough { .. } => (
-            String::new(),
-            String::new(),
-            raw_request_action_label(request),
-            redact_sensitive_query_params(&raw_request_resource_display(request)),
-            DECISION_ALLOW,
-            String::new(),
-            String::new(),
-            String::new(),
-        ),
-    };
-
-    let session_id_for_audit = match decision {
-        EnforcementDecision::Allow { envelope, .. } => {
-            envelope.metadata().session_id.as_ref().to_string()
+        EnforcementDecision::Abort {
+            reason,
+            detail,
+            identity,
+        } => {
+            let (token_id, agent_id, context_hash) = deny_identity_fields(identity.as_ref());
+            AuditDecisionFields {
+                token_id,
+                agent_id,
+                action: raw_request_action_label(request),
+                resource: redact_sensitive_query_params(&raw_request_resource_display(request)),
+                decision_code: DECISION_ABORT,
+                deny_reason: sanitize_audit_reason(&format!("{}: {detail}", reason.code())),
+                context_hash,
+                bundle_version: String::new(),
+            }
         }
-        EnforcementDecision::Deny { .. } | EnforcementDecision::Passthrough { .. } => {
-            session_id.to_string()
-        }
-    };
-
-    AuditPayload {
-        session_id: session_id_for_audit,
-        token_id,
-        agent_id,
-        action,
-        resource,
-        decision: decision_code,
-        deny_reason,
-        enforcement_latency_us,
-        context_hash,
-        bundle_version,
-        dispatch_status: 0,
-        dispatch_latency_us: 0,
-        response_size: 0,
+        EnforcementDecision::Passthrough { .. } => AuditDecisionFields {
+            token_id: String::new(),
+            agent_id: String::new(),
+            action: raw_request_action_label(request),
+            resource: redact_sensitive_query_params(&raw_request_resource_display(request)),
+            decision_code: DECISION_ALLOW,
+            deny_reason: String::new(),
+            context_hash: String::new(),
+            bundle_version: String::new(),
+        },
     }
 }
 
@@ -1740,7 +1764,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_enforce_credential_injection_fetch_failed_denies() {
+    async fn test_enforce_credential_injection_fetch_failed_aborts() {
         let mut claims = test_claims();
         claims.session_id = "sess_fail".parse().expect("literal sid");
 
@@ -1787,14 +1811,32 @@ mod tests {
         };
 
         let (decision, payload) = pipeline.enforce(&request, "sess_fail").await;
-        assert!(decision.is_deny(), "FetchFailed should produce DENY");
-        assert_eq!(
-            decision.deny_reason(),
-            Some(DenyReason::CredentialInjectionFailed)
-        );
+        assert!(decision.is_abort(), "FetchFailed should produce ABORT");
+        match decision {
+            EnforcementDecision::Abort {
+                reason,
+                detail,
+                identity,
+            } => {
+                assert_eq!(reason, AbortReason::CredentialInjectionFailed);
+                assert!(detail.contains("connector api.openai.com"));
+                let identity = identity.expect("post-validation abort should carry identity");
+                assert_eq!(identity.agent_id, "agent_test");
+            }
+            other => panic!("expected abort decision, got {other:?}"),
+        }
 
         assert_eq!(payload.session_id, "sess_fail");
-        assert_eq!(payload.decision, 2); // DENY
+        assert_eq!(payload.decision, DECISION_ABORT);
+        assert_eq!(payload.agent_id, "agent_test");
+        assert!(
+            payload
+                .deny_reason
+                .starts_with("CREDENTIAL_INJECTION_FAILED"),
+            "deny_reason should carry credential abort code, got {:?}",
+            payload.deny_reason
+        );
+        assert_eq!(payload.dispatch_status, 0);
     }
 
     // ===== SessionStateStore wiring (Task 5) =====

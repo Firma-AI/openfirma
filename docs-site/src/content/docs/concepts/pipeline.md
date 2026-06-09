@@ -220,7 +220,7 @@ That ordering is deliberate:
 - Policy evaluates the action before any secret is added.
 - A denied request never receives credentials.
 
-If no credentials are configured for the target connector, the pipeline continues with empty injected headers. If a credential should be fetched but the fetch fails, the pipeline denies with `CredentialInjectionFailed`.
+If no credentials are configured for the target connector, the pipeline continues with empty injected headers. If a credential should be fetched but the fetch fails after ALLOW, the pipeline aborts the call with `CREDENTIAL_INJECTION_FAILED`. The token stays active, but the call is recorded as not completed.
 
 Credential injection is still part of the local pipeline, but it is downstream of the authorization decision.
 
@@ -236,7 +236,24 @@ Connectors are intentionally downstream of enforcement. They do not decide wheth
 - stream the upstream response back to the agent;
 - report dispatch errors in a typed way.
 
-This separation keeps the security boundary small. A connector timeout, DNS failure, or upstream `500` does not mean policy denied the action. It means policy allowed the action and dispatch later failed.
+This separation keeps the security boundary small. A connector timeout, DNS failure, request-build failure, or upstream `500` does not mean policy denied the action. A timeout, DNS failure, or request-build failure means policy allowed the action and dispatch later failed; the Sidecar returns an ABORT. An upstream `500` is a completed target response and is relayed unchanged.
+
+V1 ABORT is sidecar-internal and local. It is triggered by:
+
+- `CONNECTOR_TIMEOUT`: the connector exceeded its configured timeout.
+- `CONNECTOR_FAILURE`: the connector failed before a target response, such as DNS, TCP, TLS, or connection reset.
+- `CONNECTOR_INVALID_REQUEST`: the connector could not translate the approved envelope into a target request.
+- `CREDENTIAL_INJECTION_FAILED`: required credential material could not be fetched after enforcement allowed the call.
+
+HTTP-facing interceptors return status `504` with a body like:
+
+```json
+{
+  "aborted": true,
+  "reason": "CONNECTOR_FAILURE",
+  "detail": "connection refused"
+}
+```
 
 The audit event records those facts separately.
 
@@ -247,7 +264,7 @@ Every outcome produces an audit event:
 - A normalization deny records that the protected request could not be classified.
 - A Stage 1 deny records which capability check failed.
 - A Stage 2 deny records the policy-stage reason, such as stale bundle or Cedar deny.
-- A credential-injection deny records that the Sidecar could not safely fetch required secret material.
+- A credential-injection abort records that the Sidecar could not safely fetch required secret material after ALLOW.
 - An allow records the envelope, capability claims, policy decision, injected credential metadata, and connector outcome.
 
 Audit signing happens off the hot path with the configured ECDSA P-256 key. The important point for readers is that audit follows the same model as enforcement: the event describes the normalized action and the stage that decided the outcome.
