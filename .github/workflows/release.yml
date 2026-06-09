@@ -50,6 +50,8 @@ jobs:
             archive_ext: zip
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Resolve version
         id: version
@@ -65,10 +67,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -105,9 +103,11 @@ jobs:
       - name: Package (unix)
         if: matrix.archive_ext == 'tar.gz'
         shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir -p dist
-          NAME="firma-${{ steps.version.outputs.version }}-${{ matrix.target }}"
+          NAME="firma-${VERSION}-${{ matrix.target }}"
           tar -czf "dist/${NAME}.tar.gz" -C "target/${{ matrix.target }}/release" firma
           if command -v sha256sum >/dev/null 2>&1; then
             (cd dist && sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256")
@@ -118,9 +118,11 @@ jobs:
       - name: Package (windows)
         if: matrix.archive_ext == 'zip'
         shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $name = "firma-${{ steps.version.outputs.version }}-${{ matrix.target }}"
+          $name = "firma-$($env:VERSION)-${{ matrix.target }}"
           $bin = "target/${{ matrix.target }}/release/firma.exe"
           Compress-Archive -Path $bin -DestinationPath "dist/$name.zip" -Force
           $hash = (Get-FileHash -Algorithm SHA256 "dist/$name.zip").Hash.ToLower()
@@ -141,6 +143,7 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          persist-credentials: false
 
       - name: Run git-cliff
         uses: orhun/git-cliff-action@v4
@@ -174,7 +177,9 @@ jobs:
         run: ls -la dist
 
       - name: Create release
-        uses: softprops/action-gh-release@v3
+        # Multi-file glob upload, checksums, and prerelease handling in one
+        # place; a hand-rolled `gh release` script would duplicate that.
+        uses: softprops/action-gh-release@v3 # zizmor: ignore[superfluous-actions]
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
@@ -194,6 +199,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Bump tap formula
         env:

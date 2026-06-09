@@ -6,6 +6,9 @@ on:
     - cron: "0 2 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   fuzz:
     name: Fuzz (${{ matrix.target }}, 300 s)
@@ -16,6 +19,8 @@ jobs:
         target: [normalizer, paseto_verify, capability_seed, capability_seed_toml]
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@nightly
 
@@ -29,7 +34,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@v1.19.1
+        uses: cargo-bins/cargo-binstall@v1.20.0
 
       - name: Install cargo-fuzz
         run: cargo binstall --no-confirm --locked cargo-fuzz
