@@ -338,6 +338,13 @@ pub struct InterceptorConfig {
     /// HTTPS MITM settings used by the HTTP proxy interceptor.
     #[serde(default)]
     pub https_mitm: HttpsMitmConfig,
+    /// Global ceiling for the total bytes of request bodies buffered
+    /// concurrently across all in-flight proxy connections.  When the
+    /// budget is full, new requests receive an immediate 403 denial
+    /// with an audit trail rather than silently unbounded buffering
+    /// that could OOM-kill the enforcer.
+    #[serde(default = "default_total_body_budget_bytes")]
+    pub total_body_budget_bytes: usize,
 }
 
 impl InterceptorConfig {
@@ -347,6 +354,15 @@ impl InterceptorConfig {
         }
         if self.max_request_body_bytes == 0 {
             return Err("interceptor.max_request_body_bytes must be > 0".into());
+        }
+        if self.total_body_budget_bytes == 0 {
+            return Err("interceptor.total_body_budget_bytes must be > 0".into());
+        }
+        if self.total_body_budget_bytes < self.max_request_body_bytes {
+            return Err(
+                "interceptor.total_body_budget_bytes must be >= interceptor.max_request_body_bytes"
+                    .into(),
+            );
         }
         self.connect_relay.validate()?;
         self.https_mitm.validate()?;
@@ -380,6 +396,7 @@ impl Default for InterceptorConfig {
             max_request_body_bytes: default_max_request_body_bytes(),
             connect_relay: ConnectRelayConfig::default(),
             https_mitm: HttpsMitmConfig::default(),
+            total_body_budget_bytes: default_total_body_budget_bytes(),
         }
     }
 }
@@ -739,6 +756,10 @@ const fn default_drain_timeout() -> u64 {
 
 const fn default_max_request_body_bytes() -> usize {
     4 * 1024 * 1024
+}
+
+const fn default_total_body_budget_bytes() -> usize {
+    64 * 1024 * 1024
 }
 
 const fn default_connect_setup_timeout_secs() -> u64 {
@@ -1207,6 +1228,55 @@ mod tests {
         assert!(
             err.contains("max_request_body_bytes"),
             "error should mention max_request_body_bytes: {err}"
+        );
+    }
+
+    #[test]
+    fn test_sidecar_config_zero_total_body_budget_rejected() {
+        let config = SidecarConfig {
+            interceptor: InterceptorConfig {
+                total_body_budget_bytes: 0,
+                ..InterceptorConfig::default()
+            },
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("total_body_budget_bytes"),
+            "error should mention total_body_budget_bytes: {err}"
+        );
+    }
+
+    #[test]
+    fn test_sidecar_config_budget_smaller_than_max_body_rejected() {
+        let config = SidecarConfig {
+            interceptor: InterceptorConfig {
+                max_request_body_bytes: 8 * 1024 * 1024,
+                total_body_budget_bytes: 4 * 1024 * 1024,
+                ..InterceptorConfig::default()
+            },
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("total_body_budget_bytes"),
+            "error should mention total_body_budget_bytes: {err}"
+        );
+    }
+
+    #[test]
+    fn test_sidecar_config_budget_equals_max_body_valid() {
+        let config = SidecarConfig {
+            interceptor: InterceptorConfig {
+                max_request_body_bytes: 4 * 1024 * 1024,
+                total_body_budget_bytes: 4 * 1024 * 1024,
+                ..InterceptorConfig::default()
+            },
+            ..SidecarConfig::default()
+        };
+        assert!(
+            config.validate().is_ok(),
+            "budget equal to max_body should be valid"
         );
     }
 
