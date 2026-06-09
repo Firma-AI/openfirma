@@ -25,13 +25,13 @@ This keeps OpenFirma's claim language simple:
 | ESF-native strategy | Secondary host hardening and audit path, not a standalone parity model. |
 | Current default claim | Proxy-only compatibility mode unless an experimental structural mode is explicitly enabled. |
 | Claim graduation bar | Hardware E2E evidence for sidecar-only egress, DNS confinement, fail-closed startup/runtime, direct-bypass resistance, and interactive CLI/TUI usability. |
-| Implementation boundary | `firma run` owns proof metadata, preflight, routing artifacts, launch contracts, and process supervision. The VZ runner owns Virtualization.framework lifecycle and in-guest enforcement. |
+| Implementation boundary | `firma run` owns proof metadata, preflight, routing artifacts, and process supervision. The planned VZ runner will own Virtualization.framework lifecycle and in-guest enforcement. |
 
 ## Baseline Reality Check
 
 Current macOS default behavior is compatibility mode. The backend is named `vz`, but the default implementation launches a host process through `sandbox-exec`, injects proxy environment variables, and starts a host-side proxy bridge. It reports `structural=false` and requires explicit non-structural opt-in before launch. That provides useful ergonomics, attribution, and some filesystem masking for supported profiles, but it does not remove the agent's ability to open direct sockets, use direct DNS, or spawn a child with a clean environment.
 
-Two experimental structural paths now exist behind explicit environment gates. `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1` selects the intermediate sandbox-exec network-deny mode. `FIRMA_RUN_VZ_GUEST=1` selects the stronger VZ guest runner contract path, which validates configured runner and guest image artifact paths and writes a deterministic launch contract. The contract path does not by itself ship Apple Virtualization.framework lifecycle code; the configured runner must own guest boot, virtio networking, guest DNS, stdio/signal/exit plumbing, and route proof inside the VM.
+One experimental structural path exists behind an explicit environment gate. `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1` selects the intermediate sandbox-exec network-deny mode. The stronger VZ guest-backed path remains the primary parity direction, but its launch contract and runner integration are split into follow-up implementation work.
 
 There is also no direct seccomp-BPF-to-ESF translation. Linux seccomp filters operate at syscall decision points; ESF exposes a different event model oriented around endpoint security events. ESF has authorization and notification events for areas such as process execution, file access, and some IPC, and it requires the Endpoint Security entitlement. It should be evaluated as its own macOS-native control plane, not as a syscall parity layer.
 
@@ -145,9 +145,9 @@ Recommendation from scoring: pursue Option A as the primary path, keep ESF as an
 | ---- | ------ | ----- |
 | Proof metadata | Implemented | `NetworkConfinement` added to `EnforcementProof`; all backends updated. |
 | Intermediate macOS structural mode | Experimental | `sandbox-exec` network-deny mode via `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1`. It blocks external IP egress but still allows host loopback. |
-| VZ guest runner contract | Experimental | `FIRMA_RUN_VZ_GUEST=1` validates runner/kernel/initrd/rootfs paths, checks runner executability, emits `macos_vz_guest` proof metadata, writes `vz-guest-launch.json`, and spawns the configured runner. |
-| Host DNS refusal stub | Implemented | `HostDnsStubHandle` wired into macOS structural routing paths and exposed to the VZ guest contract. |
-| Unit coverage | Implemented | Focused tests cover proof types, sandbox profile generation, guest contract generation, DNS stub behavior, and routing setup. |
+| VZ guest runner contract | Planned | Follow-up work will add fail-closed artifact validation, `macos_vz_guest` proof metadata, a versioned launch contract, and runner supervision. |
+| Host DNS refusal stub | Implemented | `HostDnsStubHandle` wired into macOS sandbox-exec structural routing. |
+| Unit coverage | Implemented | Focused tests cover proof types, sandbox profile generation, DNS stub behavior, and routing setup. |
 | macOS E2E schema | Written | `examples/firma-run/e2e/macos-structural-assertions.md` defines the hardware validation suite. |
 | VZ guest runner implementation | Planned | Signed Apple Virtualization.framework runner, guest image lifecycle, and in-guest route proof remain the strategic parity work. |
 | ESF hardening | Planned | Separate enterprise hardening and audit path. |
@@ -214,7 +214,7 @@ Recommendation from scoring: pursue Option A as the primary path, keep ESF as an
 | -------------- | --------- | ------ | ----- |
 | Structural proof metadata | Baseline proof | Done | `NetworkConfinement` on `EnforcementProof`; preflight logging. |
 | Intermediate macOS network-deny mode | Intermediate structural mode | Done | `sandbox-exec` network-deny structural mode + DNS stub + routing wiring. |
-| VZ guest runner contract | VZ contract | Done | Fail-closed artifact validation, `macos_vz_guest` proof, launch-contract JSON, runner spawn path. |
+| VZ guest runner contract | VZ contract | Planned | Fail-closed artifact validation, `macos_vz_guest` proof, launch-contract JSON, and runner spawn path. |
 | VZ runner implementation | VZ runner | Planned | Apple Virtualization.framework guest lifecycle with stdio, TTY, signals, terminal resize, and exit code preservation. |
 | Guest image and route proof | VZ runner | Planned | Guest image lifecycle, bridge-only route setup, DNS stub wiring, and machine-readable proof fields. |
 | macOS structural E2E suite | Evidence | Planned | Hardware tests for cooperative HTTP, policy deny, direct TCP/UDP, direct DNS, proxy-env-unset children, sidecar startup failure, and mid-session sidecar loss. |

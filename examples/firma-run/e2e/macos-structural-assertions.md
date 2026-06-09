@@ -13,20 +13,12 @@ acceptance cases. Each assertion maps to one required runtime invariant.
 # Intermediate sandbox-exec structural mode:
 FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1
 firma run --profile generic ...
-
-# VZ guest structural mode:
-FIRMA_RUN_VZ_GUEST=1
-FIRMA_RUN_VZ_GUEST_RUNNER=/Applications/Firma/vz-runner
-FIRMA_RUN_VZ_GUEST_KERNEL=/var/lib/firma/vz/vmlinuz
-FIRMA_RUN_VZ_GUEST_INITRD=/var/lib/firma/vz/initrd.img
-FIRMA_RUN_VZ_GUEST_ROOTFS=/var/lib/firma/vz/rootfs.img
-firma run --profile generic ...
 ```
 
 macOS 12+ (Monterey). Apple Silicon or Intel with sandbox-exec available for
-the intermediate mode. VZ guest mode additionally requires an operator-provided
-runner and guest image bundle that implements the launch contract. Production
-deployment should sign and package the runner for macOS.
+the intermediate mode. VZ guest mode is a follow-up path that will require an
+operator-provided runner and guest image bundle. Production deployment should
+sign and package the runner for macOS.
 
 ---
 

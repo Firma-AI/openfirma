@@ -28,9 +28,6 @@ pub enum NetworkConfinement {
     /// macOS `TrustedBSD` MAC sandbox with `deny network-outbound` policy.
     /// Provides kernel-enforced loopback-only egress without a VM guest.
     MacosSandboxNetworkDeny,
-    /// Apple Virtualization.framework guest with isolated virtio networking.
-    /// Implemented as a runner launch contract owned by the macOS VZ backend.
-    MacosVzGuest,
     /// KVM micro-VM (Firecracker). Planned as enterprise additive path.
     KvmMicroVm,
     /// Proxy-only compatibility mode: enforcement depends on `HTTP_PROXY`
