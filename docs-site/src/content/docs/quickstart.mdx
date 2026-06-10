@@ -99,12 +99,30 @@ This creates `.firma/` with a unified `firma.toml` (authority, sidecar, and run 
 
 `firma run` launches a command inside a sandbox and routes its outbound traffic through the enforcement Sidecar. It autostarts a local Sidecar and local Authority from the generated run config, then tears both down when the command exits.
 
-Pass any command you want to wrap after the `--` marker:
+Pass any command you want to wrap after the `--` marker.
+
+On **Linux**, `firma run` uses the `bwrap` backend and structurally confines outbound traffic.
+
+On **macOS** and **Windows (WSL2)**, the default backends (`vz` and `wsl2`) provide proxy-only enforcement: traffic is mediated for cooperative HTTP clients like `curl`, but `firma run` requires an explicit opt-in before starting. Pass `--allow-non-structural`, or set `allow_non_structural = true` under `[run.defaults]` in `.firma/firma.toml`. See [The sandbox boundary](../concepts/sandbox/) for details.
+
+<Tabs>
+<TabItem label="Linux">
 
 ```bash
 firma run --config .firma/firma.toml -- \
   curl -kfsS https://api.github.com/users/firma-ai
 ```
+
+</TabItem>
+<TabItem label="macOS / WSL2">
+
+```bash
+firma run --config .firma/firma.toml --allow-non-structural -- \
+  curl -kfsS https://api.github.com/users/firma-ai
+```
+
+</TabItem>
+</Tabs>
 
 Every outbound call the wrapped command makes is normalized, checked against its capability, and evaluated against the Cedar policy bundle supplied by the Authority. The `-k` flag keeps the demo short by letting `curl` accept the local HTTPS interception certificate; for real workloads, install the generated CA instead.
 
@@ -114,9 +132,24 @@ If you want to see what firma would classify and deny before writing mapping rul
 
 Enable it for a single run without editing any file:
 
+<Tabs>
+<TabItem label="Linux">
+
 ```bash
-firma run --monitor -- curl https://api.github.com/users/firma-ai
+firma run --monitor --config .firma/firma.toml -- \
+  curl -kfsS https://api.github.com/users/firma-ai
 ```
+
+</TabItem>
+<TabItem label="macOS / WSL2">
+
+```bash
+firma run --monitor --config .firma/firma.toml --allow-non-structural -- \
+  curl -kfsS https://api.github.com/users/firma-ai
+```
+
+</TabItem>
+</Tabs>
 
 Or set it permanently in `.firma/firma.toml`:
 
@@ -155,7 +188,7 @@ Each line is one signed execution event. For the GitHub call, expect ALLOW event
 
 - An **Authority**, which signs a capability token and streams policies and revocations.
 - A **Sidecar**, which receives outbound requests and decides ALLOW or DENY.
-- Your **wrapped command**, sandboxed so its traffic cannot bypass the Sidecar.
+- Your **wrapped command**, sandboxed and routed through the Sidecar. On Linux (`bwrap`), egress is structurally confined; on macOS and WSL2, enforcement is proxy-based and depends on the agent honoring `HTTP_PROXY`.
 
 Every request takes the same path:
 
