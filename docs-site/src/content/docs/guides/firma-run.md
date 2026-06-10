@@ -80,16 +80,17 @@ macOS structural modes are explicit opt-ins:
 # Intermediate: block external IP egress with sandbox-exec, loopback remains reachable.
 FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1 firma run --profile generic -- curl https://example.com
 
-# Stronger target: launch through an operator-provided Virtualization.framework runner.
+# Under development: build, ad-hoc sign and launch a local Virtualization.framework runner.
+just macos-vz-runner-dev
 FIRMA_RUN_VZ_GUEST=1 \
-FIRMA_RUN_VZ_GUEST_RUNNER=/Applications/Firma/firma-vz-runner \
+FIRMA_RUN_VZ_GUEST_RUNNER=target/macos-vz-runner-dev/firma-vz-runner \
 FIRMA_RUN_VZ_GUEST_KERNEL=/var/lib/firma/vz/vmlinuz \
 FIRMA_RUN_VZ_GUEST_INITRD=/var/lib/firma/vz/initrd.img \
 FIRMA_RUN_VZ_GUEST_ROOTFS=/var/lib/firma/vz/rootfs.img \
 firma run --profile generic -- curl https://example.com
 ```
 
-Guest mode validates those artifact paths, creates an owner-only run/contract directory, writes `vz-guest-launch.json`, and spawns the runner with `--launch-contract`. The runner is responsible for the Apple Virtualization.framework lifecycle and for enforcing the contract inside the guest.
+Guest mode is still under active development. Today it validates those artifact paths, creates an owner-only run/contract directory, writes `vz-guest-launch.json` and spawns the runner with `--launch-contract` scheme. The runner is responsible for the Apple Virtualization.framework lifecycle and for enforcing the contract inside the guest.
 
 ## Step 2: Scaffold a config directory with `firma config`
 
