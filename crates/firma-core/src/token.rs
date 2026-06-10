@@ -177,15 +177,30 @@ pub trait RevocationStore {
     fn add_revocation(&self, token_id: &TokenId) -> Result<(), TokenError>;
 }
 
+/// Check whether `resource` (a `host[/path[?query]]` display string) falls
+/// within a token's `resource_scope`.
+///
+/// Matching is segment-aware: a scope prefix only matches when the resource
+/// continues at a `/` or `?` boundary. This prevents a scope like
+/// `api.example.com/*` from authorizing a lookalike host such as
+/// `api.example.community`, or `api.example.com/v1` from matching
+/// `api.example.com/v1abc`.
 #[must_use]
 pub fn matches_resource_scope(scope: &str, resource: &str) -> bool {
     if scope == "*" {
         return true;
     }
-    if let Some(prefix) = scope.strip_suffix("/*") {
-        return resource == prefix || resource.starts_with(prefix);
-    }
-    resource == scope || resource.starts_with(scope)
+    let prefix = scope.strip_suffix("/*").unwrap_or(scope);
+    prefix_on_boundary(prefix, resource)
+}
+
+/// `resource` equals `prefix` or extends it at a `/` or `?` boundary.
+/// `?` is a boundary because resource displays carry the raw request path,
+/// which may include a query string.
+fn prefix_on_boundary(prefix: &str, resource: &str) -> bool {
+    resource
+        .strip_prefix(prefix)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/') || rest.starts_with('?'))
 }
 
 #[cfg(test)]
@@ -271,6 +286,42 @@ mod tests {
         assert!(!matches_resource_scope(
             "api.example.com/v1/chat",
             "api.example.com/v2/data"
+        ));
+    }
+
+    #[test]
+    fn resource_scope_wildcard_rejects_lookalike_host() {
+        assert!(!matches_resource_scope(
+            "api.example.com/*",
+            "api.example.community/v1/data"
+        ));
+    }
+
+    #[test]
+    fn resource_scope_bare_host_rejects_lookalike_host() {
+        assert!(!matches_resource_scope(
+            "api.example.com",
+            "api.example.community/v1/data"
+        ));
+    }
+
+    #[test]
+    fn resource_scope_path_prefix_rejects_non_boundary_extension() {
+        assert!(!matches_resource_scope(
+            "api.example.com/v1",
+            "api.example.com/v1abc"
+        ));
+    }
+
+    #[test]
+    fn resource_scope_matches_at_query_boundary() {
+        assert!(matches_resource_scope(
+            "api.example.com/v1/chat",
+            "api.example.com/v1/chat?stream=true"
+        ));
+        assert!(matches_resource_scope(
+            "api.example.com/*",
+            "api.example.com/v1/chat?stream=true"
         ));
     }
 
