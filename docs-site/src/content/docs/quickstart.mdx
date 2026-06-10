@@ -97,9 +97,9 @@ This creates `.firma/` with a unified `firma.toml` (authority, sidecar, and run 
 
 ## Run an agent under enforcement
 
-`firma run` launches a command inside a sandbox and routes its outbound traffic through the enforcement Sidecar. It autostarts a local Sidecar and local Authority from the generated run config, then tears both down when the command exits.
+`firma run` launches a command inside a sandbox and routes its outbound traffic through the enforcement Sidecar. Unless you point it at an already-running stack, it autostarts a local Sidecar and a local Authority, then tears down whatever it started when the command exits.
 
-Pass any command you want to wrap after the `--` marker.
+The command after `--` is whatever you want to govern. Here it's a one-line `curl` to keep the demo dependency-free, but in practice it could also be an AI agent such as Claude Code or Codex — see [Secure a local coding agent](../guides/secure-a-coding-agent/). Inside the sandbox, `firma run` sets `HTTP_PROXY` / `HTTPS_PROXY` so cooperative clients route through the Sidecar; on Linux the sandbox also confines traffic structurally, so even a process that ignores those variables can't bypass it ([how interception works](../concepts/interception/)).
 
 On **Linux**, `firma run` uses the `bwrap` backend and structurally confines outbound traffic.
 
@@ -124,7 +124,7 @@ firma run --config .firma/firma.toml --allow-non-structural -- \
 </TabItem>
 </Tabs>
 
-Every outbound call the wrapped command makes is normalized, checked against its capability, and evaluated against the Cedar policy bundle supplied by the Authority. The `-k` flag keeps the demo short by letting `curl` accept the local HTTPS interception certificate; for real workloads, install the generated CA instead.
+Every outbound call the wrapped command makes is normalized, checked against its capability, and evaluated against the Cedar policy bundle supplied by the Authority. `-k` just lets this single `curl` skip certificate setup; for real agents `firma run` installs and trusts its generated CA inside the sandbox automatically, so you rarely need it. To inspect or install that CA yourself, see [Enable HTTPS MITM](../guides/https-mitm/).
 
 ## Try observe-only mode first
 
@@ -184,7 +184,7 @@ Each line is one signed execution event. For the GitHub call, expect ALLOW event
 
 ## What just happened
 
-`firma run` started three local pieces:
+For this run, three local pieces work together (autostarted on demand, or reused if already running):
 
 - An **Authority**, which signs a capability token and streams policies and revocations.
 - A **Sidecar**, which receives outbound requests and decides ALLOW or DENY.
