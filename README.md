@@ -68,8 +68,7 @@ brew install firma-ai/openfirma/firma
 ```bash
 git clone https://github.com/Firma-AI/openfirma
 cd openfirma
-cargo build --release
-cargo install --path crates/firma
+cargo install --path crates/firma --locked
 ```
 
 ### Quickstart
