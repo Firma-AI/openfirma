@@ -14,15 +14,73 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive", "error-context", "help", "std", "usage"] }
+ctrlc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2-virtualization = { workspace = true, features = ["VZBootLoader", "VZLinuxBootLoader", "std"] }
-
 [dev-dependencies]
 tempfile = { workspace = true }
 
-[lints]
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = { workspace = true }
+dispatch2 = { workspace = true }
+objc2 = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
 workspace = true
+features = [
+  "NSArray",
+  "NSDate",
+  "NSDictionary",
+  "NSError",
+  "NSFileHandle",
+  "NSObject",
+  "NSRunLoop",
+  "NSString",
+  "NSURL",
+]
+
+# TODO we are using "dependencies.objc2-virtualization" instead of just objc2-virtualization = {}
+# here just because dprint doesnt accept this kindof formatting.
+# must be discussed to solve this later.
+[target.'cfg(target_os = "macos")'.dependencies.objc2-virtualization]
+workspace = true
+features = [
+  "VZBootLoader",
+  "VZDirectoryShare",
+  "VZDirectorySharingDeviceConfiguration",
+  "VZDiskImageStorageDeviceAttachment",
+  "VZDiskSynchronizationMode",
+  "VZEntropyDeviceConfiguration",
+  "VZFileHandleSerialPortAttachment",
+  "VZGenericPlatformConfiguration",
+  "VZLinuxBootLoader",
+  "VZMultipleDirectoryShare",
+  "VZPlatformConfiguration",
+  "VZSerialPortAttachment",
+  "VZSerialPortConfiguration",
+  "VZSharedDirectory",
+  "VZStorageDeviceAttachment",
+  "VZStorageDeviceConfiguration",
+  "VZVirtioBlockDeviceConfiguration",
+  "VZVirtioConsoleDeviceSerialPortConfiguration",
+  "VZVirtioEntropyDeviceConfiguration",
+  "VZVirtioFileSystemDeviceConfiguration",
+  "VZVirtualMachine",
+  "VZVirtualMachineConfiguration",
+  "block2",
+  "dispatch2",
+  "std",
+]
+
+[lints.clippy]
+expect_used = "deny"
+missing_const_for_fn = "allow"
+nursery = { level = "warn", priority = -1 }
+panic = "deny"
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+
+[lints.rust]
+unsafe_code = "allow"

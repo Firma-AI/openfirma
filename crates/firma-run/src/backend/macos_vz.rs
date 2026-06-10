@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::io::IsTerminal;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -9,8 +10,7 @@ use crate::backend::{
     BackendKind, EnforcementProof, LaunchSpec, NetworkConfinement, PrepareRequest, SandboxBackend,
     SandboxHandle,
 };
-use crate::config::MountSpec;
-use crate::config::NetworkPolicy;
+use crate::config::{MountSpec, NetworkPolicy, SidecarEndpoint};
 use crate::error::RunError;
 
 const VZ_GUEST_MODE_ENV: &str = "FIRMA_RUN_VZ_GUEST";
@@ -23,6 +23,23 @@ const VZ_GUEST_LAUNCH_CONTRACT_VERSION: u32 = 1;
 const VZ_GUEST_CONTRACT_DIR: &str = "vz-guest";
 const VZ_GUEST_CONTRACT_FILE: &str = "vz-guest-launch.json";
 const VZ_GUEST_SECRET_ENV_KEYS: &[&str] = &["FIRMA_CAPABILITY_TOKEN"];
+const VZ_GUEST_HOST_NETWORK_ENV_KEYS: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "FIRMA_DNS_STUB_ADDR",
+    "FIRMA_RUN_PROXY_LISTEN_ADDR",
+    "FIRMA_RUN_DNS_STUB_LISTEN_ADDR",
+    "FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS",
+];
+const VZ_GUEST_HTTP_PROXY_ADDR: &str = "127.0.0.1:18080";
+const VZ_GUEST_DNS_STUB_ADDR: &str = "127.0.0.1:1053";
+const VZ_GUEST_SIDECAR_VSOCK_PORT: u32 = 18080;
+const VZ_GUEST_COMMAND_PTY_VSOCK_PORT: u32 = 18081;
+const VZ_GUEST_COMMAND_PTY_CONTROL_VSOCK_PORT: u32 = 18082;
 
 /// macOS runtime backend.
 ///
@@ -338,12 +355,14 @@ struct VzGuestLaunchContract {
     runner: VzGuestRunnerContract,
     guest: VzGuestImageContract,
     command: VzGuestCommandContract,
+    terminal: VzGuestTerminalContract,
     mounts: Vec<MountSpec>,
     network: VzGuestNetworkContract,
     invariants: Vec<VzGuestInvariantContract>,
 }
 
 impl VzGuestLaunchContract {
+    /// Serializes the host launch state into the VZ guest contract boundary.
     fn from_launch(
         handle: &SandboxHandle,
         launch: &LaunchSpec,
@@ -369,9 +388,10 @@ impl VzGuestLaunchContract {
                 identity_mode: launch.identity_mode,
                 seccomp_filter_path: launch.seccomp_filter_path.clone(),
             },
+            terminal: VzGuestTerminalContract::from_launch(launch),
             mounts: handle.mounts.clone(),
-            network: VzGuestNetworkContract::from_launch_env(
-                &launch.env,
+            network: VzGuestNetworkContract::from_launch(
+                launch,
                 handle.identity.full_attribution_headers(),
             )?,
             invariants: VzGuestInvariantContract::required_set(handle.network_policy.fail_closed),
@@ -406,23 +426,117 @@ struct VzGuestCommandContract {
 
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
+struct VzGuestTerminalContract {
+    interactive: bool,
+    pty: bool,
+    pty_vsock_port: Option<u32>,
+    pty_control_vsock_port: Option<u32>,
+    term: Option<String>,
+    rows: Option<u16>,
+    cols: Option<u16>,
+}
+
+impl VzGuestTerminalContract {
+    /// Captures the host terminal shape that the guest runner should preserve.
+    fn from_launch(launch: &LaunchSpec) -> Self {
+        let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+        let pty = interactive && command_requests_guest_pty(launch);
+        let (rows, cols) = if interactive {
+            terminal_size()
+        } else {
+            (None, None)
+        };
+
+        Self {
+            interactive,
+            pty,
+            pty_vsock_port: pty.then_some(VZ_GUEST_COMMAND_PTY_VSOCK_PORT),
+            pty_control_vsock_port: pty.then_some(VZ_GUEST_COMMAND_PTY_CONTROL_VSOCK_PORT),
+            term: interactive.then(terminal_type).flatten(),
+            rows,
+            cols,
+        }
+    }
+}
+
+/// Returns whether this launch should ask the guest runner for PTY mode.
+///
+/// This is intentionally Codex-only for now because we mean to proves the
+/// real Codex TUI path.
+///
+/// TODO: we should make PTY mode profile-driven.
+fn command_requests_guest_pty(launch: &LaunchSpec) -> bool {
+    let profile = launch.env.get("FIRMA_RUN_PROFILE").map(String::as_str);
+    let executable_name = Path::new(&launch.executable)
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str);
+
+    profile == Some("codex") && executable_name == Some("codex")
+}
+
+/// Reads the host terminal type to carry into the launch contract.
+fn terminal_type() -> Option<String> {
+    std::env::var("TERM")
+        .ok()
+        .map(|term| term.trim().to_string())
+        .filter(|term| !term.is_empty())
+}
+
+/// Reads the host terminal dimensions from the conventional env vars.
+fn terminal_size() -> (Option<u16>, Option<u16>) {
+    (terminal_dimension("LINES"), terminal_dimension("COLUMNS"))
+}
+
+/// Parses one non-zero terminal dimension from the host environment.
+fn terminal_dimension(key: &str) -> Option<u16> {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|value| *value != 0)
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 struct VzGuestNetworkContract {
-    proxy_url: String,
-    dns_stub_addr: String,
+    mode: VzGuestNetworkMode,
+    guest_http_proxy_addr: String,
+    guest_dns_stub_addr: String,
+    vsock_sidecar_port: u32,
+    sidecar_host_addr: String,
+    direct_network_devices_allowed: bool,
+    dns_mode: VzGuestDnsMode,
     attribution_headers: BTreeMap<String, String>,
 }
 
 impl VzGuestNetworkContract {
-    fn from_launch_env(
-        env: &BTreeMap<String, String>,
+    /// Builds the guest-visible network contract from the host sidecar endpoint.
+    fn from_launch(
+        launch: &LaunchSpec,
         attribution_headers: BTreeMap<String, String>,
     ) -> Result<Self, RunError> {
         Ok(Self {
-            proxy_url: required_launch_env(env, "HTTP_PROXY")?.to_string(),
-            dns_stub_addr: required_launch_env(env, "FIRMA_DNS_STUB_ADDR")?.to_string(),
+            mode: VzGuestNetworkMode::VsockSidecar,
+            guest_http_proxy_addr: VZ_GUEST_HTTP_PROXY_ADDR.to_string(),
+            guest_dns_stub_addr: VZ_GUEST_DNS_STUB_ADDR.to_string(),
+            vsock_sidecar_port: VZ_GUEST_SIDECAR_VSOCK_PORT,
+            sidecar_host_addr: sidecar_host_addr(&launch.sidecar_endpoint)?,
+            direct_network_devices_allowed: false,
+            dns_mode: VzGuestDnsMode::ConfinedStub,
             attribution_headers,
         })
     }
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum VzGuestNetworkMode {
+    VsockSidecar,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum VzGuestDnsMode {
+    ConfinedStub,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -517,7 +631,10 @@ fn start_vz_guest_runner_with_inputs(
 /// but the launch contract must not create a second persisted copy of it.
 fn vz_guest_contract_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     env.iter()
-        .filter(|(key, _)| !VZ_GUEST_SECRET_ENV_KEYS.contains(&key.as_str()))
+        .filter(|(key, _)| {
+            !VZ_GUEST_SECRET_ENV_KEYS.contains(&key.as_str())
+                && !VZ_GUEST_HOST_NETWORK_ENV_KEYS.contains(&key.as_str())
+        })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
 }
@@ -562,19 +679,24 @@ fn write_vz_guest_launch_contract(
     Ok(contract_path)
 }
 
-fn required_launch_env<'a>(
-    env: &'a BTreeMap<String, String>,
-    key: &str,
-) -> Result<&'a str, RunError> {
-    env.get(key)
-        .map(String::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| RunError::Backend {
+/// Extracts the loopback TCP sidecar endpoint required by the VZ bridge.
+fn sidecar_host_addr(endpoint: &SidecarEndpoint) -> Result<String, RunError> {
+    match endpoint {
+        SidecarEndpoint::Tcp { addr } if addr.ip().is_loopback() => Ok(addr.to_string()),
+        SidecarEndpoint::Tcp { addr } => Err(RunError::UnsupportedBackend {
             backend: BackendKind::Vz.to_string(),
             reason: format!(
-                "VZ guest launch requires {key} from network runtime; sidecar bridge was not prepared"
+                "VZ guest launch requires a loopback TCP sidecar endpoint for the host bridge; got {addr}"
             ),
-        })
+        }),
+        SidecarEndpoint::Unix { path } => Err(RunError::UnsupportedBackend {
+            backend: BackendKind::Vz.to_string(),
+            reason: format!(
+                "VZ guest launch requires a TCP sidecar endpoint for the host bridge; got unix://{}",
+                path.display()
+            ),
+        }),
+    }
 }
 
 fn validate_required_file_env_value(
@@ -724,7 +846,7 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::backend::{BackendKind, LaunchSpec, SandboxHandle};
-    use crate::config::{NetworkPolicy, SandboxIdentityMode};
+    use crate::config::{NetworkPolicy, SandboxIdentityMode, SidecarEndpoint};
     use crate::error::RunError;
     use crate::identity::RunIdentity;
 
@@ -735,7 +857,7 @@ mod tests {
     };
     use super::{
         VzGuestLaunchContract, VzGuestLaunchInputs, VzStructuralMode, build_sandbox_profile,
-        vz_structural_mode_from_flags,
+        command_requests_guest_pty, vz_structural_mode_from_flags,
     };
 
     fn test_launch(profile_name: &str) -> LaunchSpec {
@@ -747,8 +869,15 @@ mod tests {
             args: vec![],
             cwd: PathBuf::from("/tmp"),
             env,
+            sidecar_endpoint: test_sidecar_endpoint(),
             seccomp_filter_path: None,
             identity_mode: SandboxIdentityMode::SandboxUser,
+        }
+    }
+
+    fn test_sidecar_endpoint() -> SidecarEndpoint {
+        SidecarEndpoint::Tcp {
+            addr: "127.0.0.1:18081".parse().expect("test sidecar addr"),
         }
     }
 
@@ -789,6 +918,21 @@ mod tests {
         .expect("guest contract should build from prepared launch")
     }
 
+    #[test]
+    fn codex_profile_command_requests_guest_pty() {
+        let mut codex = test_launch("codex");
+        codex.executable = "codex".to_string();
+        assert!(command_requests_guest_pty(&codex));
+
+        let mut codex_version = test_launch("codex");
+        codex_version.executable = "/usr/bin/true".to_string();
+        assert!(!command_requests_guest_pty(&codex_version));
+
+        let mut generic_codex = test_launch("generic");
+        generic_codex.executable = "codex".to_string();
+        assert!(!command_requests_guest_pty(&generic_codex));
+    }
+
     #[cfg(unix)]
     fn json_keys(value: &serde_json::Value) -> BTreeSet<String> {
         value
@@ -817,6 +961,7 @@ mod tests {
                 "runner",
                 "runtime_dir",
                 "sandbox_id",
+                "terminal",
                 "version",
             ])
         );
@@ -837,8 +982,29 @@ mod tests {
             ])
         );
         assert_eq!(
+            json_keys(&json["terminal"]),
+            key_set(&[
+                "cols",
+                "interactive",
+                "pty",
+                "pty_control_vsock_port",
+                "pty_vsock_port",
+                "rows",
+                "term"
+            ])
+        );
+        assert_eq!(
             json_keys(&json["network"]),
-            key_set(&["attribution_headers", "dns_stub_addr", "proxy_url"])
+            key_set(&[
+                "attribution_headers",
+                "direct_network_devices_allowed",
+                "dns_mode",
+                "guest_dns_stub_addr",
+                "guest_http_proxy_addr",
+                "mode",
+                "sidecar_host_addr",
+                "vsock_sidecar_port",
+            ])
         );
 
         let invariants = json["invariants"].as_array().expect("invariants array");
@@ -883,8 +1049,13 @@ mod tests {
         assert_eq!(json["guest"]["rootfs"], rootfs.display().to_string());
         assert_eq!(json["command"]["executable"], "codex");
         assert_eq!(json["command"]["args"][0], "--version");
-        assert_eq!(json["network"]["proxy_url"], "http://127.0.0.1:18080");
-        assert_eq!(json["network"]["dns_stub_addr"], "127.0.0.1:5353");
+        assert_eq!(json["network"]["mode"], "vsock_sidecar");
+        assert_eq!(json["network"]["guest_http_proxy_addr"], "127.0.0.1:18080");
+        assert_eq!(json["network"]["guest_dns_stub_addr"], "127.0.0.1:1053");
+        assert_eq!(json["network"]["vsock_sidecar_port"], 18080);
+        assert_eq!(json["network"]["sidecar_host_addr"], "127.0.0.1:18081");
+        assert_eq!(json["network"]["direct_network_devices_allowed"], false);
+        assert_eq!(json["network"]["dns_mode"], "confined_stub");
         assert!(
             json["command"]["env"]
                 .as_object()
@@ -1121,6 +1292,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "linear contract shape regression test"
+    )]
     fn vz_guest_contract_carries_command_mounts_network_and_invariants() {
         let identity = RunIdentity::new("claude-code");
         let handle = SandboxHandle {
@@ -1170,6 +1345,29 @@ mod tests {
         assert_eq!(json["command"]["executable"], "/usr/bin/true");
         assert_eq!(json["command"]["args"][0], "--print");
         assert_eq!(json["command"]["env"]["HOME"], "/Users/tester");
+        assert_eq!(json["terminal"]["interactive"], false);
+        assert_eq!(json["terminal"]["pty"], false);
+        assert_eq!(json["terminal"]["pty_vsock_port"], serde_json::Value::Null);
+        assert_eq!(
+            json["terminal"]["pty_control_vsock_port"],
+            serde_json::Value::Null
+        );
+        assert!(
+            json["command"]["env"]
+                .as_object()
+                .expect("contract env object")
+                .get("HTTP_PROXY")
+                .is_none(),
+            "host proxy env must not be serialized into VZ guest command env"
+        );
+        assert!(
+            json["command"]["env"]
+                .as_object()
+                .expect("contract env object")
+                .get("FIRMA_DNS_STUB_ADDR")
+                .is_none(),
+            "host DNS stub env must not be serialized into VZ guest command env"
+        );
         assert!(
             json["command"]["env"]
                 .as_object()
@@ -1179,8 +1377,13 @@ mod tests {
             "capability token must not be serialized into VZ guest contract"
         );
         assert_eq!(json["mounts"][0]["target"], "/workspace");
-        assert_eq!(json["network"]["proxy_url"], "http://127.0.0.1:18080");
-        assert_eq!(json["network"]["dns_stub_addr"], "127.0.0.1:5353");
+        assert_eq!(json["network"]["mode"], "vsock_sidecar");
+        assert_eq!(json["network"]["guest_http_proxy_addr"], "127.0.0.1:18080");
+        assert_eq!(json["network"]["guest_dns_stub_addr"], "127.0.0.1:1053");
+        assert_eq!(json["network"]["vsock_sidecar_port"], 18080);
+        assert_eq!(json["network"]["sidecar_host_addr"], "127.0.0.1:18081");
+        assert_eq!(json["network"]["direct_network_devices_allowed"], false);
+        assert_eq!(json["network"]["dns_mode"], "confined_stub");
         assert_eq!(
             json["network"]["attribution_headers"]["x-firma-profile"],
             "claude-code"
@@ -1239,6 +1442,40 @@ mod tests {
 
         assert_backend_error_contains(&error, "failed to write VZ guest launch contract");
         assert_backend_error_contains(&error, super::VZ_GUEST_CONTRACT_FILE);
+    }
+
+    #[test]
+    fn vz_guest_contract_rejects_non_loopback_sidecar_endpoint() {
+        let handle = test_handle(PathBuf::from("/tmp/firma-test-vz-guest"));
+        let mut launch = test_launch("claude-code");
+        launch.sidecar_endpoint = SidecarEndpoint::Tcp {
+            addr: "10.0.0.2:18081".parse().expect("test sidecar addr"),
+        };
+
+        let error = VzGuestLaunchContract::from_launch(
+            &handle,
+            &launch,
+            VzGuestLaunchInputs {
+                runner: PathBuf::from("/Applications/Firma/vz-runner"),
+                kernel: PathBuf::from("/var/lib/firma/vz/vmlinuz"),
+                initrd: PathBuf::from("/var/lib/firma/vz/initrd.img"),
+                rootfs: PathBuf::from("/var/lib/firma/vz/rootfs.img"),
+            },
+        )
+        .expect_err("non-loopback sidecar endpoint must fail closed");
+
+        if let RunError::UnsupportedBackend { reason, .. } = &error {
+            assert!(
+                reason.contains("loopback TCP sidecar endpoint"),
+                "expected reason to mention loopback sidecar endpoint, got {reason:?}"
+            );
+            return;
+        }
+
+        assert!(
+            matches!(error, RunError::UnsupportedBackend { .. }),
+            "expected unsupported backend error, got {error:?}"
+        );
     }
 
     #[cfg(unix)]

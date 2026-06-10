@@ -11,7 +11,9 @@ use std::process::Child;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{MountSpec, NetworkPolicy, ResolvedProfile, SandboxIdentityMode};
+use crate::config::{
+    MountSpec, NetworkPolicy, ResolvedProfile, SandboxIdentityMode, SidecarEndpoint,
+};
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 
@@ -139,6 +141,7 @@ pub struct LaunchSpec {
     pub args: Vec<String>,
     pub cwd: PathBuf,
     pub env: BTreeMap<String, String>,
+    pub sidecar_endpoint: SidecarEndpoint,
     /// Optional static seccomp cBPF artifact path resolved by runtime.
     ///
     /// Backends should treat this as the authoritative source for seccomp
