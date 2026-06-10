@@ -89,7 +89,7 @@ FIRMA_RUN_VZ_GUEST_ROOTFS=/var/lib/firma/vz/rootfs.img \
 firma run --profile generic -- curl https://example.com
 ```
 
-Guest mode validates those artifact paths, writes `vz-guest-launch.json` under the run directory, and spawns the runner with `--launch-contract`. The runner is responsible for the Apple Virtualization.framework lifecycle and for enforcing the contract inside the guest.
+Guest mode validates those artifact paths, creates an owner-only run/contract directory, writes `vz-guest-launch.json`, and spawns the runner with `--launch-contract`. The runner is responsible for the Apple Virtualization.framework lifecycle and for enforcing the contract inside the guest.
 
 ## Step 2: Scaffold a config directory with `firma config`
 

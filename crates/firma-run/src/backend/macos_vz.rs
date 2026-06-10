@@ -20,6 +20,9 @@ const VZ_GUEST_KERNEL_ENV: &str = "FIRMA_RUN_VZ_GUEST_KERNEL";
 const VZ_GUEST_INITRD_ENV: &str = "FIRMA_RUN_VZ_GUEST_INITRD";
 const VZ_GUEST_ROOTFS_ENV: &str = "FIRMA_RUN_VZ_GUEST_ROOTFS";
 const VZ_GUEST_LAUNCH_CONTRACT_VERSION: u32 = 1;
+const VZ_GUEST_CONTRACT_DIR: &str = "vz-guest";
+const VZ_GUEST_CONTRACT_FILE: &str = "vz-guest-launch.json";
+const VZ_GUEST_SECRET_ENV_KEYS: &[&str] = &["FIRMA_CAPABILITY_TOKEN"];
 
 /// macOS runtime backend.
 ///
@@ -132,13 +135,8 @@ impl SandboxBackend for VzBackend {
         let runtime_dir = std::env::temp_dir()
             .join("firma-run")
             .join(&request.identity.sandbox_id);
-        std::fs::create_dir_all(&runtime_dir).map_err(|error| RunError::Backend {
-            backend: BackendKind::Vz.to_string(),
-            reason: format!(
-                "failed to create runtime dir {}: {error}",
-                runtime_dir.display()
-            ),
-        })?;
+
+        create_vz_runtime_dir(&runtime_dir)?;
 
         let mounts = request
             .profile
@@ -276,6 +274,23 @@ impl SandboxBackend for VzBackend {
     }
 }
 
+/// Create the VZ runtime tree with owner-only custody.
+///
+/// VZ guest mode writes launch context under this directory later in the run,
+/// so the whole runtime tree must be private before any contract or runner
+/// artifacts appear there.
+fn create_vz_runtime_dir(runtime_dir: &Path) -> Result<(), RunError> {
+    firma_runtime_state::fs::create_private_dir_all(runtime_dir).map_err(|error| {
+        RunError::Backend {
+            backend: BackendKind::Vz.to_string(),
+            reason: format!(
+                "failed to create private runtime dir {}: {error}",
+                runtime_dir.display()
+            ),
+        }
+    })
+}
+
 #[derive(Debug, Clone)]
 struct VzGuestLaunchInputs {
     runner: PathBuf,
@@ -336,7 +351,7 @@ impl VzGuestLaunchContract {
                 executable: launch.executable.clone(),
                 args: launch.args.clone(),
                 cwd: launch.cwd.clone(),
-                env: launch.env.clone(),
+                env: vz_guest_contract_env(&launch.env),
                 identity_mode: launch.identity_mode,
                 seccomp_filter_path: launch.seccomp_filter_path.clone(),
             },
@@ -452,20 +467,7 @@ fn start_vz_guest_runner(handle: &SandboxHandle, launch: &LaunchSpec) -> Result<
     let inputs = VzGuestLaunchInputs::from_env()?;
     let runner = inputs.runner.clone();
     let contract = VzGuestLaunchContract::from_launch(handle, launch, inputs)?;
-    let contract_path = handle.runtime_dir.join("vz-guest-launch.json");
-    let json = serde_json::to_vec_pretty(&contract).map_err(|error| {
-        RunError::Internal(format!(
-            "failed to serialize macOS VZ guest launch contract: {error}"
-        ))
-    })?;
-
-    std::fs::write(&contract_path, json).map_err(|error| RunError::Backend {
-        backend: BackendKind::Vz.to_string(),
-        reason: format!(
-            "failed to write VZ guest launch contract {}: {error}",
-            contract_path.display()
-        ),
-    })?;
+    let contract_path = write_vz_guest_launch_contract(handle, &contract)?;
 
     tracing::info!(
         mode = "vz_guest",
@@ -484,6 +486,58 @@ fn start_vz_guest_runner(handle: &SandboxHandle, launch: &LaunchSpec) -> Result<
                 runner.display()
             ))
         })
+}
+
+/// Return the command environment that is safe to serialize into the VZ launch
+/// contract.
+///
+/// The wrapped process may still receive compatibility-mode secret material,
+/// but the launch contract must not create a second persisted copy of it.
+fn vz_guest_contract_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    env.iter()
+        .filter(|(key, _)| !VZ_GUEST_SECRET_ENV_KEYS.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// Write the VZ launch contract into the run directory with owner-only access.
+///
+/// The contract carries enough launch context for the external runner to start
+/// the guest, so it is kept under a dedicated custody directory and written as
+/// an owner-readable file rather than a normal temporary artifact.
+fn write_vz_guest_launch_contract(
+    handle: &SandboxHandle,
+    contract: &VzGuestLaunchContract,
+) -> Result<PathBuf, RunError> {
+    let contract_dir = handle.runtime_dir.join(VZ_GUEST_CONTRACT_DIR);
+    firma_runtime_state::fs::create_private_dir_all(&contract_dir).map_err(|error| {
+        RunError::Backend {
+            backend: BackendKind::Vz.to_string(),
+            reason: format!(
+                "failed to create private VZ guest contract dir {}: {error}",
+                contract_dir.display()
+            ),
+        }
+    })?;
+
+    let contract_path = contract_dir.join(VZ_GUEST_CONTRACT_FILE);
+    let json = serde_json::to_vec_pretty(contract).map_err(|error| {
+        RunError::Internal(format!(
+            "failed to serialize macOS VZ guest launch contract: {error}"
+        ))
+    })?;
+
+    firma_runtime_state::fs::write_private_file(&contract_path, &json).map_err(|error| {
+        RunError::Backend {
+            backend: BackendKind::Vz.to_string(),
+            reason: format!(
+                "failed to write VZ guest launch contract {}: {error}",
+                contract_path.display()
+            ),
+        }
+    })?;
+
+    Ok(contract_path)
 }
 
 fn required_launch_env<'a>(
@@ -642,6 +696,7 @@ mod tests {
 
     use crate::backend::{BackendKind, LaunchSpec, SandboxHandle};
     use crate::config::{NetworkPolicy, SandboxIdentityMode};
+    use crate::error::RunError;
     use crate::identity::RunIdentity;
 
     use super::{
@@ -661,6 +716,59 @@ mod tests {
             seccomp_filter_path: None,
             identity_mode: SandboxIdentityMode::SandboxUser,
         }
+    }
+
+    fn test_handle(runtime_dir: PathBuf) -> SandboxHandle {
+        SandboxHandle {
+            backend: BackendKind::Vz,
+            runtime_dir,
+            identity: RunIdentity::new("claude-code"),
+            mounts: Vec::new(),
+            network_policy: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+        }
+    }
+
+    fn test_contract(handle: &SandboxHandle) -> VzGuestLaunchContract {
+        let mut launch = test_launch("claude-code");
+        launch.env.insert(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:18080".to_string(),
+        );
+        launch.env.insert(
+            "FIRMA_DNS_STUB_ADDR".to_string(),
+            "127.0.0.1:5353".to_string(),
+        );
+
+        VzGuestLaunchContract::from_launch(
+            handle,
+            &launch,
+            VzGuestLaunchInputs {
+                runner: PathBuf::from("/Applications/Firma/vz-runner"),
+                kernel: PathBuf::from("/var/lib/firma/vz/vmlinuz"),
+                initrd: PathBuf::from("/var/lib/firma/vz/initrd.img"),
+                rootfs: PathBuf::from("/var/lib/firma/vz/rootfs.img"),
+            },
+        )
+        .expect("guest contract should build from prepared launch")
+    }
+
+    fn assert_backend_error_contains(error: &RunError, expected: &str) {
+        if let RunError::Backend { backend, reason } = error {
+            assert_eq!(backend, "vz");
+            assert!(
+                reason.contains(expected),
+                "expected backend error reason to contain {expected:?}, got {reason:?}"
+            );
+            return;
+        }
+
+        assert!(
+            matches!(error, RunError::Backend { .. }),
+            "expected backend error containing {expected:?}, got {error:?}"
+        );
     }
 
     // ── compatibility mode ────────────────────────────────────────────────────
@@ -767,6 +875,48 @@ mod tests {
     }
 
     #[test]
+    fn vz_runtime_dir_is_created() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let runtime_dir = tempdir.path().join("runtime").join("nested");
+
+        super::create_vz_runtime_dir(&runtime_dir).expect("create runtime dir");
+
+        assert!(runtime_dir.is_dir(), "runtime dir should exist");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vz_runtime_dir_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let runtime_dir = tempdir.path().join("runtime").join("nested");
+
+        super::create_vz_runtime_dir(&runtime_dir).expect("create runtime dir");
+
+        let mode = std::fs::metadata(&runtime_dir)
+            .expect("runtime dir metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "runtime dir must be owner-only");
+    }
+
+    #[test]
+    fn vz_runtime_dir_creation_error_is_backend_error() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let blocker = tempdir.path().join("runtime-file");
+        std::fs::write(&blocker, b"not a directory").expect("write blocker file");
+        let runtime_dir = blocker.join("nested");
+
+        let error =
+            super::create_vz_runtime_dir(&runtime_dir).expect_err("runtime dir should fail");
+
+        assert_backend_error_contains(&error, "failed to create private runtime dir");
+        assert_backend_error_contains(&error, &runtime_dir.display().to_string());
+    }
+
+    #[test]
     fn vz_guest_contract_carries_command_mounts_network_and_invariants() {
         let identity = RunIdentity::new("claude-code");
         let handle = SandboxHandle {
@@ -792,6 +942,10 @@ mod tests {
             "FIRMA_DNS_STUB_ADDR".to_string(),
             "127.0.0.1:5353".to_string(),
         );
+        launch.env.insert(
+            "FIRMA_CAPABILITY_TOKEN".to_string(),
+            "secret-capability-token".to_string(),
+        );
         launch.args = vec!["--print".to_string()];
 
         let contract = VzGuestLaunchContract::from_launch(
@@ -811,6 +965,15 @@ mod tests {
         assert_eq!(json["sandbox_id"], identity.sandbox_id.to_string());
         assert_eq!(json["command"]["executable"], "/usr/bin/true");
         assert_eq!(json["command"]["args"][0], "--print");
+        assert_eq!(json["command"]["env"]["HOME"], "/Users/tester");
+        assert!(
+            json["command"]["env"]
+                .as_object()
+                .expect("contract env object")
+                .get("FIRMA_CAPABILITY_TOKEN")
+                .is_none(),
+            "capability token must not be serialized into VZ guest contract"
+        );
         assert_eq!(json["mounts"][0]["target"], "/workspace");
         assert_eq!(json["network"]["proxy_url"], "http://127.0.0.1:18080");
         assert_eq!(json["network"]["dns_stub_addr"], "127.0.0.1:5353");
@@ -840,6 +1003,133 @@ mod tests {
                     && invariant["mode"] == "required"),
             "direct-bypass invariant must be required: {invariants:?}"
         );
+    }
+
+    #[test]
+    fn vz_guest_contract_write_reports_contract_dir_creation_error() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let runtime_file = tempdir.path().join("runtime-file");
+        std::fs::write(&runtime_file, b"not a directory").expect("write blocker file");
+        let handle = test_handle(runtime_file);
+        let contract = test_contract(&handle);
+
+        let error = super::write_vz_guest_launch_contract(&handle, &contract)
+            .expect_err("contract dir creation should fail");
+
+        assert_backend_error_contains(&error, "failed to create private VZ guest contract dir");
+        assert_backend_error_contains(&error, super::VZ_GUEST_CONTRACT_DIR);
+    }
+
+    #[test]
+    fn vz_guest_contract_write_reports_contract_file_error() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let handle = test_handle(tempdir.path().join("runtime"));
+        let contract_dir = handle.runtime_dir.join(super::VZ_GUEST_CONTRACT_DIR);
+        std::fs::create_dir_all(&contract_dir).expect("create contract dir");
+        std::fs::create_dir(contract_dir.join(super::VZ_GUEST_CONTRACT_FILE))
+            .expect("create contract path directory");
+        let contract = test_contract(&handle);
+
+        let error = super::write_vz_guest_launch_contract(&handle, &contract)
+            .expect_err("contract file write should fail");
+
+        assert_backend_error_contains(&error, "failed to write VZ guest launch contract");
+        assert_backend_error_contains(&error, super::VZ_GUEST_CONTRACT_FILE);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vz_guest_contract_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        use super::{
+            VZ_GUEST_CONTRACT_DIR, VZ_GUEST_CONTRACT_FILE, write_vz_guest_launch_contract,
+        };
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after unix epoch")
+            .as_nanos();
+
+        let runtime_dir = std::env::temp_dir().join(format!(
+            "firma-test-vz-contract-{}-{now}",
+            std::process::id()
+        ));
+
+        let identity = RunIdentity::new("claude-code");
+        let handle = SandboxHandle {
+            backend: BackendKind::Vz,
+            runtime_dir: runtime_dir.clone(),
+            identity,
+            mounts: Vec::new(),
+            network_policy: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+        };
+
+        let mut launch = test_launch("claude-code");
+        launch.env.insert(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:18080".to_string(),
+        );
+        launch.env.insert(
+            "FIRMA_DNS_STUB_ADDR".to_string(),
+            "127.0.0.1:5353".to_string(),
+        );
+        launch.env.insert(
+            "FIRMA_CAPABILITY_TOKEN".to_string(),
+            "secret-capability-token".to_string(),
+        );
+
+        let contract = VzGuestLaunchContract::from_launch(
+            &handle,
+            &launch,
+            VzGuestLaunchInputs {
+                runner: PathBuf::from("/Applications/Firma/vz-runner"),
+                kernel: PathBuf::from("/var/lib/firma/vz/vmlinuz"),
+                initrd: PathBuf::from("/var/lib/firma/vz/initrd.img"),
+                rootfs: PathBuf::from("/var/lib/firma/vz/rootfs.img"),
+            },
+        )
+        .expect("guest contract should build from prepared launch");
+
+        let contract_path =
+            write_vz_guest_launch_contract(&handle, &contract).expect("write contract");
+
+        assert_eq!(
+            contract_path.file_name().expect("file name"),
+            std::ffi::OsStr::new(VZ_GUEST_CONTRACT_FILE)
+        );
+        assert_eq!(
+            contract_path
+                .parent()
+                .and_then(|path| path.file_name())
+                .expect("contract dir name"),
+            std::ffi::OsStr::new(VZ_GUEST_CONTRACT_DIR)
+        );
+
+        let dir_mode = std::fs::metadata(contract_path.parent().expect("contract dir"))
+            .expect("contract dir metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = std::fs::metadata(&contract_path)
+            .expect("contract file metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+
+        assert_eq!(dir_mode, 0o700, "contract dir must be owner-only");
+        assert_eq!(file_mode, 0o600, "contract file must be owner-only");
+
+        let written_contract =
+            std::fs::read_to_string(&contract_path).expect("contract should be readable");
+        assert!(!written_contract.contains("FIRMA_CAPABILITY_TOKEN"));
+        assert!(!written_contract.contains("secret-capability-token"));
+
+        let _ = std::fs::remove_dir_all(runtime_dir);
     }
 
     // ── EnforcementProof ─────────────────────────────────────────────────────
