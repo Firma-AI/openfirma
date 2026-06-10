@@ -1,0 +1,28 @@
+[package]
+name = "firma-vz-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Apple Virtualization runner for OpenFirma VZ launch contracts"
+
+[[bin]]
+name = "firma-vz-runner"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive", "error-context", "help", "std", "usage"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-virtualization = { workspace = true, features = ["VZBootLoader", "VZLinuxBootLoader", "std"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

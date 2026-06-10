@@ -12,6 +12,7 @@ members = [
   "crates/firma-runtime-state",
   "crates/firma-sidecar",
   "crates/firma-stack",
+  "crates/firma-vz-runner",
 ]
 resolver = "3"
 
@@ -20,6 +21,7 @@ version = "0.1.2"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/Firma-AI/openfirma"
+rust-version = "1.96"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
@@ -70,6 +72,7 @@ lru = "0.17"
 miette = { version = "7", features = ["fancy-no-backtrace"] }
 nix = { version = "0.31", features = ["fs", "process", "signal", "socket", "user"] }
 notify = "8"
+objc2-virtualization = { version = "0.3.2", default-features = false }
 owo-colors = { version = "4", features = ["supports-colors"] }
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 pasetors = "0.7"

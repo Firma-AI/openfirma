@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "sandbox_id": "sandbox-test",
+  "runtime_dir": "${ROOT}/runtime",
+  "runner": {
+    "path": "${ROOT}/firma-vz-runner"
+  },
+  "guest": {
+    "kernel": "${ROOT}/vmlinuz",
+    "initrd": "${ROOT}/initrd.img",
+    "rootfs": "${ROOT}/rootfs.img"
+  },
+  "command": {
+    "executable": "codex",
+    "args": ["--version"],
+    "cwd": "${ROOT}",
+    "env": {
+      "HTTP_PROXY": "http://127.0.0.1:19080",
+      "FIRMA_DNS_STUB_ADDR": "127.0.0.1:19053"
+    },
+    "identity_mode": "host_user",
+    "seccomp_filter_path": "${ROOT}/seccomp.bpf"
+  },
+  "mounts": [
+    {
+      "source": "${ROOT}",
+      "target": "/workspace",
+      "read_only": false
+    }
+  ],
+  "network": {
+    "proxy_url": "http://127.0.0.1:19080",
+    "dns_stub_addr": "127.0.0.1:19053",
+    "attribution_headers": {
+      "x-firma-sandbox-id": "sandbox-test"
+    }
+  },
+  "invariants": [
+    {
+      "name": "sidecar_only_egress",
+      "mode": "required"
+    },
+    {
+      "name": "dns_confined",
+      "mode": "required"
+    },
+    {
+      "name": "fail_closed_startup",
+      "mode": "required"
+    },
+    {
+      "name": "fail_closed_runtime",
+      "mode": "required"
+    },
+    {
+      "name": "direct_bypass_resistant",
+      "mode": "required"
+    },
+    {
+      "name": "preserve_stdio_signals_exit",
+      "mode": "required"
+    }
+  ]
+}
