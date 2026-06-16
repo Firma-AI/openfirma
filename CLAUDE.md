@@ -8,12 +8,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make check          # Run fmt + lint + test + build (CI parity)
 make fmt            # dprint check (TOML + Markdown + Rust)
 make lint           # cargo clippy --workspace -- -D warnings
-make test           # cargo test --workspace
+make test           # cargo nextest run + cargo test --doc
 make build          # cargo build --workspace
 ```
 
-Single crate: `cargo test -p firma-sidecar`
-Single test: `cargo test -p firma-sidecar pipeline::tests::test_enforce_happy_path`
+Tests run via `cargo nextest` (process-per-test isolation); doctests run
+separately via `cargo test --doc` since nextest does not run them.
+
+Single crate: `cargo nextest run -p firma-sidecar`
+Single test: `cargo nextest run -p firma-sidecar test_enforce_happy_path`
 
 Requires `protoc` installed for `firma-proto` protobuf compilation.
 
