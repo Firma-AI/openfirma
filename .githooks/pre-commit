@@ -1,6 +1,18 @@
 #!/usr/bin/env sh
 set -e
 
+# Formatting: dprint checks only the staged TOML/Markdown/Rust files. The
+# `--staged` flag scopes it to this commit and `--allow-no-files` exits 0 when
+# the commit touches nothing dprint formats, so unrelated commits aren't blocked.
+if command -v dprint >/dev/null 2>&1; then
+    if ! dprint check --staged --allow-no-files; then
+        echo "pre-commit: staged files are not formatted — run 'dprint fmt', then re-stage" >&2
+        exit 1
+    fi
+else
+    echo "warning: dprint not found — format check skipped (run 'make install-tools' to install)" >&2
+fi
+
 if ! command -v trufflehog >/dev/null 2>&1; then
     echo "warning: trufflehog not found — secret scan skipped (run 'make install-tools' to install)" >&2
     exit 0
