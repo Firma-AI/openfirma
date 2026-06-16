@@ -36,6 +36,7 @@ install-cargo-tools:
 	@command -v cargo-doc-md >/dev/null 2>&1 || cargo install cargo-doc-md
 	@command -v cargo-audit >/dev/null 2>&1 || cargo install cargo-audit --locked
 	@command -v cargo-deny >/dev/null 2>&1 || cargo install cargo-deny --locked
+	@command -v cargo-nextest >/dev/null 2>&1 || cargo install cargo-nextest --locked
 
 install-docs-deps:
 	cd docs-site && corepack pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/
@@ -47,7 +48,10 @@ lint:
 	cargo clippy --all-features --all-targets
 
 test:
-	cargo test --all-features --all-targets
+	cargo nextest run --all-features --all-targets
+    # nextest runs unit + integration tests; it does not run doctests, so those
+    # run separately via `cargo test --doc`.
+	cargo test --all-features --doc
 
 build:
 	cargo build --all-features --all-targets
