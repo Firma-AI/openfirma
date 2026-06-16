@@ -1,0 +1,3 @@
+[submodule "firma-protobuf"]
+	path = firma-protobuf
+	url = git@github.com:Firma-AI/firma-protobuf.git
