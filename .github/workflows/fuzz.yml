@@ -18,29 +18,33 @@ jobs:
       matrix:
         target: [normalizer, paseto_verify, capability_seed, capability_seed_toml]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
       - id: nightly
         run: echo "toolchain=$(cat .rust-nightly)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
         with:
           toolchain: ${{ steps.nightly.outputs.toolchain }}
           rustflags: ""
           cache-workspaces: fuzz -> fuzz/target
 
+      - name: Load tool versions
+        shell: bash
+        run: grep -E '^[A-Z0-9_]+=' tool-versions.env >> "$GITHUB_ENV"
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
+          version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@v1.20.0
+        uses: cargo-bins/cargo-binstall@30b5ca8b54e1dcffd9548bc87ede1531310fdc67 # v1.20.0
 
       - name: Install cargo-fuzz
-        run: cargo binstall --no-confirm --locked cargo-fuzz
+        run: cargo binstall --no-confirm --locked cargo-fuzz@$CARGO_FUZZ_VERSION
 
       - name: Run ${{ matrix.target }}
         env:
