@@ -466,7 +466,7 @@ mod tests {
     fn config(action: DefaultAction) -> LocalExecHandlerConfig {
         LocalExecHandlerConfig {
             default_action: action,
-            token_ttl: Duration::from_secs(60),
+            token_ttl: Duration::from_mins(1),
             retry_after_ms: 500,
         }
     }

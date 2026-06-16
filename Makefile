@@ -60,9 +60,9 @@ deny:
 
 check: fmt lint test build audit deny
 
-# Requires nightly: rustup toolchain install nightly
+# Pinned nightly lives in .rust-nightly (cargo-fuzz requires nightly).
 fuzz-check:
-	cd fuzz && cargo +nightly check
+	cd fuzz && cargo +$(shell cat .rust-nightly) check
 
 bench:
 	cargo bench --workspace --no-fail-fast

@@ -59,7 +59,7 @@ pub fn build_channel(
         .connect_timeout(connect_timeout)
         .keep_alive_timeout(Duration::from_secs(30))
         .http2_keep_alive_interval(Duration::from_secs(30))
-        .tcp_keepalive(Some(Duration::from_secs(60)));
+        .tcp_keepalive(Some(Duration::from_mins(1)));
 
     match scheme.as_str() {
         "https" => {

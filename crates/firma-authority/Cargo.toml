@@ -4,7 +4,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-rust-version.workspace = true
 description = "Mini Authority — policy loading, capability issuance, and gRPC streams for Firma OSS"
 
 [dependencies]
