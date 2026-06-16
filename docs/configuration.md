@@ -23,21 +23,21 @@ absolutised under the resolved config and state directories. The shape is:
 
 ```toml
 [project]
-agent    = "generic"
+agent = "generic"
 provider = "anthropic"
 
 [authority]
-type                = "local"
-listen_addr         = "127.0.0.1:50051"
-policy_dir          = '/home/me/.config/firma/policies'
+type = "local"
+listen_addr = "127.0.0.1:50051"
+policy_dir = '/home/me/.config/firma/policies'
 issuance_policy_dir = '/home/me/.config/firma/issuance-policies'
-revocation_file     = '/run/user/1000/firma/revocations.txt'
-key_file            = '/home/me/.config/firma/authority.key'
-max_ttl_seconds     = 3600
-bundle_ttl_seconds  = 30
+revocation_file = '/run/user/1000/firma/revocations.txt'
+key_file = '/home/me/.config/firma/authority.key'
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 30
 
 [sidecar.interceptor]
-mode        = "http_proxy"
+mode = "http_proxy"
 listen_addr = "127.0.0.1:8080"
 
 [sidecar.policy]
@@ -71,7 +71,7 @@ is left untouched so the validator can reject it. Runtime/state paths stay
 in the state/runtime dir and are never re-based.
 
 For `[authority]`, `FIRMA_AUTHORITY_*` environment overrides are applied
-*after* re-basing, so an env-supplied path is preserved exactly as written
+_after_ re-basing, so an env-supplied path is preserved exactly as written
 (a relative env value is **not** re-based against `config_dir`).
 
 Every config-declared resource path re-bases, except the two
@@ -360,7 +360,7 @@ Audit/log visibility note:
 
 - You see `curl` timeout / agent network timeout, but no obvious deny:
   - Check audit for `action=network.connect` on the target host. This confirms
-  policy allowed the destination-level CONNECT.
+    policy allowed the destination-level CONNECT.
   - Check logs for `CONNECT relay failed after policy allow` or
     `MITM CONNECT relay failed after policy allow`. These include
     `failure_class` (`timeout`, `refused`, `reset`, `tls_handshake`, `dns`) so
@@ -369,8 +369,8 @@ Audit/log visibility note:
   - For `firma run --profile codex`, wrapper defaults inject:
     - `--sandbox workspace-write`
     - `--ask-for-approval never`
-    This keeps tool commands on the governed path by default and avoids
-    out-of-sandbox runs that bypass sidecar mediation.
+      This keeps tool commands on the governed path by default and avoids
+      out-of-sandbox runs that bypass sidecar mediation.
 
 - You want clear “blocked by policy” signals:
   - Look for:
@@ -733,10 +733,10 @@ Example:
 
 ```toml
 [local_exec]
-socket_path     = "/run/firma/local-exec.sock"
-default_action  = "pending_hitl"
-token_ttl_secs  = 300
-retry_after_ms  = 500
+socket_path = "/run/firma/local-exec.sock"
+default_action = "pending_hitl"
+token_ttl_secs = 300
+retry_after_ms = 500
 ```
 
 The `pending_hitl` action triggers the HITL approval token flow: `firma-run`

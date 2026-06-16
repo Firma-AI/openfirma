@@ -2,10 +2,10 @@
 name = "firma-sidecar"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
-description = "HTTP proxy sidecar with enforcement pipeline for Firma OSS"
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
+description = "HTTP proxy sidecar with enforcement pipeline for Firma OSS"
 
 [features]
 loom-tests = []
@@ -43,15 +43,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, default-features = false, features = [
-  "fs",
-  "macros",
-  "net",
-  "rt-multi-thread",
-  "signal",
-  "sync",
-  "time",
-] }
+tokio = { workspace = true, default-features = false, features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }

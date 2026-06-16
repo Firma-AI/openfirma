@@ -1,7 +1,7 @@
 # Firma OSS Interception Boundary Bypass Analysis
 
-Status: draft security analysis  
-Date: 2026-04-13  
+Status: draft security analysis\
+Date: 2026-04-13\
 Owner: Security / Dario W1
 
 ## Purpose

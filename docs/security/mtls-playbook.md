@@ -39,12 +39,12 @@ Set the paths in `firma-authority.toml`:
 ```toml
 # Server TLS (V1, required for mTLS)
 tls_cert_path = "/etc/firma/authority.crt"
-tls_key_path  = "/etc/firma/authority.key"
+tls_key_path = "/etc/firma/authority.key"
 
 # mTLS (V1.1)
-mtls_client_ca_cert_path  = "/etc/firma/firma-client-ca.crt"
-mtls_client_ca_key_path   = "/etc/firma/firma-client-ca.key"   # for issue-client-cert only
-authorized_clients_path   = "/etc/firma/authorized_clients.toml"
+mtls_client_ca_cert_path = "/etc/firma/firma-client-ca.crt"
+mtls_client_ca_key_path = "/etc/firma/firma-client-ca.key" # for issue-client-cert only
+authorized_clients_path = "/etc/firma/authorized_clients.toml"
 ```
 
 ### 2. Create the authorized-clients allow-list
@@ -89,9 +89,9 @@ In `firma-sidecar.toml`:
 authority_url = "https://authority.internal:50051"
 
 [authority]
-ca_cert_path          = "/etc/firma/authority-ca.crt"   # server CA (V1)
-tls_client_cert_path  = "/etc/firma/sidecar.crt"         # client cert (V1.1)
-tls_client_key_path   = "/etc/firma/sidecar.key"         # client key (V1.1)
+ca_cert_path = "/etc/firma/authority-ca.crt" # server CA (V1)
+tls_client_cert_path = "/etc/firma/sidecar.crt" # client cert (V1.1)
+tls_client_key_path = "/etc/firma/sidecar.key" # client key (V1.1)
 ```
 
 Both `tls_client_cert_path` and `tls_client_key_path` must be set together or both omitted.
@@ -142,18 +142,18 @@ Revocation model note (V1.1): Authority-side mTLS currently enforces revocation 
 
 ## Failure modes
 
-| Condition | Behavior |
-|-----------|----------|
-| Client cert signed by unknown CA | TLS handshake rejected (chain validation fails); Sidecar stays `policy_bundle_ready = false`; fail-closed |
-| Client CN/SAN not in allow-list | TLS handshake rejected after chain validation; same fail-closed behavior |
-| Client presents no cert | TLS handshake rejected (`client_auth_mandatory = true`); fail-closed |
-| `authorized_clients_path` missing at startup | Authority exits at startup with an error |
-| `authorized_clients_path` is empty (no entries) | Authority starts, but all clients are rejected |
-| Server cert missing/invalid at startup | Authority exits at startup |
-| Wrong server CA on Sidecar | Server TLS verification fails; same as V1 cert-mismatch behavior |
-| Client cert is PKI-revoked by CRL/OCSP only (still signed by trusted CA and still allow-listed) | No automatic rejection in V1.1; remove identity from allow-list to revoke access |
-| Both `tls_client_cert_path`/`tls_client_key_path` set without the other | Sidecar config validation rejects startup |
-| `mtls_client_ca_cert_path` set without TLS server cert | Authority exits at startup with a validation error |
+| Condition                                                                                       | Behavior                                                                                                  |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Client cert signed by unknown CA                                                                | TLS handshake rejected (chain validation fails); Sidecar stays `policy_bundle_ready = false`; fail-closed |
+| Client CN/SAN not in allow-list                                                                 | TLS handshake rejected after chain validation; same fail-closed behavior                                  |
+| Client presents no cert                                                                         | TLS handshake rejected (`client_auth_mandatory = true`); fail-closed                                      |
+| `authorized_clients_path` missing at startup                                                    | Authority exits at startup with an error                                                                  |
+| `authorized_clients_path` is empty (no entries)                                                 | Authority starts, but all clients are rejected                                                            |
+| Server cert missing/invalid at startup                                                          | Authority exits at startup                                                                                |
+| Wrong server CA on Sidecar                                                                      | Server TLS verification fails; same as V1 cert-mismatch behavior                                          |
+| Client cert is PKI-revoked by CRL/OCSP only (still signed by trusted CA and still allow-listed) | No automatic rejection in V1.1; remove identity from allow-list to revoke access                          |
+| Both `tls_client_cert_path`/`tls_client_key_path` set without the other                         | Sidecar config validation rejects startup                                                                 |
+| `mtls_client_ca_cert_path` set without TLS server cert                                          | Authority exits at startup with a validation error                                                        |
 
 ## Allow-list file format reference
 
@@ -161,7 +161,7 @@ Revocation model note (V1.1): Authority-side mTLS currently enforces revocation 
 # /etc/firma/authorized_clients.toml
 
 [[authorized]]
-san = "sidecar-production-1.internal"    # Must match DNS SAN (preferred) or CN
+san = "sidecar-production-1.internal" # Must match DNS SAN (preferred) or CN
 issued_at = "2026-06-01"
 notes = "prod node 1"
 
@@ -177,6 +177,7 @@ notes = "legacy CN-only cert"
 ```
 
 **Identity resolution order** (consistent between Authority verifier and `issue-client-cert`):
+
 1. First DNS SAN in the certificate's Subject Alternative Name extension.
 2. Common Name (CN) from the Subject Distinguished Name — used only when no DNS SAN is present.
 

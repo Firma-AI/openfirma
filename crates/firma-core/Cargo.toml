@@ -2,10 +2,10 @@
 name = "firma-core"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
-description = "Shared types, capability tokens, Cedar wrapper, and error types for Firma OSS"
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
+description = "Shared types, capability tokens, Cedar wrapper, and error types for Firma OSS"
 
 [dependencies]
 async-trait = { workspace = true }

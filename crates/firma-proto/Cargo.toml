@@ -2,10 +2,10 @@
 name = "firma-proto"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
-description = "Protobuf/gRPC service definitions and generated code for Firma OSS"
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
+description = "Protobuf/gRPC service definitions and generated code for Firma OSS"
 
 [dependencies]
 prost = { workspace = true }

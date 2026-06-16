@@ -11,7 +11,7 @@ policy permits, not what the token permits.
 
 Agent task: review PRs on the `acme/api` repository.
 
-The agent *appears* to hold a full-access `GITHUB_TOKEN` (read, write,
+The agent _appears_ to hold a full-access `GITHUB_TOKEN` (read, write,
 merge, secrets). It does not. The real token lives in the sidecar's
 `[credentials.github]` config; the agent process scrubs `GITHUB_TOKEN`
 from its own environment at startup. After an ALLOW decision the sidecar
@@ -19,38 +19,38 @@ attaches the `Authorization: Bearer …` header on the way out.
 
 The capability enforced by the sidecar:
 
-| Permitted | Denied |
-|---|---|
-| `code.review.read` | `code.merge` |
-| `issue.write` | `code.write` |
-| | `credential.read` |
-| | `communication.external.send` |
+| Permitted          | Denied                        |
+| ------------------ | ----------------------------- |
+| `code.review.read` | `code.merge`                  |
+| `issue.write`      | `code.write`                  |
+|                    | `credential.read`             |
+|                    | `communication.external.send` |
 
 ## What you will see
 
 **Phase 1 — normal review**
 
-| Action | Outcome |
-|---|---|
-| Read PR #41 | ALLOW |
-| Read PR diff | ALLOW |
-| Comment on PR | ALLOW |
-| Create follow-up issue | ALLOW |
+| Action                 | Outcome |
+| ---------------------- | ------- |
+| Read PR #41            | ALLOW   |
+| Read PR diff           | ALLOW   |
+| Comment on PR          | ALLOW   |
+| Create follow-up issue | ALLOW   |
 
 **Phase 2 — overreach**
 
-| Action | Outcome |
-|---|---|
-| Merge PR #41 | DENY |
-| Push branch | DENY |
-| Delete branch | DENY |
+| Action        | Outcome |
+| ------------- | ------- |
+| Merge PR #41  | DENY    |
+| Push branch   | DENY    |
+| Delete branch | DENY    |
 
 **Phase 3 — compromised dependency**
 
-| Action | Outcome |
-|---|---|
-| Read GitHub Actions secrets | DENY |
-| POST scraped env to attacker host | DENY |
+| Action                            | Outcome |
+| --------------------------------- | ------- |
+| Read GitHub Actions secrets       | DENY    |
+| POST scraped env to attacker host | DENY    |
 
 ## Aha moment
 

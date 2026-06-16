@@ -50,13 +50,13 @@ precedence; `--config <path>` only relocates the file.
 
 ```toml
 [authority]
-listen_addr        = "[::1]:50051"
-policy_dir         = "examples/policies"
-revocation_file    = "revocations.txt"
-key_file           = "firma-authority.key"
-max_ttl_seconds    = 3600
+listen_addr = "[::1]:50051"
+policy_dir = "examples/policies"
+revocation_file = "revocations.txt"
+key_file = "firma-authority.key"
+max_ttl_seconds = 3600
 bundle_ttl_seconds = 30
-log_level          = "info"
+log_level = "info"
 ```
 
 Start the Authority (discovers `firma.toml`, or pass `--config`):

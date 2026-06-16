@@ -1,8 +1,8 @@
 # FIR-111: Linux Syscall Enforcement Architecture Decision Memo
 
-Status: final recommendation  
-Date: 2026-05-11  
-Owner: Runtime team  
+Status: final recommendation\
+Date: 2026-05-11\
+Owner: Runtime team\
 Scope: Linux local-command syscall enforcement path for `firma run`
 
 ## 0. Document map
@@ -116,12 +116,12 @@ Note:
 
 ### 4.1 Benchmark summary (shell-heavy workload)
 
-| Scenario | Mode | p50 ms | p95 ms | p99 ms | avg ms | iter/s | work-units/s |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| baseline | baseline | 806.695 | 806.987 | 807.071 | 806.761 | 1.240 | 148.743 |
-| static seccomp | seccomp-static | 806.875 | 807.213 | 807.542 | 806.927 | 1.239 | 148.712 |
-| unotify | unotify-prototype | 1526.526 | 1529.027 | 1530.002 | 1526.821 | 0.655 | 78.595 |
-| unotify (slow) | unotify-prototype/slow | 1531.836 | 1533.309 | 1533.564 | 1531.939 | 0.653 | 78.332 |
+| Scenario       | Mode                   | p50 ms   | p95 ms   | p99 ms   | avg ms   | iter/s | work-units/s |
+| -------------- | ---------------------- | -------- | -------- | -------- | -------- | ------ | ------------ |
+| baseline       | baseline               | 806.695  | 806.987  | 807.071  | 806.761  | 1.240  | 148.743      |
+| static seccomp | seccomp-static         | 806.875  | 807.213  | 807.542  | 806.927  | 1.239  | 148.712      |
+| unotify        | unotify-prototype      | 1526.526 | 1529.027 | 1530.002 | 1526.821 | 0.655  | 78.595       |
+| unotify (slow) | unotify-prototype/slow | 1531.836 | 1533.309 | 1533.564 | 1531.939 | 0.653  | 78.332       |
 
 Observed deltas:
 
@@ -131,11 +131,11 @@ Observed deltas:
 
 ### 4.2 Failure-mode outcomes
 
-| Failure mode | Expected | Observed | Pass/Fail | Notes |
-| --- | --- | --- | --- | --- |
-| startup unavailable | fail-closed | `exit=63` for all 20/20 | Pass | deterministic startup deny |
-| mid-session crash | fail-closed | `exit=64` for all 20/20 | Pass | deterministic runtime deny |
-| slow notifier | bounded delay | completes 20/20 with bounded config | Pass | bounded with `FIR_UNOTIFY_SLOW_MAX_NOTIFS=1` |
+| Failure mode        | Expected      | Observed                            | Pass/Fail | Notes                                        |
+| ------------------- | ------------- | ----------------------------------- | --------- | -------------------------------------------- |
+| startup unavailable | fail-closed   | `exit=63` for all 20/20             | Pass      | deterministic startup deny                   |
+| mid-session crash   | fail-closed   | `exit=64` for all 20/20             | Pass      | deterministic runtime deny                   |
+| slow notifier       | bounded delay | completes 20/20 with bounded config | Pass      | bounded with `FIR_UNOTIFY_SLOW_MAX_NOTIFS=1` |
 
 ### 4.3 Correctness boundary notes (Cedar fidelity + TOCTOU)
 

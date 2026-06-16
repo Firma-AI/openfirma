@@ -1,7 +1,7 @@
 # Command Governance Local-Exec Contract
 
-Status: active  
-Date: 2026-05-13  
+Status: active\
+Date: 2026-05-13\
 Scope: cross-platform contract (`firma run` + Sidecar governance services)
 
 ## Overview

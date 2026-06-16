@@ -296,4 +296,3 @@ action_class = "notification.manage"
 host = "api.github.com"
 path = "/repos/*/*/subscription"
 action_class = "notification.manage"
-
