@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 make check          # Run fmt + lint + test + build (CI parity)
-make fmt            # cargo fmt --check
+make fmt            # dprint check (TOML + Markdown + Rust)
 make lint           # cargo clippy --workspace -- -D warnings
 make test           # cargo test --workspace
 make build          # cargo build --workspace
@@ -84,9 +84,13 @@ update the docs site under `docs-site/` in the same change set. Write docs for
 human readers first: concise, concrete, task-oriented, and clear about examples,
 operational gotchas, and relevant invariants.
 
-## TOML Formatting
+## Formatting (TOML + Markdown + Rust)
 
-Always run `taplo format` after modifying any `.toml` file.
+`dprint` is the single formatter for the repo — all TOML, Markdown, and Rust
+files (`rustfmt` must be installed). Run `dprint fmt` after modifying any
+`.toml`, `.md`, or `.rs` file; `make fmt` (part of `make check`) runs
+`dprint check` to verify formatting in CI. `docs-site/` is excluded — it has
+its own toolchain.
 
 ## Linting Rules
 
