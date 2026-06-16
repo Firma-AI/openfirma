@@ -810,12 +810,7 @@ fn find_crlf(buffer: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::io::{Read, Write};
-    use std::net::{SocketAddr, TcpListener, TcpStream};
-    use std::time::Duration;
 
-    #[cfg(unix)]
-    use super::HostBridgeHandle;
     use super::{BodyKind, append_missing_headers, find_header_terminator, parse_request_metadata};
 
     #[test]
@@ -874,6 +869,20 @@ mod tests {
         let meta = parse_request_metadata(req).expect("metadata");
         assert_eq!(meta.body, BodyKind::Chunked);
     }
+}
+
+// The bridge spins up real TCP listeners and only exists on the non-structural
+// (macOS) path, so these tests are Unix-only and grouped here to keep the
+// platform gate on the module rather than on each test and import.
+#[cfg(test)]
+#[cfg(unix)]
+mod host_bridge_tests {
+    use std::collections::BTreeMap;
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::time::Duration;
+
+    use super::HostBridgeHandle;
 
     /// Verifies that `HostBridgeHandle` injects `x-firma-session-id` into a
     /// plain HTTP request routed through the bridge.
@@ -881,7 +890,6 @@ mod tests {
     /// This is the regression test for FIR-213: on macOS (non-structural path)
     /// the bridge was never started, so the sidecar received an empty
     /// `session_id` and denied every request.
-    #[cfg(unix)]
     #[test]
     fn host_bridge_injects_session_id_into_http_request() {
         // ── upstream mock ──────────────────────────────────────────────────
@@ -951,7 +959,6 @@ mod tests {
 
     /// Verifies that `HostBridgeHandle` injects `x-firma-session-id` into the
     /// CONNECT request that Claude Code issues for HTTPS destinations.
-    #[cfg(unix)]
     #[test]
     fn host_bridge_injects_session_id_into_connect_request() {
         let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("upstream bind");
@@ -1013,7 +1020,6 @@ mod tests {
 
     /// Verifies that an existing `x-firma-session-id` header is not
     /// duplicated when the client already carries one.
-    #[cfg(unix)]
     #[test]
     fn host_bridge_does_not_duplicate_existing_session_id() {
         let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("upstream bind");

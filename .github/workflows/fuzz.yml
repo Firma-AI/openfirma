@@ -22,11 +22,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - id: nightly
+        run: echo "toolchain=$(cat .rust-nightly)" >> "$GITHUB_OUTPUT"
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          workspaces: fuzz -> fuzz/target
+          toolchain: ${{ steps.nightly.outputs.toolchain }}
+          rustflags: ""
+          cache-workspaces: fuzz -> fuzz/target
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -40,4 +43,7 @@ jobs:
         run: cargo binstall --no-confirm --locked cargo-fuzz
 
       - name: Run ${{ matrix.target }}
-        run: cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=300
+        env:
+          NIGHTLY: ${{ steps.nightly.outputs.toolchain }}
+          TARGET: ${{ matrix.target }}
+        run: cargo "+$NIGHTLY" fuzz run --target x86_64-unknown-linux-gnu "$TARGET" -- -max_total_time=300
