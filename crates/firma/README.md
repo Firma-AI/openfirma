@@ -82,14 +82,14 @@ Top-level flags:
 
 Subcommands:
 
-| Subcommand            | Description                              |
-| --------------------- | ---------------------------------------- |
-| _(none)_              | Serve gRPC (default action).             |
-| `generate-key`        | Generate an Ed25519 signing key pair.    |
-| `init-tls`       | Generate CA + Authority TLS PEM material. |
-| `issue`               | Issue a signed capability seed file.     |
-| `revocations add`     | Append a token ID to the revocation log. |
-| `revocations compact` | Remove expired entries from the log.     |
+| Subcommand            | Description                               |
+| --------------------- | ----------------------------------------- |
+| _(none)_              | Serve gRPC (default action).              |
+| `generate-key`        | Generate an Ed25519 signing key pair.     |
+| `init-tls`            | Generate CA + Authority TLS PEM material. |
+| `issue`               | Issue a signed capability seed file.      |
+| `revocations add`     | Append a token ID to the revocation log.  |
+| `revocations compact` | Remove expired entries from the log.      |
 
 `generate-key` flags:
 
@@ -125,16 +125,16 @@ Wrap an agent command behind a sandbox backend.
 firma run --profile generic -- python agent.py
 ```
 
-| Flag                       | Description                                     |
-| -------------------------- | ----------------------------------------------- |
-| `--profile <id>`           | Built-in profile id (default: `generic`).       |
-| `--config <path>`          | Optional runtime config (.toml/.yaml).          |
-| `--backend <kind>`         | Override: `bwrap`, `vz`, `wsl2`, `firecracker`. |
+| Flag                       | Description                                            |
+| -------------------------- | ------------------------------------------------------ |
+| `--profile <id>`           | Built-in profile id (default: `generic`).              |
+| `--config <path>`          | Optional runtime config (.toml/.yaml).                 |
+| `--backend <kind>`         | Override: `bwrap`, `vz`, `wsl2`, `firecracker`.        |
 | `--sidecar <local\|url>`   | `local` autostarts; a URL targets an external sidecar. |
-| `--capability-file <path>` | Capability lease refresh source.                |
-| `--identity-mode <mode>`   | `sandbox-user` or `host-user`.                  |
-| `--preserve-host-user`     | Force host UID/GID inside sandbox.              |
-| `--print-effective-config` | Dump resolved config as JSON before exec.       |
+| `--capability-file <path>` | Capability lease refresh source.                       |
+| `--identity-mode <mode>`   | `sandbox-user` or `host-user`.                         |
+| `--preserve-host-user`     | Force host UID/GID inside sandbox.                     |
+| `--print-effective-config` | Dump resolved config as JSON before exec.              |
 
 Wrapped command and args after `--`.
 
@@ -173,17 +173,17 @@ Layout written by `firma config`:
 
 `firma config` flags:
 
-| Flag                 | Default                     | Description                                            |
-| -------------------- | --------------------------- | ------------------------------------------------------ |
-| `--output-dir <dir>` | current directory           | Where firma.toml, policies, and mappings are written.  |
-| `--workspace <dir>`  | _cwd_ (wizard prompt)       | Agent RW access path (bwrap mount).                    |
-| `--name <name>`      | wizard prompt / `my-agent`  | Agent slug — used as `agent_id` in generated config.   |
-| `--posture <val>`    | wizard prompt / `dev`       | Cedar enforcement posture.                             |
-| `--mapping <val>`    | wizard prompt / `anthropic` | Mapping file(s) — repeat for multiple.                 |
-| `--yes`              | _off_                       | Skip the wizard; use defaults for any unset flag.      |
-| `--state-dir <dir>`  | `FIRMA_STATE_DIR` / XDG     | State dir (keys, revocations, generated CA).           |
-| `--force`            | _off_                       | Overwrite existing files.                              |
-| `--sidecar-listen`   | `127.0.0.1:8080`            | Sidecar HTTP proxy listen.                             |
+| Flag                 | Default                     | Description                                           |
+| -------------------- | --------------------------- | ----------------------------------------------------- |
+| `--output-dir <dir>` | current directory           | Where firma.toml, policies, and mappings are written. |
+| `--workspace <dir>`  | _cwd_ (wizard prompt)       | Agent RW access path (bwrap mount).                   |
+| `--name <name>`      | wizard prompt / `my-agent`  | Agent slug — used as `agent_id` in generated config.  |
+| `--posture <val>`    | wizard prompt / `dev`       | Cedar enforcement posture.                            |
+| `--mapping <val>`    | wizard prompt / `anthropic` | Mapping file(s) — repeat for multiple.                |
+| `--yes`              | _off_                       | Skip the wizard; use defaults for any unset flag.     |
+| `--state-dir <dir>`  | `FIRMA_STATE_DIR` / XDG     | State dir (keys, revocations, generated CA).          |
+| `--force`            | _off_                       | Overwrite existing files.                             |
+| `--sidecar-listen`   | `127.0.0.1:8080`            | Sidecar HTTP proxy listen.                            |
 
 ### `firma sidecar` (daemon lifecycle)
 
@@ -207,12 +207,12 @@ firma sidecar stop --timeout 10
 
 Subcommands:
 
-| Subcommand | Description                                              |
-| ---------- | -------------------------------------------------------- |
-| _(none)_   | Run the enforcement proxy in the foreground.             |
-| `start`    | Daemon-mode boot. `--detach` forks a supervisor.         |
-| `stop`     | Soft-signal then hard-kill on `--timeout`.               |
-| `status`   | docker-ps-style listing of live sidecars.                |
+| Subcommand | Description                                      |
+| ---------- | ------------------------------------------------ |
+| _(none)_   | Run the enforcement proxy in the foreground.     |
+| `start`    | Daemon-mode boot. `--detach` forks a supervisor. |
+| `stop`     | Soft-signal then hard-kill on `--timeout`.       |
+| `status`   | docker-ps-style listing of live sidecars.        |
 
 `start` / `stop` flags:
 
@@ -228,6 +228,7 @@ State-dir resolution order: `--state-dir` flag → `FIRMA_STATE_DIR` env →
 `%LOCALAPPDATA%\firma\runtime` → `%TEMP%\firma` on Windows.
 
 Exit codes:
+
 - `stop`: `0` on success (graceful or forced hard-kill), `2` on error.
 
 ### `firma doctor`
@@ -302,11 +303,11 @@ Full reference: [`docs/markdown/firma_monitor_command.md`](../../docs/markdown/f
 Internal subcommands. Not for direct operator use; documented for
 completeness.
 
-| Subcommand       | Spawned by                   | Purpose                                        |
-| ---------------- | ---------------------------- | ---------------------------------------------- |
-| `__dns-stub`     | `firma run`                  | In-sandbox UDP/TCP DNS stub for the agent.     |
-| `__proxy-bridge` | `firma run`                  | TCP↔UDS bridge from sandbox to sidecar socket. |
-| `__supervise`    | `firma sidecar start --detach` | Re-attaches to authority + sidecar pidfiles. |
+| Subcommand       | Spawned by                     | Purpose                                        |
+| ---------------- | ------------------------------ | ---------------------------------------------- |
+| `__dns-stub`     | `firma run`                    | In-sandbox UDP/TCP DNS stub for the agent.     |
+| `__proxy-bridge` | `firma run`                    | TCP↔UDS bridge from sandbox to sidecar socket. |
+| `__supervise`    | `firma sidecar start --detach` | Re-attaches to authority + sidecar pidfiles.   |
 
 Each takes a `--listen` (and `--upstream-uds` / `--state-dir`) flag set
 by its spawner.

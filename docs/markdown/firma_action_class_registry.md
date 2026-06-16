@@ -112,13 +112,13 @@ REST surface. `communication.external.send` (FEP §2.3.5, High) is reused
 for the actual send verbs; settings that change deliverability boundaries
 (delegates, forwarding, watch/stop) map to `account.permission.change`.
 
-| Action class                    | Domain        | Risk     | Notes                                                |
-| ------------------------------- | ------------- | -------- | ---------------------------------------------------- |
-| `communication.external.read`   | Communication | Low      | Read messages, threads, drafts, labels, history      |
-| `communication.external.draft`  | Communication | Medium   | Create / mutate / delete drafts (no send)            |
-| `communication.external.manage` | Communication | Medium   | Modify / move / label messages and threads           |
-| `communication.external.delete` | Communication | High     | Permanently delete messages or threads               |
-| `communication.external.filter` | Communication | Critical | Create / delete server-side mail filters             |
+| Action class                    | Domain        | Risk     | Notes                                           |
+| ------------------------------- | ------------- | -------- | ----------------------------------------------- |
+| `communication.external.read`   | Communication | Low      | Read messages, threads, drafts, labels, history |
+| `communication.external.draft`  | Communication | Medium   | Create / mutate / delete drafts (no send)       |
+| `communication.external.manage` | Communication | Medium   | Modify / move / label messages and threads      |
+| `communication.external.delete` | Communication | High     | Permanently delete messages or threads          |
+| `communication.external.filter` | Communication | Critical | Create / delete server-side mail filters        |
 
 Reserved for a future minor revision (MUST NOT appear in v0.1 policies):
 `memory.read`, `memory.write`, `browser.navigate`.

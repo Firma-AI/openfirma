@@ -2,10 +2,10 @@
 name = "firma"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
-description = "Firma CLI for managing and running OpenFirma components"
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
+description = "Firma CLI for managing and running OpenFirma components"
 
 [[bin]]
 name = "firma"
@@ -18,16 +18,7 @@ workspace = true
 anyhow = { workspace = true }
 cedar-policy = { workspace = true }
 chrono = { workspace = true }
-clap = { workspace = true, features = [
-  "color",
-  "derive",
-  "env",
-  "error-context",
-  "help",
-  "std",
-  "suggestions",
-  "usage",
-] }
+clap = { workspace = true, features = ["color", "derive", "env", "error-context", "help", "std", "suggestions", "usage"] }
 ctrlc = { workspace = true }
 dialoguer = { workspace = true }
 firma-authority = { workspace = true }
@@ -49,16 +40,7 @@ tempfile = { workspace = true }
 textwrap = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
-tokio = { workspace = true, default-features = false, features = [
-  "fs",
-  "macros",
-  "net",
-  "process",
-  "rt-multi-thread",
-  "signal",
-  "sync",
-  "time",
-] }
+tokio = { workspace = true, default-features = false, features = ["fs", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }

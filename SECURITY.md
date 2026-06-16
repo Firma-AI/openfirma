@@ -17,7 +17,7 @@ Security updates are provided for the following versions:
 
 ## Security Model
 
-OpenFirma is a **runtime policy boundary for outbound agent traffic**. It answers the question: *should this agent be making this call right now?* — and records every decision in a tamper-evident audit log.
+OpenFirma is a **runtime policy boundary for outbound agent traffic**. It answers the question: _should this agent be making this call right now?_ — and records every decision in a tamper-evident audit log.
 
 ### What OpenFirma Covers
 
@@ -43,15 +43,19 @@ For full coverage, agents must run inside `firma run` with `HTTP_PROXY` set. See
 ## Key Security Properties
 
 ### Fail-Closed
+
 The Sidecar denies all requests when the policy bundle is unavailable, the capability is revoked, or the policy decision is `DENY`.
 
 ### Capability Tokens
+
 PASETO v4 standalone signatures (Ed25519) are verified locally on every request. Tokens are selected internally by the Sidecar — agents never provide trusted claims directly.
 
 ### Transport Independence
+
 Capability token signing/verification is independent of transport TLS. A valid token is required regardless of whether the Authority connection uses TLS.
 
 ### Audit Integrity
+
 Audit events are signed with ECDSA P-256 off the hot path. For high-stakes deployments, use append-only sinks (WAL, gRPC ingestion) to prevent tampering with event absence.
 
 ## Configuration Security
@@ -61,6 +65,7 @@ Audit events are signed with ECDSA P-256 off the hot path. For high-stakes deplo
 See [docs/security/transport.md](docs/security/transport.md) for certificate generation and configuration.
 
 **Requirements for production:**
+
 - Use a CA-issued certificate for the Authority; keep the CA key offline
 - Distribute the CA certificate to every Sidecar host via `authority.ca_cert_path`
 - Set `allow_insecure_remote_authority = false` (default) for all non-loopback connections
@@ -103,12 +108,15 @@ Run `cargo audit` to check for vulnerable dependencies in the Rust workspace. Th
 ## Operational Security
 
 ### CA Private Key Exposure
+
 If the MITM CA's private key leaks, anyone can sign certificates the Sidecar will trust. Treat the CA directory as immutable infrastructure; never regenerate it; never put it under version control.
 
 ### Authority Signing Key Compromise
+
 If the Authority's Ed25519 signing key leaks, attackers can mint valid capability tokens. Key rotation requires re-issuing every active capability.
 
 ### Audit Log Tampering
+
 Audit events are signed, but the Sidecar writes them before shipping to a durable sink. For high-stakes environments, use an append-only sink to detect deletion.
 
 ## Related Documentation

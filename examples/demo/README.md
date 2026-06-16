@@ -58,11 +58,11 @@ make demo-repl
 
 ## Demo modes
 
-| Mode | Command | What it runs | Requires API keys | Used in CI |
-| --- | --- | --- | --- | --- |
-| CI | `make demo-ci` | Deterministic Rust fixture client | no | yes |
-| Hero | `make demo` | Scripted Python agent | yes | no |
-| REPL | `make demo-repl` | Interactive Python agent | yes | no |
+| Mode | Command          | What it runs                      | Requires API keys | Used in CI |
+| ---- | ---------------- | --------------------------------- | ----------------- | ---------- |
+| CI   | `make demo-ci`   | Deterministic Rust fixture client | no                | yes        |
+| Hero | `make demo`      | Scripted Python agent             | yes               | no         |
+| REPL | `make demo-repl` | Interactive Python agent          | yes               | no         |
 
 All three modes use the same local Authority and Sidecar configuration. The demo runner is `examples/demo/run.sh`.
 

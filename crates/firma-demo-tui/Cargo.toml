@@ -2,9 +2,9 @@
 name = "firma-demo-tui"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
 
 [[bin]]
 name = "firma-demo-tui"
@@ -16,15 +16,7 @@ workspace = true
 [dependencies]
 ansi-to-tui = "8"
 anyhow.workspace = true
-clap = { workspace = true, features = [
-  "color",
-  "derive",
-  "error-context",
-  "help",
-  "std",
-  "suggestions",
-  "usage",
-] }
+clap = { workspace = true, features = ["color", "derive", "error-context", "help", "std", "suggestions", "usage"] }
 crossterm = "0.28"
 firma-stack = { workspace = true }
 ratatui = "0.30"

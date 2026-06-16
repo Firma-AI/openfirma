@@ -1,7 +1,7 @@
 # Linux Local Command Enforcement
 
-Status: implementation complete (Linux path)  
-Date: 2026-05-13  
+Status: implementation complete (Linux path)\
+Date: 2026-05-13\
 Scope: `firma run` + Linux `bwrap` backend
 
 ## Overview
@@ -116,7 +116,7 @@ Artifact layout:
 8. Mediated mode is fail-closed on timeout/unavailable/error/invalid response.
 9. Runtime canonicalizes the executable path (resolving symlinks, enforcing UTF-8) before governance request construction.
 10. When `enforce_known_executables=true`, canonical executable is checked against `allowed_executables`. Any executable not in the list is fail-closed.
-10. Mediator request includes `sandbox_id` + `session_id` for identity/session binding.
+11. Mediator request includes `sandbox_id` + `session_id` for identity/session binding.
 
 ## Local-Exec Governance Contract
 
@@ -403,7 +403,7 @@ All must be true:
 
 1. Switch to previous known-good artifact version.
 2. If needed, temporarily disable generic managed default with:
-`FIRMA_RUN_MANAGED_SECCOMP_DISABLE_DEFAULT=1`
+   `FIRMA_RUN_MANAGED_SECCOMP_DISABLE_DEFAULT=1`
 3. Re-enable only after compatibility + runtime validation pass.
 
 ## Notes

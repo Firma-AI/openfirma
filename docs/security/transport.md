@@ -37,7 +37,7 @@ Then wire the generated paths into Authority + Sidecar config.
 tls_cert_path = "/etc/firma/authority.crt"
 
 # Path to the server's TLS private key (PEM).
-tls_key_path  = "/etc/firma/authority.key"
+tls_key_path = "/etc/firma/authority.key"
 ```
 
 Both fields must be set together or neither. When set, the gRPC listener becomes TLS-only.
@@ -99,12 +99,14 @@ openssl x509 -req \
 Distribute `authority-ca.crt` to every Sidecar host. Keep `authority-ca.key` offline.
 
 Authority config:
+
 ```toml
 tls_cert_path = "./authority.crt"
-tls_key_path  = "./authority.key"
+tls_key_path = "./authority.key"
 ```
 
 Sidecar config:
+
 ```toml
 [authority]
 ca_cert_path = "./authority-ca.crt"
@@ -118,14 +120,14 @@ Distribute the internal CA bundle (or the issuing intermediate CA cert) to Sidec
 
 ## Failure modes
 
-| Condition | Behavior |
-|-----------|----------|
-| TLS cert mismatch (wrong CA) | Handshake rejected; policy bundle stream never connects; `policy_bundle_ready` stays `false`; Sidecar denies all requests (fail-closed) |
-| CA cert file missing at sidecar startup | `build_channel` returns an error; sidecar process exits at startup |
-| Both `tls_cert_path`/`tls_key_path` present, file unreadable | Authority `try_new` returns an error; authority process exits at startup |
-| Only one of `tls_cert_path`/`tls_key_path` set | Authority `try_new` returns an error at startup |
-| `https://` URL without `ca_cert_path` | Config validation rejects the config at sidecar startup |
-| Non-loopback `http://` URL without `allow_insecure_remote_authority = true` | Config validation rejects startup (secure-by-default downgrade protection) |
+| Condition                                                                   | Behavior                                                                                                                                |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| TLS cert mismatch (wrong CA)                                                | Handshake rejected; policy bundle stream never connects; `policy_bundle_ready` stays `false`; Sidecar denies all requests (fail-closed) |
+| CA cert file missing at sidecar startup                                     | `build_channel` returns an error; sidecar process exits at startup                                                                      |
+| Both `tls_cert_path`/`tls_key_path` present, file unreadable                | Authority `try_new` returns an error; authority process exits at startup                                                                |
+| Only one of `tls_cert_path`/`tls_key_path` set                              | Authority `try_new` returns an error at startup                                                                                         |
+| `https://` URL without `ca_cert_path`                                       | Config validation rejects the config at sidecar startup                                                                                 |
+| Non-loopback `http://` URL without `allow_insecure_remote_authority = true` | Config validation rejects startup (secure-by-default downgrade protection)                                                              |
 
 ## Certificate rotation
 

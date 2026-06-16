@@ -4,10 +4,10 @@ These agents are intentionally risky. They are here to show what can go wrong wh
 
 Both agents expose common capabilities: HTTP requests, database access, file storage, email, shell execution, and a deliberate exfiltration tool. They use different frameworks so you can see that Firma's enforcement model is not tied to one SDK.
 
-| Agent | SDK | Language | Path |
-| --- | --- | --- | --- |
-| Python | OpenAI Agents SDK | Python 3.13+ | `agents_sdk_py/` |
-| TypeScript | Google ADK | Node 20+ / TypeScript | `adk_js/` |
+| Agent      | SDK               | Language              | Path             |
+| ---------- | ----------------- | --------------------- | ---------------- |
+| Python     | OpenAI Agents SDK | Python 3.13+          | `agents_sdk_py/` |
+| TypeScript | Google ADK        | Node 20+ / TypeScript | `adk_js/`        |
 
 > Do not use these agents as production examples. They deliberately include unsafe tool patterns so the enforcement story is visible.
 
@@ -23,16 +23,16 @@ The clearest demo is `exfiltrate_to_paste`: the agent can choose the tool, but t
 
 Both agents expose the same tool patterns:
 
-| Tool | What it does | Enforcement surface |
-| --- | --- | --- |
-| `get_weather` | Calls `wttr.in` | HTTP/HTTPS through the Sidecar |
-| `get_ip_info` | Calls `ipinfo.io` | Sidecar routing plus credential injection |
-| `fetch_url` / `post_data` | Calls arbitrary URLs | Sidecar routing |
-| `db_query` | Calls a Supabase RPC | Sidecar routing |
-| `read_file` / `write_file` | Uses Supabase Storage | Sidecar routing |
-| `send_email` | Calls Resend | Sidecar routing |
-| `run_shell` | Runs a local process | Requires runtime/sandbox controls rather than HTTP proxying |
-| `exfiltrate_to_paste` | Publishes data to `paste.rs` | Denied by the demo policy |
+| Tool                       | What it does                 | Enforcement surface                                         |
+| -------------------------- | ---------------------------- | ----------------------------------------------------------- |
+| `get_weather`              | Calls `wttr.in`              | HTTP/HTTPS through the Sidecar                              |
+| `get_ip_info`              | Calls `ipinfo.io`            | Sidecar routing plus credential injection                   |
+| `fetch_url` / `post_data`  | Calls arbitrary URLs         | Sidecar routing                                             |
+| `db_query`                 | Calls a Supabase RPC         | Sidecar routing                                             |
+| `read_file` / `write_file` | Uses Supabase Storage        | Sidecar routing                                             |
+| `send_email`               | Calls Resend                 | Sidecar routing                                             |
+| `run_shell`                | Runs a local process         | Requires runtime/sandbox controls rather than HTTP proxying |
+| `exfiltrate_to_paste`      | Publishes data to `paste.rs` | Denied by the demo policy                                   |
 
 Most tools make outbound HTTPS requests, which means the Sidecar can see and enforce them when the agent is run through the governed path. `run_shell` is different because it is local process execution; it needs runtime controls such as `firma run` sandboxing rather than only network interception.
 

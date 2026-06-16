@@ -16,13 +16,13 @@ Cedar is default-deny: if no `permit` rule matches, the request is denied. A mat
 
 ## Files
 
-| File | Purpose |
-| --- | --- |
-| `demo.cedar` | Demo policy used by the E2E stack. It permits normal agent traffic and blocks the paste-service exfiltration path. |
-| `communication.cedar` | Reference rules for internal and external communication actions. |
-| `credential.cedar` | Reference rules for credential read and write actions. |
-| `filesystem.cedar` | Reference rules for filesystem-style read, write, and delete actions. |
-| `payment.cedar` | Reference rules for payment actions, including cumulative counter checks. |
+| File                  | Purpose                                                                                                            |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `demo.cedar`          | Demo policy used by the E2E stack. It permits normal agent traffic and blocks the paste-service exfiltration path. |
+| `communication.cedar` | Reference rules for internal and external communication actions.                                                   |
+| `credential.cedar`    | Reference rules for credential read and write actions.                                                             |
+| `filesystem.cedar`    | Reference rules for filesystem-style read, write, and delete actions.                                              |
+| `payment.cedar`       | Reference rules for payment actions, including cumulative counter checks.                                          |
 
 The canonical schema lives at `crates/firma-core/firma.cedarschema` and is embedded in the binary. Put a `schema.cedarschema` file beside your policies only when you need to override the embedded schema.
 
@@ -30,11 +30,11 @@ The canonical schema lives at `crates/firma-core/firma.cedarschema` and is embed
 
 Firma policies use three Cedar entity types:
 
-| Role | Format |
-| --- | --- |
-| Principal | `Firma::Agent::"<agent_id>"` |
-| Action | `Firma::Action::"<action_class>"` |
-| Resource | `Firma::Resource::"<resource>"` |
+| Role      | Format                            |
+| --------- | --------------------------------- |
+| Principal | `Firma::Agent::"<agent_id>"`      |
+| Action    | `Firma::Action::"<action_class>"` |
+| Resource  | `Firma::Resource::"<resource>"`   |
 
 For example, a request from `example-agent` to send data to `paste.rs` is evaluated as an agent principal, a communication action, and a resource that represents the destination.
 
@@ -42,19 +42,19 @@ For example, a request from `example-agent` to send data to `paste.rs` is evalua
 
 The Sidecar adds request context before policy evaluation. Policy conditions can use fields such as:
 
-| Field | Meaning |
-| --- | --- |
-| `session_id` | The current agent session. |
-| `timestamp_ms` | The request time. |
-| `params` | Serialized action parameters. |
-| `risk_score` | A precomputed risk value. |
-| `budget_remaining` | Remaining budget for bounded actions. |
-| `action_count` | The request count within the session. |
-| `transfer_amount` | Current transfer amount in cents. |
+| Field                     | Meaning                                   |
+| ------------------------- | ----------------------------------------- |
+| `session_id`              | The current agent session.                |
+| `timestamp_ms`            | The request time.                         |
+| `params`                  | Serialized action parameters.             |
+| `risk_score`              | A precomputed risk value.                 |
+| `budget_remaining`        | Remaining budget for bounded actions.     |
+| `action_count`            | The request count within the session.     |
+| `transfer_amount`         | Current transfer amount in cents.         |
 | `daily_cumulative_amount` | Rolling 24-hour transfer amount in cents. |
-| `transfers_last_10m` | Recent transfer count. |
-| `same_payee_count_30m` | Recent transfer count to the same payee. |
-| `session_transfer_count` | Total transfers in the session. |
+| `transfers_last_10m`      | Recent transfer count.                    |
+| `same_payee_count_30m`    | Recent transfer count to the same payee.  |
+| `session_transfer_count`  | Total transfers in the session.           |
 
 Prefer semantic fields such as `transfer_amount` or `daily_cumulative_amount` over transport details. Policies should describe the action, not the shape of the HTTP request that carried it.
 

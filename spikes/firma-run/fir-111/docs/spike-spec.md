@@ -1,8 +1,8 @@
 # FIR-111: Linux Local-Command Syscall Enforcement Spike
 
-Status: completed  
-Owners: Runtime team  
-Branch: `dario/fir-111-linux-local-command-syscall-enforcement-spike-seccomp`  
+Status: completed\
+Owners: Runtime team\
+Branch: `dario/fir-111-linux-local-command-syscall-enforcement-spike-seccomp`\
 Last updated: 2026-05-11
 
 ## 0. Document map

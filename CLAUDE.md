@@ -56,11 +56,11 @@ across merged files fail at startup (fail-closed).
 
 Shipped mapping files live under `crates/firma-sidecar/config/mappings/`:
 
-| File          | Covers                                                        |
-|---------------|---------------------------------------------------------------|
-| `github.toml` | 44 GitHub REST endpoints → 12 action classes                  |
-| `stripe.toml` | 88 Stripe REST endpoints → 14 action classes                  |
-| `gmail.toml`  | 41 Gmail REST endpoints → 7 action classes                    |
+| File          | Covers                                       |
+| ------------- | -------------------------------------------- |
+| `github.toml` | 44 GitHub REST endpoints → 12 action classes |
+| `stripe.toml` | 88 Stripe REST endpoints → 14 action classes |
+| `gmail.toml`  | 41 Gmail REST endpoints → 7 action classes   |
 
 Example operator config:
 

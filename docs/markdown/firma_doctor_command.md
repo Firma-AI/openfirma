@@ -70,7 +70,7 @@ the operator already declared and that is now misbehaving.
 | `data dir`            | Existence + mode `0700` (Unix) of `$XDG_DATA_HOME/firma` (or platform fallback). |
 
 Unsupported-on-this-OS sandbox backends always report `WARN`, never
-`FAIL`. A backend probe only reports `FAIL` when the host *is* the right
+`FAIL`. A backend probe only reports `FAIL` when the host _is_ the right
 OS and the binary is missing or refuses to run.
 
 ## Output
