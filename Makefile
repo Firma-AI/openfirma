@@ -1,4 +1,4 @@
-.PHONY: fmt lint test build check fuzz-check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps install-tools toml-fmt managed-seccomp-compat-check
+.PHONY: fmt lint test build check fuzz-check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps install-tools managed-seccomp-compat-check
 
 install: install-system install-cargo-tools install-docs-deps install-tools
 	@echo "Dev environment ready. Try 'make check' or 'make docs-dev'."
@@ -17,6 +17,10 @@ install-system:
 	  else \
 	    echo "Please install protoc for your platform and re-run 'make install'"; exit 1; \
 	  fi; \
+	fi
+	@if ! command -v dprint >/dev/null 2>&1; then \
+	  echo "Installing dprint..."; \
+	  curl -fsSL https://dprint.dev/install.sh | sh; \
 	fi
 	@corepack enable >/dev/null 2>&1 || echo "warning: 'corepack enable' failed; you may need to run it with sudo"
 
@@ -37,10 +41,7 @@ install-docs-deps:
 	cd docs-site && corepack pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/
 
 fmt:
-	cargo fmt --check
-
-toml-fmt:
-	taplo fmt --check '**/Cargo.toml'
+	dprint check
 
 lint:
 	cargo clippy --all-features --all-targets
@@ -57,7 +58,7 @@ audit:
 deny:
 	cargo deny check licenses bans sources
 
-check: fmt toml-fmt lint test build audit deny
+check: fmt lint test build audit deny
 
 # Requires nightly: rustup toolchain install nightly
 fuzz-check:
