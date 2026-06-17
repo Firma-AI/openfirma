@@ -1,10 +1,11 @@
 # zizmor configuration — https://docs.zizmor.sh/configuration/
 #
-# Allow version-tag pins (e.g. actions/checkout@v4) instead of requiring
-# full commit SHA pins. Tags are permitted project-wide; a ref (tag or
-# branch) is still required, so fully unpinned uses remain a finding.
+# Require a full commit-SHA pin for every `uses:` (the `hash-pin` policy).
+# Version-tag pins are rejected: a tag is mutable and does not pin the action to
+# reviewed code. Each `uses:` carries a `# vX.Y.Z` comment so Renovate/Dependabot
+# can still track upstream releases.
 rules:
   unpinned-uses:
     config:
       policies:
-        "*": ref-pin
+        "*": hash-pin
