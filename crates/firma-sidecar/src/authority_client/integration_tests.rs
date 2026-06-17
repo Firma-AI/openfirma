@@ -16,7 +16,7 @@ use firma_core::{AgentId, RevocationStore, TokenId};
 use firma_proto::authority_service_server::{AuthorityService, AuthorityServiceServer};
 use firma_proto::{
     IssueCapabilityRequest, IssueCapabilityResponse, PolicyBundle, PolicyBundleUpdate,
-    RevocationEvent, WatchPolicyBundleRequest, WatchRevocationsRequest,
+    RevocationEvent, SidecarCredentials, WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
@@ -31,6 +31,9 @@ use super::policy_bundle::CedarBundleParser;
 use super::readiness::{ReadinessFlag, ReadinessState, ReadinessView};
 use super::swappable_policy::SwappablePolicyEvaluation;
 use super::{AuthorityClientHandle, AuthorityDeps, spawn_authority_client};
+use crate::authority_credentials::{
+    RedactedPreSharedKey, ResolvedSidecarCredentials, SidecarCredentialSource,
+};
 use crate::config::AuthorityConfig;
 use crate::enforcement::constraint_enforcement::PolicyEvaluation;
 use crate::enforcement::revocation::{BloomLruRevocationStore, RevocationConfig};
@@ -43,6 +46,8 @@ struct MockAuthorityState {
     bundle_tx: broadcast::Sender<PolicyBundleUpdate>,
     revoc_tx: broadcast::Sender<RevocationEvent>,
     initial_bundle: Mutex<Option<PolicyBundleUpdate>>,
+    policy_credentials: Mutex<Option<SidecarCredentials>>,
+    revocation_credentials: Mutex<Option<SidecarCredentials>>,
 }
 
 struct MockAuthorityHandle {
@@ -66,6 +71,22 @@ impl MockAuthorityHandle {
     fn push_revocation(&self, event: RevocationEvent) {
         let _ = self.state.revoc_tx.send(event);
     }
+
+    fn policy_credentials(&self) -> Option<SidecarCredentials> {
+        self.state
+            .policy_credentials
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    fn revocation_credentials(&self) -> Option<SidecarCredentials> {
+        self.state
+            .revocation_credentials
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
 }
 
 struct MockAuthority {
@@ -87,8 +108,11 @@ impl AuthorityService for MockAuthority {
 
     async fn watch_policy_bundle(
         &self,
-        _request: Request<WatchPolicyBundleRequest>,
+        request: Request<WatchPolicyBundleRequest>,
     ) -> Result<Response<Self::WatchPolicyBundleStream>, Status> {
+        if let Ok(mut guard) = self.state.policy_credentials.lock() {
+            *guard = request.into_inner().credentials;
+        }
         let (tx, rx) = mpsc::channel::<Result<PolicyBundleUpdate, Status>>(16);
         let initial = self
             .state
@@ -114,8 +138,11 @@ impl AuthorityService for MockAuthority {
 
     async fn watch_revocations(
         &self,
-        _request: Request<WatchRevocationsRequest>,
+        request: Request<WatchRevocationsRequest>,
     ) -> Result<Response<Self::WatchRevocationsStream>, Status> {
+        if let Ok(mut guard) = self.state.revocation_credentials.lock() {
+            *guard = request.into_inner().credentials;
+        }
         let (tx, rx) = mpsc::channel::<Result<RevocationEvent, Status>>(16);
         let mut broadcast_rx = self.state.revoc_tx.subscribe();
         tokio::spawn(async move {
@@ -162,6 +189,8 @@ async fn spawn_mock_authority() -> anyhow::Result<MockAuthorityServer> {
         bundle_tx,
         revoc_tx,
         initial_bundle: Mutex::new(None),
+        policy_credentials: Mutex::new(None),
+        revocation_credentials: Mutex::new(None),
     });
     let service = MockAuthority {
         state: Arc::clone(&state),
@@ -208,6 +237,8 @@ async fn spawn_mock_authority_tls(
         bundle_tx,
         revoc_tx,
         initial_bundle: Mutex::new(None),
+        policy_credentials: Mutex::new(None),
+        revocation_credentials: Mutex::new(None),
     });
     let service = MockAuthority {
         state: Arc::clone(&state),
@@ -299,6 +330,24 @@ fn spawn_sidecar(
     client_cert_pem: Option<&[u8]>,
     client_key_pem: Option<&[u8]>,
 ) -> anyhow::Result<SidecarHarness> {
+    spawn_sidecar_with_credentials(
+        url,
+        config,
+        ca_cert_pem,
+        client_cert_pem,
+        client_key_pem,
+        None,
+    )
+}
+
+fn spawn_sidecar_with_credentials(
+    url: &str,
+    config: AuthorityConfig,
+    ca_cert_pem: Option<&[u8]>,
+    client_cert_pem: Option<&[u8]>,
+    client_key_pem: Option<&[u8]>,
+    credentials: Option<ResolvedSidecarCredentials>,
+) -> anyhow::Result<SidecarHarness> {
     let channel = build_channel(
         url,
         Duration::from_secs(config.connect_timeout_secs),
@@ -326,6 +375,7 @@ fn spawn_sidecar(
         readiness,
         cancel: cancel.clone(),
         config,
+        credentials,
         bundle_parser: Arc::new(CedarBundleParser),
     });
 
@@ -409,6 +459,7 @@ fn test_config() -> AuthorityConfig {
         allow_insecure_remote_authority: false,
         tls_client_cert_path: None,
         tls_client_key_path: None,
+        credentials: None,
     }
 }
 
@@ -466,6 +517,61 @@ async fn readiness_flips_after_initial_bundle_and_revocation_grace() -> anyhow::
         harness.swappable_policy.version().as_deref(),
         Some("v1"),
         "initial bundle version should be applied"
+    );
+
+    harness.shutdown().await;
+    server.stop().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stream_requests_include_configured_credentials() -> anyhow::Result<()> {
+    let server = spawn_mock_authority().await?;
+    server
+        .handle
+        .set_initial_bundle(valid_bundle_update("v1", 60));
+    let credentials = ResolvedSidecarCredentials {
+        workspace_id: "ws-acme".to_string(),
+        sidecar_id: "sc-eu-1".to_string(),
+        pre_shared_key: RedactedPreSharedKey::new("psk-secret".to_string()),
+        source: SidecarCredentialSource::Env("FIRMA_SIDECAR_PSK".to_string()),
+    };
+    let harness = spawn_sidecar_with_credentials(
+        &server.url,
+        test_config(),
+        None,
+        None,
+        None,
+        Some(credentials),
+    )?;
+
+    let policy_seen = wait_for(Duration::from_secs(2), || {
+        server.handle.policy_credentials().is_some()
+    })
+    .await;
+    let revocation_seen = wait_for(Duration::from_secs(2), || {
+        server.handle.revocation_credentials().is_some()
+    })
+    .await;
+
+    assert!(policy_seen, "policy stream credentials were not observed");
+    assert!(
+        revocation_seen,
+        "revocation stream credentials were not observed"
+    );
+    assert_eq!(
+        server
+            .handle
+            .policy_credentials()
+            .map(|credentials| credentials.pre_shared_key),
+        Some("psk-secret".to_string())
+    );
+    assert_eq!(
+        server
+            .handle
+            .revocation_credentials()
+            .map(|credentials| credentials.workspace_id),
+        Some("ws-acme".to_string())
     );
 
     harness.shutdown().await;

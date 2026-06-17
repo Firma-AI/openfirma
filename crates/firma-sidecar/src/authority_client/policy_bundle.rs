@@ -12,6 +12,7 @@ use tonic::transport::Channel;
 use crate::authority_client::backoff::ExponentialBackoff;
 use crate::authority_client::readiness::ReadinessFlag;
 use crate::authority_client::swappable_policy::SwappablePolicyEvaluation;
+use crate::authority_credentials::ResolvedSidecarCredentials;
 use crate::enforcement::cedar_evaluator::CedarPolicyEvaluator;
 use crate::enforcement::constraint_enforcement::PolicyEvaluation;
 
@@ -72,6 +73,8 @@ pub struct PolicyBundleTask {
     pub cancel: CancellationToken,
     /// Bundle parser.
     pub bundle_parser: Arc<dyn BundleParser + Send + Sync>,
+    /// Credentials presented on each stream connection.
+    pub credentials: Option<ResolvedSidecarCredentials>,
 }
 
 impl PolicyBundleTask {
@@ -119,6 +122,10 @@ impl PolicyBundleTask {
         let response = client
             .watch_policy_bundle(WatchPolicyBundleRequest {
                 current_version: current_version.unwrap_or_default().to_string(),
+                credentials: self
+                    .credentials
+                    .as_ref()
+                    .map(ResolvedSidecarCredentials::to_proto),
             })
             .await
             .map_err(|err| err.to_string())?;

@@ -8,9 +8,26 @@ The Authority ↔ Sidecar gRPC channel carries the policy bundle stream and revo
 - **Authority authentication.** Each Sidecar verifies the Authority's certificate against a configured CA. A MitM serving a spoofed policy bundle is rejected at the TLS handshake.
 - **Capability tokens are unaffected.** PASETO v4 signing/verification is independent of transport.
 
+## Sidecar authentication
+
+OpenFirma can present pre-shared-key credentials on Authority RPCs when the
+Sidecar config includes `[authority.credentials]` or unified
+`[sidecar.authority.credentials]`. The Sidecar sends `workspace_id`,
+`sidecar_id`, and the resolved PSK on `IssueCapability`, `WatchPolicyBundle`,
+and `WatchRevocations`.
+
+If credentials are absent, OpenFirma sends no credentials. This keeps the local
+Mini Authority development loop keyless. Remote deployments that require PSK
+authentication should provision the key in the Authority operator workflow and
+expose it to the Sidecar through either `pre_shared_key_env` or
+`pre_shared_key_path`.
+
 ## What V1 does NOT achieve
 
-Sidecar identity is not asserted — anyone who can establish a TLS connection to the Authority's gRPC endpoint can call `IssueCapability`. V1 mitigation is operational: restrict network access via VPN, security groups, or a mesh VPN. Closing this gap is V1.1 mTLS.
+TLS server verification alone does not assert Sidecar identity. Use PSK
+credentials when the Authority enforces Sidecar authentication. mTLS remains an
+orthogonal transport-hardening option for deployments that require client
+certificate identity.
 
 ## Configuration
 

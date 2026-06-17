@@ -33,6 +33,7 @@
 
 pub mod audit;
 pub mod authority_client;
+pub mod authority_credentials;
 pub mod config;
 pub mod connector;
 pub mod credential;

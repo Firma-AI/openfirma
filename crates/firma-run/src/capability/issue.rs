@@ -17,6 +17,7 @@ use firma_core::{CapabilitySeed, TokenVerifier};
 use firma_proto::IssueCapabilityRequest;
 use firma_proto::authority_service_client::AuthorityServiceClient;
 use firma_proto::client::build_channel;
+use firma_sidecar::authority_credentials::ResolvedSidecarCredentials;
 
 use crate::error::RunError;
 
@@ -29,6 +30,8 @@ pub struct IssueParams {
     pub authority_pub_key_path: PathBuf,
     /// Optional PEM CA cert path for an `https://` Authority.
     pub authority_ca_cert_path: Option<PathBuf>,
+    /// Optional Sidecar credentials for the Authority request.
+    pub credentials: Option<ResolvedSidecarCredentials>,
     /// Agent identity to bind into the request.
     pub agent_id: String,
     /// Session identity to bind into the request.
@@ -115,6 +118,10 @@ fn mint(params: &IssueParams) -> Result<CapabilitySeed, RunError> {
                 requested_actions: params.requested_actions.clone(),
                 resource_scope: params.resource_scope.clone(),
                 requested_ttl_seconds: params.ttl_seconds,
+                credentials: params
+                    .credentials
+                    .as_ref()
+                    .map(ResolvedSidecarCredentials::to_proto),
             })
             .await
             .map(tonic::Response::into_inner)

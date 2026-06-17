@@ -600,14 +600,15 @@ Tuning for the background Authority stream clients
 `authority.url` is set; when unset the sidecar runs in dev
 mode and this section is ignored.
 
-| Field                                  | Type | Default | Description                                                                                                                 |
-| -------------------------------------- | ---- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `connect_timeout_secs`                 | u64  | `10`    | Connection timeout for the tonic channel                                                                                    |
-| `reconnect_min_backoff_ms`             | u64  | `250`   | Minimum reconnect backoff                                                                                                   |
-| `reconnect_max_backoff_secs`           | u64  | `30`    | Maximum reconnect backoff                                                                                                   |
-| `revocation_readiness_grace_ms`        | u64  | `500`   | Grace period after revocation stream opens before readiness                                                                 |
-| `revocation_fail_closed_on_disconnect` | bool | `false` | Flip revocation readiness back to false when the stream drops                                                               |
-| `public_key_path`                      | path | none    | Authority Ed25519 public key. Required when `[capability_seed].paths` is non-empty so the sidecar can verify seeded tokens. |
+| Field                                  | Type    | Default | Description                                                                                                                 |
+| -------------------------------------- | ------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `connect_timeout_secs`                 | u64     | `10`    | Connection timeout for the tonic channel                                                                                    |
+| `reconnect_min_backoff_ms`             | u64     | `250`   | Minimum reconnect backoff                                                                                                   |
+| `reconnect_max_backoff_secs`           | u64     | `30`    | Maximum reconnect backoff                                                                                                   |
+| `revocation_readiness_grace_ms`        | u64     | `500`   | Grace period after revocation stream opens before readiness                                                                 |
+| `revocation_fail_closed_on_disconnect` | bool    | `false` | Flip revocation readiness back to false when the stream drops                                                               |
+| `public_key_path`                      | path    | none    | Authority Ed25519 public key. Required when `[capability_seed].paths` is non-empty so the sidecar can verify seeded tokens. |
+| `credentials`                          | section | none    | Optional Sidecar PSK credentials sent on every Authority RPC.                                                               |
 
 Validation:
 
@@ -615,6 +616,30 @@ Validation:
   `reconnect_max_backoff_secs` must all be greater than `0`.
 - `reconnect_max_backoff_secs * 1000` must be ≥
   `reconnect_min_backoff_ms`.
+- When `credentials` is present, `workspace_id` and `sidecar_id`
+  must be non-empty, and exactly one PSK source must be configured.
+
+#### `[authority.credentials]`
+
+Use this section when connecting a Sidecar to an Authority that requires a
+pre-shared key. The PSK is issued by the Authority operator. It is resolved once
+at startup, kept in memory, and sent on `IssueCapability`,
+`WatchPolicyBundle`, and `WatchRevocations`.
+
+```toml
+[authority.credentials]
+workspace_id = "ws-acme"
+sidecar_id = "sc-eu-1"
+
+# exactly one:
+pre_shared_key_env = "FIRMA_SIDECAR_PSK"
+# pre_shared_key_path = "/run/secrets/firma-sidecar-psk"
+```
+
+`pre_shared_key_path` is resolved relative to the config file directory when it
+is not absolute. File values have trailing newlines trimmed. If the section is
+absent, the Sidecar sends no credentials and remains compatible with the local
+Mini Authority path.
 
 Behavior notes:
 

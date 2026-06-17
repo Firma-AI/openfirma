@@ -264,6 +264,7 @@ fn live_mint_writes_seed_and_admits_stage1() {
         authority_url: authority.url.clone(),
         authority_pub_key_path: authority.pub_key_path.clone(),
         authority_ca_cert_path: None,
+        credentials: None,
         agent_id: "live-agent".to_string(),
         session_id: "live-session".to_string(),
         requested_actions: firma_run::capability::issue::DEFAULT_REQUESTED_ACTIONS

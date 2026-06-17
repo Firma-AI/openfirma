@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use crate::authority_credentials::SidecarCredentialsConfig;
+
 /// Tuning for background Authority stream clients.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthorityConfig {
@@ -53,6 +55,9 @@ pub struct AuthorityConfig {
     /// together with `tls_client_cert_path` or not at all.
     #[serde(default)]
     pub tls_client_key_path: Option<PathBuf>,
+    /// Credentials presented on each outbound Authority RPC.
+    #[serde(default)]
+    pub credentials: Option<SidecarCredentialsConfig>,
 }
 
 impl AuthorityConfig {
@@ -108,6 +113,11 @@ impl AuthorityConfig {
         {
             return Err("tls_client_key_path must not be empty when set".to_string());
         }
+        if let Some(ref credentials) = self.credentials {
+            credentials
+                .validate()
+                .map_err(|error| format!("credentials: {error}"))?;
+        }
         Ok(())
     }
 }
@@ -126,6 +136,7 @@ impl Default for AuthorityConfig {
             allow_insecure_remote_authority: false,
             tls_client_cert_path: None,
             tls_client_key_path: None,
+            credentials: None,
         }
     }
 }

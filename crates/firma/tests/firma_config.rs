@@ -274,6 +274,10 @@ fn agent_remote_switch_drops_local_authority_section() {
         value["sidecar"]["authority"]["url"].as_str(),
         Some("https://authority.example.com:9443"),
     );
+    assert!(
+        firma_toml.contains("# [sidecar.authority.credentials]"),
+        "agent-remote scaffold should include commented Sidecar PSK guidance:\n{firma_toml}"
+    );
 }
 
 #[test]
