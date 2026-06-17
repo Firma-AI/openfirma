@@ -12,7 +12,46 @@ pub mod token;
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Command as ClapCommand, CommandFactory, FromArgMatches, Parser, Subcommand};
+
+const HELP_WIDTH: usize = 100;
+const HELP_TEMPLATE: &str = "\
+{about-with-newline}
+{usage-heading} {usage}
+
+{all-args}{after-help}";
+
+/// Parse CLI arguments after applying Firma shared help-output policy.
+///
+/// clap's derive parser does not give us a hook to adjust every generated
+/// subcommand before parsing. Build the command tree first, apply the help
+/// template recursively, then convert the resulting matches back into `Cli`.
+pub fn parse() -> Cli {
+    let mut command = Cli::command();
+    configure_help(&mut command);
+    let matches = command.get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+}
+
+/// Apply one help layout to the whole clap command tree.
+///
+/// the explicit width is the fallback used when clap cannot infer a terminal
+/// size. `wrap_help` still uses the real terminal width when available; this
+/// keeps non-TTY output and narrow terminals from falling back to clap's
+/// defaults. the recursion is what keeps firma, nested commands and hidden
+/// internal commands on the same template policy.
+fn configure_help(command: &mut ClapCommand) {
+    *command = command
+        .clone()
+        .max_term_width(HELP_WIDTH)
+        .subcommand_help_heading("Commands")
+        .next_help_heading("Options")
+        .help_template(HELP_TEMPLATE);
+
+    for subcommand in command.get_subcommands_mut() {
+        configure_help(subcommand);
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(

@@ -10,12 +10,10 @@ mod signal;
 
 use std::process::ExitCode;
 
-use clap::Parser as _;
-
-use crate::args::{Cli, Command};
+use crate::args::Command;
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = args::parse();
 
     if let Err(e) = log::init(&cli.log_filter, cli.log_file.as_deref()) {
         output::err(format!("{e}"));
