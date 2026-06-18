@@ -20,6 +20,7 @@ use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 use crate::sidecar::supervisor::{SidecarSupervisor, SpawnRequest};
+use firma_sidecar::authority_credentials::{ResolvedSidecarCredentials, SidecarCredentialsConfig};
 
 #[cfg(unix)]
 fn structural_proxy_listen_addr() -> &'static str {
@@ -96,6 +97,9 @@ pub struct AutostartFlags {
     /// `[sidecar.authority].public_key_path` during synthesis so the sidecar
     /// can verify the per-session capability seed.
     pub authority_pub_key: Option<PathBuf>,
+    /// Sidecar credential config injected into `[sidecar.authority.credentials]`
+    /// during sidecar config synthesis.
+    pub authority_credentials: Option<SidecarCredentialsConfig>,
     /// Path of the per-session capability seed minted by `firma run`.
     pub capability_seed_path: Option<PathBuf>,
     /// When `true`, the autostarted sidecar is started in HTTP proxy
@@ -116,6 +120,7 @@ impl Default for AutostartFlags {
             authority_url: None,
             authority_ca_cert: None,
             authority_pub_key: None,
+            authority_credentials: None,
             capability_seed_path: None,
             use_http_proxy_sidecar: false,
             monitor_mode: false,
@@ -130,6 +135,10 @@ pub struct ResolvedAuthority {
     pub ca_cert_path: Option<PathBuf>,
     /// Authority public key path from `[sidecar.authority]`, if present.
     pub pub_key_path: Option<PathBuf>,
+    /// Resolved credentials used by `firma run` when issuing a capability.
+    pub credentials: Option<ResolvedSidecarCredentials>,
+    /// Unresolved credentials config passed to an autostarted Sidecar.
+    pub credentials_config: Option<SidecarCredentialsConfig>,
     pub supervisor: Option<crate::authority::AuthoritySupervisor>,
 }
 
@@ -166,6 +175,9 @@ pub fn prepare_network_runtime(
     flags.authority_url = Some(authority.url.clone());
     flags.authority_ca_cert.clone_from(&authority.ca_cert_path);
     flags.authority_pub_key.clone_from(&authority.pub_key_path);
+    flags
+        .authority_credentials
+        .clone_from(&authority.credentials_config);
 
     // Mint the per-session capability seed before resolving the endpoint so the
     // synthesized sidecar config can reference it. The guard is moved into the
@@ -292,6 +304,7 @@ fn maybe_mint_capability_seed(
         authority_url: authority.url.clone(),
         authority_pub_key_path: pub_key_path,
         authority_ca_cert_path: flags.authority_ca_cert.clone(),
+        credentials: authority.credentials.clone(),
         agent_id: identity.profile.clone(),
         session_id: identity.session_id.clone(),
         requested_actions: crate::capability::issue::DEFAULT_REQUESTED_ACTIONS
@@ -464,6 +477,7 @@ fn autostart_sidecar(
         authority_url: flags.authority_url.as_deref(),
         authority_ca_cert: flags.authority_ca_cert.clone(),
         authority_pub_key: flags.authority_pub_key.clone(),
+        authority_credentials: flags.authority_credentials.clone(),
         capability_seed_path: flags.capability_seed_path.clone(),
         use_http_proxy_interceptor: flags.use_http_proxy_sidecar,
         monitor_mode: flags.monitor_mode,
@@ -527,6 +541,22 @@ pub fn resolve_authority(
         .as_ref()
         .and_then(|c| c.public_key_path.as_deref())
         .map(|path| rebase_config_relative_path(path, user_config_dir));
+    let credentials_config = section
+        .connect
+        .as_ref()
+        .and_then(|connect| connect.credentials.as_ref())
+        .cloned()
+        .map(|mut credentials| {
+            credentials.rebase_defaults(user_config_dir.unwrap_or_else(|| Path::new(".")));
+            credentials
+        });
+    let credentials = credentials_config
+        .as_ref()
+        .map(SidecarCredentialsConfig::resolve)
+        .transpose()
+        .map_err(|reason| {
+            RunError::ConfigValidation(format!("sidecar.authority.credentials: {reason}"))
+        })?;
     let config_committed_local = section.local;
 
     maybe_regen_tls(ca_cert_path.as_deref(), firma_exe)?;
@@ -538,6 +568,8 @@ pub fn resolve_authority(
                 url,
                 ca_cert_path,
                 pub_key_path,
+                credentials,
+                credentials_config,
                 supervisor: None,
             })
         }
@@ -558,6 +590,8 @@ pub fn resolve_authority(
                     url: format!("http://{target}"),
                     ca_cert_path,
                     pub_key_path,
+                    credentials,
+                    credentials_config,
                     supervisor: None,
                 });
             }
@@ -593,6 +627,8 @@ pub fn resolve_authority(
                         url: sup.url(),
                         ca_cert_path,
                         pub_key_path: Some(ephemeral_pub_key),
+                        credentials,
+                        credentials_config,
                         supervisor: Some(sup),
                     })
                 }
@@ -612,6 +648,8 @@ pub fn resolve_authority(
                             url: format!("http://{target}"),
                             ca_cert_path,
                             pub_key_path,
+                            credentials,
+                            credentials_config,
                             supervisor: None,
                         })
                     } else {
@@ -1078,6 +1116,8 @@ mod non_structural_env_tests {
             url: "https://authority.test".to_string(),
             ca_cert_path: None,
             pub_key_path: None,
+            credentials: None,
+            credentials_config: None,
             supervisor: None,
         };
         let proof = crate::backend::EnforcementProof {

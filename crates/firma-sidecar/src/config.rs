@@ -26,6 +26,7 @@ pub use self::connector::ConnectorConfig;
 
 pub use self::enforcement::{EnforcementConfig, MappingRuleConfig, MappingRulesFile};
 pub use self::revocation::RevocationConfig;
+pub use crate::authority_credentials::SidecarCredentialsConfig;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -233,6 +234,9 @@ impl SidecarConfig {
         }
         if let Some(p) = self.authority.ca_cert_path.as_mut() {
             rebase(p);
+        }
+        if let Some(credentials) = self.authority.credentials.as_mut() {
+            credentials.rebase_defaults(config_dir);
         }
         if let Some(p) = self.audit.signing_key_path.as_mut() {
             rebase(p);

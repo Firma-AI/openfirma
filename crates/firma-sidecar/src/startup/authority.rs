@@ -69,6 +69,23 @@ pub fn spawn_authority_client(
         client_cert_pem.as_deref(),
         client_key_pem.as_deref(),
     )?;
+    let credentials = config
+        .authority
+        .credentials
+        .as_ref()
+        .map(crate::authority_credentials::SidecarCredentialsConfig::resolve)
+        .transpose()
+        .map_err(|error| anyhow::anyhow!("failed to resolve authority credentials: {error}"))?;
+    if let Some(ref credentials) = credentials {
+        tracing::info!(
+            workspace_id = %credentials.workspace_id,
+            sidecar_id = %credentials.sidecar_id,
+            source = credentials.source.kind(),
+            "authority credentials configured"
+        );
+    } else {
+        tracing::debug!("authority credentials not configured; Authority RPCs are keyless");
+    }
     tracing::debug!("Authority stream clients wired with Cedar bundle parser");
 
     let handle = authority_client::spawn_authority_client(AuthorityDeps {
@@ -78,6 +95,7 @@ pub fn spawn_authority_client(
         readiness: Arc::clone(&runtime.readiness),
         cancel,
         config: config.authority.clone(),
+        credentials,
         bundle_parser: Arc::new(CedarBundleParser),
     });
     Ok(Some(handle))

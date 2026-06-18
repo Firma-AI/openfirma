@@ -48,6 +48,7 @@ fn req<'a>(sock: &'a Path, out: &'a Path) -> SynthesizeRequest<'a> {
         authority_url: None,
         authority_ca_cert: None,
         authority_pub_key: None,
+        authority_credentials: None,
         capability_seed_path: None,
         audit_fallback_path: None,
         monitor_mode: false,
