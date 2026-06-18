@@ -43,8 +43,12 @@ jobs:
 
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@30b5ca8b54e1dcffd9548bc87ede1531310fdc67 # v1.20.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install cargo-fuzz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: cargo binstall --no-confirm --locked cargo-fuzz@$CARGO_FUZZ_VERSION
 
       - name: Run ${{ matrix.target }}
