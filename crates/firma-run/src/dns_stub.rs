@@ -1,8 +1,174 @@
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
-use std::thread;
+use std::sync::mpsc;
+use std::thread::{self, JoinHandle};
 
 use crate::error::RunError;
+
+// ---------------------------------------------------------------------------
+// Host-side DNS stub handle.
+// ---------------------------------------------------------------------------
+
+/// Owning handle for a host-side DNS refusal stub started for the macOS
+/// structural network path.
+///
+/// The stub binds an ephemeral loopback UDP+TCP port and returns `REFUSED`
+/// (RCODE 5) for every DNS query. It is the DNS analog of [`super::proxy_bridge::HostBridgeHandle`]:
+/// a host-side service that the sandbox-exec profile allows through (loopback),
+/// while all other DNS destinations (external resolvers) are blocked by the
+/// `deny network-outbound` policy.
+///
+/// [`Drop`] signals the listener threads to stop and joins them.
+pub struct HostDnsStubHandle {
+    listen_addr: SocketAddr,
+    udp_stop_tx: Option<mpsc::Sender<()>>,
+    tcp_stop_tx: Option<mpsc::Sender<()>>,
+    udp_task: Option<JoinHandle<()>>,
+    tcp_task: Option<JoinHandle<()>>,
+}
+
+impl HostDnsStubHandle {
+    /// Start a host-side DNS refusal stub on an ephemeral loopback port.
+    ///
+    /// Binds both UDP and TCP DNS listeners on `127.0.0.1:0`, spawns
+    /// listener threads, and returns immediately. The actual listen port is
+    /// available via [`listen_addr`](Self::listen_addr).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RunError::Spawn`] if the listeners cannot be bound or threads
+    /// cannot be spawned.
+    pub fn start() -> Result<Self, RunError> {
+        let udp = UdpSocket::bind("127.0.0.1:0").map_err(|error| {
+            RunError::Spawn(format!("failed to bind host DNS stub UDP: {error}"))
+        })?;
+        let listen_addr = udp.local_addr().map_err(|error| {
+            RunError::Spawn(format!("failed to read host DNS stub listen addr: {error}"))
+        })?;
+
+        let tcp = TcpListener::bind(listen_addr).map_err(|error| {
+            RunError::Spawn(format!(
+                "failed to bind host DNS stub TCP on {listen_addr}: {error}"
+            ))
+        })?;
+
+        udp.set_nonblocking(true).map_err(|error| {
+            RunError::Spawn(format!("failed to set DNS stub UDP non-blocking: {error}"))
+        })?;
+        tcp.set_nonblocking(true).map_err(|error| {
+            RunError::Spawn(format!("failed to set DNS stub TCP non-blocking: {error}"))
+        })?;
+
+        let (udp_stop_tx, udp_stop_rx) = mpsc::channel::<()>();
+        let (tcp_stop_tx, tcp_stop_rx) = mpsc::channel::<()>();
+
+        let udp_task = thread::Builder::new()
+            .name("firma-run-host-dns-stub-udp".to_string())
+            .spawn(move || run_stub_udp_nonblocking(&udp, &udp_stop_rx))
+            .map_err(|error| {
+                RunError::Spawn(format!("failed to spawn host DNS stub UDP thread: {error}"))
+            })?;
+
+        let tcp_task = thread::Builder::new()
+            .name("firma-run-host-dns-stub-tcp".to_string())
+            .spawn(move || run_stub_tcp_nonblocking(&tcp, &tcp_stop_rx))
+            .map_err(|error| {
+                RunError::Spawn(format!("failed to spawn host DNS stub TCP thread: {error}"))
+            })?;
+
+        tracing::info!(
+            %listen_addr,
+            "host DNS refusal stub started for macOS structural network path"
+        );
+
+        Ok(Self {
+            listen_addr,
+            udp_stop_tx: Some(udp_stop_tx),
+            tcp_stop_tx: Some(tcp_stop_tx),
+            udp_task: Some(udp_task),
+            tcp_task: Some(tcp_task),
+        })
+    }
+
+    /// UDP+TCP address the stub is listening on.
+    #[must_use]
+    pub fn listen_addr(&self) -> SocketAddr {
+        self.listen_addr
+    }
+}
+
+impl Drop for HostDnsStubHandle {
+    fn drop(&mut self) {
+        if let Some(tx) = self.udp_stop_tx.take() {
+            let _ = tx.send(());
+        }
+        if let Some(tx) = self.tcp_stop_tx.take() {
+            let _ = tx.send(());
+        }
+        // Wake the TCP accept loop by connecting briefly.
+        let _ = std::net::TcpStream::connect_timeout(
+            &self.listen_addr,
+            std::time::Duration::from_millis(100),
+        );
+        if let Some(task) = self.udp_task.take() {
+            let _ = task.join();
+        }
+        if let Some(task) = self.tcp_task.take() {
+            let _ = task.join();
+        }
+    }
+}
+
+fn run_stub_udp_nonblocking(socket: &UdpSocket, stop_rx: &mpsc::Receiver<()>) {
+    let mut buf = [0_u8; 4096];
+    loop {
+        if stop_rx.try_recv().is_ok() {
+            break;
+        }
+        match socket.recv_from(&mut buf) {
+            Ok((len, peer)) => {
+                if let Some(response) = refused_response(&buf[..len]) {
+                    let _ = socket.send_to(&response, peer);
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(error) => {
+                tracing::warn!("host DNS stub UDP receive failed: {error}");
+                thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+}
+
+fn run_stub_tcp_nonblocking(listener: &TcpListener, stop_rx: &mpsc::Receiver<()>) {
+    loop {
+        if stop_rx.try_recv().is_ok() {
+            break;
+        }
+        match listener.accept() {
+            Ok((stream, peer)) => {
+                if let Err(error) = stream.set_nonblocking(false) {
+                    tracing::warn!("host DNS stub TCP set blocking failed for {peer}: {error}");
+                    continue;
+                }
+                thread::spawn(move || {
+                    if let Err(error) = handle_tcp_client(stream) {
+                        tracing::debug!("host DNS stub TCP client {peer} closed: {error}");
+                    }
+                });
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(error) => {
+                tracing::warn!("host DNS stub TCP accept failed: {error}");
+                thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+}
 
 /// Lib-level input for [`execute_dns_stub`]. The CLI layer builds this
 /// from its `clap`-derived args struct.
@@ -126,7 +292,10 @@ fn refused_response(query: &[u8]) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DNS_RCODE_REFUSED, refused_response};
+    use std::net::UdpSocket;
+    use std::time::Duration;
+
+    use super::{DNS_RCODE_REFUSED, HostDnsStubHandle, refused_response};
 
     #[test]
     fn refused_response_preserves_query_id_and_question() {
@@ -148,5 +317,65 @@ mod tests {
     #[test]
     fn refused_response_rejects_malformed_header() {
         assert!(refused_response(&[0_u8; 11]).is_none());
+    }
+
+    // ── HostDnsStubHandle ─────────────────────────────────────────────────────
+
+    #[test]
+    fn host_dns_stub_starts_and_responds_refused_over_udp() {
+        let stub = HostDnsStubHandle::start().expect("stub start");
+        let addr = stub.listen_addr();
+
+        let client = UdpSocket::bind("127.0.0.1:0").expect("client bind");
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("set timeout");
+
+        let query = [
+            0xAB, 0xCD, // transaction id
+            0x01, 0x00, // flags: standard query
+            0x00, 0x01, // 1 question
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // no answers/authority/additional
+            0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm',
+            0x00, // root
+            0x00, 0x01, // QTYPE A
+            0x00, 0x01, // QCLASS IN
+        ];
+        client.send_to(&query, addr).expect("send query");
+
+        let mut buf = [0_u8; 512];
+        let (len, _) = client.recv_from(&mut buf).expect("recv response");
+        let response = &buf[..len];
+
+        // Transaction ID preserved.
+        assert_eq!(&response[..2], &[0xAB, 0xCD]);
+        // QR bit set (response).
+        assert_ne!(response[2] & 0x80, 0, "QR bit must be set");
+        // RCODE = REFUSED.
+        assert_eq!(
+            response[3] & 0x0F,
+            DNS_RCODE_REFUSED,
+            "RCODE must be REFUSED"
+        );
+    }
+
+    #[test]
+    fn host_dns_stub_drops_cleanly() {
+        let stub = HostDnsStubHandle::start().expect("stub start");
+        let addr = stub.listen_addr();
+        drop(stub);
+        // After drop the port should be released; a new stub can bind there if
+        // the OS reuses ephemeral ports — or just verify it doesn't hang.
+        let _ = addr;
+    }
+
+    #[test]
+    fn host_dns_stub_listen_addr_is_loopback() {
+        let stub = HostDnsStubHandle::start().expect("stub start");
+        assert_eq!(
+            stub.listen_addr().ip(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            "stub must bind on loopback"
+        );
     }
 }

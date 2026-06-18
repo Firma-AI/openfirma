@@ -119,6 +119,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             tracing::info!(
                 structural = proof.structural,
                 fail_closed = proof.fail_closed,
+                network_confinement = ?proof.network_confinement,
                 detail = %proof.detail,
                 "backend network enforcement proof"
             );
@@ -130,6 +131,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
                 backend = %proof.backend,
                 profile = %profile.id,
                 fail_closed = proof.fail_closed,
+                network_confinement = ?proof.network_confinement,
                 http_proxy_injected = profile.use_http_proxy_sidecar,
                 detail = %proof.detail,
                 "backend compatibility proof — proxy-only mode; \
@@ -204,6 +206,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         let skip_mint = matches!(profile.capability.source, CapabilitySource::File { .. });
         let network_runtime = prepare_network_runtime(
             handle_ref,
+            &proof,
             &profile.sidecar_endpoint,
             &identity,
             &flags,
@@ -1191,7 +1194,17 @@ mod tests {
         let result = backend.enforce_network(&handle, &handle.network_policy);
         if cfg!(target_os = "macos") {
             let proof = result.unwrap();
-            assert!(!proof.structural, "vz backend must report structural=false");
+            if crate::config::env_truthy("FIRMA_RUN_VZ_STRUCTURAL_NETWORK") {
+                assert!(
+                    proof.structural,
+                    "vz backend must report structural=true when macOS structural mode is enabled"
+                );
+            } else {
+                assert!(
+                    !proof.structural,
+                    "vz backend must report structural=false by default"
+                );
+            }
         }
     }
 

@@ -3,7 +3,7 @@ title: The sandbox boundary
 description: How firma run contains agent egress, what structural vs proxy-only enforcement means, and what each backend protects against.
 ---
 
-`firma run` wraps an agent in a sandbox, routes its outbound traffic through the Sidecar, and — on structural backends — *removes* the agent's ability to bypass that route. On macOS and WSL2, where OS-level network confinement is not yet available, enforcement is proxy-based: traffic is mediated only for cooperative HTTP clients that honor `HTTP_PROXY`. This distinction is the most important thing to understand before relying on `firma run` for security enforcement.
+`firma run` wraps an agent in a sandbox, routes its outbound traffic through the Sidecar, and — on structural backends — *removes* the agent's ability to bypass that route. On default macOS and WSL2 paths, enforcement is proxy-based: traffic is mediated only for cooperative HTTP clients that honor `HTTP_PROXY`. macOS also has an experimental sandbox-exec structural path behind an explicit environment gate. This distinction is the most important thing to understand before relying on `firma run` for security enforcement.
 
 ## The problem with proxy env vars alone
 
@@ -20,11 +20,11 @@ For a cooperative agent on a developer laptop, none of this matters. For a less-
 
 `firma run` has two materially different enforcement modes:
 
-**Structural confinement** (Linux `bwrap`, Linux `firecracker`): The sandbox removes the agent's ability to bypass the proxy at the OS level. The agent runs in a network namespace where the only reachable destination is the proxy bridge — raw sockets, DNS lookups, and child processes all dead-end inside the sandbox. No extra cooperation from the agent is required.
+**Structural confinement** (Linux `bwrap`; experimental macOS sandbox-exec mode): The sandbox removes the agent's ability to bypass the proxy at the OS level. In the Linux path, the agent runs in a network namespace where the only reachable destination is the proxy bridge — raw sockets, DNS lookups, and child processes all dead-end inside the sandbox. The macOS sandbox-exec experiment blocks external IP egress but remains loopback-scoped. No extra cooperation from the agent is required once the structural boundary is active.
 
 **Proxy-only / compatibility mode** (macOS `vz`, Windows/WSL2 `wsl2`): The agent runs in the host environment with `HTTP_PROXY` and related environment variables injected. Outbound mediation depends on the agent (or its HTTP library) respecting those variables. Raw sockets, proxy-env-unset children, and non-HTTP protocols can bypass the Sidecar.
 
-This is not a preference — it is a current capability gap. Structural parity is tracked separately by **FIR-72**.
+This is not a preference — it is a current capability gap. Cross-platform structural parity is tracked as a separate implementation effort. The macOS strategy decision is documented in [macOS structural confinement strategy](../macos-structural-strategy/): VZ guest-based structural parity is the primary path, while ESF-native controls are treated as targeted hardening rather than a standalone structural network boundary.
 
 To prevent false confidence, `firma run` **fails closed** when a non-structural backend is selected. You must explicitly opt in with `--allow-non-structural` (or set `run.allow_non_structural = true` in `firma.toml`) to acknowledge the limitations of proxy-only mode:
 
@@ -43,15 +43,15 @@ Without the opt-in, `firma run` prints a typed error explaining that the selecte
 
 `firma run` wraps the agent's launch in a sandbox. The specific mechanisms depend on the backend:
 
-### Structural backends (bwrap, firecracker)
+### Structural backends
 
-1. **Network namespace.** The agent runs in a sandbox where the only reachable network destination is a host-side process listening on `127.0.0.1:18080` (the proxy bridge).
-2. **Proxy bridge.** A small helper inside the sandbox listens on `127.0.0.1:18080` and forwards bytes over a Unix socket to the host's Sidecar (typically at `$XDG_RUNTIME_DIR/firma/sidecar.sock`). The agent's traffic has nowhere else to go.
-3. **DNS stub.** A stub resolver inside the sandbox answers DNS queries deterministically — only hostnames the Sidecar will route receive answers. Random outbound DNS is impossible.
+1. **Network boundary.** On Linux `bwrap`, the agent runs in a network namespace where the only reachable network destination is a host-side process listening on `127.0.0.1:18080` (the proxy bridge). On experimental macOS network-deny mode, the agent is restricted to loopback and external IP egress is blocked.
+2. **Proxy bridge.** A small helper inside the sandbox listens on `127.0.0.1:18080` and forwards bytes over a Unix socket to the host's Sidecar (typically at `$XDG_RUNTIME_DIR/firma/sidecar.sock`). On Linux `bwrap`, the agent's traffic has nowhere else to go. On experimental macOS network-deny mode, external IP egress is blocked but other loopback services remain a caveat.
+3. **DNS stub.** A stub resolver answers DNS queries deterministically. On Linux it runs inside the sandbox path. On macOS sandbox-exec structural mode, `firma run` starts a host-side refusal stub reachable on loopback. Random outbound DNS must not be a successful bypass.
 4. **`HTTP_PROXY` injection.** For agents that *do* respect proxy env vars, `firma run` sets `HTTP_PROXY=http://127.0.0.1:18080` so they don't need any code change.
 5. **Identity remap.** The agent runs under a sandbox user (configurable via `--identity-mode`), so it can't read host secrets via filesystem.
 
-The result is that an agent running under a structural `firma run` can attempt to bypass the proxy in any way it likes — open raw sockets, set its own DNS, fork a child process — and *every one of those attempts dead-ends inside the sandbox*. The only exit is through the Sidecar.
+The result is that an agent running under Linux structural `firma run` can attempt to bypass the proxy in any way it likes — open raw sockets, set its own DNS, fork a child process — and every one of those attempts dead-ends inside the sandbox. Experimental macOS network-deny mode provides a narrower claim: external IP egress is blocked, while host loopback remains a known limit. The stronger macOS VZ guest-backed path remains the planned parity direction.
 
 ### Proxy-only backends (vz, wsl2)
 
@@ -69,8 +69,8 @@ Network sandboxing primitives differ across OSes, so `firma run` selects a backe
 | Backend       | Platform | Mechanism                                    | Enforcement    |
 | ------------- | -------- | -------------------------------------------- | -------------- |
 | `bwrap`       | Linux    | Unprivileged user namespaces (bubblewrap)    | Structural     |
-| `firecracker` | Linux    | KVM micro-VM                                 | Structural     |
-| `vz`          | macOS    | HTTP proxy injection (`HTTP_PROXY`)         | Proxy-only     |
+| `firecracker` | Linux    | KVM micro-VM                                 | Planned        |
+| `vz`          | macOS    | Host proxy bridge + HTTP proxy injection (`HTTP_PROXY`); optional sandbox-exec network-deny | Proxy-only (default); experimental structural mode via `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1` |
 | `wsl2`        | Windows  | HTTP proxy injection (`HTTP_PROXY`)         | Proxy-only     |
 
 You can override the platform default with `--backend`:
@@ -79,7 +79,7 @@ You can override the platform default with `--backend`:
 firma run --profile generic --backend firecracker -- python my_agent.py
 ```
 
-The choice is mostly an operational one: bwrap is fast to start and lightweight; vz and wsl2 are the only options on their platforms; firecracker gives you a real micro-VM at the cost of slightly slower start time.
+The choice is mostly an operational one: bwrap is fast to start and lightweight; current `vz` and `wsl2` are compatibility options on their platforms; the Firecracker backend is planned as a VM path.
 
 `firma run` cannot escalate privileges. On Linux it requires unprivileged user namespaces (which most modern distros enable by default). On WSL hosts, implicit backend selection uses the `wsl2` compatibility backend instead of attempting `bwrap`.
 
@@ -90,11 +90,12 @@ The *strength* of the enforcement boundary differs by platform. This is the most
 | Platform        | Backend        | Enforcement mechanism                          | `structural` | Agent bypass possible?            | Requires `--allow-non-structural` |
 | --------------- | -------------- | ---------------------------------------------- | :----------: | --------------------------------- | --------------------------------- |
 | Linux (native)  | `bwrap`        | Network namespace; proxy bridge is only exit   | Yes          | No                                | No                                |
-| Linux (native)  | `firecracker`  | KVM micro-VM network isolation                 | Yes          | No                                | No                                |
-| macOS           | `vz`           | HTTP proxy injection (`HTTP_PROXY`)            | No           | Yes, if agent ignores `HTTP_PROXY` | Yes                               |
+| Linux (native)  | `firecracker`  | KVM micro-VM network isolation                 | Planned      | N/A                               | N/A                               |
+| macOS `vz` (default) | `vz`    | Host proxy bridge + HTTP proxy injection       | No           | Yes, if agent ignores `HTTP_PROXY` | Yes                               |
+| macOS `vz` (experimental) | `vz` | `sandbox-exec` with `deny network-outbound`; host bridge + DNS stub on loopback | Yes (experimental) | No for external IP egress; loopback-all scope is residual caveat | No; requires experimental env opt-in |
 | Windows / WSL2  | `wsl2`         | HTTP proxy injection (`HTTP_PROXY`)            | No           | Yes, if agent ignores `HTTP_PROXY` | Yes                               |
 
-**Structural** means the sandbox removes the agent's ability to bypass the proxy at the OS level — no extra cooperation from the agent is required. **Proxy-only** means enforcement depends on the agent (or its HTTP library) respecting `HTTP_PROXY`. On proxy-only backends, `firma run` fails closed unless you pass `--allow-non-structural` to acknowledge this limitation.
+**Structural** means the sandbox removes the agent's ability to bypass the proxy at the OS level — no extra cooperation from the agent is required. The experimental macOS mode is narrower than Linux because it is loopback-scoped rather than bridge-port-scoped. **Proxy-only** means enforcement depends on the agent (or its HTTP library) respecting `HTTP_PROXY`. On proxy-only backends, `firma run` fails closed unless you pass `--allow-non-structural` to acknowledge this limitation.
 
 `NO_PROXY` / `no_proxy` are cleared in all built-in profiles to prevent a host-env override from silently routing traffic around the proxy Sidecar on macOS and WSL2.
 
@@ -134,20 +135,20 @@ This prints the resolved config as JSON so you can see exactly what mounts, env 
 
 ## Capability handling
 
-The agent inside the sandbox does not handle the capability token. Instead:
+The preferred runtime shape keeps capability material outside the agent process:
 
-1. **Before** the sandbox starts, `firma run` obtains a capability — either by reading `--capability-file` (a TOML seed) or, in future iterations, by calling the Authority's `IssueCapability` gRPC.
-2. The capability is written to a path the host-side Sidecar reads via its `[capability_seed]` config — *outside* the sandbox.
-3. **Inside** the sandbox, the agent only sees `HTTP_PROXY=http://127.0.0.1:18080`. It never sees the token.
+1. **Before** the sandbox starts, the operator stages capability material for the Sidecar, normally through `[capability_seed]`.
+2. The host-side Sidecar reads that seed outside the sandbox.
+3. Inside the sandbox, the agent only needs `HTTP_PROXY=http://127.0.0.1:18080`.
 4. When the agent makes an outbound call, the Sidecar selects the right capability based on `(session_id, action_class, resource)` — which it knows from the request, not from the agent.
 
-This is a meaningful security property: a compromised agent **cannot exfiltrate the capability token**, because it never had it. The agent's only superpower is "ask the Sidecar to do this thing"; the Sidecar decides whether the capability covers it.
+That is the mode to use when token non-exposure is a security requirement. Current `firma run --capability-file` support is a compatibility path: the runtime reads the file and exports `FIRMA_CAPABILITY_TOKEN` / `FIRMA_CAPABILITY_FILE` into the wrapped process environment. Do not rely on token non-exposure in that mode. The long-term direction is to keep the agent's only superpower as "ask the Sidecar to do this thing"; the Sidecar decides whether the capability covers it.
 
 ## What the sandbox protects against
 
-What `firma run` protects against depends on the enforcement mode. The lists below reflect this: structural backends provide hard guarantees; proxy-only backends provide best-effort mediation.
+What `firma run` protects against depends on the enforcement mode. The lists below reflect this: Linux structural mode provides the strongest guarantee, experimental macOS network-deny mode blocks external IP egress with loopback caveats, and proxy-only backends provide best-effort mediation.
 
-### Structural backends (bwrap, firecracker) protect against:
+### Structural backends protect against:
 
 - An agent that intentionally tries to bypass the proxy with raw TCP / UDP / non-HTTP protocols.
 - An agent that spawns child processes that don't inherit `HTTP_PROXY`.
@@ -187,11 +188,13 @@ Use proxy env vars alone when:
 Use `firma run` when:
 
 - The agent is third-party, untrusted, or runs prompts you don't fully control.
-- You want a hard guarantee that nothing escapes the policy boundary.
+- You want a hard guarantee that nothing escapes the policy boundary, and you can use a structural backend.
 - You're shipping an agent runtime to others and the policy boundary is part of the product (rather than an add-on operators have to remember to wire up).
 - Your threat model includes a compromised agent process that might actively try to evade enforcement.
 
 **Important:** If you are on macOS or WSL2 and your threat model includes a non-cooperative or adversarial agent, proxy-only enforcement may not be sufficient. Consider running `firma run` on a Linux host with the `bwrap` backend for structural confinement, or accept the proxy-only limitation explicitly via `--allow-non-structural`.
+
+For the macOS parity decision, including the capability matrix and ESF caveats, see [macOS structural confinement strategy](../macos-structural-strategy/).
 
 For a worked example of using `firma run` to govern a real coding agent, see [Secure a local coding agent](../../guides/secure-a-coding-agent/).
 
