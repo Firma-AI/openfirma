@@ -12,6 +12,7 @@ use tonic::transport::Channel;
 
 use crate::authority_client::backoff::ExponentialBackoff;
 use crate::authority_client::readiness::ReadinessFlag;
+use crate::authority_credentials::ResolvedSidecarCredentials;
 
 /// Server-streaming task for revocation events.
 pub struct RevocationTask {
@@ -31,6 +32,8 @@ pub struct RevocationTask {
     pub readiness_grace_ms: u64,
     /// Last seen revocation timestamp for replay.
     pub last_event_time: Option<Timestamp>,
+    /// Credentials presented on each stream connection.
+    pub credentials: Option<ResolvedSidecarCredentials>,
 }
 
 impl RevocationTask {
@@ -74,6 +77,10 @@ impl RevocationTask {
         let response = client
             .watch_revocations(WatchRevocationsRequest {
                 since: self.last_event_time,
+                credentials: self
+                    .credentials
+                    .as_ref()
+                    .map(ResolvedSidecarCredentials::to_proto),
             })
             .await
             .map_err(|err| err.to_string())?;

@@ -21,6 +21,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 
+use crate::authority_credentials::ResolvedSidecarCredentials;
 use crate::config::AuthorityConfig;
 
 use self::backoff::ExponentialBackoff;
@@ -43,6 +44,8 @@ pub struct AuthorityDeps {
     pub cancel: CancellationToken,
     /// Authority client tuning.
     pub config: AuthorityConfig,
+    /// Credentials presented on each Authority RPC.
+    pub credentials: Option<ResolvedSidecarCredentials>,
     /// Policy bundle parser implementation.
     pub bundle_parser: Arc<dyn BundleParser + Send + Sync>,
 }
@@ -68,6 +71,7 @@ pub fn spawn_authority_client(deps: AuthorityDeps) -> AuthorityClientHandle {
         backoff: ExponentialBackoff::new(min, max),
         cancel: deps.cancel.clone(),
         bundle_parser: deps.bundle_parser,
+        credentials: deps.credentials.clone(),
     };
     let revocation_task = RevocationTask {
         channel: deps.channel,
@@ -78,6 +82,7 @@ pub fn spawn_authority_client(deps: AuthorityDeps) -> AuthorityClientHandle {
         fail_closed_on_disconnect: deps.config.revocation_fail_closed_on_disconnect,
         readiness_grace_ms: deps.config.revocation_readiness_grace_ms,
         last_event_time: None,
+        credentials: deps.credentials,
     };
 
     AuthorityClientHandle {

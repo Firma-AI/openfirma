@@ -86,7 +86,9 @@ impl DocInputs<'_> {
 pub fn render_firma_toml(text: &str, inputs: &DocInputs<'_>) -> Result<String> {
     let mut doc = parse_or_empty(text)?;
     merge_firma_toml(&mut doc, inputs)?;
-    Ok(doc.to_string())
+    let mut rendered = doc.to_string();
+    append_remote_credentials_hint(&mut rendered, inputs);
+    Ok(rendered)
 }
 
 /// Parse `text` as a `mapping-rules.toml` document, merge `inputs`, and
@@ -250,6 +252,26 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
     }
 
     Ok(())
+}
+
+fn append_remote_credentials_hint(rendered: &mut String, inputs: &DocInputs<'_>) {
+    if !matches!(inputs.mode, Mode::AgentRemote)
+        || rendered.contains("[sidecar.authority.credentials]")
+    {
+        return;
+    }
+    if !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+    rendered.push_str(
+        "\n# Uncomment when connecting to an Authority that requires a Sidecar PSK.\n\
+         # The pre-shared key is minted by the Authority operator.\n\
+         # [sidecar.authority.credentials]\n\
+         # workspace_id = \"ws-acme\"\n\
+         # sidecar_id = \"sc-eu-1\"\n\
+         # pre_shared_key_env = \"FIRMA_SIDECAR_PSK\"\n\
+         # pre_shared_key_path = \"/run/secrets/firma-sidecar-psk\"\n",
+    );
 }
 
 // ── [run] section ─────────────────────────────────────────────────────────────

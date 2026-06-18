@@ -17,6 +17,7 @@ use p256::pkcs8::{EncodePrivateKey, LineEnding};
 use sha2::{Digest, Sha256};
 
 use crate::error::RunError;
+use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 const MINIMAL_MAPPING_RULES_TOML: &str = "\
 [[rules]]
@@ -153,6 +154,9 @@ pub struct SynthesizeRequest<'a> {
     /// The sidecar uses it to verify the per-session capability seed.
     /// `None` leaves any existing template value untouched.
     pub authority_pub_key: Option<&'a Path>,
+    /// Sidecar credentials to inject into `[sidecar.authority.credentials]`.
+    /// `None` leaves any existing template value untouched.
+    pub authority_credentials: Option<&'a SidecarCredentialsConfig>,
     /// Path of the per-session capability seed minted by `firma run`, appended
     /// to `[sidecar.capability_seed].paths`. `None` when no seed was minted
     /// (e.g. `--capability-file` was passed).
@@ -219,6 +223,9 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
     }
     if let Some(key) = req.authority_pub_key {
         override_authority_pub_key(&mut value, key)?;
+    }
+    if let Some(credentials) = req.authority_credentials {
+        override_authority_credentials(&mut value, credentials)?;
     }
     // Standalone synthesis (no `authority_pub_key` override, e.g. tests or
     // operator templates) may still need `[sidecar.authority].public_key_path`
@@ -342,6 +349,47 @@ fn override_authority_url(value: &mut toml::Value, url: &str) -> Result<(), RunE
     Ok(())
 }
 
+fn override_authority_credentials(
+    value: &mut toml::Value,
+    credentials: &SidecarCredentialsConfig,
+) -> Result<(), RunError> {
+    let sidecar = sidecar_table_mut(value)?;
+    let authority = sidecar
+        .entry("authority".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[sidecar.authority] is not a table".into()))?;
+    let entry = authority
+        .entry("credentials".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+    let table = entry.as_table_mut().ok_or_else(|| {
+        RunError::Internal("[sidecar.authority.credentials] is not a table".into())
+    })?;
+    table.insert(
+        "workspace_id".to_string(),
+        toml::Value::String(credentials.workspace_id.clone()),
+    );
+    table.insert(
+        "sidecar_id".to_string(),
+        toml::Value::String(credentials.sidecar_id.clone()),
+    );
+    if let Some(env_name) = credentials.pre_shared_key_env.as_ref() {
+        table.insert(
+            "pre_shared_key_env".to_string(),
+            toml::Value::String(env_name.clone()),
+        );
+        table.remove("pre_shared_key_path");
+    }
+    if let Some(path) = credentials.pre_shared_key_path.as_ref() {
+        table.insert(
+            "pre_shared_key_path".to_string(),
+            toml::Value::String(path.display().to_string()),
+        );
+        table.remove("pre_shared_key_env");
+    }
+    Ok(())
+}
+
 fn normalize_to_sectioned_sidecar(value: &mut toml::Value) -> Result<(), RunError> {
     let root = value
         .as_table_mut()
@@ -366,7 +414,9 @@ const REBASE_SCALAR_FIELDS: &[&[&str]] = &[
     &["audit", "file_path"],
     &["policy", "dir"],
     &["mapping", "rules_path"],
+    &["authority", "ca_cert_path"],
     &["authority", "public_key_path"],
+    &["authority", "credentials", "pre_shared_key_path"],
 ];
 
 /// Resource list fields anchored to the template's config dir.
@@ -388,16 +438,10 @@ fn rebase_template_resource_paths(
 }
 
 fn rebase_scalar_in_table(sidecar: &mut toml::value::Table, path: &[&str], template_dir: &Path) {
-    let Some((table_key, field_key)) = path.split_first() else {
+    let Some((field_key, parents)) = path.split_last() else {
         return;
     };
-    let Some(field_key) = field_key.first() else {
-        return;
-    };
-    let Some(table) = sidecar
-        .get_mut(*table_key)
-        .and_then(toml::Value::as_table_mut)
-    else {
+    let Some(table) = nested_table_mut(sidecar, parents) else {
         return;
     };
     let Some(entry) = table.get_mut(*field_key) else {
@@ -409,6 +453,17 @@ fn rebase_scalar_in_table(sidecar: &mut toml::value::Table, path: &[&str], templ
     if let Some(rebased) = rebase_relative(text, template_dir) {
         *entry = toml::Value::String(rebased);
     }
+}
+
+fn nested_table_mut<'a>(
+    table: &'a mut toml::value::Table,
+    path: &[&str],
+) -> Option<&'a mut toml::value::Table> {
+    let mut current = table;
+    for key in path {
+        current = current.get_mut(*key)?.as_table_mut()?;
+    }
+    Some(current)
 }
 
 fn rebase_array_in_table(sidecar: &mut toml::value::Table, path: &[&str], template_dir: &Path) {

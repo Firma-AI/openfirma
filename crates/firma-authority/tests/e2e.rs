@@ -104,6 +104,7 @@ async fn issue_capability_e2e() {
         resource_scope: "*".to_string(),
         session_id: "test_session".to_string(),
         requested_ttl_seconds: 300,
+        credentials: None,
     };
 
     let response = client.issue_capability(request).await.expect("RPC failed");
@@ -128,6 +129,7 @@ async fn watch_policy_bundle_streams_on_connect() {
     let mut stream = client
         .watch_policy_bundle(WatchPolicyBundleRequest {
             current_version: String::new(),
+            credentials: None,
         })
         .await
         .expect("RPC failed")
@@ -157,6 +159,7 @@ async fn watch_policy_bundle_pushes_on_file_change() {
     let mut stream = client
         .watch_policy_bundle(WatchPolicyBundleRequest {
             current_version: String::new(),
+            credentials: None,
         })
         .await
         .expect("RPC failed")
@@ -196,7 +199,10 @@ async fn watch_revocations_streams_new_events() {
         .expect("failed to connect");
 
     let mut stream = client
-        .watch_revocations(WatchRevocationsRequest { since: None })
+        .watch_revocations(WatchRevocationsRequest {
+            since: None,
+            credentials: None,
+        })
         .await
         .expect("RPC failed")
         .into_inner();

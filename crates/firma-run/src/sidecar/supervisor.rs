@@ -24,6 +24,7 @@ use wait_timeout::ChildExt;
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 use crate::identity::SandboxId;
+use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 /// Per-spec default ready-line wait. CLI flag overrides this value.
 pub const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
@@ -55,6 +56,9 @@ pub struct SpawnRequest<'a> {
     /// `[sidecar.authority].public_key_path` so the sidecar can verify the
     /// per-session capability seed. `None` leaves existing.
     pub authority_pub_key: Option<PathBuf>,
+    /// Sidecar credentials injected into `[sidecar.authority.credentials]`.
+    /// `None` leaves existing.
+    pub authority_credentials: Option<SidecarCredentialsConfig>,
     /// Path of the per-session capability seed minted by `firma run`, threaded
     /// into `[sidecar.capability_seed].paths` during synthesis. `None` when no
     /// seed was minted (e.g. `--capability-file` was passed).
@@ -167,6 +171,7 @@ impl SidecarSupervisor {
                 authority_url: req.authority_url,
                 authority_ca_cert: req.authority_ca_cert.as_deref(),
                 authority_pub_key: req.authority_pub_key.as_deref(),
+                authority_credentials: req.authority_credentials.as_ref(),
                 capability_seed_path: req.capability_seed_path.as_deref(),
                 audit_fallback_path: req.audit_fallback_path.as_deref(),
                 monitor_mode: req.monitor_mode,

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::RunError;
+use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 /// Client-side connect coordinates lifted from `[sidecar.authority]`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -20,6 +21,8 @@ pub struct AuthorityConnectSection {
     pub ca_cert_path: Option<PathBuf>,
     /// Path to the authority's Ed25519 public key for PASETO token verification.
     pub public_key_path: Option<PathBuf>,
+    /// Sidecar credentials presented on Authority RPCs.
+    pub credentials: Option<SidecarCredentialsConfig>,
 }
 
 /// Snapshot of routing-relevant sections.
@@ -52,6 +55,8 @@ struct SidecarAuthorityOnDisk {
     ca_cert_path: Option<PathBuf>,
     #[serde(default)]
     public_key_path: Option<PathBuf>,
+    #[serde(default)]
+    credentials: Option<SidecarCredentialsConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -113,8 +118,16 @@ pub fn read_authority(path: &Path) -> Result<Option<AuthoritySection>, RunError>
             url: a.url,
             ca_cert_path: a.ca_cert_path,
             public_key_path: a.public_key_path,
+            credentials: a.credentials,
         })
-        .filter(|c| c.url.is_some() || c.ca_cert_path.is_some() || c.public_key_path.is_some());
+        .map(validate_connect_section)
+        .transpose()?
+        .filter(|c| {
+            c.url.is_some()
+                || c.ca_cert_path.is_some()
+                || c.public_key_path.is_some()
+                || c.credentials.is_some()
+        });
     if !local && connect.is_none() {
         return Ok(None);
     }
@@ -123,6 +136,17 @@ pub fn read_authority(path: &Path) -> Result<Option<AuthoritySection>, RunError>
         listen_addr,
         connect,
     }))
+}
+
+fn validate_connect_section(
+    section: AuthorityConnectSection,
+) -> Result<AuthorityConnectSection, RunError> {
+    if let Some(ref credentials) = section.credentials {
+        credentials.validate().map_err(|reason| {
+            RunError::ConfigValidation(format!("sidecar.authority.credentials: {reason}"))
+        })?;
+    }
+    Ok(section)
 }
 
 #[cfg(test)]
@@ -167,5 +191,26 @@ mod tests {
             section.connect.as_ref().and_then(|c| c.url.as_deref()),
             Some("https://x")
         );
+    }
+
+    #[test]
+    fn sidecar_authority_credentials_are_lifted_into_connect() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("firma.toml");
+        fs::write(
+            &path,
+            "[sidecar.authority.credentials]\n\
+             workspace_id = \"ws\"\n\
+             sidecar_id = \"sc\"\n\
+             pre_shared_key_env = \"FIRMA_PSK\"\n",
+        )
+        .unwrap();
+        let section = read_authority(&path).unwrap().unwrap();
+        let credentials = section
+            .connect
+            .and_then(|connect| connect.credentials)
+            .expect("credentials");
+        assert_eq!(credentials.workspace_id, "ws");
+        assert_eq!(credentials.sidecar_id, "sc");
     }
 }

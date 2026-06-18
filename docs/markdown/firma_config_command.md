@@ -132,6 +132,12 @@ ca_cert_path    = "/path/to/state/tls/authority-ca.crt"
 public_key_path = "/path/to/state/authority.pub"
 # ... plus connect_timeout_secs / reconnect_* / revocation_* tuning
 
+# Uncomment for remote Authorities that require Sidecar PSK authentication.
+# [sidecar.authority.credentials]
+# workspace_id = "ws-acme"
+# sidecar_id = "sc-eu-1"
+# pre_shared_key_env = "FIRMA_SIDECAR_PSK"
+
 [sidecar.preflight]
 agent_id          = "my-agent"
 requested_actions = ["credential.read", "code.read", ...]

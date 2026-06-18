@@ -280,6 +280,7 @@ async fn mtls_allow_listed_client_receives_policy_bundle() {
         tokio::time::Duration::from_secs(5),
         grpc.watch_policy_bundle(WatchPolicyBundleRequest {
             current_version: String::new(),
+            credentials: None,
         }),
     )
     .await
@@ -332,6 +333,7 @@ async fn mtls_non_allow_listed_client_rejected_at_handshake() {
         tokio::time::Duration::from_secs(5),
         grpc.watch_policy_bundle(WatchPolicyBundleRequest {
             current_version: String::new(),
+            credentials: None,
         }),
     )
     .await
@@ -360,6 +362,7 @@ async fn mtls_missing_client_cert_rejected_at_handshake() {
         tokio::time::Duration::from_secs(5),
         grpc.watch_policy_bundle(WatchPolicyBundleRequest {
             current_version: String::new(),
+            credentials: None,
         }),
     )
     .await
@@ -400,6 +403,7 @@ async fn mtls_cn_identity_matched_when_no_san() {
         tokio::time::Duration::from_secs(5),
         grpc.watch_policy_bundle(WatchPolicyBundleRequest {
             current_version: String::new(),
+            credentials: None,
         }),
     )
     .await
@@ -455,6 +459,7 @@ async fn mtls_wrong_client_ca_rejected_at_handshake() {
         tokio::time::Duration::from_secs(5),
         grpc.watch_policy_bundle(WatchPolicyBundleRequest {
             current_version: String::new(),
+            credentials: None,
         }),
     )
     .await
