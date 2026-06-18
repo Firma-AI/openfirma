@@ -111,9 +111,13 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
 
-      - name: Install cargo-nextest
+      - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@30b5ca8b54e1dcffd9548bc87ede1531310fdc67 # v1.20.0
-      - run: cargo binstall -y --locked cargo-nextest@$CARGO_NEXTEST_VERSION
+      - name: Install cargo-nextest
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo binstall -y --force --locked cargo-nextest@$CARGO_NEXTEST_VERSION
+          cargo nextest --version
         shell: bash
 
       - name: Test
