@@ -49,7 +49,7 @@ jobs:
       - name: Install cargo-fuzz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: cargo binstall --no-confirm --locked cargo-fuzz@$CARGO_FUZZ_VERSION
+        run: command -v cargo-fuzz || cargo binstall --no-confirm --force --locked cargo-fuzz@$CARGO_FUZZ_VERSION
 
       - name: Run ${{ matrix.target }}
         env:

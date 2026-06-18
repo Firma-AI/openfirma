@@ -25,7 +25,7 @@ jobs:
       - name: Load tool versions
         shell: bash
         run: grep -E '^[A-Z0-9_]+=' tool-versions.env >> "$GITHUB_ENV"
-      - run: cargo binstall -y --locked cargo-audit@$CARGO_AUDIT_VERSION
+      - run: command -v cargo-audit || cargo binstall -y --force --locked cargo-audit@$CARGO_AUDIT_VERSION
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: cargo audit --deny warnings
@@ -123,9 +123,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          cargo binstall -y --force --locked cargo-nextest@$CARGO_NEXTEST_VERSION
-          cargo nextest --version
+          command -v cargo-nextest || cargo binstall -y --force --locked cargo-nextest@$CARGO_NEXTEST_VERSION
         shell: bash
 
       - name: Test
