@@ -77,7 +77,10 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
     )
     .map_err(|e| anyhow::anyhow!("failed to build mapping table: {e}"))?;
 
-    let normalizer = pipeline::IntentNormalizer::new(table);
+    let normalizer = pipeline::IntentNormalizer::with_custom_query_params(
+        table,
+        config.audit.redact_query_params.clone(),
+    );
 
     let revocation_store = Arc::new(BloomLruRevocationStore::new(config.revocation.into()));
     tracing::debug!(

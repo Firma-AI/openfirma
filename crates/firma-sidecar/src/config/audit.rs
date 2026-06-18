@@ -68,6 +68,13 @@ pub struct AuditConfig {
     /// Mutually exclusive with `signing_key_path`.
     #[serde(default)]
     pub signing_key_env: Option<String>,
+    /// Additional query parameter names to redact in audit logs.
+    /// Case-insensitive. Extends the built-in deny-list:
+    /// `api_key`, `apikey`, `key`, `token`, `access_token`,
+    /// `refresh_token`, `auth`, `password`, `secret`, `signature`,
+    /// `sig`, `sas`.
+    #[serde(default)]
+    pub redact_query_params: Vec<String>,
 }
 
 impl AuditConfig {
@@ -147,6 +154,7 @@ impl Default for AuditConfig {
             wal_max_bytes: default_wal_max_bytes(),
             signing_key_path: None,
             signing_key_env: None,
+            redact_query_params: Vec::new(),
         }
     }
 }

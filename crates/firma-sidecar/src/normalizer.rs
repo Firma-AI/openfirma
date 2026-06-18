@@ -70,6 +70,23 @@ const SENSITIVE_HEADERS: &[&str] = &[
     "x-api-key",
 ];
 
+/// Built-in deny-list of sensitive query parameter names.
+/// Case-insensitive comparison is used when matching.
+const DEFAULT_SENSITIVE_QUERY_PARAMS: &[&str] = &[
+    "api_key",
+    "apikey",
+    "key",
+    "token",
+    "access_token",
+    "refresh_token",
+    "auth",
+    "password",
+    "secret",
+    "signature",
+    "sig",
+    "sas",
+];
+
 /// Output of the intent normalizer — contains only the fields the normalizer can fill.
 ///
 /// Missing fields (`capability`, `agent_id`, `session_id`) are populated by the pipeline
@@ -129,6 +146,7 @@ pub struct RawRequest {
 #[derive(Debug)]
 pub struct IntentNormalizer {
     mapping_table: MappingTable,
+    sensitive_query_params: &'static [&'static str],
 }
 
 #[cfg(not(miri))]
@@ -146,7 +164,38 @@ fn runtime_timestamp() -> DateTime<Utc> {
 impl IntentNormalizer {
     #[must_use]
     pub fn new(mapping_table: MappingTable) -> Self {
-        Self { mapping_table }
+        Self {
+            mapping_table,
+            sensitive_query_params: DEFAULT_SENSITIVE_QUERY_PARAMS,
+        }
+    }
+
+    #[must_use]
+    pub fn with_sensitive_query_params(
+        mapping_table: MappingTable,
+        params: &'static [&'static str],
+    ) -> Self {
+        Self {
+            mapping_table,
+            sensitive_query_params: params,
+        }
+    }
+
+    #[must_use]
+    pub fn with_custom_query_params(
+        mapping_table: MappingTable,
+        custom_params: Vec<String>,
+    ) -> Self {
+        let mut merged: Vec<&'static str> = DEFAULT_SENSITIVE_QUERY_PARAMS.to_vec();
+        for param in custom_params {
+            if !merged.iter().any(|p| p.eq_ignore_ascii_case(&param)) {
+                merged.push(Box::leak(param.into_boxed_str()));
+            }
+        }
+        Self {
+            mapping_table,
+            sensitive_query_params: Box::leak(merged.into_boxed_slice()),
+        }
     }
 
     /// Normalize a raw request into a [`NormalizedEnvelope`].
@@ -166,10 +215,20 @@ impl IntentNormalizer {
         &self,
         request: &RawRequest,
     ) -> Result<NormalizedEnvelope, EnforcementDecision> {
-        let path_without_query = request
+        let (path_without_query, query_string) = request
             .path
             .split_once('?')
-            .map_or(request.path.as_str(), |(p, _)| p);
+            .map_or((request.path.as_str(), ""), |(p, q)| (p, q));
+
+        let (sanitized_path, query_params) = if query_string.is_empty() {
+            (request.path.clone(), HashMap::new())
+        } else {
+            let sanitized_query = sanitize_query_string(query_string, self.sensitive_query_params);
+            let sanitized_path = format!("{path_without_query}?{sanitized_query}");
+            let query_params = parse_query_string(query_string);
+            (sanitized_path, query_params)
+        };
+
         let match_result =
             self.mapping_table
                 .find_match(&request.method, &request.host, path_without_query);
@@ -180,7 +239,7 @@ impl IntentNormalizer {
                 let raw_transport = if request.is_https { "https" } else { "http" };
                 let mut resource = BTreeMap::new();
                 resource.insert("host".to_string(), request.host.clone());
-                resource.insert("path".to_string(), request.path.clone());
+                resource.insert("path".to_string(), sanitized_path);
                 if let Some(provider) = provider_for_host(&request.host) {
                     resource.insert("provider".to_string(), provider.to_string());
                 }
@@ -202,7 +261,7 @@ impl IntentNormalizer {
                             method: http_method,
                             headers: sanitize_headers(&request.headers),
                             body: request.body.clone(),
-                            query: HashMap::new(),
+                            query: query_params,
                         }),
                         raw_transport: raw_transport.to_string(),
                         raw_action_ref,
@@ -250,6 +309,38 @@ fn parse_http_method(method: &str) -> Option<HttpMethod> {
     }
 }
 
+fn sanitize_query_string(query: &str, sensitive_params: &[&str]) -> String {
+    let pairs: Vec<&str> = query.split('&').collect();
+    let mut result = Vec::with_capacity(pairs.len());
+
+    for pair in pairs {
+        if let Some(eq_pos) = pair.find('=') {
+            let key = &pair[..eq_pos];
+            let is_sensitive = sensitive_params.iter().any(|p| p.eq_ignore_ascii_case(key));
+            if is_sensitive {
+                result.push(format!("{key}=<redacted>"));
+            } else {
+                result.push(pair.to_string());
+            }
+        } else {
+            result.push(pair.to_string());
+        }
+    }
+
+    result.join("&")
+}
+
+fn parse_query_string(query: &str) -> HashMap<String, String> {
+    query
+        .split('&')
+        .filter_map(|pair| {
+            let eq_pos = pair.find('=')?;
+            let key = pair[..eq_pos].to_string();
+            let value = pair[eq_pos + 1..].to_string();
+            Some((key, value))
+        })
+        .collect()
+}
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
