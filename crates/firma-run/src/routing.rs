@@ -1202,6 +1202,8 @@ mod non_structural_env_tests {
             url: "https://authority.test".to_string(),
             ca_cert_path: None,
             pub_key_path: None,
+            credentials: None,
+            credentials_config: None,
             supervisor: None,
         };
         let structural_proof = crate::backend::EnforcementProof {
@@ -1268,6 +1270,8 @@ mod non_structural_env_tests {
             url: "https://authority.test".to_string(),
             ca_cert_path: None,
             pub_key_path: None,
+            credentials: None,
+            credentials_config: None,
             supervisor: None,
         };
         let proof = crate::backend::EnforcementProof {
