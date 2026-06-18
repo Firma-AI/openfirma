@@ -20,7 +20,9 @@ jobs:
     name: ShellCheck install.sh
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Run shellcheck
@@ -30,7 +32,9 @@ jobs:
     name: PSScriptAnalyzer install.ps1
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       - name: Install PSScriptAnalyzer
         shell: pwsh
         run: Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser

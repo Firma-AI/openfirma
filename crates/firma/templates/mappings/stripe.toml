@@ -13,8 +13,8 @@
 
 # Plain CONNECT (no MITM): host carries port.
 [[rules]]
-method       = "CONNECT"
-host         = "api.stripe.com:443"
+method = "CONNECT"
+host = "api.stripe.com:443"
 action_class = "payment.read"
 
 # ── REST rules (bare host — post-MITM only) ───────────────────────────────────
@@ -22,541 +22,541 @@ action_class = "payment.read"
 # --- payment.read (14) -----------------------------------------------------
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/balance"
+host = "api.stripe.com"
+path = "/v1/balance"
 action_class = "payment.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/balance/history"
+host = "api.stripe.com"
+path = "/v1/balance/history"
 action_class = "payment.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/charges"
+host = "api.stripe.com"
+path = "/v1/charges"
 action_class = "payment.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/charges/*"
+host = "api.stripe.com"
+path = "/v1/charges/*"
 action_class = "payment.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/payment_intents"
+host = "api.stripe.com"
+path = "/v1/payment_intents"
 action_class = "payment.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/payment_intents/*"
+host = "api.stripe.com"
+path = "/v1/payment_intents/*"
 action_class = "payment.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/refunds"
+host = "api.stripe.com"
+path = "/v1/refunds"
 action_class = "payment.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/refunds/*"
+host = "api.stripe.com"
+path = "/v1/refunds/*"
 action_class = "payment.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/payouts"
+host = "api.stripe.com"
+path = "/v1/payouts"
 action_class = "payment.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/payouts/*"
+host = "api.stripe.com"
+path = "/v1/payouts/*"
 action_class = "payment.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/disputes"
+host = "api.stripe.com"
+path = "/v1/disputes"
 action_class = "payment.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/disputes/*"
+host = "api.stripe.com"
+path = "/v1/disputes/*"
 action_class = "payment.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/events"
+host = "api.stripe.com"
+path = "/v1/events"
 action_class = "payment.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/events/*"
+host = "api.stripe.com"
+path = "/v1/events/*"
 action_class = "payment.read"
 
 # --- payment.transfer (6) --------------------------------------------------
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/payment_intents"
+host = "api.stripe.com"
+path = "/v1/payment_intents"
 action_class = "payment.transfer"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/payment_intents/*/confirm"
+host = "api.stripe.com"
+path = "/v1/payment_intents/*/confirm"
 action_class = "payment.transfer"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/payment_intents/*/capture"
+host = "api.stripe.com"
+path = "/v1/payment_intents/*/capture"
 action_class = "payment.transfer"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/payment_intents/*/increment_authorization"
+host = "api.stripe.com"
+path = "/v1/payment_intents/*/increment_authorization"
 action_class = "payment.transfer"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/charges"
+host = "api.stripe.com"
+path = "/v1/charges"
 action_class = "payment.transfer"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/charges/*/capture"
+host = "api.stripe.com"
+path = "/v1/charges/*/capture"
 action_class = "payment.transfer"
 
 # --- payment.cancel (1) ----------------------------------------------------
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/payment_intents/*/cancel"
+host = "api.stripe.com"
+path = "/v1/payment_intents/*/cancel"
 action_class = "payment.cancel"
 
 # --- payment.refund (3) ----------------------------------------------------
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/refunds"
+host = "api.stripe.com"
+path = "/v1/refunds"
 action_class = "payment.refund"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/refunds/*"
+host = "api.stripe.com"
+path = "/v1/refunds/*"
 action_class = "payment.refund"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/refunds/*/cancel"
+host = "api.stripe.com"
+path = "/v1/refunds/*/cancel"
 action_class = "payment.refund"
 
 # --- payment.payout (4) ----------------------------------------------------
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/payouts"
+host = "api.stripe.com"
+path = "/v1/payouts"
 action_class = "payment.payout"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/payouts/*/cancel"
+host = "api.stripe.com"
+path = "/v1/payouts/*/cancel"
 action_class = "payment.payout"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/transfers"
+host = "api.stripe.com"
+path = "/v1/transfers"
 action_class = "payment.payout"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/transfers/*/reversals"
+host = "api.stripe.com"
+path = "/v1/transfers/*/reversals"
 action_class = "payment.payout"
 
 # --- payment.dispute (2) ---------------------------------------------------
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/disputes/*"
+host = "api.stripe.com"
+path = "/v1/disputes/*"
 action_class = "payment.dispute"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/disputes/*/close"
+host = "api.stripe.com"
+path = "/v1/disputes/*/close"
 action_class = "payment.dispute"
 
 # --- payment.subscription (10) ---------------------------------------------
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/subscriptions"
+host = "api.stripe.com"
+path = "/v1/subscriptions"
 action_class = "payment.subscription"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/subscriptions/*"
+host = "api.stripe.com"
+path = "/v1/subscriptions/*"
 action_class = "payment.subscription"
 
 [[rules]]
 method = "DELETE"
-host   = "api.stripe.com"
-path   = "/v1/subscriptions/*"
+host = "api.stripe.com"
+path = "/v1/subscriptions/*"
 action_class = "payment.subscription"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/invoices"
+host = "api.stripe.com"
+path = "/v1/invoices"
 action_class = "payment.subscription"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/invoices/*"
+host = "api.stripe.com"
+path = "/v1/invoices/*"
 action_class = "payment.subscription"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/invoices/*/finalize"
+host = "api.stripe.com"
+path = "/v1/invoices/*/finalize"
 action_class = "payment.subscription"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/invoices/*/pay"
+host = "api.stripe.com"
+path = "/v1/invoices/*/pay"
 action_class = "payment.subscription"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/invoices/*/void"
+host = "api.stripe.com"
+path = "/v1/invoices/*/void"
 action_class = "payment.subscription"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/invoices/*/send"
+host = "api.stripe.com"
+path = "/v1/invoices/*/send"
 action_class = "payment.subscription"
 
 [[rules]]
 method = "DELETE"
-host   = "api.stripe.com"
-path   = "/v1/invoices/*"
+host = "api.stripe.com"
+path = "/v1/invoices/*"
 action_class = "payment.subscription"
 
 # --- payment.method.setup (6) ----------------------------------------------
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/setup_intents"
+host = "api.stripe.com"
+path = "/v1/setup_intents"
 action_class = "payment.method.setup"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/setup_intents/*"
+host = "api.stripe.com"
+path = "/v1/setup_intents/*"
 action_class = "payment.method.setup"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/setup_intents/*/confirm"
+host = "api.stripe.com"
+path = "/v1/setup_intents/*/confirm"
 action_class = "payment.method.setup"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/setup_intents/*/cancel"
+host = "api.stripe.com"
+path = "/v1/setup_intents/*/cancel"
 action_class = "payment.method.setup"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/setup_intents"
+host = "api.stripe.com"
+path = "/v1/setup_intents"
 action_class = "payment.method.setup"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/setup_intents/*"
+host = "api.stripe.com"
+path = "/v1/setup_intents/*"
 action_class = "payment.method.setup"
 
 # --- payment.method.manage (6) ---------------------------------------------
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/payment_methods"
+host = "api.stripe.com"
+path = "/v1/payment_methods"
 action_class = "payment.method.manage"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/payment_methods/*"
+host = "api.stripe.com"
+path = "/v1/payment_methods/*"
 action_class = "payment.method.manage"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/payment_methods/*/attach"
+host = "api.stripe.com"
+path = "/v1/payment_methods/*/attach"
 action_class = "payment.method.manage"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/payment_methods/*/detach"
+host = "api.stripe.com"
+path = "/v1/payment_methods/*/detach"
 action_class = "payment.method.manage"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/payment_methods"
+host = "api.stripe.com"
+path = "/v1/payment_methods"
 action_class = "payment.method.manage"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/payment_methods/*"
+host = "api.stripe.com"
+path = "/v1/payment_methods/*"
 action_class = "payment.method.manage"
 
 # --- payment.catalog.write (12) --------------------------------------------
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/products"
+host = "api.stripe.com"
+path = "/v1/products"
 action_class = "payment.catalog.write"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/products/*"
+host = "api.stripe.com"
+path = "/v1/products/*"
 action_class = "payment.catalog.write"
 
 [[rules]]
 method = "DELETE"
-host   = "api.stripe.com"
-path   = "/v1/products/*"
+host = "api.stripe.com"
+path = "/v1/products/*"
 action_class = "payment.catalog.write"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/prices"
+host = "api.stripe.com"
+path = "/v1/prices"
 action_class = "payment.catalog.write"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/prices/*"
+host = "api.stripe.com"
+path = "/v1/prices/*"
 action_class = "payment.catalog.write"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/coupons"
+host = "api.stripe.com"
+path = "/v1/coupons"
 action_class = "payment.catalog.write"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/coupons/*"
+host = "api.stripe.com"
+path = "/v1/coupons/*"
 action_class = "payment.catalog.write"
 
 [[rules]]
 method = "DELETE"
-host   = "api.stripe.com"
-path   = "/v1/coupons/*"
+host = "api.stripe.com"
+path = "/v1/coupons/*"
 action_class = "payment.catalog.write"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/promotion_codes"
+host = "api.stripe.com"
+path = "/v1/promotion_codes"
 action_class = "payment.catalog.write"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/promotion_codes/*"
+host = "api.stripe.com"
+path = "/v1/promotion_codes/*"
 action_class = "payment.catalog.write"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/payment_links"
+host = "api.stripe.com"
+path = "/v1/payment_links"
 action_class = "payment.catalog.write"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/payment_links/*"
+host = "api.stripe.com"
+path = "/v1/payment_links/*"
 action_class = "payment.catalog.write"
 
 # --- payment.tax (8) -------------------------------------------------------
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/tax/calculations"
+host = "api.stripe.com"
+path = "/v1/tax/calculations"
 action_class = "payment.tax"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/tax/transactions"
+host = "api.stripe.com"
+path = "/v1/tax/transactions"
 action_class = "payment.tax"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/tax/calculations/*"
+host = "api.stripe.com"
+path = "/v1/tax/calculations/*"
 action_class = "payment.tax"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/tax/transactions/*"
+host = "api.stripe.com"
+path = "/v1/tax/transactions/*"
 action_class = "payment.tax"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/tax_rates"
+host = "api.stripe.com"
+path = "/v1/tax_rates"
 action_class = "payment.tax"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/tax_rates/*"
+host = "api.stripe.com"
+path = "/v1/tax_rates/*"
 action_class = "payment.tax"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/tax_rates"
+host = "api.stripe.com"
+path = "/v1/tax_rates"
 action_class = "payment.tax"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/tax_rates/*"
+host = "api.stripe.com"
+path = "/v1/tax_rates/*"
 action_class = "payment.tax"
 
 # --- customer.read (4) -----------------------------------------------------
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/customers"
+host = "api.stripe.com"
+path = "/v1/customers"
 action_class = "customer.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/customers/*"
+host = "api.stripe.com"
+path = "/v1/customers/*"
 action_class = "customer.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/customers/*/payment_methods"
+host = "api.stripe.com"
+path = "/v1/customers/*/payment_methods"
 action_class = "customer.read"
 
 [[rules]]
 method = "GET"
-host   = "api.stripe.com"
-path   = "/v1/customers/search"
+host = "api.stripe.com"
+path = "/v1/customers/search"
 action_class = "customer.read"
 
 # --- customer.write (3) ----------------------------------------------------
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/customers"
+host = "api.stripe.com"
+path = "/v1/customers"
 action_class = "customer.write"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/customers/*"
+host = "api.stripe.com"
+path = "/v1/customers/*"
 action_class = "customer.write"
 
 [[rules]]
 method = "DELETE"
-host   = "api.stripe.com"
-path   = "/v1/customers/*"
+host = "api.stripe.com"
+path = "/v1/customers/*"
 action_class = "customer.write"
 
 # --- account.permission.change (9) -----------------------------------------
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/webhook_endpoints"
+host = "api.stripe.com"
+path = "/v1/webhook_endpoints"
 action_class = "account.permission.change"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/webhook_endpoints/*"
+host = "api.stripe.com"
+path = "/v1/webhook_endpoints/*"
 action_class = "account.permission.change"
 
 [[rules]]
 method = "DELETE"
-host   = "api.stripe.com"
-path   = "/v1/webhook_endpoints/*"
+host = "api.stripe.com"
+path = "/v1/webhook_endpoints/*"
 action_class = "account.permission.change"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/accounts"
+host = "api.stripe.com"
+path = "/v1/accounts"
 action_class = "account.permission.change"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/accounts/*"
+host = "api.stripe.com"
+path = "/v1/accounts/*"
 action_class = "account.permission.change"
 
 [[rules]]
 method = "DELETE"
-host   = "api.stripe.com"
-path   = "/v1/accounts/*"
+host = "api.stripe.com"
+path = "/v1/accounts/*"
 action_class = "account.permission.change"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/radar/value_lists"
+host = "api.stripe.com"
+path = "/v1/radar/value_lists"
 action_class = "account.permission.change"
 
 [[rules]]
 method = "POST"
-host   = "api.stripe.com"
-path   = "/v1/radar/value_lists/*"
+host = "api.stripe.com"
+path = "/v1/radar/value_lists/*"
 action_class = "account.permission.change"
 
 [[rules]]
 method = "DELETE"
-host   = "api.stripe.com"
-path   = "/v1/radar/value_lists/*"
+host = "api.stripe.com"
+path = "/v1/radar/value_lists/*"
 action_class = "account.permission.change"

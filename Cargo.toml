@@ -1,23 +1,22 @@
 [workspace]
 members = [
   "crates/firma",
+  "crates/firma-authority",
   "crates/firma-config",
   "crates/firma-core",
-  "crates/firma-grpc-interceptor-proto",
-  "crates/firma-proto",
-  "crates/firma-sidecar",
-  "crates/firma-authority",
-  "crates/firma-run",
-  "crates/firma-stack",
   "crates/firma-demo-fixture",
   "crates/firma-demo-tui",
+  "crates/firma-grpc-interceptor-proto",
+  "crates/firma-proto",
+  "crates/firma-run",
+  "crates/firma-sidecar",
+  "crates/firma-stack",
 ]
 resolver = "3"
 
 [workspace.package]
 version = "0.1.1"
 edition = "2024"
-rust-version = "1.88.0"
 license = "Apache-2.0"
 repository = "https://github.com/Firma-AI/openfirma"
 
@@ -40,9 +39,7 @@ async-trait = "0.1"
 cedar-policy = "3"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", default-features = false }
-criterion = { version = "0.8", default-features = false, features = [
-  "cargo_bench_support",
-] }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 ctrlc = "3.5"
 dialoguer = "0.11"
 dirs = "6"
@@ -58,40 +55,28 @@ firma-sidecar = { path = "crates/firma-sidecar" }
 firma-stack = { path = "crates/firma-stack" }
 governor = "0.10"
 hex = "0.4"
-http-body-util = "0.1"
 http-body = "1"
+http-body-util = "0.1"
 hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 lru = "0.17"
 miette = { version = "7", features = ["fancy-no-backtrace"] }
+nix = { version = "0.31", features = ["fs", "process", "signal", "socket", "user"] }
 notify = "8"
 owo-colors = { version = "4", features = ["supports-colors"] }
-textwrap = "0.16"
-nix = { version = "0.31", features = [
-  "fs",
-  "process",
-  "signal",
-  "socket",
-  "user",
-] }
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 pasetors = "0.7"
 pingora-core = "0.8"
 pingora-http = "0.8"
 pingora-proxy = "0.8"
 pretty_assertions = "1"
-regex = "1"
+proptest = "1"
 prost = "0.14"
 prost-types = "0.14"
-proptest = "1"
 rand = { version = "0.9", default-features = false, features = ["small_rng"] }
 rcgen = { version = "0.13", features = ["x509-parser"] }
-reqwest = { version = "0.13", default-features = false, features = [
-  "charset",
-  "http2",
-  "query",
-  "rustls",
-] }
+regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["charset", "http2", "query", "rustls"] }
 rustls = "0.23"
 rustls-pemfile = "2"
 serde = { version = "1", features = ["derive"] }
@@ -101,14 +86,12 @@ serial_test = "3"
 sha2 = "0.11"
 strum = "0.28"
 tempfile = "3"
+textwrap = "0.16"
 thiserror = "2"
 time = { version = "0.3", default-features = false }
-tokio = { version = "1", default-features = false, features = [
-  "rt-multi-thread",
-  "macros",
-] }
-tokio-stream = { version = "0.1", features = ["sync"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros"] }
 tokio-rustls = "0.26"
+tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "1"
 toml_edit = "0.23"
@@ -120,13 +103,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 wait-timeout = "0.2"
-windows-sys = { version = "0.59", features = [
-  "Win32_Foundation",
-  "Win32_Security",
-  "Win32_System_Console",
-  "Win32_System_JobObjects",
-  "Win32_System_Threading",
-] }
-xxhash-rust = { version = "0.8", features = ["xxh3"] }
-x509-parser = "0.16"
 webpki-roots = "1"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Threading"] }
+x509-parser = "0.16"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }

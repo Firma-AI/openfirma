@@ -4,11 +4,11 @@ This folder shows what teams often have before a system like Firma: several unre
 
 The intended rule is simple: the agent may read, but it must not write or destroy. In practice, that rule is split across provider-specific files:
 
-| File | Surface | Vocabulary |
-| --- | --- | --- |
-| `oauth-scopes.json` | Gmail OAuth scopes | Google scope URIs |
+| File                            | Surface                  | Vocabulary             |
+| ------------------------------- | ------------------------ | ---------------------- |
+| `oauth-scopes.json`             | Gmail OAuth scopes       | Google scope URIs      |
 | `github-token-permissions.yaml` | GitHub token permissions | GitHub PAT permissions |
-| `network-allowlist.yaml` | Network egress | Hostnames |
+| `network-allowlist.yaml`        | Network egress           | Hostnames              |
 
 Each file speaks a different language. None of them gives a shared answer to the question: what is the agent trying to do?
 

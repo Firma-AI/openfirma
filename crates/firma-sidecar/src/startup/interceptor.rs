@@ -59,6 +59,7 @@ pub fn spawn_interceptor(
             let interceptor = interceptor::http::HttpInterceptor::new(ic.listen_addr)
                 .with_https_mitm(ic.https_mitm.clone(), config.ca.dir.clone())
                 .with_max_request_body_bytes(ic.max_request_body_bytes)
+                .with_total_body_budget_bytes(ic.total_body_budget_bytes)
                 .with_connect_relay(ic.connect_relay.clone());
             tracing::debug!(listen_addr = %ic.listen_addr, "HTTP proxy interceptor configured");
             let handle = tokio::spawn(async move {

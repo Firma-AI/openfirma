@@ -22,12 +22,12 @@ the sandbox or prints curl smoke-test commands.
 
 ## Layer coverage
 
-| Layer | Mechanism | Status in this example |
-|-------|-----------|------------------------|
-| 1 — Network (host / IP allowlist) | mapping rules + Cedar | covered |
-| 2 — Command / syscall | seccomp-unotify / ESF | deferred (FIR-79) |
-| 3 — Filesystem | firma-run sandbox (bwrap) | covered via `[run.profiles.generic]` in `firma.toml` |
-| 4 — Semantic (HTTP action classes) | Cedar policy bundle | covered |
+| Layer                              | Mechanism                 | Status in this example                               |
+| ---------------------------------- | ------------------------- | ---------------------------------------------------- |
+| 1 — Network (host / IP allowlist)  | mapping rules + Cedar     | covered                                              |
+| 2 — Command / syscall              | seccomp-unotify / ESF     | deferred (FIR-79)                                    |
+| 3 — Filesystem                     | firma-run sandbox (bwrap) | covered via `[run.profiles.generic]` in `firma.toml` |
+| 4 — Semantic (HTTP action classes) | Cedar policy bundle       | covered                                              |
 
 Layer 3 and Layer 2 are enforced outside the sidecar. The Cedar policy
 in `policies/llm-agent.cedar` does not duplicate filesystem path or
@@ -38,13 +38,13 @@ syscall rules — those belong to firma-run / bwrap / seccomp.
 Linux-only. Backend: `bwrap`. Configured under `[run.profiles.generic]` in
 `examples/generic-agent/firma.toml`.
 
-| Access | Paths |
-|--------|-------|
-| Read + Write | Workspace directory. `run.sh` creates and launches from `examples/generic-agent/workspace/`. For direct `firma run` use, `cd` into your workspace first. |
-| Read only | `/usr`, `/lib`, `/bin`, `/etc` (whole rootfs ro-bound — covers `/etc/sudoers`, `/etc/shadow`, `/etc/crontab`, `/etc/hosts`) |
-| No access | `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gcloud` (tmpfs mask on host `$HOME` + sandbox HOME redirected to per-run runtime dir) |
-| No access | `$HOST_HOME/.env` — masked via tmpfs (HOME redirection + explicit mask). `.env` files at arbitrary paths under the host rootfs remain readable via ro-bind; full pattern-deny needs a path-aware FS policy layer (follow-up). |
-| No access | Other users' home dirs (only the workspace path is bound RW; `/home/<other-user>` stays under the rootfs ro-bind) |
+| Access       | Paths                                                                                                                                                                                                                         |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Read + Write | Workspace directory. `run.sh` creates and launches from `examples/generic-agent/workspace/`. For direct `firma run` use, `cd` into your workspace first.                                                                      |
+| Read only    | `/usr`, `/lib`, `/bin`, `/etc` (whole rootfs ro-bound — covers `/etc/sudoers`, `/etc/shadow`, `/etc/crontab`, `/etc/hosts`)                                                                                                   |
+| No access    | `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gcloud` (tmpfs mask on host `$HOME` + sandbox HOME redirected to per-run runtime dir)                                                                                              |
+| No access    | `$HOST_HOME/.env` — masked via tmpfs (HOME redirection + explicit mask). `.env` files at arbitrary paths under the host rootfs remain readable via ro-bind; full pattern-deny needs a path-aware FS policy layer (follow-up). |
+| No access    | Other users' home dirs (only the workspace path is bound RW; `/home/<other-user>` stays under the rootfs ro-bind)                                                                                                             |
 
 The knobs the file sets are read by the bwrap backend
 (`crates/firma-run/src/backend/linux_bwrap.rs`):
@@ -91,25 +91,25 @@ bash examples/generic-agent/verify-layer3.sh
 
 Runs three probes through `firma run` against the stack started by `run.sh`:
 
-| Probe | Expected |
-|-------|----------|
-| sandbox `$HOME` != host `$HOME` | preflight passes (bwrap active) |
-| `echo ok > <workspace>/probe.txt` | exit 0, file present (PASS) |
-| `echo bad >> ~/.ssh/authorized_keys` | exit non-zero (PASS — denied) |
+| Probe                                | Expected                        |
+| ------------------------------------ | ------------------------------- |
+| sandbox `$HOME` != host `$HOME`      | preflight passes (bwrap active) |
+| `echo ok > <workspace>/probe.txt`    | exit 0, file present (PASS)     |
+| `echo bad >> ~/.ssh/authorized_keys` | exit non-zero (PASS — denied)   |
 
 Exits 0 on PASS, non-zero on FAIL. Linux-only; requires `bwrap` and
 `cargo`.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `firma.toml` | unified config — `[authority]`, `[sidecar.*]`, and `[run.profiles.*]` (Layer 3 bwrap profile) |
-| `policies/llm-agent.cedar` | enforcement policy bundle streamed to the sidecar |
-| `issuance-policies/issuance.cedar` | gates capability token issuance at the Authority |
-| `mapping-rules.toml` | supplemental host/method/path → action class rules (CONNECT tunnels, package managers, localhost) |
-| `verify-layer3.sh` | filesystem sandbox acceptance test (workspace RW vs `~/.ssh` denied) |
-| `run.sh` | startup script + curl smoke tests |
+| File                               | Purpose                                                                                           |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `firma.toml`                       | unified config — `[authority]`, `[sidecar.*]`, and `[run.profiles.*]` (Layer 3 bwrap profile)     |
+| `policies/llm-agent.cedar`         | enforcement policy bundle streamed to the sidecar                                                 |
+| `issuance-policies/issuance.cedar` | gates capability token issuance at the Authority                                                  |
+| `mapping-rules.toml`               | supplemental host/method/path → action class rules (CONNECT tunnels, package managers, localhost) |
+| `verify-layer3.sh`                 | filesystem sandbox acceptance test (workspace RW vs `~/.ssh` denied)                              |
+| `run.sh`                           | startup script + curl smoke tests                                                                 |
 
 The shipped provider mappings in `crates/firma-sidecar/config/mappings/`
 (`github.toml`, `gmail.toml`) are merged on top — see
@@ -185,14 +185,14 @@ The proxy expects `x-firma-session-id: preflight-session` on each
 request to bind it to the preflight-issued capability token. The
 `run.sh` output prints the exact curl invocations.
 
-| Target | Expected |
-|--------|----------|
-| crates.io GET | 200 |
-| pypi.org GET | 200 |
-| api.github.com GET /repos/* | 200 |
-| api.github.com DELETE /repos/*/git/refs/* | 403 (`code.destructive`) |
-| evil.com GET | 403 (unmapped) |
-| 169.254.169.254 GET | 403 (Cedar forbid) |
+| Target                                    | Expected                 |
+| ----------------------------------------- | ------------------------ |
+| crates.io GET                             | 200                      |
+| pypi.org GET                              | 200                      |
+| api.github.com GET /repos/*               | 200                      |
+| api.github.com DELETE /repos/_/git/refs/_ | 403 (`code.destructive`) |
+| evil.com GET                              | 403 (unmapped)           |
+| 169.254.169.254 GET                       | 403 (Cedar forbid)       |
 
 ## Pointing an agent at the proxy
 

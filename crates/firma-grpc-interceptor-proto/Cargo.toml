@@ -2,10 +2,9 @@
 name = "firma-grpc-interceptor-proto"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
-description = "Protobuf/gRPC definitions for the Firma interceptor hook (agent to sidecar)"
 license.workspace = true
 repository.workspace = true
+description = "Protobuf/gRPC definitions for the Firma interceptor hook (agent to sidecar)"
 
 [dependencies]
 prost = { workspace = true }

@@ -31,22 +31,22 @@ write or destructive actions."_
 
 ## Three surfaces, three configurations
 
-| Surface | File | What it controls | What it cannot see |
-|---|---|---|---|
-| OAuth scopes | `before/oauth-scopes.json` | Which Gmail API methods the token can call. | The taxonomy used by the other two surfaces. |
-| Token permissions | `before/github-token-permissions.yaml` | Which GitHub API verbs the PAT can issue. | Whether the call is consistent with the agent's intent at the other providers. |
-| Network allowlist | `before/network-allowlist.yaml` | Which destination hosts the agent process can reach. | The HTTP method or path — once the host is on the list, every call to it goes through. |
+| Surface           | File                                   | What it controls                                     | What it cannot see                                                                     |
+| ----------------- | -------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| OAuth scopes      | `before/oauth-scopes.json`             | Which Gmail API methods the token can call.          | The taxonomy used by the other two surfaces.                                           |
+| Token permissions | `before/github-token-permissions.yaml` | Which GitHub API verbs the PAT can issue.            | Whether the call is consistent with the agent's intent at the other providers.         |
+| Network allowlist | `before/network-allowlist.yaml`        | Which destination hosts the agent process can reach. | The HTTP method or path — once the host is on the list, every call to it goes through. |
 
 Three artifacts. Three vocabularies. Zero shared representation of "what the
 agent is doing".
 
 ## What goes wrong
 
-| Action | Canonical action class | What stops it today |
-|---|---|---|
-| Read GitHub PR | `code.review.read` | GitHub PAT has `pull_requests:read`. ALLOWED. |
-| Send Gmail message | `communication.external.send` | OAuth scope is read-only. BLOCKED at provider. |
-| Delete internal user | `account.permission.change` | Internal service host is on the egress allowlist. **The DELETE goes through.** |
+| Action               | Canonical action class        | What stops it today                                                            |
+| -------------------- | ----------------------------- | ------------------------------------------------------------------------------ |
+| Read GitHub PR       | `code.review.read`            | GitHub PAT has `pull_requests:read`. ALLOWED.                                  |
+| Send Gmail message   | `communication.external.send` | OAuth scope is read-only. BLOCKED at provider.                                 |
+| Delete internal user | `account.permission.change`   | Internal service host is on the egress allowlist. **The DELETE goes through.** |
 
 The rule was consistent. The three surfaces were not. The internal service is
 governed by a network allowlist that only knows about hosts — it cannot tell
@@ -77,11 +77,11 @@ The action class taxonomy is the same regardless of which provider the call
 targets. `code.review.read` means the same thing whether the underlying call is
 to GitHub, Gmail, or the internal service.
 
-| Action | Canonical action class | With Firma |
-|---|---|---|
-| Read GitHub PR | `code.review.read` | ALLOW |
-| Send Gmail message | `communication.external.send` | DENY |
-| Delete internal user | `account.permission.change` | DENY |
+| Action               | Canonical action class        | With Firma |
+| -------------------- | ----------------------------- | ---------- |
+| Read GitHub PR       | `code.review.read`            | ALLOW      |
+| Send Gmail message   | `communication.external.send` | DENY       |
+| Delete internal user | `account.permission.change`   | DENY       |
 
 One policy. One taxonomy. One enforcement point. Same rule, every provider,
 every call.

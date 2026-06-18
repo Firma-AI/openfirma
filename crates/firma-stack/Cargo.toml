@@ -2,10 +2,9 @@
 name = "firma-stack"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
-description = "Process supervision and observability primitives for the firma stack"
 license.workspace = true
 repository.workspace = true
+description = "Process supervision and observability primitives for the firma stack"
 
 [lints]
 workspace = true

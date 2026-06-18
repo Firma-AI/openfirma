@@ -54,6 +54,13 @@ pub fn default_runtime_dir_from(
     }
 }
 
+/// `<runtime>/capabilities` — directory holding per-sandbox capability
+/// seed files written by `firma run`.
+#[must_use]
+pub fn capabilities_dir_from(runtime_dir: &Path) -> PathBuf {
+    runtime_dir.join("capabilities")
+}
+
 /// `<runtime>/run` — directory that contains one subdirectory per
 /// autostarted per-run sidecar.
 #[must_use]
@@ -76,4 +83,16 @@ fn current_uid() -> u32 {
 #[cfg(windows)]
 fn current_uid() -> u32 {
     0
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capabilities_dir_is_runtime_subdir() {
+        let dir = capabilities_dir_from(std::path::Path::new("/run/firma"));
+        assert_eq!(dir, std::path::PathBuf::from("/run/firma/capabilities"));
+    }
 }

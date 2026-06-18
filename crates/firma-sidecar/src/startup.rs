@@ -24,7 +24,6 @@ pub mod interceptor;
 pub mod local_exec;
 pub mod log_contract;
 pub mod pipeline;
-pub mod preflight;
 
 pub use self::audit::{load_audit_event_builder, spawn_audit_sink};
 pub use self::authority::spawn_authority_client;
@@ -37,4 +36,3 @@ pub use self::log_contract::{
     log_ready_sequence,
 };
 pub use self::pipeline::{PipelineRuntime, build_pipeline_runtime};
-pub use self::preflight::run_preflight;

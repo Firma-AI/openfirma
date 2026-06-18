@@ -1,17 +1,16 @@
 <div align="center">
   <img src="docs-site/src/assets/openfirma-logo.png" alt="OpenFirma" width="440" />
 
-  <br/>
+<br/>
 
 <img src="docs-site/src/assets/Subtitle.gif" alt="OpenFirma" width="600" />
 
-  <br/>
+<br/>
 <br/>
 
-  **Every call passes through a sidecar that decides whether it happens.**
-  <br/>
-  Policy in, signed decision out. Deterministic. At call-level.
-
+**Every call passes through a sidecar that decides whether it happens.**
+<br/>
+Policy in, signed decision out. Deterministic. At call-level.
 
 [Docs](https://firma-ai.github.io/openfirma)
 &nbsp;·&nbsp;
@@ -34,7 +33,6 @@
   <img src="docs-site/src/assets/home-diagram.svg" alt="OpenFirma diagram" width="100%" />
 </div>
 <br/>
-
 
 ## 1. What is OpenFirma?
 
@@ -68,8 +66,7 @@ brew install firma-ai/openfirma/firma
 ```bash
 git clone https://github.com/Firma-AI/openfirma
 cd openfirma
-cargo build --release
-cargo install --path crates/firma
+cargo install --path crates/firma --locked
 ```
 
 ### Quickstart
@@ -77,7 +74,6 @@ cargo install --path crates/firma
 `firma` ships as a single precompiled static binary, no build toolchain or API keys required to get started.
 
 There are two ways to start OpenFirma. Both end up in the same place (your agent running under enforcement) but the first is faster to try, the second gives you more control.
-
 
 **Option A: zero config**
 
@@ -93,10 +89,9 @@ Every outbound call is normalized, checked against your Cedar policy, and either
 firma monitor
 ```
 
-
 **Option B: explicit setup**
 
-`firma sidecar start` boots Authority and Sidecar as persistent daemons that stay alive across sessions. 
+`firma sidecar start` boots Authority and Sidecar as persistent daemons that stay alive across sessions.
 
 ```bash
 firma config                       # scaffold once: keys, policy, mappings
@@ -104,6 +99,7 @@ firma sidecar start --detach       # boot Authority + Sidecar as persistent daem
 firma run -- claude
 firma monitor
 ```
+
 Use this when you want to run multiple agents against the same Authority, keep enforcement running between sessions, or configure posture and mappings upfront with `firma config` before starting anything.
 
 ### Policies
@@ -121,24 +117,24 @@ firma policy test     .firma/policies/fixture.toml      # run allow/deny fixture
 
 **Posture packs**, choose one per project:
 
-| Posture | What it permits |
-|---|---|
-| `strict` | `credential.read` and `communication.external.send` only. No code operations. |
-| `dev` | Adds `code.read/write`, issues, package install. No payments or destructive ops. |
-| `dev-with-delete-watch` | `dev` plus `code.destructive` for local-exec and delete-watch scenarios. |
+| Posture                 | What it permits                                                                  |
+| ----------------------- | -------------------------------------------------------------------------------- |
+| `strict`                | `credential.read` and `communication.external.send` only. No code operations.    |
+| `dev`                   | Adds `code.read/write`, issues, package install. No payments or destructive ops. |
+| `dev-with-delete-watch` | `dev` plus `code.destructive` for local-exec and delete-watch scenarios.         |
 
 **Mapping packs**, add one per service your agent calls:
 
-| Mapping | Covers |
-|---|---|
-| `anthropic` | `api.anthropic.com` |
-| `openai` | `api.openai.com` |
-| `github` | 44 GitHub REST endpoints → 12 action classes |
-| `gmail` | 41 Gmail REST endpoints → 7 action classes |
-| `stripe` | 88 Stripe REST endpoints → 14 action classes |
-| `npm` | `registry.npmjs.org` |
-| `pypi` | `pypi.org`, `files.pythonhosted.org` |
-| `cargo` | `crates.io` |
+| Mapping     | Covers                                       |
+| ----------- | -------------------------------------------- |
+| `anthropic` | `api.anthropic.com`                          |
+| `openai`    | `api.openai.com`                             |
+| `github`    | 44 GitHub REST endpoints → 12 action classes |
+| `gmail`     | 41 Gmail REST endpoints → 7 action classes   |
+| `stripe`    | 88 Stripe REST endpoints → 14 action classes |
+| `npm`       | `registry.npmjs.org`                         |
+| `pypi`      | `pypi.org`, `files.pythonhosted.org`         |
+| `cargo`     | `crates.io`                                  |
 
 ```bash
 firma policy list                                        # browse all available packs
@@ -146,7 +142,7 @@ firma config --posture dev --mapping github --mapping stripe
 ```
 
 **Live policy update**
- 
+
 Edit a Cedar policy file on disk at any point. The Authority picks up the change via file watcher and pushes the updated bundle to all connected Sidecars. No restart needed.
 
 > Full policy reference: [Concepts: Policies](https://firma-ai.github.io/openfirma/concepts/policies/) · [Write your first Cedar policy](https://firma-ai.github.io/openfirma/guides/write-a-cedar-policy/)
@@ -232,47 +228,47 @@ The Authority can be the Mini Authority included in this repo or your own implem
 
 **Standalone commands** (flags only, no subcommands)
 
-| Command | Description |
-|---|---|
-| `firma run` | Launch an agent in a sandbox via the Sidecar |
-| `firma config` | Scaffold a new agent config directory (`--mode…`) |
+| Command         | Description                                           |
+| --------------- | ----------------------------------------------------- |
+| `firma run`     | Launch an agent in a sandbox via the Sidecar          |
+| `firma config`  | Scaffold a new agent config directory (`--mode…`)     |
 | `firma monitor` | Tail audit decisions and component logs (`--source…`) |
-| `firma doctor` | Diagnose a Firma install |
-| `firma help` | Print help for any command |
+| `firma doctor`  | Diagnose a Firma install                              |
+| `firma help`    | Print help for any command                            |
 
 **`firma sidecar`** — run and manage the enforcement Sidecar daemon. Bare form (no subcommand) = foreground server.
 
-| Subcommand | Description |
-|---|---|
-| `sidecar start` | Start Sidecar (+ local Authority) as a daemon |
-| `sidecar stop` | Stop the daemon gracefully (`--timeout` fallback) |
-| `sidecar status` | List live Sidecars + health (table or `--json`) |
+| Subcommand       | Description                                       |
+| ---------------- | ------------------------------------------------- |
+| `sidecar start`  | Start Sidecar (+ local Authority) as a daemon     |
+| `sidecar stop`   | Stop the daemon gracefully (`--timeout` fallback) |
+| `sidecar status` | List live Sidecars + health (table or `--json`)   |
 
 **`firma authority`** — issue tokens, stream policy bundles and revocations.
 
-| Subcommand | Description |
-|---|---|
-| `authority revocations` | Manage the revocation list (nested group) |
-| `authority generate-key` | Generate a new Ed25519 signing key pair |
-| `authority init-tls` | Bootstrap local CA + Authority↔Sidecar certs |
-| `authority issue` | Sign and emit a capability token to a TOML seed |
-| `authority issue-client-cert` | Sign an mTLS client cert for a Sidecar |
-| `authority generate-client-ca` | Generate a new mTLS client CA key pair |
+| Subcommand                     | Description                                     |
+| ------------------------------ | ----------------------------------------------- |
+| `authority revocations`        | Manage the revocation list (nested group)       |
+| `authority generate-key`       | Generate a new Ed25519 signing key pair         |
+| `authority init-tls`           | Bootstrap local CA + Authority↔Sidecar certs    |
+| `authority issue`              | Sign and emit a capability token to a TOML seed |
+| `authority issue-client-cert`  | Sign an mTLS client cert for a Sidecar          |
+| `authority generate-client-ca` | Generate a new mTLS client CA key pair          |
 
 **`firma policy`** — browse the template catalogue and validate Cedar bundles.
 
-| Subcommand | Description |
-|---|---|
-| `policy list` | Print all posture and mapping templates |
+| Subcommand        | Description                                |
+| ----------------- | ------------------------------------------ |
+| `policy list`     | Print all posture and mapping templates    |
 | `policy validate` | Parse and schema-check a Cedar policy file |
-| `policy test` | Run an allow/deny fixture against a bundle |
+| `policy test`     | Run an allow/deny fixture against a bundle |
 
 **`firma token`** — approve and revoke local-execution governance tokens (HITL).
 
-| Subcommand | Description |
-|---|---|
-| `token approve` | Approve a pending governance token |
-| `token revoke` | Revoke a pending or approved governance token |
+| Subcommand      | Description                                   |
+| --------------- | --------------------------------------------- |
+| `token approve` | Approve a pending governance token            |
+| `token revoke`  | Revoke a pending or approved governance token |
 
 > Full CLI reference: [`docs/cli.md`](docs/cli.md)
 
@@ -317,11 +313,11 @@ The Authority can be the Mini Authority included in this repo or your own implem
 
 **Examples**
 
-|                                                     |                                                                     |
-| --------------------------------------------------- | ------------------------------------------------------------------- |
-| [`examples/demos`](examples/demos/)                 | TUI demo runner with three self-contained enforcement scenarios     |
-| [`examples/agents`](examples/agents/)               | Intentionally risky demo agents (OpenAI Agents SDK + Google ADK)    |
-| [`examples/e2e`](examples/e2e/)                     | Local stack example: Authority + Sidecar + agent via `HTTP_PROXY`   |
+|                                       |                                                                   |
+| ------------------------------------- | ----------------------------------------------------------------- |
+| [`examples/demos`](examples/demos/)   | TUI demo runner with three self-contained enforcement scenarios   |
+| [`examples/agents`](examples/agents/) | Intentionally risky demo agents (OpenAI Agents SDK + Google ADK)  |
+| [`examples/e2e`](examples/e2e/)       | Local stack example: Authority + Sidecar + agent via `HTTP_PROXY` |
 
 **Docs**
 

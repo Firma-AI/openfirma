@@ -1,6 +1,6 @@
 # Firma Run + Claude Code (Linux) Launch Notes
 
-Status: launch-ready  
+Status: launch-ready\
 Owners: Runtime + Sidecar teams
 
 ## 1. What shipped
@@ -12,6 +12,7 @@ firma run --profile claude-code -- claude
 ```
 
 Delivered capabilities:
+
 - Linux-first sandboxed Claude runtime path (`bwrap` backend).
 - Claude settings injection with:
   - `sandbox.autoAllowBashIfSandboxed = true`
@@ -41,6 +42,7 @@ but should not be represented as parity with Linux structural confinement.
 ## 2. Proxy routing model
 
 Current implementation mapping:
+
 - sandboxed process uses local proxy env (`HTTP[S]_PROXY=127.0.0.1:<sandbox-proxy-port>`),
 - `firma-run` internal proxy bridge forwards sandbox proxy TCP traffic to host-side sidecar endpoint,
 - attribution headers are injected per request before sidecar policy evaluation.
@@ -50,6 +52,7 @@ This ensures all sandbox-originated HTTP/HTTPS proxy traffic is mediated by the 
 ## 3. Coverage delta (launch copy)
 
 Compared with running Claude Code standalone sandbox controls:
+
 - **Whole-process boundary**: Firma wraps the whole agent process, not only Bash tool descendants.
 - **Externalized policy plane**: governance logic is outside the agent process.
 - **Cross-agent reuse**: same policy plane applies to Claude/Codex/custom agents.
@@ -61,6 +64,7 @@ This is an architectural distinction, not a blanket immunity claim.
 ## 4. Acceptance coverage (implemented)
 
 `examples/firma-run/e2e/run.sh --claude-acceptance` covers:
+
 - shell `curl` egress interception + deny,
 - child-process `wget` interception + deny,
 - write outside working directory blocked by sandbox filesystem policy,
@@ -70,11 +74,13 @@ This is an architectural distinction, not a blanket immunity claim.
 
 During Claude real-session validation, HTTPS CONNECT/MITM behavior surfaced edge cases.
 Root causes and fixes included:
+
 - CONNECT preface handling around CR/LF + TLS handshake start,
 - strict/non-strict fallback semantics hardening,
 - CONNECT-level enforcement preservation when fallback paths are possible.
 
 Outcome:
+
 - deterministic CONNECT classification behavior,
 - no spurious `InvalidContentType` handshake failures from CR/LF replay,
 - no non-strict fallback bypass of destination-level CONNECT policy.
@@ -102,6 +108,7 @@ examples/firma-run/e2e/run.sh --claude-acceptance
 ## 8. Fast-follow for macOS parity (v1.1)
 
 Planned fast-follow scope:
+
 - tighten macOS confinement backend guarantees for `claude-code`,
 - add macOS-specific acceptance matrix equivalent to Linux shell-governance
   checks where technically feasible,

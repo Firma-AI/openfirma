@@ -113,13 +113,6 @@ pub struct SidecarConfig {
     /// Audit event emitter settings.
     #[serde(default)]
     pub audit: AuditConfig,
-    /// Optional pre-flight capability token provisioning.
-    ///
-    /// When set, the sidecar contacts the Authority at startup to issue
-    /// a capability token for the configured agent. This populates Stage 1
-    /// with a real token and verifier instead of the stub defaults.
-    #[serde(default)]
-    pub preflight: Option<PreflightConfig>,
     /// Local-exec governance endpoint configuration.
     ///
     /// When set, the sidecar binds a UDS endpoint that `firma-run` clients
@@ -213,9 +206,6 @@ impl SidecarConfig {
             }
         }
         self.audit.validate().map_err(|e| format!("audit: {e}"))?;
-        if let Some(ref pf) = self.preflight {
-            pf.validate().map_err(|e| format!("preflight: {e}"))?;
-        }
         if let Some(ref le) = self.local_exec {
             le.validate().map_err(|e| format!("local_exec: {e}"))?;
         }
@@ -338,6 +328,13 @@ pub struct InterceptorConfig {
     /// HTTPS MITM settings used by the HTTP proxy interceptor.
     #[serde(default)]
     pub https_mitm: HttpsMitmConfig,
+    /// Global ceiling for the total bytes of request bodies buffered
+    /// concurrently across all in-flight proxy connections.  When the
+    /// budget is full, new requests receive an immediate 403 denial
+    /// with an audit trail rather than silently unbounded buffering
+    /// that could OOM-kill the enforcer.
+    #[serde(default = "default_total_body_budget_bytes")]
+    pub total_body_budget_bytes: usize,
 }
 
 impl InterceptorConfig {
@@ -347,6 +344,15 @@ impl InterceptorConfig {
         }
         if self.max_request_body_bytes == 0 {
             return Err("interceptor.max_request_body_bytes must be > 0".into());
+        }
+        if self.total_body_budget_bytes == 0 {
+            return Err("interceptor.total_body_budget_bytes must be > 0".into());
+        }
+        if self.total_body_budget_bytes < self.max_request_body_bytes {
+            return Err(
+                "interceptor.total_body_budget_bytes must be >= interceptor.max_request_body_bytes"
+                    .into(),
+            );
         }
         self.connect_relay.validate()?;
         self.https_mitm.validate()?;
@@ -380,6 +386,7 @@ impl Default for InterceptorConfig {
             max_request_body_bytes: default_max_request_body_bytes(),
             connect_relay: ConnectRelayConfig::default(),
             https_mitm: HttpsMitmConfig::default(),
+            total_body_budget_bytes: default_total_body_budget_bytes(),
         }
     }
 }
@@ -527,68 +534,6 @@ impl Default for PolicyConfig {
             dir: default_policy_dir(),
         }
     }
-}
-
-/// Pre-flight capability token provisioning settings.
-///
-/// When present, the sidecar calls `IssueCapability` on the Authority at
-/// startup to obtain a real PASETO v4 token and build a live `CapabilityMap`.
-/// Requires `authority.url` to also be set.
-#[derive(Debug, Clone, Deserialize)]
-pub struct PreflightConfig {
-    /// Agent identity string (e.g. `"demo0-agent"`).
-    pub agent_id: String,
-    /// Session identifier for the pre-flight token.
-    #[serde(default = "default_preflight_session_id")]
-    pub session_id: String,
-    /// Action classes the agent is requesting authorization for.
-    pub requested_actions: Vec<String>,
-    /// Resource scope requested (e.g. `"*"` for any resource).
-    #[serde(default = "default_resource_scope")]
-    pub resource_scope: String,
-    /// Path to the Authority's Ed25519 public key file (32 raw bytes).
-    /// Synthesized at runtime from `[sidecar.authority].public_key_path`
-    /// by `firma run`; omit in firma.toml and let firma-run inject it.
-    #[serde(default)]
-    pub authority_pub_key_path: Option<PathBuf>,
-    /// Requested token TTL in seconds (default: 900 / 15 min).
-    /// Override for long-running batch agents via `preflight.ttl_seconds = <n>`.
-    #[serde(default = "default_preflight_ttl_seconds")]
-    pub ttl_seconds: i32,
-}
-
-impl PreflightConfig {
-    /// Validate preflight config fields.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if required fields are empty.
-    pub fn validate(&self) -> Result<(), String> {
-        if self.agent_id.trim().is_empty() {
-            return Err("preflight.agent_id must not be empty".into());
-        }
-        if self.requested_actions.is_empty() {
-            return Err("preflight.requested_actions must not be empty".into());
-        }
-        if let Some(ref p) = self.authority_pub_key_path
-            && p.as_os_str().is_empty()
-        {
-            return Err("preflight.authority_pub_key_path must not be empty when set".into());
-        }
-        Ok(())
-    }
-}
-
-fn default_preflight_session_id() -> String {
-    "preflight-session".to_string()
-}
-
-fn default_resource_scope() -> String {
-    "*".to_string()
-}
-
-const fn default_preflight_ttl_seconds() -> i32 {
-    900
 }
 
 /// Certificate authority directory settings.
@@ -739,6 +684,10 @@ const fn default_drain_timeout() -> u64 {
 
 const fn default_max_request_body_bytes() -> usize {
     4 * 1024 * 1024
+}
+
+const fn default_total_body_budget_bytes() -> usize {
+    64 * 1024 * 1024
 }
 
 const fn default_connect_setup_timeout_secs() -> u64 {
@@ -1211,6 +1160,55 @@ mod tests {
     }
 
     #[test]
+    fn test_sidecar_config_zero_total_body_budget_rejected() {
+        let config = SidecarConfig {
+            interceptor: InterceptorConfig {
+                total_body_budget_bytes: 0,
+                ..InterceptorConfig::default()
+            },
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("total_body_budget_bytes"),
+            "error should mention total_body_budget_bytes: {err}"
+        );
+    }
+
+    #[test]
+    fn test_sidecar_config_budget_smaller_than_max_body_rejected() {
+        let config = SidecarConfig {
+            interceptor: InterceptorConfig {
+                max_request_body_bytes: 8 * 1024 * 1024,
+                total_body_budget_bytes: 4 * 1024 * 1024,
+                ..InterceptorConfig::default()
+            },
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("total_body_budget_bytes"),
+            "error should mention total_body_budget_bytes: {err}"
+        );
+    }
+
+    #[test]
+    fn test_sidecar_config_budget_equals_max_body_valid() {
+        let config = SidecarConfig {
+            interceptor: InterceptorConfig {
+                max_request_body_bytes: 4 * 1024 * 1024,
+                total_body_budget_bytes: 4 * 1024 * 1024,
+                ..InterceptorConfig::default()
+            },
+            ..SidecarConfig::default()
+        };
+        assert!(
+            config.validate().is_ok(),
+            "budget equal to max_body should be valid"
+        );
+    }
+
+    #[test]
     fn test_sidecar_config_zero_connect_setup_timeout_rejected() {
         let config = SidecarConfig {
             interceptor: InterceptorConfig {
@@ -1635,31 +1633,5 @@ drain_timeout_secs = 10
             config.interceptor.socket_path.as_deref(),
             Some(std::path::Path::new("/tmp/firma.sock"))
         );
-    }
-
-    // T7: default capability TTL ≤ 15 minutes unless explicitly overridden.
-    #[test]
-    fn test_preflight_default_ttl_is_900() {
-        let toml_str = r#"
-            agent_id               = "test-agent"
-            requested_actions      = ["communication.external.send"]
-            authority_pub_key_path = "/tmp/authority.pub"
-        "#;
-        let config: PreflightConfig =
-            toml::from_str(toml_str).unwrap_or_else(|e| panic!("parse failed: {e}"));
-        assert_eq!(config.ttl_seconds, 900);
-    }
-
-    #[test]
-    fn test_preflight_ttl_override_respected() {
-        let toml_str = r#"
-            agent_id               = "batch-agent"
-            requested_actions      = ["communication.external.send"]
-            authority_pub_key_path = "/tmp/authority.pub"
-            ttl_seconds            = 3600
-        "#;
-        let config: PreflightConfig =
-            toml::from_str(toml_str).unwrap_or_else(|e| panic!("parse failed: {e}"));
-        assert_eq!(config.ttl_seconds, 3600);
     }
 }

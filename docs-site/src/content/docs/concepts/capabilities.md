@@ -57,7 +57,14 @@ The Authority does three things in order:
 2. **TTL clamping.** The requested TTL is clamped to the Authority's `max_ttl_seconds` config (default 3600 in the demo). You cannot mint long-lived tokens by asking for them.
 3. **Signing.** If issuance is allowed, the Authority assembles a `CapabilityClaims`, signs it with its Ed25519 key, and returns the PASETO token + the parsed claims.
 
-In OpenFirma's reference Authority, you can do this from the CLI for development:
+In the normal `firma run` flow, this entire sequence happens automatically:
+`firma run` calls the Authority's `IssueCapability` gRPC endpoint, receives the
+signed token, writes it to
+`$XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml`, and the autostarted
+sidecar loads it — no operator action required.
+
+For the legacy operator path (pre-provisioning a fixed, long-lived session
+without `firma run`), the CLI subcommand is available:
 
 ```bash
 firma authority issue \
@@ -69,7 +76,10 @@ firma authority issue \
   --output capability-demo-agent.toml
 ```
 
-The output is a TOML file with both the raw PASETO and the parsed claims, ready to be loaded into a Sidecar via `[capability_seed]` or used by `firma run --capability-file`. See [Issue capability tokens](../../guides/issue-capability-tokens/) for the full operator workflow.
+The output is a TOML file with both the raw PASETO and the parsed claims. It can
+be loaded into a Sidecar via `[capability_seed]` (deprecated) or used by
+`firma run --capability-file`. See [Issue capability tokens](../../guides/issue-capability-tokens/)
+for that legacy workflow.
 
 The `raw_token` is the source of truth. The other TOML fields are a parsed mirror for selection, diagnostics, and operator readability. At Sidecar startup, every seed is verified with the configured Authority public key, and the mirrored TOML claims must exactly match the claims inside the signed token. If someone edits `action_set`, `resource_scope`, `session_id`, or any other claim in the TOML without re-issuing and re-signing the token, the Sidecar refuses to start.
 
@@ -87,7 +97,13 @@ If all five pass, Stage 1 emits a `ValidatedCapability` containing the raw token
 
 The whole stage is local. There is no network call, no Authority round-trip, no key fetch. This is what lets it stay under 1 ms p95.
 
-Seeded capabilities get an additional startup hardening check before the `CapabilityMap` is built: the Sidecar verifies each seed's `raw_token` and rejects the seed if the signed claims differ from the TOML mirror. This moves tamper detection to boot time instead of waiting for the first matching request.
+Capabilities written under `$XDG_RUNTIME_DIR/firma/capabilities/` by `firma run`
+are loaded by the sidecar at startup using the same verification path. Operator-
+configured `[capability_seed]` paths are also loaded (deprecated; see
+[Issue capability tokens](../../guides/issue-capability-tokens/)), but emit a
+deprecation warning. In both cases the sidecar verifies each seed's `raw_token`
+and rejects the seed if the signed claims differ from the TOML mirror. This moves
+tamper detection to boot time instead of waiting for the first matching request.
 
 ## Revocation
 

@@ -218,7 +218,7 @@ impl InMemoryTokenStore {
         Self {
             tokens: Mutex::new(HashMap::new()),
             ttl,
-            expiry_grace: Duration::from_secs(300),
+            expiry_grace: Duration::from_mins(5),
         }
     }
 
@@ -423,7 +423,7 @@ mod tests {
     use super::*;
 
     fn store() -> InMemoryTokenStore {
-        InMemoryTokenStore::new(Duration::from_secs(60))
+        InMemoryTokenStore::new(Duration::from_mins(1))
     }
 
     fn issue_token(store: &InMemoryTokenStore) -> String {

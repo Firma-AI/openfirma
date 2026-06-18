@@ -183,9 +183,9 @@ pub fn matches_resource_scope(scope: &str, resource: &str) -> bool {
         return true;
     }
     if let Some(prefix) = scope.strip_suffix("/*") {
-        return resource == prefix || resource.starts_with(prefix);
+        return resource == prefix || resource.starts_with(&format!("{prefix}/"));
     }
-    resource == scope || resource.starts_with(scope)
+    resource == scope || resource.starts_with(&format!("{scope}/"))
 }
 
 #[cfg(test)]
@@ -271,6 +271,22 @@ mod tests {
         assert!(!matches_resource_scope(
             "api.example.com/v1/chat",
             "api.example.com/v2/data"
+        ));
+    }
+
+    #[test]
+    fn resource_scope_prefix_does_not_match_similar_host() {
+        assert!(!matches_resource_scope(
+            "api.example.com/*",
+            "api.example.community/v1/data"
+        ));
+        assert!(!matches_resource_scope(
+            "api.example.com",
+            "api.example.community/v1/data"
+        ));
+        assert!(!matches_resource_scope(
+            "api.example.com/v1/chat",
+            "api.example.community/v1/chat"
         ));
     }
 

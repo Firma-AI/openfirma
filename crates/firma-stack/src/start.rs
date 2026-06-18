@@ -91,7 +91,7 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
     let auth_addr = read_authority_listen_addr(&cfg.config_file)?;
     std::fs::write(state_dir.join("authority.listen"), format!("{auth_addr}\n"))?;
     debug!(addr = %auth_addr, "waiting for authority TCP listen");
-    wait_for_tcp("authority", auth_addr, Duration::from_secs(60))?;
+    wait_for_tcp("authority", auth_addr, Duration::from_mins(1))?;
     info!(addr = %auth_addr, "authority listening");
 
     debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning sidecar");
@@ -100,12 +100,12 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
     let side_addr = read_sidecar_listen_addr(&cfg.config_file)?;
     std::fs::write(state_dir.join("sidecar.listen"), format!("{side_addr}\n"))?;
     debug!(addr = %side_addr, "waiting for sidecar TCP listen");
-    wait_for_tcp("sidecar", side_addr, Duration::from_secs(60))?;
+    wait_for_tcp("sidecar", side_addr, Duration::from_mins(1))?;
     info!(addr = %side_addr, "sidecar listening");
     debug!("waiting for sidecar CA material");
     wait_for_ca_material(
         &state_dir.join("generated-firma-ca"),
-        Duration::from_secs(60),
+        Duration::from_mins(1),
     )?;
     debug!("CA material present");
 

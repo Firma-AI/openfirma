@@ -4,9 +4,9 @@ This folder shows the limits of governing an agent with only a network allowlist
 
 The platform team wants to allow access to an internal API. The control file allows the host:
 
-| File | Surface | Vocabulary |
-| --- | --- | --- |
-| `network-allowlist.yaml` | Network egress | Hostnames |
+| File                     | Surface        | Vocabulary |
+| ------------------------ | -------------- | ---------- |
+| `network-allowlist.yaml` | Network egress | Hostnames  |
 
 That seems safe until the agent reaches the wrong endpoint on the right host.
 

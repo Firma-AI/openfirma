@@ -1,4 +1,10 @@
 #!/usr/bin/env pwsh
+# LEGACY operator path: manually mints a capability seed via `firma authority issue`.
+# This flow is superseded by the automatic per-session capability minted by `firma run`
+# (written to $XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml and loaded by the
+# autostarted sidecar without operator intervention).
+# Use this script only when pre-provisioning a fixed, long-lived session outside
+# the `firma run` autostart flow (e.g. a daemon or CI agent with a known identity).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 

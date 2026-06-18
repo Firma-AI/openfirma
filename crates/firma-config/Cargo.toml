@@ -2,10 +2,9 @@
 name = "firma-config"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
-description = "Platform config-path discovery for the firma CLI"
 license.workspace = true
 repository.workspace = true
+description = "Platform config-path discovery for the firma CLI"
 
 [lints]
 workspace = true

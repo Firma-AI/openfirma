@@ -27,25 +27,25 @@ firma config [OPTIONS]
 
 ### Options
 
-| Flag                         | Short | Default                  | Description                                                          |
-| ---------------------------- | ----- | ------------------------ | -------------------------------------------------------------------- |
-| `--mode`                     |       | wizard / `agent-local`   | `agent-local`, `agent-remote`, or `authority`                        |
-| `--name`                     | `-n`  | wizard / `my-agent`      | Agent slug — used as `agent_id` in `[sidecar.preflight]`             |
-| `--posture`                  |       | wizard / `dev`           | Cedar policy posture written under `policies/`                       |
-| `--mapping`                  |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                     |
-| `--requested-action`         |       | derived from posture     | Preflight requested actions — repeat or comma-separate               |
-| `--extra-hosts`              |       | none                     | Comma-separated extra hosts the agent may reach                      |
+| Flag                         | Short | Default                  | Description                                                                |
+| ---------------------------- | ----- | ------------------------ | -------------------------------------------------------------------------- |
+| `--mode`                     |       | wizard / `agent-local`   | `agent-local`, `agent-remote`, or `authority`                              |
+| `--name`                     | `-n`  | wizard / `my-agent`      | Agent slug — used as `agent_id` in `[sidecar.preflight]`                   |
+| `--posture`                  |       | wizard / `dev`           | Cedar policy posture written under `policies/`                             |
+| `--mapping`                  |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                           |
+| `--requested-action`         |       | derived from posture     | Preflight requested actions — repeat or comma-separate                     |
+| `--extra-hosts`              |       | none                     | Comma-separated extra hosts the agent may reach                            |
 | `--workspace`                |       | CWD                      | Agent RW path written to `firma.toml` `[run.profiles.generic]` bwrap mount |
-| `--output-dir`               | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings land             |
-| `--state-dir`                |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                          |
-| `--authority-listen <addr>`  |       | `127.0.0.1:9443`         | gRPC listen address (`agent-local` / `authority` modes only)         |
-| `--authority-url <url>`      |       | wizard prompt            | Authority URL written to `[sidecar.authority].url` (`agent-remote`)  |
-| `--authority-ca-cert <path>` |       | wizard prompt            | Authority CA cert PEM path (`agent-remote`)                          |
-| `--authority-pub-key <path>` |       | derived from state dir   | Authority public key path                                            |
-| `--yes`                      | `-y`  | off                      | Skip all prompts; use existing values or flag defaults               |
-| `--force`                    |       | off                      | Overwrite existing files, including the authority keypair            |
-| `--dry-run`                  |       | off                      | Print generated files to stdout; no disk writes                      |
-| `--list-templates`           |       | off                      | Print posture × mapping catalogue and exit                           |
+| `--output-dir`               | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings land                   |
+| `--state-dir`                |       | `$FIRMA_STATE_DIR` / XDG | State dir — keys, revocations, generated CA                                |
+| `--authority-listen <addr>`  |       | `127.0.0.1:9443`         | gRPC listen address (`agent-local` / `authority` modes only)               |
+| `--authority-url <url>`      |       | wizard prompt            | Authority URL written to `[sidecar.authority].url` (`agent-remote`)        |
+| `--authority-ca-cert <path>` |       | wizard prompt            | Authority CA cert PEM path (`agent-remote`)                                |
+| `--authority-pub-key <path>` |       | derived from state dir   | Authority public key path                                                  |
+| `--yes`                      | `-y`  | off                      | Skip all prompts; use existing values or flag defaults                     |
+| `--force`                    |       | off                      | Overwrite existing files, including the authority keypair                  |
+| `--dry-run`                  |       | off                      | Print generated files to stdout; no disk writes                            |
+| `--list-templates`           |       | off                      | Print posture × mapping catalogue and exit                                 |
 
 An explicit `--posture` rewrites the selected `policies/<posture>.cedar`
 file even without `--force`; other existing generated files are still
@@ -130,16 +130,16 @@ firma run -- <agent-command>
 
 ### Mappings
 
-| Name        | Covers                                                                          |
-| ----------- | ------------------------------------------------------------------------------- |
-| `anthropic` | api.anthropic.com — Anthropic Claude API (CONNECT, no MITM)                    |
-| `openai`    | api.openai.com — OpenAI API (CONNECT, no MITM)                                 |
-| `github`    | api.github.com — GitHub REST API (MITM for per-endpoint classification)        |
-| `gmail`     | gmail.googleapis.com — Gmail REST API (MITM for per-endpoint classification)   |
-| `npm`       | registry.npmjs.org — npm package registry                                      |
-| `pypi`      | pypi.org, files.pythonhosted.org — PyPI                                        |
-| `cargo`     | crates.io, static.crates.io — Rust package registry                            |
-| `stripe`    | api.stripe.com — Stripe REST API                                               |
+| Name        | Covers                                                                       |
+| ----------- | ---------------------------------------------------------------------------- |
+| `anthropic` | api.anthropic.com — Anthropic Claude API (CONNECT, no MITM)                  |
+| `openai`    | api.openai.com — OpenAI API (CONNECT, no MITM)                               |
+| `github`    | api.github.com — GitHub REST API (MITM for per-endpoint classification)      |
+| `gmail`     | gmail.googleapis.com — Gmail REST API (MITM for per-endpoint classification) |
+| `npm`       | registry.npmjs.org — npm package registry                                    |
+| `pypi`      | pypi.org, files.pythonhosted.org — PyPI                                      |
+| `cargo`     | crates.io, static.crates.io — Rust package registry                          |
+| `stripe`    | api.stripe.com — Stripe REST API                                             |
 
 ## `firma policy`
 

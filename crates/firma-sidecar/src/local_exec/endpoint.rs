@@ -135,7 +135,7 @@ impl LocalExecEndpoint {
         let store_for_pruner = self.handler.token_store();
         let prune_cancel = cancel.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            let mut interval = tokio::time::interval(Duration::from_mins(1));
             loop {
                 tokio::select! {
                     () = prune_cancel.cancelled() => break,
@@ -375,7 +375,7 @@ mod tests {
         let socket_path = tmp.path().join("test-local-exec.sock");
         let config = LocalExecHandlerConfig {
             default_action: action,
-            token_ttl: Duration::from_secs(60),
+            token_ttl: Duration::from_mins(1),
             retry_after_ms: 500,
         };
         let handler = LocalExecHandler::new(config);

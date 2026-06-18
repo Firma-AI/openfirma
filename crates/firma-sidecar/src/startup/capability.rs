@@ -1,8 +1,9 @@
 //! Build the runtime [`CapabilityMap`] and [`TokenVerifier`] from the
 //! sidecar's `[capability_seed]` and `[authority] public_key_path` config.
 //!
-//! Replaces the empty-default + stub-verifier wiring that lived inline in
-//! [`crate::startup::pipeline`] until the gRPC `IssueCapability` client lands.
+//! Seeds are minted per session by `firma run` (via `IssueCapability`) and
+//! written under the runtime capabilities directory; operator-configured
+//! `[capability_seed]` paths are deprecated and warn at load time.
 
 use std::path::Path;
 
@@ -13,8 +14,18 @@ use firma_core::{AgentId, CapabilityClaims, SessionId, TokenError, TokenId, Toke
 use crate::config::{CapabilitySeedConfig, SeedFile};
 use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
 
+/// True when `path` is an operator-configured seed (NOT under the runtime
+/// capabilities dir written by `firma run`), and therefore should emit the
+/// `[capability_seed]` deprecation warning.
+fn is_operator_seed(path: &Path, capabilities_dir: &Path) -> bool {
+    !path.starts_with(capabilities_dir)
+}
+
 /// Read every seed file referenced by `seed.paths` and assemble a
 /// fully-indexed [`CapabilityMap`].
+///
+/// Emits a deprecation warning for each seed path that is not under the
+/// runtime capabilities directory written by `firma run`.
 ///
 /// # Errors
 ///
@@ -24,9 +35,17 @@ use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
 pub fn load_capability_map(
     seed: &CapabilitySeedConfig,
     verifier: &dyn TokenVerifier,
+    capabilities_dir: &Path,
 ) -> anyhow::Result<CapabilityMap> {
     let mut entries: Vec<CapabilityEntry> = Vec::with_capacity(seed.paths.len());
     for path in &seed.paths {
+        if is_operator_seed(path, capabilities_dir) {
+            tracing::warn!(
+                path = %path.display(),
+                "[capability_seed] is deprecated; prefer per-session capabilities \
+                 minted by `firma run` under the runtime capabilities directory"
+            );
+        }
         let body = std::fs::read_to_string(path).map_err(|e| {
             anyhow::anyhow!("failed to read capability seed '{}': {e}", path.display())
         })?;
@@ -147,7 +166,12 @@ mod tests {
     fn empty_seed_yields_empty_map() {
         let seed = CapabilitySeedConfig::default();
         let verifier = build_token_verifier(None).unwrap();
-        let map = load_capability_map(&seed, verifier.as_ref()).unwrap();
+        let map = load_capability_map(
+            &seed,
+            verifier.as_ref(),
+            Path::new("/run/firma/capabilities"),
+        )
+        .unwrap();
         // `CapabilityMap::select` returns `Err(EnforcementDecision)`
         // when no entry matches; the empty map must always deny.
         let result = map.select("sess", "communication.external.send", "wttr.in");
@@ -160,10 +184,24 @@ mod tests {
             paths: vec![PathBuf::from("/definitely/not/here.toml")],
         };
         let verifier = build_token_verifier(None).unwrap();
-        let err = load_capability_map(&seed, verifier.as_ref())
-            .unwrap_err()
-            .to_string();
+        let err = load_capability_map(
+            &seed,
+            verifier.as_ref(),
+            Path::new("/run/firma/capabilities"),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("/definitely/not/here.toml"));
+    }
+
+    #[test]
+    fn runtime_dir_seed_is_not_flagged_operator() {
+        let cap_dir = Path::new("/run/firma/capabilities");
+        assert!(!is_operator_seed(
+            Path::new("/run/firma/capabilities/abc.toml"),
+            cap_dir
+        ));
+        assert!(is_operator_seed(Path::new("/etc/firma/seed.toml"), cap_dir));
     }
 
     #[test]

@@ -201,6 +201,9 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             &mut prompt,
         )?;
 
+        // When the user supplied their own capability file, `firma run` must
+        // not mint a per-session seed during autostart.
+        let skip_mint = matches!(profile.capability.source, CapabilitySource::File { .. });
         let network_runtime = prepare_network_runtime(
             handle_ref,
             &proof,
@@ -208,6 +211,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             &identity,
             &flags,
             authority,
+            skip_mint,
         )?;
         let effective_endpoint = network_runtime.sidecar_endpoint().clone();
         let effective_seccomp = resolve_effective_seccomp(&profile)?;

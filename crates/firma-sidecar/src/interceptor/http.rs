@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use firma_core::{AbortReason, DenyReason};
@@ -46,7 +47,70 @@ use crate::interceptor::{Interceptor, InterceptorError};
 use crate::pipeline::RawRequest;
 
 const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
+const DEFAULT_TOTAL_BODY_BUDGET_BYTES: usize = 64 * 1024 * 1024;
 const CONNECT_PREFACE_MAX_BYTES: usize = 32;
+
+struct BodyBudget {
+    used: AtomicUsize,
+    ceiling: usize,
+}
+
+impl BodyBudget {
+    fn new(ceiling: usize) -> Self {
+        Self {
+            used: AtomicUsize::new(0),
+            ceiling,
+        }
+    }
+
+    fn try_acquire(&self, n: usize) -> bool {
+        if n == 0 {
+            return true;
+        }
+        self.used
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+                cur.checked_add(n).filter(|&next| next <= self.ceiling)
+            })
+            .is_ok()
+    }
+
+    fn try_release(&self, n: usize) -> bool {
+        if n == 0 {
+            return true;
+        }
+        self.used
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+                cur.checked_sub(n)
+            })
+            .is_ok()
+    }
+}
+
+struct BudgetGuard {
+    budget: Arc<BodyBudget>,
+    reserved: usize,
+}
+
+impl BudgetGuard {
+    fn new(budget: Arc<BodyBudget>) -> Self {
+        Self {
+            budget,
+            reserved: 0,
+        }
+    }
+
+    fn release(&mut self, n: usize) {
+        self.reserved = n;
+    }
+}
+
+impl Drop for BudgetGuard {
+    fn drop(&mut self) {
+        if self.reserved > 0 {
+            let _ = self.budget.try_release(self.reserved);
+        }
+    }
+}
 
 /// HTTP forward proxy interceptor.
 ///
@@ -66,6 +130,7 @@ pub struct HttpInterceptor {
     ca_dir: PathBuf,
     max_request_body_bytes: usize,
     connect_relay: ConnectRelayConfig,
+    total_body_budget_bytes: usize,
 }
 
 impl HttpInterceptor {
@@ -86,6 +151,7 @@ impl HttpInterceptor {
             ca_dir: PathBuf::from("./firma-ca/"),
             max_request_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
             connect_relay: ConnectRelayConfig::default(),
+            total_body_budget_bytes: DEFAULT_TOTAL_BODY_BUDGET_BYTES,
         }
     }
 
@@ -101,6 +167,13 @@ impl HttpInterceptor {
     #[must_use]
     pub fn with_max_request_body_bytes(mut self, max_request_body_bytes: usize) -> Self {
         self.max_request_body_bytes = max_request_body_bytes;
+        self
+    }
+
+    /// Set the global ceiling for concurrent request body buffering.
+    #[must_use]
+    pub fn with_total_body_budget_bytes(mut self, total_body_budget_bytes: usize) -> Self {
+        self.total_body_budget_bytes = total_body_budget_bytes;
         self
     }
 
@@ -161,6 +234,7 @@ impl HttpInterceptor {
             Arc::clone(self.handler.as_ref().ok_or_else(|| {
                 InterceptorError::ServerError("request handler not set".to_string())
             })?);
+        let budget = Arc::new(BodyBudget::new(self.total_body_budget_bytes));
 
         loop {
             tokio::select! {
@@ -170,6 +244,7 @@ impl HttpInterceptor {
                         let mitm_runtime = mitm_runtime.clone();
                         let max_request_body_bytes = self.max_request_body_bytes;
                         let connect_relay = self.connect_relay.clone();
+                        let budget = Arc::clone(&budget);
                         tokio::spawn(async move {
                             if let Err(e) = serve_connection(
                                 stream,
@@ -177,6 +252,7 @@ impl HttpInterceptor {
                                 mitm_runtime,
                                 max_request_body_bytes,
                                 connect_relay,
+                                budget,
                             ).await {
                                 tracing::warn!("http proxy connection error: {e}");
                             }
@@ -197,6 +273,7 @@ async fn serve_connection(
     mitm_runtime: Option<Arc<HttpsMitmRuntime>>,
     max_request_body_bytes: usize,
     connect_relay: ConnectRelayConfig,
+    budget: Arc<BodyBudget>,
 ) -> Result<(), InterceptorError> {
     let io = TokioIo::new(socket);
     http1::Builder::new()
@@ -206,6 +283,7 @@ async fn serve_connection(
                 let handler = Arc::clone(&handler);
                 let mitm_runtime = mitm_runtime.clone();
                 let connect_relay = connect_relay.clone();
+                let budget = Arc::clone(&budget);
                 async move {
                     handle_request(
                         req,
@@ -213,6 +291,7 @@ async fn serve_connection(
                         mitm_runtime,
                         max_request_body_bytes,
                         connect_relay,
+                        budget,
                     )
                     .await
                 }
@@ -229,6 +308,7 @@ async fn handle_request(
     mitm_runtime: Option<Arc<HttpsMitmRuntime>>,
     max_request_body_bytes: usize,
     connect_relay: ConnectRelayConfig,
+    budget: Arc<BodyBudget>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     if req.method() == Method::CONNECT {
         return handle_connect_request(
@@ -237,6 +317,7 @@ async fn handle_request(
             mitm_runtime,
             max_request_body_bytes,
             connect_relay,
+            budget,
         )
         .await;
     }
@@ -245,19 +326,20 @@ async fn handle_request(
     // request can still emit an attributable deny audit event (FIR-208).
     let malformed_host = host_with_default_port(&req, false);
     let session_hint = header_session_id(&req);
-    let raw = match build_raw_request(req, max_request_body_bytes).await {
-        Ok(raw) => raw,
-        Err(detail) => {
-            return Ok(deny_malformed(
-                &handler,
-                &session_hint,
-                "raw.http",
-                &malformed_host,
-                &detail,
-            )
-            .await);
-        }
-    };
+    let (raw, body_guard) =
+        match build_raw_request(req, max_request_body_bytes, budget.clone()).await {
+            Ok(result) => result,
+            Err(detail) => {
+                return Ok(deny_malformed(
+                    &handler,
+                    &session_hint,
+                    "raw.http",
+                    &malformed_host,
+                    &detail,
+                )
+                .await);
+            }
+        };
     let session_id = raw
         .headers
         .get("x-firma-session-id")
@@ -290,6 +372,7 @@ async fn handle_request(
         ),
     };
 
+    drop(body_guard);
     Ok(response)
 }
 
@@ -351,6 +434,7 @@ async fn handle_connect_request(
     mitm_runtime: Option<Arc<HttpsMitmRuntime>>,
     max_request_body_bytes: usize,
     connect_relay: ConnectRelayConfig,
+    budget: Arc<BodyBudget>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let raw = match build_raw_request_head(req, true) {
         Ok(raw) => raw,
@@ -448,6 +532,7 @@ async fn handle_connect_request(
                 max_request_body_bytes,
                 limits,
                 strict_mitm,
+                budget,
             );
             Ok(connect_established_response())
         }
@@ -491,6 +576,7 @@ fn spawn_connect_relay(
     max_request_body_bytes: usize,
     limits: ConnectRelayLimits,
     strict_mitm: bool,
+    budget: Arc<BodyBudget>,
 ) {
     // Invariant enforced by handle_connect_request: when mitm_candidate is Some,
     // prepared_acceptor is also Some (preflight runs synchronously and either
@@ -539,6 +625,7 @@ fn spawn_connect_relay(
                 let relay_target_info = target_info.clone();
                 let relay_session_id = session_id.clone();
                 let relay_handler = Arc::clone(&handler);
+                let relay_budget = Arc::clone(&budget);
                 if let Err(e) = relay_connect_mitm(
                     on_upgrade,
                     relay_target_info,
@@ -548,6 +635,7 @@ fn spawn_connect_relay(
                     max_request_body_bytes,
                     limits,
                     strict_mitm,
+                    relay_budget,
                 )
                 .await
                 {
@@ -670,6 +758,7 @@ async fn relay_connect_mitm(
     max_request_body_bytes: usize,
     limits: ConnectRelayLimits,
     strict_mitm: bool,
+    budget: Arc<BodyBudget>,
 ) -> Result<(), String> {
     let upgraded = tokio::time::timeout(limits.setup_timeout, on_upgrade)
         .await
@@ -742,6 +831,7 @@ async fn relay_connect_mitm(
                 let handler = Arc::clone(&handler);
                 let target = target.clone();
                 let connect_session_id = connect_session_id.clone();
+                let budget = Arc::clone(&budget);
                 async move {
                     handle_mitm_https_request(
                         req,
@@ -749,6 +839,7 @@ async fn relay_connect_mitm(
                         target,
                         &connect_session_id,
                         max_request_body_bytes,
+                        budget,
                     )
                     .await
                 }
@@ -987,6 +1078,7 @@ async fn handle_mitm_https_request(
     target: ConnectTargetInfo,
     connect_session_id: &str,
     max_request_body_bytes: usize,
+    budget: Arc<BodyBudget>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     if req.method() == Method::CONNECT {
         let detail = "MALFORMED_REQUEST: nested CONNECT is not supported";
@@ -1012,19 +1104,20 @@ async fn handle_mitm_https_request(
         .await;
     }
 
-    let raw = match build_raw_https_request(req, &target, max_request_body_bytes).await {
-        Ok(raw) => raw,
-        Err(detail) => {
-            return Ok(deny_malformed(
-                &handler,
-                connect_session_id,
-                "raw.http",
-                &target.host,
-                &detail,
-            )
-            .await);
-        }
-    };
+    let (raw, body_guard) =
+        match build_raw_https_request(req, &target, max_request_body_bytes, budget.clone()).await {
+            Ok(result) => result,
+            Err(detail) => {
+                return Ok(deny_malformed(
+                    &handler,
+                    connect_session_id,
+                    "raw.http",
+                    &target.host,
+                    &detail,
+                )
+                .await);
+            }
+        };
 
     let session_id = raw
         .headers
@@ -1060,6 +1153,7 @@ async fn handle_mitm_https_request(
             crate::handler::abort_body_json(reason, &detail),
         ),
     };
+    drop(body_guard);
     Ok(response)
 }
 
@@ -1419,10 +1513,13 @@ async fn build_raw_https_request(
     req: Request<Incoming>,
     target: &ConnectTargetInfo,
     max_request_body_bytes: usize,
-) -> Result<RawRequest, String> {
+    budget: Arc<BodyBudget>,
+) -> Result<(RawRequest, BudgetGuard), String> {
     let mut raw = build_raw_https_request_head(&req, target)?;
-    raw.body = read_body_with_limit(req.into_body(), max_request_body_bytes).await?;
-    Ok(raw)
+    let (body, guard) =
+        read_body_with_limit(req.into_body(), max_request_body_bytes, budget).await?;
+    raw.body = body;
+    Ok((raw, guard))
 }
 
 fn build_raw_https_request_head(
@@ -1471,16 +1568,20 @@ fn host_matches_connect_target(requested: &ConnectTargetInfo, connect: &ConnectT
 async fn build_raw_request(
     req: Request<Incoming>,
     max_request_body_bytes: usize,
-) -> Result<RawRequest, String> {
+    budget: Arc<BodyBudget>,
+) -> Result<(RawRequest, BudgetGuard), String> {
     let mut raw = build_raw_request_head(&req, false)?;
-    raw.body = read_body_with_limit(req.into_body(), max_request_body_bytes).await?;
-    Ok(raw)
+    let (body, guard) =
+        read_body_with_limit(req.into_body(), max_request_body_bytes, budget).await?;
+    raw.body = body;
+    Ok((raw, guard))
 }
 
 async fn read_body_with_limit(
     mut body: Incoming,
     max_request_body_bytes: usize,
-) -> Result<Option<Vec<u8>>, String> {
+    budget: Arc<BodyBudget>,
+) -> Result<(Option<Vec<u8>>, BudgetGuard), String> {
     if let Some(upper) = body.size_hint().upper()
         && upper > max_request_body_bytes as u64
     {
@@ -1489,24 +1590,31 @@ async fn read_body_with_limit(
         ));
     }
 
+    let mut guard = BudgetGuard::new(budget.clone());
     let mut out = Vec::new();
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(|e| format!("MALFORMED_REQUEST: failed to read body: {e}"))?;
         if let Ok(data) = frame.into_data() {
-            let new_len = out
-                .len()
-                .checked_add(data.len())
-                .ok_or_else(|| "MALFORMED_REQUEST: request body size overflow".to_string())?;
+            let new_len = out.len().checked_add(data.len()).ok_or_else(|| {
+                guard.release(out.len());
+                "MALFORMED_REQUEST: request body size overflow".to_string()
+            })?;
             if new_len > max_request_body_bytes {
+                guard.release(out.len());
                 return Err(format!(
                     "MALFORMED_REQUEST: request body exceeds {max_request_body_bytes} bytes limit"
                 ));
+            }
+            if !budget.try_acquire(data.len()) {
+                guard.release(out.len());
+                return Err("MALFORMED_REQUEST: sidecar body budget exceeded".to_string());
             }
             out.extend_from_slice(data.as_ref());
         }
     }
 
-    Ok(if out.is_empty() { None } else { Some(out) })
+    guard.release(out.len());
+    Ok((if out.is_empty() { None } else { Some(out) }, guard))
 }
 
 fn build_raw_request_head(req: &Request<Incoming>, is_connect: bool) -> Result<RawRequest, String> {
@@ -2243,6 +2351,55 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         panic!("proxy did not become ready within 2.5 seconds");
+    }
+
+    async fn start_proxy_with_budget(
+        addr: SocketAddr,
+        handler: Arc<RequestHandler>,
+        cancel: CancellationToken,
+        max_request_body_bytes: usize,
+        total_body_budget_bytes: usize,
+    ) -> tokio::task::JoinHandle<Result<(), super::super::InterceptorError>> {
+        let interceptor = HttpInterceptor::new(addr)
+            .with_max_request_body_bytes(max_request_body_bytes)
+            .with_total_body_budget_bytes(total_body_budget_bytes);
+        let cancel_clone = cancel.clone();
+        let handle = tokio::spawn(async move { interceptor.run(handler, cancel_clone).await });
+
+        for _ in 0..50 {
+            if TcpStream::connect(addr).await.is_ok() {
+                return handle;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("proxy did not become ready within 2.5 seconds");
+    }
+
+    async fn mock_slow_upstream(delay: Duration) -> (SocketAddr, CancellationToken) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        if let Ok((mut stream, _)) = accepted {
+                            let mut buf = vec![0u8; 4096];
+                            let _ = stream.read(&mut buf).await;
+                            tokio::time::sleep(delay).await;
+                            let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+                            let _ = stream.write_all(response.as_bytes()).await;
+                            let _ = stream.shutdown().await;
+                        }
+                    }
+                    () = cancel_clone.cancelled() => break,
+                }
+            }
+        });
+
+        (addr, cancel)
     }
 
     async fn connect_tls_with_ca(
@@ -3197,6 +3354,132 @@ Content-Length: 10\r\n\
         );
 
         cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    // ── BodyBudget unit tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_body_budget_acquire_within_ceiling() {
+        let budget = BodyBudget::new(16);
+        assert!(budget.try_acquire(8));
+        assert!(budget.try_acquire(8));
+        assert!(!budget.try_acquire(1));
+    }
+
+    #[test]
+    fn test_body_budget_release_allows_reacquire() {
+        let budget = BodyBudget::new(8);
+        assert!(budget.try_acquire(8));
+        assert!(budget.try_release(8));
+        assert!(budget.try_acquire(8));
+    }
+
+    #[test]
+    fn test_body_budget_acquire_zero_always_succeeds() {
+        let budget = BodyBudget::new(0);
+        assert!(budget.try_acquire(0));
+    }
+
+    #[test]
+    fn test_body_budget_release_zero_is_noop() {
+        let budget = BodyBudget::new(8);
+        assert!(budget.try_acquire(4));
+        assert!(budget.try_release(0));
+        assert!(budget.try_acquire(4));
+    }
+
+    // ── Body-budget integration tests ──────────────────────────────────
+
+    #[tokio::test]
+    async fn test_proxy_rejects_request_when_body_budget_exhausted() {
+        let (upstream_addr, upstream_cancel) = mock_slow_upstream(Duration::from_millis(500)).await;
+        let proxy_addr = free_addr();
+        let host = format!("127.0.0.1:{}", upstream_addr.port());
+        let handler = test_handler(test_pipeline_allow("/v1/chat/completions"));
+        let cancel = CancellationToken::new();
+
+        let budget = 4usize;
+        let max_body = 4usize;
+        let server_handle =
+            start_proxy_with_budget(proxy_addr, handler, cancel.clone(), max_body, budget).await;
+
+        let session_a = format!(
+            "POST http://{host}/v1/chat/completions HTTP/1.1\r\n\
+             Host: {host}\r\n\
+             X-Firma-Session-Id: _test_\r\n\
+             Content-Length: 4\r\n\
+             \r\n\
+             AAAA"
+        );
+        let session_b = format!(
+            "POST http://{host}/v1/chat/completions HTTP/1.1\r\n\
+             Host: {host}\r\n\
+             X-Firma-Session-Id: _test_\r\n\
+             Content-Length: 4\r\n\
+             \r\n\
+             BBBB"
+        );
+
+        let mut stream_a = TcpStream::connect(proxy_addr).await.unwrap();
+        stream_a.write_all(session_a.as_bytes()).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let response_b = proxy_response(proxy_addr, &session_b).await;
+        let status_b = response_b
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse::<u16>().ok())
+            .unwrap_or(0);
+        assert_eq!(
+            status_b, 403,
+            "expected 403 for budget-exhausted request, got: {response_b}"
+        );
+        assert!(
+            response_b.contains("body budget exceeded"),
+            "expected budget-exceeded message, got: {response_b}"
+        );
+
+        cancel.cancel();
+        upstream_cancel.cancel();
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_proxy_body_budget_released_after_request_completes() {
+        let (upstream_addr, upstream_cancel) = mock_upstream().await;
+        let proxy_addr = free_addr();
+        let host = format!("127.0.0.1:{}", upstream_addr.port());
+        let handler = test_handler(test_pipeline_allow("/v1/chat/completions"));
+        let cancel = CancellationToken::new();
+
+        let budget = 4usize;
+        let max_body = 4usize;
+        let server_handle =
+            start_proxy_with_budget(proxy_addr, handler, cancel.clone(), max_body, budget).await;
+
+        let request = format!(
+            "POST http://{host}/v1/chat/completions HTTP/1.1\r\n\
+             Host: {host}\r\n\
+             X-Firma-Session-Id: _test_\r\n\
+             Content-Length: 2\r\n\
+             \r\n\
+             {{}}"
+        );
+
+        let status1 = proxy_request(proxy_addr, &request).await;
+        assert_eq!(status1, 200, "first request should succeed");
+
+        let status2 = proxy_request(proxy_addr, &request).await;
+        assert_eq!(
+            status2, 200,
+            "second request should succeed after budget is released"
+        );
+
+        cancel.cancel();
+        upstream_cancel.cancel();
         let _ = server_handle.await;
     }
 }

@@ -1,4 +1,8 @@
-.PHONY: fmt lint test build check fuzz-check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps install-tools toml-fmt managed-seccomp-compat-check
+.PHONY: fmt lint test build check fuzz-check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps install-tools managed-seccomp-compat-check
+
+# Tool versions (shared with CI — see tool-versions.env). KEY=value lines are
+# valid Make assignments, so a plain include exposes each as $(<KEY>).
+include tool-versions.env
 
 install: install-system install-cargo-tools install-docs-deps install-tools
 	@echo "Dev environment ready. Try 'make check' or 'make docs-dev'."
@@ -18,6 +22,10 @@ install-system:
 	    echo "Please install protoc for your platform and re-run 'make install'"; exit 1; \
 	  fi; \
 	fi
+	@if ! command -v dprint >/dev/null 2>&1; then \
+	  echo "Installing dprint..."; \
+	  curl -fsSL https://dprint.dev/install.sh | sh -s $(DPRINT_VERSION); \
+	fi
 	@corepack enable >/dev/null 2>&1 || echo "warning: 'corepack enable' failed; you may need to run it with sudo"
 
 install-tools:
@@ -29,24 +37,25 @@ install-tools:
 	@echo "Git hooks wired to .githooks/"
 
 install-cargo-tools:
-	@command -v cargo-doc-md >/dev/null 2>&1 || cargo install cargo-doc-md
-	@command -v cargo-audit >/dev/null 2>&1 || cargo install cargo-audit --locked
-	@command -v cargo-deny >/dev/null 2>&1 || cargo install cargo-deny --locked
+	@command -v cargo-doc-md >/dev/null 2>&1 || cargo install cargo-doc-md --version $(CARGO_DOC_MD_VERSION)
+	@command -v cargo-audit >/dev/null 2>&1 || cargo install cargo-audit --version $(CARGO_AUDIT_VERSION) --locked
+	@command -v cargo-deny >/dev/null 2>&1 || cargo install cargo-deny --version $(CARGO_DENY_VERSION) --locked
+	@command -v cargo-nextest >/dev/null 2>&1 || cargo install cargo-nextest --version $(CARGO_NEXTEST_VERSION) --locked
 
 install-docs-deps:
 	cd docs-site && corepack pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/
 
 fmt:
-	cargo fmt --check
-
-toml-fmt:
-	taplo fmt --check '**/Cargo.toml'
+	dprint check
 
 lint:
 	cargo clippy --all-features --all-targets
 
 test:
-	cargo test --all-features --all-targets
+	cargo nextest run --all-features --all-targets
+    # nextest runs unit + integration tests; it does not run doctests, so those
+    # run separately via `cargo test --doc`.
+	cargo test --all-features --doc
 
 build:
 	cargo build --all-features --all-targets
@@ -57,11 +66,11 @@ audit:
 deny:
 	cargo deny check licenses bans sources
 
-check: fmt toml-fmt lint test build audit deny
+check: fmt lint test build audit deny
 
-# Requires nightly: rustup toolchain install nightly
+# Pinned nightly lives in .rust-nightly (cargo-fuzz requires nightly).
 fuzz-check:
-	cd fuzz && cargo +nightly check
+	cd fuzz && cargo +$(shell cat .rust-nightly) check
 
 bench:
 	cargo bench --workspace --no-fail-fast

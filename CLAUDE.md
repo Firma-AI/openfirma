@@ -6,14 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 make check          # Run fmt + lint + test + build (CI parity)
-make fmt            # cargo fmt --check
+make fmt            # dprint check (TOML + Markdown + Rust)
 make lint           # cargo clippy --workspace -- -D warnings
-make test           # cargo test --workspace
+make test           # cargo nextest run + cargo test --doc
 make build          # cargo build --workspace
 ```
 
-Single crate: `cargo test -p firma-sidecar`
-Single test: `cargo test -p firma-sidecar pipeline::tests::test_enforce_happy_path`
+Tests run via `cargo nextest` (process-per-test isolation); doctests run
+separately via `cargo test --doc` since nextest does not run them.
+
+Single crate: `cargo nextest run -p firma-sidecar`
+Single test: `cargo nextest run -p firma-sidecar test_enforce_happy_path`
 
 Requires `protoc` installed for `firma-proto` protobuf compilation.
 
@@ -56,11 +59,11 @@ across merged files fail at startup (fail-closed).
 
 Shipped mapping files live under `crates/firma-sidecar/config/mappings/`:
 
-| File          | Covers                                                        |
-|---------------|---------------------------------------------------------------|
-| `github.toml` | 44 GitHub REST endpoints → 12 action classes                  |
-| `stripe.toml` | 88 Stripe REST endpoints → 14 action classes                  |
-| `gmail.toml`  | 41 Gmail REST endpoints → 7 action classes                    |
+| File          | Covers                                       |
+| ------------- | -------------------------------------------- |
+| `github.toml` | 44 GitHub REST endpoints → 12 action classes |
+| `stripe.toml` | 88 Stripe REST endpoints → 14 action classes |
+| `gmail.toml`  | 41 Gmail REST endpoints → 7 action classes   |
 
 Example operator config:
 
@@ -84,9 +87,13 @@ update the docs site under `docs-site/` in the same change set. Write docs for
 human readers first: concise, concrete, task-oriented, and clear about examples,
 operational gotchas, and relevant invariants.
 
-## TOML Formatting
+## Formatting (TOML + Markdown + Rust)
 
-Always run `taplo format` after modifying any `.toml` file.
+`dprint` is the single formatter for the repo — all TOML, Markdown, and Rust
+files (`rustfmt` must be installed). Run `dprint fmt` after modifying any
+`.toml`, `.md`, or `.rs` file; `make fmt` (part of `make check`) runs
+`dprint check` to verify formatting in CI. `docs-site/` is excluded — it has
+its own toolchain.
 
 ## Linting Rules
 

@@ -2,10 +2,9 @@
 name = "firma-sidecar"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
-description = "HTTP proxy sidecar with enforcement pipeline for Firma OSS"
 license.workspace = true
 repository.workspace = true
+description = "HTTP proxy sidecar with enforcement pipeline for Firma OSS"
 
 [features]
 loom-tests = []
@@ -21,6 +20,7 @@ elliptic-curve = { workspace = true }
 firma-core = { workspace = true }
 firma-grpc-interceptor-proto = { workspace = true }
 firma-proto = { workspace = true }
+firma-stack = { workspace = true }
 governor = { workspace = true }
 hex = { workspace = true }
 http-body = { workspace = true }
@@ -42,15 +42,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, default-features = false, features = [
-  "fs",
-  "macros",
-  "net",
-  "rt-multi-thread",
-  "signal",
-  "sync",
-  "time",
-] }
+tokio = { workspace = true, default-features = false, features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }

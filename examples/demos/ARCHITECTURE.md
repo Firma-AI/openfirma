@@ -63,7 +63,7 @@ examples/
 
 ### Phase 1 — Menu
 
-`demo_loader::discover` scans `--demos-dir` for subdirectories that contain `description.md`. The first `# ` line of `description.md` is used as the tagline. Entries are sorted by name. The user selects a demo with arrow keys + Enter.
+`demo_loader::discover` scans `--demos-dir` for subdirectories that contain `description.md`. The first `#` line of `description.md` is used as the tagline. Entries are sorted by name. The user selects a demo with arrow keys + Enter.
 
 ### Phase 2 — Config (optional)
 
@@ -121,13 +121,13 @@ Each demo provides a single `demoX/firma.toml`; its `[authority]` table maps dir
 
 ```toml
 [authority]
-listen_addr        = "127.0.0.1:50051"
-policy_dir         = "examples/demos/demo0/policies"   # note: policies/ subdir
-revocation_file    = "examples/demos/demo0/.runtime/revocations.txt"
-key_file           = "examples/demos/demo0/.runtime/authority.key"
-max_ttl_seconds    = 3600
+listen_addr = "127.0.0.1:50051"
+policy_dir = "examples/demos/demo0/policies" # note: policies/ subdir
+revocation_file = "examples/demos/demo0/.runtime/revocations.txt"
+key_file = "examples/demos/demo0/.runtime/authority.key"
+max_ttl_seconds = 3600
 bundle_ttl_seconds = 30
-log_level          = "info"
+log_level = "info"
 # schema_path = "..."  # optional; omit to use embedded schema
 ```
 
@@ -147,12 +147,12 @@ The `[sidecar.*]` tables in `demoX/firma.toml` mirror the `examples/e2e/firma.to
 
 ```toml
 [sidecar.interceptor]
-mode               = "http_proxy"
-listen_addr        = "127.0.0.1:8080"
+mode = "http_proxy"
+listen_addr = "127.0.0.1:8080"
 drain_timeout_secs = 30
 
 [sidecar.policy]
-dir           = "examples/demos/demo0"
+dir = "examples/demos/demo0"
 authority_url = "http://127.0.0.1:50051"
 
 [sidecar.ca]
@@ -162,38 +162,38 @@ dir = "examples/demos/demo0/.runtime/generated-firma-ca"
 level = "info"
 
 [sidecar.mapping]
-rules_path        = "examples/demos/demo0/mapping-rules.toml"
-default_protected = true   # demos default to fail-closed
+rules_path = "examples/demos/demo0/mapping-rules.toml"
+default_protected = true # demos default to fail-closed
 
 [sidecar.capability_validation]
 clock_skew_tolerance_seconds = 0
 
 [sidecar.constraint_enforcement]
-bundle_ttl_seconds     = 3600
+bundle_ttl_seconds = 3600
 enforcement_timeout_ms = 50
 
 [sidecar.connector]
 default_timeout_ms = 10000
 
 [sidecar.audit]
-sink             = "file"
-file_path        = "examples/demos/demo0/.runtime/audit.jsonl"
+sink = "file"
+file_path = "examples/demos/demo0/.runtime/audit.jsonl"
 signing_key_path = "examples/demos/demo0/.runtime/audit.key"
 
 [sidecar.authority]
-connect_timeout_secs                 = 10
-reconnect_min_backoff_ms             = 250
-reconnect_max_backoff_secs           = 30
-revocation_readiness_grace_ms        = 500
+connect_timeout_secs = 10
+reconnect_min_backoff_ms = 250
+reconnect_max_backoff_secs = 30
+revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false
 
 [sidecar.preflight]
-agent_id               = "demo0-agent"
-session_id             = "demo0-session-001"
-requested_actions      = ["code.review.read", "filesystem.read"]
-resource_scope         = "*"
+agent_id = "demo0-agent"
+session_id = "demo0-session-001"
+requested_actions = ["code.review.read", "filesystem.read"]
+resource_scope = "*"
 authority_pub_key_path = "examples/demos/demo0/.runtime/authority.pub"
-ttl_seconds            = 3600
+ttl_seconds = 3600
 ```
 
 `default_protected = true` is the demo default — every unmapped host is DENY.
@@ -206,27 +206,27 @@ ttl_seconds            = 3600
 
 ```toml
 [[rules]]
-method       = "GET"
-host         = "api.github.com"
-path         = "/repos/*/*/pulls/*"
+method = "GET"
+host = "api.github.com"
+path = "/repos/*/*/pulls/*"
 action_class = "code.review.read"
 
 [[rules]]
-method       = "PUT"
-host         = "api.github.com"
-path         = "/repos/*/*/pulls/*/merge"
+method = "PUT"
+host = "api.github.com"
+path = "/repos/*/*/pulls/*/merge"
 action_class = "code.merge"
 
 [[rules]]
-method       = "POST"
-host         = "api.stripe.com"
-path         = "/v1/refunds"
+method = "POST"
+host = "api.stripe.com"
+path = "/v1/refunds"
 action_class = "payment.transfer"
 
 [[rules]]
-method       = "DELETE"
-host         = "httpbin.org"
-path         = "/delete"
+method = "DELETE"
+host = "httpbin.org"
+path = "/delete"
 action_class = "account.permission.change"
 ```
 

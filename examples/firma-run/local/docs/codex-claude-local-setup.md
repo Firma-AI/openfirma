@@ -37,9 +37,18 @@ capability claims.
 
 ### Token lifecycle
 
+**Automatic (primary path):** `firma run` mints a per-session capability live via
+the Authority's `IssueCapability` gRPC call and writes it to
+`$XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml`. The autostarted sidecar
+loads it at startup — no manual step required. When the token expires, start a
+new `firma run` session.
+
+**Legacy (operator-managed, deprecated):** If you need a fixed, long-lived
+session pre-provisioned outside the `firma run` autostart flow:
+
 1. Issue token for the exact session id:
    - `examples/firma-run/local/renew-capability.sh --session-id "$FIRMA_RUN_SESSION_ID" ...`
-2. Sidecar loads token via `[capability_seed].paths` at startup.
+2. Sidecar loads token via `[capability_seed].paths` at startup (deprecated; emits warning).
 3. Requests are enforced against that token until expiry.
 4. On expiry, sidecar denies with `TokenExpired`.
 5. Re-issue token for the same session id and restart sidecar.
@@ -107,9 +116,15 @@ cp examples/firma-run/local/assets/mapping-rules.codex.local.example.toml .local
 # cp examples/firma-run/local/assets/mapping-rules.claude.local.example.toml .local/mapping-rules.toml
 ```
 
-## 4) Set stable session id and issue capability token
+## 4) Run the agent (automatic capability mint)
 
-Codex:
+`firma run` mints a capability automatically on each session start. No manual
+token issuance is required for the standard flow.
+
+If you are using the **legacy operator path** (pre-provisioned seed tokens with
+`[capability_seed]`), set a stable session id and issue a seed manually:
+
+Codex (legacy):
 
 ```bash
 export FIRMA_RUN_SESSION_ID=demo-session-codex
@@ -118,7 +133,7 @@ examples/firma-run/local/renew-capability.sh \
   --output .local/capability-codex.toml
 ```
 
-Claude:
+Claude (legacy):
 
 ```bash
 export FIRMA_RUN_SESSION_ID=demo-session-claude

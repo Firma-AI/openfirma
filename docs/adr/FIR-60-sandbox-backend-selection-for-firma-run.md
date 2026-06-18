@@ -190,13 +190,13 @@ The wrapper chooses backend automatically by host OS with explicit override flag
 
 The following external discussions and tools were reviewed to pressure-test FIR-60. They are informative, not normative for the decision.
 
-| Project family | Verified from primary sources | FIR-60 relevance |
-|---|---|---|
-| E2B | Linux VM sandbox model; configurable timeout/pause-resume lifecycle; managed SDK-first platform | Useful reference for remote sandbox APIs, but not selected as FIR-60 default because FIR-60 targets local wrapper enforcement under direct runtime control |
-| Beam | Open-source platform components with AGPL core; cloud-oriented sandbox workflows | Valuable for cloud execution patterns, but not selected as default local backend |
-| Daytona | AGPL platform with multi-service control/compute architecture and sandbox runners | Strong orchestration platform, but heavier than FIR-60 default requirements |
-| Microsandbox | Apache-2.0 self-hosted microVM execution layer; docs indicate Linux/macOS support and Windows pending | Strong candidate for future backend experimentation, especially enterprise/high-isolation tracks |
-| Dify Sandbox | Apache-2.0 code execution sandbox; Linux/container-oriented requirements | Useful design reference, but not a direct FIR-60 cross-platform default fit |
+| Project family | Verified from primary sources                                                                         | FIR-60 relevance                                                                                                                                           |
+| -------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| E2B            | Linux VM sandbox model; configurable timeout/pause-resume lifecycle; managed SDK-first platform       | Useful reference for remote sandbox APIs, but not selected as FIR-60 default because FIR-60 targets local wrapper enforcement under direct runtime control |
+| Beam           | Open-source platform components with AGPL core; cloud-oriented sandbox workflows                      | Valuable for cloud execution patterns, but not selected as default local backend                                                                           |
+| Daytona        | AGPL platform with multi-service control/compute architecture and sandbox runners                     | Strong orchestration platform, but heavier than FIR-60 default requirements                                                                                |
+| Microsandbox   | Apache-2.0 self-hosted microVM execution layer; docs indicate Linux/macOS support and Windows pending | Strong candidate for future backend experimentation, especially enterprise/high-isolation tracks                                                           |
+| Dify Sandbox   | Apache-2.0 code execution sandbox; Linux/container-oriented requirements                              | Useful design reference, but not a direct FIR-60 cross-platform default fit                                                                                |
 
 Interpretation rule used in this ADR:
 
