@@ -31,6 +31,7 @@ firma run -- curl -x "$HTTP_PROXY" https://api.anthropic.com/v1/messages
 ```
 
 Expected:
+
 - Exit 0 or Sidecar-denied exit (policy may block the request)
 - Sidecar audit log contains a mediated request for `api.anthropic.com`
 - No direct connection from the process appears in network capture
@@ -43,6 +44,7 @@ firma run -- env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
 ```
 
 Expected:
+
 - `curl` cannot resolve or connect to `api.anthropic.com`
 - Exit non-zero (connection refused, network unreachable, or DNS failure)
 - Sidecar audit log has NO entry for this request
@@ -62,6 +64,7 @@ except Exception as e:
 ```
 
 Expected:
+
 - Output contains `BLOCKED`
 - `BYPASS` must not appear
 - Exit 0 (script ran to completion, but the connect failed)
@@ -84,6 +87,7 @@ except Exception as e:
 ```
 
 Expected:
+
 - Output contains `BLOCKED`
 - Exit 0 (script ran; resolution failed cleanly)
 
@@ -103,6 +107,7 @@ except Exception as e:
 ```
 
 Expected:
+
 - Output contains `BLOCKED`
 
 ---
@@ -117,6 +122,7 @@ firma run --sidecar tcp://127.0.0.1:19999 --no-autostart -- echo hello
 ```
 
 Expected:
+
 - Exit non-zero
 - Error message references sidecar unreachable or fail-closed
 - `hello` is NOT printed
@@ -134,6 +140,7 @@ firma run -- bash -c 'sleep 1; curl https://api.anthropic.com/v1/messages; echo 
 ```
 
 Expected:
+
 - After sidecar kill, `curl` returns a connection error or non-200 status
 - Subsequent requests from the agent cannot reach external services
 - The agent process may continue running but all outbound is broken
@@ -149,6 +156,7 @@ firma run -- bash -c 'curl https://api.anthropic.com/v1/messages'
 ```
 
 Expected:
+
 - Child `curl` process is confined by the same sandbox-exec policy
 - If `HTTP_PROXY` is set: request is mediated via Sidecar (may be denied by policy)
 - If `HTTP_PROXY` unset in child: direct connection fails (blocked by MAC)
@@ -167,6 +175,7 @@ except Exception as e:
 ```
 
 Expected:
+
 - Output contains `BLOCKED`
 - `exec` across process boundary does not remove the MAC sandbox label
 
@@ -182,6 +191,7 @@ echo "exit=$?"
 ```
 
 Expected:
+
 - Shell prints `exit=42`
 
 ### MACOS-011 — SIGINT forwarded and agent exits cleanly
@@ -197,6 +207,7 @@ echo "exit=$?"
 ```
 
 Expected:
+
 - Process exits promptly after SIGINT
 - Exit code is 130 (128 + SIGTERM/SIGINT signal number) or similar non-zero
 
@@ -207,6 +218,7 @@ firma run -- bash -c 'echo stdout; echo stderr >&2'
 ```
 
 Expected:
+
 - `stdout` appears on stdout
 - `stderr` appears on stderr
 
@@ -214,13 +226,13 @@ Expected:
 
 ## Known limits and residual caveats
 
-| Limit | Description |
-| ----- | ----------- |
-| `sandbox-exec` deprecated | Apple deprecated `sandbox-exec`; policy is TrustedBSD MAC but the tool may be removed in future macOS versions. Track for VZ guest graduation. |
-| DNS confine via denial only | `/etc/resolv.conf` cannot be bind-mounted (no namespace). DNS confinement works by denying UDP/TCP to non-loopback, not via a controlled resolver. An agent could read `/etc/hosts` for `.local` names. |
-| Port 53 stub not on standard port | Host DNS stub runs on an ephemeral port; `FIRMA_DNS_STUB_ADDR` is set but agents that hardcode port 53 will get ECONNREFUSED (blocked) rather than a REFUSED DNS response. |
-| Loopback allows all of 127.0.0.1 | The sandbox profile allows any connection to `127.0.0.1`, not just the specific bridge port. A compromised agent could reach other host services on loopback. |
-| No structural proof until E2E green | The runtime logs `network_confinement=macos_sandbox_network_deny` but the docs claim boundary remains non-structural until MACOS-001 through MACOS-009 are verified on supported hardware. |
+| Limit                               | Description                                                                                                                                                                                             |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sandbox-exec` deprecated           | Apple deprecated `sandbox-exec`; policy is TrustedBSD MAC but the tool may be removed in future macOS versions. Track for VZ guest graduation.                                                          |
+| DNS confine via denial only         | `/etc/resolv.conf` cannot be bind-mounted (no namespace). DNS confinement works by denying UDP/TCP to non-loopback, not via a controlled resolver. An agent could read `/etc/hosts` for `.local` names. |
+| Port 53 stub not on standard port   | Host DNS stub runs on an ephemeral port; `FIRMA_DNS_STUB_ADDR` is set but agents that hardcode port 53 will get ECONNREFUSED (blocked) rather than a REFUSED DNS response.                              |
+| Loopback allows all of 127.0.0.1    | The sandbox profile allows any connection to `127.0.0.1`, not just the specific bridge port. A compromised agent could reach other host services on loopback.                                           |
+| No structural proof until E2E green | The runtime logs `network_confinement=macos_sandbox_network_deny` but the docs claim boundary remains non-structural until MACOS-001 through MACOS-009 are verified on supported hardware.              |
 
 ## Graduation criteria
 
