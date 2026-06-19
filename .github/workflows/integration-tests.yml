@@ -61,4 +61,4 @@ jobs:
           FIRMA_BIN: ${{ github.workspace }}/target/release/firma
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: cargo test --test integration_tests -- '${{ matrix.agent.name }}::' --include-ignored
+        run: cargo test --test e2e -- '${{ matrix.agent.name }}::' --include-ignored
