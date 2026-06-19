@@ -225,6 +225,9 @@ async fn run_enforcement(
     let mut cmd = tokio::process::Command::new(firma_bin);
     cmd.args(["run", "--profile", ctx.agent.profile(), "--config"])
         .arg(&config_path);
+    if !crate::bwrap_available() {
+        cmd.arg("--allow-non-structural");
+    }
     if let Some(cap) = &ctx.capability_seed {
         cmd.args(["--capability-file"]).arg(cap);
     }
