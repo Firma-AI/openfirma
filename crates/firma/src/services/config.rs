@@ -1496,8 +1496,8 @@ mod tests {
         assert!(
             rules
                 .iter()
-                .any(|r| r.host == "api.openai.com" && r.method.as_deref() == Some("CONNECT")),
-            "expected api.openai.com:443 CONNECT rule"
+                .any(|r| r.host == "*.openai.com" && r.method.as_deref() == Some("CONNECT")),
+            "expected *.openai.com:443 CONNECT rule"
         );
     }
 
