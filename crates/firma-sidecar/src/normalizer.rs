@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
 use firma_core::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
+use unicode_normalization::UnicodeNormalization;
 
 /// Hosts whose traffic earns the `provider = "github"` resource tag.
 /// Exact match, not glob — typo-squat hostnames must not be tagged.
@@ -220,18 +221,20 @@ impl IntentNormalizer {
             .split_once('?')
             .map_or((request.path.as_str(), ""), |(p, q)| (p, q));
 
+        let normalized_path = normalize_path(path_without_query);
+
         let (sanitized_path, query_params) = if query_string.is_empty() {
-            (request.path.clone(), HashMap::new())
+            (normalized_path.clone(), HashMap::new())
         } else {
             let sanitized_query = sanitize_query_string(query_string, self.sensitive_query_params);
-            let sanitized_path = format!("{path_without_query}?{sanitized_query}");
+            let sanitized_path = format!("{normalized_path}?{sanitized_query}");
             let query_params = parse_query_string(query_string);
             (sanitized_path, query_params)
         };
 
         let match_result =
             self.mapping_table
-                .find_match(&request.method, &request.host, path_without_query);
+                .find_match(&request.method, &request.host, &normalized_path);
 
         match match_result {
             MatchResult::Matched(rule) => {
@@ -341,6 +344,46 @@ fn parse_query_string(query: &str) -> HashMap<String, String> {
         })
         .collect()
 }
+
+/// Normalize a request path according to the canonicalization rules:
+/// 1. Strip fragment (everything after '#')
+/// 2. Collapse double slashes to single slash
+/// 3. Strip trailing slash (except for root "/")
+/// 4. Apply NFC normalization to non-ASCII characters
+fn normalize_path(path: &str) -> String {
+    // Drop fragment
+    let path = path.split('#').next().unwrap_or(path);
+
+    // Collapse double slashes
+    let mut collapsed = String::with_capacity(path.len());
+    let mut prev_was_slash = false;
+    for ch in path.chars() {
+        if ch == '/' {
+            if !prev_was_slash {
+                collapsed.push(ch);
+                prev_was_slash = true;
+            }
+        } else {
+            collapsed.push(ch);
+            prev_was_slash = false;
+        }
+    }
+
+    // Strip trailing slash (except root)
+    let trimmed = if collapsed.len() > 1 && collapsed.ends_with('/') {
+        &collapsed[..collapsed.len() - 1]
+    } else {
+        &collapsed
+    };
+
+    // Apply NFC normalization if there are non-ASCII characters
+    if trimmed.chars().any(|c| c > '\u{7F}') {
+        trimmed.nfc().collect::<String>()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -386,6 +429,57 @@ mod tests {
             body: None,
             is_https: true,
         }
+    }
+
+    #[test]
+    fn test_normalize_path_strips_trailing_slash() {
+        assert_eq!(normalize_path("/v1/charges/"), "/v1/charges");
+        assert_eq!(normalize_path("/api/v1/users/"), "/api/v1/users");
+    }
+
+    #[test]
+    fn test_normalize_path_preserves_root() {
+        assert_eq!(normalize_path("/"), "/");
+        assert_eq!(normalize_path("//"), "/");
+    }
+
+    #[test]
+    fn test_normalize_path_collapses_double_slashes() {
+        assert_eq!(normalize_path("/v1//charges"), "/v1/charges");
+        assert_eq!(normalize_path("//api//v1//users//"), "/api/v1/users");
+        assert_eq!(normalize_path("///"), "/");
+    }
+
+    #[test]
+    fn test_normalize_path_strips_fragment() {
+        assert_eq!(normalize_path("/v1/charges#section"), "/v1/charges");
+        assert_eq!(normalize_path("/api#fragment"), "/api");
+        assert_eq!(normalize_path("/path?query=1#frag"), "/path?query=1");
+    }
+
+    #[test]
+    fn test_normalize_path_applies_nfc() {
+        let composed = "café"; // NFC: U+0063 U+0061 U+0066 U+00E9
+        let decomposed = "cafe\u{301}"; // NFD: U+0063 U+0061 U+0066 U+0065 U+0301
+        assert_eq!(
+            normalize_path(&format!("/{decomposed}")),
+            format!("/{composed}")
+        );
+    }
+
+    #[test]
+    fn test_normalize_path_ascii_unchanged() {
+        assert_eq!(normalize_path("/v1/charges"), "/v1/charges");
+        assert_eq!(normalize_path("/api/v1/users"), "/api/v1/users");
+    }
+
+    #[test]
+    fn test_normalize_path_combined() {
+        assert_eq!(normalize_path("/v1//charges/#frag"), "/v1/charges");
+        assert_eq!(
+            normalize_path("//api//v1//users//#section"),
+            "/api/v1/users"
+        );
     }
 
     fn load_mapping_file(filename: &str) -> MappingRulesFile {
