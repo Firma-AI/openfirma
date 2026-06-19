@@ -6,7 +6,7 @@ Guidance for coding agents working in this repository.
 
 ```bash
 make check # Run fmt + lint + test + build (CI parity)
-make fmt # cargo fmt --check
+make fmt # dprint check (TOML + Markdown + Rust)
 make lint # cargo clippy --workspace -- -D warnings
 make test # cargo nextest run + cargo test --doc
 make build # cargo build --workspace
@@ -19,6 +19,82 @@ Single crate: `cargo nextest run -p firma-sidecar`
 Single test: `cargo nextest run -p firma-sidecar test_enforce_happy_path`
 
 Requires `protoc` installed for `firma-grpc-interceptor-proto` protobuf compilation. The `firma.v1` wire contract comes from the published `firma-protobuf` crate, which vendors its own `protoc`.
+
+## Formatting
+
+`dprint` is the single formatter for the repo. It covers Rust, TOML, and
+Markdown; `rustfmt` must still be installed. Run `dprint fmt` after modifying
+`.toml`, `.md`, or `.rs` files. `make fmt` runs `dprint check` in CI.
+
+`docs-site/` is excluded and uses its own toolchain.
+
+## Linting Rules
+
+Workspace lints are strict and enforced in CI:
+
+- `clippy::pedantic` warn
+- `clippy::unwrap_used` deny
+- `clippy::expect_used` deny
+- `clippy::panic` deny
+- `unsafe_code` deny
+
+Do not use `.unwrap()`, `.expect()`, `panic!()`, or `unsafe`. Prefer
+`Result<T, E>` with `thiserror` for error handling.
+
+## Architecture
+
+OpenFirma is an L7 policy enforcement sidecar for AI agents. Every outbound
+agent call passes through the Sidecar before reaching external systems.
+
+### Crates
+
+- `firma-core` — shared types and trait contracts such as `Decision`,
+  `ExecutionEnvelope`, `CapabilityClaims`, `TokenVerifier`, `TokenSigner`,
+  `PolicyEvaluator`, and `RevocationStore`. No dependencies on other crates.
+- `firma-proto` — gRPC wire contract via protobuf. `build.rs` compiles `.proto`
+  files with `tonic-build`.
+- `firma-sidecar` — enforcement proxy binary. Key top-level modules:
+  - `interceptor` — captures outbound agent traffic.
+  - `normalizer` — maps raw HTTP requests to canonical `ExecutionEnvelope`
+    values with normalized action classes. Unclassifiable protected actions
+    fail closed to DENY.
+  - `enforcement` — two-stage engine: capability validation, then constraint
+    enforcement.
+  - `pipeline` — orchestrates normalizer and enforcement through a single
+    `enforce()` entry point.
+- `firma-authority` — local/dev Authority reference implementation. Issues
+  PASETO v4 tokens and streams policy bundles and revocations. Never on the hot
+  path.
+
+### Key Invariants
+
+- Fail closed: every error becomes a DENY decision.
+- No network on the hot path: enforcement is fully local.
+- Deterministic enforcement: same context plus same policy bundle yields the
+  same decision.
+- Immutable execution envelopes: treat `ExecutionEnvelope` as immutable once
+  created.
+
+## Mapping Rules Configuration
+
+The normalizer's host/method/path to action-class mapping is loaded from TOML
+at startup by `startup::pipeline::build_pipeline_runtime`.
+
+`[enforcement.mapping]` supports:
+
+- `rules_path: String` — primary mapping file, defaulting to
+  `mapping-rules.toml`.
+- `rules_paths: Vec<String>` — additional mapping files merged on top.
+
+Rules from `rules_path` and each entry in `rules_paths` are concatenated before
+passing to `MappingTable::from_config`. Duplicate `(method, host, path)` tuples
+across merged files fail at startup.
+
+Shipped mapping files live under `crates/firma-sidecar/config/mappings/`:
+
+- `github.toml`
+- `stripe.toml`
+- `gmail.toml`
 
 ## Documentation
 
