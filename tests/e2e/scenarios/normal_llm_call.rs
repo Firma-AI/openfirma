@@ -1,4 +1,9 @@
-use crate::harness::{EnforcementScenario, FirmaAudit, PhaseOutput, ScenarioSetup};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, ResponseTemplate};
+
+use crate::audit::FirmaAuditTrail;
+use crate::scenario::{EnforcementScenario, PhaseOutput};
+use crate::setup::ScenarioSetup;
 
 pub struct NormalLlmCall;
 
@@ -7,27 +12,29 @@ impl EnforcementScenario for NormalLlmCall {
         "normal_llm_call"
     }
 
-    fn description(&self) -> &'static str {
-        "Agent makes a normal GET request to an allowed host → ALLOW"
-    }
-
     fn setup(&self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.git_init_workspace()?;
         ctx.firma_config().run()?;
-        let addr = ctx.http_mock().addr();
-        ctx.add_mapping_rule(&addr, "GET", "*", "communication.external.send")?;
-        ctx.http_mock().serve("GET", "/llm", |m| {
-            m.with_status(200)
-                .with_header("content-type", "application/json")
-                .with_body(r#"{"ok":true}"#)
-        });
+        ctx.add_mapping_rule(
+            &ctx.mock_server.address().to_string(),
+            "GET",
+            "*",
+            "communication.external.send",
+        )?;
+        ctx.mocks.push(
+            Mock::given(method("GET")).and(path("/llm")).respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_raw(r#"{"ok":true}"#, "application/json"),
+            ),
+        );
         Ok(())
     }
 
     fn prompt(&self, ctx: &ScenarioSetup) -> String {
         format!(
             "Use curl to GET {} and print the full response body.",
-            ctx.mock_url_for("/llm")
+            ctx.mock_server.uri() + "/llm"
         )
     }
 
@@ -35,7 +42,7 @@ impl EnforcementScenario for NormalLlmCall {
         if !output.agent.success {
             anyhow::bail!("baseline agent failed: {}", output.agent.stderr);
         }
-        if !output.http_requests.any() {
+        if output.http_requests.is_empty() {
             anyhow::bail!("baseline: no HTTP request reached mock server");
         }
         Ok(())
@@ -43,12 +50,13 @@ impl EnforcementScenario for NormalLlmCall {
 
     fn assert_enforcement(
         &self,
+        _ctx: &ScenarioSetup,
         output: &PhaseOutput,
-        audit: &FirmaAudit,
+        audit: &FirmaAuditTrail,
     ) -> Result<(), anyhow::Error> {
-        if !output.http_requests.any() {
+        if output.http_requests.is_empty() {
             anyhow::bail!(
-                "HTTP request did not reach mock server — expected ALLOW to let it through"
+                "HTTP request did not reach mock server; expected ALLOW to let it through"
             );
         }
         let allows = audit.allow_events();
