@@ -47,7 +47,7 @@ impl MockResponseBuilder {
 
 // ── Mock spec ─────────────────────────────────────────────────────────────────
 
-pub(crate) struct MockSpec {
+pub struct MockSpec {
     pub(crate) method: String,
     pub(crate) path: String,
     pub(crate) status: u16,
@@ -113,7 +113,7 @@ impl HttpMock<'_> {
 // ── Capture server ────────────────────────────────────────────────────────────
 
 #[derive(Default)]
-pub(crate) struct CaptureState {
+pub struct CaptureState {
     pub(crate) mocks: Vec<MockSpec>,
     pub(crate) received: Vec<ReceivedRequest>,
 }
@@ -139,7 +139,7 @@ impl ReceivedRequest {
     }
 }
 
-pub(crate) async fn run_capture_server(
+pub async fn run_capture_server(
     listener: tokio::net::TcpListener,
     state: Arc<Mutex<CaptureState>>,
     mut shutdown: oneshot::Receiver<()>,

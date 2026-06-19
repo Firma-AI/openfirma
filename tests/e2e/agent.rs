@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AgentKind {
+pub enum AgentKind {
     ClaudeCode,
     Codex,
 }
@@ -10,7 +10,7 @@ pub(crate) enum AgentKind {
 /// treated as global flags by the agent binary.
 #[derive(Debug, Clone)]
 pub struct Agent {
-    pub(crate) kind: AgentKind,
+    pub kind: AgentKind,
     args: Vec<String>,
 }
 

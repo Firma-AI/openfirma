@@ -13,6 +13,7 @@ mod setup;
 use std::path::PathBuf;
 use std::process::Command;
 
+use agent::AgentKind;
 use runner::run_scenario;
 use scenarios::EnforcementScenario;
 
@@ -60,29 +61,28 @@ pub fn bwrap_available() -> bool {
 
 // ── Test driver ──────────────────────────────────────────────────────────────
 
-/// Default agent configuration by command name.
-#[allow(clippy::panic)]
-fn default_agent(agent_cmd: &str) -> agent::Agent {
-    match agent_cmd {
-        "claude" => agent::Agent::claude().args(["--permission-mode", "bypassPermissions"]),
-        "codex" => agent::Agent::codex().args(["--sandbox", "danger-full-access"]),
-        other => panic!("unknown agent: {other}"),
+fn default_agent(kind: AgentKind) -> agent::Agent {
+    match kind {
+        AgentKind::ClaudeCode => {
+            agent::Agent::claude().args(["--permission-mode", "bypassPermissions"])
+        }
+        AgentKind::Codex => agent::Agent::codex().args(["--sandbox", "danger-full-access"]),
     }
 }
 
 #[allow(clippy::panic)]
-async fn drive_scenario_for_agent(scenario: &dyn EnforcementScenario, agent_cmd: &str) {
+async fn drive_scenario_for_agent(scenario: &dyn EnforcementScenario, kind: AgentKind) {
+    let agent = default_agent(kind);
+
     if scenario.requires_structural_network() && !bwrap_available() {
         eprintln!(
             "skip {} [{}]: requires structural network confinement (bwrap), \
              not available on this platform",
             scenario.name(),
-            agent_cmd,
+            agent.command(),
         );
         return;
     }
-
-    let agent = default_agent(agent_cmd);
     let result = run_scenario(scenario, &agent).await;
 
     match result {
@@ -110,11 +110,20 @@ async fn drive_scenario_for_agent(scenario: &dyn EnforcementScenario, agent_cmd:
 
 // ── Scenario registration ────────────────────────────────────────────────────
 //
-// Pass the agent list as the first argument. Each ident becomes both the module
-// name and — via `stringify!` — the string passed to `drive_scenario_for_agent`.
+// Pass the agent list as the first argument. Each ident becomes the sub-module
+// name and maps to an `AgentKind` variant via `agent_kind!`.
 //
 //   scenario_tests! [claude, codex] { ... }   // all agents
 //   scenario_tests! [claude]        { ... }   // claude only
+macro_rules! agent_kind {
+    (claude) => {
+        agent::AgentKind::ClaudeCode
+    };
+    (codex) => {
+        agent::AgentKind::Codex
+    };
+}
+
 macro_rules! scenario_tests {
     // $scenarios is a single tt (the parenthesised block), not a repetition,
     // so it can be passed inside the $agent repetition without a depth conflict.
@@ -128,7 +137,7 @@ macro_rules! scenario_tests {
                 #[tokio::test]
                 #[ignore = "integration test — run with --include-ignored"]
                 async fn $name() {
-                    super::drive_scenario_for_agent(&$scenario, stringify!($agent)).await;
+                    super::drive_scenario_for_agent(&$scenario, agent_kind!($agent)).await;
                 }
             )*
         }

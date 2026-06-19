@@ -177,11 +177,7 @@ fn agent_available(name: &str) -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
-async fn run_agent_direct(
-    agent_cmd: &str,
-    agent_args: &[String],
-    workspace: &Path,
-) -> AgentOutput {
+async fn run_agent_direct(agent_cmd: &str, agent_args: &[String], workspace: &Path) -> AgentOutput {
     if !agent_available(agent_cmd) {
         eprintln!("[baseline] agent '{agent_cmd}' not found on PATH — skip");
         return AgentOutput {
