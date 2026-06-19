@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use firma_core::{AgentId, RevocationStore, TokenId};
-use firma_proto::authority_service_server::{AuthorityService, AuthorityServiceServer};
-use firma_proto::{
+use firma_protobuf::v1::authority_service_server::{AuthorityService, AuthorityServiceServer};
+use firma_protobuf::v1::{
     IssueCapabilityRequest, IssueCapabilityResponse, PolicyBundle, PolicyBundleUpdate,
     RevocationEvent, SidecarCredentials, WatchPolicyBundleRequest, WatchRevocationsRequest,
 };

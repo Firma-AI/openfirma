@@ -19,7 +19,7 @@ ecdsa = { workspace = true }
 elliptic-curve = { workspace = true }
 firma-core = { workspace = true }
 firma-grpc-interceptor-proto = { workspace = true }
-firma-proto = { workspace = true }
+firma-protobuf = { workspace = true }
 firma-stack = { workspace = true }
 governor = { workspace = true }
 hex = { workspace = true }

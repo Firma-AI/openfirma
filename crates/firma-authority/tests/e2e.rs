@@ -2,8 +2,8 @@
 
 use std::path::PathBuf;
 
-use firma_proto::firma::v1::authority_service_client::AuthorityServiceClient;
-use firma_proto::firma::v1::{
+use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
+use firma_protobuf::v1::{
     IssueCapabilityRequest, WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
 use pasetors::keys::{AsymmetricKeyPair, Generate};

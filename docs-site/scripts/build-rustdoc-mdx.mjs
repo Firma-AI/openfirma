@@ -40,7 +40,6 @@ const CRATE_LABELS = {
   firma_demo_fixture: 'firma-demo-fixture',
   firma_demo_tui: 'firma-demo-tui',
   firma_grpc_interceptor_proto: 'firma-grpc-interceptor-proto',
-  firma_proto: 'firma-proto',
   firma_run: 'firma-run',
   firma_sidecar: 'firma-sidecar',
 };
