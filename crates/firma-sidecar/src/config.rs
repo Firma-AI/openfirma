@@ -18,6 +18,7 @@ mod capability_seed;
 mod connector;
 mod enforcement;
 mod revocation;
+mod tenancy;
 
 pub use self::audit::{AuditConfig, AuditSink};
 pub use self::authority::AuthorityConfig;
@@ -26,6 +27,7 @@ pub use self::connector::ConnectorConfig;
 
 pub use self::enforcement::{EnforcementConfig, MappingRuleConfig, MappingRulesFile};
 pub use self::revocation::RevocationConfig;
+pub use self::tenancy::{TenancyConfig, TenancyMode};
 pub use crate::authority_credentials::SidecarCredentialsConfig;
 
 use std::collections::HashMap;
@@ -121,6 +123,9 @@ pub struct SidecarConfig {
     /// local-exec endpoint is not started.
     #[serde(default)]
     pub local_exec: Option<LocalExecConfig>,
+    /// Tenancy settings (agent isolation mode).
+    #[serde(default)]
+    pub tenancy: TenancyConfig,
 }
 
 impl SidecarConfig {
@@ -210,6 +215,9 @@ impl SidecarConfig {
         if let Some(ref le) = self.local_exec {
             le.validate().map_err(|e| format!("local_exec: {e}"))?;
         }
+        self.tenancy
+            .validate()
+            .map_err(|e| format!("tenancy: {e}"))?;
         Ok(())
     }
 

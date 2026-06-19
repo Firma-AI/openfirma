@@ -682,6 +682,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
@@ -710,6 +711,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
@@ -837,6 +839,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -910,6 +913,7 @@ mod tests {
             }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(DenyDeletePolicy));
@@ -975,6 +979,7 @@ mod tests {
             }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(DenyAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1046,6 +1051,7 @@ mod tests {
             Box::new(RejectingVerifier),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -1098,6 +1104,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -1254,6 +1261,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(RevokedStore),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1301,6 +1309,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1349,6 +1358,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1444,6 +1454,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(StalePolicy));
@@ -1488,6 +1499,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1534,6 +1546,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1583,6 +1596,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1626,6 +1640,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1672,6 +1687,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -1722,6 +1738,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -1769,6 +1786,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 

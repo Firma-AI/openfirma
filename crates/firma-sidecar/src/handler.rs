@@ -710,6 +710,7 @@ pub(crate) mod tests {
     use std::net::SocketAddr;
     use std::time::Duration;
 
+    use crate::config::TenancyMode;
     use async_trait::async_trait;
     use chrono::Utc;
     use firma_core::{
@@ -860,6 +861,7 @@ pub(crate) mod tests {
                 Box::new(MockVerifier { claims }),
                 std::sync::Arc::new(NoRevocations),
                 Duration::from_secs(0),
+                TenancyMode::SingleAgent,
             ),
             constraint_enforcer: ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy)),
             credential_injector: Box::new(NullCredentialInjector),
@@ -889,6 +891,7 @@ pub(crate) mod tests {
                 Box::new(MockVerifier { claims }),
                 std::sync::Arc::new(NoRevocations),
                 Duration::from_secs(0),
+                TenancyMode::SingleAgent,
             ),
             constraint_enforcer: ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy)),
             credential_injector: Box::new(FailingCredentialInjector),

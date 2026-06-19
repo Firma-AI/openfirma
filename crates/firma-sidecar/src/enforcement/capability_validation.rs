@@ -27,13 +27,14 @@
 //! - **Revoked token reuse** — bloom filter + LRU cache check rejects tokens
 //!   that have been explicitly invalidated.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(test)]
 use firma_core::TokenId;
-use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
+use firma_core::{AgentId, CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
 
+use crate::config::TenancyMode;
 use crate::normalizer::NormalizedEnvelope;
 
 use super::capability_map::CapabilityMap;
@@ -63,6 +64,8 @@ pub struct CapabilityValidator {
     capability_map: CapabilityMap,
     revocation: Arc<dyn RevocationStore + Send + Sync>,
     verifier: Box<dyn TokenVerifier + Send + Sync>,
+    tenancy_mode: TenancyMode,
+    first_agent_id: Mutex<Option<AgentId>>,
 }
 
 impl CapabilityValidator {
@@ -74,12 +77,15 @@ impl CapabilityValidator {
         verifier: Box<dyn TokenVerifier + Send + Sync>,
         revocation: Arc<dyn RevocationStore + Send + Sync>,
         clock_skew_tolerance: Duration,
+        tenancy_mode: TenancyMode,
     ) -> Self {
         Self {
             clock_skew_tolerance,
             capability_map,
             revocation,
             verifier,
+            tenancy_mode,
+            first_agent_id: Mutex::new(None),
         }
     }
 
@@ -96,10 +102,15 @@ impl CapabilityValidator {
     ///
     /// Returns `EnforcementDecision::Deny` if no token matches or token
     /// validation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex guarding the first observed agent_id is poisoned.
     #[expect(
         clippy::result_large_err,
         reason = "domain decision carries denial context"
     )]
+    #[allow(clippy::unwrap_used, reason = "mutex poison is fatal")]
     pub fn enforce(
         &self,
         envelope: &NormalizedEnvelope,
@@ -115,6 +126,30 @@ impl CapabilityValidator {
 
         // Step 2: Validate selected token
         let claims = self.validate(&entry.raw_token)?;
+
+        // Step 3: Enforce single-agent tenancy (V1 ADR §2)
+        if self.tenancy_mode == TenancyMode::SingleAgent {
+            let mut first_agent = self.first_agent_id.lock().unwrap();
+            match &*first_agent {
+                None => *first_agent = Some(claims.agent_id.clone()),
+                Some(observed) if observed != &claims.agent_id => {
+                    return Err(EnforcementDecision::Deny {
+                        reason: firma_core::DenyReason::TenantMismatch,
+                        stage: EnforcementStage::CapabilityValidation(
+                            CapabilityValidationStage::TokenValidation,
+                        ),
+                        detail: format!(
+                            "agent_id '{}' does not match first observed agent_id '{}'",
+                            claims.agent_id, observed
+                        ),
+                        envelope: None,
+                        identity: None,
+                    });
+                }
+                _ => {}
+            }
+        }
+
         Ok(ValidatedCapability {
             raw_token: entry.raw_token.clone(),
             claims,
@@ -245,16 +280,21 @@ mod tests {
         }])
     }
 
-    #[test]
-    fn test_valid_token_passes() {
-        let validator = CapabilityValidator::new(
+    fn make_validator() -> CapabilityValidator {
+        CapabilityValidator::new(
             test_capability_map(),
             Box::new(MockVerifier {
                 claims: valid_claims(),
             }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
-        );
+            TenancyMode::SingleAgent,
+        )
+    }
+
+    #[test]
+    fn test_valid_token_passes() {
+        let validator = make_validator();
 
         let result = validator.validate("v4.public.test_token");
         assert!(result.is_ok());
@@ -267,6 +307,7 @@ mod tests {
             Box::new(FailingVerifier),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let result = validator.validate("v4.public.bad_token");
@@ -289,6 +330,7 @@ mod tests {
                 revoked: vec!["3713c5fc-b569-650c-c780-c64051473370".to_string()],
             }),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let result = validator.validate("v4.public.test_token");
@@ -310,6 +352,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let result = validator.validate("v4.public.test_token");
@@ -337,6 +380,7 @@ mod tests {
             Box::new(MalformedVerifier),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let result = validator.validate("garbage-not-a-token");
@@ -357,6 +401,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(5),
+            TenancyMode::SingleAgent,
         );
 
         let result = validator.validate("v4.public.test_token");
@@ -390,6 +435,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let result = validator.enforce(&envelope, "sess_001");
@@ -426,6 +472,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let result = validator.enforce(&envelope, "sess_001");
@@ -453,6 +500,7 @@ mod tests {
                 verifier,
                 Arc::new(MockRevocationStore { revoked: vec![] }),
                 Duration::from_secs(0),
+                TenancyMode::SingleAgent,
             );
             let result = validator.validate("any");
             assert!(
