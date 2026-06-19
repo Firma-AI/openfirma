@@ -144,10 +144,11 @@ impl AuthoritySupervisor {
         let mut tee_handle: Option<JoinHandle<()>> = None;
         let mut last_error: Option<RunError> = None;
         for attempt in 0..MAX_BIND_ATTEMPTS {
-            let authority_conf_str = toml::to_string_pretty(&authority_config).map_err(|err| {
+            let inner = toml::to_string_pretty(&authority_config).map_err(|err| {
                 RunError::Internal(format!("invalid synthetic authority config: {err}"))
             })?;
-            std::fs::write(&authority_toml, authority_conf_str).map_err(|e| {
+            let authority_conf_str = format!("[authority]\n{inner}");
+            std::fs::write(&authority_toml, &authority_conf_str).map_err(|e| {
                 RunError::Internal(format!("write {}: {e}", authority_toml.display()))
             })?;
 
