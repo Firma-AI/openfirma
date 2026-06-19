@@ -1,16 +1,5 @@
-use std::sync::{Arc, Mutex};
-
-use http_body_util::{BodyExt, Full};
-use hyper::body::{Bytes, Incoming};
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::{Request, Response};
-use hyper_util::rt::TokioIo;
-use tokio::sync::oneshot;
-
 // ── Mock response builder ─────────────────────────────────────────────────────
 
-/// Configures the HTTP response returned by the capture server for a mock route.
 pub struct MockResponseBuilder {
     status: u16,
     headers: Vec<(String, String)>,
@@ -57,7 +46,6 @@ pub struct MockSpec {
 
 // ── HttpMock short-lived handle ───────────────────────────────────────────────
 
-/// Short-lived handle returned by [`crate::setup::ScenarioSetup::http_mock`].
 pub struct HttpMock<'a> {
     pub(crate) host: &'a str,
     pub(crate) port: u16,
@@ -110,19 +98,7 @@ impl HttpMock<'_> {
     }
 }
 
-// ── Capture server ────────────────────────────────────────────────────────────
-//
-// We hand-roll this rather than using wiremock/httpmock because we need a
-// single server that persists across both scenario phases (baseline and
-// enforcement) at the same port. Between phases we atomically swap in the mock
-// specs and clear captures; wiremock's reset API would spin up a new server
-// and change the port, breaking the mapping rule registered during setup.
-
-#[derive(Default)]
-pub struct CaptureState {
-    pub(crate) mocks: Vec<MockSpec>,
-    pub(crate) received: Vec<ReceivedRequest>,
-}
+// ── ReceivedRequest ───────────────────────────────────────────────────────────
 
 /// An HTTP request captured by the mock server during the enforcement phase.
 #[derive(Debug, Clone)]
@@ -143,76 +119,6 @@ impl ReceivedRequest {
     pub fn body_json(&self) -> Option<serde_json::Value> {
         serde_json::from_slice(&self.body).ok()
     }
-}
-
-pub async fn run_capture_server(
-    listener: tokio::net::TcpListener,
-    state: Arc<Mutex<CaptureState>>,
-    mut shutdown: oneshot::Receiver<()>,
-) {
-    loop {
-        tokio::select! {
-            biased;
-            _ = &mut shutdown => break,
-            accept = listener.accept() => {
-                let Ok((stream, _)) = accept else { break; };
-                let state = Arc::clone(&state);
-                tokio::spawn(async move {
-                    let io = TokioIo::new(stream);
-                    let _ = http1::Builder::new()
-                        .serve_connection(io, service_fn(move |req: Request<Incoming>| {
-                            let s = Arc::clone(&state);
-                            handle_capture_request(req, s)
-                        }))
-                        .await;
-                });
-            }
-        }
-    }
-}
-
-async fn handle_capture_request(
-    req: Request<Incoming>,
-    state: Arc<Mutex<CaptureState>>,
-) -> Result<Response<Full<Bytes>>, anyhow::Error> {
-    let method = req.method().to_string();
-    let path = req.uri().path().to_string();
-
-    let body_bytes = req
-        .into_body()
-        .collect()
-        .await
-        .map_err(|e| anyhow::anyhow!("body read: {e}"))?
-        .to_bytes()
-        .to_vec();
-
-    let (status, headers, body) = {
-        let mut locked = state
-            .lock()
-            .map_err(|e| anyhow::anyhow!("capture lock poisoned: {e}"))?;
-        locked.received.push(ReceivedRequest {
-            method: method.clone(),
-            path: path.clone(),
-            body: body_bytes,
-        });
-        locked
-            .mocks
-            .iter()
-            .find(|m| m.method.eq_ignore_ascii_case(&method) && m.path == path)
-            .map_or_else(
-                || (404_u16, Vec::new(), b"no mock registered".to_vec()),
-                |m| (m.status, m.headers.clone(), m.body.clone()),
-            )
-    };
-
-    let mut builder = Response::builder().status(status);
-    for (k, v) in headers {
-        builder = builder.header(k.as_str(), v.as_str());
-    }
-    let response = builder
-        .body(Full::new(Bytes::from(body)))
-        .map_err(|e| anyhow::anyhow!("response build: {e}"))?;
-    Ok(response)
 }
 
 // ── HttpCaptures ──────────────────────────────────────────────────────────────

@@ -1,16 +1,16 @@
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use tokio::io::AsyncReadExt;
-use tokio::sync::oneshot;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::agent::Agent;
 use crate::audit;
 use crate::firma_bin;
-use crate::mock::{CaptureState, HttpCaptures, run_capture_server};
+use crate::mock::{HttpCaptures, MockSpec, ReceivedRequest};
 use crate::scenario::{AgentOutput, EnforcementScenario, FirmaAudit, PhaseOutput, ScenarioResult};
 use crate::setup::ScenarioSetup;
 
@@ -23,21 +23,8 @@ pub async fn run_scenario(
     scenario: &dyn EnforcementScenario,
     agent: &Agent,
 ) -> Result<ScenarioResult, anyhow::Error> {
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0")
-        .await
-        .with_context(|| "bind capture server")?;
-    let port = listener
-        .local_addr()
-        .with_context(|| "get capture server port")?
-        .port();
-
-    let capture_state = Arc::new(Mutex::new(CaptureState::default()));
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    tokio::spawn(run_capture_server(
-        listener,
-        Arc::clone(&capture_state),
-        shutdown_rx,
-    ));
+    let mock_server = MockServer::start().await;
+    let port = mock_server.address().port();
 
     let cfg_tmp = tempfile::tempdir()?;
     let state_tmp = tempfile::tempdir()?;
@@ -76,17 +63,9 @@ pub async fn run_scenario(
     )
     .await;
 
-    let baseline_http = capture_state
-        .lock()
-        .map_err(|e| anyhow::anyhow!("capture lock: {e}"))?
-        .received
-        .clone();
-
     let baseline_phase = PhaseOutput {
         agent: baseline_agent_output,
-        http_requests: HttpCaptures {
-            requests: baseline_http,
-        },
+        http_requests: collect_captures(&mock_server).await,
     };
 
     let baseline_passed = match scenario.assert_baseline(&baseline_phase) {
@@ -102,14 +81,9 @@ pub async fn run_scenario(
         }
     };
 
-    // Transfer mock specs into capture server; clear baseline captures.
-    {
-        let mut state = capture_state
-            .lock()
-            .map_err(|e| anyhow::anyhow!("capture lock: {e}"))?;
-        state.mocks = std::mem::take(&mut ctx.mock_specs);
-        state.received.clear();
-    }
+    // Clear baseline captures; mount enforcement mocks.
+    mock_server.reset().await;
+    mount_specs(&mock_server, std::mem::take(&mut ctx.mock_specs)).await;
 
     scenario.before_assert(&ctx)?;
 
@@ -117,17 +91,9 @@ pub async fn run_scenario(
     let enforcement_agent_output =
         run_enforcement(&firma_bin(), &ctx, &agent_args, scenario.timeout()).await?;
 
-    let enforcement_http = capture_state
-        .lock()
-        .map_err(|e| anyhow::anyhow!("capture lock: {e}"))?
-        .received
-        .clone();
-
     let enforcement_phase = PhaseOutput {
         agent: enforcement_agent_output,
-        http_requests: HttpCaptures {
-            requests: enforcement_http,
-        },
+        http_requests: collect_captures(&mock_server).await,
     };
 
     let audit_path = state_dir.join("audit.jsonl");
@@ -140,8 +106,6 @@ pub async fn run_scenario(
             Ok(()) => (true, None),
             Err(e) => (false, Some(format!("{e:#}"))),
         };
-
-    let _ = shutdown_tx.send(());
 
     Ok(ScenarioResult {
         scenario_name: scenario.name().to_string(),
@@ -161,6 +125,37 @@ fn agent_available(name: &str) -> bool {
         .arg(name)
         .output()
         .is_ok_and(|o| o.status.success())
+}
+
+async fn collect_captures(server: &MockServer) -> HttpCaptures {
+    let requests = server.received_requests().await.unwrap_or_default();
+    HttpCaptures {
+        requests: requests
+            .into_iter()
+            .map(|r| ReceivedRequest {
+                method: r.method.to_string(),
+                path: r.url.path().to_string(),
+                body: r.body,
+            })
+            .collect(),
+    }
+}
+
+async fn mount_specs(server: &MockServer, specs: Vec<MockSpec>) {
+    for spec in specs {
+        let mut template = ResponseTemplate::new(spec.status);
+        if !spec.body.is_empty() {
+            template = template.set_body_bytes(spec.body);
+        }
+        for (k, v) in spec.headers {
+            template = template.append_header(k.as_str(), v.as_str());
+        }
+        Mock::given(method(spec.method.as_str()))
+            .and(path(spec.path.as_str()))
+            .respond_with(template)
+            .mount(server)
+            .await;
+    }
 }
 
 /// Spawn `cmd` and wait up to `timeout`. On timeout: kill the process and
@@ -213,7 +208,6 @@ async fn run_with_timeout(
     let stderr_bytes = stderr_task.await.unwrap_or_default();
     let elapsed = start.elapsed();
 
-    // Re-query exit status (only valid when not timed out).
     let status = if timed_out {
         None
     } else {
