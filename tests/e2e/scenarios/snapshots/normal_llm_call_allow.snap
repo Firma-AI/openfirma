@@ -1,0 +1,19 @@
+---
+source: tests/e2e/scenarios/normal_llm_call.rs
+expression: allows[0]
+---
+{
+  "action": "communication.external.send",
+  "agent_id": "[agent_id]",
+  "bundle_version": "[bundle_version]",
+  "context_hash": "[context_hash]",
+  "decision": 1,
+  "deny_reason": "",
+  "dispatch_status": "[dispatch_status]",
+  "enforcement_latency_us": "[latency_us]",
+  "event_id": "[event_id]",
+  "resource": "[resource]",
+  "session_id": "[session_id]",
+  "timestamp": "[timestamp]",
+  "token_id": "[token_id]"
+}

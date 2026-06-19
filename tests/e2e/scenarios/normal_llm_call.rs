@@ -56,12 +56,28 @@ impl EnforcementScenario for NormalLlmCall {
         if allows.is_empty() {
             anyhow::bail!("expected at least one ALLOW event, got none");
         }
-        if !allows[0].action.contains("communication.external.send") {
-            anyhow::bail!(
-                "expected action communication.external.send, got '{}'",
-                allows[0].action
-            );
+        let mut settings = insta::Settings::clone_current();
+        settings.set_snapshot_path(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/e2e/scenarios/snapshots"),
+        );
+        for field in &[
+            ".event_id",
+            ".session_id",
+            ".token_id",
+            ".agent_id",
+            ".resource",
+            ".enforcement_latency_us",
+            ".context_hash",
+            ".bundle_version",
+            ".timestamp",
+            ".dispatch_status",
+        ] {
+            settings.add_redaction(field, format!("[{}]", field.trim_start_matches('.')));
         }
+        settings.bind(|| {
+            insta::assert_json_snapshot!("normal_llm_call_allow", allows[0]);
+        });
         Ok(())
     }
 }
