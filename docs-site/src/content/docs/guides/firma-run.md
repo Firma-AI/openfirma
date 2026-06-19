@@ -50,7 +50,7 @@ For the conceptual background, read [The sandbox boundary](../../concepts/sandbo
 | Platform | Default backend | Notes |
 | -------- | --------------- | ----- |
 | Linux    | `bwrap`         | Structural mode; requires unprivileged user namespaces + AppArmor allowance for bwrap. |
-| macOS    | `vz`            | Default compatibility mode: host process, `sandbox-exec`, proxy bridge, explicit `--allow-non-structural` opt-in. Experimental sandbox-exec network-deny mode is available behind an environment gate. |
+| macOS    | `vz`            | Default compatibility mode: host process, `sandbox-exec`, proxy bridge, explicit `--allow-non-structural` opt-in. Experimental structural modes are available via sandbox-exec network-deny or the VZ guest runner contract. |
 | Windows  | `wsl2`          | Current compatibility mode; explicit `--allow-non-structural` opt-in. |
 
 Verify the platform default works on your host. On Linux, the bwrap backend
@@ -79,9 +79,17 @@ macOS structural modes are explicit opt-ins:
 ```bash
 # Intermediate: block external IP egress with sandbox-exec, loopback remains reachable.
 FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1 firma run --profile generic -- curl https://example.com
+
+# Stronger target: launch through an operator-provided Virtualization.framework runner.
+FIRMA_RUN_VZ_GUEST=1 \
+FIRMA_RUN_VZ_GUEST_RUNNER=/Applications/Firma/vz-runner \
+FIRMA_RUN_VZ_GUEST_KERNEL=/var/lib/firma/vz/vmlinuz \
+FIRMA_RUN_VZ_GUEST_INITRD=/var/lib/firma/vz/initrd.img \
+FIRMA_RUN_VZ_GUEST_ROOTFS=/var/lib/firma/vz/rootfs.img \
+firma run --profile generic -- curl https://example.com
 ```
 
-The stronger VZ guest-backed path is the planned parity direction, but the executable launch contract and runner integration are intentionally split into a follow-up change.
+Guest mode validates those artifact paths, writes `vz-guest-launch.json` under the run directory, and spawns the runner with `--launch-contract`. The runner is responsible for the Apple Virtualization.framework lifecycle and for enforcing the contract inside the guest.
 
 ## Step 2: Scaffold a config directory with `firma config`
 
