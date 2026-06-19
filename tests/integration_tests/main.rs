@@ -133,6 +133,13 @@ macro_rules! scenario_tests {
 scenario_tests! {
     [claude, codex];
     (
-        normal_llm_call => scenarios::NormalLlmCall,
+        normal_llm_call     => scenarios::NormalLlmCall,
+        block_paste_service => scenarios::BlockPasteService,
+        block_unlisted_host => scenarios::BlockUnlistedHost,
+        tool_call_exfil     => scenarios::ToolCallExfil,
+        direct_tcp_bypass   => scenarios::DirectTcpBypass,
+        fs_read_deny        => scenarios::FsReadDeny::new(),
+        fs_delete_deny      => scenarios::FsDeleteDeny::new(),
+        code_fibonacci      => scenarios::CodeFibonacci::new(),
     )
 }
