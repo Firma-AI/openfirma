@@ -39,10 +39,6 @@ FIRMA_BIN=./target/release/firma make e2e
 
 ## Scenarios
 
-| Scenario          | Agents | Expected outcome                      |
-| ----------------- | ------ | ------------------------------------- |
-| `normal_llm_call` | all    | ALLOW — legitimate LLM traffic passes |
-
 Each scenario runs in two phases:
 
 1. **Baseline** — agent runs directly (no firma). Confirms the agent can complete

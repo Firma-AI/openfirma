@@ -68,9 +68,13 @@ pub async fn run_scenario(
     scenario.before_assert(&ctx)?;
 
     // Phase 1: baseline — run agent directly, no firma proxy.
-    let baseline_agent_output =
-        run_agent_direct(agent.command(), &agent_args, &ctx.workspace_dir, scenario.timeout())
-            .await;
+    let baseline_agent_output = run_agent_direct(
+        agent.command(),
+        &agent_args,
+        &ctx.workspace_dir,
+        scenario.timeout(),
+    )
+    .await;
 
     let baseline_http = capture_state
         .lock()
@@ -210,7 +214,11 @@ async fn run_with_timeout(
     let elapsed = start.elapsed();
 
     // Re-query exit status (only valid when not timed out).
-    let status = if timed_out { None } else { child.try_wait().ok().flatten() };
+    let status = if timed_out {
+        None
+    } else {
+        child.try_wait().ok().flatten()
+    };
 
     Ok(status.map_or_else(
         || {
@@ -298,5 +306,10 @@ async fn run_enforcement(
         .arg(ctx.agent.command())
         .args(agent_args)
         .current_dir(&ctx.workspace_dir);
-    run_with_timeout(cmd, timeout, &format!("firma run --profile {}", ctx.agent.profile())).await
+    run_with_timeout(
+        cmd,
+        timeout,
+        &format!("firma run --profile {}", ctx.agent.profile()),
+    )
+    .await
 }
