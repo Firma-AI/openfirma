@@ -2,10 +2,10 @@
 
 Guidance for coding agents working in this repository.
 
-## Build Commands
+## Key Commands
 
 ```bash
-make check # Run fmt + lint + test + build (CI parity)
+make check # Run all local verification checks (CI parity)
 make fmt # dprint check (TOML + Markdown + Rust)
 make lint # cargo clippy --workspace -- -D warnings
 make test # cargo nextest run + cargo test --doc
@@ -15,15 +15,11 @@ make build # cargo build --workspace
 Tests run via `cargo nextest` (process-per-test isolation); doctests run
 separately via `cargo test --doc` since nextest does not run them.
 
-Single crate: `cargo nextest run -p firma-sidecar`
-Single test: `cargo nextest run -p firma-sidecar test_enforce_happy_path`
-
-Requires `protoc` installed for `firma-grpc-interceptor-proto` protobuf compilation. The `firma.v1` wire contract comes from the published `firma-protobuf` crate, which vendors its own `protoc`.
+Requires `protoc` installed for `firma-proto` protobuf compilation.
 
 ## Formatting
 
-`dprint` is the single formatter for the repo. It covers Rust, TOML, and
-Markdown; `rustfmt` must still be installed. Run `dprint fmt` after modifying
+`dprint` is the single formatter for the repo. Run `dprint fmt` after modifying
 `.toml`, `.md`, or `.rs` files. `make fmt` runs `dprint check` in CI.
 
 `docs-site/` is excluded and uses its own toolchain.
@@ -40,6 +36,18 @@ Workspace lints are strict and enforced in CI:
 
 Do not use `.unwrap()`, `.expect()`, `panic!()`, or `unsafe`. Prefer
 `Result<T, E>` with `thiserror` for error handling.
+
+## Version Control
+
+Some contributors use Git, some use Jujutsu.
+
+- If the repository has a `.jj/` directory, prefer `jj` commands for history,
+  diff, conflict resolution, and changeset manipulation.
+- If the repository does not have a `.jj/` directory, use Git.
+- Do not assume every clone uses `jj`; detect it from the working copy before
+  choosing commands.
+- When giving user-facing revision identifiers or instructions, match the VCS
+  actually in use in that clone.
 
 ## Architecture
 
