@@ -111,6 +111,12 @@ impl HttpMock<'_> {
 }
 
 // ── Capture server ────────────────────────────────────────────────────────────
+//
+// We hand-roll this rather than using wiremock/httpmock because we need a
+// single server that persists across both scenario phases (baseline and
+// enforcement) at the same port. Between phases we atomically swap in the mock
+// specs and clear captures; wiremock's reset API would spin up a new server
+// and change the port, breaking the mapping rule registered during setup.
 
 #[derive(Default)]
 pub struct CaptureState {
