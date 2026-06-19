@@ -1,6 +1,7 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display)]
+#[strum(serialize_all = "snake_case")]
 pub enum AgentKind {
-    ClaudeCode,
+    Claude,
     Codex,
 }
 
@@ -18,7 +19,7 @@ impl Agent {
     #[must_use]
     pub fn claude() -> Self {
         Self {
-            kind: AgentKind::ClaudeCode,
+            kind: AgentKind::Claude,
             args: Vec::new(),
         }
     }
@@ -41,7 +42,7 @@ impl Agent {
     #[must_use]
     pub fn command(&self) -> &'static str {
         match self.kind {
-            AgentKind::ClaudeCode => "claude",
+            AgentKind::Claude => "claude",
             AgentKind::Codex => "codex",
         }
     }
@@ -49,7 +50,7 @@ impl Agent {
     #[must_use]
     pub fn profile(&self) -> &'static str {
         match self.kind {
-            AgentKind::ClaudeCode => "claude-code",
+            AgentKind::Claude => "claude-code",
             AgentKind::Codex => "codex",
         }
     }
@@ -57,7 +58,7 @@ impl Agent {
     pub fn prompt_args(&self, prompt: &str) -> Vec<String> {
         let mut result = self.args.clone();
         match self.kind {
-            AgentKind::ClaudeCode => {
+            AgentKind::Claude => {
                 result.push("-p".to_string());
                 result.push(prompt.to_string());
             }

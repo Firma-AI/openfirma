@@ -60,7 +60,7 @@ pub fn bwrap_available() -> bool {
 
 fn default_agent(kind: AgentKind) -> agent::Agent {
     match kind {
-        AgentKind::ClaudeCode => {
+        AgentKind::Claude => {
             agent::Agent::claude().args(["--permission-mode", "bypassPermissions"])
         }
         AgentKind::Codex => agent::Agent::codex().args(["--sandbox", "danger-full-access"]),
@@ -123,7 +123,7 @@ async fn drive_scenario_for_agent(scenario: &dyn EnforcementScenario, kind: Agen
 //   scenario_tests! [claude]        { ... }   // claude only
 macro_rules! agent_kind {
     (claude) => {
-        agent::AgentKind::ClaudeCode
+        agent::AgentKind::Claude
     };
     (codex) => {
         agent::AgentKind::Codex

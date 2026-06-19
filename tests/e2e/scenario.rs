@@ -39,6 +39,28 @@ impl FirmaAudit {
             .filter(|e| e.action.contains(fragment))
             .collect()
     }
+
+    #[track_caller]
+    pub fn assert_trail_snapshot(&self, snapshot_name: &str) {
+        // Agents perform asynchronous calls, so we sort the trail by action and resource
+        // to ensure a stable ordering for snapshot tests.
+        let mut events = self.events.clone();
+        events.sort_by(|a, b| a.action.cmp(&b.action).then(a.resource.cmp(&b.resource)));
+        insta::assert_json_snapshot!(snapshot_name, &events, {
+            "[].event_id"               => "[event_id]",
+            "[].session_id"             => "[session_id]",
+            "[].token_id"               => "[token_id]",
+            "[].agent_id"               => "[agent_id]",
+            "[].enforcement_latency_us" => "[latency_us]",
+            "[].context_hash"           => "[context_hash]",
+            "[].bundle_version"         => "[bundle_version]",
+            "[].timestamp"              => "[timestamp]",
+            "[].dispatch_latency_us"    => "[dispatch_latency_us]",
+            "[].response_size"          => "[response_size]",
+            "[].sandbox_id"             => "[sandbox_id]",
+            "[].signature"              => "[signature]",
+        });
+    }
 }
 
 // ── EnforcementScenario trait ─────────────────────────────────────────────────

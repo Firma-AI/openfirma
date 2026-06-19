@@ -1,6 +1,6 @@
 ---
-source: crates/firma/../../tests/e2e/scenarios/simple_prompt.rs
-expression: "&audit.events"
+source: crates/firma/../../tests/e2e/scenario.rs
+expression: "&events"
 ---
 [
   {
@@ -9,7 +9,7 @@ expression: "&audit.events"
     "token_id": "[token_id]",
     "agent_id": "[agent_id]",
     "action": "communication.external.send",
-    "resource": "[resource]",
+    "resource": "api.anthropic.com/",
     "decision": 1,
     "deny_reason": "",
     "enforcement_latency_us": "[latency_us]",
@@ -28,7 +28,7 @@ expression: "&audit.events"
     "token_id": "[token_id]",
     "agent_id": "[agent_id]",
     "action": "communication.external.send",
-    "resource": "[resource]",
+    "resource": "api.anthropic.com/",
     "decision": 1,
     "deny_reason": "",
     "enforcement_latency_us": "[latency_us]",

@@ -541,14 +541,12 @@ fn override_ca_dir(value: &mut toml::Value, out_path: &Path) -> Result<(), RunEr
         ))
     })?;
     let ca_dir = marker_dir.join("firma-ca");
-    let root = value
-        .as_table_mut()
-        .ok_or_else(|| RunError::Internal("sidecar template root is not a table".into()))?;
-    let ca_table = root
+    let sidecar = sidecar_table_mut(value)?;
+    let ca_table = sidecar
         .entry("ca".to_string())
         .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
         .as_table_mut()
-        .ok_or_else(|| RunError::Internal("[ca] is not a table".into()))?;
+        .ok_or_else(|| RunError::Internal("[sidecar.ca] is not a table".into()))?;
     ca_table.insert(
         "dir".to_string(),
         toml::Value::String(ca_dir.display().to_string()),

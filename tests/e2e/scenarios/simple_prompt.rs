@@ -38,22 +38,8 @@ impl EnforcementScenario for SimplePrompt {
         if !output.agent.success {
             anyhow::bail!("enforcement agent failed: {}", output.agent.stderr);
         }
-        let snapshot_name = format!("{}_{}", ctx.agent.profile(), self.name());
-        insta::assert_json_snapshot!(snapshot_name, &audit.events, {
-            "[].event_id"               => "[event_id]",
-            "[].session_id"             => "[session_id]",
-            "[].token_id"               => "[token_id]",
-            "[].agent_id"               => "[agent_id]",
-            "[].resource"               => "[resource]",
-            "[].enforcement_latency_us" => "[latency_us]",
-            "[].context_hash"           => "[context_hash]",
-            "[].bundle_version"         => "[bundle_version]",
-            "[].timestamp"              => "[timestamp]",
-            "[].dispatch_latency_us"    => "[dispatch_latency_us]",
-            "[].response_size"          => "[response_size]",
-            "[].sandbox_id"             => "[sandbox_id]",
-            "[].signature"              => "[signature]",
-        });
+        let snapshot_name = format!("{}_{}", ctx.agent.kind, self.name());
+        audit.assert_trail_snapshot(&snapshot_name);
         Ok(())
     }
 }
