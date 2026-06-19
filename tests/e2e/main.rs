@@ -32,11 +32,9 @@ pub fn firma_bin() -> PathBuf {
         .and_then(|p| p.parent())
         .map_or_else(|| manifest_dir.clone(), PathBuf::from);
 
-    let release_bin = repo_root.join("target/release/firma");
-    if release_bin.exists() {
-        return release_bin;
-    }
-
+    // Point at the debug build the setup script (re)builds before every run,
+    // so tests always run current code — never a stale release binary with
+    // outdated embedded mapping templates.
     let debug_bin = repo_root.join("target/debug/firma");
     if debug_bin.exists() {
         return debug_bin;
