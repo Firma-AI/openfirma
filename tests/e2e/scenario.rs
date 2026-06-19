@@ -1,69 +1,13 @@
 use std::time::Duration;
 
-use crate::audit::{self, ExecutionEvent};
+use crate::audit::FirmaAuditTrail;
 use crate::setup::ScenarioSetup;
-
-// ── PhaseOutput ───────────────────────────────────────────────────────────────
 
 /// Combined output from one scenario phase: agent result + mock HTTP captures.
 pub struct PhaseOutput {
     pub agent: AgentOutput,
     pub http_requests: Vec<wiremock::Request>,
 }
-
-// ── FirmaAudit ────────────────────────────────────────────────────────────────
-
-/// Sidecar audit events from the enforcement phase.
-pub struct FirmaAudit {
-    pub(crate) events: Vec<ExecutionEvent>,
-}
-
-impl FirmaAudit {
-    /// Audit events where the sidecar issued an ALLOW decision.
-    #[must_use]
-    pub fn allow_events(&self) -> Vec<&ExecutionEvent> {
-        audit::allow_events(&self.events)
-    }
-
-    /// Audit events where the sidecar issued a DENY decision.
-    #[must_use]
-    pub fn deny_events(&self) -> Vec<&ExecutionEvent> {
-        audit::deny_events(&self.events)
-    }
-
-    /// Audit events whose `action` contains `fragment`.
-    #[must_use]
-    pub fn events_for_action(&self, fragment: &str) -> Vec<&ExecutionEvent> {
-        self.events
-            .iter()
-            .filter(|e| e.action.contains(fragment))
-            .collect()
-    }
-
-    #[track_caller]
-    pub fn assert_trail_snapshot(&self, snapshot_name: &str) {
-        // Agents perform asynchronous calls, so we sort the trail by action and resource
-        // to ensure a stable ordering for snapshot tests.
-        let mut events = self.events.clone();
-        events.sort_by(|a, b| a.action.cmp(&b.action).then(a.resource.cmp(&b.resource)));
-        insta::assert_json_snapshot!(snapshot_name, &events, {
-            "[].event_id"               => "[event_id]",
-            "[].session_id"             => "[session_id]",
-            "[].token_id"               => "[token_id]",
-            "[].agent_id"               => "[agent_id]",
-            "[].enforcement_latency_us" => "[latency_us]",
-            "[].context_hash"           => "[context_hash]",
-            "[].bundle_version"         => "[bundle_version]",
-            "[].timestamp"              => "[timestamp]",
-            "[].dispatch_latency_us"    => "[dispatch_latency_us]",
-            "[].response_size"          => "[response_size]",
-            "[].sandbox_id"             => "[sandbox_id]",
-            "[].signature"              => "[signature]",
-        });
-    }
-}
-
-// ── EnforcementScenario trait ─────────────────────────────────────────────────
 
 #[allow(async_fn_in_trait)]
 pub trait EnforcementScenario: Send + Sync {
@@ -101,11 +45,9 @@ pub trait EnforcementScenario: Send + Sync {
         &self,
         ctx: &ScenarioSetup,
         output: &PhaseOutput,
-        audit: &FirmaAudit,
+        audit: &FirmaAuditTrail,
     ) -> Result<(), anyhow::Error>;
 }
-
-// ── Output / result types ─────────────────────────────────────────────────────
 
 pub struct AgentOutput {
     pub success: bool,
@@ -122,5 +64,5 @@ pub struct ScenarioResult {
     pub enforcement_passed: bool,
     pub enforcement_error: Option<String>,
     pub enforcement_output: PhaseOutput,
-    pub firma_audit: FirmaAudit,
+    pub firma_audit: FirmaAuditTrail,
 }

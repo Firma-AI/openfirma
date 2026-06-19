@@ -1,4 +1,5 @@
-use crate::scenario::{EnforcementScenario, FirmaAudit, PhaseOutput};
+use crate::audit::FirmaAuditTrail;
+use crate::scenario::{EnforcementScenario, PhaseOutput};
 use crate::setup::ScenarioSetup;
 
 pub struct SimplePrompt;
@@ -33,7 +34,7 @@ impl EnforcementScenario for SimplePrompt {
         &self,
         ctx: &ScenarioSetup,
         output: &PhaseOutput,
-        audit: &FirmaAudit,
+        audit: &FirmaAuditTrail,
     ) -> Result<(), anyhow::Error> {
         if !output.agent.success {
             anyhow::bail!("enforcement agent failed: {}", output.agent.stderr);

@@ -8,9 +8,9 @@ use tokio::io::AsyncReadExt;
 use wiremock::MockServer;
 
 use crate::agent::Agent;
-use crate::audit;
+use crate::audit::FirmaAuditTrail;
 use crate::firma_bin;
-use crate::scenario::{AgentOutput, EnforcementScenario, FirmaAudit, PhaseOutput, ScenarioResult};
+use crate::scenario::{AgentOutput, EnforcementScenario, PhaseOutput, ScenarioResult};
 use crate::setup::ScenarioSetup;
 
 /// Run a full two-phase scenario for `agent`.
@@ -96,9 +96,7 @@ pub async fn run_scenario(
     };
 
     let audit_path = state_dir.join("audit.jsonl");
-    let firma_audit = FirmaAudit {
-        events: audit::parse_audit_log(&audit_path).unwrap_or_default(),
-    };
+    let firma_audit = FirmaAuditTrail::try_new(&audit_path)?;
 
     let (enforcement_passed, enforcement_error) =
         match scenario.assert_enforcement(&ctx, &enforcement_phase, &firma_audit) {
