@@ -7,7 +7,6 @@ members = [
   "crates/firma-demo-fixture",
   "crates/firma-demo-tui",
   "crates/firma-grpc-interceptor-proto",
-  "crates/firma-proto",
   "crates/firma-run",
   "crates/firma-sidecar",
   "crates/firma-stack",
@@ -49,7 +48,7 @@ firma-authority = { path = "crates/firma-authority" }
 firma-config = { path = "crates/firma-config" }
 firma-core = { path = "crates/firma-core" }
 firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto" }
-firma-proto = { path = "crates/firma-proto" }
+firma-protobuf = "0.1.1"
 firma-run = { path = "crates/firma-run" }
 firma-sidecar = { path = "crates/firma-sidecar" }
 firma-stack = { path = "crates/firma-stack" }

@@ -19,7 +19,7 @@ ecdsa = { workspace = true }
 elliptic-curve = { workspace = true }
 firma-core = { workspace = true }
 firma-grpc-interceptor-proto = { workspace = true }
-firma-proto = { workspace = true }
+firma-protobuf = { workspace = true }
 firma-stack = { workspace = true }
 governor = { workspace = true }
 hex = { workspace = true }
@@ -50,6 +50,7 @@ toml = { workspace = true }
 tonic = { workspace = true, features = ["tls-aws-lc"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+unicode-normalization = "0.1"
 uuid = { workspace = true }
 webpki-roots = { workspace = true }
 x509-parser = { workspace = true }

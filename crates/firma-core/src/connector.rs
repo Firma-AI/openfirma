@@ -92,7 +92,7 @@ use crate::transport::TransportView;
 /// verification, and credential sourcing happen upstream of this
 /// trait — see the module-level documentation for the boundary rules.
 ///
-/// The trait uses [`async_trait`] because connector instances are
+/// The trait uses [`macro@async_trait`] because connector instances are
 /// consumed as `Arc<dyn Connector>` through the sidecar registry, and
 /// native `async fn` in traits does not yet support `dyn` under this
 /// workspace's configuration.

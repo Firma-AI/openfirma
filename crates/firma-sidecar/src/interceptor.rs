@@ -6,8 +6,8 @@
 //! binding in containers). eBPF capture is on the roadmap.
 //!
 //! Regardless of interception mode, the raw intercepted request is converted
-//! into a [`RawRequest`](crate::normalizer::RawRequest) and passed to the
-//! [`RequestHandler`](crate::handler::RequestHandler) for enforcement and
+//! into a [`RawRequest`](crate::pipeline::RawRequest) and passed to the
+//! [`RequestHandler`] for enforcement and
 //! dispatch. If the intercepted request cannot be parsed into a valid
 //! `RawRequest`, the interceptor returns a structured DENY with reason
 //! `MALFORMED_REQUEST` (fail-closed).
@@ -41,7 +41,7 @@ pub enum InterceptorError {
 ///
 /// Every outbound agent call must pass through an [`Interceptor`] before reaching
 /// the target. The interceptor converts transport-specific input into a
-/// [`RawRequest`](crate::normalizer::RawRequest), runs it through the
+/// [`RawRequest`](crate::pipeline::RawRequest), runs it through the
 /// [`RequestHandler`], and serializes the resulting
 /// [`HandledResponse`](crate::handler::HandledResponse) at the transport
 /// level.
@@ -59,11 +59,11 @@ pub enum InterceptorError {
 /// # Contract
 ///
 /// * The implementor **must** build a
-///   [`RawRequest`](crate::normalizer::RawRequest) from the incoming
+///   [`RawRequest`](crate::pipeline::RawRequest) from the incoming
 ///   transport data and call
-///   [`RequestHandler::handle`](crate::handler::RequestHandler::handle).
+///   [`RequestHandler::handle`].
 /// * If a request cannot be parsed into a valid
-///   [`RawRequest`](crate::normalizer::RawRequest), the implementor
+///   [`RawRequest`](crate::pipeline::RawRequest), the implementor
 ///   **must** reply to the caller with a structured DENY carrying reason
 ///   `MALFORMED_REQUEST` (fail-closed).
 /// * On allow or passthrough, the implementor serializes the dispatched

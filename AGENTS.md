@@ -18,7 +18,7 @@ separately via `cargo test --doc` since nextest does not run them.
 Single crate: `cargo nextest run -p firma-sidecar`
 Single test: `cargo nextest run -p firma-sidecar test_enforce_happy_path`
 
-Requires `protoc` installed for `firma-proto` protobuf compilation.
+Requires `protoc` installed for `firma-grpc-interceptor-proto` protobuf compilation. The `firma.v1` wire contract comes from the published `firma-protobuf` crate, which vendors its own `protoc`.
 
 ## Documentation
 

@@ -18,7 +18,9 @@ separately via `cargo test --doc` since nextest does not run them.
 Single crate: `cargo nextest run -p firma-sidecar`
 Single test: `cargo nextest run -p firma-sidecar test_enforce_happy_path`
 
-Requires `protoc` installed for `firma-proto` protobuf compilation.
+Requires `protoc` installed for `firma-grpc-interceptor-proto` protobuf
+compilation. The `firma.v1` wire contract comes from the published
+`firma-protobuf` crate, which vendors its own `protoc`.
 
 ## Architecture
 
@@ -27,7 +29,7 @@ L7 policy enforcement sidecar for AI agents. Every outbound agent call passes th
 ### Crates
 
 - **firma-core** — Shared types and trait contracts (`Decision`, `ExecutionEnvelope`, `CapabilityClaims`, `TokenVerifier`, `TokenSigner`, `PolicyEvaluator`, `RevocationStore`). No dependencies on other crates.
-- **firma-proto** — gRPC wire contract via protobuf. `build.rs` compiles `.proto` files with `tonic-build`. Generated code has relaxed clippy lints.
+- **firma-protobuf** — External crate (crates.io) carrying the generated `firma.v1` gRPC wire contract. The single source of truth for Authority, Sidecar, and audit wire types; consumed directly by `firma-sidecar`, `firma-authority`, and `firma-run`. The Authority gRPC channel builder (`build_channel`, `BuildChannelError`) lives in `firma-sidecar`'s `authority_client::channel` module.
 - **firma-sidecar** — The enforcement proxy binary. Four top-level modules:
   - `interceptor` — Captures outbound agent traffic (placeholder).
   - `normalizer` — Maps raw HTTP requests to canonical `ExecutionEnvelope` with normalized `intent.action_class` from a 44-class registry (15 FEP v0.1 + 12 GitHub + 12 Stripe + 5 Gmail additions). `intent.resource` is a `BTreeMap<String, String>` with conventional keys `host`, `path`, and optionally `provider` (attached only when the request host exact-matches a known allowlist: `api.github.com` / `github.com` → `provider="github"`; `api.stripe.com` → `provider="stripe"`; `gmail.googleapis.com` → `provider="gmail"`). Fail-closed: unclassifiable protected actions → DENY.

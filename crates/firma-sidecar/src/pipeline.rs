@@ -1,6 +1,6 @@
 //! Enforcement pipeline orchestrator.
 //!
-//! Wires the [`IntentNormalizer`](crate::normalizer::IntentNormalizer),
+//! Wires the [`IntentNormalizer`],
 //! Stage 1 ([`CapabilityValidator`]), and Stage 2 ([`ConstraintEnforcer`])
 //! into a single `enforce()` entry point.
 //!

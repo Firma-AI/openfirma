@@ -20,7 +20,6 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          submodules: recursive
           persist-credentials: false
 
       - id: nightly
@@ -43,9 +42,13 @@ jobs:
 
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@30b5ca8b54e1dcffd9548bc87ede1531310fdc67 # v1.20.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install cargo-fuzz
-        run: cargo binstall --no-confirm --locked cargo-fuzz@$CARGO_FUZZ_VERSION
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: command -v cargo-fuzz || cargo binstall --no-confirm --force --locked cargo-fuzz@$CARGO_FUZZ_VERSION
 
       - name: Run ${{ matrix.target }}
         env:

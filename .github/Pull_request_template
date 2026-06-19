@@ -8,7 +8,7 @@
 -->
 
 > - OpenFirma is a runtime enforcement boundary — every outbound agent call passes through a local Sidecar that evaluates Cedar policies and either allows or denies it
-> - [Which crate or subsystem is involved: firma-core / firma-sidecar / firma-authority / firma-proto / firma-run / …]
+> - [Which crate or subsystem is involved: firma-core / firma-sidecar / firma-authority / firma-protobuf / firma-run / …]
 > - [What problem, gap, or invariant violation prompted this change]
 > - [Why it needs to be addressed now]
 > - This pull request …

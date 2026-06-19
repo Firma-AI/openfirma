@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use firma_core::token::paseto::PasetoV4Signer;
-use firma_proto::firma::v1::authority_service_server::AuthorityServiceServer;
+use firma_protobuf::v1::authority_service_server::AuthorityServiceServer;
 use tonic::transport::{Identity, Server as TonicServer, ServerTlsConfig};
 use tonic_health::server::HealthReporter;
 

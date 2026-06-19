@@ -20,7 +20,7 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use firma_proto::firma::v1::audit_service_client::AuditServiceClient;
+use firma_protobuf::v1::audit_service_client::AuditServiceClient;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tonic::transport::Channel;
 
@@ -211,9 +211,9 @@ impl WalAuditSink {
 /// Type alias for the gRPC stream sender and the spawned RPC task
 /// handle.
 type StreamState = (
-    tokio::sync::mpsc::Sender<firma_proto::firma::v1::ExecutionEvent>,
+    tokio::sync::mpsc::Sender<firma_protobuf::v1::ExecutionEvent>,
     tokio::task::JoinHandle<
-        Result<tonic::Response<firma_proto::firma::v1::StreamEventsResponse>, tonic::Status>,
+        Result<tonic::Response<firma_protobuf::v1::StreamEventsResponse>, tonic::Status>,
     >,
 );
 
@@ -311,7 +311,7 @@ impl WalAuditSink {
 
         tracing::info!(count = buffered.len(), "replaying WAL events to gRPC");
         for event in buffered {
-            let proto = firma_proto::firma::v1::ExecutionEvent::from(event);
+            let proto = firma_protobuf::v1::ExecutionEvent::from(event);
             if stream_tx.send(proto).await.is_err() {
                 tracing::warn!("gRPC stream broke during WAL replay");
                 return;
@@ -385,7 +385,7 @@ impl WalAuditSink {
         let Some((stream_tx, _)) = stream else {
             return false;
         };
-        let proto = firma_proto::firma::v1::ExecutionEvent::from(event.clone());
+        let proto = firma_protobuf::v1::ExecutionEvent::from(event.clone());
         stream_tx.send(proto).await.is_ok()
     }
 
@@ -428,8 +428,7 @@ impl WalAuditSink {
             }
         };
 
-        let (tx, stream_rx) =
-            tokio::sync::mpsc::channel::<firma_proto::firma::v1::ExecutionEvent>(256);
+        let (tx, stream_rx) = tokio::sync::mpsc::channel::<firma_protobuf::v1::ExecutionEvent>(256);
         let stream = tokio_stream::wrappers::ReceiverStream::new(stream_rx);
         let handle = tokio::spawn(async move { client.stream_events(stream).await });
 
@@ -454,7 +453,7 @@ impl WalAuditSink {
                 "replaying WAL events after reconnect"
             );
             for event in buffered {
-                let proto = firma_proto::firma::v1::ExecutionEvent::from(event);
+                let proto = firma_protobuf::v1::ExecutionEvent::from(event);
                 if state.0.send(proto).await.is_err() {
                     tracing::warn!("gRPC broke during reconnect replay; staying in WAL mode");
                     return None;

@@ -1,13 +1,13 @@
 //! HTTP proxy interceptor.
 //!
-//! Implements the [`Interceptor`](super::Interceptor) trait using a TCP
+//! Implements the [`Interceptor`] trait using a TCP
 //! HTTP/1.1 proxy endpoint. The agent sets
 //! `HTTP_PROXY=http://localhost:<port>` and all outbound HTTP traffic flows
 //! through this interceptor before reaching external systems.
 //!
 //! The interceptor parses each inbound request into a
-//! [`RawRequest`](crate::normalizer::RawRequest), passes it to the shared
-//! [`RequestHandler`](crate::handler::RequestHandler), and writes the handled
+//! [`RawRequest`], passes it to the shared
+//! [`RequestHandler`], and writes the handled
 //! response downstream.
 //!
 //! HTTPS `CONNECT` is supported in two modes:
@@ -116,9 +116,9 @@ impl Drop for BudgetGuard {
 ///
 /// Listens on a configurable TCP port (default 8080) and captures every
 /// outbound HTTP request made by the agent. Each request is converted into a
-/// [`RawRequest`](crate::normalizer::RawRequest) and handled through the
-/// [`RequestHandler`](crate::handler::RequestHandler) provided in
-/// [`Interceptor::run`](super::Interceptor::run).
+/// [`RawRequest`] and handled through the
+/// [`RequestHandler`] provided in
+/// [`Interceptor::run`].
 ///
 /// Malformed requests that cannot be parsed into a valid `RawRequest` are
 /// rejected with a structured DENY carrying reason `MALFORMED_REQUEST`
