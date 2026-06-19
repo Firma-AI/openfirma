@@ -88,6 +88,31 @@ jobs:
         with:
           dprint-version: ${{ env.DPRINT_VERSION }}
 
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
+
+      - name: Load tool versions
+        shell: bash
+        run: grep -E '^[A-Z0-9_]+=' tool-versions.env >> "$GITHUB_ENV"
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: ${{ env.PROTOC_VERSION }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build docs with warnings denied
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps
+
   check:
     name: Check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

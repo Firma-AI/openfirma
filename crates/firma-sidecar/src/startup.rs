@@ -1,6 +1,6 @@
 //! Startup builders that translate the validated
 //! [`SidecarConfig`](crate::config::SidecarConfig) into the runtime
-//! subsystems the [`main`] function wires together.
+//! subsystems the `main.rs` entry point wires together.
 //!
 //! Each submodule owns one subsystem so that `main.rs` stays short
 //! and readable:

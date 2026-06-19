@@ -1,13 +1,13 @@
 //! Unix domain socket interceptor.
 //!
-//! Implements the [`Interceptor`](super::Interceptor) trait over a Unix
+//! Implements the [`Interceptor`] trait over a Unix
 //! domain socket (UDS). The interceptor owns the full socket lifecycle: it
 //! removes any stale socket file, binds a
 //! [`tokio::net::UnixListener`], accepts connections, and unlinks the socket
 //! on shutdown.
 //!
 //! Requests arrive as plain HTTP over the UDS and are parsed with hyper into
-//! [`RawRequest`](crate::normalizer::RawRequest) values — the same parsing
+//! [`RawRequest`] values — the same parsing
 //! logic used by the HTTP proxy mode. This mode avoids TCP port binding,
 //! making it well suited for containerized environments.
 
@@ -30,12 +30,12 @@ use crate::pipeline::RawRequest;
 
 /// Unix domain socket interceptor.
 ///
-/// Accepts a [`PathBuf`](std::path::PathBuf) pointing to the socket file and
+/// Accepts a [`PathBuf`] pointing to the socket file and
 /// manages the full bind / listen / accept / cleanup cycle. Incoming HTTP
 /// requests are parsed into
-/// [`RawRequest`](crate::normalizer::RawRequest) values and handled through
-/// the [`RequestHandler`](crate::handler::RequestHandler) provided
-/// in [`Interceptor::run`](super::Interceptor::run).
+/// [`RawRequest`] values and handled through
+/// the [`RequestHandler`] provided
+/// in [`Interceptor::run`].
 ///
 /// Malformed requests that cannot be parsed into a valid `RawRequest` are
 /// rejected with a structured DENY carrying reason `MALFORMED_REQUEST`

@@ -14,7 +14,7 @@ use crate::config::ConfigError;
 
 /// In-memory set of authorized client identities (CN or DNS SAN strings).
 ///
-/// Populated from [`AuthorizedClientsFile`] at startup. Look-ups are O(1)
+/// Populated from the on-disk authorized clients TOML file at startup. Look-ups are O(1)
 /// and require no locking — the set is immutable after construction.
 #[derive(Debug, Clone)]
 pub struct AuthorizedClientSet {

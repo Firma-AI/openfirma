@@ -1,7 +1,7 @@
 //! Interceptor spawn dispatch.
 //!
 //! Selects the concrete interceptor implementation based on the
-//! [`InterceptorMode`](crate::config::InterceptorMode) in config and
+//! [`InterceptorMode`] in config and
 //! returns a [`tokio::task::JoinHandle`] that resolves when the
 //! interceptor shuts down.
 

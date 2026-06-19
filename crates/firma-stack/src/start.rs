@@ -33,7 +33,7 @@ pub enum StartMode {
 ///
 /// The handle is informational only: it does not own the children's lifecycle
 /// (pid files on disk are the source of truth). Callers tear the stack down
-/// via [`crate::stop`].
+/// via [`crate::stop()`].
 pub struct StackHandle {
     /// PID of the authority component.
     pub authority_pid: u32,
@@ -47,7 +47,7 @@ pub struct StackHandle {
 ///
 /// Returns once both components are listening and the sidecar CA material is
 /// on disk. The caller owns lifecycle: it must eventually call
-/// [`crate::stop`] to tear the stack down (or rely on the OS reaping pids when
+/// [`crate::stop()`] to tear the stack down (or rely on the OS reaping pids when
 /// the parent process exits).
 ///
 /// Used by `firma-demo-tui` and as the first step of [`start`].

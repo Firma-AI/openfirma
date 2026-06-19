@@ -8,8 +8,8 @@
 //! - [`spawn_audit_sink`] — spawns the signing adapter plus the
 //!   concrete sink (stdout/file/gRPC/WAL) as background tokio tasks.
 //! - internal `run_signing_adapter` — sits between the pipeline and
-//!   the concrete sink, signing [`AuditPayload`]s into
-//!   [`ExecutionEvent`]s on their way out.
+//!   the concrete sink, signing [`AuditPayload`](crate::audit::AuditPayload)s into
+//!   [`ExecutionEvent`](crate::audit::ExecutionEvent)s on their way out.
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;

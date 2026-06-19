@@ -106,8 +106,8 @@ fn seed_claims(file: &SeedFile) -> anyhow::Result<CapabilityClaims> {
 
 /// Build the Stage 1 token verifier.
 ///
-/// Returns a [`PasetoV4Verifier`] when `public_key_path` is set,
-/// otherwise returns a [`RejectAllVerifier`] so unconfigured
+/// Returns a PASETO v4 verifier when `public_key_path` is set,
+/// otherwise returns a reject-all verifier so unconfigured
 /// deployments continue to deny every protected call.
 ///
 /// # Errors
