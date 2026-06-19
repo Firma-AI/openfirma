@@ -3,7 +3,6 @@
 mod agent;
 mod audit;
 mod config;
-mod mock;
 mod policy;
 mod runner;
 mod scenario;
@@ -107,7 +106,7 @@ async fn drive_scenario_for_agent(scenario: &dyn EnforcementScenario, kind: Agen
                 r.enforcement_error.as_deref().unwrap_or("(no detail)"),
                 r.firma_audit.allow_events().len(),
                 r.firma_audit.deny_events().len(),
-                r.enforcement_output.http_requests.all().len(),
+                r.enforcement_output.http_requests.len(),
                 r.enforcement_output.agent.stderr.trim(),
             );
         }

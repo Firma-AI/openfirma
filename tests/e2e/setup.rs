@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Context;
+use wiremock::{Mock, MockServer};
 
 use crate::agent::{Agent, AgentKind};
-use crate::mock::{HttpMock, MockSpec};
 use crate::policy::PolicyBuilder;
 use crate::{config, firma_bin};
 
@@ -15,33 +16,17 @@ pub struct ScenarioSetup {
     pub capability_seed: Option<PathBuf>,
     pub capability_session_id: Option<String>,
 
-    pub(crate) mock_host: String,
-    pub(crate) mock_port: u16,
-    pub(crate) mock_specs: Vec<MockSpec>,
+    /// Shared mock server. Scenarios push built `Mock` objects into `mocks`;
+    /// the runner mounts them between the baseline and enforcement phases.
+    pub mock_server: Arc<MockServer>,
+    pub mocks: Vec<Mock>,
+
     pub(crate) config_dir: PathBuf,
     pub(crate) state_dir: PathBuf,
     pub(crate) agent: Agent,
 }
 
 impl ScenarioSetup {
-    #[must_use]
-    pub fn mock_addr(&self) -> String {
-        format!("{}:{}", self.mock_host, self.mock_port)
-    }
-
-    #[must_use]
-    pub fn mock_url_for(&self, path: &str) -> String {
-        format!("http://{}:{}{}", self.mock_host, self.mock_port, path)
-    }
-
-    pub fn http_mock(&mut self) -> HttpMock<'_> {
-        HttpMock {
-            host: &self.mock_host,
-            port: self.mock_port,
-            mock_specs: &mut self.mock_specs,
-        }
-    }
-
     pub fn add_mapping_rule(
         &self,
         host_port: &str,
