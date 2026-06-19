@@ -50,8 +50,8 @@ toml = { workspace = true }
 tonic = { workspace = true, features = ["tls-aws-lc"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-uuid = { workspace = true }
 unicode-normalization = "0.1"
+uuid = { workspace = true }
 webpki-roots = { workspace = true }
 x509-parser = { workspace = true }
 xxhash-rust = { workspace = true }
