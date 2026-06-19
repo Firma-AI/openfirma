@@ -1,4 +1,4 @@
-.PHONY: fmt lint test build check fuzz-check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps install-tools managed-seccomp-compat-check
+.PHONY: fmt lint test build check e2e fuzz-check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps install-tools managed-seccomp-compat-check
 
 # Tool versions (shared with CI — see tool-versions.env). KEY=value lines are
 # valid Make assignments, so a plain include exposes each as $(<KEY>).
@@ -59,6 +59,9 @@ test:
 
 build:
 	cargo build --all-features --all-targets
+
+e2e:
+	cargo nextest run -p firma --test e2e --profile e2e
 
 audit:
 	cargo audit --deny warnings

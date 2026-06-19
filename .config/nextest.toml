@@ -1,0 +1,7 @@
+[profile.e2e]
+setup-scripts = ["build-firma"]
+run-ignored = "all"
+
+[scripts.build-firma]
+# Build the firma binary if no prebuilt path is provided via FIRMA_BIN.
+command = 'test -n "$FIRMA_BIN" || cargo build -p firma'

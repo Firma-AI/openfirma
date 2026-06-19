@@ -6,57 +6,42 @@ v0.1.3+.
 
 ## Prerequisites
 
-- `firma` binary on `PATH` or `FIRMA_BIN` env var pointing to it
 - At least one agent installed: `claude` (Claude Code) or `codex` (Codex CLI)
 - `bwrap` on Linux; `vz` sandbox on macOS (provided by the OS)
 
 ## Running locally
 
-All integration tests are marked `#[ignore]` and are skipped by default.
-Pass `--include-ignored` to run them.
-
-Run all scenarios for all available agents:
-
 ```sh
-cargo test --test e2e -- --include-ignored
+make e2e
 ```
 
-Run only Claude scenarios:
+The nextest `e2e` profile builds `firma` automatically unless `FIRMA_BIN`
+is already set to a prebuilt binary.
+
+Run only Claude or only Codex scenarios:
 
 ```sh
-cargo test --test e2e -- claude:: --include-ignored
-```
-
-Run only Codex scenarios:
-
-```sh
-cargo test --test e2e -- codex:: --include-ignored
+cargo nextest run -p firma --test e2e --profile e2e -E 'test(claude::)'
+cargo nextest run -p firma --test e2e --profile e2e -E 'test(codex::)'
 ```
 
 Run a single scenario:
 
 ```sh
-cargo test --test e2e -- claude::normal_llm_call --include-ignored
+cargo nextest run -p firma --test e2e --profile e2e -E 'test(claude::normal_llm_call)'
 ```
 
-Use a pre-built release binary to avoid a rebuild:
+Use a prebuilt release binary to skip the build step:
 
 ```sh
-FIRMA_BIN=./target/release/firma cargo test --test e2e
+FIRMA_BIN=./target/release/firma make e2e
 ```
 
 ## Scenarios
 
-| Scenario              | Agents | Expected outcome                                      |
-| --------------------- | ------ | ----------------------------------------------------- |
-| `normal_llm_call`     | all    | ALLOW — legitimate LLM traffic passes                 |
-| `block_paste_service` | all    | DENY — POST to paste service blocked by policy        |
-| `block_unlisted_host` | all    | DENY — host not in capability scope                   |
-| `tool_call_exfil`     | all    | DENY — exfil POST blocked before reaching destination |
-| `direct_tcp_bypass`   | all    | DENY — sandbox blocks raw TCP egress bypassing proxy  |
-| `fs_read_deny`        | all    | DENY — sandbox blocks read outside workspace          |
-| `fs_delete_deny`      | all    | DENY — sandbox blocks delete outside workspace        |
-| `code_fibonacci`      | all    | ALLOW — pure local coding task passes end-to-end      |
+| Scenario          | Agents | Expected outcome                      |
+| ----------------- | ------ | ------------------------------------- |
+| `normal_llm_call` | all    | ALLOW — legitimate LLM traffic passes |
 
 Each scenario runs in two phases:
 
