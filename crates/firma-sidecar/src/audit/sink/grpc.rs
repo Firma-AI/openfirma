@@ -10,7 +10,7 @@
 //! This sink does **not** implement local WAL buffering — that is the
 //! responsibility of the separate WAL sink.
 
-use firma_proto::firma::v1::audit_service_client::AuditServiceClient;
+use firma_protobuf::v1::audit_service_client::AuditServiceClient;
 use tonic::transport::Channel;
 
 use crate::audit::{AuditSink, AuditSinkError, ExecutionEvent};
@@ -57,7 +57,7 @@ impl AuditSink for GrpcAuditSink {
         // Bridge domain events into a proto stream consumed by the
         // client-streaming RPC.
         let (stream_tx, stream_rx) =
-            tokio::sync::mpsc::channel::<firma_proto::firma::v1::ExecutionEvent>(256);
+            tokio::sync::mpsc::channel::<firma_protobuf::v1::ExecutionEvent>(256);
         let stream = tokio_stream::wrappers::ReceiverStream::new(stream_rx);
 
         // Spawn the RPC in a background task so we can keep feeding
@@ -67,7 +67,7 @@ impl AuditSink for GrpcAuditSink {
         loop {
             tokio::select! {
                 Some(event) = rx.recv() => {
-                    let proto_event = firma_proto::firma::v1::ExecutionEvent::from(event);
+                    let proto_event = firma_protobuf::v1::ExecutionEvent::from(event);
                     if stream_tx.send(proto_event).await.is_err() {
                         tracing::warn!("gRPC stream closed; event dropped");
                     }
@@ -76,7 +76,7 @@ impl AuditSink for GrpcAuditSink {
                     // Drain remaining buffered events before shutting
                     // down.
                     while let Some(event) = rx.recv().await {
-                        let proto_event = firma_proto::firma::v1::ExecutionEvent::from(event);
+                        let proto_event = firma_protobuf::v1::ExecutionEvent::from(event);
                         if stream_tx.send(proto_event).await.is_err() {
                             tracing::warn!("gRPC stream closed during drain; event dropped");
                             break;
@@ -176,6 +176,6 @@ mod tests {
     /// is wired correctly; the actual gRPC call requires a live server.
     fn sample_event_converts_to_proto() {
         let event = sample_event("evt-proto");
-        let _proto: firma_proto::firma::v1::ExecutionEvent = event.into();
+        let _proto: firma_protobuf::v1::ExecutionEvent = event.into();
     }
 }

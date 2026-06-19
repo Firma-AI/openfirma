@@ -176,7 +176,7 @@ pub struct ExecutionEvent {
     pub signature: Vec<u8>,
 }
 
-impl From<ExecutionEvent> for firma_proto::firma::v1::ExecutionEvent {
+impl From<ExecutionEvent> for firma_protobuf::v1::ExecutionEvent {
     fn from(value: ExecutionEvent) -> Self {
         Self {
             event_id: value.event_id,
@@ -197,7 +197,7 @@ impl From<ExecutionEvent> for firma_proto::firma::v1::ExecutionEvent {
                 )]
                 let seconds = (nanos / 1_000_000_000) as i64;
                 let sub_nanos = (nanos % 1_000_000_000) as i32;
-                firma_proto::prost_types::Timestamp {
+                prost_types::Timestamp {
                     seconds,
                     nanos: sub_nanos,
                 }

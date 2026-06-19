@@ -30,7 +30,7 @@ Four invariants shape the design:
 ```mermaid
 graph LR
     core[firma-core<br/>shared types & traits]
-    proto[firma-proto<br/>gRPC wire contract]
+    proto[firma-protobuf<br/>gRPC wire contract -- crates.io]
     grpcproto[firma-grpc-interceptor-proto<br/>gRPC hook contract]
     sidecar[firma-sidecar<br/>enforcement binary]
     authority[firma-authority<br/>reference Authority]
@@ -42,13 +42,13 @@ graph LR
     authority --> proto
 ```
 
-| Crate                          | Role                                                                             |
-| ------------------------------ | -------------------------------------------------------------------------------- |
-| `firma-core`                   | Domain types (`ExecutionEnvelope`, `CapabilityClaims`, `Decision`) and traits.   |
-| `firma-proto`                  | Protobuf-generated gRPC contract used by audit sink and Authority streams.       |
-| `firma-grpc-interceptor-proto` | Contract for the in-process gRPC hook interceptor.                               |
-| `firma-sidecar`                | The enforcement binary — interceptors, pipeline, connector, audit, startup.      |
-| `firma-authority`              | Reference Authority for local dev. Issues PASETO tokens, streams policy bundles. |
+| Crate                          | Role                                                                                                     |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `firma-core`                   | Domain types (`ExecutionEnvelope`, `CapabilityClaims`, `Decision`) and traits.                           |
+| `firma-protobuf`               | External crate (crates.io): generated `firma.v1` gRPC contract used by audit sink and Authority streams. |
+| `firma-grpc-interceptor-proto` | Contract for the in-process gRPC hook interceptor.                                                       |
+| `firma-sidecar`                | The enforcement binary — interceptors, pipeline, connector, audit, startup.                              |
+| `firma-authority`              | Reference Authority for local dev. Issues PASETO tokens, streams policy bundles.                         |
 
 ## 3. Top-level runtime
 

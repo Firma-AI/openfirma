@@ -309,7 +309,6 @@ The Authority can be the Mini Authority included in this repo or your own implem
 | [`crates/firma-core`](crates/firma-core/)           | Shared types, Cedar schema, action classes, audit event format                |
 | [`crates/firma-run`](crates/firma-run/)             | Agent process confinement: bwrap backend, profile resolution, autostart       |
 | [`crates/firma-stack`](crates/firma-stack/)         | Process supervision primitives used internally by `firma sidecar start`       |
-| [`crates/firma-proto`](crates/firma-proto/)         | Protobuf/gRPC service definitions                                             |
 
 **Examples**
 

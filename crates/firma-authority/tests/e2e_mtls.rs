@@ -10,8 +10,8 @@
 use std::io::Write as _;
 
 use firma_authority::{AuthorityConfig, AuthorityTlsConfig, Server};
-use firma_proto::firma::v1::WatchPolicyBundleRequest;
-use firma_proto::firma::v1::authority_service_client::AuthorityServiceClient;
+use firma_protobuf::v1::WatchPolicyBundleRequest;
+use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
 use rcgen::{

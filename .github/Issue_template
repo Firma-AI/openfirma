@@ -26,7 +26,7 @@
 - [ ] `firma-sidecar` — normalizer, enforcement pipeline (Stage 1 / Stage 2)
 - [ ] `firma-authority` — token issuance, policy bundle distribution
 - [ ] `firma-run` — process supervision and confinement
-- [ ] `firma-proto` — gRPC wire contract
+- [ ] `firma-protobuf` — gRPC wire contract (external crate)
 - [ ] CLI (`firma` binary)
 - [ ] Configuration / mapping rules (TOML)
 - [ ] Documentation / docs-site

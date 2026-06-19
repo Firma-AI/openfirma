@@ -12,7 +12,7 @@ async-stream = { workspace = true }
 cedar-policy = { workspace = true }
 chrono = { workspace = true }
 firma-core = { workspace = true }
-firma-proto = { workspace = true }
+firma-protobuf = { workspace = true }
 hex = { workspace = true }
 notify = { workspace = true }
 pasetors = { workspace = true }

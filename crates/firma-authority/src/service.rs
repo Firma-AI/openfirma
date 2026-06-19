@@ -9,9 +9,9 @@ use firma_core::policy::PolicyBundle;
 use firma_core::session::SessionId;
 use firma_core::token::CapabilityClaims;
 use firma_core::token::paseto::PasetoV4Signer;
-use firma_proto::RevocationEvent;
-use firma_proto::firma::v1::authority_service_server::AuthorityService;
-use firma_proto::firma::v1::{
+use firma_protobuf::v1::RevocationEvent;
+use firma_protobuf::v1::authority_service_server::AuthorityService;
+use firma_protobuf::v1::{
     CapabilityToken, IssueCapabilityRequest, IssueCapabilityResponse, PolicyBundleUpdate,
     TokenFormat, WatchPolicyBundleRequest, WatchRevocationsRequest,
 };
@@ -472,7 +472,7 @@ fn build_proto_token(claims: &CapabilityClaims, signature: Vec<u8>) -> Capabilit
 
 fn bundle_to_update(bundle: &PolicyBundle) -> PolicyBundleUpdate {
     PolicyBundleUpdate {
-        bundle: Some(firma_proto::PolicyBundle {
+        bundle: Some(firma_protobuf::v1::PolicyBundle {
             version: bundle.version.clone(),
             policies: bundle.policies.clone(),
             entity_schema: bundle.entity_schema.clone(),

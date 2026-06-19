@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use firma_core::policy::PolicyBundle as CorePolicyBundle;
-use firma_proto::authority_service_client::AuthorityServiceClient;
-use firma_proto::{PolicyBundle, WatchPolicyBundleRequest};
+use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
+use firma_protobuf::v1::{PolicyBundle, WatchPolicyBundleRequest};
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 

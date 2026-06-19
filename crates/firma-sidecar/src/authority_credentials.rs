@@ -3,7 +3,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use firma_proto::SidecarCredentials;
+use firma_protobuf::v1::SidecarCredentials;
 use serde::Deserialize;
 
 /// Configured source for Sidecar pre-shared-key credentials.

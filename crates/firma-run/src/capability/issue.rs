@@ -14,9 +14,9 @@ use std::time::Duration;
 
 use firma_core::token::paseto::PasetoV4Verifier;
 use firma_core::{CapabilitySeed, TokenVerifier};
-use firma_proto::IssueCapabilityRequest;
-use firma_proto::authority_service_client::AuthorityServiceClient;
-use firma_proto::client::build_channel;
+use firma_protobuf::v1::IssueCapabilityRequest;
+use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
+use firma_sidecar::authority_client::channel::build_channel;
 use firma_sidecar::authority_credentials::ResolvedSidecarCredentials;
 
 use crate::error::RunError;

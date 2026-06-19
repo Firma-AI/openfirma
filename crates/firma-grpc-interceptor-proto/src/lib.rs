@@ -1,7 +1,7 @@
 // Firma gRPC Interceptor Proto — agent-facing interceptor hook definitions.
 //
 // This crate owns the wire contract between an agent and the Firma Sidecar
-// interceptor. It is intentionally separate from `firma-proto`, which carries
+// interceptor. It is intentionally separate from `firma-protobuf`, which carries
 // the Authority ↔ Sidecar contract.
 //
 // All types are generated from `.proto` files via prost/tonic.

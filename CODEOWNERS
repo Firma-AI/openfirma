@@ -3,7 +3,6 @@
 /crates/firma-authority/           @Firma-AI/team-firma
 /crates/firma-sidecar/              @Firma-AI/team-firma
 /crates/firma-core/                 @Firma-AI/team-firma
-/crates/firma-proto/                @Firma-AI/team-firma
 /crates/firma-grpc-interceptor-proto/ @Firma-AI/team-firma
 /crates/firma-config/               @Firma-AI/team-firma
 /crates/firma-run/                  @Firma-AI/team-firma
