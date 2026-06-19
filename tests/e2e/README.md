@@ -19,31 +19,31 @@ Pass `--include-ignored` to run them.
 Run all scenarios for all available agents:
 
 ```sh
-cargo test --test integration_tests -- --include-ignored
+cargo test --test e2e -- --include-ignored
 ```
 
 Run only Claude scenarios:
 
 ```sh
-cargo test --test integration_tests -- claude:: --include-ignored
+cargo test --test e2e -- claude:: --include-ignored
 ```
 
 Run only Codex scenarios:
 
 ```sh
-cargo test --test integration_tests -- codex:: --include-ignored
+cargo test --test e2e -- codex:: --include-ignored
 ```
 
 Run a single scenario:
 
 ```sh
-cargo test --test integration_tests -- claude::normal_llm_call --include-ignored
+cargo test --test e2e -- claude::normal_llm_call --include-ignored
 ```
 
 Use a pre-built release binary to avoid a rebuild:
 
 ```sh
-FIRMA_BIN=./target/release/firma cargo test --test integration_tests
+FIRMA_BIN=./target/release/firma cargo test --test e2e
 ```
 
 ## Scenarios

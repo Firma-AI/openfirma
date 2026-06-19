@@ -67,5 +67,5 @@ tempfile = { workspace = true }
 nix = { workspace = true }
 
 [[test]]
-name = "integration_tests"
-path = "../../tests/integration_tests/main.rs"
+name = "e2e"
+path = "../../tests/e2e/main.rs"
