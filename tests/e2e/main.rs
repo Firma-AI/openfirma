@@ -156,6 +156,6 @@ macro_rules! scenario_tests {
 scenario_tests! {
     [claude, codex];
     (
-        normal_llm_call => scenarios::NormalLlmCall,
+        simple_prompt => scenarios::SimplePrompt,
     )
 }

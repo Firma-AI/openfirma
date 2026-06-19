@@ -1,5 +1,5 @@
-mod normal_llm_call;
+mod simple_prompt;
 
-pub use normal_llm_call::NormalLlmCall;
+pub use simple_prompt::SimplePrompt;
 
 pub use crate::scenario::EnforcementScenario;
