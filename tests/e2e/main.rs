@@ -1,14 +1,19 @@
 #![allow(dead_code)]
 
+mod agent;
 mod audit;
 mod config;
-mod harness;
+mod mock;
+mod policy;
+mod runner;
+mod scenario;
 mod scenarios;
+mod setup;
 
 use std::path::PathBuf;
 use std::process::Command;
 
-use harness::run_scenario;
+use runner::run_scenario;
 use scenarios::EnforcementScenario;
 
 // ── Utilities ────────────────────────────────────────────────────────────────
@@ -57,10 +62,10 @@ pub fn bwrap_available() -> bool {
 
 /// Default agent configuration by command name.
 #[allow(clippy::panic)]
-fn default_agent(agent_cmd: &str) -> harness::Agent {
+fn default_agent(agent_cmd: &str) -> agent::Agent {
     match agent_cmd {
-        "claude" => harness::Agent::claude().args(["--permission-mode", "bypassPermissions"]),
-        "codex" => harness::Agent::codex().args(["--sandbox", "danger-full-access"]),
+        "claude" => agent::Agent::claude().args(["--permission-mode", "bypassPermissions"]),
+        "codex" => agent::Agent::codex().args(["--sandbox", "danger-full-access"]),
         other => panic!("unknown agent: {other}"),
     }
 }

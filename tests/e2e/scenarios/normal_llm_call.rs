@@ -1,4 +1,5 @@
-use crate::harness::{EnforcementScenario, FirmaAudit, PhaseOutput, ScenarioSetup};
+use crate::scenario::{EnforcementScenario, FirmaAudit, PhaseOutput};
+use crate::setup::ScenarioSetup;
 
 pub struct NormalLlmCall;
 

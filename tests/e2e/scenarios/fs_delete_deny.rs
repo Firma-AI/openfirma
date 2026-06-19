@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use crate::harness::{EnforcementScenario, FirmaAudit, PhaseOutput, ScenarioSetup};
+use crate::scenario::{EnforcementScenario, FirmaAudit, PhaseOutput};
+use crate::setup::ScenarioSetup;
 
 pub struct FsDeleteDeny {
     important_file: OnceLock<PathBuf>,

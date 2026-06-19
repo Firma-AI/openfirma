@@ -16,4 +16,4 @@ pub use fs_read_deny::FsReadDeny;
 pub use normal_llm_call::NormalLlmCall;
 pub use tool_call_exfil::ToolCallExfil;
 
-pub use crate::harness::EnforcementScenario;
+pub use crate::scenario::EnforcementScenario;

@@ -3,7 +3,8 @@ use std::sync::OnceLock;
 
 use anyhow::Context;
 
-use crate::harness::{EnforcementScenario, FirmaAudit, PhaseOutput, ScenarioSetup};
+use crate::scenario::{EnforcementScenario, FirmaAudit, PhaseOutput};
+use crate::setup::ScenarioSetup;
 
 pub struct FsReadDeny {
     secrets_file: OnceLock<PathBuf>,
