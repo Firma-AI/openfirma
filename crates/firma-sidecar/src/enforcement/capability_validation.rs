@@ -105,7 +105,7 @@ impl CapabilityValidator {
     ///
     /// # Panics
     ///
-    /// Panics if the mutex guarding the first observed agent_id is poisoned.
+    /// Panics if the mutex guarding the first observed `agent_id` is poisoned.
     #[expect(
         clippy::result_large_err,
         reason = "domain decision carries denial context"
