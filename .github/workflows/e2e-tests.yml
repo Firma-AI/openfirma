@@ -1,4 +1,4 @@
-name: Integration Tests
+name: E2E Tests
 
 on:
   push:
@@ -10,15 +10,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: integration-tests-${{ github.ref }}
+  group: e2e-tests-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  integration:
-    name: integration (${{ matrix.os }}, ${{ matrix.agent.name }})
+  e2e:
+    name: e2e (${{ matrix.os }}, ${{ matrix.agent.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -56,7 +56,7 @@ jobs:
       - name: Install ${{ matrix.agent.name }}
         run: npm install -g '${{ matrix.agent.package }}'
 
-      - name: Run integration tests
+      - name: Run e2e tests
         env:
           FIRMA_BIN: ${{ github.workspace }}/target/release/firma
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

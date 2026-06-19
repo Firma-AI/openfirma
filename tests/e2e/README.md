@@ -1,4 +1,4 @@
-# Integration Tests
+# E2E Tests
 
 End-to-end validation of the OpenFirma enforcement boundary against real coding
 agent workloads. Covers Claude Code and Codex CLI as the primary targets for
@@ -54,6 +54,6 @@ supported) or look for the temp path printed on test failure.
 
 ## CI
 
-The CI matrix (`integration-tests.yml`) runs on `ubuntu-latest` (bwrap) and
+The CI matrix (`e2e-tests.yml`) runs on `ubuntu-latest` (bwrap) and
 `macos-latest` (vz) for each agent. The sandbox backend is selected automatically
 by the OS — no manual configuration is needed.
