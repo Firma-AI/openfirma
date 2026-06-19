@@ -1,5 +1,5 @@
 ---
-source: crates/firma/../../tests/e2e/scenario.rs
+source: crates/firma/../../tests/e2e/audit.rs
 expression: "&events"
 ---
 [
