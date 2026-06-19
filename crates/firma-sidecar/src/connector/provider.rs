@@ -6,7 +6,7 @@
 //! providers (gRPC, SQL, specialized API clients) are added here when
 //! they are built.
 //!
-//! External crates implementing the core [`Connector`] trait are
+//! External crates implementing the core [`Connector`](firma_core::Connector) trait are
 //! plugged in at startup via
 //! [`ConnectorRegistry::register_host`](super::ConnectorRegistry::register_host).
 

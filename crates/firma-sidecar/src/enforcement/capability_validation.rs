@@ -4,7 +4,7 @@
 //! validates it:
 //!
 //! 1. **Capability token selection** — selects the best-matching pre-provisioned
-//!    token from the [`CapabilityMap`](super::capability_map::CapabilityMap) by
+//!    token from the [`CapabilityMap`] by
 //!    action class and resource scope (ADR-002). The agent knows nothing about
 //!    Firma; the sidecar selects the correct token internally.
 //! 2. **Token validation** — parse PASETO v4, verify Ed25519 signature, check

@@ -2,7 +2,7 @@
 //!
 //! Wires the shared tonic channel and spawns the background
 //! `WatchPolicyBundle` / `WatchRevocations` tasks when
-//! [`PolicyConfig::authority_url`](crate::config::PolicyConfig::authority_url)
+//! `authority.url`
 //! is configured. Returns `Ok(None)` when the Authority integration is
 //! disabled so the binary still runs in dev mode against local state.
 

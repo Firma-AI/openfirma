@@ -206,8 +206,7 @@ impl AuthorityConfig {
     /// directory" for consistency.
     ///
     /// `revocation_file` is intentionally excluded — state-managed.
-    /// Env overrides are applied *after* this (see
-    /// [`Self::apply_env_overrides`]) so an env-supplied path is kept
+    /// Env overrides are applied *after* this so an env-supplied path is kept
     /// exactly as the operator wrote it.
     pub fn rebase_defaults(&mut self, config_dir: &std::path::Path) {
         let rebase = |p: &mut PathBuf| {

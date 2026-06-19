@@ -1,4 +1,4 @@
-//! [`CredentialInjector`] construction from the `[credentials]`
+//! [`CredentialInjector`](credential::CredentialInjector) construction from the `[credentials]`
 //! config section.
 //!
 //! Basic-mode entries resolve their `value_from_env` environment

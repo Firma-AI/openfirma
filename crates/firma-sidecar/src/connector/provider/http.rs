@@ -32,7 +32,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Build-time configuration for a [`GenericHttpConnector`] instance.
 ///
-/// Built from the sidecar [`HostConnectorConfig`](crate::config::HostConnectorConfig)
+/// Built from sidecar host connector configuration entries
 /// at startup. Per-host instances carry a rate limiter; the registry
 /// default built via
 /// [`GenericHttpConnector::default_for_unconfigured`] does not.
@@ -85,7 +85,7 @@ impl GenericHttpConnector {
     ///
     /// # Errors
     ///
-    /// Returns [`HttpConnectorBuildError::Client`] when the underlying
+    /// Returns `HttpConnectorBuildError::Client` when the underlying
     /// [`reqwest::Client`] cannot be constructed (TLS setup failure,
     /// invalid runtime defaults).
     pub fn new(config: &HttpConnectorConfig) -> Result<Self, HttpConnectorBuildError> {
@@ -112,7 +112,7 @@ impl GenericHttpConnector {
     ///
     /// # Errors
     ///
-    /// Returns [`HttpConnectorBuildError::Client`] when the underlying
+    /// Returns `HttpConnectorBuildError::Client` when the underlying
     /// [`reqwest::Client`] cannot be constructed.
     pub fn default_for_unconfigured() -> Result<Self, HttpConnectorBuildError> {
         Self::new(&HttpConnectorConfig {

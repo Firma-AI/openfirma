@@ -1,13 +1,13 @@
 //! gRPC hook interceptor.
 //!
-//! Implements the [`Interceptor`](super::Interceptor) trait as a Tonic gRPC
+//! Implements the [`Interceptor`] trait as a Tonic gRPC
 //! server. The agent process registers this interceptor programmatically and
 //! calls the `Intercept` RPC for every outbound action — no port binding or
 //! proxy environment variable is required.
 //!
 //! The service converts each `InterceptRequest` proto message into a
-//! [`RawRequest`](crate::normalizer::RawRequest), passes it to the shared
-//! [`RequestHandler`](crate::handler::RequestHandler), and returns an
+//! [`RawRequest`], passes it to the shared
+//! [`RequestHandler`], and returns an
 //! `InterceptResponse` with the ALLOW / DENY result.
 
 use std::net::SocketAddr;
@@ -29,9 +29,9 @@ use firma_grpc_interceptor_proto::{InterceptRequest, InterceptResponse};
 /// Exposes an `InterceptorHook` gRPC service that agent code calls directly
 /// from within the same process or over a local connection. Each inbound
 /// `InterceptRequest` is converted into a
-/// [`RawRequest`](crate::normalizer::RawRequest) and handled through the
-/// [`RequestHandler`](crate::handler::RequestHandler). The resulting
-/// [`HandledResponse`](crate::handler::HandledResponse) is mapped to an
+/// [`RawRequest`] and handled through the
+/// [`RequestHandler`]. The resulting
+/// [`HandledResponse`] is mapped to an
 /// `InterceptResponse` returned to the
 /// agent.
 ///

@@ -2,7 +2,7 @@
 //!
 //! The registry default is built from `default_timeout_ms` (30s uses
 //! the [`GenericHttpConnector::default_for_unconfigured`] shortcut);
-//! every [`HostConnectorConfig`] entry becomes a
+//! every host connector entry becomes a
 //! [`GenericHttpConnector`] registered under its host string.
 
 use std::num::NonZeroU32;

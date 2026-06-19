@@ -6,7 +6,7 @@
 //! - [`selection`] — resolver that combines CLI args and config into a
 //!   single [`AuthoritySelection`].
 //! - [`supervisor`] — `AuthoritySupervisor` spawning + scrape + Drop.
-//! - [`metadata`] — per-run `authority/metadata.toml` writer.
+//! - `metadata` — per-run `authority/metadata.toml` writer.
 
 pub mod bootstrap;
 pub mod config;
