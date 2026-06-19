@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use anyhow::Context;
 pub use firma_sidecar::audit::ExecutionEvent;
 
 pub fn parse_audit_log(path: &Path) -> Result<Vec<ExecutionEvent>, anyhow::Error> {
@@ -8,22 +9,15 @@ pub fn parse_audit_log(path: &Path) -> Result<Vec<ExecutionEvent>, anyhow::Error
     }
 
     let content = fs_err::read_to_string(path)?;
-
-    let mut events = Vec::new();
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<ExecutionEvent>(line) {
-            Ok(event) => events.push(event),
-            Err(e) => {
-                anyhow::bail!("unexpected non-audit line in audit log: {e}: {line}");
-            }
-        }
-    }
-
-    Ok(events)
+    content
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim().is_empty())
+        .map(|(i, l)| {
+            serde_json::from_str(l)
+                .with_context(|| format!("unexpected audit record in audit log at line {i}"))
+        })
+        .collect()
 }
 
 #[must_use]
