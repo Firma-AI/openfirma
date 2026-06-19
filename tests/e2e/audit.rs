@@ -7,8 +7,7 @@ pub fn parse_audit_log(path: &Path) -> Result<Vec<ExecutionEvent>, anyhow::Error
         return Ok(Vec::new());
     }
 
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| anyhow::anyhow!("read audit log {}: {e}", path.display()))?;
+    let content = fs_err::read_to_string(path)?;
 
     let mut events = Vec::new();
     for line in content.lines() {
@@ -19,6 +18,8 @@ pub fn parse_audit_log(path: &Path) -> Result<Vec<ExecutionEvent>, anyhow::Error
         match serde_json::from_str::<ExecutionEvent>(line) {
             Ok(event) => events.push(event),
             Err(e) => {
+                // firma run can emit startup/progress lines before the sidecar
+                // begins writing JSONL; skip anything that isn't an audit event.
                 eprintln!("skip non-audit line in audit log: {e}: {line}");
             }
         }

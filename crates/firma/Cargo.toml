@@ -55,6 +55,7 @@ nix = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+fs-err = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
