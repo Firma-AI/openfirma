@@ -1,0 +1,64 @@
+name: Integration Tests
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  integration:
+    name: integration (${{ matrix.os }}, ${{ matrix.agent.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        agent:
+          - name: claude
+            package: "@anthropic-ai/claude-code"
+          - name: codex
+            package: "@openai/codex"
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions-rust-lang/setup-rust-toolchain@1fbea72663f6d4c03efaab13560c8a24cfd2a7cc # v1.9.0
+        with:
+          rustflags: ""
+          cache: false
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install bubblewrap (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y bubblewrap
+
+      - name: Build firma (release)
+        run: cargo build --release -p firma
+
+      - name: Install ${{ matrix.agent.name }}
+        run: npm install -g '${{ matrix.agent.package }}'
+
+      - name: Run integration tests
+        env:
+          FIRMA_BIN: ${{ github.workspace }}/target/release/firma
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: cargo test --test integration_tests -- '${{ matrix.agent.name }}::' --include-ignored

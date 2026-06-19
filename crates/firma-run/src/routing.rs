@@ -629,6 +629,7 @@ pub fn resolve_authority(
                 profile_name,
                 firma_exe: firma_exe.to_path_buf(),
                 startup_timeout: flags.startup_timeout,
+                user_config_path: user_config_path.map(Path::to_path_buf),
             }) {
                 Ok(sup) => {
                     let ephemeral_pub_key = sup.pub_key_path();
