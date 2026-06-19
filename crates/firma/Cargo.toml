@@ -55,6 +55,9 @@ nix = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["tokio"] }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
@@ -62,3 +65,7 @@ tempfile = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 nix = { workspace = true }
+
+[[test]]
+name = "integration_tests"
+path = "../../tests/integration_tests/main.rs"

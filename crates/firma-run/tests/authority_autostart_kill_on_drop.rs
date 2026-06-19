@@ -49,6 +49,7 @@ fn drop_reaps_child_within_grace() {
         profile_name: "developer",
         firma_exe: fake,
         startup_timeout: Duration::from_secs(5),
+        user_config_path: None,
     })
     .expect("spawn ok");
     let pid = sup.pid();

@@ -169,7 +169,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             .map(|resolved| resolved.config_dir.as_path());
         let sidecar_template_path =
             resolve_sidecar_template_path(args, user_config_path.as_deref());
-        let flags = AutostartFlags {
+        let mut flags = AutostartFlags {
             sidecar_autostart: matches!(
                 profile.sidecar_selection,
                 crate::sidecar::SidecarSelection::Local
@@ -185,6 +185,13 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             monitor_mode: args.monitor_mode,
             ..Default::default()
         };
+        // When the user supplies --capability-file, thread the path into the
+        // autostart flags so the sidecar loads it as a capability seed.
+        // maybe_mint_capability_seed skips minting (skip_mint=true) but keeps
+        // any capability_seed_path already set here.
+        if let CapabilitySource::File { ref path } = profile.capability.source {
+            flags.capability_seed_path = Some(path.clone());
+        }
         let firma_exe = std::env::current_exe()
             .map_err(|e| RunError::Internal(format!("resolve current_exe: {e}")))?;
         let runtime_dir = firma_stack::runtime_paths::default_runtime_dir();

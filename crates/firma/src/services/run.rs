@@ -78,7 +78,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         command: args.command,
         authority_cli,
         authority_profile: args.authority_profile,
-        user_config_path: None,
+        user_config_path: args.config.clone(),
         allow_non_structural: args.allow_non_structural,
         monitor_mode: args.monitor,
     };
