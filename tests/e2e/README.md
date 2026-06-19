@@ -9,7 +9,6 @@ v0.1.3+.
 - `firma` binary on `PATH` or `FIRMA_BIN` env var pointing to it
 - At least one agent installed: `claude` (Claude Code) or `codex` (Codex CLI)
 - `bwrap` on Linux; `vz` sandbox on macOS (provided by the OS)
-- `protoc` (required to build `firma-proto`)
 
 ## Running locally
 
