@@ -2,8 +2,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
-// ── Policy files ──────────────────────────────────────────────────────────────
-
 pub fn append_policy_rule(cfg_dir: &Path, name: &str, rule: &str) -> Result<(), anyhow::Error> {
     let path = cfg_dir.join("policies").join(format!("{name}.cedar"));
     let mut current = std::fs::read_to_string(&path)
@@ -14,8 +12,6 @@ pub fn append_policy_rule(cfg_dir: &Path, name: &str, rule: &str) -> Result<(), 
     std::fs::write(&path, current).with_context(|| format!("append policy {}", path.display()))?;
     Ok(())
 }
-
-// ── Mapping rules ──────────────────────────────────────────────────────────────
 
 pub fn add_mapping_rule(
     cfg_dir: &Path,
@@ -55,35 +51,6 @@ pub fn add_mapping_rule(
     Ok(())
 }
 
-// ── firma.toml edits ───────────────────────────────────────────────────────────
-
-pub fn set_config_value(cfg_dir: &Path, key: &str, value: &str) -> Result<(), anyhow::Error> {
-    let path = cfg_dir.join("firma.toml");
-    let content =
-        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    let mut doc: toml_edit::DocumentMut = content
-        .parse()
-        .with_context(|| format!("parse {}", path.display()))?;
-
-    let parts: Vec<&str> = key.split('.').collect();
-    let mut current = doc.as_table_mut();
-    for (i, part) in parts.iter().enumerate() {
-        if i == parts.len() - 1 {
-            current.insert(part, toml_edit::value(value));
-        } else {
-            current = current[part]
-                .or_insert(toml_edit::table())
-                .as_table_mut()
-                .ok_or_else(|| anyhow::anyhow!("key segment '{part}' is not a table"))?;
-        }
-    }
-
-    std::fs::write(&path, doc.to_string()).with_context(|| format!("write {}", path.display()))?;
-    Ok(())
-}
-
-// ── Capability issuance ────────────────────────────────────────────────────────
-
 #[allow(clippy::too_many_arguments)]
 pub fn issue_capability(
     firma_bin: &Path,
@@ -120,12 +87,25 @@ pub fn issue_capability(
     Ok(seed_path)
 }
 
-// ── Audit ──────────────────────────────────────────────────────────────────────
-
 pub fn configure_audit_path(cfg_dir: &Path, audit_path: &Path) -> Result<(), anyhow::Error> {
-    set_config_value(
-        cfg_dir,
-        "sidecar.audit.file_path",
-        &audit_path.to_string_lossy(),
-    )
+    let path = cfg_dir.join("firma.toml");
+    let content = fs_err::read_to_string(&path)?;
+    let mut doc: toml_edit::DocumentMut = content
+        .parse()
+        .with_context(|| format!("parse {}", path.display()))?;
+
+    let sidecar = doc["sidecar"].or_insert(toml_edit::table());
+    let sidecar = sidecar
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("[sidecar] is not a table"))?;
+    let audit = sidecar["audit"].or_insert(toml_edit::table());
+    let audit = audit
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("[sidecar.audit] is not a table"))?;
+    audit.insert(
+        "file_path",
+        toml_edit::value(audit_path.to_string_lossy().as_ref()),
+    );
+    fs_err::write(&path, doc.to_string())?;
+    Ok(())
 }
