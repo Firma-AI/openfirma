@@ -18,9 +18,7 @@ pub fn parse_audit_log(path: &Path) -> Result<Vec<ExecutionEvent>, anyhow::Error
         match serde_json::from_str::<ExecutionEvent>(line) {
             Ok(event) => events.push(event),
             Err(e) => {
-                // firma run can emit startup/progress lines before the sidecar
-                // begins writing JSONL; skip anything that isn't an audit event.
-                eprintln!("skip non-audit line in audit log: {e}: {line}");
+                anyhow::bail!("unexpected non-audit line in audit log: {e}: {line}");
             }
         }
     }
