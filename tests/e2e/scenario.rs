@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use crate::audit::{self, ExecutionEvent};
-use crate::mock::HttpCaptures;
 use crate::setup::ScenarioSetup;
 
 // ── PhaseOutput ───────────────────────────────────────────────────────────────
@@ -9,7 +8,7 @@ use crate::setup::ScenarioSetup;
 /// Combined output from one scenario phase: agent result + mock HTTP captures.
 pub struct PhaseOutput {
     pub agent: AgentOutput,
-    pub http_requests: HttpCaptures,
+    pub http_requests: Vec<wiremock::Request>,
 }
 
 // ── FirmaAudit ────────────────────────────────────────────────────────────────

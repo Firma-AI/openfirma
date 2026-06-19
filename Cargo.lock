@@ -1563,9 +1563,6 @@ dependencies = [
  "firma-sidecar",
  "firma-stack",
  "fs-err",
- "http-body-util",
- "hyper",
- "hyper-util",
  "insta",
  "miette",
  "nix 0.31.3",
@@ -1592,6 +1589,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "windows-sys 0.59.0",
+ "wiremock",
  "x509-parser",
 ]
 
