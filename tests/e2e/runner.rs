@@ -161,6 +161,7 @@ pub async fn run_scenario(
     Ok(ScenarioResult {
         scenario_name: scenario.name().to_string(),
         baseline_passed,
+        baseline_output: baseline_phase,
         enforcement_passed,
         enforcement_error,
         enforcement_output: enforcement_phase,

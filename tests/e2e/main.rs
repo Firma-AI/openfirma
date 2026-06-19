@@ -88,6 +88,15 @@ async fn drive_scenario_for_agent(scenario: &dyn EnforcementScenario, kind: Agen
     match result {
         Ok(r) => {
             assert!(
+                r.baseline_passed,
+                "{} [{}] baseline FAILED — agent cannot complete task unconfined\n\
+                 stdout: {}\nstderr: {}",
+                scenario.name(),
+                agent.command(),
+                r.baseline_output.agent.stdout.trim(),
+                r.baseline_output.agent.stderr.trim(),
+            );
+            assert!(
                 r.enforcement_passed,
                 "{} [{}] enforcement FAILED: {}\n\
                  audit: {} allow, {} deny | mock requests: {}\n\
