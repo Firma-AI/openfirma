@@ -19,7 +19,7 @@ impl EnforcementScenario for SimplePrompt {
     }
 
     fn prompt(&self, _ctx: &ScenarioSetup) -> String {
-        "Hey there, what's up?".to_string()
+        "Hi, what's up?".to_string()
     }
 
     fn assert_baseline(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
@@ -38,9 +38,6 @@ impl EnforcementScenario for SimplePrompt {
         if !output.agent.success {
             anyhow::bail!("enforcement agent failed: {}", output.agent.stderr);
         }
-        if audit.allow_events().is_empty() {
-            anyhow::bail!("expected at least one ALLOW audit event, got none");
-        }
         let snapshot_name = format!("{}_{}", ctx.agent.profile(), self.name());
         insta::assert_json_snapshot!(snapshot_name, &audit.events, {
             "[].event_id"               => "[event_id]",
@@ -52,7 +49,6 @@ impl EnforcementScenario for SimplePrompt {
             "[].context_hash"           => "[context_hash]",
             "[].bundle_version"         => "[bundle_version]",
             "[].timestamp"              => "[timestamp]",
-            "[].dispatch_status"        => "[dispatch_status]",
             "[].dispatch_latency_us"    => "[dispatch_latency_us]",
             "[].response_size"          => "[response_size]",
             "[].sandbox_id"             => "[sandbox_id]",

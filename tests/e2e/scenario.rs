@@ -78,6 +78,7 @@ pub trait EnforcementScenario: Send + Sync {
 
     fn assert_enforcement(
         &self,
+        ctx: &ScenarioSetup,
         output: &PhaseOutput,
         audit: &FirmaAudit,
     ) -> Result<(), anyhow::Error>;

@@ -136,7 +136,7 @@ pub async fn run_scenario(
     };
 
     let (enforcement_passed, enforcement_error) =
-        match scenario.assert_enforcement(&enforcement_phase, &firma_audit) {
+        match scenario.assert_enforcement(&ctx, &enforcement_phase, &firma_audit) {
             Ok(()) => (true, None),
             Err(e) => (false, Some(format!("{e:#}"))),
         };
