@@ -144,8 +144,6 @@ impl AuthoritySupervisor {
         let mut tee_handle: Option<JoinHandle<()>> = None;
         let mut last_error: Option<RunError> = None;
         for attempt in 0..MAX_BIND_ATTEMPTS {
-            let listen_addr = select_loopback_v6_port()?;
-            authority_config.listen_addr = listen_addr.to_string();
             let authority_conf_str = toml::to_string_pretty(&authority_config).map_err(|err| {
                 RunError::Internal(format!("invalid synthetic authority config: {err}"))
             })?;
@@ -229,6 +227,8 @@ impl AuthoritySupervisor {
             if attempt + 1 < MAX_BIND_ATTEMPTS {
                 std::thread::sleep(Duration::from_millis(120));
             }
+            let listen_addr = select_loopback_v6_port()?;
+            authority_config.listen_addr = listen_addr.to_string();
         }
         let capture = capture.ok_or_else(|| {
             last_error.unwrap_or_else(|| RunError::AuthorityStartupFailed {
