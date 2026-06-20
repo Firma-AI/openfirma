@@ -57,13 +57,3 @@ pub enum Phase {
     Baseline,
     Enforcement,
 }
-
-pub struct ScenarioResult {
-    pub scenario_name: String,
-    pub baseline_passed: bool,
-    pub baseline_output: PhaseOutput,
-    pub enforcement_passed: bool,
-    pub enforcement_error: Option<String>,
-    pub enforcement_output: PhaseOutput,
-    pub firma_audit: FirmaAuditTrail,
-}

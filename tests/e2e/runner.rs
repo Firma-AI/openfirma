@@ -10,7 +10,7 @@ use wiremock::MockServer;
 use crate::agent::Agent;
 use crate::audit::FirmaAuditTrail;
 use crate::firma_bin;
-use crate::scenario::{EnforcementScenario, Phase, PhaseOutput, ScenarioResult};
+use crate::scenario::{EnforcementScenario, Phase, PhaseOutput};
 use crate::setup::ScenarioSetup;
 
 /// Captured result of running a phase process (bare agent or firma wrapper) to
@@ -37,13 +37,14 @@ pub struct RunTimeoutError {
 
 /// Run a full two-phase scenario for `agent`.
 ///
-/// Phase 1 (baseline): agent runs directly — no firma proxy.
+/// Phase 1 (baseline): agent runs directly — no firma proxy. If the baseline
+/// assertion fails the scenario stops here with an error — there is no point
+/// enforcing a task the agent cannot complete unconfined.
 /// Phase 2 (enforcement): agent runs through `firma run`.
-#[allow(clippy::too_many_lines)]
 pub async fn run_scenario(
     scenario: &dyn EnforcementScenario,
     agent: &Agent,
-) -> Result<ScenarioResult, anyhow::Error> {
+) -> Result<(), anyhow::Error> {
     let mock_server = Arc::new(MockServer::start().await);
 
     let cfg_tmp = tempfile::tempdir()?;
@@ -87,18 +88,13 @@ pub async fn run_scenario(
         http_requests: mock_server.received_requests().await.unwrap_or_default(),
     };
 
-    let baseline_passed = match scenario.assert_baseline(&baseline_phase) {
-        Ok(()) => true,
-        Err(err) => {
-            eprintln!(
-                "[baseline] {} FAIL: {err}\nstdout: {}\nstderr: {}",
-                agent.command(),
-                baseline_phase.agent.stdout.trim(),
-                baseline_phase.agent.stderr.trim()
-            );
-            false
-        }
-    };
+    scenario.assert_baseline(&baseline_phase).with_context(|| {
+        format!(
+            "baseline FAILED\nstdout: {}\nstderr: {}",
+            baseline_phase.agent.stdout.trim(),
+            baseline_phase.agent.stderr.trim(),
+        )
+    })?;
 
     // Clear baseline captures; mount enforcement mocks built during setup.
     mock_server.reset().await;
@@ -120,21 +116,17 @@ pub async fn run_scenario(
     let audit_path = state_dir.join("audit.jsonl");
     let firma_audit = FirmaAuditTrail::try_new(&audit_path)?;
 
-    let (enforcement_passed, enforcement_error) =
-        match scenario.assert_enforcement(&ctx, &enforcement_phase, &firma_audit) {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{e:#}"))),
-        };
+    scenario
+        .assert_enforcement(&ctx, &enforcement_phase, &firma_audit)
+        .with_context(|| {
+            format!(
+                "enforcement FAILED\nstdout: {}\nstderr: {}",
+                enforcement_phase.agent.stdout.trim(),
+                enforcement_phase.agent.stderr.trim(),
+            )
+        })?;
 
-    Ok(ScenarioResult {
-        scenario_name: scenario.name().to_string(),
-        baseline_passed,
-        baseline_output: baseline_phase,
-        enforcement_passed,
-        enforcement_error,
-        enforcement_output: enforcement_phase,
-        firma_audit,
-    })
+    Ok(())
 }
 
 /// Spawn `cmd` and wait up to `timeout`. On timeout: kill the process and

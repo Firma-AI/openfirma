@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use agent::AgentKind;
+use anyhow::Context;
 use runner::run_scenario;
 use scenarios::EnforcementScenario;
 
@@ -52,8 +53,10 @@ fn default_agent(kind: AgentKind) -> agent::Agent {
     }
 }
 
-#[allow(clippy::panic)]
-async fn drive_scenario_for_agent(scenario: &dyn EnforcementScenario, kind: AgentKind) {
+async fn drive_scenario_for_agent(
+    scenario: &dyn EnforcementScenario,
+    kind: AgentKind,
+) -> Result<(), anyhow::Error> {
     let agent = default_agent(kind);
 
     if scenario.requires_structural_network() && !bwrap_available() {
@@ -63,40 +66,12 @@ async fn drive_scenario_for_agent(scenario: &dyn EnforcementScenario, kind: Agen
             scenario.name(),
             agent.command(),
         );
-        return;
+        return Ok(());
     }
-    let result = run_scenario(scenario, &agent).await;
 
-    match result {
-        Ok(r) => {
-            assert!(
-                r.baseline_passed,
-                "{} [{}] baseline FAILED — agent cannot complete task unconfined\n\
-                 stdout: {}\nstderr: {}",
-                scenario.name(),
-                agent.command(),
-                r.baseline_output.agent.stdout.trim(),
-                r.baseline_output.agent.stderr.trim(),
-            );
-            assert!(
-                r.enforcement_passed,
-                "{} [{}] enforcement FAILED: {}\n\
-                 audit: {} allow, {} deny | mock requests: {}\n\
-                 --- firma run stderr ---\n\
-                 {}",
-                scenario.name(),
-                agent.command(),
-                r.enforcement_error.as_deref().unwrap_or("(no detail)"),
-                r.firma_audit.allow_events().len(),
-                r.firma_audit.deny_events().len(),
-                r.enforcement_output.http_requests.len(),
-                r.enforcement_output.agent.stderr.trim(),
-            );
-        }
-        Err(err) => {
-            panic!("{} [{}] ERROR: {err}", scenario.name(), agent.command());
-        }
-    }
+    run_scenario(scenario, &agent)
+        .await
+        .with_context(|| format!("[{}] scenario {}", agent.kind.as_ref(), scenario.name()))
 }
 
 // ── Scenario registration ────────────────────────────────────────────────────
@@ -127,8 +102,8 @@ macro_rules! scenario_tests {
             $(
                 #[tokio::test]
                 #[ignore = "integration test — run with --include-ignored"]
-                async fn $name() {
-                    super::drive_scenario_for_agent(&$scenario, agent_kind!($agent)).await;
+                async fn $name() -> Result<(), anyhow::Error> {
+                    super::drive_scenario_for_agent(&$scenario, agent_kind!($agent)).await
                 }
             )*
         }
