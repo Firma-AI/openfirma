@@ -9,10 +9,6 @@ impl EnforcementScenario for SimplePrompt {
         "simple_prompt"
     }
 
-    fn description(&self) -> &'static str {
-        "Agent sends greeting to LLM provider → firma ALLOWs the call"
-    }
-
     fn setup(&self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.git_init_workspace()?;
         ctx.firma_config().run()?;
@@ -39,8 +35,7 @@ impl EnforcementScenario for SimplePrompt {
         if !output.agent.success {
             anyhow::bail!("enforcement agent failed: {}", output.agent.stderr);
         }
-        let snapshot_name = format!("{}_{}", ctx.agent.kind, self.name());
-        insta::assert_debug_snapshot!(snapshot_name, &audit);
+        insta::assert_debug_snapshot!(ctx.agent.kind.as_ref(), &audit);
         Ok(())
     }
 }

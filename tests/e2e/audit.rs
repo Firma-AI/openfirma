@@ -2,9 +2,11 @@ use std::path::Path;
 
 use anyhow::Context;
 use serde::Deserialize;
+use serde_repr::Deserialize_repr;
 use std::collections::BTreeSet;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize_repr)]
+#[repr(u8)]
 pub enum Decision {
     Allow = 1,
     Deny,

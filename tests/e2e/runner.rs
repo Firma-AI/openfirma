@@ -3,15 +3,37 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use tokio::io::AsyncReadExt;
 use wiremock::MockServer;
 
 use crate::agent::Agent;
 use crate::audit::FirmaAuditTrail;
 use crate::firma_bin;
-use crate::scenario::{AgentOutput, EnforcementScenario, PhaseOutput, ScenarioResult};
+use crate::scenario::{EnforcementScenario, Phase, PhaseOutput, ScenarioResult};
 use crate::setup::ScenarioSetup;
+
+/// Captured result of running a phase process (bare agent or firma wrapper) to
+/// completion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunOutput {
+    pub success: bool,
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub elapsed: Duration,
+}
+
+/// Returned when a phase process exceeds its allotted wall-clock time and is
+/// killed before exiting. Carries whatever partial output was captured.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("[{phase}] run timed out after {elapsed:?}")]
+pub struct RunTimeoutError {
+    pub phase: Phase,
+    pub stdout: String,
+    pub stderr: String,
+    pub elapsed: Duration,
+}
 
 /// Run a full two-phase scenario for `agent`.
 ///
@@ -58,7 +80,7 @@ pub async fn run_scenario(
         &ctx.workspace_dir,
         scenario.timeout(),
     )
-    .await;
+    .await?;
 
     let baseline_phase = PhaseOutput {
         agent: baseline_agent_output,
@@ -115,28 +137,19 @@ pub async fn run_scenario(
     })
 }
 
-// ── Internal helpers ──────────────────────────────────────────────────────────
-
-fn agent_available(name: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(name)
-        .output()
-        .is_ok_and(|o| o.status.success())
-}
-
 /// Spawn `cmd` and wait up to `timeout`. On timeout: kill the process and
 /// collect whatever partial stdout/stderr was written.
 async fn run_with_timeout(
+    phase: Phase,
     mut cmd: tokio::process::Command,
     timeout: Duration,
-    label: &str,
-) -> Result<AgentOutput, anyhow::Error> {
+) -> Result<RunOutput, anyhow::Error> {
     let start = Instant::now();
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("spawn {label}"))?;
+        .with_context(|| format!("spawn {phase}"))?;
 
     let mut stdout_handle = child
         .stdout
@@ -147,70 +160,49 @@ async fn run_with_timeout(
         .take()
         .ok_or_else(|| anyhow::anyhow!("stderr not piped"))?;
 
-    let stdout_task = tokio::spawn(async move {
+    let stdout = tokio::spawn(async move {
         let mut buf = Vec::new();
         let _ = stdout_handle.read_to_end(&mut buf).await;
-        buf
+        String::from_utf8_lossy(&buf).to_string()
     });
-    let stderr_task = tokio::spawn(async move {
+
+    let stderr = tokio::spawn(async move {
         let mut buf = Vec::new();
         let _ = stderr_handle.read_to_end(&mut buf).await;
-        buf
+        String::from_utf8_lossy(&buf).to_string()
     });
 
-    // Use child.wait() (borrows) so child remains owned if the sleep arm fires.
-    let timed_out = tokio::select! {
-        _ = child.wait() => false,
-        () = tokio::time::sleep(timeout) => true,
+    let exit_status = tokio::select! {
+        status = child.wait() => Some(status?),
+        () = tokio::time::sleep(timeout) => {
+            eprintln!("[{phase}] timed out after {timeout:?} - killing");
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            None
+        },
     };
 
-    if timed_out {
-        eprintln!("[{label}] timed out after {timeout:?} — killing");
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-    }
-
-    let stdout_bytes = stdout_task.await.unwrap_or_default();
-    let stderr_bytes = stderr_task.await.unwrap_or_default();
     let elapsed = start.elapsed();
+    let stdout = stdout.await?;
+    let stderr = stderr.await?;
 
-    let status = if timed_out {
-        None
-    } else {
-        child.try_wait().ok().flatten()
+    let Some(exit_status) = exit_status else {
+        return Err(RunTimeoutError {
+            phase,
+            stdout,
+            stderr,
+            elapsed,
+        }
+        .into());
     };
 
-    Ok(status.map_or_else(
-        || {
-            if timed_out {
-                AgentOutput {
-                    success: false,
-                    exit_code: None,
-                    stdout: String::from_utf8_lossy(&stdout_bytes).to_string(),
-                    stderr: format!(
-                        "timed out after {timeout:?}\n--- partial stderr ---\n{}",
-                        String::from_utf8_lossy(&stderr_bytes)
-                    ),
-                    elapsed: timeout,
-                }
-            } else {
-                AgentOutput {
-                    success: false,
-                    exit_code: None,
-                    stdout: String::new(),
-                    stderr: "process wait failed".to_string(),
-                    elapsed,
-                }
-            }
-        },
-        |s| AgentOutput {
-            success: s.success(),
-            exit_code: s.code(),
-            stdout: String::from_utf8_lossy(&stdout_bytes).to_string(),
-            stderr: String::from_utf8_lossy(&stderr_bytes).to_string(),
-            elapsed,
-        },
-    ))
+    Ok(RunOutput {
+        success: exit_status.success(),
+        exit_code: exit_status.code(),
+        stdout,
+        stderr,
+        elapsed,
+    })
 }
 
 async fn run_agent_direct(
@@ -218,29 +210,14 @@ async fn run_agent_direct(
     agent_args: &[String],
     workspace: &Path,
     timeout: Duration,
-) -> AgentOutput {
+) -> Result<RunOutput, anyhow::Error> {
     if !agent_available(agent_cmd) {
-        eprintln!("[baseline] agent '{agent_cmd}' not found on PATH — skip");
-        return AgentOutput {
-            success: false,
-            exit_code: None,
-            stdout: String::new(),
-            stderr: format!("agent '{agent_cmd}' not found on PATH"),
-            elapsed: Duration::from_secs(0),
-        };
+        bail!("[baseline] agent '{agent_cmd}' not found on PATH");
     }
 
     let mut cmd = tokio::process::Command::new(agent_cmd);
     cmd.args(agent_args).current_dir(workspace);
-    run_with_timeout(cmd, timeout, "baseline")
-        .await
-        .unwrap_or_else(|e| AgentOutput {
-            success: false,
-            exit_code: None,
-            stdout: String::new(),
-            stderr: format!("spawn failed: {e}"),
-            elapsed: Duration::from_secs(0),
-        })
+    run_with_timeout(Phase::Baseline, cmd, timeout).await
 }
 
 async fn run_enforcement(
@@ -248,7 +225,7 @@ async fn run_enforcement(
     ctx: &ScenarioSetup,
     agent_args: &[String],
     timeout: Duration,
-) -> Result<AgentOutput, anyhow::Error> {
+) -> Result<RunOutput, anyhow::Error> {
     let config_path = ctx.config_dir().join("firma.toml");
     let mut cmd = tokio::process::Command::new(firma_bin);
     cmd.args(["run", "--profile", ctx.agent.profile(), "--config"])
@@ -266,10 +243,12 @@ async fn run_enforcement(
         .arg(ctx.agent.command())
         .args(agent_args)
         .current_dir(&ctx.workspace_dir);
-    run_with_timeout(
-        cmd,
-        timeout,
-        &format!("firma run --profile {}", ctx.agent.profile()),
-    )
-    .await
+    run_with_timeout(Phase::Enforcement, cmd, timeout).await
+}
+
+fn agent_available(name: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(name)
+        .output()
+        .is_ok_and(|o| o.status.success())
 }

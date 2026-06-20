@@ -1,18 +1,18 @@
 use std::time::Duration;
 
 use crate::audit::FirmaAuditTrail;
+use crate::runner::RunOutput;
 use crate::setup::ScenarioSetup;
 
 /// Combined output from one scenario phase: agent result + mock HTTP captures.
 pub struct PhaseOutput {
-    pub agent: AgentOutput,
+    pub agent: RunOutput,
     pub http_requests: Vec<wiremock::Request>,
 }
 
 #[allow(async_fn_in_trait)]
 pub trait EnforcementScenario: Send + Sync {
     fn name(&self) -> &'static str;
-    fn description(&self) -> &'static str;
 
     /// Maximum wall-clock time allowed for the enforcement phase.
     fn timeout(&self) -> Duration {
@@ -49,12 +49,13 @@ pub trait EnforcementScenario: Send + Sync {
     ) -> Result<(), anyhow::Error>;
 }
 
-pub struct AgentOutput {
-    pub success: bool,
-    pub exit_code: Option<i32>,
-    pub stdout: String,
-    pub stderr: String,
-    pub elapsed: Duration,
+/// Which run of a scenario produced an output: the unenforced baseline or the
+/// firma-enforced run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display)]
+#[strum(serialize_all = "snake_case")]
+pub enum Phase {
+    Baseline,
+    Enforcement,
 }
 
 pub struct ScenarioResult {
