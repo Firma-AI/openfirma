@@ -98,15 +98,17 @@ impl RuleBuilder<'_> {
         self
     }
 
-    /// Format the Cedar rule and write it to `policies/dev.cedar`.
+    /// Format the Cedar rule and append it to `policies/e2e.cedar`, a dedicated
+    /// file for scenario-authored rules kept separate from the shipped
+    /// `dev.cedar`.
     ///
     /// # Errors
     ///
-    /// Returns an error if the file cannot be read or written.
+    /// Returns an error if the file cannot be written.
     pub fn add(self) -> Result<(), anyhow::Error> {
         let config_dir = self.ctx.config_dir.clone();
         let rule = self.render();
-        config::append_policy_rule(&config_dir, "dev", &rule)
+        config::append_policy_rule(&config_dir, "e2e", &rule)
     }
 
     fn render(self) -> String {

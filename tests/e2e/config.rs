@@ -5,12 +5,15 @@ use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile};
 
 pub fn append_policy_rule(cfg_dir: &Path, name: &str, rule: &str) -> Result<(), anyhow::Error> {
     let path = cfg_dir.join("policies").join(format!("{name}.cedar"));
-    let mut current = std::fs::read_to_string(&path)
-        .with_context(|| format!("read policy {}", path.display()))?;
+    let mut current = if path.exists() {
+        fs_err::read_to_string(&path)?
+    } else {
+        String::new()
+    };
     current.push('\n');
     current.push_str(rule);
     current.push('\n');
-    std::fs::write(&path, current).with_context(|| format!("append policy {}", path.display()))?;
+    fs_err::write(&path, current)?;
     Ok(())
 }
 
