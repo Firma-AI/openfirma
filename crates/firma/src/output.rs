@@ -9,6 +9,11 @@
 //! render the same way across `firma run`, `firma authority`, `firma config`,
 //! `firma doctor`, `firma monitor`, `firma policy`, and friends.
 
+#![allow(
+    dead_code,
+    reason = "Info is reserved for future callers in the shared CLI output surface"
+)]
+
 use std::io::{IsTerminal as _, Write as _};
 
 use owo_colors::{OwoColorize as _, Stream};
@@ -18,10 +23,6 @@ const TERM_WIDTH: usize = 80;
 const PREFIX_WIDTH: usize = 7;
 
 #[derive(Clone, Copy)]
-#[allow(
-    dead_code,
-    reason = "Info is reserved for future informational lines; output::info is part of the public surface"
-)]
 enum Level {
     Ok,
     Info,
@@ -64,10 +65,6 @@ pub fn ok(msg: impl AsRef<str>) {
 }
 
 /// Emit an informational line to stdout.
-#[allow(
-    dead_code,
-    reason = "part of the public output surface; not all callers wired yet"
-)]
 pub fn info(msg: impl AsRef<str>) {
     emit(Level::Info, msg.as_ref());
 }

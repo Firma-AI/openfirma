@@ -7,7 +7,10 @@ use clap::{Args as ClapArgs, ValueEnum};
 /// Parsed `firma monitor` command-line arguments.
 // X-compliance: struct_excessive_bools is acceptable for CLI args structs where
 // each bool maps 1-to-1 to a distinct command-line flag.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "this type intentionally models independent CLI/runtime flags one-to-one"
+)]
 #[derive(Debug, ClapArgs)]
 pub struct Args {
     /// Accepted for compatibility; `state_dir` is resolved from
@@ -104,7 +107,6 @@ pub enum Format {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

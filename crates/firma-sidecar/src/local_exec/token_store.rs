@@ -251,7 +251,10 @@ impl InMemoryTokenStore {
     /// so `firma-run` knows to keep polling until the operator approves or the
     /// TTL expires. Context binding is checked for both `Pending` and `Approved`
     /// tokens to fail-close on mismatched retries.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "explicit lock scope keeps token state transitions atomic before returning derived results"
+    )]
     pub fn validate_and_consume(
         &self,
         token_id: &str,
@@ -306,7 +309,10 @@ impl InMemoryTokenStore {
     /// Approve a pending token, making it consumable by `firma-run`.
     ///
     /// Idempotent on [`TokenState::Approved`].
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "explicit lock scope keeps token state transitions atomic before returning derived results"
+    )]
     pub fn approve(&self, token_id: &str) -> ApproveResult {
         let mut guard = lock_or_recover(&self.tokens);
 
@@ -333,7 +339,10 @@ impl InMemoryTokenStore {
     /// Revoke a pending or approved token, preventing any future consumption.
     ///
     /// Idempotent on [`TokenState::Revoked`].
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "explicit lock scope keeps token state transitions atomic before returning derived results"
+    )]
     pub fn revoke(&self, token_id: &str) -> RevokeResult {
         let mut guard = lock_or_recover(&self.tokens);
 
@@ -418,7 +427,6 @@ impl TokenStore for InMemoryTokenStore {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

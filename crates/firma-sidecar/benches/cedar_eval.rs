@@ -1,6 +1,6 @@
 //! Stage 2 policy-eval bench. Target: p95 < 200 µs.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use std::hint::black_box;
 
@@ -10,7 +10,7 @@ use firma_sidecar::enforcement::cedar_evaluator::CedarPolicyEvaluator;
 use firma_sidecar::enforcement::constraint_enforcement::PolicyEvaluation;
 use serde_json::json;
 
-include!("fixtures.rs");
+include!("support/common_fixtures.rs");
 
 fn agent() -> AgentId {
     "agent-bench".parse().expect("literal agent id")

@@ -205,7 +205,6 @@ impl ConstraintEnforcer {
     /// (`PolicyBundleStale`), policy evaluation times out
     /// (`EnforcementTimeout`), or the policy evaluator returns an error
     /// (`FailClosed`).
-    #[allow(clippy::result_large_err)]
     pub async fn evaluate_with_timeout(
         &self,
         envelope: &NormalizedEnvelope,
@@ -404,7 +403,6 @@ impl ConstraintEnforcer {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::enforcement::session_state::RuntimeSignals;

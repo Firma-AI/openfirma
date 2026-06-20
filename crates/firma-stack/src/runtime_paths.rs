@@ -22,8 +22,13 @@ pub fn default_runtime_dir() -> PathBuf {
 /// Compute the runtime dir from explicit inputs. Exposed for tests and
 /// internal callers that need to inject environment overrides.
 #[doc(hidden)]
-#[cfg_attr(windows, allow(clippy::needless_pass_by_value))]
-#[cfg_attr(unix, allow(clippy::needless_pass_by_value))]
+#[cfg_attr(
+    unix,
+    expect(
+        clippy::needless_pass_by_value,
+        reason = "the pure helper takes owned env overrides so tests and callers can pass them through directly"
+    )
+)]
 #[must_use]
 pub fn default_runtime_dir_from(
     xdg_runtime_dir: Option<String>,
@@ -86,7 +91,6 @@ fn current_uid() -> u32 {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

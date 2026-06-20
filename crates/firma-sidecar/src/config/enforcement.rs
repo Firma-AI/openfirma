@@ -1,5 +1,10 @@
 //! Enforcement engine configuration.
 
+#![allow(
+    dead_code,
+    reason = "Authority-wired capability manifest support is defined now but not consumed yet"
+)]
+
 use serde::Deserialize;
 
 const VALID_HTTP_METHODS: &[&str] = &[
@@ -217,7 +222,6 @@ impl CapabilityManifestEntry {
     /// # Errors
     ///
     /// Returns a message describing the first invalid field.
-    #[allow(dead_code, reason = "consumed once Authority integration is wired")]
     pub fn validate(&self) -> Result<(), String> {
         if self.agent_id.trim().is_empty() {
             return Err("agent_id must not be empty".into());
@@ -260,7 +264,6 @@ const fn default_stage2_timeout_ms() -> u64 {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

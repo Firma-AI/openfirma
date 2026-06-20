@@ -46,7 +46,6 @@ pub enum HandledResponse {
         // same 403 response). Tests read it. `cfg_attr` keeps the
         // non-test build warning-clean without marking the attribute
         // unfulfilled during test compilation.
-        #[cfg_attr(not(test), allow(dead_code))]
         context: DenialContext,
     },
     /// Request was approved by enforcement but the dispatch could not
@@ -174,7 +173,6 @@ pub fn deny_body_json(reason: DenyReason, detail: &str) -> Vec<u8> {
 #[must_use]
 // Public API reserved for a future tool-call interceptor; V1 has no
 // tool-call transport so the function is only called from tests.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn tool_denial_body_json(
     reason: DenyReason,
     detail: &str,
@@ -707,7 +705,6 @@ fn parse_http_method(method: &str) -> HttpMethod {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 pub(crate) mod tests {
     use std::collections::HashMap;
     use std::net::SocketAddr;

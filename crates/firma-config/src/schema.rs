@@ -78,7 +78,6 @@ pub fn load_section(path: &Path, section: &str) -> Result<String, String> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
     use tempfile::tempdir;

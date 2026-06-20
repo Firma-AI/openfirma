@@ -194,7 +194,6 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
     use firma_core::policy::PolicyBundle;

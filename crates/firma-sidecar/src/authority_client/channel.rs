@@ -81,12 +81,6 @@ pub fn build_channel(
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "test module"
-)]
 mod tests {
     use super::*;
 

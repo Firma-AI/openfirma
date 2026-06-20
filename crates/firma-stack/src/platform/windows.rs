@@ -153,11 +153,6 @@ impl Platform for WindowsPlatform {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test code: panics are acceptable test failures"
-)]
 mod tests {
     use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
     use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};

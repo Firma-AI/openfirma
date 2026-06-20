@@ -23,7 +23,13 @@ pub fn resolve_state_dir(flag: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 #[doc(hidden)]
-#[cfg_attr(windows, allow(clippy::needless_pass_by_value))]
+#[cfg_attr(
+    windows,
+    expect(
+        clippy::needless_pass_by_value,
+        reason = "the pure helper takes owned env overrides so tests and callers can pass them through directly"
+    )
+)]
 pub fn resolve_state_dir_from(
     flag: Option<PathBuf>,
     firma_state_dir: Option<String>,

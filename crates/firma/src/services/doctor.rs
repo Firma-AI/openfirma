@@ -88,7 +88,6 @@ fn marker_state_is_live(state: firma_stack::status::State) -> bool {
 /// the `block_on` call without extra synchronisation.
 struct RenderedReport(Report, bool);
 
-#[allow(clippy::too_many_lines)]
 async fn build_report(args: Args) -> RenderedReport {
     let mut report = Report::default();
     let timeout = Duration::from_millis(args.timeout_ms);

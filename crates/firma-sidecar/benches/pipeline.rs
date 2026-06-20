@@ -1,6 +1,6 @@
 //! End-to-end pipeline bench. Target: p95 < 3 ms.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -21,7 +21,7 @@ use firma_sidecar::normalizer::{IntentNormalizer, MappingTable, RawRequest};
 use firma_sidecar::pipeline::{EnforcementPipeline, PipelineArgs};
 use tokio::runtime::Runtime;
 
-include!("fixtures.rs");
+include!("support/common_fixtures.rs");
 
 /// Canonical action class emitted by the normalizer for the bench request.
 /// Must be (a) a valid v0.1 `ActionClassRegistry` entry so the mapping

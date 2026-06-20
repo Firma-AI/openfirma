@@ -472,7 +472,7 @@ impl ProfilePatch {
 ///
 /// Returns an error when profile resolution fails due to invalid inputs,
 /// parse errors, or resulting validation failures.
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "sequential profile resolution (patch merge + endpoint/selection + network + capability) reads more clearly inline"
 )]
@@ -1060,7 +1060,10 @@ mod tests {
             return BackendKind::Wsl2;
         }
 
-        #[allow(unreachable_code)]
+        #[expect(
+            unreachable_code,
+            reason = "fallback satisfies exhaustive return typing after cfg-gated platform branches"
+        )]
         BackendKind::Firecracker
     }
 

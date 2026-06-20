@@ -264,7 +264,6 @@ fn deny_json_response(status: StatusCode, body: Vec<u8>) -> Response<Full<Bytes>
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use std::net::SocketAddr;
     use std::time::Duration;

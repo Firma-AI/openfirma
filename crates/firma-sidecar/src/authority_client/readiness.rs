@@ -93,7 +93,6 @@ impl ReadinessView {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, reason = "test-only")]
 mod tests {
     use std::sync::Arc;
     use std::time::Duration;

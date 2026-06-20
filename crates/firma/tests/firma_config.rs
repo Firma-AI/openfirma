@@ -78,7 +78,7 @@ fn assert_unified_config_parses(firma_toml: &Path) {
 }
 
 #[test]
-#[allow(clippy::too_many_lines, reason = "linear scenario test")]
+#[expect(clippy::too_many_lines, reason = "linear scenario test")]
 fn reads_existing_config_as_defaults_and_allows_overrides() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let config_dir = tmp.path().join("config");

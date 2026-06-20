@@ -114,7 +114,6 @@ pub fn read_policy_set(dir: &Path) -> Result<PolicySet, BundleError> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use std::fs;

@@ -34,7 +34,10 @@ use miette::{Diagnostic, GraphicalReportHandler, GraphicalTheme, NamedSource, Re
 // The `Result` wrapper is intentional and not removable: it is the shared
 // contract for `firma` service entry points dispatched by `main.rs`, and the
 // sibling `PolicyCommand::Test` arm in `services::policy` does return `Err`.
-#[allow(clippy::unnecessary_wraps)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "matches the shared CLI service entry-point signature returning anyhow::Result<ExitCode>"
+)]
 pub fn run(path: &Path) -> anyhow::Result<ExitCode> {
     let (code, diagnostic) = validate_to_outcome(path);
     if let Some(diagnostic) = diagnostic {

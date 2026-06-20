@@ -26,6 +26,7 @@ unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"
 missing_const_for_fn = "allow"
+allow_attributes = "warn"
 
 [workspace.lints.rust]
 unsafe_code = "warn"

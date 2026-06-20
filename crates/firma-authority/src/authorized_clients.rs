@@ -94,7 +94,10 @@ struct AuthorizedClientsFile {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "backward-compatible TOML schema accepts metadata fields that serde deserializes even when the loader ignores them"
+)]
 struct AuthorizedEntry {
     #[serde(default)]
     cn: Option<String>,
@@ -112,7 +115,6 @@ struct ClientEntry {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
     use std::io::Write as _;

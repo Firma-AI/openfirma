@@ -34,7 +34,7 @@ impl ExponentialBackoff {
     ///
     /// Applies symmetric jitter within ±15% of the current base so reconnect
     /// storms spread out in both directions rather than biasing upward.
-    #[allow(
+    #[expect(
         clippy::should_implement_trait,
         reason = "Backoff is not an iterator; `next` names the next delay"
     )]
