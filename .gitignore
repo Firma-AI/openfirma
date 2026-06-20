@@ -67,4 +67,7 @@ fuzz/corpus/**
 !fuzz/corpus/**/
 !fuzz/corpus/**/*.toml
 
+# Coverage artefacts
+codecov.json
+
 !.skills/build
