@@ -28,7 +28,7 @@ cargo nextest run -p firma --test e2e --profile e2e -E 'test(codex::)'
 Run a single scenario:
 
 ```sh
-cargo nextest run -p firma --test e2e --profile e2e -E 'test(claude::normal_llm_call)'
+cargo nextest run -p firma --test e2e --profile e2e -E 'test(claude::simple_prompt)'
 ```
 
 Use a prebuilt release binary to skip the build step:
