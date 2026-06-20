@@ -34,14 +34,6 @@ pub fn firma() -> Command {
     Command::new(firma_bin())
 }
 
-#[must_use]
-pub fn bwrap_available() -> bool {
-    std::process::Command::new("bwrap")
-        .arg("--version")
-        .output()
-        .is_ok()
-}
-
 // ── Test driver ──────────────────────────────────────────────────────────────
 
 fn default_agent(kind: AgentKind) -> agent::Agent {
@@ -58,16 +50,6 @@ async fn drive_scenario_for_agent(
     kind: AgentKind,
 ) -> Result<(), anyhow::Error> {
     let agent = default_agent(kind);
-
-    if scenario.requires_structural_network() && !bwrap_available() {
-        eprintln!(
-            "skip {} [{}]: requires structural network confinement (bwrap), \
-             not available on this platform",
-            scenario.name(),
-            agent.command(),
-        );
-        return Ok(());
-    }
 
     run_scenario(scenario, &agent)
         .await

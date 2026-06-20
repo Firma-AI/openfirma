@@ -19,12 +19,6 @@ pub trait EnforcementScenario: Send + Sync {
         Duration::from_mins(5)
     }
 
-    /// Return `true` if the scenario requires structural network confinement
-    /// (i.e. bwrap `--unshare-net`) to produce a meaningful enforcement result.
-    fn requires_structural_network(&self) -> bool {
-        false
-    }
-
     /// Configure the scenario: register HTTP mock routes, add mapping rules,
     /// append Cedar policy rules, configure sandbox mounts, etc.
     fn setup(&self, _ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {

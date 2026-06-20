@@ -222,7 +222,9 @@ async fn run_enforcement(
     let mut cmd = tokio::process::Command::new(firma_bin);
     cmd.args(["run", "--profile", ctx.agent.profile(), "--config"])
         .arg(&config_path);
-    if !crate::bwrap_available() {
+    // macOS VzBackend runs in compatibility mode (sandbox-exec + HTTP_PROXY),
+    // which is non-structural; Linux uses bwrap and confines structurally.
+    if cfg!(target_os = "macos") {
         cmd.arg("--allow-non-structural");
     }
     if let Some(cap) = &ctx.capability_seed {
