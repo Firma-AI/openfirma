@@ -10,7 +10,6 @@ mod scenarios;
 mod setup;
 
 use std::path::PathBuf;
-use std::process::Command;
 
 use agent::AgentKind;
 use anyhow::Context;
@@ -27,11 +26,6 @@ use scenarios::EnforcementScenario;
 #[must_use]
 pub fn firma_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_firma"))
-}
-
-#[must_use]
-pub fn firma() -> Command {
-    Command::new(firma_bin())
 }
 
 // ── Test driver ──────────────────────────────────────────────────────────────
