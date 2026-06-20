@@ -113,7 +113,12 @@ impl MappingTable {
         for (i, rule_cfg) in file.rules.iter().enumerate() {
             if !registry.contains(&rule_cfg.action_class) {
                 return Err(format!(
-                    "rule {i}: action class '{}' not in registry",
+                    "rule {i}: action class '{}' is not in the built-in FEP action class \
+                     registry.\nNote: schema_path in [authority] only affects Cedar policy \
+                     validation in the Authority — it does not extend this registry, which is \
+                     fixed when the Sidecar loads.\nTo use this action class in a mapping \
+                     rule, add it to the registry first.\nSee: \
+                     https://firma-ai.github.io/openfirma/guides/extend-mapping/",
                     rule_cfg.action_class
                 ));
             }
