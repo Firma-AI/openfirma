@@ -39,21 +39,4 @@ impl FirmaAuditTrail {
             .collect::<Result<BTreeSet<_>, _>>()?;
         Ok(Self(events))
     }
-    /// Audit events where the sidecar issued an ALLOW decision.
-    #[must_use]
-    pub fn allow_events(&self) -> Vec<&AuditEvent> {
-        self.0
-            .iter()
-            .filter(|e| e.decision == Decision::Allow)
-            .collect()
-    }
-
-    /// Audit events where the sidecar issued a DENY decision.
-    #[must_use]
-    pub fn deny_events(&self) -> Vec<&AuditEvent> {
-        self.0
-            .iter()
-            .filter(|e| e.decision == Decision::Deny)
-            .collect()
-    }
 }
