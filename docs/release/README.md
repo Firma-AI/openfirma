@@ -10,7 +10,7 @@ installers, the Homebrew tap, and the docs in sync.
 2. Run CI-parity checks locally:
 
    ```bash
-   make check
+   just check
    ```
 
 3. Confirm `main` is green in GitHub Actions.

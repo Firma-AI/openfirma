@@ -8,7 +8,7 @@ Two canned turns through the same Agent + tool registry the REPL uses:
    expected DENY at the second tool call (paste.rs is forbidden in the
    demo Cedar bundle).
 
-Used by ``make demo`` and ``examples/demo/run.sh hero``. The script does not
+Used by ``just demo`` and ``examples/demo/run.sh hero``. The script does not
 infer outcomes from the LLM's natural-language reply (LLMs paraphrase
 errors and sometimes route around them). Instead it reads the sidecar
 audit log directly — the same source the CI gate uses — and asserts
@@ -107,7 +107,7 @@ async def _run_turn(
 
     if log is None:
         # No audit log wired in: fall back to "no exception = success"
-        # for ad-hoc local runs. CI / `make demo` always sets the env.
+        # for ad-hoc local runs. CI / `just demo` always sets the env.
         print(
             f"[turn {label}] WARN: FIRMA_SIDECAR_AUDIT_LOG not set; "
             f"falling back to runtime-error check"

@@ -5,11 +5,11 @@ Guidance for coding agents working in this repository.
 ## Key Commands
 
 ```bash
-make check # Run all local verification checks (CI parity)
-make fmt # dprint check (TOML + Markdown + Rust)
-make lint # cargo clippy --workspace -- -D warnings
-make test # cargo nextest run + cargo test --doc
-make build # cargo build --workspace
+just check # Run all local verification checks (CI parity)
+just fmt # dprint check (TOML + Markdown + Rust)
+just lint # cargo clippy --workspace -- -D warnings
+just test # cargo nextest run + cargo test --doc
+just build # cargo build --workspace
 ```
 
 Tests run via `cargo nextest` (process-per-test isolation); doctests run
@@ -20,7 +20,7 @@ Requires `protoc` installed for `firma-proto` protobuf compilation.
 ## Formatting
 
 `dprint` is the single formatter for the repo. Run `dprint fmt` after modifying
-`.toml`, `.md`, or `.rs` files. `make fmt` runs `dprint check` in CI.
+`.toml`, `.md`, or `.rs` files. `just fmt` runs `dprint check` in CI.
 
 `docs-site/` is excluded and uses its own toolchain.
 

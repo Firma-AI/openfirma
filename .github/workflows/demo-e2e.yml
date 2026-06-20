@@ -13,7 +13,7 @@ env:
 
 jobs:
   demo-ci:
-    name: make demo-ci
+    name: just demo-ci
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
@@ -37,11 +37,23 @@ jobs:
       - name: Install jq + netcat
         run: sudo apt-get install -y jq netcat-openbsd
 
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@30b5ca8b54e1dcffd9548bc87ede1531310fdc67 # v1.20.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install just
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          command -v just || cargo binstall -y --force --locked just
+        shell: bash
+
       - name: Build release binaries
         run: cargo build --release -p firma -p firma-demo-fixture
 
       - name: Run demo CI driver
-        run: timeout 90 make demo-ci
+        run: timeout 90 just demo-ci
 
       - name: Assert audit ALLOW + DENY events
         run: |

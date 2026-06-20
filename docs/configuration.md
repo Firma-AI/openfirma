@@ -101,7 +101,7 @@ state/runtime dir:
 | sockets, pid, listen, logs  | state/runtime dir                         |
 
 > **See also**: `examples/demo/firma.toml` is the canonical
-> end-to-end reference. `make demo-ci` boots the sidecar against it
+> end-to-end reference. `just demo-ci` boots the sidecar against it
 > and gates merges via the `demo-e2e` GitHub Actions workflow.
 
 ## Minimal Configuration

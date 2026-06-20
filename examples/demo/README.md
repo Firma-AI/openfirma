@@ -37,7 +37,7 @@ with `uv` and an `OPENAI_API_KEY` in `examples/demo/.env`.
 From the repository root:
 
 ```bash
-make demo-ci
+just demo-ci
 ```
 
 That mode does not need API keys. It builds the required binaries, starts the Authority and Sidecar, runs the Rust fixture client, and checks that both an ALLOW and DENY audit event were emitted.
@@ -47,22 +47,22 @@ To run the LLM-backed scripted demo:
 ```bash
 cp examples/demo/.env.sample examples/demo/.env
 # Add OPENAI_API_KEY to examples/demo/.env
-make demo
+just demo
 ```
 
 To run the interactive Python agent REPL behind the same local stack:
 
 ```bash
-make demo-repl
+just demo-repl
 ```
 
 ## Demo modes
 
 | Mode | Command          | What it runs                      | Requires API keys | Used in CI |
 | ---- | ---------------- | --------------------------------- | ----------------- | ---------- |
-| CI   | `make demo-ci`   | Deterministic Rust fixture client | no                | yes        |
-| Hero | `make demo`      | Scripted Python agent             | yes               | no         |
-| REPL | `make demo-repl` | Interactive Python agent          | yes               | no         |
+| CI   | `just demo-ci`   | Deterministic Rust fixture client | no                | yes        |
+| Hero | `just demo`      | Scripted Python agent             | yes               | no         |
+| REPL | `just demo-repl` | Interactive Python agent          | yes               | no         |
 
 All three modes use the same local Authority and Sidecar configuration. The demo runner is `examples/demo/run.sh`.
 

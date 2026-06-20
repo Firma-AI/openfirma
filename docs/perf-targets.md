@@ -28,7 +28,7 @@ All budgets currently met with substantial headroom.
 ## Running benches locally
 
 ```bash
-make bench
+just bench
 ```
 
 Criterion reports are written to `target/criterion/`. Open

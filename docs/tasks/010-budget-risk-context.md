@@ -21,6 +21,6 @@
   used by both Authority and Sidecar: `session_id`, `timestamp_ms`,
   `params`, `risk_score`, `budget_remaining`, `session_duration_s`, and
   `action_count`.
-- `make check` is green modulo the known macOS timing flakes in
+- `just check` is green modulo the known macOS timing flakes in
   `firma-authority::cedar_loader::tests::watch_reloads_on_policy_change`
   and `watch_subscribe_receives_bundle_update`.

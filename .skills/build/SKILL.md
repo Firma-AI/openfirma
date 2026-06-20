@@ -16,7 +16,7 @@ Run this skill after making code changes to ensure the workspace still compiles.
 ### Full workspace build
 
 ```bash
-make build
+just build
 ```
 
 ### Single-crate build
@@ -43,5 +43,5 @@ cargo build -p firma-run --all-features
 
 ## Notes
 
-- `make check` already includes `make build`, so a full PR validation does not need a separate build step.
-- Prefer `make build` over ad hoc cargo invocations unless you are intentionally narrowing scope.
+- `just check` already includes `just build`, so a full PR validation does not need a separate build step.
+- Prefer `just build` over ad hoc cargo invocations unless you are intentionally narrowing scope.

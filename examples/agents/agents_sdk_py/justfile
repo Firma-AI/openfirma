@@ -1,0 +1,11 @@
+set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
+set dotenv-load := true
+
+install:
+  uv sync
+
+run:
+  uv run python -m agent.main
+
+demo-scripted:
+  uv run python -m agent.scripted

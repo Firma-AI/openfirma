@@ -26,7 +26,7 @@ cp .env.sample .env
 # Fill in the required API keys.
 export HTTP_PROXY=http://127.0.0.1:8080
 export HTTPS_PROXY=http://127.0.0.1:8080
-make install && make run
+just install && just run
 ```
 
 Or run the TypeScript agent:
@@ -37,7 +37,7 @@ cp .env.sample .env
 # Fill in the required API keys.
 export HTTP_PROXY=http://127.0.0.1:8080
 export HTTPS_PROXY=http://127.0.0.1:8080
-make install && make run
+just install && just run
 ```
 
 ## What to try

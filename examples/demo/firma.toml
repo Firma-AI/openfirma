@@ -1,6 +1,6 @@
 # Firma OSS — release demo configuration (unified sectioned config).
 #
-# Run from the repo root via `make demo` / `make demo-ci`. The
+# Run from the repo root via `just demo` / `just demo-ci`. The
 # orchestrator (`examples/demo/run.sh`) bootstraps the keys, the audit key,
 # and the capability seed before launching the binaries.
 
