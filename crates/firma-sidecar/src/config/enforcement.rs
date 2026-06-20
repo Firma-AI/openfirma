@@ -1,6 +1,6 @@
 //! Enforcement engine configuration.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const VALID_HTTP_METHODS: &[&str] = &[
     "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "CONNECT",
@@ -125,14 +125,15 @@ impl Default for ConstraintEnforcementConfig {
 // ---------------------------------------------------------------------------
 
 /// A single mapping rule as deserialized from the rules TOML file.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MappingRuleConfig {
     /// HTTP method to match (`None` = any method).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
     /// Host pattern to match (supports `*` wildcard).
     pub host: String,
     /// Path pattern to match (supports `*` wildcard).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     /// Canonical action class this rule maps to.
     pub action_class: String,
@@ -165,7 +166,7 @@ impl MappingRuleConfig {
 }
 
 /// Top-level structure of the mapping rules TOML file.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct MappingRulesFile {
     /// Individual mapping rules.
     #[serde(rename = "rules", default)]

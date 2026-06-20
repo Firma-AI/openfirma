@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile};
 
 pub fn append_policy_rule(cfg_dir: &Path, name: &str, rule: &str) -> Result<(), anyhow::Error> {
     let path = cfg_dir.join("policies").join(format!("{name}.cedar"));
@@ -13,41 +14,21 @@ pub fn append_policy_rule(cfg_dir: &Path, name: &str, rule: &str) -> Result<(), 
     Ok(())
 }
 
-pub fn add_mapping_rule(
+pub fn add_mapping_rules(
     cfg_dir: &Path,
-    host: &str,
-    method: &str,
-    path: &str,
-    action_class: &str,
+    rules: Vec<MappingRuleConfig>,
 ) -> Result<(), anyhow::Error> {
     let rules_path = cfg_dir.join("mapping-rules.toml");
-    if rules_path.exists() {
-        let content = std::fs::read_to_string(&rules_path)
-            .with_context(|| format!("read {}", rules_path.display()))?;
-        let mut doc: toml_edit::DocumentMut = content
-            .parse()
-            .with_context(|| format!("parse {}", rules_path.display()))?;
-
-        let rules = doc["rules"].or_insert(toml_edit::array());
-        let mut table = toml_edit::Table::new();
-        table.insert("method", toml_edit::value(method));
-        table.insert("host", toml_edit::value(host));
-        table.insert("path", toml_edit::value(path));
-        table.insert("action_class", toml_edit::value(action_class));
-        rules
-            .as_array_of_tables_mut()
-            .ok_or_else(|| anyhow::anyhow!("[rules] is not an array of tables"))?
-            .push(table);
-
-        std::fs::write(&rules_path, doc.to_string())
-            .with_context(|| format!("write {}", rules_path.display()))?;
+    let mut file: MappingRulesFile = if rules_path.exists() {
+        let content = fs_err::read_to_string(&rules_path)?;
+        toml::from_str(&content).with_context(|| format!("parse {}", rules_path.display()))?
     } else {
-        let content = format!(
-            "[[rules]]\nmethod = \"{method}\"\nhost = \"{host}\"\npath = \"{path}\"\naction_class = \"{action_class}\"\n"
-        );
-        std::fs::write(&rules_path, content)
-            .with_context(|| format!("create {}", rules_path.display()))?;
-    }
+        MappingRulesFile::default()
+    };
+
+    file.rules.extend(rules);
+    let content = toml::to_string(&file).context("serialize mapping rules")?;
+    fs_err::write(&rules_path, content)?;
     Ok(())
 }
 
@@ -85,27 +66,4 @@ pub fn issue_capability(
     }
 
     Ok(seed_path)
-}
-
-pub fn configure_audit_path(cfg_dir: &Path, audit_path: &Path) -> Result<(), anyhow::Error> {
-    let path = cfg_dir.join("firma.toml");
-    let content = fs_err::read_to_string(&path)?;
-    let mut doc: toml_edit::DocumentMut = content
-        .parse()
-        .with_context(|| format!("parse {}", path.display()))?;
-
-    let sidecar = doc["sidecar"].or_insert(toml_edit::table());
-    let sidecar = sidecar
-        .as_table_mut()
-        .ok_or_else(|| anyhow::anyhow!("[sidecar] is not a table"))?;
-    let audit = sidecar["audit"].or_insert(toml_edit::table());
-    let audit = audit
-        .as_table_mut()
-        .ok_or_else(|| anyhow::anyhow!("[sidecar.audit] is not a table"))?;
-    audit.insert(
-        "file_path",
-        toml_edit::value(audit_path.to_string_lossy().as_ref()),
-    );
-    fs_err::write(&path, doc.to_string())?;
-    Ok(())
 }

@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
+use firma_sidecar::config::MappingRuleConfig;
 use wiremock::{Mock, MockServer};
 
 use crate::agent::{Agent, AgentKind};
@@ -34,9 +35,24 @@ impl ScenarioSetup {
         path: &str,
         action_class: &str,
     ) -> Result<(), anyhow::Error> {
-        config::add_mapping_rule(&self.config_dir, host_port, method, path, action_class)?;
-        config::add_mapping_rule(&self.config_dir, host_port, "CONNECT", "", action_class)?;
-        Ok(())
+        config::add_mapping_rules(
+            &self.config_dir,
+            vec![
+                MappingRuleConfig {
+                    method: Some(method.to_string()),
+                    host: host_port.to_string(),
+                    path: Some(path.to_string()),
+                    action_class: action_class.to_string(),
+                },
+                // Companion CONNECT rule so the TLS tunnel itself is classified.
+                MappingRuleConfig {
+                    method: Some("CONNECT".to_string()),
+                    host: host_port.to_string(),
+                    path: Some(String::new()),
+                    action_class: action_class.to_string(),
+                },
+            ],
+        )
     }
 
     #[must_use]
@@ -208,10 +224,6 @@ impl<'a> FirmaConfigBuilder<'a> {
             anyhow::bail!("firma config failed: {stderr}");
         }
 
-        config::configure_audit_path(
-            &self.ctx.config_dir,
-            &self.ctx.state_dir.join("audit.jsonl"),
-        )?;
         Ok(())
     }
 }
