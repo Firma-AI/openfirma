@@ -30,11 +30,11 @@ impl FirmaAuditTrail {
         let content = fs_err::read_to_string(path)?;
         let events = content
             .lines()
-            .enumerate()
-            .filter(|(_, l)| !l.trim().is_empty())
-            .map(|(i, l)| {
+            .zip(1..)
+            .filter(|(l, _)| !l.trim().is_empty())
+            .map(|(l, line)| {
                 serde_json::from_str(l)
-                    .with_context(|| format!("unexpected audit record in audit log at line {i}"))
+                    .with_context(|| format!("unexpected audit record in audit log at line {line}"))
             })
             .collect::<Result<BTreeSet<_>, _>>()?;
         Ok(Self(events))
