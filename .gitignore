@@ -59,7 +59,6 @@ audit.jsonl
 /examples/demos/*/.runtime/*
 /examples/generic-agent/workspace/
 .artifacts/
-.claude/
 .cursor/
 
 #fuzzy tests
@@ -67,3 +66,5 @@ fuzz/artifacts/
 fuzz/corpus/**
 !fuzz/corpus/**/
 !fuzz/corpus/**/*.toml
+
+!.skills/build
