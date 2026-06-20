@@ -18,29 +18,14 @@ use scenarios::EnforcementScenario;
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 
+/// Path to the `firma` binary under test.
+///
+/// Cargo builds the package's `[[bin]]` when compiling this integration test and
+/// exposes its path via `CARGO_BIN_EXE_firma`, so nextest always runs the
+/// just-built debug binary.
 #[must_use]
 pub fn firma_bin() -> PathBuf {
-    if let Ok(path) = std::env::var("FIRMA_BIN")
-        && !path.is_empty()
-    {
-        return PathBuf::from(path);
-    }
-
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .map_or_else(|| manifest_dir.clone(), PathBuf::from);
-
-    // Point at the debug build the setup script (re)builds before every run,
-    // so tests always run current code — never a stale release binary with
-    // outdated embedded mapping templates.
-    let debug_bin = repo_root.join("target/debug/firma");
-    if debug_bin.exists() {
-        return debug_bin;
-    }
-
-    PathBuf::from("firma")
+    PathBuf::from(env!("CARGO_BIN_EXE_firma"))
 }
 
 #[must_use]

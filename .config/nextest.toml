@@ -1,9 +1,0 @@
-[profile.e2e]
-setup-scripts = ["build-firma"]
-run-ignored = "all"
-
-[scripts.build-firma]
-# Always (re)build the debug binary before the e2e run so tests exercise the
-# current source — cargo is a no-op when nothing changed. firma_bin() points
-# at target/debug/firma. FIRMA_BIN overrides for prebuilt CI binaries.
-command = 'test -n "$FIRMA_BIN" || cargo build -p firma'

@@ -15,26 +15,20 @@ v0.1.3+.
 make e2e
 ```
 
-The nextest `e2e` profile builds `firma` automatically unless `FIRMA_BIN`
-is already set to a prebuilt binary.
+nextest builds the debug `firma` binary as part of compiling the e2e test;
+`firma_bin()` reads its path from `CARGO_BIN_EXE_firma` — no manual build needed.
 
 Run only Claude or only Codex scenarios:
 
 ```sh
-cargo nextest run -p firma --test e2e --profile e2e -E 'test(claude::)'
-cargo nextest run -p firma --test e2e --profile e2e -E 'test(codex::)'
+cargo nextest run -p firma --test e2e --run-ignored all -E 'test(claude::)'
+cargo nextest run -p firma --test e2e --run-ignored all -E 'test(codex::)'
 ```
 
 Run a single scenario:
 
 ```sh
-cargo nextest run -p firma --test e2e --profile e2e -E 'test(claude::simple_prompt)'
-```
-
-Use a prebuilt release binary to skip the build step:
-
-```sh
-FIRMA_BIN=./target/release/firma make e2e
+cargo nextest run -p firma --test e2e --run-ignored all -E 'test(claude::simple_prompt)'
 ```
 
 ## Scenarios
