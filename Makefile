@@ -1,4 +1,4 @@
-.PHONY: fmt lint test build check fuzz-check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps install-tools managed-seccomp-compat-check
+.PHONY: fmt lint test build check coverage fuzz-check bench docs docs-build docs-dev demo demo-repl demo-ci install install-system install-cargo-tools install-docs-deps install-tools managed-seccomp-compat-check
 
 # Tool versions (shared with CI — see tool-versions.env). KEY=value lines are
 # valid Make assignments, so a plain include exposes each as $(<KEY>).
@@ -41,6 +41,7 @@ install-cargo-tools:
 	@command -v cargo-audit >/dev/null 2>&1 || cargo install cargo-audit --version $(CARGO_AUDIT_VERSION) --locked
 	@command -v cargo-deny >/dev/null 2>&1 || cargo install cargo-deny --version $(CARGO_DENY_VERSION) --locked
 	@command -v cargo-nextest >/dev/null 2>&1 || cargo install cargo-nextest --version $(CARGO_NEXTEST_VERSION) --locked
+	@command -v cargo-llvm-cov >/dev/null 2>&1 || cargo install cargo-llvm-cov --version $(CARGO_LLVM_COV_VERSION) --locked
 
 install-docs-deps:
 	cd docs-site && corepack pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/
@@ -67,6 +68,9 @@ deny:
 	cargo deny check licenses bans sources
 
 check: fmt lint test build audit deny
+
+coverage:
+	cargo llvm-cov nextest --workspace --all-features --codecov --output-path codecov.json
 
 # Pinned nightly lives in .rust-nightly (cargo-fuzz requires nightly).
 fuzz-check:
