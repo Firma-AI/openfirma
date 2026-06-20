@@ -91,22 +91,6 @@ impl ScenarioSetup {
         Ok(())
     }
 
-    /// Run `firma doctor` against this scenario's config and fail if it exits non-zero.
-    pub fn doctor(&self) -> Result<(), anyhow::Error> {
-        let out = std::process::Command::new(firma_bin())
-            .arg("doctor")
-            .args(["--config"])
-            .arg(self.config_dir.join("firma.toml"))
-            .output()
-            .with_context(|| "spawn firma doctor")?;
-        anyhow::ensure!(
-            out.status.success(),
-            "firma doctor failed:\n{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        Ok(())
-    }
-
     /// Start building a `firma config init` invocation.
     #[must_use]
     pub fn firma_config(&self) -> FirmaConfigBuilder<'_> {
