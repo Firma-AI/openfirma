@@ -118,9 +118,8 @@ impl MappingTable {
     /// Load and validate mapping rules from a parsed config.
     ///
     /// # Errors
-    /// Returns an error if the file fails its own validation, two rules
-    /// share the same `(method, host, path)` tuple, or a rule references an
-    /// unknown action class.
+    /// Returns an error if the rules are structurally invalid or
+    /// ambiguous.
     pub fn from_config(
         file: &MappingRulesFile,
         registry: &ActionClassRegistry,
