@@ -1768,6 +1768,7 @@ dependencies = [
  "pingora-core",
  "pingora-http",
  "pingora-proxy",
+ "pretty_assertions",
  "proptest",
  "prost-types",
  "rand 0.9.4",

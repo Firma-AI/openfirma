@@ -60,6 +60,7 @@ xxhash-rust = { workspace = true }
 criterion = { workspace = true }
 loom = "0.7"
 pasetors = { workspace = true }
+pretty_assertions = { workspace = true, features = ["unstable"] }
 proptest = { workspace = true }
 rcgen = { workspace = true }
 rustls-pemfile = { workspace = true }
