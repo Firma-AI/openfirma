@@ -137,6 +137,8 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Clippy
+        id: clippy
+        continue-on-error: true
         run: cargo clippy --workspace -- -D warnings
 
       - name: Install cargo-binstall
@@ -151,11 +153,44 @@ jobs:
         shell: bash
 
       - name: Test
-        run: cargo nextest run --workspace
+        id: test
+        continue-on-error: true
+        run: cargo nextest run --workspace --no-fail-fast
       # nextest runs unit + integration tests; it does not run doctests, so
       # those run separately via `cargo test --doc`.
       - name: Doctests
+        id: doctest
+        continue-on-error: true
         run: cargo test --workspace --doc
+
+      - name: Fail if any verification step failed
+        if: ${{ steps.clippy.outcome == 'failure' || steps.test.outcome == 'failure' || steps.doctest.outcome == 'failure' }}
+        shell: bash
+        env:
+          CLIPPY_OUTCOME: ${{ steps.clippy.outcome }}
+          TEST_OUTCOME: ${{ steps.test.outcome }}
+          DOCTEST_OUTCOME: ${{ steps.doctest.outcome }}
+        run: |
+          has_failures=false
+
+          if [[ "$CLIPPY_OUTCOME" == 'failure' ]]; then
+            printf 'Clippy failed, check the output of its step to troubleshoot the failure.\n'
+            has_failures=true
+          fi
+
+          if [[ "$TEST_OUTCOME" == 'failure' ]]; then
+            printf 'Test failed, check the output of its step to troubleshoot the failure.\n'
+            has_failures=true
+          fi
+
+          if [[ "$DOCTEST_OUTCOME" == 'failure' ]]; then
+            printf 'Doctests failed, check the output of its step to troubleshoot the failure.\n'
+            has_failures=true
+          fi
+
+          if [[ "$has_failures" == 'true' ]]; then
+            exit 1
+          fi
 
   coverage:
     name: Coverage
