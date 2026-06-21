@@ -528,7 +528,6 @@ pub(crate) fn clamp_ttl(requested: i32, max: i32) -> i32 {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
 

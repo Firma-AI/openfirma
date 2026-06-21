@@ -7,7 +7,6 @@
 //! valid bundle.
 
 #![cfg(test)]
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

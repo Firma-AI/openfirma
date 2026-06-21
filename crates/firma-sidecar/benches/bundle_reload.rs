@@ -6,7 +6,7 @@
 //
 // Fixture: benches/fixtures/reference_bundle.cedar (Task 2).
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use std::hint::black_box;
 
@@ -16,7 +16,7 @@ use firma_sidecar::enforcement::cedar_evaluator::CedarPolicyEvaluator;
 use firma_sidecar::enforcement::constraint_enforcement::PolicyEvaluation;
 use serde_json::json;
 
-include!("fixtures.rs");
+include!("support/common_fixtures.rs");
 
 fn bench_reload(c: &mut Criterion) {
     let bundle = reference_bundle();

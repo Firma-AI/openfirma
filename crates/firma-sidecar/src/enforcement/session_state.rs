@@ -41,7 +41,11 @@ impl RuntimeSignals {
     /// ceiling means unbounded → emit `i64::MAX`. Otherwise emit
     /// `floor(ceiling - budget_consumed)` clamped to `i64`.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        reason = "conversion intentionally floors and clamps budget values into Cedar Long semantics"
+    )]
     pub fn budget_remaining_long(&self, ceiling: Option<f64>) -> i64 {
         let Some(ceiling) = ceiling else {
             return i64::MAX;
@@ -63,7 +67,10 @@ impl RuntimeSignals {
 
     /// `risk_score` as a Cedar `Long` — floor-rounded.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "conversion intentionally floors risk score into Cedar Long semantics"
+    )]
     pub fn risk_score_long(&self) -> i64 {
         // Fail-closed: NaN risk collapses to the most-positive Long so
         // `context.risk_score > N` policies always deny.
@@ -173,13 +180,8 @@ impl SessionStateStore for LruSessionStateStore {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::float_cmp
-)]
 mod tests {
+    #![allow(clippy::float_cmp)]
     use super::*;
     use firma_core::SessionId;
 

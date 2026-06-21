@@ -37,10 +37,6 @@ impl SandboxBackend for BwrapBackend {
         BackendKind::Bwrap
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        reason = "sequential preflight checks + mount assembly read more clearly inline"
-    )]
     fn prepare(&self, request: &PrepareRequest) -> Result<SandboxHandle, RunError> {
         if !cfg!(target_os = "linux") {
             return Err(RunError::UnsupportedBackend {
@@ -237,7 +233,10 @@ impl SandboxBackend for BwrapBackend {
         }
 
         #[cfg(target_os = "linux")]
-        #[allow(clippy::collection_is_never_read)]
+        #[expect(
+            clippy::collection_is_never_read,
+            reason = "keeps the seccomp file descriptor alive until bwrap inherits it"
+        )]
         let mut _seccomp_file: Option<File> = None;
         #[cfg(target_os = "linux")]
         let seccomp_path = launch

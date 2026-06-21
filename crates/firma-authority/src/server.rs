@@ -239,7 +239,10 @@ where
 // Per-mode server future builders
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mTLS server construction needs explicit TLS paths, services, listener, and shutdown signal"
+)]
 async fn build_mtls_future<F, H>(
     cert_path: &Path,
     key_path: &Path,

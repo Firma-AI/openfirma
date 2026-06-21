@@ -27,6 +27,11 @@
 //!   Keeping a strict entry only *narrows* the egress surface (fail-closed),
 //!   so preserving it is safe.
 
+#![allow(
+    dead_code,
+    reason = "some backend-selection helpers are compiled only for non-test host combinations"
+)]
+
 use std::path::Path;
 
 use anyhow::{Result, bail};
@@ -289,7 +294,10 @@ fn default_run_backend() -> &'static str {
     {
         return backend_for_linux(firma_run::backend::platform::detect_wsl());
     }
-    #[allow(unreachable_code)]
+    #[expect(
+        unreachable_code,
+        reason = "fallback satisfies exhaustive return typing after cfg-gated platform branches"
+    )]
     "bwrap"
 }
 
@@ -302,7 +310,6 @@ fn default_run_backend() -> &'static str {
 //
 // Only invoked from the Linux branch of `default_run_backend`; on other
 // targets it is exercised solely by unit tests, so silence dead-code there.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn backend_for_linux(wsl: firma_run::backend::platform::WslKind) -> &'static str {
     if wsl.is_wsl() { "wsl2" } else { "bwrap" }
 }
@@ -543,7 +550,6 @@ fn set_str_array(table: &mut Table, key: &str, items: &[String]) {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 mod tests {
     use super::*;
 

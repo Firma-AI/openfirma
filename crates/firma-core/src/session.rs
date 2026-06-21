@@ -7,7 +7,10 @@ use serde::{Deserialize, Serialize};
 
 const SESSION_ID_PATTERN: &str = "^[a-zA-Z0-9_-]{1,128}$";
 
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "compiles a fixed SessionId regex literal that is only invalid if edited"
+)]
 static SESSION_ID_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(SESSION_ID_PATTERN).expect("compile-time literal pattern"));
 

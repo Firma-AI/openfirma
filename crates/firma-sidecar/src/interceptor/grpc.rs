@@ -156,7 +156,6 @@ impl Interceptor for GrpcInterceptor {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use std::collections::HashMap;
     use std::time::Duration;

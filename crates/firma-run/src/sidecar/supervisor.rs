@@ -132,7 +132,7 @@ impl SidecarSupervisor {
     }
 
     #[cfg(unix)]
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "single linear spawn-then-scrape sequence reads more clearly inline than split"
     )]
@@ -408,7 +408,7 @@ const INTERCEPTOR_TOKEN: &str = "interceptor listening";
 /// piped). The raw bytes are written to the log file unmodified so a
 /// human `cat`ting the log still sees the colors the subscriber chose.
 #[doc(hidden)]
-#[allow(
+#[expect(
     clippy::needless_pass_by_value,
     reason = "tx is moved into the spawned thread and owns the sender for the thread lifetime"
 )]

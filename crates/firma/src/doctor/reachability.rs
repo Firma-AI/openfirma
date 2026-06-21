@@ -160,7 +160,6 @@ pub fn reconcile_reachability(daemon: Check, live_running: usize) -> Check {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use std::io::ErrorKind;
     use std::net::{Ipv4Addr, TcpListener};

@@ -1,8 +1,6 @@
 //! End-to-end: a sectioned firma.toml resolves and the sidecar section
 //! parses through `load_section`.
 
-#![allow(clippy::unwrap_used, clippy::panic)]
-
 use firma_config::{ConfigSource, SystemDirs, load_section, resolve_config};
 use tempfile::tempdir;
 

@@ -387,7 +387,6 @@ fn duration_to_u64_micros(duration: Duration) -> u64 {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use std::collections::HashMap;
     use std::io::{self, Write};

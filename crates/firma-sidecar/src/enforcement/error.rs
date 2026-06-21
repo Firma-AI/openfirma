@@ -75,7 +75,6 @@ fn token_error_to_deny_reason(err: &TokenError) -> DenyReason {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

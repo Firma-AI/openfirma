@@ -1,14 +1,15 @@
 //! Integration tests for the per-run sidecar marker reader.
 
+#![allow(
+    clippy::expect_used,
+    reason = "integration-test setup uses expect to fail fast on fixture construction"
+)]
+
 use std::fs;
 use std::path::Path;
 
 use firma_stack::MetadataFile;
 
-#[allow(
-    clippy::expect_used,
-    reason = "test helper: panics are acceptable test failures"
-)]
 fn write_marker(run_dir: &Path, sandbox_id: &str, pid: u32) {
     write_marker_with_listen(run_dir, sandbox_id, pid, None);
 }
@@ -17,10 +18,6 @@ fn write_marker(run_dir: &Path, sandbox_id: &str, pid: u32) {
 /// (a `host:port` pair for an `http_proxy` interceptor, or a socket path).
 /// `None` omits the field, mirroring a legacy marker written before
 /// FIR-195.
-#[allow(
-    clippy::expect_used,
-    reason = "test helper: panics are acceptable test failures"
-)]
 fn write_marker_with_listen(run_dir: &Path, sandbox_id: &str, pid: u32, listen: Option<&str>) {
     let dir = run_dir.join(sandbox_id);
     fs::create_dir_all(&dir).expect("mkdir marker dir");
@@ -76,10 +73,6 @@ fn live_pid_no_socket_is_unhealthy() {
 /// Spawn and immediately reap a child, returning its now-dead PID.
 ///
 /// `is_alive` on this PID returns false (ESRCH) until the OS reuses the slot.
-#[allow(
-    clippy::expect_used,
-    reason = "test helper: panics are acceptable test failures"
-)]
 fn reaped_dead_pid() -> u32 {
     #[cfg(windows)]
     let mut child = std::process::Command::new("cmd")

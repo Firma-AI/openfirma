@@ -133,7 +133,10 @@ pub fn enforce_local_command_governance(
 }
 
 /// Build and send one local-exec governance request; return the parsed response.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "governance request fields are passed through as separate inputs"
+)]
 fn call_mediator(
     mediator: &CommandMediatorConfig,
     identity: &RunIdentity,
@@ -292,7 +295,13 @@ fn request_over_unix(
 
 #[cfg(target_family = "unix")]
 #[cfg(target_os = "linux")]
-#[cfg_attr(test, allow(dead_code))]
+#[cfg_attr(
+    test,
+    expect(
+        dead_code,
+        reason = "linux peer-credential validation is compiled but not exercised by unit tests"
+    )
+)]
 fn validate_unix_peer_credentials(stream: &UnixStream) -> Result<(), RunError> {
     let creds = getsockopt(stream, PeerCredentials).map_err(|error| {
         RunError::Governance(format!(

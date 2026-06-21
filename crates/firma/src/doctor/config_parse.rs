@@ -45,7 +45,6 @@ pub fn check(firma_toml: &Path) -> Check {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::doctor::report::Status;

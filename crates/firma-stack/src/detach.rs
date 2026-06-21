@@ -35,7 +35,10 @@ pub fn spawn_supervisor(state_dir: &Path) -> Result<()> {
             // Detach from the controlling terminal so closing the parent shell
             // does not deliver SIGHUP to the supervisor. `setsid` must run in
             // the child between fork and exec.
-            #[allow(unsafe_code)]
+            #[expect(
+                unsafe_code,
+                reason = "CommandExt::pre_exec is required here to call setsid in the fork/exec window"
+            )]
             // SAFETY: `setsid` is async-signal-safe and is the only syscall in
             // the pre-exec closure. No allocator or locks are used.
             unsafe {

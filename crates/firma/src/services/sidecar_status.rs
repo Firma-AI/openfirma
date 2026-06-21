@@ -80,7 +80,7 @@ pub fn render_pretty(rows: &[SidecarEntry]) -> String {
 ///
 /// Internal failures print to stderr and map to exit code 2 so the caller
 /// does not double-report.
-#[allow(
+#[expect(
     clippy::unnecessary_wraps,
     reason = "uniform with every other services::*::run returning anyhow::Result<ExitCode>; errors are handled internally and mapped to exit code 2, never propagated"
 )]
