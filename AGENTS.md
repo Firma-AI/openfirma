@@ -49,6 +49,21 @@ Some contributors use Git, some use Jujutsu.
 - When giving user-facing revision identifiers or instructions, match the VCS
   actually in use in that clone.
 
+## Atomic Revisions
+
+Whenever the working copy is already dirty or you are about to touch revision
+history, use the repository skills instead of improvising:
+
+- [`commit-guidelines`](.skills/commit-guidelines/SKILL.md) for dirty-worktree
+  inspection, atomic checkpoint commits/changesets, and reviewed-history
+  preservation
+- [`split-jj-changeset`](.skills/split-jj-changeset/SKILL.md) for splitting
+  mixed Jujutsu changesets
+- [`verify`](.skills/verify/SKILL.md) for per-revision and final verification
+
+Use commits or jj changesets as local checkpoints during substantial work.
+Prefer small atomic revisions that can stand on their own when feasible.
+
 ## Architecture
 
 OpenFirma is an L7 policy enforcement sidecar for AI agents. Every outbound

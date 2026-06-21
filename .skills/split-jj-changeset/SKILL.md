@@ -1,13 +1,18 @@
 ---
 name: split-jj-changeset
-description: Split a jj changeset into smaller focused changesets without interactive commands. Use only in clones that use Jujutsu.
+description: jj split, mixed changeset, atomic revision, reviewed history: split a jj changeset into atomic focused changesets without interactive commands. Use in Jujutsu clones whenever one changeset mixes multiple intents.
 ---
 
 # Split a jj Changeset
 
-Split the changeset `$ARGUMENTS` into smaller, focused units.
+Split the changeset `$ARGUMENTS` into smaller, atomic units.
 
 If `$ARGUMENTS` is empty, ask the user which revset to split.
+
+Follow
+[`commit-guidelines`](../commit-guidelines/SKILL.md)
+for dirty-worktree decisions, checkpoint strategy, and reviewed-history
+preservation.
 
 ## Core safety principle
 
@@ -30,6 +35,11 @@ Only abandon the original after the split is verified.
 7. Rebase dependents if needed.
 8. Clean up the original.
 
+## Target outcome
+
+The goal is not only smaller changesets, but atomic changesets that satisfy the
+revision rules in [`commit-guidelines`](../commit-guidelines/SKILL.md).
+
 ## Inspect the changeset
 
 ```bash
@@ -39,6 +49,10 @@ jj log -r <revset>
 ```
 
 Summarize the logical groups before changing anything.
+
+Apply the grouping rules from
+[`commit-guidelines`](../commit-guidelines/SKILL.md)
+before choosing split boundaries.
 
 ## Plan with the user
 
