@@ -58,6 +58,7 @@ xxhash-rust = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+insta = "1"
 loom = "0.7"
 pasetors = { workspace = true }
 pretty_assertions = { workspace = true, features = ["unstable"] }

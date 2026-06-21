@@ -269,6 +269,7 @@ fn glob_match(pattern: &str, value: &str) -> bool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
+    use insta::assert_snapshot;
     use pretty_assertions::assert_matches;
 
     use super::*;
@@ -291,6 +292,12 @@ mod tests {
             MappingTableError::NonExistingActionClass { index: 0, ref rule }
                 if rule.action_class == "nonexistent.action"
         );
+        assert_snapshot!(err.to_string(), @"
+        rule 0: action class 'nonexistent.action' is not in the built-in FEP action class registry.
+        Note: schema_path in [authority] only affects Cedar policy validation in the Authority — it does not extend this registry, which is fixed when the Sidecar loads.
+        To use this action class in a mapping rule, add it to the registry first.
+        See: https://firma-ai.github.io/openfirma/guides/extend-mapping/
+        ");
     }
 
     #[test]
@@ -317,6 +324,7 @@ mod tests {
             MappingTableError::DuplicateRule { index: 1, ref rule }
                 if rule.action_class == "code.review.read"
         );
+        assert_snapshot!(err.to_string(), @r#"rule 1: duplicate mapping tuple method="GET" host="api.github.com" path="/repos/*/*""#);
     }
 
     #[test]
