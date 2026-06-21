@@ -24,7 +24,7 @@ fmt:
   dprint check
 
 lint:
-  cargo clippy --all-features --all-targets
+  cargo clippy --all-features --all-targets -- -D warnings
 
 test:
   cargo nextest run --all-features --all-targets --no-fail-fast
