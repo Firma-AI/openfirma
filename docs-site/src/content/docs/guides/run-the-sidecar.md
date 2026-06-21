@@ -3,7 +3,7 @@ title: Run the sidecar standalone
 description: Start a local Sidecar against a hand-written config and route an agent through it without firma run.
 ---
 
-This guide walks you through running the Sidecar as a standalone process, pointing an agent at it, and observing decisions in the audit log. It is the next step after the [Quickstart](../../quickstart/) — you'll write your own config from scratch instead of using `make demo`.
+This guide walks you through running the Sidecar as a standalone process, pointing an agent at it, and observing decisions in the audit log. It is the next step after the [Quickstart](../../quickstart/) — you'll write your own config from scratch instead of using `just demo`.
 
 By the end you will have:
 

@@ -11,7 +11,7 @@ corepack pnpm install
 corepack pnpm dev
 ```
 
-From the repository root, use `make docs-dev` to build Rustdoc once, mount it at
+From the repository root, use `just docs-dev` to build Rustdoc once, mount it at
 `/api/`, and start Starlight with hot reload. Changes to prose docs reload
 automatically; changes to Rust API docs need the command to be restarted.
 

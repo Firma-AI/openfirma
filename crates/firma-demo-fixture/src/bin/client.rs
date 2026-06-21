@@ -8,7 +8,7 @@
 //!   `{"denied":true,"reason":"...","detail":"..."}`.
 //!
 //! Exits 0 on success, 1 on the first assertion mismatch with a human
-//! readable diagnostic. Used by `make demo-ci` and the `demo-e2e`
+//! readable diagnostic. Used by `just demo-ci` and the `demo-e2e`
 //! GitHub Actions job.
 
 use clap::Parser;

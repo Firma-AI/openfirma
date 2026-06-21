@@ -254,7 +254,7 @@ Supported:
 Compatibility command:
 
 ```bash
-make managed-seccomp-compat-check
+just managed-seccomp-compat-check
 ```
 
 ## CI/Local Validation
@@ -262,7 +262,7 @@ make managed-seccomp-compat-check
 Primary deterministic gate:
 
 ```bash
-make managed-seccomp-guardrail
+just managed-seccomp-guardrail
 ```
 
 Recommended runtime validation:
@@ -293,8 +293,8 @@ cargo test -p firma-run -- --nocapture
 ### Step 3: Compatibility + Guardrail Gate
 
 ```bash
-make managed-seccomp-compat-check
-make managed-seccomp-guardrail
+just managed-seccomp-compat-check
+just managed-seccomp-guardrail
 ```
 
 ### Step 4: Explicit Mediator Tests
@@ -377,8 +377,8 @@ Repeat with decision responses:
 All must be true:
 
 1. `cargo test -p firma-run -- --nocapture` passes.
-2. `make managed-seccomp-compat-check` passes.
-3. `make managed-seccomp-guardrail` passes.
+2. `just managed-seccomp-compat-check` passes.
+3. `just managed-seccomp-guardrail` passes.
 4. Sidecar local-exec governance allow/deny/pending/unavailable behavior matches fail-closed model.
 5. No direct exec fallback path observed in mediated mode.
 6. Allowlist enforcement blocks unknown executable when enabled.

@@ -74,7 +74,7 @@ Run the Python example agent in another terminal:
   export HTTPS_PROXY=http://127.0.0.1:8080
   export REQUESTS_CA_BUNDLE="$REPO_ROOT/examples/e2e/firma-ca/firma-ca.crt"
   export SSL_CERT_FILE="$REPO_ROOT/examples/e2e/firma-ca/firma-ca.crt"
-  make install && make run
+  just install && just run
 
 Or the TypeScript agent:
 
@@ -83,7 +83,7 @@ Or the TypeScript agent:
   export HTTP_PROXY=http://127.0.0.1:8080
   export HTTPS_PROXY=http://127.0.0.1:8080
   export NODE_EXTRA_CA_CERTS="$REPO_ROOT/examples/e2e/firma-ca/firma-ca.crt"
-  make install && make run
+  just install && just run
 
 Try in the agent REPL:
   > What is the weather in London?           # wttr.in not mapped → PASSTHROUGH → works

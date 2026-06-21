@@ -88,7 +88,7 @@ The combined split should match the original.
 Run the validation plan agreed with the user. It is usually enough to run:
 
 ```bash
-make check
+just check
 ```
 
 Use narrower crate-level commands when appropriate during iteration.

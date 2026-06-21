@@ -184,7 +184,7 @@ sleep 1
 case "$MODE" in
   hero)
     echo "[demo] installing Python agent deps (uv sync, no proxy)"
-    (cd "$ROOT/examples/agents/agents_sdk_py" && make install)
+    (cd "$ROOT/examples/agents/agents_sdk_py" && just install)
     CA_BUNDLE="$DEMO/firma-ca/firma-ca.crt"
     echo "[demo] dispatching scripted Python hero agent (CA=$CA_BUNDLE)"
     (cd "$ROOT/examples/agents/agents_sdk_py" && \
@@ -194,11 +194,11 @@ case "$MODE" in
         REQUESTS_CA_BUNDLE="$CA_BUNDLE" \
         FIRMA_SESSION_ID=demo-session \
         FIRMA_SIDECAR_AUDIT_LOG="$LOG_DIR/sidecar.log" \
-        make demo-scripted)
+        just demo-scripted)
     ;;
   repl)
     echo "[demo] installing Python agent deps (uv sync, no proxy)"
-    (cd "$ROOT/examples/agents/agents_sdk_py" && make install)
+    (cd "$ROOT/examples/agents/agents_sdk_py" && just install)
     CA_BUNDLE="$DEMO/firma-ca/firma-ca.crt"
     echo "[demo] dispatching interactive Python REPL (CA=$CA_BUNDLE)"
     (cd "$ROOT/examples/agents/agents_sdk_py" && \
@@ -207,7 +207,7 @@ case "$MODE" in
         SSL_CERT_FILE="$CA_BUNDLE" \
         REQUESTS_CA_BUNDLE="$CA_BUNDLE" \
         FIRMA_SESSION_ID=demo-session \
-        make run)
+        just run)
     ;;
   ci)
     echo "[demo] starting firma-demo-fixture"

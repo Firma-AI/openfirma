@@ -29,7 +29,7 @@
 -->
 
 ```bash
-make check          # fmt + toml-fmt + lint + test + build + audit + deny (CI parity)
+just check          # fmt + toml-fmt + lint + test + build + audit + deny (CI parity)
 
 # Single crate (if applicable):
 cargo test -p <crate-name>
@@ -81,7 +81,7 @@ cargo test -p <crate-name> <module>::tests::<test_name>
 ## Checklist
 
 - [ ] Thinking path traces from project context down to this specific change
-- [ ] `make check` passes locally (fmt + toml-fmt + lint + test + build + audit + deny)
+- [ ] `just check` passes locally (fmt + toml-fmt + lint + test + build + audit + deny)
 - [ ] No `.unwrap()`, `.expect()`, `panic!()`, or `unsafe` introduced outside of test code
 - [ ] All error paths are fail-closed — errors produce DENY, not silent ALLOW
 - [ ] No network calls added on the hot path (normalizer → Stage 1 → Stage 2)
