@@ -10,7 +10,6 @@ pub struct PhaseOutput {
     pub http_requests: Vec<wiremock::Request>,
 }
 
-#[allow(async_fn_in_trait)]
 pub trait EnforcementScenario: Send + Sync {
     fn name(&self) -> &'static str;
 
