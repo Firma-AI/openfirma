@@ -27,7 +27,7 @@ lint:
   cargo clippy --all-features --all-targets
 
 test:
-  cargo nextest run --all-features --all-targets
+  cargo nextest run --all-features --all-targets --no-fail-fast
   # nextest runs unit + integration tests; it does not run doctests, so those
   # run separately via `cargo test --doc`.
   cargo test --all-features --doc
