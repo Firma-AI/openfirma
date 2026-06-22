@@ -40,9 +40,14 @@ This ADR chooses sandbox backend(s) for Firma Run so FIR-61 and FIR-62 can imple
 Backend family:
 
 - Linux default: `sandbox-bwrap` (bubblewrap-class namespace isolation).
-- macOS default: `sandbox-vz` (Linux guest via Apple Virtualization Framework).
-- Windows default: `sandbox-wsl2` (Linux guest via WSL2).
+- macOS accepted target: `sandbox-vz` (Linux guest via Apple Virtualization Framework).
+- Windows accepted target: `sandbox-wsl2` (Linux guest via WSL2).
 - Linux enterprise additive: `sandbox-firecracker`.
+
+This ADR records the selected backend strategy and structural target. It does not
+mean every backend already has Linux-equivalent runtime guarantees in the current
+implementation. Current release posture is tracked in the status table below and
+in the sandbox boundary docs.
 
 Why selected:
 
@@ -135,20 +140,35 @@ Adopt **Option A**: an OS-specific backend matrix with a common backend contract
 
 ### Backend matrix
 
-| Host OS          | Default backend       | Isolation substrate                                 | Notes                                           |
-| ---------------- | --------------------- | --------------------------------------------------- | ----------------------------------------------- |
-| Linux            | `sandbox-bwrap`       | Namespaces/seccomp/cgroup-style process isolation   | Primary fast path for local and CI              |
-| macOS            | `sandbox-vz`          | Linux guest VM using Apple Virtualization Framework | Aligns semantics with Linux enforcement model   |
-| Windows          | `sandbox-wsl2`        | Linux guest VM via WSL2                             | Reuses Linux confinement/routing logic in guest |
-| Linux enterprise | `sandbox-firecracker` | KVM microVM                                         | Additive stronger isolation profile             |
+| Host OS          | Backend               | Accepted structural target                          | Current release status                                                                                                                                                   |
+| ---------------- | --------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Linux            | `sandbox-bwrap`       | Namespaces/seccomp/cgroup-style process isolation   | Current structural fast path for local and CI.                                                                                                                           |
+| macOS            | `sandbox-vz`          | Linux guest VM using Apple Virtualization Framework | Default implementation is proxy-only compatibility mode. Experimental `sandbox-exec` and VZ guest contract modes exist, but parity still requires hardware E2E evidence. |
+| Windows          | `sandbox-wsl2`        | Linux guest VM via WSL2                             | Current implementation is proxy-only compatibility mode.                                                                                                                 |
+| Linux enterprise | `sandbox-firecracker` | KVM microVM                                         | Planned additive stronger isolation profile.                                                                                                                             |
 
-### Enforcement invariants (MUST hold on every backend)
+### Structural backend invariants and current status
+
+These invariants must hold before a backend is described as structural. They do
+not all hold on proxy-only compatibility backends.
 
 1. All agent outbound TCP egress is transparently redirected to sidecar.
 2. DNS is confined; direct resolver bypass is blocked.
-3. Sidecar unreachable implies fail-closed (no external network from agent sandbox).
-4. Each execution has deterministic sandbox/session identity for policy attribution and audit.
+3. Sidecar unreachable implies fail-closed with no external network fallback from
+   the agent sandbox.
+4. Each execution has deterministic sandbox/session identity for policy attribution
+   and audit.
 5. Wrapper remains interactive-safe (`stdin/stdout/stderr` passthrough, no TUI breakage).
+
+Current status:
+
+- Linux `bwrap` is the current structural backend.
+- macOS default `vz` and Windows `wsl2` are proxy-only compatibility backends and
+  require explicit opt-in before launch.
+- macOS `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1` is experimental and loopback-scoped.
+- macOS `FIRMA_RUN_VZ_GUEST=1` emits a launch contract for an external runner; the
+  runner and guest image must still prove the structural invariants.
+- Firecracker remains planned.
 
 ### Backend interface contract (FIR-61)
 
@@ -173,13 +193,18 @@ The wrapper chooses backend automatically by host OS with explicit override flag
 
 ### macOS (`sandbox-vz`)
 
-- Run agent and sidecar within managed Linux guest to keep enforcement mechanics consistent with Linux.
-- Host launcher manages VM lifecycle and bridges audited output back to host CLI.
+- Accepted target: run the agent within a managed Linux guest to keep enforcement
+  mechanics consistent with Linux.
+- Current release: default `vz` launches a host process with proxy mediation and
+  does not claim Linux-equivalent structural confinement. The VZ guest path is a
+  launch-contract mode for an external runner, not the runner implementation itself.
 
 ### Windows (`sandbox-wsl2`)
 
-- Run agent and sidecar inside WSL2 distro/instance dedicated to Firma Run profile.
-- Apply Linux guest-level routing and DNS confinement; account for WSL2 NAT/mirrored networking modes.
+- Accepted target: run the agent inside a WSL2 distro/instance dedicated to Firma
+  Run profile.
+- Current release: `wsl2` is proxy-only compatibility mode. Linux guest-level
+  routing and DNS confinement remain target behavior, not the current guarantee.
 
 ### Linux enterprise (`sandbox-firecracker`)
 
@@ -234,7 +259,8 @@ Required measurements:
    - p50/p95/p99 by profile (`generic`, `codex`)
 3. Security behavior:
    - Sidecar unavailable at startup and mid-session
-   - Assertion: zero direct external egress from sandboxed agent process
+   - Structural-backend assertion: zero direct external egress from sandboxed
+     agent process
 
 Artifacts:
 
@@ -262,7 +288,8 @@ Artifacts:
 - Host capability variability:
   - Mitigation: startup preflight checks with actionable diagnostics.
 - Egress bypass regressions:
-  - Mitigation: mandatory fail-closed integration tests in CI for every backend.
+  - Mitigation: mandatory fail-closed integration tests in CI for every backend
+    mode that claims structural confinement.
 
 ## Non-goals
 
