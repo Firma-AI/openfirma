@@ -13,6 +13,13 @@ FirmaAuditTrail(
         },
         AuditEvent {
             action: "communication.external.send",
+            resource: "api.openai.com/",
+            decision: Allow,
+            deny_reason: "",
+            dispatch_status: 200,
+        },
+        AuditEvent {
+            action: "communication.external.send",
             resource: "chatgpt.com/",
             decision: Allow,
             deny_reason: "",
