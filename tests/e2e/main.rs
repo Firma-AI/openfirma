@@ -32,9 +32,13 @@ pub fn firma_bin() -> PathBuf {
 
 fn default_agent(kind: AgentKind) -> agent::Agent {
     match kind {
-        AgentKind::Claude => {
-            agent::Agent::claude().args(["--permission-mode", "bypassPermissions"])
-        }
+        AgentKind::Claude => agent::Agent::claude().args([
+            "--permission-mode",
+            "bypassPermissions",
+            // Suppresses analytics only — normal agent behavior is unaffected.
+            "--settings",
+            r#"{"env":{"DISABLE_TELEMETRY":"1"}}"#,
+        ]),
         AgentKind::Codex => agent::Agent::codex().args(["--sandbox", "danger-full-access"]),
     }
 }
