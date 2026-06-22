@@ -66,6 +66,12 @@ jobs:
       - name: Install ${{ matrix.agent.name }}
         run: npm install -g '${{ matrix.agent.package }}'
 
+      - name: Authenticate codex
+        if: matrix.agent.name == 'codex'
+        run: printenv OPENAI_API_KEY | codex login --with-api-key
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
       # nextest builds the firma binary as part of the e2e test; firma_bin()
       # reads its path from CARGO_BIN_EXE_firma.
       - name: Run e2e tests
