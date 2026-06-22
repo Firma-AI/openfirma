@@ -85,18 +85,104 @@ The choice is mostly an operational one: bwrap is fast to start and lightweight;
 
 ## Platform enforcement matrix
 
-The *strength* of the enforcement boundary differs by platform. This is the most important thing to understand when deploying `firma run` in a security-sensitive context.
+Use this section as the current release claim for `firma run` confinement. It tracks runtime invariants, not only backend names, so a backend can be useful while still missing a structural guarantee.
 
-| Platform        | Backend        | Enforcement mechanism                          | `structural` | Agent bypass possible?            | Requires `--allow-non-structural` |
-| --------------- | -------------- | ---------------------------------------------- | :----------: | --------------------------------- | --------------------------------- |
-| Linux (native)  | `bwrap`        | Network namespace; proxy bridge is only exit   | Yes          | No                                | No                                |
-| Linux (native)  | `firecracker`  | KVM micro-VM network isolation                 | Planned      | N/A                               | N/A                               |
-| macOS `vz` (default) | `vz`    | Host proxy bridge + HTTP proxy injection       | No           | Yes, if agent ignores `HTTP_PROXY` | Yes                               |
-| macOS `vz` (experimental) | `vz` | `sandbox-exec` with `deny network-outbound`; host bridge + DNS stub on loopback | Yes (experimental) | No for external IP egress; loopback-all scope is residual caveat | No; requires experimental env opt-in |
-| macOS `vz` guest (experimental) | `vz` | Virtualization.framework runner contract; guest image must enforce bridge-only egress and DNS stub | Yes (experimental) | Target: no; requires runner/guest proof and hardware E2E evidence | No; requires guest env opt-in and artifacts |
-| Windows / WSL2  | `wsl2`         | HTTP proxy injection (`HTTP_PROXY`)            | No           | Yes, if agent ignores `HTTP_PROXY` | Yes                               |
+| OS | Modes and release stance |
+| -- | ------------------------ |
+| Linux | `bwrap`: current structural release path.<br />`firecracker`: planned backend; no current release claim. |
+| macOS | `vz` default: proxy-only compatibility path.<br />`vz` + `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1`: experimental `sandbox-exec` network-deny mode; not a default release claim.<br />`vz` + `FIRMA_RUN_VZ_GUEST=1`: experimental VZ guest runner contract mode; not a default release claim. |
+| Windows / WSL2 | `wsl2`: proxy-only compatibility path. |
 
-**Structural** means the sandbox removes the agent's ability to bypass the proxy at the OS level — no extra cooperation from the agent is required. The experimental macOS mode is narrower than Linux because it is loopback-scoped rather than bridge-port-scoped. **Proxy-only** means enforcement depends on the agent (or its HTTP library) respecting `HTTP_PROXY`. On proxy-only backends, `firma run` fails closed unless you pass `--allow-non-structural` to acknowledge this limitation.
+### Linux
+
+Available modes:
+
+- `bwrap` - current Linux default.
+- `firecracker` - planned Linux micro-VM backend.
+
+| Runtime invariant | `bwrap` | `firecracker` |
+| ----------------- | ------- | ------------- |
+| Sidecar-only egress | **Yes.** Network namespace makes the proxy bridge the only useful exit. | **Planned.** KVM micro-VM network isolation target. |
+| DNS confinement | **Yes.** Sandbox resolver points at the local DNS stub or fails closed. | **Planned.** Guest-local deterministic resolver target. |
+| Fail-closed startup | **Yes.** Backend, sidecar, policy, and seccomp setup failures block launch. | **Planned.** |
+| Fail-closed runtime | **Yes.** With no direct egress route, sidecar or bridge loss breaks outbound traffic. | **Planned.** |
+| Child/process-tree bypass resistance | **Yes.** Child processes inherit the network namespace. | **Planned.** |
+| Syscall/seccomp enforcement | **Linux-only.** Static seccomp cBPF is supported with a bounded Cedar-subset projection. | **Planned.** Linux guest path should reuse static kernel controls where applicable. |
+| Immutable execution envelope | **Yes.** Runtime fixes identity, env, mounts, routing, and optional seccomp before launch. | **Planned.** |
+| Interactive CLI/TUI support | **Yes.** Stdio, signals, and exit status are preserved through the wrapper path. | **Planned.** |
+| Evidence status | Runtime code, Linux E2E harness, and FIR-111 seccomp spike artifacts exist. | Planned backend; no release evidence. |
+
+### macOS
+
+Available modes:
+
+- `vz` default - proxy-only host compatibility mode.
+- `vz` + `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1` - experimental `sandbox-exec` network-deny mode.
+- `vz` + `FIRMA_RUN_VZ_GUEST=1` - experimental VZ guest runner contract mode.
+
+#### `vz` default
+
+| Runtime invariant | Status |
+| ----------------- | ------ |
+| Sidecar-only egress | **No.** Cooperative HTTP clients are mediated through injected proxy env. |
+| DNS confinement | **No.** Host DNS remains available to non-cooperative processes. |
+| Fail-closed startup | **Yes for startup.** Launch is blocked unless proxy-only mode is explicitly accepted and the sidecar path is prepared. |
+| Fail-closed runtime | **Partial.** Proxy-routed clients fail, but direct sockets can bypass. |
+| Child/process-tree bypass resistance | **No.** Children can ignore or clear proxy env. |
+| Syscall/seccomp enforcement | **No.** seccomp is unavailable on macOS. |
+| Immutable execution envelope | **Partial.** Runtime creates a deterministic launch envelope, but proxy-only children can still bypass network intent. |
+| Interactive CLI/TUI support | **Yes.** Host-process compatibility path preserves normal CLI behavior. |
+| Evidence status | Runtime proof logs and unit tests support the proxy-only claim. |
+
+#### `vz` + `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1`
+
+| Runtime invariant | Status |
+| ----------------- | ------ |
+| Sidecar-only egress | **Partial / experimental.** External IP egress is denied by `sandbox-exec`, but all loopback remains reachable. |
+| DNS confinement | **Partial / experimental.** Non-loopback DNS is blocked by network denial; the host resolver is not replaced. |
+| Fail-closed startup | **Yes / experimental.** Network-deny mode still uses the same startup fail-closed path. |
+| Fail-closed runtime | **Partial / experimental.** External egress remains denied, but loopback-all scope is a residual caveat. |
+| Child/process-tree bypass resistance | **Partial / experimental.** Child processes should inherit the MAC sandbox label for external egress denial; loopback remains reachable and hardware E2E is pending. |
+| Syscall/seccomp enforcement | **No seccomp.** Uses TrustedBSD MAC network rules, not syscall filtering. |
+| Immutable execution envelope | **Partial / experimental.** Launch envelope plus MAC profile are fixed before process start; residual loopback caveat remains. |
+| Interactive CLI/TUI support | **Yes / experimental.** Still host-process based through `sandbox-exec`. |
+| Evidence status | Runtime code and unit tests exist; macOS hardware E2E assertions are written but not yet green evidence. |
+
+#### `vz` + `FIRMA_RUN_VZ_GUEST=1`
+
+| Runtime invariant | Status |
+| ----------------- | ------ |
+| Sidecar-only egress | **Target / experimental.** Launch contract requires bridge-only guest egress; the runner and guest image must enforce it. |
+| DNS confinement | **Target / experimental.** Contract carries the DNS stub address; the runner must wire guest DNS to it. |
+| Fail-closed startup | **Target / experimental.** Artifact validation and contract generation fail closed; runner-side preflight must also prove the guest boundary. |
+| Fail-closed runtime | **Target / experimental.** Guest route and bridge loss behavior must be proven by the runner and hardware E2E tests. |
+| Child/process-tree bypass resistance | **Target / experimental.** Guest boundary should cover the process tree; runner and guest proof are pending. |
+| Syscall/seccomp enforcement | **Target only.** Contract can carry a seccomp filter path for an in-guest Linux runner; guest loading is not a current release claim. |
+| Immutable execution envelope | **Target / experimental.** Versioned launch contract records command, env, mounts, network endpoints, and required invariants. |
+| Interactive CLI/TUI support | **Target / experimental.** Runner must preserve stdio, signals, exit status, terminal resize, and TTY behavior. |
+| Evidence status | Runtime contract code and unit tests exist; signed VZ runner, guest image lifecycle, route proof, and hardware E2E are still pending. |
+
+### Windows / WSL2
+
+Available mode:
+
+- `wsl2` - proxy-only compatibility mode.
+
+| Runtime invariant | `wsl2` |
+| ----------------- | ------ |
+| Sidecar-only egress | **No.** Cooperative proxy env only. |
+| DNS confinement | **No.** No mandatory DNS boundary. |
+| Fail-closed startup | **Yes for startup.** Launch is blocked unless proxy-only mode is explicitly accepted and the sidecar path is prepared. |
+| Fail-closed runtime | **Partial.** Proxy-routed clients fail, but direct sockets can bypass. |
+| Child/process-tree bypass resistance | **No.** Children can ignore or clear proxy env. |
+| Syscall/seccomp enforcement | **No current claim.** |
+| Immutable execution envelope | **Partial.** Runtime injects env and identity into the WSL launch, but no structural boundary backs it. |
+| Interactive CLI/TUI support | **Partial.** Basic process execution is supported; WSL terminal behavior depends on host setup. |
+| Evidence status | Runtime code and unit tests support the proxy-only claim. |
+
+**Structural** means the sandbox removes the agent's ability to bypass the proxy at the OS level - no extra cooperation from the agent is required. The experimental macOS network-deny mode is narrower than Linux because it is loopback-scoped rather than bridge-port-scoped. The experimental macOS VZ guest mode has the stronger structural target, but the runner and guest image own the actual Virtualization.framework lifecycle and in-guest enforcement.
+
+**Proxy-only** means enforcement depends on the agent or its HTTP library respecting `HTTP_PROXY`. `firma run` refuses to launch proxy-only backends by default; `--allow-non-structural` is an explicit opt-in to that weaker enforcement model.
 
 `NO_PROXY` / `no_proxy` are cleared in all built-in profiles to prevent a host-env override from silently routing traffic around the proxy Sidecar on macOS and WSL2.
 
