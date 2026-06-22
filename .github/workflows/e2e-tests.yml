@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "v*.*.*"
+    branches:
+      - "fir-368-e2e-tests" # TEMP: remove before merge — exercises the workflow on branch pushes
   workflow_dispatch:
 
 permissions:
