@@ -63,6 +63,24 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y bubblewrap
 
+      # Ubuntu 24.04 ships kernel.apparmor_restrict_unprivileged_userns=1, which
+      # transitions bwrap to a profile that strips CAP_NET_ADMIN inside its user
+      # namespace, so it cannot bring up loopback (RTM_NEWADDR). Install the
+      # targeted AppArmor profile that lets bwrap keep its caps in the userns.
+      - name: Allow bwrap user namespaces via AppArmor profile (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo tee /etc/apparmor.d/bwrap >/dev/null <<'EOF'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+              userns,
+              include if exists <local/bwrap>
+          }
+          EOF
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+
       - name: Install ${{ matrix.agent.name }}
         run: |
           npm install -g '${{ matrix.agent.package }}'
