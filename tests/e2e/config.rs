@@ -36,7 +36,6 @@ pub fn add_mapping_rules(
 }
 
 pub fn issue_capability(
-    firma_bin: &Path,
     cfg_dir: &Path,
     agent_id: &str,
     session_id: &str,
@@ -46,7 +45,7 @@ pub fn issue_capability(
 ) -> Result<PathBuf, anyhow::Error> {
     let config_path = cfg_dir.join("firma.toml");
     let seed_path = cfg_dir.join("capability-seed.toml");
-    let output = std::process::Command::new(firma_bin)
+    let output = std::process::Command::new(crate::firma_bin())
         .arg("authority")
         .args(["--config"])
         .arg(&config_path)

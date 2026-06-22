@@ -72,9 +72,7 @@ impl ScenarioSetup {
         scope: &str,
         ttl_secs: u64,
     ) -> Result<(), anyhow::Error> {
-        let bin = crate::firma_bin();
         let seed_path = config::issue_capability(
-            &bin,
             &self.config_dir,
             agent_id,
             session_id,
@@ -190,8 +188,7 @@ impl<'a> FirmaConfigBuilder<'a> {
     /// Returns an error if the `firma config init` process fails or
     /// the audit path cannot be configured.
     pub fn run(self) -> Result<(), anyhow::Error> {
-        let firma = firma_bin();
-        let mut cmd = std::process::Command::new(&firma);
+        let mut cmd = std::process::Command::new(&firma_bin());
         cmd.args([
             "config",
             "--yes",
