@@ -188,7 +188,7 @@ impl<'a> FirmaConfigBuilder<'a> {
     /// Returns an error if the `firma config init` process fails or
     /// the audit path cannot be configured.
     pub fn run(self) -> Result<(), anyhow::Error> {
-        let mut cmd = std::process::Command::new(&firma_bin());
+        let mut cmd = std::process::Command::new(firma_bin());
         cmd.args([
             "config",
             "--yes",
