@@ -266,7 +266,6 @@ fn extract_capability_claims(claims: &Claims) -> Result<CapabilityClaims, TokenE
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

@@ -10,7 +10,10 @@ use firma_run::config::SandboxIdentityMode;
 
 /// Arguments for `firma run`.
 #[derive(Debug, Args)]
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "this type intentionally models independent CLI/runtime flags one-to-one"
+)]
 pub struct RunArgs {
     /// Built-in agent profile (e.g. `generic`, `codex`, `claude-code`) that selects
     /// default backend, identity mode and policy bundle.

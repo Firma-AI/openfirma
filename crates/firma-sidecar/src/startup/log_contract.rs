@@ -118,7 +118,6 @@ pub fn compute_policy_bundle_version(policy_dir: &Path) -> std::io::Result<(Stri
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

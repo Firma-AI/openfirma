@@ -127,5 +127,5 @@ Quick fail-closed checks:
 5. For real rollout validation, also run:
 
 ```bash
-make managed-seccomp-compat-check
+just managed-seccomp-compat-check
 ```

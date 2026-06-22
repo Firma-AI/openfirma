@@ -80,7 +80,10 @@ impl NetworkRuntime {
 
 /// Inputs to [`prepare_network_runtime`] that gate autostart behaviour.
 #[derive(Debug, Clone)]
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "this type intentionally models independent CLI/runtime flags one-to-one"
+)]
 pub struct AutostartFlags {
     /// `true` when the selection resolved to local autostart.
     pub sidecar_autostart: bool,
@@ -507,11 +510,11 @@ fn autostart_sidecar(
 /// # Errors
 ///
 /// Propagates any `RunError` raised by selection or spawn paths.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "every input is independent — bundling into a request struct only adds noise here"
 )]
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "step-0 selection + plaintext-h2 transport probe + autostart fallback read more clearly inline than split"
 )]
@@ -1002,7 +1005,6 @@ fn relay_unix_to_unix(client: &UnixStream, target: &UnixStream) -> io::Result<()
 
 #[cfg(test)]
 #[cfg(unix)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod non_structural_env_tests {
     use std::collections::BTreeMap;
     use std::io::{Read, Write};
@@ -1317,7 +1319,6 @@ mod non_structural_env_tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod parse_host_port_tests {
     use std::path::{Path, PathBuf};
 

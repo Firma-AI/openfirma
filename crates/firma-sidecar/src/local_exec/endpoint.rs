@@ -75,7 +75,13 @@ pub struct LocalExecEndpoint {
 impl LocalExecEndpoint {
     /// Create the endpoint with the given socket path and handler.
     #[must_use]
-    #[cfg_attr(not(target_family = "unix"), allow(clippy::needless_pass_by_value))]
+    #[cfg_attr(
+        not(target_family = "unix"),
+        expect(
+            clippy::needless_pass_by_value,
+            reason = "non-unix builds keep the constructor signature aligned with the unix implementation"
+        )
+    )]
     pub fn new(socket_path: PathBuf, handler: LocalExecHandler) -> Self {
         #[cfg(target_family = "unix")]
         {
@@ -359,10 +365,12 @@ fn validate_peer_uid(stream: &UnixStream) -> io::Result<()> {
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-#[cfg(target_family = "unix")]
+#[cfg(all(test, target_family = "unix"))]
 mod tests {
+    #![allow(
+        clippy::expect_used,
+        reason = "unix-only endpoint tests use expect for socket setup and wire round-trips"
+    )]
     use std::time::Duration;
 
     use super::*;

@@ -5,11 +5,11 @@ Guidance for coding agents working in this repository.
 ## Key Commands
 
 ```bash
-make check # Run all local verification checks (CI parity)
-make fmt # dprint check (TOML + Markdown + Rust)
-make lint # cargo clippy --workspace -- -D warnings
-make test # cargo nextest run + cargo test --doc
-make build # cargo build --workspace
+just check # Run all local verification checks (CI parity)
+just fmt # dprint check (TOML + Markdown + Rust)
+just lint # cargo clippy --workspace -- -D warnings
+just test # cargo nextest run + cargo test --doc
+just build # cargo build --workspace
 ```
 
 Tests run via `cargo nextest` (process-per-test isolation); doctests run
@@ -20,7 +20,7 @@ Requires `protoc` installed for `firma-proto` protobuf compilation.
 ## Formatting
 
 `dprint` is the single formatter for the repo. Run `dprint fmt` after modifying
-`.toml`, `.md`, or `.rs` files. `make fmt` runs `dprint check` in CI.
+`.toml`, `.md`, or `.rs` files. `just fmt` runs `dprint check` in CI.
 
 `docs-site/` is excluded and uses its own toolchain.
 
@@ -48,6 +48,21 @@ Some contributors use Git, some use Jujutsu.
   choosing commands.
 - When giving user-facing revision identifiers or instructions, match the VCS
   actually in use in that clone.
+
+## Atomic Revisions
+
+Whenever the working copy is already dirty or you are about to touch revision
+history, use the repository skills instead of improvising:
+
+- [`commit-guidelines`](.skills/commit-guidelines/SKILL.md) for dirty-worktree
+  inspection, atomic checkpoint commits/changesets, and reviewed-history
+  preservation
+- [`split-jj-changeset`](.skills/split-jj-changeset/SKILL.md) for splitting
+  mixed Jujutsu changesets
+- [`verify`](.skills/verify/SKILL.md) for per-revision and final verification
+
+Use commits or jj changesets as local checkpoints during substantial work.
+Prefer small atomic revisions that can stand on their own when feasible.
 
 ## Architecture
 

@@ -15,10 +15,10 @@ To ensure a positive and inclusive environment, please read our [Code of Conduct
 ```bash
 git clone https://github.com/firma-ai/openfirma.git
 cd openfirma
-make install
+just install
 ```
 
-`make install` sets up everything you need: Rust toolchain check, protoc, cargo tools, and docs dependencies. See the [README](README.md) for more details on prerequisites and configuration.
+Install `just` first (`brew install just` on macOS, `cargo binstall just` elsewhere after installing `cargo-binstall`, or your distro package), then run `just install` to set up everything else: Rust toolchain check, protoc, cargo tools, and docs dependencies. See the [README](README.md) for more details on prerequisites and configuration.
 
 ## Issues
 
@@ -38,7 +38,7 @@ We actively welcome your Pull Requests! A couple of things to keep in mind befor
 Before submitting your PR, please run these checks locally:
 
 ```bash
-make check     # fmt + lint + test + build + audit + dependency check
+just check     # fmt + lint + test + build + audit + dependency check
 ```
 
 Running this before you create the PR will help reduce back and forth during review.

@@ -24,6 +24,10 @@
 pub mod firma {
     pub mod interceptor {
         pub mod v1 {
+            #![allow(
+                clippy::allow_attributes,
+                reason = "prost/tonic emits outer #[allow(...)] attributes in generated Rust"
+            )]
             tonic::include_proto!("firma.interceptor.v1");
         }
     }

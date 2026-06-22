@@ -928,7 +928,6 @@ impl LocalExecConfig {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -1431,7 +1430,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "single end-to-end HTTP proxy TOML fixture is easier to review in one test"
+    )]
     fn test_full_toml_deserialization_http_proxy() {
         let toml_str = r#"
 [interceptor]

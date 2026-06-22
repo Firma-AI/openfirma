@@ -203,7 +203,7 @@ Required scenarios:
 
 Gate:
 
-- `make check` clean.
+- `just check` clean.
 - E2E matrix green in local reproducible run.
 
 ### Phase 6: Rollout, Performance, and Operator Guidance

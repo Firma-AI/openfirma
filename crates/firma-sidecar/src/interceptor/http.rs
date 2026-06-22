@@ -564,7 +564,10 @@ fn log_connect_deny(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "CONNECT relay setup needs explicit upgrade state, target/session context, MITM inputs, and resource limits"
+)]
 fn spawn_connect_relay(
     on_upgrade: hyper::upgrade::OnUpgrade,
     target: String,
@@ -748,7 +751,10 @@ async fn relay_connect_tunnel(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "MITM CONNECT relay needs explicit stream, target, handler, TLS acceptor, and relay limits"
+)]
 async fn relay_connect_mitm(
     on_upgrade: hyper::upgrade::OnUpgrade,
     target: ConnectTargetInfo,
@@ -1157,7 +1163,10 @@ async fn handle_mitm_https_request(
     Ok(response)
 }
 
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "fail-closed websocket MITM authorization and response handling are kept in one routine"
+)]
 async fn handle_mitm_websocket_upgrade_request(
     req: &mut Request<Incoming>,
     handler: Arc<RequestHandler>,
@@ -1776,7 +1785,10 @@ fn deny_json_response(status: StatusCode, body: Vec<u8>) -> Response<Full<Bytes>
 /// For absolute-form proxy requests (`http://host/path`), strips the scheme
 /// and authority to return just the path (e.g. `/path`). For origin-form
 /// requests (`/path`), returns the value unchanged.
-#[allow(clippy::option_if_let_else)]
+#[expect(
+    clippy::option_if_let_else,
+    reason = "absolute-form versus origin-form path parsing is clearer as one optional-prefix branch"
+)]
 fn extract_path(raw_path: &[u8]) -> String {
     let s = String::from_utf8_lossy(raw_path);
     if let Some(rest) = s
@@ -1797,7 +1809,6 @@ fn extract_path(raw_path: &[u8]) -> String {
 // Note: CONNECT routing is handled explicitly in `handle_connect_request`.
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use std::collections::HashMap;
     use std::io::Cursor;

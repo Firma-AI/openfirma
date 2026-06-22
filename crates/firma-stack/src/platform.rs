@@ -18,10 +18,16 @@ pub struct Group {
 }
 
 #[cfg(windows)]
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "the Windows Group wraps an owned Job Object handle that is safe to move across threads"
+)]
 unsafe impl Send for Group {}
 #[cfg(windows)]
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "shared references rely on Windows Job Object handle semantics rather than Rust auto-derivation"
+)]
 unsafe impl Sync for Group {}
 
 #[cfg(windows)]

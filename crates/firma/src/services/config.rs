@@ -1141,7 +1141,6 @@ fn resolve_state_dir_with_default(
 ///
 /// # Errors
 /// Returns a formatted string on any filesystem or key-generation failure.
-#[allow(clippy::too_many_lines)]
 pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
     let mappings = provider_to_mappings(&plan.provider);
     let (mode, authority) = match &plan.authority {
@@ -1263,7 +1262,6 @@ fn provider_to_profile(provider: &str) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use strum::IntoEnumIterator;
 

@@ -75,7 +75,6 @@ fn section_to_selection(s: &AuthoritySection) -> Option<AuthoritySelection> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use tempfile::tempdir;

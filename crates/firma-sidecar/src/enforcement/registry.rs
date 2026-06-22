@@ -50,7 +50,10 @@ impl ActionClassRegistry {
     /// in-place additions covering the GitHub (12), Stripe (12), and
     /// Gmail (5) REST surfaces.
     #[must_use]
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the canonical v0.1 action-class registry is maintained as one declarative literal"
+    )]
     pub fn v0_1() -> Self {
         use RiskLevel::{Critical, High, Low, Medium};
 
@@ -314,7 +317,6 @@ impl ActionClassRegistry {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

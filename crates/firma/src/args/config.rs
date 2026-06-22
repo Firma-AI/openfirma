@@ -37,7 +37,10 @@ impl Mode {
 
 /// Scaffold a new agent config directory interactively.
 #[derive(Debug, Args)]
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "this type intentionally models independent CLI/runtime flags one-to-one"
+)]
 pub struct InitArgs {
     /// What to configure: agent-local | agent-remote | authority.
     #[arg(long, value_enum)]

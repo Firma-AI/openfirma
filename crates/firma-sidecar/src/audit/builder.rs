@@ -176,7 +176,6 @@ fn timestamp_nanos() -> u128 {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

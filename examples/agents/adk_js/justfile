@@ -1,0 +1,8 @@
+set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
+set dotenv-load := true
+
+install:
+  pnpm install
+
+run:
+  pnpm exec adk run src/agent.ts

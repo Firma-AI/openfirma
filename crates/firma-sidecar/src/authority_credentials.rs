@@ -189,7 +189,6 @@ fn trim_trailing_newlines(mut value: String) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, reason = "test module")]
 mod tests {
     use super::*;
 

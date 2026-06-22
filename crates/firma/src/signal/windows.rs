@@ -72,11 +72,6 @@ pub fn install_listener(token: CancellationToken) {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test code: panics are acceptable test failures"
-)]
 mod tests {
     use std::time::Duration;
 

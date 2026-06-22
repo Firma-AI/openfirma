@@ -103,7 +103,7 @@ impl AuthoritySupervisor {
     ///
     /// See the platform-stub variant of this method for the full list.
     #[cfg(unix)]
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "single linear spawn-then-scrape sequence reads more clearly inline"
     )]
@@ -466,7 +466,7 @@ fn send_sigterm(_pid: u32) {}
 const LISTENING_TOKEN: &str = "listening";
 
 #[doc(hidden)]
-#[allow(
+#[expect(
     clippy::needless_pass_by_value,
     reason = "tx is moved into the spawned thread"
 )]

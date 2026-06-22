@@ -1,7 +1,7 @@
 //! Stage 1 bench: `CapabilityValidator::enforce` under a realistic
 //! revocation-store population. Target: p95 < 1 ms.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use std::hint::black_box;
 use std::sync::Arc;

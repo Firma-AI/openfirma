@@ -49,7 +49,6 @@ pub fn resolve_stack_config(cli_override: Option<&Path>) -> Result<StackConfig> 
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
     use tempfile::tempdir;

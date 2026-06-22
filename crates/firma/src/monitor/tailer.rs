@@ -32,7 +32,7 @@ pub struct Line {
     pub raw: String,
 }
 
-#[allow(
+#[expect(
     clippy::needless_pass_by_value,
     reason = "tailers run in spawned threads and intentionally own these handles"
 )]

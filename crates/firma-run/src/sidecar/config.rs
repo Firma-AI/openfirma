@@ -193,7 +193,7 @@ pub enum TemplateSource {
 /// Returns I/O, parse, or serialization errors. All variants are wrapped in
 /// [`RunError`] so that callers can fail-closed through the existing path.
 #[doc(hidden)]
-#[allow(
+#[expect(
     clippy::needless_pass_by_value,
     reason = "request struct carries owned PathBufs the function selects between; cloning to keep callers free of borrow plumbing is the simpler API"
 )]
@@ -776,12 +776,6 @@ pub mod testing {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "test module"
-)]
 mod tests {
     use super::{configure_capability_seed, normalize_to_sectioned_sidecar};
 

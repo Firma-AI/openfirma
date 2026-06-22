@@ -60,8 +60,8 @@ Both agents share one Supabase project.
 cd examples/agents/agents_sdk_py
 cp .env.sample .env
 # Fill in OPENAI_API_KEY, SUPABASE_*, and RESEND_* as needed.
-make install
-make run
+just install
+just run
 ```
 
 ## Run the TypeScript agent
@@ -70,8 +70,8 @@ make run
 cd examples/agents/adk_js
 cp .env.sample .env
 # Fill in GOOGLE_GENAI_API_KEY, SUPABASE_*, and RESEND_* as needed.
-make install
-make run
+just install
+just run
 ```
 
 ## Try the enforcement story

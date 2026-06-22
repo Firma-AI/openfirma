@@ -16,7 +16,7 @@ Run this skill after editing `.rs`, `.toml`, or `.md` files.
 ### 1. Format check
 
 ```bash
-make fmt
+just fmt
 ```
 
 This runs `dprint check` for Rust, TOML, and Markdown.
@@ -30,7 +30,7 @@ dprint fmt
 ### 2. Lint check
 
 ```bash
-make lint
+just lint
 ```
 
 ### 3. Common repo-specific lint expectations

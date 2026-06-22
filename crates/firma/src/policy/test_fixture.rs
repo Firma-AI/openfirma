@@ -70,7 +70,10 @@ impl Outcome {
 /// Never returns `Err`: every failure is converted to a stderr diagnostic
 /// plus a non-zero [`ExitCode`], keeping evaluation fail-closed. The
 /// `anyhow::Result` return type matches sibling `firma` service entry points.
-#[allow(clippy::unnecessary_wraps)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "matches the shared CLI service entry-point signature returning anyhow::Result<ExitCode>"
+)]
 pub fn run(path: &Path) -> anyhow::Result<ExitCode> {
     let outcome = evaluate_to_outcome(path);
     if let Some(stdout) = outcome.stdout {
@@ -221,7 +224,6 @@ fn build_uids(fixture: &Fixture) -> Result<(EntityUid, EntityUid, EntityUid), St
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use std::fs;

@@ -170,12 +170,6 @@ fn write_seed(seed: &CapabilitySeed, out_path: &Path) -> Result<(), RunError> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "test module"
-)]
 mod tests {
     use super::*;
     use firma_core::{CapabilityClaims, TokenId};

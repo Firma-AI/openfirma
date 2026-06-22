@@ -19,7 +19,10 @@ use crate::supervisor::wait_with_signal_forwarding;
 /// Lib-level input for [`execute_run`]. The CLI layer (in the `firma`
 /// host crate) builds this from its `clap`-derived args struct.
 #[derive(Debug, Clone)]
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "this type intentionally models independent CLI/runtime flags one-to-one"
+)]
 pub struct RunInput {
     /// Built-in profile id to use.
     pub profile: String,
@@ -69,7 +72,7 @@ pub struct RunInput {
 ///
 /// Returns an error when config resolution, backend lifecycle operations, or
 /// wrapped process supervision fails.
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "step-0 authority resolution + sidecar autostart + sandbox lifecycle are sequential and read more clearly inline"
 )]
@@ -1281,7 +1284,10 @@ mod tests {
         {
             return crate::backend::BackendKind::Wsl2;
         }
-        #[allow(unreachable_code)]
+        #[expect(
+            unreachable_code,
+            reason = "fallback satisfies exhaustive return typing after cfg-gated platform branches"
+        )]
         crate::backend::BackendKind::Firecracker
     }
 }

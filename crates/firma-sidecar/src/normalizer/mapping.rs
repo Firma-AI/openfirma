@@ -10,8 +10,45 @@
 //! be deterministically mapped to a registry entry fail closed with
 //! `DENY: UNCLASSIFIED_INTENT` (FEP \[I-N1\]).
 
-use crate::config::MappingRulesFile;
+use crate::config::{MappingRuleConfig, MappingRulesFile};
 use crate::enforcement::registry::ActionClassRegistry;
+
+/// Errors that can occur while building a [`MappingTable`] from configuration.
+#[derive(Debug, thiserror::Error)]
+pub enum MappingTableError {
+    /// The mapping rules file itself failed validation (empty file,
+    /// malformed rule, invalid HTTP method, etc).
+    #[error("invalid mapping rules file: {0}")]
+    InvalidRulesFile(String),
+
+    /// Two rules share the same `(method, host, path)` tuple, which
+    /// makes classification ambiguous.
+    #[error(
+        "rule {index}: duplicate mapping tuple method={:?} host={:?} path={:?}",
+        rule.method.as_deref().unwrap_or_default(),
+        rule.host,
+        rule.path.as_deref().unwrap_or_default()
+    )]
+    DuplicateRule {
+        index: usize,
+        rule: MappingRuleConfig,
+    },
+
+    /// A rule references an action class outside the built-in FEP
+    /// registry.
+    #[error(
+        "rule {index}: action class '{}' is not in the built-in FEP action class registry.\n\
+         Note: schema_path in [authority] only affects Cedar policy validation in the \
+         Authority — it does not extend this registry, which is fixed when the Sidecar \
+         loads.\nTo use this action class in a mapping rule, add it to the registry first.\n\
+         See: https://firma-ai.github.io/openfirma/guides/extend-mapping/",
+        rule.action_class
+    )]
+    NonExistingActionClass {
+        index: usize,
+        rule: MappingRuleConfig,
+    },
+}
 
 /// A validated mapping rule ready for matching.
 #[derive(Debug, Clone)]
@@ -81,13 +118,15 @@ impl MappingTable {
     /// Load and validate mapping rules from a parsed config.
     ///
     /// # Errors
-    /// Returns an error if any rule references an unknown action class.
+    /// Returns an error if the rules are structurally invalid or
+    /// ambiguous.
     pub fn from_config(
         file: &MappingRulesFile,
         registry: &ActionClassRegistry,
         default_protected: bool,
-    ) -> Result<Self, String> {
-        file.validate()?;
+    ) -> Result<Self, MappingTableError> {
+        file.validate()
+            .map_err(MappingTableError::InvalidRulesFile)?;
 
         // Duplicate (method, host, path) tuple detection. Two rules
         // with the same triple across merged mapping files produces
@@ -100,11 +139,11 @@ impl MappingTable {
                 rule_cfg.host.clone(),
                 rule_cfg.path.clone().unwrap_or_default(),
             );
-            if !seen.insert(key.clone()) {
-                return Err(format!(
-                    "rule {i}: duplicate mapping tuple method={:?} host={:?} path={:?}",
-                    key.0, key.1, key.2
-                ));
+            if !seen.insert(key) {
+                return Err(MappingTableError::DuplicateRule {
+                    index: i,
+                    rule: rule_cfg.clone(),
+                });
             }
         }
 
@@ -112,10 +151,10 @@ impl MappingTable {
 
         for (i, rule_cfg) in file.rules.iter().enumerate() {
             if !registry.contains(&rule_cfg.action_class) {
-                return Err(format!(
-                    "rule {i}: action class '{}' not in registry",
-                    rule_cfg.action_class
-                ));
+                return Err(MappingTableError::NonExistingActionClass {
+                    index: i,
+                    rule: rule_cfg.clone(),
+                });
             }
 
             let specificity = MappingRule::compute_specificity(
@@ -228,49 +267,15 @@ fn glob_match(pattern: &str, value: &str) -> bool {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
+    use insta::assert_snapshot;
+    use pretty_assertions::assert_matches;
+
     use super::*;
     use crate::config::MappingRuleConfig;
 
-    fn test_registry() -> ActionClassRegistry {
-        ActionClassRegistry::v0_1()
-    }
-
-    fn test_rules_file() -> MappingRulesFile {
-        MappingRulesFile {
-            rules: vec![
-                MappingRuleConfig {
-                    method: Some("POST".to_string()),
-                    host: "api.openai.com".to_string(),
-                    path: Some("/v1/chat/completions".to_string()),
-                    action_class: "communication.external.send".to_string(),
-                },
-                MappingRuleConfig {
-                    method: Some("POST".to_string()),
-                    host: "api.anthropic.com".to_string(),
-                    path: Some("/v1/messages".to_string()),
-                    action_class: "communication.external.send".to_string(),
-                },
-                MappingRuleConfig {
-                    method: Some("GET".to_string()),
-                    host: "*".to_string(),
-                    path: None,
-                    action_class: "filesystem.read".to_string(),
-                },
-                MappingRuleConfig {
-                    method: Some("POST".to_string()),
-                    host: "*".to_string(),
-                    path: None,
-                    action_class: "communication.internal.send".to_string(),
-                },
-            ],
-        }
-    }
-
     #[test]
-    fn test_from_config_validates_action_classes() {
-        let registry = test_registry();
+    fn mapping_rules_rejects_nonexisting_action_class() {
         let bad_file = MappingRulesFile {
             rules: vec![MappingRuleConfig {
                 method: None,
@@ -279,13 +284,23 @@ mod tests {
                 action_class: "nonexistent.action".to_string(),
             }],
         };
-        let result = MappingTable::from_config(&bad_file, &registry, true);
-        assert!(result.is_err());
+        let err =
+            MappingTable::from_config(&bad_file, &ActionClassRegistry::v0_1(), true).unwrap_err();
+        assert_matches!(
+            err,
+            MappingTableError::NonExistingActionClass { index: 0, ref rule }
+                if rule.action_class == "nonexistent.action"
+        );
+        assert_snapshot!(err.to_string(), @"
+        rule 0: action class 'nonexistent.action' is not in the built-in FEP action class registry.
+        Note: schema_path in [authority] only affects Cedar policy validation in the Authority — it does not extend this registry, which is fixed when the Sidecar loads.
+        To use this action class in a mapping rule, add it to the registry first.
+        See: https://firma-ai.github.io/openfirma/guides/extend-mapping/
+        ");
     }
 
     #[test]
-    fn duplicate_tuple_across_merged_rules_is_startup_error() {
-        let registry = test_registry();
+    fn duplicated_mapping_rule_is_rejected() {
         let file = MappingRulesFile {
             rules: vec![
                 MappingRuleConfig {
@@ -302,17 +317,34 @@ mod tests {
                 },
             ],
         };
-        let result = MappingTable::from_config(&file, &registry, true);
-        assert!(result.is_err());
-        let msg = result.err().unwrap_or_default();
-        assert!(msg.contains("duplicate"), "expected duplicate: {msg}");
+        let err = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).unwrap_err();
+        assert_matches!(
+            err,
+            MappingTableError::DuplicateRule { index: 1, ref rule }
+                if rule.action_class == "code.review.read"
+        );
+        assert_snapshot!(err.to_string(), @r#"rule 1: duplicate mapping tuple method="GET" host="api.github.com" path="/repos/*/*""#);
     }
 
     #[test]
-    fn test_specific_rule_matches_first() {
-        let registry = test_registry();
-        let table = MappingTable::from_config(&test_rules_file(), &registry, true)
-            .unwrap_or_else(|e| panic!("{e}"));
+    fn specific_rule_matches_first() {
+        let file = MappingRulesFile {
+            rules: vec![
+                MappingRuleConfig {
+                    method: Some("POST".to_string()),
+                    host: "*".to_string(),
+                    path: None,
+                    action_class: "communication.internal.send".to_string(),
+                },
+                MappingRuleConfig {
+                    method: Some("POST".to_string()),
+                    host: "api.openai.com".to_string(),
+                    path: Some("/v1/chat/completions".to_string()),
+                    action_class: "communication.external.send".to_string(),
+                },
+            ],
+        };
+        let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).unwrap();
 
         match table.find_match("POST", "api.openai.com", "/v1/chat/completions") {
             MatchResult::Matched(rule) => {
@@ -323,10 +355,24 @@ mod tests {
     }
 
     #[test]
-    fn test_wildcard_rule_matches_unknown_host() {
-        let registry = test_registry();
-        let table = MappingTable::from_config(&test_rules_file(), &registry, true)
-            .unwrap_or_else(|e| panic!("{e}"));
+    fn wildcard_rule_matches_unknown_host() {
+        let file = MappingRulesFile {
+            rules: vec![
+                MappingRuleConfig {
+                    method: Some("GET".to_string()),
+                    host: "api.other.com".to_string(),
+                    path: None,
+                    action_class: "communication.internal.send".to_string(),
+                },
+                MappingRuleConfig {
+                    method: Some("GET".to_string()),
+                    host: "*".to_string(),
+                    path: None,
+                    action_class: "filesystem.read".to_string(),
+                },
+            ],
+        };
+        let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).unwrap();
 
         match table.find_match("GET", "api.weather.com", "/forecast") {
             MatchResult::Matched(rule) => assert_eq!(rule.action_class, "filesystem.read"),
@@ -335,8 +381,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_match_protected_returns_unclassified() {
-        let registry = test_registry();
+    fn no_match_protected_returns_unclassified() {
         // Table with only specific rules, no wildcard
         let file = MappingRulesFile {
             rules: vec![MappingRuleConfig {
@@ -346,8 +391,7 @@ mod tests {
                 action_class: "communication.external.send".to_string(),
             }],
         };
-        let table =
-            MappingTable::from_config(&file, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).unwrap();
 
         assert!(matches!(
             table.find_match("GET", "unknown.host", "/"),
@@ -356,24 +400,24 @@ mod tests {
     }
 
     #[test]
-    fn test_glob_match_exact() {
+    fn glob_match_exact() {
         assert!(glob_match("api.openai.com", "api.openai.com"));
         assert!(!glob_match("api.openai.com", "api.anthropic.com"));
     }
 
     #[test]
-    fn test_glob_match_wildcard_prefix() {
+    fn glob_match_wildcard_prefix() {
         assert!(glob_match("*.openai.com", "api.openai.com"));
         assert!(!glob_match("*.openai.com", "api.anthropic.com"));
     }
 
     #[test]
-    fn test_glob_match_star_matches_all() {
+    fn glob_match_star_matches_all() {
         assert!(glob_match("*", "anything.at.all"));
     }
 
     #[test]
-    fn test_glob_match_path_wildcard() {
+    fn glob_match_path_wildcard() {
         assert!(glob_match("/v1/*/completions", "/v1/chat/completions"));
         assert!(!glob_match("/v1/*/completions", "/v2/chat/completions"));
     }

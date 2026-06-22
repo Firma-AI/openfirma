@@ -83,7 +83,10 @@ impl BackendKind {
             return Self::Wsl2;
         }
 
-        #[allow(unreachable_code)]
+        #[expect(
+            unreachable_code,
+            reason = "fallback satisfies exhaustive return typing after cfg-gated platform branches"
+        )]
         Self::Bwrap
     }
 }

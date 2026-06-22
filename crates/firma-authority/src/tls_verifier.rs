@@ -158,7 +158,6 @@ fn extract_identity(cert_der: &CertificateDer<'_>) -> Option<String> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 mod tests {
     use super::*;
     fn make_allow_list(ids: &[&str]) -> Arc<AuthorizedClientSet> {

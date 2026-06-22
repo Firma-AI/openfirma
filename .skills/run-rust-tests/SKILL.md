@@ -50,7 +50,7 @@ cargo test --doc -p <crate1> -p <crate2>
 ### `all`
 
 ```bash
-make test
+just test
 ```
 
 ### One crate
@@ -75,4 +75,4 @@ cargo test --doc -p <crate-name>
 ## Notes
 
 - `cargo nextest` does not run doctests in this repo.
-- Prefer targeted crate runs while iterating, then `make test` or `make check` at the end.
+- Prefer targeted crate runs while iterating, then `just test` or `just check` at the end.

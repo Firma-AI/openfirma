@@ -54,7 +54,7 @@ If unsure about the correct resolution, ask the user rather than guessing.
 Run:
 
 ```bash
-make check
+just check
 ```
 
 ### 4. Re-check remaining conflicts
@@ -73,7 +73,7 @@ After all conflicts are resolved, confirm no conflicts remain and verify the fin
 
 ```bash
 jj log -r '(<target-revset>) & conflicts()'
-make check
+just check
 ```
 
 ### 6. Cleanup
