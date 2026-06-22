@@ -50,7 +50,6 @@ fn marker_dir_layout_and_developer_cedar() {
         profile_name: "developer",
         firma_exe: fake,
         startup_timeout: Duration::from_secs(5),
-        user_config_path: None,
     })
     .expect("spawn ok");
 

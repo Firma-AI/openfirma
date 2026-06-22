@@ -9,7 +9,8 @@ use std::collections::BTreeSet;
 #[repr(u8)]
 pub enum Decision {
     Allow = 1,
-    Deny,
+    Deny = 2,
+    Abort = 3,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]

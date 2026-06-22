@@ -33,14 +33,6 @@ fn audit_table(value: &toml::Value) -> &toml::value::Table {
         .expect("sidecar.audit table")
 }
 
-fn sidecar_table(value: &toml::Value) -> &toml::value::Table {
-    value
-        .as_table()
-        .and_then(|t| t.get("sidecar"))
-        .and_then(|v| v.as_table())
-        .expect("sidecar table")
-}
-
 /// Default [`SynthesizeRequest`] for tests. Override specific fields with
 /// struct-update syntax: `SynthesizeRequest { monitor_mode: true, ..req(&sock, &out) }`.
 fn req<'a>(sock: &'a Path, out: &'a Path) -> SynthesizeRequest<'a> {
@@ -135,7 +127,11 @@ fn missing_template_writes_minimal_config() {
     let source = synthesize(req(&sock, &out)).expect("synthesize");
     assert_eq!(source, TemplateSource::Minimal);
     let value = read(&out);
-    let sidecar = sidecar_table(&value);
+    let sidecar = value
+        .as_table()
+        .and_then(|t| t.get("sidecar"))
+        .and_then(|v| v.as_table())
+        .expect("sidecar table");
     let interceptor = sidecar
         .get("interceptor")
         .and_then(|v| v.as_table())
@@ -157,18 +153,6 @@ fn missing_template_writes_minimal_config() {
             .get("default_protected")
             .and_then(toml::Value::as_bool),
         Some(true)
-    );
-    let ca = sidecar
-        .get("ca")
-        .and_then(|v| v.as_table())
-        .expect("ca table");
-    assert_eq!(
-        ca.get("dir").and_then(|v| v.as_str()),
-        Some(tmp.path().join("firma-ca").display().to_string()).as_deref()
-    );
-    assert!(
-        value.as_table().and_then(|t| t.get("ca")).is_none(),
-        "CA config must live under [sidecar.ca], not root [ca]"
     );
 }
 

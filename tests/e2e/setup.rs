@@ -75,7 +75,6 @@ impl ScenarioSetup {
         let bin = crate::firma_bin();
         let seed_path = config::issue_capability(
             &bin,
-            &self.state_dir,
             &self.config_dir,
             agent_id,
             session_id,
@@ -116,7 +115,6 @@ impl ScenarioSetup {
 
 // ── FirmaConfigBuilder ────────────────────────────────────────────────────────
 
-#[allow(dead_code)]
 pub struct FirmaConfigBuilder<'a> {
     ctx: &'a ScenarioSetup,
     mode: &'static str,

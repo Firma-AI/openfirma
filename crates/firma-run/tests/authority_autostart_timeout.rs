@@ -41,7 +41,6 @@ fn timeout_kills_child_and_returns_typed_error() {
         profile_name: "developer",
         firma_exe: fake,
         startup_timeout: Duration::from_millis(500),
-        user_config_path: None,
     });
     let Err(err) = result else {
         panic!("must time out")

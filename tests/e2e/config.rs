@@ -35,10 +35,8 @@ pub fn add_mapping_rules(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn issue_capability(
     firma_bin: &Path,
-    _state_dir: &Path,
     cfg_dir: &Path,
     agent_id: &str,
     session_id: &str,
