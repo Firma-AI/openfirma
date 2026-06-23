@@ -19,10 +19,7 @@ fn resolves_explicit_override() {
 }
 
 #[test]
-fn explicit_override_round_trips_even_if_missing() {
-    // resolve_config trusts an explicit --config flag (Flag source); the
-    // not-found branch only triggers during discovery.
+fn explicit_override_errors_if_missing() {
     let cfg_path = std::path::Path::new("/definitely/not/here/firma.toml");
-    let cfg = resolve_stack_config(Some(cfg_path)).expect("resolve");
-    assert_eq!(cfg.config_file, cfg_path);
+    assert!(resolve_stack_config(Some(cfg_path)).is_err());
 }

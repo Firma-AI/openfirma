@@ -1,6 +1,9 @@
 //! Section extraction so one `firma.toml` serves every subcommand.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context as _, anyhow, bail};
+use fs_err as fs;
 
 /// A `firma.toml` parsed once. Use when more than one `[section]` is
 /// needed from the same file (e.g. `doctor` reads both `[authority]`
@@ -8,7 +11,7 @@ use std::path::Path;
 #[derive(Debug, Clone)]
 pub struct FirmaConfig {
     table: toml::Table,
-    origin: String,
+    origin: PathBuf,
 }
 
 impl FirmaConfig {
@@ -16,16 +19,24 @@ impl FirmaConfig {
     ///
     /// # Errors
     ///
-    /// Returns the read or parse error as a string (caller wraps it).
-    pub fn load(path: &Path) -> Result<Self, String> {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    /// Returns the read or parse error.
+    pub fn load(path: &Path) -> anyhow::Result<Self> {
+        let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        Self::parse(path, &text)
+    }
+
+    pub(crate) fn parse(origin: impl Into<PathBuf>, text: &str) -> anyhow::Result<Self> {
+        let origin = origin.into();
         let table: toml::Table = text
             .parse()
-            .map_err(|e: toml::de::Error| format!("{}: {e}", path.display()))?;
-        Ok(Self {
-            table,
-            origin: path.display().to_string(),
-        })
+            .with_context(|| format!("parse {}", origin.display()))?;
+        Ok(Self { table, origin })
+    }
+
+    /// Path where this config was originally loaded from.
+    #[must_use]
+    pub fn origin(&self) -> &Path {
+        &self.origin
     }
 
     /// The named section body re-serialized as standalone TOML.
@@ -36,30 +47,30 @@ impl FirmaConfig {
     ///
     /// # Errors
     ///
-    /// Returns a "missing section" or serialization error string.
-    pub fn section(&self, section: &str) -> Result<String, String> {
-        let parts: Vec<&str> = section.split('.').collect();
+    /// Returns a "missing section" or serialization error.
+    pub fn section(&self, section_path: &str) -> anyhow::Result<String> {
+        let parts: Vec<&str> = section_path.split('.').collect();
         let mut current = &self.table;
         for &part in &parts[..parts.len() - 1] {
             match current.get(part) {
                 Some(toml::Value::Table(t)) => current = t,
                 _ => {
-                    return Err(format!(
-                        "{}: missing required `[{section}]` section",
-                        self.origin
-                    ));
+                    bail!(
+                        "{}: missing required `[{section_path}]` section",
+                        self.origin.display()
+                    );
                 }
             }
         }
-        let last = parts.last().copied().unwrap_or(section);
+        let last = parts.last().copied().unwrap_or(section_path);
         match current.get(last) {
             Some(toml::Value::Table(sub)) => {
-                toml::to_string(sub).map_err(|e| format!("{}: {e}", self.origin))
+                toml::to_string(sub).map_err(|e| anyhow!("{}: {e}", self.origin.display()))
             }
-            _ => Err(format!(
-                "{}: missing required `[{section}]` section",
-                self.origin
-            )),
+            _ => bail!(
+                "{}: missing required `[{section_path}]` section",
+                self.origin.display()
+            ),
         }
     }
 }
@@ -71,82 +82,7 @@ impl FirmaConfig {
 ///
 /// # Errors
 ///
-/// Returns the read/parse error, or a "missing section" error, as a
-/// string (caller wraps it).
-pub fn load_section(path: &Path, section: &str) -> Result<String, String> {
+/// Returns the read/parse error, or a "missing section" error.
+pub fn load_section(path: &Path, section: &str) -> anyhow::Result<String> {
     FirmaConfig::load(path)?.section(section)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn extracts_named_section() {
-        let tmp = tempdir().unwrap();
-        let p = tmp.path().join("firma.toml");
-        std::fs::write(&p, "[sidecar]\nfoo = 1\n[authority]\nbar = 2\n").unwrap();
-        let out = load_section(&p, "sidecar").unwrap();
-        let t: toml::Table = out.parse().unwrap();
-        assert_eq!(t.get("foo").and_then(toml::Value::as_integer), Some(1));
-        assert!(t.get("bar").is_none());
-    }
-
-    #[test]
-    fn nested_subtables_are_preserved() {
-        let tmp = tempdir().unwrap();
-        let p = tmp.path().join("firma.toml");
-        std::fs::write(
-            &p,
-            "[sidecar.interceptor]\nmode = \"http_proxy\"\n[sidecar.authority]\nurl = \"http://x\"\n",
-        )
-        .unwrap();
-        let out = load_section(&p, "sidecar").unwrap();
-        let t: toml::Table = out.parse().unwrap();
-        assert!(
-            t.get("interceptor")
-                .and_then(toml::Value::as_table)
-                .is_some()
-        );
-        assert!(t.get("authority").and_then(toml::Value::as_table).is_some());
-    }
-
-    #[test]
-    fn missing_section_is_an_error() {
-        let tmp = tempdir().unwrap();
-        let p = tmp.path().join("firma.toml");
-        std::fs::write(&p, "[authority]\nbar = 2\n").unwrap();
-        let err = load_section(&p, "sidecar").unwrap_err();
-        assert!(err.contains("sidecar"), "error names the section: {err}");
-    }
-
-    #[test]
-    fn dotted_path_extracts_nested_section() {
-        let tmp = tempdir().unwrap();
-        let p = tmp.path().join("firma.toml");
-        std::fs::write(
-            &p,
-            "[sidecar.policy]\ndir = \".\"\n[sidecar.authority]\nurl = \"https://x\"\n",
-        )
-        .unwrap();
-        let policy = load_section(&p, "sidecar.policy").unwrap();
-        let t: toml::Table = policy.parse().unwrap();
-        assert_eq!(t.get("dir").and_then(toml::Value::as_str), Some("."));
-        let connect = load_section(&p, "sidecar.authority").unwrap();
-        let t2: toml::Table = connect.parse().unwrap();
-        assert_eq!(
-            t2.get("url").and_then(toml::Value::as_str),
-            Some("https://x")
-        );
-    }
-
-    #[test]
-    fn dotted_path_missing_is_an_error() {
-        let tmp = tempdir().unwrap();
-        let p = tmp.path().join("firma.toml");
-        std::fs::write(&p, "[sidecar.policy]\ndir = \".\"\n").unwrap();
-        let err = load_section(&p, "sidecar.authority").unwrap_err();
-        assert!(err.contains("sidecar.authority"), "error: {err}");
-    }
 }

@@ -41,12 +41,12 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     maybe_implicit_init(&args)?;
 
     // Auto-discover firma.toml when --config is not set.
-    let run_config = args.config.clone().or_else(|| {
-        firma_config::resolve_config("run", None, &firma_config::SystemDirs)
-            .ok()
-            .map(|r| r.config_dir.join(firma_config::CONFIG_FILE_NAME))
-            .filter(|p| p.is_file())
-    });
+    let run_config = match &args.config {
+        Some(config) => Some(config.clone()),
+        None => firma_config::SystemDirs::default()
+            .resolve_config(None)?
+            .map(|resolved| resolved.config_file().to_path_buf()),
+    };
 
     let profile = resolve_profile_name(
         args.profile.as_deref(),
@@ -97,7 +97,10 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
     // Spec §4 step 1 + §5: walk-up `./.firma/firma.toml` is the project-local
     // tier, picked up by `firma_config::resolve_config`. If anything in the
     // search path resolves, skip implicit init.
-    if firma_config::resolve_config("run", None, &firma_config::SystemDirs).is_ok() {
+    if firma_config::SystemDirs::default()
+        .resolve_config(None)?
+        .is_some()
+    {
         return Ok(());
     }
 

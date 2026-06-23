@@ -43,22 +43,22 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let resolved = firma_config::resolve_config(
-        "authority",
-        args.config.as_deref(),
-        &firma_config::SystemDirs,
-    )?;
+    let resolved = firma_config::SystemDirs::default()
+        .resolve_config(args.config.as_deref())?
+        .ok_or_else(|| anyhow::anyhow!("no firma.toml found for `authority`"))?;
     tracing::info!(
-        path = %resolved.config_file.display(),
+        path = %resolved.config_file().display(),
         source = ?resolved.source,
         "config resolved"
     );
-    let body = firma_config::load_section(&resolved.config_file, "authority")
+    let body = resolved
+        .config
+        .section("authority")
         .map_err(|e| anyhow::anyhow!("failed to load authority configuration: {e}"))?;
     let tmp_dir = tempfile::tempdir().context("tempdir for authority config")?;
     let tmp_cfg = tmp_dir.path().join("authority.toml");
     std::fs::write(&tmp_cfg, body).context("stage authority config")?;
-    let config = AuthorityConfig::load_resolved(&tmp_cfg, &resolved.config_dir)
+    let config = AuthorityConfig::load_resolved(&tmp_cfg, &resolved.config_dir())
         .context("failed to load authority configuration")?;
 
     match args.command {

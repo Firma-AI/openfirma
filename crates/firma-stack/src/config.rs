@@ -35,15 +35,20 @@ pub struct StackConfig {
 /// Returns [`StackError::ConfigRead`] when no `firma.toml` can be
 /// resolved.
 pub fn resolve_stack_config(cli_override: Option<&Path>) -> Result<StackConfig> {
-    let resolved = firma_config::resolve_config("stack", cli_override, &firma_config::SystemDirs)
+    let resolved = firma_config::SystemDirs::default()
+        .resolve_config(cli_override)
         .map_err(|error| StackError::ConfigRead {
-        path: cli_override.map_or_else(|| PathBuf::from("firma.toml"), Path::to_path_buf),
-        source: std::io::Error::new(std::io::ErrorKind::NotFound, error.to_string()),
-    })?;
-    debug!(config = %resolved.config_file.display(), "resolved unified firma.toml");
+            path: cli_override.map_or_else(|| PathBuf::from("firma.toml"), Path::to_path_buf),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, error.to_string()),
+        })?
+        .ok_or_else(|| StackError::ConfigRead {
+            path: cli_override.map_or_else(|| PathBuf::from("firma.toml"), Path::to_path_buf),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "no firma.toml found"),
+        })?;
+    debug!(config = %resolved.config_file().display(), "resolved unified firma.toml");
     Ok(StackConfig {
         state_dir: None,
-        config_file: resolved.config_file,
+        config_file: resolved.config_file().to_path_buf(),
         firma_bin: None,
     })
 }
@@ -66,7 +71,6 @@ mod tests {
     #[test]
     fn unresolvable_is_error() {
         let missing = Path::new("/definitely/not/here/firma.toml");
-        let cfg = resolve_stack_config(Some(missing)).unwrap();
-        assert_eq!(cfg.config_file, missing);
+        assert!(resolve_stack_config(Some(missing)).is_err());
     }
 }

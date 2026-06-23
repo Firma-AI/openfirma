@@ -13,8 +13,10 @@ workspace = true
 clap = ["dep:clap"]
 
 [dependencies]
+anyhow = { workspace = true }
 clap = { workspace = true, optional = true, features = ["derive"] }
 dirs = { workspace = true }
+fs-err = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }

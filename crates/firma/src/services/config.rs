@@ -445,8 +445,9 @@ fn resolve_config_dir(
         return std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()));
     }
 
-    let default = firma_config::resolve_config("config", None, &firma_config::SystemDirs)
-        .map_or_else(|_| default_output_dir(), |resolved| resolved.config_dir);
+    let default = firma_config::SystemDirs::default()
+        .resolve_config(None)?
+        .map_or_else(default_output_dir, |resolved| resolved.config_dir());
 
     if interactive {
         let s: String = dialoguer::Input::with_theme(theme)
@@ -1094,24 +1095,23 @@ pub fn resolve_audit_log_path(state_dir_flag: Option<&PathBuf>) -> Result<PathBu
         return Ok(state_dir.join("audit.jsonl"));
     }
 
-    if let Ok(resolved) = firma_config::resolve_config("monitor", None, &firma_config::SystemDirs) {
-        let firma_toml = resolved.config_dir.join(firma_config::CONFIG_FILE_NAME);
-        if firma_toml.is_file() {
-            let text = std::fs::read_to_string(&firma_toml).map_err(|error| {
-                format!("read discovered config {}: {error}", firma_toml.display())
-            })?;
-            let value: toml::Value = toml::from_str(&text).map_err(|error| {
-                format!("parse discovered config {}: {error}", firma_toml.display())
-            })?;
-            if let Some(path) = value
-                .get("sidecar")
-                .and_then(|sidecar| sidecar.get("audit"))
-                .and_then(|audit| audit.get("file_path"))
-                .and_then(toml::Value::as_str)
-                .filter(|path| !path.is_empty())
-            {
-                return Ok(PathBuf::from(path));
-            }
+    if let Some(resolved) = firma_config::SystemDirs::default()
+        .resolve_config(None)
+        .map_err(|error| format!("resolve discovered config: {error}"))?
+        && let Ok(body) = resolved.config.section("sidecar.audit")
+    {
+        let value: toml::Value = toml::from_str(&body).map_err(|error| {
+            format!(
+                "parse discovered audit config {}: {error}",
+                resolved.config_file().display()
+            )
+        })?;
+        if let Some(path) = value
+            .get("file_path")
+            .and_then(toml::Value::as_str)
+            .filter(|path| !path.is_empty())
+        {
+            return Ok(PathBuf::from(path));
         }
     }
 

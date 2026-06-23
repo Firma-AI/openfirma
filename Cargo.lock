@@ -1631,8 +1631,10 @@ dependencies = [
 name = "firma-config"
 version = "0.1.1"
 dependencies = [
+ "anyhow",
  "clap",
  "dirs",
+ "fs-err",
  "pretty_assertions",
  "serde",
  "tempfile",

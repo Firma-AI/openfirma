@@ -8,10 +8,10 @@ and `[run]`. Each subcommand reads only its own section; section extraction
 is fail-closed (a missing required section is a hard error).
 
 When `--config` is **omitted**, that `firma.toml` is discovered from
-platform-standard directories (see
+`$FIRMA_CONFIG` or by walking up from `cwd` to `.firma/firma.toml` (see
 [Config Discovery](cli.md#config-discovery)). An explicit `--config <path>`
 only overrides the file location — the file still uses the same sectioned
-shape.
+shape and must be readable and valid TOML.
 
 Configuration is validated at startup. Invalid fields cause the affected
 binary to exit before accepting requests.

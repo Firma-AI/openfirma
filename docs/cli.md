@@ -349,27 +349,22 @@ FIR-104.
 
 When `--config` is **omitted**, every subcommand — `sidecar`
 (`start`/`stop`/`status`), `authority`, `run`, `config`, `monitor`, and
-`doctor` — discovers the same single shared `firma.toml` from
-platform-standard directories. That one file holds top-level
+`doctor` — discovers the same single shared `firma.toml`. That one file holds top-level
 `[project]` / `[sidecar]` / `[authority]` / `[run]` sections; each
-subcommand reads only its own section. The first existing file wins:
+subcommand reads only its own section. The first selected file wins:
 
 1. `--config <path>` flag — always wins. It only relocates the file;
    the file still uses the sectioned schema.
-2. **Project-local `.firma/firma.toml`**, found by walking up from
+2. `$FIRMA_CONFIG` env var if set — overrides walk, points directly to file.
+3. **Project-local `.firma/firma.toml`**, found by walking up from
    `cwd`. The closest ancestor with a `.firma/firma.toml` wins; the
    walk stops at the filesystem root. This is what `firma config` writes.
-3. `$FIRMA_CONFIG` env var if set — overrides walk, points directly to file.
-4. None found and config is required → exit non-zero with a message listing
-   every directory searched.
+4. None found and config is required → exit non-zero. Optional flows such as
+   zero-config `firma run` may continue without a config.
 
-On macOS the user tier is a dual path: `$XDG_CONFIG_HOME/firma` is tried
-first, then `~/.config/firma` (CLI/dev-tool convention, preferred), then
-`~/Library/Application Support/firma`. On Linux `~/.config/firma` and the
-platform default coincide and are de-duplicated. On Windows the
-home-convention tier is the bare `%USERPROFILE%\.firma` dotdir (matching
-agent/dev CLIs such as `.claude` and `.codex`), distinct from the
-`%APPDATA%\Roaming\firma` platform tier tried after it.
+A selected file must be readable and valid TOML. An explicit `--config`,
+`$FIRMA_CONFIG`, or discovered project-local file that cannot be loaded fails
+closed instead of falling through to another tier or to zero-config defaults.
 
 The resolved path and its source are emitted on startup as a single
 `config resolved` INFO line (with `path` and `source` fields) so operators
