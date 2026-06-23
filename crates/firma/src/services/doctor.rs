@@ -106,10 +106,7 @@ async fn build_report(args: Args) -> RenderedReport {
         firma_config::ConfigResolver::default().resolve_config(args.config.as_deref());
     let parsed_config = match &resolved_config {
         Ok(Some(resolved)) => {
-            report.push(config_parse::check_loaded(
-                resolved.config_file(),
-                &resolved.config,
-            ));
+            report.push(config_parse::check_loaded(&resolved.config));
             Some(resolved.config.clone())
         }
         Ok(None) => {

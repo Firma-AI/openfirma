@@ -4,6 +4,7 @@
 //! if either the `[authority]` or `[sidecar]` section is missing or does
 //! not deserialize into its component config type.
 
+#[cfg(test)]
 use std::path::Path;
 
 use crate::doctor::report::Check;
@@ -22,13 +23,13 @@ pub fn check(firma_toml: &Path) -> Check {
         }
     };
 
-    check_loaded(firma_toml, &parsed)
+    check_loaded(&parsed)
 }
 
 /// Validate an already-loaded `firma.toml`.
 #[must_use]
-pub fn check_loaded(firma_toml: &Path, parsed: &firma_config::FirmaConfig) -> Check {
-    let display = firma_toml.display().to_string();
+pub fn check_loaded(parsed: &firma_config::FirmaConfig) -> Check {
+    let display = parsed.origin().display().to_string();
 
     // [authority] is optional — agent-remote configs have no server section.
     if let Ok(body) = parsed.section("authority")
