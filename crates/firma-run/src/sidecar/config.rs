@@ -215,6 +215,11 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
         rebase_template_resource_paths(&mut value, dir)?;
     }
     override_interceptor(&mut value, req.socket_path, req.listen_addr)?;
+    // Pin ca.dir to the marker dir so the MITM CA cert lands where
+    // sidecar_trust_env_overrides expects it (<marker_dir>/firma-ca/).
+    // The default "./firma-ca/" is CWD-relative and would diverge when
+    // firma run's CWD differs from the marker dir.
+    override_ca_dir(&mut value, req.out_path)?;
     if let Some(url) = req.authority_url {
         override_authority_url(&mut value, url)?;
     }
@@ -525,6 +530,27 @@ fn sidecar_table_mut(value: &mut toml::Value) -> Result<&mut toml::value::Table,
 fn override_sidecar_mode(value: &mut toml::Value, mode: &str) -> Result<(), RunError> {
     let sidecar = sidecar_table_mut(value)?;
     sidecar.insert("mode".to_string(), toml::Value::String(mode.to_string()));
+    Ok(())
+}
+
+fn override_ca_dir(value: &mut toml::Value, out_path: &Path) -> Result<(), RunError> {
+    let marker_dir = out_path.parent().ok_or_else(|| {
+        RunError::Internal(format!(
+            "cannot resolve marker dir from synthesized config path {}",
+            out_path.display()
+        ))
+    })?;
+    let ca_dir = marker_dir.join("firma-ca");
+    let sidecar = sidecar_table_mut(value)?;
+    let ca_table = sidecar
+        .entry("ca".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[sidecar.ca] is not a table".into()))?;
+    ca_table.insert(
+        "dir".to_string(),
+        toml::Value::String(ca_dir.display().to_string()),
+    );
     Ok(())
 }
 

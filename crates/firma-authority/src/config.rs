@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Sentinel: unset `policy_dir`.
@@ -12,7 +12,7 @@ pub(crate) const DEFAULT_KEY_FILE: &str = "firma-authority.key";
 ///
 /// Environment variables take precedence over TOML values and use the
 /// `FIRMA_AUTHORITY_` prefix (e.g., `FIRMA_AUTHORITY_LISTEN_ADDR`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AuthorityConfig {
     /// gRPC listen address (default: `[::1]:50051`).
@@ -51,7 +51,7 @@ pub struct AuthorityConfig {
 /// TLS configuration for the Authority gRPC server.
 ///
 /// Both values are required together to enable TLS.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct AuthorityTlsConfig {
     /// Path to the TLS certificate file (PEM). Must be set together with
     /// `tls_key_path`.

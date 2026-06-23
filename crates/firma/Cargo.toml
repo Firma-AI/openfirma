@@ -55,10 +55,18 @@ nix = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+fs-err = { workspace = true }
+insta = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
+serde_repr = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 tempfile = { workspace = true }
+wiremock = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 nix = { workspace = true }
+
+[[test]]
+name = "e2e"
+path = "../../tests/e2e/main.rs"

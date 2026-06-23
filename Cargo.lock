@@ -1562,6 +1562,8 @@ dependencies = [
  "firma-run",
  "firma-sidecar",
  "firma-stack",
+ "fs-err",
+ "insta",
  "miette",
  "nix 0.31.3",
  "owo-colors",
@@ -1572,6 +1574,7 @@ dependencies = [
  "rcgen",
  "serde",
  "serde_json",
+ "serde_repr",
  "serde_yaml",
  "sha2 0.11.0",
  "strum 0.28.0",
@@ -1587,6 +1590,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "windows-sys 0.59.0",
+ "wiremock",
  "x509-parser",
 ]
 
@@ -1875,6 +1879,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs-err"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73fde052dbfc920003cfd2c8e2c6e6d4cc7c1091538c3a24226cec0665ab08c0"
+dependencies = [
+ "autocfg",
 ]
 
 [[package]]
@@ -2558,6 +2571,9 @@ checksum = "86f0f8fee8c926415c58d6ae43a08523a26faccb2323f5e6b644fe7dd4ef6b82"
 dependencies = [
  "console 0.16.3",
  "once_cell",
+ "pest",
+ "pest_derive",
+ "serde",
  "similar",
  "tempfile",
 ]
@@ -4946,6 +4962,17 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "serde_repr"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "175ee3e80ae9982737ca543e96133087cbd9a485eecc3bc4de9c1a37b47ea59c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

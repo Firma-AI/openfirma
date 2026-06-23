@@ -35,6 +35,9 @@ test:
 build:
   cargo build --all-features --all-targets
 
+e2e:
+  cargo nextest run -p firma --test e2e --run-ignored all
+
 audit:
   cargo audit --deny warnings
 

@@ -1,0 +1,100 @@
+name: E2E Tests
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  e2e:
+    name: e2e (${{ matrix.os }}, ${{ matrix.agent.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        agent:
+          - name: claude
+            package: "@anthropic-ai/claude-code"
+          - name: codex
+            package: "@openai/codex"
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
+        with:
+          rustflags: ""
+          cache: false
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@30b5ca8b54e1dcffd9548bc87ede1531310fdc67 # v1.20.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Load tool versions
+        shell: bash
+        run: grep -E '^[A-Z0-9_]+=' tool-versions.env >> "$GITHUB_ENV"
+      - name: Install cargo-nextest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: command -v cargo-nextest || cargo binstall -y --force --locked cargo-nextest@$CARGO_NEXTEST_VERSION
+        shell: bash
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install bubblewrap (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y bubblewrap
+
+      # Ubuntu 24.04 ships kernel.apparmor_restrict_unprivileged_userns=1, which
+      # transitions bwrap to a profile that strips CAP_NET_ADMIN inside its user
+      # namespace, so it cannot bring up loopback (RTM_NEWADDR). Install the
+      # targeted AppArmor profile that lets bwrap keep its caps in the userns.
+      - name: Allow bwrap user namespaces via AppArmor profile (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo tee /etc/apparmor.d/bwrap >/dev/null <<'EOF'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+              userns,
+              include if exists <local/bwrap>
+          }
+          EOF
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+
+      - name: Install ${{ matrix.agent.name }}
+        run: |
+          npm install -g '${{ matrix.agent.package }}'
+          ${{ matrix.agent.name }} --version
+
+      - name: Authenticate codex
+        if: matrix.agent.name == 'codex'
+        run: printenv OPENAI_API_KEY | codex login --with-api-key
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      # nextest builds the firma binary as part of the e2e test; firma_bin()
+      # reads its path from CARGO_BIN_EXE_firma.
+      - name: Run e2e tests
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: cargo nextest run -p firma --test e2e --run-ignored all -E 'test(/${{ matrix.agent.name }}::/)'
