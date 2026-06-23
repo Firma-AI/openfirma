@@ -114,7 +114,11 @@ pub async fn run_scenario(
     };
 
     let audit_path = state_dir.join("audit.jsonl");
-    let firma_audit = FirmaAuditTrail::try_new(&audit_path)?;
+    // Drop the agent's own provider allow-traffic before assertions: it is
+    // implied by a successful run and varies by platform, so it must not reach
+    // deterministic snapshots.
+    let firma_audit =
+        FirmaAuditTrail::try_new(&audit_path)?.exclude_provider_allow_events(ctx.agent.kind);
 
     scenario
         .assert_enforcement(&ctx, &enforcement_phase, &firma_audit)

@@ -5,6 +5,22 @@ pub enum AgentKind {
     Codex,
 }
 
+impl AgentKind {
+    /// Domains the agent contacts to reach its own model provider.
+    ///
+    /// This traffic is incidental to enforcement scenarios and varies by
+    /// platform and agent version (e.g. codex dials `files.openai.com` on
+    /// macOS but not Linux), so tests filter it out of the audit trail to keep
+    /// snapshots deterministic across operating systems.
+    #[must_use]
+    pub fn provider_domains(self) -> &'static [&'static str] {
+        match self {
+            Self::Claude => &["anthropic.com"],
+            Self::Codex => &["openai.com", "chatgpt.com"],
+        }
+    }
+}
+
 /// An agent the harness can run, optionally carrying extra CLI flags.
 ///
 /// Flags passed via `.args()` are inserted before the subcommand so they are

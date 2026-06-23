@@ -3,13 +3,5 @@ source: crates/firma/../../tests/e2e/scenarios/simple_prompt.rs
 expression: "&audit"
 ---
 FirmaAuditTrail(
-    {
-        AuditEvent {
-            action: "communication.external.send",
-            resource: "api.anthropic.com/",
-            decision: Allow,
-            deny_reason: "",
-            dispatch_status: 200,
-        },
-    },
+    {},
 )
