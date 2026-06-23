@@ -150,10 +150,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         let resolved_user_config = firma_config::ConfigResolver::default()
             .resolve_config(args.user_config_path.as_deref())
             .map_err(|error| RunError::ConfigParse {
-                path: args
-                    .user_config_path
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from("firma.toml")),
+                path: error.path.clone(),
                 reason: error.to_string(),
             })?;
         let user_config_path: Option<PathBuf> = resolved_user_config.as_ref().map_or_else(

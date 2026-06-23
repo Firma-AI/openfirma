@@ -38,7 +38,7 @@ pub fn resolve_stack_config(cli_override: Option<&Path>) -> Result<StackConfig> 
     let resolved = firma_config::ConfigResolver::default()
         .resolve_config(cli_override)
         .map_err(|error| StackError::ConfigRead {
-            path: cli_override.map_or_else(|| PathBuf::from("firma.toml"), Path::to_path_buf),
+            path: error.path.clone(),
             source: std::io::Error::new(std::io::ErrorKind::NotFound, error.to_string()),
         })?
         .ok_or_else(|| StackError::ConfigRead {
