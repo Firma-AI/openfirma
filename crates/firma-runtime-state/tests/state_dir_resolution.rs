@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use firma_stack::state_dir::resolve_state_dir_from;
+use firma_runtime_state::state_dir::resolve_state_dir_from;
 
 #[test]
 fn flag_wins() {

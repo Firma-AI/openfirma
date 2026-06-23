@@ -6,8 +6,8 @@ use std::process::Command;
 use tracing::debug;
 
 use crate::error::Result;
-use crate::pidfile;
 use crate::platform::{Group, Platform, SpawnedChild, SystemPlatform};
+use firma_runtime_state::pidfile;
 
 #[derive(Clone, Copy)]
 pub struct SpawnRequest<'a> {

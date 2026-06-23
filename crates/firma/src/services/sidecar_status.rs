@@ -8,8 +8,8 @@
 use std::fmt::Write as _;
 use std::process::ExitCode;
 
-use firma_stack::sidecar_markers::SidecarEntry;
-use firma_stack::status::State;
+use firma_runtime_state::sidecar_markers::SidecarEntry;
+use firma_runtime_state::status::State;
 
 use crate::args::sidecar::StatusArgs;
 
@@ -112,13 +112,13 @@ fn collect(args: &StatusArgs) -> anyhow::Result<Vec<SidecarEntry>> {
     if args.daemon {
         return collect_daemon();
     }
-    let runtime_dir = firma_stack::default_runtime_dir();
+    let runtime_dir = firma_runtime_state::default_runtime_dir();
     if let Some(id) = &args.sandbox_id {
-        return Ok(firma_stack::sidecar_markers::get(&runtime_dir, id)?
+        return Ok(firma_runtime_state::sidecar_markers::get(&runtime_dir, id)?
             .into_iter()
             .collect());
     }
-    Ok(firma_stack::sidecar_markers::list(&runtime_dir)?)
+    Ok(firma_runtime_state::sidecar_markers::list(&runtime_dir)?)
 }
 
 /// Probe the long-lived daemon sidecar via the stack status mechanism and
@@ -127,7 +127,7 @@ fn collect(args: &StatusArgs) -> anyhow::Result<Vec<SidecarEntry>> {
 /// Returns an empty `Vec` when no `sidecar` component is found in the stack
 /// status (e.g., the daemon is not running and left no pidfile).
 fn collect_daemon() -> anyhow::Result<Vec<SidecarEntry>> {
-    let state_dir = firma_stack::resolve_state_dir(None)?;
+    let state_dir = firma_runtime_state::resolve_state_dir(None)?;
     let stack = firma_stack::status::status(&state_dir)?;
     let Some(c) = stack.components.into_iter().find(|c| c.name == "sidecar") else {
         return Ok(Vec::new());

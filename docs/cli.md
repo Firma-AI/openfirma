@@ -336,9 +336,9 @@ drift or a mid-write race.
 
 ### `--daemon` path note
 
-`--daemon` probes the long-lived daemon sidecar by reading `firma-stack`'s
-stack state over `resolve_state_dir(None)` — the same path the daemon sidecar
-actually uses: `$XDG_RUNTIME_DIR/firma` (fallback `/tmp/firma-$UID`).
+`--daemon` probes the long-lived daemon sidecar by reading stack state from the
+runtime state dir — the same path the daemon sidecar actually uses:
+`$XDG_RUNTIME_DIR/firma` (fallback `/tmp/firma-$UID`).
 
 The original FIR-104 spec text referenced `$XDG_DATA_HOME/firma/sidecar/state/`
 for the daemon path. Nothing writes that directory today, so the implementation

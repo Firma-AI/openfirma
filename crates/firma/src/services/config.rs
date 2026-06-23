@@ -1136,7 +1136,7 @@ fn resolve_state_dir_with_default(
     {
         return Ok(PathBuf::from(env));
     }
-    firma_stack::resolve_state_dir(None).map_err(|error| format!("state_dir: {error}"))
+    firma_runtime_state::resolve_state_dir(None).map_err(|error| format!("state_dir: {error}"))
 }
 
 /// Scaffold from an already-resolved plan. Called by `firma run` on first use

@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info};
 
 use crate::error::Result;
-use crate::pidfile;
 use crate::platform::{Platform, SystemPlatform};
+use firma_runtime_state::pidfile;
 
 /// Result of a [`stop`] call.
 #[derive(Debug, Clone)]

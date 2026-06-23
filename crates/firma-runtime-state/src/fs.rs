@@ -1,4 +1,4 @@
-//! Filesystem helpers shared across the stack and its dependents.
+//! Filesystem helpers for private runtime state.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -9,14 +9,18 @@ pub enum CreatePrivateDirError {
     /// Directory creation failed.
     #[error("failed to create {path}: {source}")]
     Create {
+        /// Path that could not be created.
         path: PathBuf,
+        /// Underlying I/O error.
         #[source]
         source: io::Error,
     },
     /// Setting mode 0700 on an existing directory failed.
     #[error("failed to set mode 0700 on {path}: {source}")]
     Chmod {
+        /// Path whose permissions could not be updated.
         path: PathBuf,
+        /// Underlying I/O error.
         #[source]
         source: io::Error,
     },

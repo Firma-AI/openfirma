@@ -190,7 +190,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         };
         let firma_exe = std::env::current_exe()
             .map_err(|e| RunError::Internal(format!("resolve current_exe: {e}")))?;
-        let runtime_dir = firma_stack::runtime_paths::default_runtime_dir();
+        let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
         let mut prompt = crate::authority::StdAuthorityPrompt;
         let authority = crate::routing::resolve_authority(
             &identity,

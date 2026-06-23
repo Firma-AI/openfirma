@@ -8,7 +8,7 @@
 use std::fs;
 use std::path::Path;
 
-use firma_stack::MetadataFile;
+use firma_runtime_state::MetadataFile;
 
 fn write_marker(run_dir: &Path, sandbox_id: &str, pid: u32) {
     write_marker_with_listen(run_dir, sandbox_id, pid, None);
@@ -53,8 +53,8 @@ fn metadata_file_parses_all_fields() {
     assert_eq!(meta.started_at, "2026-05-18T10:00:00Z");
 }
 
-use firma_stack::sidecar_markers::probe_entry;
-use firma_stack::status::State;
+use firma_runtime_state::sidecar_markers::probe_entry;
+use firma_runtime_state::status::State;
 
 #[test]
 fn live_pid_no_socket_is_unhealthy() {
@@ -185,7 +185,7 @@ fn live_pid_with_listening_socket_is_running() {
     assert_eq!(entry.state, State::Running);
 }
 
-use firma_stack::sidecar_markers::{gc_stale, get, list};
+use firma_runtime_state::sidecar_markers::{gc_stale, get, list};
 
 #[test]
 fn list_skips_and_gcs_dead_markers() {

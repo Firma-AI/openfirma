@@ -1,25 +1,18 @@
 //! Reader half of the per-run sidecar marker contract.
-//!
-//! The writer is `firma-run::sidecar::metadata::Metadata`. `firma-stack`
-//! must not depend on `firma-run` (that would cycle), so [`MetadataFile`]
-//! is a hand-mirrored deserialize twin. Any field change in the writer
-//! must be mirrored here in lockstep.
 
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::runtime_paths::{run_dir_from, run_entry_from};
 
 /// Connect timeout for the TCP liveness probe of an `http_proxy` interceptor.
-/// Matches the daemon-mode port probe in [`crate::status`].
-const TCP_PROBE_TIMEOUT: Duration = Duration::from_millis(200);
+pub const TCP_PROBE_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// On-disk schema of `<runtime>/run/<sandbox_id>/metadata.toml`.
-/// Mirror of `firma-run::sidecar::metadata::Metadata`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MetadataFile {
     /// Sandbox identifier for this run.
     pub sandbox_id: String,
@@ -45,7 +38,7 @@ pub struct MetadataFile {
 }
 
 /// One row of `firma sidecar status`. Serialized verbatim by `--json`.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SidecarEntry {
     /// Sandbox identifier for this run.
     pub sandbox_id: String,
@@ -83,17 +76,6 @@ fn socket_responds(_sock: &Path) -> bool {
 }
 
 /// Reachability probe for a per-run sidecar's interceptor endpoint.
-///
-/// Per-run sidecars expose one of two interceptor transports depending on the
-/// resolved run profile: an `http_proxy` interceptor bound to a loopback TCP
-/// port, or a Unix-domain socket. `listen_str` is the address recorded in
-/// `metadata.toml`; when it parses as a [`SocketAddr`] the endpoint is probed
-/// with a bounded TCP connect, otherwise `listen_path` is probed as a UDS. A
-/// successful connect means the sidecar is accepting connections.
-///
-/// This is the FIR-195 fix: the previous probe unconditionally connected to
-/// `<marker_dir>/sidecar.sock`, which does not exist for an `http_proxy`
-/// sidecar, so a healthy per-run sidecar was reported `unhealthy`.
 fn endpoint_responds(listen_str: &str, listen_path: &Path) -> bool {
     listen_str.parse::<SocketAddr>().map_or_else(
         |_| socket_responds(listen_path),
@@ -116,13 +98,11 @@ fn marker_uptime_secs(marker_dir: &Path) -> Option<u64> {
 /// stale: we never delete a directory we cannot understand, since it may belong
 /// to a live sidecar (deleting it would orphan its socket).
 fn is_stale(marker_dir: &Path) -> bool {
-    use crate::platform::{Platform, SystemPlatform};
-
     let Ok(text) = std::fs::read_to_string(marker_dir.join("metadata.toml")) else {
         return false;
     };
     match toml::from_str::<MetadataFile>(&text) {
-        Ok(meta) => !SystemPlatform::is_alive(meta.pid),
+        Ok(meta) => !crate::process::is_alive(meta.pid),
         Err(_) => false,
     }
 }
@@ -132,20 +112,20 @@ fn is_stale(marker_dir: &Path) -> bool {
 ///
 /// # Errors
 ///
-/// Returns [`crate::error::StackError::Io`] if the `run/` dir exists but
+/// Returns [`crate::error::RuntimeStateError::Io`] if the `run/` dir exists but
 /// cannot be enumerated.
 pub fn gc_stale(runtime_dir: &Path) -> crate::error::Result<Vec<String>> {
-    use crate::error::StackError;
+    use crate::error::RuntimeStateError;
 
     let run_dir = run_dir_from(runtime_dir);
     let read = match std::fs::read_dir(&run_dir) {
         Ok(r) => r,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(StackError::Io(e)),
+        Err(e) => return Err(RuntimeStateError::Io(e)),
     };
     let mut removed = Vec::new();
     for entry in read {
-        let entry = entry.map_err(StackError::Io)?;
+        let entry = entry.map_err(RuntimeStateError::Io)?;
         let path = entry.path();
         if path.is_dir()
             && is_stale(&path)
@@ -169,29 +149,29 @@ pub fn gc_stale(runtime_dir: &Path) -> crate::error::Result<Vec<String>> {
 ///
 /// # Errors
 ///
-/// Returns [`crate::error::StackError::Io`] if `run/` exists but cannot be
+/// Returns [`crate::error::RuntimeStateError::Io`] if `run/` exists but cannot be
 /// enumerated, or any I/O error other than `NotFound` from [`probe_entry`].
 pub fn list(runtime_dir: &Path) -> crate::error::Result<Vec<SidecarEntry>> {
-    use crate::error::StackError;
+    use crate::error::RuntimeStateError;
 
     gc_stale(runtime_dir)?;
     let run_dir = run_dir_from(runtime_dir);
     let read = match std::fs::read_dir(&run_dir) {
         Ok(r) => r,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(StackError::Io(e)),
+        Err(e) => return Err(RuntimeStateError::Io(e)),
     };
     let mut entries = Vec::new();
     for dir_entry in read {
-        let dir_entry = dir_entry.map_err(StackError::Io)?;
+        let dir_entry = dir_entry.map_err(RuntimeStateError::Io)?;
         let path = dir_entry.path();
         if !path.is_dir() {
             continue;
         }
         match probe_entry(&path) {
             Ok(entry) => entries.push(entry),
-            Err(StackError::MarkerParse { .. }) => {}
-            Err(StackError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(RuntimeStateError::MarkerParse { .. }) => {}
+            Err(RuntimeStateError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(other) => return Err(other),
         }
     }
@@ -222,21 +202,21 @@ pub fn get(runtime_dir: &Path, sandbox_id: &str) -> crate::error::Result<Option<
 ///
 /// # Errors
 ///
-/// Returns [`crate::error::StackError::Io`] when `metadata.toml` cannot be
-/// read and [`crate::error::StackError::MarkerParse`] on parse failure
+/// Returns [`crate::error::RuntimeStateError::Io`] when `metadata.toml` cannot be
+/// read and [`crate::error::RuntimeStateError::MarkerParse`] on parse failure
 /// (fail-closed: an unreadable marker is surfaced, never silently treated as
 /// healthy).
 pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
-    use crate::error::StackError;
-    use crate::platform::{Platform, SystemPlatform};
+    use crate::error::RuntimeStateError;
     use crate::status::State;
 
     let meta_path = marker_dir.join("metadata.toml");
     let text = std::fs::read_to_string(&meta_path)?;
-    let meta: MetadataFile = toml::from_str(&text).map_err(|source| StackError::MarkerParse {
-        path: meta_path.clone(),
-        source: Box::new(source),
-    })?;
+    let meta: MetadataFile =
+        toml::from_str(&text).map_err(|source| RuntimeStateError::MarkerParse {
+            path: meta_path.clone(),
+            source: Box::new(source),
+        })?;
 
     // Legacy markers (pre-FIR-195) record no `listen`; fall back to the
     // conventional UDS path so their probe behavior is unchanged.
@@ -245,7 +225,7 @@ pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
     } else {
         PathBuf::from(&meta.listen)
     };
-    let state = if !SystemPlatform::is_alive(meta.pid) {
+    let state = if !crate::process::is_alive(meta.pid) {
         State::Stopped
     } else if endpoint_responds(&meta.listen, &listen) {
         State::Running

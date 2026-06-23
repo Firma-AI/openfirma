@@ -18,6 +18,7 @@ anyhow.workspace = true
 clap = { workspace = true, features = ["color", "derive", "error-context", "help", "std", "suggestions", "usage"] }
 crossterm = "0.28"
 firma-config = { workspace = true }
+firma-runtime-state = { workspace = true }
 firma-stack = { workspace = true }
 ratatui = "0.30"
 serde.workspace = true

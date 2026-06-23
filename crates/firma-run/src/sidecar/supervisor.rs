@@ -269,7 +269,7 @@ impl SidecarSupervisor {
             );
         };
 
-        firma_stack::pidfile::write(&pid_path, pid)
+        firma_runtime_state::pidfile::write(&pid_path, pid)
             .map_err(|error| RunError::Internal(format!("write sidecar.pid: {error}")))?;
         crate::sidecar::metadata::write(
             &metadata_path,

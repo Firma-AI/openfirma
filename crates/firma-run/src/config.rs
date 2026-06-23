@@ -924,17 +924,17 @@ const MANAGED_SECCOMP_POLICY: &str = include_str!("../seccomp/generic-local-comm
 /// To override, set `FIRMA_RUN_MANAGED_SECCOMP_POLICY_PATH` or `seccomp_policy.source_policy_path` in the profile config.
 /// Creates the directory with restricted permissions (0o700/0o600).
 fn ensure_managed_policy_path() -> PathBuf {
-    let dir = firma_stack::runtime_paths::default_runtime_dir().join("seccomp");
+    let dir = firma_runtime_state::runtime_paths::default_runtime_dir().join("seccomp");
     write_managed_policy_to_dir(&dir)
 }
 
 fn write_managed_policy_to_dir(dir: &std::path::Path) -> PathBuf {
     let path = dir.join(DEFAULT_MANAGED_POLICY_FILE);
-    if let Err(error) = firma_stack::fs::create_private_dir_all(dir) {
+    if let Err(error) = firma_runtime_state::fs::create_private_dir_all(dir) {
         tracing::warn!(%error, "failed to create seccomp policy dir; falling back to unextracted path");
         return path;
     }
-    match firma_stack::fs::write_private_file(&path, MANAGED_SECCOMP_POLICY.as_bytes()) {
+    match firma_runtime_state::fs::write_private_file(&path, MANAGED_SECCOMP_POLICY.as_bytes()) {
         Ok(()) => {
             tracing::debug!(path = %path.display(), "wrote default managed seccomp policy");
         }
@@ -944,7 +944,7 @@ fn write_managed_policy_to_dir(dir: &std::path::Path) -> PathBuf {
 }
 
 fn default_managed_artifact_dir() -> PathBuf {
-    let dir = firma_stack::runtime_paths::default_runtime_dir().join("seccomp-artifacts");
+    let dir = firma_runtime_state::runtime_paths::default_runtime_dir().join("seccomp-artifacts");
     tracing::debug!(path = %dir.display(), "seccomp artifact dir");
     dir
 }
