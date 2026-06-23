@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - "v*.*.*"
-    branches:
-      - fir-368-e2e-tests
   workflow_dispatch:
 
 permissions:
