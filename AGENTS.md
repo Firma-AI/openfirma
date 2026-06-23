@@ -41,11 +41,13 @@ Do not use `.unwrap()`, `.expect()`, `panic!()`, or `unsafe`. Prefer
 
 Some contributors use Git, some use Jujutsu.
 
-- If the repository has a `.jj/` directory, prefer `jj` commands for history,
-  diff, conflict resolution, and changeset manipulation.
-- If the repository does not have a `.jj/` directory, use Git.
-- Do not assume every clone uses `jj`; detect it from the working copy before
-  choosing commands.
+- Invoke `jj` from the working copy to determine whether the local clone uses
+  Jujutsu; do not infer this by inspecting the filesystem for `.jj/`.
+- If the `jj` probe succeeds, prefer `jj` commands for history, diff, conflict
+  resolution, and changeset manipulation.
+- If the `jj` probe fails because the clone is not a Jujutsu workspace, use Git.
+- Do not assume every clone uses `jj`; detect the active VCS before choosing
+  commands.
 - When giving user-facing revision identifiers or instructions, match the VCS
   actually in use in that clone.
 
