@@ -152,6 +152,9 @@ fn project_local_found_in_cwd() {
 }
 
 #[test]
+// Windows doesn't let a process delete the directory that's currently set as its current
+// working directory.
+#[cfg(unix)]
 fn project_local_fails_if_we_cannot_determine_cwd() {
     helper::run_isolated(|root| {
         let provider = ConfigResolver::default().walk_up_to(root);
