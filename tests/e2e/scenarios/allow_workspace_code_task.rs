@@ -1,22 +1,13 @@
-use std::path::PathBuf;
-use std::sync::OnceLock;
-
 use anyhow::Context;
+use std::path::PathBuf;
 
 use crate::audit::FirmaAuditTrail;
 use crate::scenario::{EnforcementScenario, PhaseOutput};
 use crate::setup::ScenarioSetup;
 
+#[derive(Default)]
 pub struct AllowWorkspaceCodeTask {
-    fib_main: OnceLock<PathBuf>,
-}
-
-impl AllowWorkspaceCodeTask {
-    pub fn new() -> Self {
-        Self {
-            fib_main: OnceLock::new(),
-        }
-    }
+    fib_main: PathBuf,
 }
 
 impl EnforcementScenario for AllowWorkspaceCodeTask {
@@ -24,12 +15,10 @@ impl EnforcementScenario for AllowWorkspaceCodeTask {
         "allow_workspace_code_task"
     }
 
-    fn setup(&self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
+    fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.firma_config().run()?;
         let fib_dir = ctx.workspace_dir.join("fib");
-        self.fib_main
-            .set(fib_dir.join("src").join("main.rs"))
-            .map_err(|_| anyhow::anyhow!("fib_main already set"))?;
+        self.fib_main = fib_dir.join("src").join("main.rs");
         Ok(())
     }
 
@@ -74,23 +63,18 @@ impl AllowWorkspaceCodeTask {
             anyhow::bail!("agent failed: {}", output.agent.stderr);
         }
 
-        let main_path = self
-            .fib_main
-            .get()
-            .ok_or_else(|| anyhow::anyhow!("fib_main path not set"))?;
-
-        let src = std::fs::read_to_string(main_path)
-            .with_context(|| format!("read {}", main_path.display()))?;
+        let src = fs_err::read_to_string(&self.fib_main).context("read")?;
         anyhow::ensure!(
             src.contains("fn fib"),
             "fib/src/main.rs missing 'fn fib':\n{src}"
         );
 
-        let fib_dir = main_path
+        let fib_dir = self
+            .fib_main
             .parent()
             .and_then(std::path::Path::parent)
             .ok_or_else(|| {
-                anyhow::anyhow!("unexpected fib path structure: {}", main_path.display())
+                anyhow::anyhow!("unexpected fib path structure: {}", self.fib_main.display())
             })?;
 
         let test_out = std::process::Command::new("cargo")

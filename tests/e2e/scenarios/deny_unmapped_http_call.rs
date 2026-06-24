@@ -12,7 +12,7 @@ impl EnforcementScenario for DenyUnmappedHttpCall {
         "deny_unmapped_http_call"
     }
 
-    fn setup(&self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
+    fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.git_init_workspace()?;
         ctx.firma_config().run()?;
         // No mapping rule registered; firma must deny the unclassified request.

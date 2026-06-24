@@ -20,7 +20,7 @@ pub trait EnforcementScenario: Send + Sync {
 
     /// Configure the scenario: register HTTP mock routes, add mapping rules,
     /// append Cedar policy rules, configure sandbox mounts, etc.
-    fn setup(&self, _ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
+    fn setup(&mut self, _ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         Ok(())
     }
 

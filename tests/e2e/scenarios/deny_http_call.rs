@@ -12,7 +12,7 @@ impl EnforcementScenario for DenyHttpCall {
         "deny_http_call"
     }
 
-    fn setup(&self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
+    fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.firma_config().run()?;
         // Map to `communication.internal.send`: the host is classified, so this
         // is not an unmapped request — the deny comes from the capability stage.

@@ -42,7 +42,7 @@ pub struct RunTimeoutError {
 /// enforcing a task the agent cannot complete unconfined.
 /// Phase 2 (enforcement): agent runs through `firma run`.
 pub async fn run_scenario(
-    scenario: &dyn EnforcementScenario,
+    scenario: &mut dyn EnforcementScenario,
     agent: &Agent,
 ) -> Result<(), anyhow::Error> {
     let mock_server = Arc::new(MockServer::start().await);

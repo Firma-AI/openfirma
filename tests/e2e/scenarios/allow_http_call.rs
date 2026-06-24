@@ -13,17 +13,17 @@ use crate::setup::ScenarioSetup;
 /// posture, so it is default-denied by Cedar until the scenario adds its own
 /// `permit` rule. The minted seed also covers `communication.external.send` so
 /// the agent can still reach its own provider.
-pub struct AllowViaPolicy;
+pub struct AllowHttpCall;
 
-const SESSION_ID: &str = "allow-via-policy-session";
+const SESSION_ID: &str = "some-session";
 const MOCK_PATH: &str = "/allow";
 
-impl EnforcementScenario for AllowViaPolicy {
+impl EnforcementScenario for AllowHttpCall {
     fn name(&self) -> &'static str {
-        "allow_via_policy"
+        "allow_http_call"
     }
 
-    fn setup(&self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
+    fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.git_init_workspace()?;
         ctx.firma_config().run()?;
         let addr = ctx.mock_server.address().to_string();

@@ -9,7 +9,7 @@ impl EnforcementScenario for BlockRawTcpEgress {
         "block_raw_tcp_egress"
     }
 
-    fn setup(&self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
+    fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.git_init_workspace()?;
         ctx.firma_config().run()?;
         Ok(())

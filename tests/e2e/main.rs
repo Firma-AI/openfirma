@@ -44,7 +44,7 @@ fn default_agent(kind: AgentKind) -> agent::Agent {
 }
 
 async fn drive_scenario_for_agent(
-    scenario: &dyn EnforcementScenario,
+    scenario: &mut dyn EnforcementScenario,
     kind: AgentKind,
 ) -> Result<(), anyhow::Error> {
     let agent = default_agent(kind);
@@ -83,7 +83,7 @@ macro_rules! scenario_tests {
                 #[tokio::test]
                 #[ignore = "integration test — run with --include-ignored"]
                 async fn $name() -> Result<(), anyhow::Error> {
-                    super::drive_scenario_for_agent(&$scenario, agent_kind!($agent)).await
+                    super::drive_scenario_for_agent(&mut $scenario, agent_kind!($agent)).await
                 }
             )*
         }
@@ -94,13 +94,13 @@ scenario_tests! {
     [claude, codex];
     (
         simple_prompt                => scenarios::SimplePrompt,
-        allow_via_policy             => scenarios::AllowViaPolicy,
-        allow_workspace_code_task    => scenarios::AllowWorkspaceCodeTask::new(),
+        allow_http_call              => scenarios::AllowHttpCall,
+        allow_workspace_code_task    => scenarios::AllowWorkspaceCodeTask::default(),
         deny_forbidden_http_resource => scenarios::DenyForbiddenHttpResource,
         deny_unmapped_http_call      => scenarios::DenyUnmappedHttpCall,
         deny_http_call               => scenarios::DenyHttpCall,
         block_raw_tcp_egress         => scenarios::BlockRawTcpEgress,
-        fs_read_deny                 => scenarios::FsReadDeny::new(),
-        fs_delete_deny               => scenarios::FsDeleteDeny::new(),
+        fs_read_deny                 => scenarios::FsReadDeny::default(),
+        fs_delete_deny               => scenarios::FsDeleteDeny::default(),
     )
 }

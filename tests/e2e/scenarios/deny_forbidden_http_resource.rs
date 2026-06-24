@@ -12,7 +12,7 @@ impl EnforcementScenario for DenyForbiddenHttpResource {
         "deny_forbidden_http_resource"
     }
 
-    fn setup(&self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
+    fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.git_init_workspace()?;
         ctx.firma_config().run()?;
         let addr = ctx.mock_server.address().to_string();

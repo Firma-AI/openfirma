@@ -1,22 +1,13 @@
-use std::path::PathBuf;
-use std::sync::OnceLock;
-
 use anyhow::Context;
+use std::path::PathBuf;
 
 use crate::audit::FirmaAuditTrail;
 use crate::scenario::{EnforcementScenario, PhaseOutput};
 use crate::setup::ScenarioSetup;
 
+#[derive(Default)]
 pub struct FsReadDeny {
-    secrets_file: OnceLock<PathBuf>,
-}
-
-impl FsReadDeny {
-    pub fn new() -> Self {
-        Self {
-            secrets_file: OnceLock::new(),
-        }
-    }
+    secrets_file: PathBuf,
 }
 
 impl EnforcementScenario for FsReadDeny {
@@ -24,14 +15,10 @@ impl EnforcementScenario for FsReadDeny {
         "fs_read_deny"
     }
 
-    fn setup(&self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
+    fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.firma_config().run()?;
-        let path = ctx.protected_dir.join("secrets.txt");
-        std::fs::write(&path, "secret-value-42\n")
-            .with_context(|| format!("write {}", path.display()))?;
-        self.secrets_file
-            .set(path)
-            .map_err(|_| anyhow::anyhow!("secrets_file already set"))?;
+        self.secrets_file = ctx.protected_dir.join("secrets.txt");
+        fs_err::write(&self.secrets_file, "secret-value-42\n").context("write secret")?;
         Ok(())
     }
 
@@ -65,12 +52,10 @@ impl EnforcementScenario for FsReadDeny {
         if output.agent.success && output.agent.stdout.contains("secret-value-42") {
             anyhow::bail!("agent read the protected file — sandbox did not block");
         }
-        if let Some(path) = self.secrets_file.get()
-            && !path.exists()
-        {
+        if !self.secrets_file.exists() {
             anyhow::bail!(
                 "secrets file was deleted — unexpected side effect: {}",
-                path.display()
+                self.secrets_file.display()
             );
         }
         Ok(())
