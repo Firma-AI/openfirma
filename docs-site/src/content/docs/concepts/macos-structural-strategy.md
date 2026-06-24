@@ -175,7 +175,7 @@ Recommendation from scoring: pursue Option A as the primary path, keep ESF as an
 - Run MACOS-001 through MACOS-009 from `examples/firma-run/e2e/macos-structural-assertions.md` on macOS 12+ Apple Silicon and Intel.
 - Include raw socket, proxy-env-unset, child process, direct DNS, policy deny, startup sidecar-down, and mid-session sidecar-loss cases.
 - Keep the runtime claim as non-structural (default mode) until the suite is reliable on supported macOS versions.
-- Publish known-limits table: sandbox-exec deprecation caveats, DNS stub port limitation, loopback-all allow scope.
+- Keep the central known-limits table in [the sandbox boundary](../sandbox/) current as evidence changes.
 
 ### Milestone 4: VZ Guest Runner Contract
 

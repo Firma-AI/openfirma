@@ -83,7 +83,7 @@ The choice is mostly an operational one: bwrap is fast to start and lightweight;
 
 `firma run` cannot escalate privileges. On Linux it requires unprivileged user namespaces (which most modern distros enable by default). On WSL hosts, implicit backend selection uses the `wsl2` compatibility backend instead of attempting `bwrap`.
 
-## Platform enforcement matrix
+## Cross-OS capability matrix
 
 Use this section as the current release claim for `firma run` confinement. It tracks runtime invariants, not only backend names, so a backend can be useful while still missing a structural guarantee.
 
@@ -179,6 +179,19 @@ Available mode:
 | Immutable execution envelope | **Partial.** Runtime injects env and identity into the WSL launch, but no structural boundary backs it. |
 | Interactive CLI/TUI support | **Partial.** Basic process execution is supported; WSL terminal behavior depends on host setup. |
 | Evidence status | Runtime code and unit tests support the proxy-only claim. |
+
+## Known limits
+
+These limits are part of the current release posture. Treat them as constraints on what `firma run` can claim today, not as implementation bugs.
+
+| Limit | Current status | Practical effect |
+| ----- | -------------- | ---------------- |
+| macOS default `vz` is proxy-only | The default macOS backend launches a host process with proxy environment injection and a host-side bridge. | Cooperative HTTP clients are mediated, but raw sockets, direct DNS, and proxy-env-unset children can bypass the Sidecar. |
+| macOS `sandbox-exec` mode is loopback-scoped | `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1` blocks external IP egress, but allows loopback so the proxy bridge and DNS stub can work. | Other host services listening on loopback remain reachable; this is not Linux-equivalent network namespace confinement. |
+| VZ guest mode is not a default release claim | `FIRMA_RUN_VZ_GUEST=1` validates runner and image paths, writes the launch contract, and requires a configured runner and guest bundle to enforce bridge-only egress. | It remains experimental until hardware E2E proves guest lifecycle, guest routing, DNS confinement, and runtime loss behavior. |
+| macOS hardware E2E evidence is not complete | The macOS assertion schema exists, but the structural suite is not yet green on supported macOS hardware. | macOS has no current release claim for Linux-style egress, DNS, child-process, or runtime fail-closed guarantees. |
+| WSL2 is proxy-only | The current `wsl2` backend injects proxy env into the launched command. | It is useful for compatibility, but it is not a mandatory network boundary for non-cooperative processes. |
+| seccomp is Linux-only static cBPF today | Managed seccomp is available for the Linux `bwrap` path as a static filter with a bounded Cedar-subset projection. | macOS and WSL2 do not get seccomp enforcement, and Linux syscall filtering is not live Cedar policy evaluation. |
 
 **Structural** means the sandbox removes the agent's ability to bypass the proxy at the OS level - no extra cooperation from the agent is required. The experimental macOS network-deny mode is narrower than Linux because it is loopback-scoped rather than bridge-port-scoped. The experimental macOS VZ guest mode has the stronger structural target, but the runner and guest image own the actual Virtualization.framework lifecycle and in-guest enforcement.
 
