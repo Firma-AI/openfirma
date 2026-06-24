@@ -309,12 +309,12 @@ State directory resolution: `FIRMA_STATE_DIR` → `$XDG_RUNTIME_DIR/firma` →
 
 ### STATE semantics
 
-| State       | Meaning                                                 |
-| ----------- | ------------------------------------------------------- |
-| `running`   | PID alive and UDS socket responds to a connect probe.   |
-| `unhealthy` | PID alive but UDS socket is closed or unresponsive.     |
-| `stopped`   | PID is dead (or absent from the marker).                |
-| `unknown`   | Probe was inconclusive (e.g., no socket path recorded). |
+| State       | Meaning                                                         |
+| ----------- | --------------------------------------------------------------- |
+| `running`   | PID alive and interceptor endpoint responds to a connect probe. |
+| `unhealthy` | PID alive but interceptor endpoint is closed or unresponsive.   |
+| `stopped`   | PID is dead (or absent from the marker).                        |
+| `unknown`   | Probe was inconclusive.                                         |
 
 ### Exit codes
 
@@ -336,14 +336,14 @@ drift or a mid-write race.
 
 ### `--daemon` path note
 
-`--daemon` probes the long-lived daemon sidecar by reading stack state from the
+`--daemon` probes the long-lived daemon sidecar by reading runtime state from the
 runtime state dir — the same path the daemon sidecar actually uses:
 `$XDG_RUNTIME_DIR/firma` (fallback `/tmp/firma-$UID`).
 
 The original FIR-104 spec text referenced `$XDG_DATA_HOME/firma/sidecar/state/`
 for the daemon path. Nothing writes that directory today, so the implementation
-uses the stack state dir instead. This discrepancy is intentional and noted on
-FIR-104.
+uses the runtime state dir instead. This discrepancy is intentional and noted
+on FIR-104.
 
 ## Config Discovery
 
