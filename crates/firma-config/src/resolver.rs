@@ -146,51 +146,47 @@ impl ConfigResolver {
             return load_path(&env_path, ConfigSource::EnvVar).map(Some);
         }
 
-        'walk_up: {
-            let cwd = std::env::current_dir().map_err(|e| ConfigResolveError {
-                config_source: ConfigSource::ProjectLocal,
-                path: PathBuf::default(),
-                reason: e.into(),
-            })?;
-
-            #[cfg(feature = "test-utils")]
-            let walk_ceiling = {
-                let walk_ceiling = self.walk_ceiling.as_deref();
-                if walk_ceiling.is_some_and(|ceiling| !cwd.starts_with(ceiling)) {
-                    break 'walk_up;
-                }
-                walk_ceiling
-            };
-
-            for dir in cwd.ancestors() {
-                let candidate = dir.join(".firma").join(FILE_NAME);
-                match fs::read_to_string(&candidate) {
-                    Ok(text) => {
-                        let config = FirmaConfig::parse(&candidate, &text).map_err(|reason| {
-                            ConfigResolveError {
-                                config_source: ConfigSource::ProjectLocal,
-                                path: candidate.clone(),
-                                reason,
-                            }
-                        })?;
-                        return Ok(Some(ResolvedConfig::new(
-                            ConfigSource::ProjectLocal,
-                            config,
-                        )));
-                    }
-                    Err(error) if error.kind() == ErrorKind::NotFound => {}
-                    Err(error) => {
-                        return Err(ConfigResolveError {
+        let cwd = std::env::current_dir().map_err(|e| ConfigResolveError {
+            config_source: ConfigSource::ProjectLocal,
+            path: PathBuf::default(),
+            reason: e.into(),
+        })?;
+        #[cfg(feature = "test-utils")]
+        let walk_ceiling = {
+            let walk_ceiling = self.walk_ceiling.as_deref();
+            if walk_ceiling.is_some_and(|ceiling| !cwd.starts_with(ceiling)) {
+                return Ok(None);
+            }
+            walk_ceiling
+        };
+        for dir in cwd.ancestors() {
+            let candidate = dir.join(".firma").join(FILE_NAME);
+            match fs::read_to_string(&candidate) {
+                Ok(text) => {
+                    let config = FirmaConfig::parse(&candidate, &text).map_err(|reason| {
+                        ConfigResolveError {
                             config_source: ConfigSource::ProjectLocal,
-                            path: candidate,
-                            reason: error.into(),
-                        });
-                    }
+                            path: candidate.clone(),
+                            reason,
+                        }
+                    })?;
+                    return Ok(Some(ResolvedConfig::new(
+                        ConfigSource::ProjectLocal,
+                        config,
+                    )));
                 }
-                #[cfg(feature = "test-utils")]
-                if walk_ceiling.is_some_and(|ceiling| dir == ceiling) {
-                    break;
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(ConfigResolveError {
+                        config_source: ConfigSource::ProjectLocal,
+                        path: candidate,
+                        reason: error.into(),
+                    });
                 }
+            }
+            #[cfg(feature = "test-utils")]
+            if walk_ceiling.is_some_and(|ceiling| dir == ceiling) {
+                break;
             }
         }
 
