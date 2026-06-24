@@ -93,14 +93,14 @@ macro_rules! scenario_tests {
 scenario_tests! {
     [claude, codex];
     (
-        simple_prompt => scenarios::SimplePrompt,
+        simple_prompt                => scenarios::SimplePrompt,
+        allow_via_policy             => scenarios::AllowViaPolicy,
+        allow_workspace_code_task    => scenarios::AllowWorkspaceCodeTask::new(),
         deny_forbidden_http_resource => scenarios::DenyForbiddenHttpResource,
         deny_unmapped_http_call      => scenarios::DenyUnmappedHttpCall,
         deny_http_call               => scenarios::DenyHttpCall,
-        allow_via_policy             => scenarios::AllowViaPolicy,
         block_raw_tcp_egress         => scenarios::BlockRawTcpEgress,
-        fs_read_deny        => scenarios::FsReadDeny::new(),
-        fs_delete_deny      => scenarios::FsDeleteDeny::new(),
-        allow_workspace_code_task    => scenarios::AllowWorkspaceCodeTask::new(),
+        fs_read_deny                 => scenarios::FsReadDeny::new(),
+        fs_delete_deny               => scenarios::FsDeleteDeny::new(),
     )
 }

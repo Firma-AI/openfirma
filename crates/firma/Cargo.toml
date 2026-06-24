@@ -56,10 +56,10 @@ windows-sys = { workspace = true }
 
 [dev-dependencies]
 fs-err = { workspace = true }
-insta = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
+insta = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
