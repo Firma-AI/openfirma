@@ -103,7 +103,7 @@ async fn build_report(args: Args) -> RenderedReport {
     //    uses, then validates both sections. Runs early so the
     //    reachability probes can reuse the resolved path.
     let resolved_config =
-        firma_config::SystemDirs::default().resolve_config(args.config.as_deref());
+        firma_config::ConfigResolver::default().resolve_config(args.config.as_deref());
     let parsed_config = match &resolved_config {
         Ok(Some(resolved)) => {
             report.push(config_parse::check_loaded(

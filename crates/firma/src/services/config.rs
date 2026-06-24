@@ -445,7 +445,7 @@ fn resolve_config_dir(
         return std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()));
     }
 
-    let default = firma_config::SystemDirs::default()
+    let default = firma_config::ConfigResolver::default()
         .resolve_config(None)?
         .map_or_else(default_output_dir, |resolved| resolved.config_dir());
 
@@ -1095,7 +1095,7 @@ pub fn resolve_audit_log_path(state_dir_flag: Option<&PathBuf>) -> Result<PathBu
         return Ok(state_dir.join("audit.jsonl"));
     }
 
-    if let Some(resolved) = firma_config::SystemDirs::default()
+    if let Some(resolved) = firma_config::ConfigResolver::default()
         .resolve_config(None)
         .map_err(|error| format!("resolve discovered config: {error}"))?
         && let Ok(body) = resolved.config.section("sidecar.audit")

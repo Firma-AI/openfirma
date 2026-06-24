@@ -43,7 +43,7 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let resolved = firma_config::SystemDirs::default()
+    let resolved = firma_config::ConfigResolver::default()
         .resolve_config(args.config.as_deref())?
         .ok_or_else(|| anyhow::anyhow!("no firma.toml found for `authority`"))?;
     tracing::info!(

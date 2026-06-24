@@ -10,7 +10,13 @@ mod schema;
 
 /// Canonical config file name shared by every binary.
 pub const CONFIG_FILE_NAME: &str = "firma.toml";
+/// Canonical name for directory that contain `firma` configuration files.
+pub const CONFIG_DIR_NAME: &str = ".firma";
+/// Canonical name for the environment variable that can be used to
+/// shortcircuit config discovery. See [`ConfigResolver::resolve_config`] for
+/// more details.
+pub const CONFIG_ENV_NAME: &str = "FIRMA_CONFIG";
 
 pub use profile::AgentProfile;
-pub use resolver::{ConfigResolveError, ConfigSource, ResolvedConfig, SystemDirs};
+pub use resolver::{ConfigResolveError, ConfigResolver, ConfigSource, ResolvedConfig};
 pub use schema::{FirmaConfig, load_section};

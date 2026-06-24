@@ -1,8 +1,11 @@
 //! Config discovery behavior through the public resolver API.
 
+use std::assert_matches;
 use std::path::{Path, PathBuf};
 
-use firma_config::{ConfigResolveError, ConfigSource, SystemDirs};
+use firma_config::{
+    CONFIG_DIR_NAME, CONFIG_ENV_NAME, ConfigResolveError, ConfigResolver, ConfigSource,
+};
 use fs_err as fs;
 
 use crate::helper;
@@ -16,7 +19,7 @@ fn unwrap_resolved(
 }
 
 fn touch_project_local(dir: &Path) -> PathBuf {
-    let d = dir.join(".firma");
+    let d = dir.join(CONFIG_DIR_NAME);
     fs::create_dir_all(&d).expect("create .firma dir");
     let f = d.join(firma_config::CONFIG_FILE_NAME);
     fs::write(&f, "").expect("write config file");
@@ -33,7 +36,7 @@ fn enter_nested_project(root: &Path) -> PathBuf {
 
 fn firma_config_env(root: &Path, file_name: &str) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
     vec![(
-        std::ffi::OsString::from("FIRMA_CONFIG"),
+        std::ffi::OsString::from(CONFIG_ENV_NAME),
         root.join(file_name).into_os_string(),
     )]
 }
@@ -44,7 +47,7 @@ fn flag_wins_over_everything() {
         let flag = root.join("explicit.toml");
         fs::write(&flag, "").expect("write explicit config");
 
-        let resolved = unwrap_resolved(SystemDirs::default().resolve_config(Some(&flag)));
+        let resolved = unwrap_resolved(ConfigResolver::default().resolve_config(Some(&flag)));
 
         assert_eq!(resolved.source, ConfigSource::Flag);
         assert_eq!(resolved.config_file(), flag.as_path());
@@ -56,16 +59,16 @@ fn flag_wins_over_everything() {
 fn explicit_missing_config_is_an_error() {
     helper::run_isolated(|root| {
         let missing = root.join("missing.toml");
-        let error = SystemDirs::default()
+        let error = ConfigResolver::default()
             .resolve_config(Some(&missing))
             .expect_err("resolution should fail");
-        assert!(matches!(
+        assert_matches!(
             error,
             ConfigResolveError {
                 config_source: ConfigSource::Flag,
                 ..
             }
-        ));
+        );
     });
 }
 
@@ -75,12 +78,10 @@ fn explicit_invalid_toml_is_an_error() {
         let invalid = root.join("invalid.toml");
         fs::write(&invalid, "=").expect("write invalid config");
 
-        let error = SystemDirs::default()
+        let error = ConfigResolver::default()
             .resolve_config(Some(&invalid))
             .expect_err("resolution should fail");
-        assert!(
-            matches!(error, ConfigResolveError { config_source: ConfigSource::Flag, path, .. } if path == invalid)
-        );
+        assert_matches!(error, ConfigResolveError { config_source: ConfigSource::Flag, path, .. } if path == invalid);
     });
 }
 
@@ -94,7 +95,7 @@ fn env_var_beats_project_local() {
             let project = enter_nested_project(root);
             touch_project_local(&project);
 
-            let resolved = unwrap_resolved(SystemDirs::default().resolve_config(None));
+            let resolved = unwrap_resolved(ConfigResolver::default().resolve_config(None));
 
             assert_eq!(resolved.source, ConfigSource::EnvVar);
             assert_eq!(resolved.config_file(), env_file.as_path());
@@ -107,16 +108,16 @@ fn env_missing_config_is_an_error() {
     helper::run_isolated_with_env(
         |root| firma_config_env(root, "missing.toml"),
         |_| {
-            let error = SystemDirs::default()
+            let error = ConfigResolver::default()
                 .resolve_config(None)
                 .expect_err("resolution should fail");
-            assert!(matches!(
+            assert_matches!(
                 error,
                 ConfigResolveError {
                     config_source: ConfigSource::EnvVar,
                     ..
                 }
-            ));
+            );
         },
     );
 }
@@ -129,12 +130,10 @@ fn env_invalid_toml_is_an_error() {
             let invalid = root.join("invalid.toml");
             fs::write(&invalid, "=").expect("write invalid config");
 
-            let error = SystemDirs::default()
+            let error = ConfigResolver::default()
                 .resolve_config(None)
                 .expect_err("resolution should fail");
-            assert!(
-                matches!(error, ConfigResolveError { config_source: ConfigSource::EnvVar, path, .. } if path == invalid)
-            );
+            assert_matches!(error, ConfigResolveError { config_source: ConfigSource::EnvVar, path, .. } if path == invalid);
         },
     );
 }
@@ -143,7 +142,7 @@ fn env_invalid_toml_is_an_error() {
 fn project_local_found_in_cwd() {
     helper::run_isolated(|root| {
         let project_file = touch_project_local(root);
-        let provider = SystemDirs::default().walk_up_to(root);
+        let provider = ConfigResolver::default().walk_up_to(root);
 
         let resolved = unwrap_resolved(provider.resolve_config(None));
 
@@ -158,7 +157,7 @@ fn project_local_walks_up_to_ancestor() {
         let project = enter_nested_project(root);
         let project_file = touch_project_local(&project);
 
-        let resolved = unwrap_resolved(SystemDirs::default().resolve_config(None));
+        let resolved = unwrap_resolved(ConfigResolver::default().resolve_config(None));
 
         assert_eq!(resolved.source, ConfigSource::ProjectLocal);
         assert_eq!(resolved.config_file(), project_file.as_path());
@@ -172,7 +171,7 @@ fn project_local_closest_ancestor_wins() {
         touch_project_local(&project);
         let nested_file = touch_project_local(project.join("sub").as_path());
 
-        let resolved = unwrap_resolved(SystemDirs::default().resolve_config(None));
+        let resolved = unwrap_resolved(ConfigResolver::default().resolve_config(None));
 
         assert_eq!(resolved.source, ConfigSource::ProjectLocal);
         assert_eq!(resolved.config_file(), nested_file.as_path());
@@ -184,17 +183,17 @@ fn project_local_invalid_toml_fails_closed_without_continuing_to_parent() {
     helper::run_isolated(|root| {
         let project = enter_nested_project(root);
         let nested = project.join("sub").join("deep");
-        fs::create_dir_all(nested.join(".firma")).expect("create nested .firma dir");
+        fs::create_dir_all(nested.join(CONFIG_DIR_NAME)).expect("create nested .firma dir");
         touch_project_local(&project);
-        let invalid = nested.join(".firma").join(firma_config::CONFIG_FILE_NAME);
+        let invalid = nested
+            .join(CONFIG_DIR_NAME)
+            .join(firma_config::CONFIG_FILE_NAME);
         fs::write(&invalid, "=").expect("write invalid config");
 
-        let error = SystemDirs::default()
+        let error = ConfigResolver::default()
             .resolve_config(None)
             .expect_err("resolution should fail");
-        assert!(
-            matches!(error, ConfigResolveError { config_source: ConfigSource::ProjectLocal, path, .. } if path == invalid)
-        );
+        assert_matches!(error, ConfigResolveError { config_source: ConfigSource::ProjectLocal, path, .. } if path == invalid);
     });
 }
 
@@ -214,9 +213,11 @@ fn project_local_unreadable_file_fails_closed_without_continuing_to_parent() {
     helper::run_isolated(|root| {
         let project = enter_nested_project(root);
         let nested = project.join("sub").join("deep");
-        fs::create_dir_all(nested.join(".firma")).expect("create nested .firma dir");
+        fs::create_dir_all(nested.join(CONFIG_DIR_NAME)).expect("create nested .firma dir");
         touch_project_local(&project);
-        let unreadable = nested.join(".firma").join(firma_config::CONFIG_FILE_NAME);
+        let unreadable = nested
+            .join(CONFIG_DIR_NAME)
+            .join(firma_config::CONFIG_FILE_NAME);
         fs::write(&unreadable, "").expect("write unreadable config");
         set_mode(&unreadable, 0o000);
         if fs::read_to_string(&unreadable).is_ok() {
@@ -224,12 +225,10 @@ fn project_local_unreadable_file_fails_closed_without_continuing_to_parent() {
             return;
         }
 
-        let error = SystemDirs::default()
+        let error = ConfigResolver::default()
             .resolve_config(None)
             .expect_err("resolution should fail");
-        assert!(
-            matches!(error, ConfigResolveError { config_source: ConfigSource::ProjectLocal, path, .. } if path == unreadable)
-        );
+        assert_matches!(error, ConfigResolveError { config_source: ConfigSource::ProjectLocal, path, .. } if path == unreadable);
 
         set_mode(&unreadable, 0o600);
     });
@@ -240,7 +239,7 @@ fn system_dirs_walks_up_to_project_local_with_ceiling() {
     helper::run_isolated(|root| {
         let ceiling = enter_nested_project(root);
         let project_file = touch_project_local(&ceiling);
-        let provider = SystemDirs::default().walk_up_to(&ceiling);
+        let provider = ConfigResolver::default().walk_up_to(&ceiling);
 
         let resolved = unwrap_resolved(provider.resolve_config(None));
 
@@ -254,14 +253,9 @@ fn system_dirs_stops_walk_at_ceiling() {
     helper::run_isolated(|root| {
         let ceiling = enter_nested_project(root);
         touch_project_local(root);
-        let provider = SystemDirs::default().walk_up_to(&ceiling);
+        let provider = ConfigResolver::default().walk_up_to(&ceiling);
 
-        assert!(
-            provider
-                .resolve_config(None)
-                .expect("resolve config")
-                .is_none()
-        );
+        assert_matches!(provider.resolve_config(None).expect("resolve config"), None);
     });
 }
 
@@ -270,27 +264,17 @@ fn cwd_outside_ceiling_stops_before_searching() {
     helper::run_isolated(|root| {
         let ceiling = root.join("project");
         touch_project_local(root);
-        let provider = SystemDirs::default().walk_up_to(&ceiling);
+        let provider = ConfigResolver::default().walk_up_to(&ceiling);
 
-        assert!(
-            provider
-                .resolve_config(None)
-                .expect("resolve config")
-                .is_none()
-        );
+        assert_matches!(provider.resolve_config(None).expect("resolve config"), None);
     });
 }
 
 #[test]
 fn nothing_found_returns_none() {
     helper::run_isolated(|root| {
-        let provider = SystemDirs::default().walk_up_to(root);
+        let provider = ConfigResolver::default().walk_up_to(root);
 
-        assert!(
-            provider
-                .resolve_config(None)
-                .expect("resolve config")
-                .is_none()
-        );
+        assert_matches!(provider.resolve_config(None).expect("resolve config"), None);
     });
 }

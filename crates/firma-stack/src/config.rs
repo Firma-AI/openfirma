@@ -35,7 +35,7 @@ pub struct StackConfig {
 /// Returns [`StackError::ConfigRead`] when no `firma.toml` can be
 /// resolved.
 pub fn resolve_stack_config(cli_override: Option<&Path>) -> Result<StackConfig> {
-    let resolved = firma_config::SystemDirs::default()
+    let resolved = firma_config::ConfigResolver::default()
         .resolve_config(cli_override)
         .map_err(|error| StackError::ConfigRead {
             path: cli_override.map_or_else(|| PathBuf::from("firma.toml"), Path::to_path_buf),

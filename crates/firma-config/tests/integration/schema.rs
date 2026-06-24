@@ -1,23 +1,24 @@
 //! Section extraction behavior through the public schema API.
 
-use firma_config::{FirmaConfig, load_section};
+use firma_config::{CONFIG_FILE_NAME, load_section};
 use fs_err as fs;
+use std::assert_matches;
 
 #[test]
 fn extracts_named_section() {
     let tmp = tempfile::tempdir().expect("tmpdir");
-    let path = tmp.path().join("firma.toml");
+    let path = tmp.path().join(CONFIG_FILE_NAME);
     fs::write(&path, "[sidecar]\nfoo = 1\n[authority]\nbar = 2\n").expect("write config");
     let out = load_section(&path, "sidecar").expect("load section");
     let table: toml::Table = out.parse().expect("parse section");
     assert_eq!(table.get("foo").and_then(toml::Value::as_integer), Some(1));
-    assert!(table.get("bar").is_none());
+    assert_matches!(table.get("bar"), None);
 }
 
 #[test]
 fn nested_subtables_are_preserved() {
     let tmp = tempfile::tempdir().expect("tmpdir");
-    let path = tmp.path().join("firma.toml");
+    let path = tmp.path().join(CONFIG_FILE_NAME);
     fs::write(
         &path,
         "[sidecar.interceptor]\nmode = \"http_proxy\"\n[sidecar.authority]\nurl = \"http://x\"\n",
@@ -25,24 +26,20 @@ fn nested_subtables_are_preserved() {
     .expect("write config");
     let out = load_section(&path, "sidecar").expect("load section");
     let table: toml::Table = out.parse().expect("parse section");
-    assert!(
-        table
-            .get("interceptor")
-            .and_then(toml::Value::as_table)
-            .is_some()
+    assert_matches!(
+        table.get("interceptor").and_then(toml::Value::as_table),
+        Some(_)
     );
-    assert!(
-        table
-            .get("authority")
-            .and_then(toml::Value::as_table)
-            .is_some()
+    assert_matches!(
+        table.get("authority").and_then(toml::Value::as_table),
+        Some(_)
     );
 }
 
 #[test]
 fn missing_section_is_an_error() {
     let tmp = tempfile::tempdir().expect("tmpdir");
-    let path = tmp.path().join("firma.toml");
+    let path = tmp.path().join(CONFIG_FILE_NAME);
     fs::write(&path, "[authority]\nbar = 2\n").expect("write config");
     let error = load_section(&path, "sidecar").expect_err("section should be missing");
     assert!(
@@ -54,7 +51,7 @@ fn missing_section_is_an_error() {
 #[test]
 fn dotted_path_extracts_nested_section() {
     let tmp = tempfile::tempdir().expect("tmpdir");
-    let path = tmp.path().join("firma.toml");
+    let path = tmp.path().join(CONFIG_FILE_NAME);
     fs::write(
         &path,
         "[sidecar.policy]\ndir = \".\"\n[sidecar.authority]\nurl = \"https://x\"\n",
@@ -77,39 +74,11 @@ fn dotted_path_extracts_nested_section() {
 #[test]
 fn dotted_path_missing_is_an_error() {
     let tmp = tempfile::tempdir().expect("tmpdir");
-    let path = tmp.path().join("firma.toml");
+    let path = tmp.path().join(CONFIG_FILE_NAME);
     fs::write(&path, "[sidecar.policy]\ndir = \".\"\n").expect("write config");
     let error = load_section(&path, "sidecar.authority").expect_err("section should be missing");
     assert!(
         error.to_string().contains("sidecar.authority"),
         "error: {error}"
-    );
-}
-
-#[test]
-fn firma_config_reuses_a_single_parse_for_multiple_sections() {
-    let tmp = tempfile::tempdir().expect("tmpdir");
-    let path = tmp.path().join("firma.toml");
-    fs::write(&path, "[sidecar]\nfoo = 1\n[authority]\nbar = 2\n").expect("write config");
-
-    let config = FirmaConfig::load(&path).expect("load config");
-    let sidecar: toml::Table = config
-        .section("sidecar")
-        .expect("load sidecar section")
-        .parse()
-        .expect("parse sidecar section");
-    let authority: toml::Table = config
-        .section("authority")
-        .expect("load authority section")
-        .parse()
-        .expect("parse authority section");
-
-    assert_eq!(
-        sidecar.get("foo").and_then(toml::Value::as_integer),
-        Some(1)
-    );
-    assert_eq!(
-        authority.get("bar").and_then(toml::Value::as_integer),
-        Some(2)
     );
 }

@@ -7,34 +7,16 @@ use std::{
 
 use fs_err as fs;
 
-use crate::FirmaConfig;
+use crate::{CONFIG_ENV_NAME, FirmaConfig};
 
-/// Config discovery inputs backed by the real process environment.
+/// A helper to determine which configuration should be applied to the
+/// `firma` command that's about to execute.
+///
+/// Refer to [`ConfigResolver::resolve_config`] for more details.
 #[derive(Debug, Default, Clone)]
-pub struct SystemDirs {
+pub struct ConfigResolver {
+    #[cfg(feature = "test-utils")]
     walk_ceiling: Option<PathBuf>,
-}
-
-impl SystemDirs {
-    /// Create a provider backed by the real process environment.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set the inclusive directory where project-local walk-up stops.
-    #[must_use]
-    pub fn walk_up_to(mut self, ceiling: impl Into<PathBuf>) -> Self {
-        self.walk_ceiling = Some(ceiling.into());
-        self
-    }
-
-    /// `$FIRMA_CONFIG` if set — direct path to the config file.
-    fn env_config_file() -> Option<PathBuf> {
-        std::env::var_os("FIRMA_CONFIG")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-    }
 }
 
 /// Where the resolved config came from.
@@ -89,32 +71,72 @@ pub struct ConfigResolveError {
 
 use crate::CONFIG_FILE_NAME as FILE_NAME;
 
-fn load_path(path: &Path, source: ConfigSource) -> Result<ResolvedConfig, ConfigResolveError> {
-    FirmaConfig::load(path)
-        .map(|config| ResolvedConfig::new(source, config))
-        .map_err(|reason| ConfigResolveError {
-            config_source: source,
-            path: path.to_path_buf(),
-            reason,
-        })
-}
+impl ConfigResolver {
+    /// Create a new [`ConfigResolver`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-impl SystemDirs {
+    /// Set an upper bound for walk-up resolution.
+    ///
+    /// The upper bound is _inclusive_—i.e. if `ceiling` contains
+    /// a configuration file, it'll be used if appropriate.
+    ///
+    /// # Implementation details
+    ///
+    /// This method is used in end-to-end tests.
+    /// Each test spawns a dedicated process with its current directory
+    /// set to a freshly-created temporary directory.
+    /// We use that temporary directory as the ceiling for our search
+    /// to reduce the risk of test flakiness: e.g. there might be a
+    /// valid Firma configuration file above the temporary directory
+    /// folder, and we don't want tests to pick it up.
+    #[must_use]
+    #[cfg(feature = "test-utils")]
+    pub fn walk_up_to(mut self, ceiling: impl Into<PathBuf>) -> Self {
+        self.walk_ceiling = Some(ceiling.into());
+        self
+    }
+
+    /// The path to a configuration file specified via the canonical environment
+    /// variable.
+    ///
+    /// We treat the environment variable as unset if empty.
+    fn env_config_file() -> Option<PathBuf> {
+        std::env::var_os(CONFIG_ENV_NAME)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    }
+
     /// Resolve and load the config file.
     ///
-    /// Priority:
-    /// 1. `cli_override` (`--config` flag) — always wins.
-    /// 2. `$FIRMA_CONFIG` env var — direct path to the config file.
-    /// 3. Walk up from cwd looking for `.firma/firma.toml`.
+    /// We check these sources, in priority order:
+    /// 1. `cli_override` (`--config` flag).
+    /// 2. Environment variable ([`CONFIG_ENV_NAME`]).
+    /// 3. Filesystem, using the closest configuration file to the current working directory.
     ///
     /// # Errors
     ///
-    /// Returns `Ok(None)` when no file exists in any discovery tier. Returns
-    /// [`ConfigResolveError`] when a selected file cannot be read or parsed.
+    /// Returns `Ok(None)` when no file exists in any discovery tier.
+    /// Returns [`ConfigResolveError`] when a selected file cannot be read or parsed.
     pub fn resolve_config(
         &self,
         cli_override: Option<&Path>,
     ) -> Result<Option<ResolvedConfig>, ConfigResolveError> {
+        fn load_path(
+            path: &Path,
+            source: ConfigSource,
+        ) -> Result<ResolvedConfig, ConfigResolveError> {
+            FirmaConfig::load(path)
+                .map(|config| ResolvedConfig::new(source, config))
+                .map_err(|reason| ConfigResolveError {
+                    config_source: source,
+                    path: path.to_path_buf(),
+                    reason,
+                })
+        }
+
         if let Some(path) = cli_override {
             return load_path(path, ConfigSource::Flag).map(Some);
         }
@@ -127,10 +149,16 @@ impl SystemDirs {
             let Some(cwd) = std::env::current_dir().ok() else {
                 break 'walk_up;
             };
-            let walk_ceiling = self.walk_ceiling.as_deref();
-            if walk_ceiling.is_some_and(|ceiling| !cwd.starts_with(ceiling)) {
-                break 'walk_up;
-            }
+
+            #[cfg(feature = "test-utils")]
+            let walk_ceiling = {
+                let walk_ceiling = self.walk_ceiling.as_deref();
+                if walk_ceiling.is_some_and(|ceiling| !cwd.starts_with(ceiling)) {
+                    break 'walk_up;
+                }
+                walk_ceiling
+            };
+
             for dir in cwd.ancestors() {
                 let candidate = dir.join(".firma").join(FILE_NAME);
                 match fs::read_to_string(&candidate) {
@@ -156,6 +184,7 @@ impl SystemDirs {
                         });
                     }
                 }
+                #[cfg(feature = "test-utils")]
                 if walk_ceiling.is_some_and(|ceiling| dir == ceiling) {
                     break;
                 }

@@ -1634,6 +1634,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dirs",
+ "firma-config",
  "fs-err",
  "pretty_assertions",
  "serde",

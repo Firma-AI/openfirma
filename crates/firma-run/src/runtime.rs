@@ -147,7 +147,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         // Resolve firma.toml: explicit CLI path > env var > walk up from
         // cwd for `.firma/firma.toml`. `None` means no config — zero-config
         // defaults kick in downstream.
-        let resolved_user_config = firma_config::SystemDirs::default()
+        let resolved_user_config = firma_config::ConfigResolver::default()
             .resolve_config(args.user_config_path.as_deref())
             .map_err(|error| RunError::ConfigParse {
                 path: args
