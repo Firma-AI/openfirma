@@ -152,6 +152,17 @@ fn project_local_found_in_cwd() {
 }
 
 #[test]
+fn project_local_fails_if_we_cannot_determine_cwd() {
+    helper::run_isolated(|root| {
+        let provider = ConfigResolver::default().walk_up_to(root);
+        // One way to get `current_dir` to fail is to delete the directory that's set as
+        // current working directory of the process!
+        fs::remove_dir_all(root).unwrap();
+        let _resolved = provider.resolve_config(None).unwrap_err();
+    });
+}
+
+#[test]
 fn project_local_walks_up_to_ancestor() {
     helper::run_isolated(|root| {
         let project = enter_nested_project(root);
@@ -235,7 +246,7 @@ fn project_local_unreadable_file_fails_closed_without_continuing_to_parent() {
 }
 
 #[test]
-fn system_dirs_walks_up_to_project_local_with_ceiling() {
+fn resolver_walks_up_to_project_local_with_ceiling() {
     helper::run_isolated(|root| {
         let ceiling = enter_nested_project(root);
         let project_file = touch_project_local(&ceiling);
@@ -249,7 +260,7 @@ fn system_dirs_walks_up_to_project_local_with_ceiling() {
 }
 
 #[test]
-fn system_dirs_stops_walk_at_ceiling() {
+fn resolver_stops_walk_at_ceiling() {
     helper::run_isolated(|root| {
         let ceiling = enter_nested_project(root);
         touch_project_local(root);

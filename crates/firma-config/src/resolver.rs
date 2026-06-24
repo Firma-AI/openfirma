@@ -66,6 +66,7 @@ impl ResolvedConfig {
 pub struct ConfigResolveError {
     pub config_source: ConfigSource,
     pub path: PathBuf,
+    #[source]
     pub reason: anyhow::Error,
 }
 
@@ -146,9 +147,11 @@ impl ConfigResolver {
         }
 
         'walk_up: {
-            let Some(cwd) = std::env::current_dir().ok() else {
-                break 'walk_up;
-            };
+            let cwd = std::env::current_dir().map_err(|e| ConfigResolveError {
+                config_source: ConfigSource::ProjectLocal,
+                path: PathBuf::default(),
+                reason: e.into(),
+            })?;
 
             #[cfg(feature = "test-utils")]
             let walk_ceiling = {
