@@ -44,10 +44,10 @@ impl EnforcementScenario for DenyForbiddenHttpResource {
 
     fn assert_baseline(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
         if !output.agent.success {
-            anyhow::bail!("baseline agent failed: {}", output.agent.stderr);
+            anyhow::bail!("agent failed");
         }
         if output.http_requests.is_empty() {
-            anyhow::bail!("baseline: POST did not reach mock server");
+            anyhow::bail!("POST did not reach mock server");
         }
         Ok(())
     }
@@ -58,11 +58,8 @@ impl EnforcementScenario for DenyForbiddenHttpResource {
         output: &PhaseOutput,
         audit: &FirmaAuditTrail,
     ) -> Result<(), anyhow::Error> {
-        if let Some(req) = output.http_requests.first() {
-            anyhow::bail!(
-                "POST reached mock server (body: {:?}); should have been blocked before the network",
-                String::from_utf8_lossy(&req.body)
-            );
+        if !output.http_requests.is_empty() {
+            anyhow::bail!("POST reached mock server; should have been blocked before the network");
         }
         audit.assert_snapshot(self.name(), ctx);
         Ok(())

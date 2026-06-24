@@ -34,7 +34,7 @@ impl EnforcementScenario for FsDeleteDeny {
 
     fn assert_baseline(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
         if !output.agent.success {
-            anyhow::bail!("baseline rm failed: {}", output.agent.stderr);
+            anyhow::bail!("agent failed");
         }
         Ok(())
     }

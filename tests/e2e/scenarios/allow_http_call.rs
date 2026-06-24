@@ -27,15 +27,10 @@ impl EnforcementScenario for AllowHttpCall {
         ctx.git_init_workspace()?;
         ctx.firma_config().run()?;
         let addr = ctx.mock_server.address().to_string();
-        // The permit must exist before issuance: the Authority gates token
-        // issuance through the same Cedar bundle, so `repo.lifecycle` is
-        // unissuable until this rule is in place.
         ctx.policy()
             .named("allow-repo-lifecycle")
             .permit("repo.lifecycle")
             .add()?;
-        // Providing an explicit seed suppresses the default mint, so cover the
-        // provider action too or the agent cannot reach its own model.
         let agent_id = ctx.agent.profile();
         ctx.issue_capability(
             agent_id,
@@ -66,7 +61,7 @@ impl EnforcementScenario for AllowHttpCall {
 
     fn assert_baseline(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
         if !output.agent.success {
-            anyhow::bail!("baseline agent failed: {}", output.agent.stderr);
+            anyhow::bail!("baseline agent failed");
         }
         if !output
             .http_requests

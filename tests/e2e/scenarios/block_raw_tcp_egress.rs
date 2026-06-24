@@ -46,13 +46,10 @@ impl EnforcementScenario for BlockRawTcpEgress {
         _audit: &FirmaAuditTrail,
     ) -> Result<(), anyhow::Error> {
         if !output.agent.success {
-            anyhow::bail!("agent process failed: {}", output.agent.stderr);
+            anyhow::bail!("agent failed");
         }
         if !output.agent.stdout.contains("BLOCKED") {
-            anyhow::bail!(
-                "raw TCP connection was NOT blocked by sandbox (stdout: {})",
-                output.agent.stdout.trim()
-            );
+            anyhow::bail!("raw TCP connection was NOT blocked by sandbox");
         }
         Ok(())
     }

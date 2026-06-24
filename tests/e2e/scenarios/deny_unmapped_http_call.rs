@@ -33,10 +33,10 @@ impl EnforcementScenario for DenyUnmappedHttpCall {
 
     fn assert_baseline(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
         if !output.agent.success {
-            anyhow::bail!("baseline agent failed: {}", output.agent.stderr);
+            anyhow::bail!("agent failed");
         }
         if output.http_requests.is_empty() {
-            anyhow::bail!("baseline: no HTTP request reached mock server");
+            anyhow::bail!("no HTTP request reached mock server");
         }
         Ok(())
     }

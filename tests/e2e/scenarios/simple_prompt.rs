@@ -21,7 +21,7 @@ impl EnforcementScenario for SimplePrompt {
 
     fn assert_baseline(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
         if !output.agent.success {
-            anyhow::bail!("baseline agent failed: {}", output.agent.stderr);
+            anyhow::bail!("agent failed");
         }
         Ok(())
     }
@@ -33,7 +33,7 @@ impl EnforcementScenario for SimplePrompt {
         audit: &FirmaAuditTrail,
     ) -> Result<(), anyhow::Error> {
         if !output.agent.success {
-            anyhow::bail!("enforcement agent failed: {}", output.agent.stderr);
+            anyhow::bail!("agent failed");
         }
         audit.assert_snapshot(self.name(), ctx);
         Ok(())

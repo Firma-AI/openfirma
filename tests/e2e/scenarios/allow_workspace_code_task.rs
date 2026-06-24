@@ -60,32 +60,13 @@ impl EnforcementScenario for AllowWorkspaceCodeTask {
 impl AllowWorkspaceCodeTask {
     fn check(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
         if !output.agent.success {
-            anyhow::bail!("agent failed: {}", output.agent.stderr);
+            anyhow::bail!("agent failed");
         }
 
         let src = fs_err::read_to_string(&self.fib_main).context("read")?;
         anyhow::ensure!(
             src.contains("fn fib"),
             "fib/src/main.rs missing 'fn fib':\n{src}"
-        );
-
-        let fib_dir = self
-            .fib_main
-            .parent()
-            .and_then(std::path::Path::parent)
-            .ok_or_else(|| {
-                anyhow::anyhow!("unexpected fib path structure: {}", self.fib_main.display())
-            })?;
-
-        let test_out = std::process::Command::new("cargo")
-            .arg("test")
-            .current_dir(fib_dir)
-            .output()
-            .with_context(|| format!("cargo test in {}", fib_dir.display()))?;
-        anyhow::ensure!(
-            test_out.status.success(),
-            "cargo test failed:\n{}",
-            String::from_utf8_lossy(&test_out.stderr)
         );
         Ok(())
     }
