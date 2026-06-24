@@ -1,0 +1,8 @@
+---
+source: crates/firma/../../tests/e2e/scenarios/deny_http_call.rs
+assertion_line: 72
+expression: "&audit"
+---
+FirmaAuditTrail(
+    {},
+)

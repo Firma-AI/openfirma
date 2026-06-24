@@ -2,11 +2,11 @@ use crate::audit::FirmaAuditTrail;
 use crate::scenario::{EnforcementScenario, PhaseOutput};
 use crate::setup::ScenarioSetup;
 
-pub struct DirectTcpBypass;
+pub struct BlockRawTcpEgress;
 
-impl EnforcementScenario for DirectTcpBypass {
+impl EnforcementScenario for BlockRawTcpEgress {
     fn name(&self) -> &'static str {
-        "direct_tcp_bypass"
+        "block_raw_tcp_egress"
     }
 
     fn setup(&self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {

@@ -7,11 +7,11 @@ use crate::audit::FirmaAuditTrail;
 use crate::scenario::{EnforcementScenario, PhaseOutput};
 use crate::setup::ScenarioSetup;
 
-pub struct CodeFibonacci {
+pub struct AllowWorkspaceCodeTask {
     fib_main: OnceLock<PathBuf>,
 }
 
-impl CodeFibonacci {
+impl AllowWorkspaceCodeTask {
     pub fn new() -> Self {
         Self {
             fib_main: OnceLock::new(),
@@ -19,9 +19,9 @@ impl CodeFibonacci {
     }
 }
 
-impl EnforcementScenario for CodeFibonacci {
+impl EnforcementScenario for AllowWorkspaceCodeTask {
     fn name(&self) -> &'static str {
-        "code_fibonacci"
+        "allow_workspace_code_task"
     }
 
     fn setup(&self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
@@ -61,7 +61,7 @@ impl EnforcementScenario for CodeFibonacci {
     }
 }
 
-impl CodeFibonacci {
+impl AllowWorkspaceCodeTask {
     fn check(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
         if !output.agent.success {
             anyhow::bail!("agent failed: {}", output.agent.stderr);

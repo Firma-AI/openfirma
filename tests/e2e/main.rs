@@ -94,13 +94,12 @@ scenario_tests! {
     [claude, codex];
     (
         simple_prompt => scenarios::SimplePrompt,
-        normal_llm_call     => scenarios::NormalLlmCall,
-        block_paste_service => scenarios::BlockPasteService,
-        block_unlisted_host => scenarios::BlockUnlistedHost,
-        tool_call_exfil     => scenarios::ToolCallExfil,
-        direct_tcp_bypass   => scenarios::DirectTcpBypass,
+        deny_forbidden_http_resource => scenarios::DenyForbiddenHttpResource,
+        deny_unmapped_http_call      => scenarios::DenyUnmappedHttpCall,
+        deny_http_call               => scenarios::DenyHttpCall,
+        block_raw_tcp_egress         => scenarios::BlockRawTcpEgress,
         fs_read_deny        => scenarios::FsReadDeny::new(),
         fs_delete_deny      => scenarios::FsDeleteDeny::new(),
-        code_fibonacci      => scenarios::CodeFibonacci::new(),
+        allow_workspace_code_task    => scenarios::AllowWorkspaceCodeTask::new(),
     )
 }
