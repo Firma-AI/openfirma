@@ -371,15 +371,17 @@ fn resolve_persisted_paths(
         .map_err(|e| RunError::Internal(format!("parse authority config: {e}")))?;
     cfg.rebase_defaults(&config_dir);
 
-    // Generate the signing key when the configured path has no key yet, so a
-    // bootstrap-persisted or hand-written `[authority]` section still starts.
-    if !cfg.key_file.exists() {
-        if let Some(parent) = cfg.key_file.parent() {
-            firma_stack::fs::create_private_dir_all(parent)
-                .map_err(|e| RunError::Internal(e.to_string()))?;
-        }
-        generate_authority_key(&cfg.key_file, log_path)?;
+    // Ensure a signing key exists at the configured path, generating one when
+    // absent so a bootstrap-persisted or hand-written `[authority]` section
+    // still starts. Only create the parent dir when missing — never re-touch an
+    // existing config dir's permissions.
+    if let Some(parent) = cfg.key_file.parent()
+        && !parent.exists()
+    {
+        firma_stack::fs::create_private_dir_all(parent)
+            .map_err(|e| RunError::Internal(e.to_string()))?;
     }
+    ensure_authority_key(&cfg.key_file, log_path)?;
 
     // Per-run authority always runs plaintext on loopback — strip any TLS
     // config from the user's persisted settings, and pick an ephemeral port
@@ -393,7 +395,9 @@ fn resolve_persisted_paths(
 /// Generate an Ed25519 authority keypair at `key_path` and its `.pub` sibling.
 ///
 /// Calls [`firma_authority::write_keypair`] in-process so the on-disk key
-/// format stays identical to `firma authority generate-key`.
+/// format stays identical to `firma authority generate-key`. Fails if a key is
+/// already present — callers that may race a concurrent writer should use
+/// [`ensure_authority_key`] instead.
 #[cfg(unix)]
 fn generate_authority_key(
     key_path: &std::path::Path,
@@ -404,6 +408,33 @@ fn generate_authority_key(
         log_path: log_path.to_path_buf(),
     })?;
     Ok(())
+}
+
+/// Ensure an Ed25519 authority keypair exists at `key_path`, generating one if
+/// absent.
+///
+/// Generation is atomic: [`firma_authority::write_keypair`] opens the key with
+/// `create_new`, so a concurrent writer that wins the race surfaces as
+/// `AlreadyExists` — treated here as "key present, reuse it" rather than an
+/// error. This avoids a time-of-check/time-of-use gap between probing for the
+/// key and writing it.
+#[cfg(unix)]
+fn ensure_authority_key(
+    key_path: &std::path::Path,
+    log_path: &std::path::Path,
+) -> Result<(), RunError> {
+    match firma_authority::write_keypair(key_path) {
+        Ok(_) => Ok(()),
+        Err(firma_authority::KeygenError::Write { source, .. })
+            if source.kind() == std::io::ErrorKind::AlreadyExists =>
+        {
+            Ok(())
+        }
+        Err(e) => Err(RunError::AuthorityStartupFailed {
+            reason: format!("generate authority key: {e}"),
+            log_path: log_path.to_path_buf(),
+        }),
+    }
 }
 
 /// Set up ephemeral key, policy dir, and revocation file in `marker_dir`.
