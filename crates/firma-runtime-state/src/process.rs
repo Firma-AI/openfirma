@@ -14,10 +14,20 @@ pub fn is_alive(pid: u32) -> bool {
         return false;
     };
     let pid = nix::unistd::Pid::from_raw(raw);
-    matches!(
-        nix::sys::signal::kill(pid, None),
-        Ok(()) | Err(nix::errno::Errno::EPERM)
-    )
+    // If the process is our child and has exited, reap the zombie here.
+    // Otherwise `kill(pid, 0)` still reports a zombie as present.
+    match nix::sys::wait::waitpid(pid, Some(nix::sys::wait::WaitPidFlag::WNOHANG)) {
+        Ok(
+            nix::sys::wait::WaitStatus::Exited(_, _)
+            | nix::sys::wait::WaitStatus::Signaled(_, _, _),
+        ) => false,
+        Ok(_) => true,
+        Err(nix::errno::Errno::ECHILD) => matches!(
+            nix::sys::signal::kill(pid, None),
+            Ok(()) | Err(nix::errno::Errno::EPERM)
+        ),
+        Err(_) => false,
+    }
 }
 
 #[cfg(windows)]
