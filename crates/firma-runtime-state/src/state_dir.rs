@@ -6,7 +6,7 @@ use tracing::debug;
 
 use crate::error::Result;
 
-/// Resolve the stack runtime state directory.
+/// Resolve the shared runtime state directory.
 ///
 /// # Errors
 ///
