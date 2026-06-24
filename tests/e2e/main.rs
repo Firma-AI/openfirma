@@ -97,6 +97,7 @@ scenario_tests! {
         deny_forbidden_http_resource => scenarios::DenyForbiddenHttpResource,
         deny_unmapped_http_call      => scenarios::DenyUnmappedHttpCall,
         deny_http_call               => scenarios::DenyHttpCall,
+        allow_via_policy             => scenarios::AllowViaPolicy,
         block_raw_tcp_egress         => scenarios::BlockRawTcpEgress,
         fs_read_deny        => scenarios::FsReadDeny::new(),
         fs_delete_deny      => scenarios::FsDeleteDeny::new(),

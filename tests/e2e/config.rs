@@ -39,20 +39,23 @@ pub fn issue_capability(
     cfg_dir: &Path,
     agent_id: &str,
     session_id: &str,
-    action: &str,
+    actions: &[&str],
     scope: &str,
     ttl_secs: u64,
 ) -> Result<PathBuf, anyhow::Error> {
     let config_path = cfg_dir.join("firma.toml");
     let seed_path = cfg_dir.join("capability-seed.toml");
-    let output = std::process::Command::new(crate::firma_bin())
-        .arg("authority")
+    let mut cmd = std::process::Command::new(crate::firma_bin());
+    cmd.arg("authority")
         .args(["--config"])
         .arg(&config_path)
         .arg("issue")
         .args(["--agent-id", agent_id])
-        .args(["--session-id", session_id])
-        .args(["--action", action])
+        .args(["--session-id", session_id]);
+    for action in actions {
+        cmd.args(["--action", action]);
+    }
+    let output = cmd
         .args(["--resource-scope", scope])
         .args(["--ttl-seconds", &ttl_secs.to_string()])
         .args(["--output"])

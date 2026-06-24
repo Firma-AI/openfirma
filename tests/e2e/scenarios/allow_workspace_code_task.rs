@@ -25,13 +25,20 @@ impl EnforcementScenario for AllowWorkspaceCodeTask {
     }
 
     fn setup(&self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
-        ctx.git_init_workspace()?;
         ctx.firma_config().run()?;
         let fib_dir = ctx.workspace_dir.join("fib");
         self.fib_main
             .set(fib_dir.join("src").join("main.rs"))
             .map_err(|_| anyhow::anyhow!("fib_main already set"))?;
         Ok(())
+    }
+
+    /// Reset to an empty git workspace before each phase. The baseline run
+    /// creates `fib/` via `cargo init`; without this the enforcement run's
+    /// `cargo init fib` would fail on a directory that already exists.
+    fn before_assert(&self, ctx: &ScenarioSetup) -> Result<(), anyhow::Error> {
+        ctx.reset_workspace()?;
+        ctx.git_init_workspace()
     }
 
     fn prompt(&self, ctx: &ScenarioSetup) -> String {

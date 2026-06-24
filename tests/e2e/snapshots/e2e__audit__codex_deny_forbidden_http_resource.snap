@@ -5,13 +5,6 @@ expression: self
 FirmaAuditTrail(
     {
         AuditEvent {
-            action: "communication.external.send",
-            resource: "127.0.0.1:<mock-port>/paste",
-            decision: Deny,
-            deny_reason: "policy denied: policy denied action 'communication.external.send' on resource '127.0.0.1:<mock-port>/paste'",
-            dispatch_status: 0,
-        },
-        AuditEvent {
             action: "network.connect",
             resource: "github.com/",
             decision: Deny,

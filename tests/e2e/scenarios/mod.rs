@@ -1,3 +1,4 @@
+mod allow_via_policy;
 mod allow_workspace_code_task;
 mod block_raw_tcp_egress;
 mod deny_forbidden_http_resource;
@@ -7,6 +8,7 @@ mod fs_delete_deny;
 mod fs_read_deny;
 mod simple_prompt;
 
+pub use allow_via_policy::AllowViaPolicy;
 pub use allow_workspace_code_task::AllowWorkspaceCodeTask;
 pub use block_raw_tcp_egress::BlockRawTcpEgress;
 pub use deny_forbidden_http_resource::DenyForbiddenHttpResource;

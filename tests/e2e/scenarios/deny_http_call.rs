@@ -14,11 +14,16 @@ impl EnforcementScenario for DenyHttpCall {
 
     fn setup(&self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.firma_config().run()?;
+        // Map to `communication.internal.send`: the host is classified, so this
+        // is not an unmapped request — the deny comes from the capability stage.
+        // `firma run` mints a default seed covering only
+        // `communication.external.send`, so no token covers this action and the
+        // request fails closed before the network.
         ctx.add_mapping_rule(
             &ctx.mock_server.address().to_string(),
             "POST",
             "*",
-            "communication.external.send",
+            "communication.internal.send",
         )?;
         ctx.mocks.push(
             Mock::given(method("POST"))
