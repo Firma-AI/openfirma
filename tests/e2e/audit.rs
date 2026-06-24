@@ -87,11 +87,11 @@ impl FirmaAuditTrail {
     #[track_caller]
     pub fn assert_snapshot(&self, scenario_name: &str, ctx: &ScenarioSetup) {
         let name = format!("{}_{}", ctx.agent.kind.as_ref(), scenario_name);
-        let mock_addr = ctx.mock_server.address().to_string();
-        let mock_addr_filter = regex::escape(&mock_addr);
+        let mock_port = ctx.mock_server.address().port().to_string();
+        let mock_port_filter = regex::escape(&mock_port);
         insta::with_settings!({
             filters => vec![
-                (mock_addr_filter.as_str(), "<mock-address>"),
+                (mock_port_filter.as_str(), "<mock-port>"),
             ],
         }, {
             insta::assert_debug_snapshot!(name, self);
