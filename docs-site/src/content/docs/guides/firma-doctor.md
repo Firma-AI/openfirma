@@ -39,7 +39,7 @@ firma doctor --timeout-ms 1500                 # slower network probe (ms)
 
 | Flag           | Env               | Default    | Description                                                    |
 | -------------- | ----------------- | ---------- | -------------------------------------------------------------- |
-| `--config`     | `FIRMA_STACK_CONFIG` | discovered | Unified `firma.toml`. When unset, auto-discovery uses `$FIRMA_CONFIG` or walk-up to `<dir>/.firma/firma.toml`. |
+| `--config`     | `FIRMA_STACK_CONFIG` | discovered | Unified `firma.toml`. When unset, auto-discovery uses `$FIRMA_CONFIG` or walk-up to `<dir>/.firma/firma.toml`; selected files must load successfully. |
 | `--state-dir`  | `FIRMA_STATE_DIR` | resolved   | Override the runtime state directory.                          |
 | `--json`       | —                 | _off_      | Emit a single JSON object instead of pretty text.              |
 | `--timeout-ms` | —                 | `500`      | Per-probe network timeout (TCP / UDS connect) in milliseconds. |

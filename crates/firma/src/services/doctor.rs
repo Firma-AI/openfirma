@@ -103,12 +103,21 @@ async fn build_report(args: Args) -> RenderedReport {
     //    uses, then validates both sections. Runs early so the
     //    reachability probes can reuse the resolved path.
     let resolved_config =
-        firma_config::resolve_config("doctor", args.config.as_deref(), &firma_config::SystemDirs);
-    let config_path = match &resolved_config {
-        Ok(resolved) => {
-            let p = resolved.config_file.clone();
-            report.push(config_parse::check(&p));
-            Some(p)
+        firma_config::ConfigResolver::default().resolve_config(args.config.as_deref());
+    let parsed_config = match &resolved_config {
+        Ok(Some(resolved)) => {
+            report.push(config_parse::check_loaded(
+                resolved.config_file(),
+                &resolved.config,
+            ));
+            Some(resolved.config.clone())
+        }
+        Ok(None) => {
+            report.push(Check::fail(
+                "config parsed",
+                "could not resolve firma.toml: no config found",
+            ));
+            None
         }
         Err(error) => {
             report.push(Check::fail(
@@ -118,18 +127,6 @@ async fn build_report(args: Args) -> RenderedReport {
             None
         }
     };
-
-    // Parse the resolved file once; reachability probes 4 and 5 reuse it.
-    let parsed_config =
-        config_path
-            .as_deref()
-            .and_then(|p| match firma_config::FirmaConfig::load(p) {
-                Ok(parsed) => Some(parsed),
-                Err(error) => {
-                    warn!(?error, "could not parse firma.toml");
-                    None
-                }
-            });
 
     // State dir doubles as the runtime dir on every supported platform, so the
     // per-run sidecar markers live under it. Resolve it now: checks 4 and 5
@@ -141,13 +138,17 @@ async fn build_report(args: Args) -> RenderedReport {
     // 4. sidecar mode + reachability
     let parsed_sidecar: Option<firma_sidecar::config::SidecarConfig> =
         parsed_config.as_ref().and_then(|c| {
-            match c.section("sidecar").and_then(|body| {
-                toml::from_str::<firma_sidecar::config::SidecarConfig>(&body)
-                    .map_err(|e| e.to_string())
-            }) {
-                Ok(sc) => Some(sc),
+            let body = match c.section("sidecar") {
+                Ok(body) => body,
                 Err(error) => {
                     warn!(?error, "could not load sidecar config");
+                    return None;
+                }
+            };
+            match toml::from_str::<firma_sidecar::config::SidecarConfig>(&body) {
+                Ok(sc) => Some(sc),
+                Err(error) => {
+                    warn!(?error, "could not parse sidecar config");
                     None
                 }
             }

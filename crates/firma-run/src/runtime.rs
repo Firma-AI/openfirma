@@ -147,12 +147,15 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         // Resolve firma.toml: explicit CLI path > env var > walk up from
         // cwd for `.firma/firma.toml`. `None` means no config — zero-config
         // defaults kick in downstream.
-        let resolved_user_config = firma_config::resolve_config(
-            "run",
-            args.user_config_path.as_deref(),
-            &firma_config::SystemDirs,
-        )
-        .ok();
+        let resolved_user_config = firma_config::ConfigResolver::default()
+            .resolve_config(args.user_config_path.as_deref())
+            .map_err(|error| RunError::ConfigParse {
+                path: args
+                    .user_config_path
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from("firma.toml")),
+                reason: error.to_string(),
+            })?;
         let user_config_path: Option<PathBuf> = resolved_user_config.as_ref().map_or_else(
             || {
                 tracing::info!("no firma.toml found; using zero-config defaults");
@@ -160,16 +163,16 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             },
             |resolved| {
                 tracing::info!(
-                    path = %resolved.config_file.display(),
+                    path = %resolved.config_file().display(),
                     source = ?resolved.source,
                     "loaded firma.toml"
                 );
-                Some(resolved.config_file.clone())
+                Some(resolved.config_file().to_path_buf())
             },
         );
         let user_config_dir = resolved_user_config
             .as_ref()
-            .map(|resolved| resolved.config_dir.as_path());
+            .map(firma_config::ResolvedConfig::config_dir);
         let sidecar_template_path =
             resolve_sidecar_template_path(args, user_config_path.as_deref());
         let flags = AutostartFlags {
@@ -199,7 +202,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             &args.authority_cli,
             &args.authority_profile,
             user_config_path.as_deref(),
-            user_config_dir,
+            user_config_dir.as_deref(),
             &firma_exe,
             &mut prompt,
         )?;

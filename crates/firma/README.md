@@ -55,8 +55,8 @@ firma sidecar --config /etc/firma/firma.toml
 | `--health-bind-addr` | `FIRMA_SIDECAR_HEALTH_BIND_ADDR` | `127.0.0.1:9000` |
 
 When `--config` is omitted, a shared `firma.toml` is discovered from
-platform-standard directories — see the Config Discovery section in
-`docs/cli.md`.
+`$FIRMA_CONFIG` or by walking up to `.firma/firma.toml` — see the Config
+Discovery section in `docs/cli.md`.
 
 Config schema: see `crates/firma-sidecar/src/config.rs`.
 

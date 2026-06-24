@@ -11,14 +11,18 @@ workspace = true
 
 [features]
 clap = ["dep:clap"]
+test-utils = []
 
 [dependencies]
+anyhow = { workspace = true }
 clap = { workspace = true, optional = true, features = ["derive"] }
 dirs = { workspace = true }
+fs-err = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
+firma-config = { path = ".", features = ["test-utils"] }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

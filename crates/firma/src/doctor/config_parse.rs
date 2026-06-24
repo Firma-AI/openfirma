@@ -11,15 +11,24 @@ use crate::doctor::report::Check;
 /// Validate the resolved `firma.toml`: both `[authority]` and `[sidecar]`
 /// sections must be present and parse into their component config types.
 #[must_use]
+#[cfg(test)]
 pub fn check(firma_toml: &Path) -> Check {
     let display = firma_toml.display().to_string();
 
     let parsed = match firma_config::FirmaConfig::load(firma_toml) {
         Ok(parsed) => parsed,
         Err(error) => {
-            return Check::fail("config parsed", error).with_detail("path", display);
+            return Check::fail("config parsed", error.to_string()).with_detail("path", display);
         }
     };
+
+    check_loaded(firma_toml, &parsed)
+}
+
+/// Validate an already-loaded `firma.toml`.
+#[must_use]
+pub fn check_loaded(firma_toml: &Path, parsed: &firma_config::FirmaConfig) -> Check {
+    let display = firma_toml.display().to_string();
 
     // [authority] is optional — agent-remote configs have no server section.
     if let Ok(body) = parsed.section("authority")

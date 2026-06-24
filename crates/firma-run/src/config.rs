@@ -963,6 +963,7 @@ fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
         // load_section prefixes the path; strip it to avoid doubling in the
         // RunError::ConfigParse display ("{path}: {reason}").
         let prefix = format!("{}: ", path.display());
+        let reason = reason.to_string();
         let reason = reason.strip_prefix(&prefix).unwrap_or(&reason).to_string();
         let hint = if reason.contains("[run]") {
             "; run `firma config` to add a [run] section"
@@ -993,6 +994,7 @@ fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
 pub fn read_configured_profile(path: &Path) -> Result<Option<String>, RunError> {
     let section = firma_config::load_section(path, "run").map_err(|reason| {
         let prefix = format!("{}: ", path.display());
+        let reason = reason.to_string();
         let reason = reason.strip_prefix(&prefix).unwrap_or(&reason).to_string();
         RunError::ConfigParse {
             path: path.to_path_buf(),

@@ -85,10 +85,11 @@ fn fail(msg: &str) -> ExitCode {
 async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode> {
     debug!("firma sidecar starting");
 
-    let resolved =
-        firma_config::resolve_config("sidecar", args.config.as_deref(), &firma_config::SystemDirs)?;
+    let resolved = firma_config::ConfigResolver::default()
+        .resolve_config(args.config.as_deref())?
+        .ok_or_else(|| anyhow::anyhow!("no firma.toml found for `sidecar`"))?;
     info!(
-        path = %resolved.config_file.display(),
+        path = %resolved.config_file().display(),
         source = ?resolved.source,
         "config resolved"
     );
@@ -135,7 +136,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     let local_exec_handle = startup::spawn_local_exec_endpoint(&config, exit.clone())?;
 
     let report = build_startup_report(
-        &resolved.config_file,
+        resolved.config_file(),
         &config,
         pipeline_runtime.mapping_rules_loaded,
         &interceptor.listen_addr,
@@ -236,10 +237,12 @@ fn emit_operator_routing_hints(config: &config::SidecarConfig, interceptor_addr:
 }
 
 fn read_config(resolved: &firma_config::ResolvedConfig) -> anyhow::Result<config::SidecarConfig> {
-    let body = firma_config::load_section(&resolved.config_file, "sidecar")
+    let body = resolved
+        .config
+        .section("sidecar")
         .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;
     let mut config: config::SidecarConfig = toml::from_str(&body)?;
-    config.rebase_defaults(&resolved.config_dir);
+    config.rebase_defaults(&resolved.config_dir());
     config
         .validate()
         .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;
