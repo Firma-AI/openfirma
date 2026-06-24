@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
+use firma_config::CONFIG_FILE_NAME;
 use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
 use firma_run::routing::{AutostartFlags, resolve_authority};
 
@@ -56,7 +57,7 @@ fn existing_plaintext_h2_authority_is_reused_without_supervisor() {
     spawn_plaintext_h2_stub(listener);
 
     let tmp = tempfile::tempdir().unwrap();
-    let cfg = tmp.path().join("firma.toml");
+    let cfg = tmp.path().join(CONFIG_FILE_NAME);
     std::fs::write(
         &cfg,
         format!("[authority]\nlisten_addr = \"{authority_address}\"\n"),

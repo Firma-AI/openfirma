@@ -13,7 +13,7 @@ use dialoguer::theme::ColorfulTheme;
 use crate::args::config::{InitArgs, Mapping, Mode, Posture};
 use crate::fs::create_private_dir_all;
 use doc::DocInputs;
-use firma_config::AgentProfile;
+use firma_config::{AgentProfile, CONFIG_DIR_NAME, CONFIG_FILE_NAME};
 
 struct AuthorityInputs {
     /// gRPC listen address (agent-local + authority modes).
@@ -180,7 +180,7 @@ fn write_scaffold_files(
         // Skipping the write here would silently swallow mode changes (e.g.
         // switching from agent-remote to agent-local would not persist the new
         // `[authority]` section).
-        let is_merged_toml = matches!(rel.as_str(), "firma.toml" | "mapping-rules.toml");
+        let is_merged_toml = matches!(rel.as_str(), CONFIG_FILE_NAME | "mapping-rules.toml");
         let should_overwrite =
             force || is_merged_toml || (overwrite_policy && rel.starts_with("policies/"));
         if !should_overwrite && path.exists() {
@@ -289,13 +289,13 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
         extra_hosts: &inputs.sidecar.extra_hosts,
     };
 
-    let firma_toml = render_for(&inputs.config_dir, "firma.toml", |text| {
+    let firma_toml = render_for(&inputs.config_dir, CONFIG_FILE_NAME, |text| {
         doc::render_firma_toml(text, &doc_inputs)
     })?;
 
     let cedar_path = format!("policies/{}.cedar", inputs.sidecar.posture.file_name());
     let mut files: Vec<(String, String)> = vec![
-        ("firma.toml".into(), firma_toml),
+        (CONFIG_FILE_NAME.into(), firma_toml),
         (
             cedar_path,
             inputs.sidecar.posture.cedar_content().to_string(),
@@ -341,7 +341,7 @@ fn path_display(path: &Path) -> String {
 fn default_output_dir() -> PathBuf {
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".firma")
+        .join(CONFIG_DIR_NAME)
 }
 
 fn collect_inputs(args: &InitArgs) -> Result<CollectedInputs> {
@@ -1314,7 +1314,7 @@ mod tests {
     #[test]
     fn audit_log_path_honors_explicit_config() {
         let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("firma.toml");
+        let config = dir.path().join(CONFIG_FILE_NAME);
         let audit_log = dir.path().join("explicit-audit.jsonl");
         std::fs::write(
             &config,
@@ -1369,7 +1369,7 @@ mod tests {
     fn firma_toml_is_valid_toml() {
         for posture in Posture::iter() {
             let files = make_files(&posture, &[Mapping::Anthropic, Mapping::Github], &[]);
-            let _: toml::Value = toml::from_str(get(&files, "firma.toml")).unwrap();
+            let _: toml::Value = toml::from_str(get(&files, CONFIG_FILE_NAME)).unwrap();
         }
     }
 
@@ -1377,8 +1377,8 @@ mod tests {
     fn firma_toml_parses_as_authority_config() {
         let files = make_files(&Posture::Dev, &[Mapping::Anthropic], &[]);
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("firma.toml");
-        std::fs::write(&path, get(&files, "firma.toml")).unwrap();
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        std::fs::write(&path, get(&files, CONFIG_FILE_NAME)).unwrap();
         let body = firma_config::load_section(&path, "authority").unwrap();
         let _: firma_authority::AuthorityConfig = toml::from_str(&body).unwrap();
     }
@@ -1393,8 +1393,8 @@ mod tests {
             ] {
                 let files = make_files(&posture, &mappings, &[]);
                 let dir = tempfile::tempdir().unwrap();
-                let path = dir.path().join("firma.toml");
-                std::fs::write(&path, get(&files, "firma.toml")).unwrap();
+                let path = dir.path().join(CONFIG_FILE_NAME);
+                std::fs::write(&path, get(&files, CONFIG_FILE_NAME)).unwrap();
                 let body = firma_config::load_section(&path, "sidecar").unwrap();
                 let _: firma_sidecar::config::SidecarConfig = toml::from_str(&body).unwrap();
             }
@@ -1408,7 +1408,7 @@ mod tests {
             &[Mapping::Anthropic, Mapping::Github, Mapping::Gmail],
             &[],
         );
-        let t: toml::Value = toml::from_str(get(&files, "firma.toml")).unwrap();
+        let t: toml::Value = toml::from_str(get(&files, CONFIG_FILE_NAME)).unwrap();
         let hosts = t["sidecar"]["interceptor"]["https_mitm"]["intercept_hosts"]
             .as_array()
             .unwrap();
@@ -1421,7 +1421,7 @@ mod tests {
     #[test]
     fn firma_toml_no_mitm_hosts_when_only_anthropic() {
         let files = make_files(&Posture::Dev, &[Mapping::Anthropic], &[]);
-        let t: toml::Value = toml::from_str(get(&files, "firma.toml")).unwrap();
+        let t: toml::Value = toml::from_str(get(&files, CONFIG_FILE_NAME)).unwrap();
         let https_mitm = &t["sidecar"]["interceptor"]["https_mitm"];
         // No MITM hosts → MITM disabled, host lists absent.
         assert_eq!(https_mitm["enabled"].as_bool(), Some(false));
@@ -1431,7 +1431,7 @@ mod tests {
     #[test]
     fn firma_toml_rules_paths_contains_selected_mappings() {
         let files = make_files(&Posture::Dev, &[Mapping::Anthropic, Mapping::Github], &[]);
-        let t: toml::Value = toml::from_str(get(&files, "firma.toml")).unwrap();
+        let t: toml::Value = toml::from_str(get(&files, CONFIG_FILE_NAME)).unwrap();
         let paths = t["sidecar"]["mapping"]["rules_paths"].as_array().unwrap();
         let path_strs: Vec<_> = paths.iter().filter_map(|v| v.as_str()).collect();
         assert!(path_strs.contains(&"mappings/anthropic.toml"));
@@ -1588,7 +1588,7 @@ mod tests {
     #[test]
     fn firma_toml_has_run_profiles_section() {
         let files = make_files(&Posture::Dev, &[], &[]);
-        let t: toml::Value = toml::from_str(get(&files, "firma.toml")).unwrap();
+        let t: toml::Value = toml::from_str(get(&files, CONFIG_FILE_NAME)).unwrap();
         assert!(
             t.get("run").and_then(|r| r.get("profiles")).is_some(),
             "[run.profiles] missing from firma.toml"
@@ -1598,7 +1598,7 @@ mod tests {
     #[test]
     fn run_profiles_workspace_mount_matches_input() {
         let files = make_files(&Posture::Dev, &[], &[]);
-        let t: toml::Value = toml::from_str(get(&files, "firma.toml")).unwrap();
+        let t: toml::Value = toml::from_str(get(&files, CONFIG_FILE_NAME)).unwrap();
         let mounts = t["run"]["profiles"]["generic"]["mounts"]
             .as_array()
             .unwrap();
@@ -1611,7 +1611,7 @@ mod tests {
     fn implicit_scaffold_uses_workspace_not_config_dir_for_mount() {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = tmp.path().join("project");
-        let config_dir = workspace.join(".firma");
+        let config_dir = workspace.join(CONFIG_DIR_NAME);
         let state_dir = tmp.path().join("state");
         std::fs::create_dir_all(&workspace).unwrap();
 
@@ -1627,7 +1627,7 @@ mod tests {
         })
         .unwrap();
 
-        let text = std::fs::read_to_string(config_dir.join("firma.toml")).unwrap();
+        let text = std::fs::read_to_string(config_dir.join(CONFIG_FILE_NAME)).unwrap();
         let t: toml::Value = toml::from_str(&text).unwrap();
         // agent="generic" is a recognized profile → section is [run.profiles.generic]
         let mounts = t["run"]["profiles"]["generic"]["mounts"]

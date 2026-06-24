@@ -14,6 +14,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use firma_config::CONFIG_FILE_NAME;
 use firma_run::sidecar::config::testing::{SynthesizeRequest, TemplateSource, synthesize};
 use tempfile::TempDir;
 
@@ -269,7 +270,7 @@ fn relative_template_resource_paths_rebase_to_template_dir() {
     let tmp = TempDir::new().expect("tmp");
     let template_dir = tmp.path().join("operator-config");
     fs::create_dir_all(&template_dir).expect("mkdir template dir");
-    let template = template_dir.join("firma.toml");
+    let template = template_dir.join(CONFIG_FILE_NAME);
     // Touch sentinel files so the assertions key off real paths (the
     // rebase logic itself does not require them, but it documents that
     // the operator's config dir is where these resources actually live).

@@ -21,6 +21,8 @@ use std::net::TcpListener;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use firma_config::CONFIG_FILE_NAME;
+
 const CONTRACT_PREFIXES: &[&str] = &[
     "config loaded",
     "mapping table loaded",
@@ -80,7 +82,7 @@ action_class = "communication.external.send"
 
     let interceptor_port = pick_free_port();
     let health_port = pick_free_port();
-    let sidecar_toml = tmp.path().join("firma.toml");
+    let sidecar_toml = tmp.path().join(CONFIG_FILE_NAME);
     std::fs::write(
         &sidecar_toml,
         format!(

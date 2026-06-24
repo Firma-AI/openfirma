@@ -77,6 +77,7 @@ fn section_to_selection(s: &AuthoritySection) -> Option<AuthoritySelection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use firma_config::CONFIG_FILE_NAME;
     use tempfile::tempdir;
 
     #[test]
@@ -103,7 +104,7 @@ mod tests {
     #[test]
     fn authority_section_implies_local() {
         let tmp = tempdir().unwrap();
-        let path = tmp.path().join("firma.toml");
+        let path = tmp.path().join(CONFIG_FILE_NAME);
         std::fs::write(&path, "[authority]\nlisten_addr = \"127.0.0.1:0\"\n").unwrap();
         let sel = resolve(&AuthorityCli::Unset, false, Some(path.as_path())).unwrap();
         assert_eq!(sel, AuthoritySelection::Local);
@@ -112,7 +113,7 @@ mod tests {
     #[test]
     fn sidecar_authority_url_only_returns_remote() {
         let tmp = tempdir().unwrap();
-        let path = tmp.path().join("firma.toml");
+        let path = tmp.path().join(CONFIG_FILE_NAME);
         std::fs::write(&path, "[sidecar.authority]\nurl = \"https://x\"\n").unwrap();
         let sel = resolve(&AuthorityCli::Unset, false, Some(path.as_path())).unwrap();
         assert_eq!(sel, AuthoritySelection::Remote("https://x".into()));
@@ -127,7 +128,7 @@ mod tests {
     #[test]
     fn no_authority_keys_defaults_to_local_autostart() {
         let tmp = tempdir().unwrap();
-        let path = tmp.path().join("firma.toml");
+        let path = tmp.path().join(CONFIG_FILE_NAME);
         std::fs::write(&path, "[other]\nkeep = true\n").unwrap();
         let sel = resolve(&AuthorityCli::Unset, false, Some(path.as_path())).unwrap();
         assert_eq!(sel, AuthoritySelection::Local);
