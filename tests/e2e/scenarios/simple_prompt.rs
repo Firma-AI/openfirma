@@ -35,7 +35,7 @@ impl EnforcementScenario for SimplePrompt {
         if !output.agent.success {
             anyhow::bail!("enforcement agent failed: {}", output.agent.stderr);
         }
-        insta::assert_debug_snapshot!(ctx.agent.kind.as_ref(), &audit);
+        audit.assert_snapshot(self.name(), ctx);
         Ok(())
     }
 }

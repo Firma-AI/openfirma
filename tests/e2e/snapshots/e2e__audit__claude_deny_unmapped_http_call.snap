@@ -1,0 +1,15 @@
+---
+source: crates/firma/../../tests/e2e/audit.rs
+expression: self
+---
+FirmaAuditTrail(
+    {
+        AuditEvent {
+            action: "raw.http.GET",
+            resource: "<mock-address>/unlisted",
+            decision: Deny,
+            deny_reason: "token invalid: no capability token covers action 'communication.internal.send' on resource '<mock-address>/unlisted'",
+            dispatch_status: 0,
+        },
+    },
+)

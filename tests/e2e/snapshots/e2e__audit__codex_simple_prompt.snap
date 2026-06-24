@@ -1,17 +1,9 @@
 ---
-source: crates/firma/../../tests/e2e/scenarios/deny_forbidden_http_resource.rs
-assertion_line: 67
-expression: "&audit"
+source: crates/firma/../../tests/e2e/audit.rs
+expression: self
 ---
 FirmaAuditTrail(
     {
-        AuditEvent {
-            action: "communication.external.send",
-            resource: "127.0.0.1:40095/paste",
-            decision: Deny,
-            deny_reason: "policy denied: policy denied action 'communication.external.send' on resource '127.0.0.1:40095/paste'",
-            dispatch_status: 0,
-        },
         AuditEvent {
             action: "network.connect",
             resource: "github.com/",

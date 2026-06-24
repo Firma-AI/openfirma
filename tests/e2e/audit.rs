@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_repr::Deserialize_repr;
 use std::collections::BTreeSet;
 
-use crate::agent::AgentKind;
+use crate::{agent::AgentKind, setup::ScenarioSetup};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize_repr)]
 #[repr(u8)]
@@ -82,5 +82,19 @@ impl FirmaAuditTrail {
             .iter()
             .filter(|event| event.decision == Decision::Deny)
             .collect()
+    }
+
+    #[track_caller]
+    pub fn assert_snapshot(&self, scenario_name: &str, ctx: &ScenarioSetup) {
+        let name = format!("{}_{}", ctx.agent.kind.as_ref(), scenario_name);
+        let mock_addr = ctx.mock_server.address().to_string();
+        let mock_addr_filter = regex::escape(&mock_addr);
+        insta::with_settings!({
+            filters => vec![
+                (mock_addr_filter.as_str(), "<mock-address>"),
+            ],
+        }, {
+            insta::assert_debug_snapshot!(name, self);
+        });
     }
 }

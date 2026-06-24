@@ -52,7 +52,7 @@ impl EnforcementScenario for DenyUnmappedHttpCall {
                 "request reached mock server; should have been blocked (no mapping rule registered)"
             );
         }
-        insta::assert_debug_snapshot!(ctx.agent.kind.as_ref(), &audit);
+        audit.assert_snapshot(self.name(), ctx);
         Ok(())
     }
 }

@@ -1,22 +1,21 @@
 ---
-source: crates/firma/../../tests/e2e/scenarios/deny_unmapped_http_call.rs
-assertion_line: 55
-expression: "&audit"
+source: crates/firma/../../tests/e2e/audit.rs
+expression: self
 ---
 FirmaAuditTrail(
     {
+        AuditEvent {
+            action: "communication.external.send",
+            resource: "127.0.0.1:<mock-port>/paste",
+            decision: Deny,
+            deny_reason: "policy denied: policy denied action 'communication.external.send' on resource '127.0.0.1:<mock-port>/paste'",
+            dispatch_status: 0,
+        },
         AuditEvent {
             action: "network.connect",
             resource: "github.com/",
             decision: Deny,
             deny_reason: "token invalid: no capability token covers action 'code.write' on resource 'github.com/'",
-            dispatch_status: 0,
-        },
-        AuditEvent {
-            action: "raw.http.GET",
-            resource: "127.0.0.1:36499/unlisted",
-            decision: Deny,
-            deny_reason: "token invalid: no capability token covers action 'communication.internal.send' on resource '127.0.0.1:36499/unlisted'",
             dispatch_status: 0,
         },
         AuditEvent {

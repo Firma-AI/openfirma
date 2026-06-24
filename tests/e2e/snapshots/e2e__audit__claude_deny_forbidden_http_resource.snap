@@ -1,0 +1,15 @@
+---
+source: crates/firma/../../tests/e2e/audit.rs
+expression: self
+---
+FirmaAuditTrail(
+    {
+        AuditEvent {
+            action: "communication.external.send",
+            resource: "<mock-address>/paste",
+            decision: Deny,
+            deny_reason: "policy denied: policy denied action 'communication.external.send' on resource '<mock-address>/paste'",
+            dispatch_status: 0,
+        },
+    },
+)

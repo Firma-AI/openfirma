@@ -69,7 +69,7 @@ impl EnforcementScenario for DenyHttpCall {
                 String::from_utf8_lossy(&req.body)
             );
         }
-        insta::assert_debug_snapshot!(ctx.agent.kind.as_ref(), &audit);
+        audit.assert_snapshot(self.name(), ctx);
         Ok(())
     }
 }
