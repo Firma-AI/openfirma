@@ -1,5 +1,6 @@
 //! Runner for `firma run`.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use firma_run::authority::AuthorityPromptIo;
@@ -36,17 +37,9 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     validate_sidecar_endpoint_flag(&args)?;
 
     // Implicit init: if no firma.toml is discoverable for this project,
-    // scaffold one before handing off to firma-run. Keeps the spec's
-    // one-command path (`firma run codex`) working from a fresh clone.
-    maybe_implicit_init(&args)?;
-
-    // Auto-discover firma.toml when --config is not set.
-    let run_config = match &args.config {
-        Some(config) => Some(config.clone()),
-        None => firma_config::ConfigResolver::default()
-            .resolve_config(None)?
-            .map(|resolved| resolved.config_file().to_path_buf()),
-    };
+    // scaffold one before handing off to firma-run. The returned path is
+    // reused below so discovery is performed once.
+    let run_config = maybe_implicit_init(&args)?;
 
     let profile = resolve_profile_name(
         args.profile.as_deref(),
@@ -88,20 +81,17 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     }
 }
 
-fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
-    if args.config.is_some() {
+fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<Option<PathBuf>> {
+    if let Some(config) = &args.config {
         // Trust the user-supplied config path. If it does not exist we
         // let firma-run report the parse/IO error normally.
-        return Ok(());
+        return Ok(Some(config.clone()));
     }
     // Spec §4 step 1 + §5: walk-up `./.firma/firma.toml` is the project-local
     // tier, picked up by `firma_config::resolve_config`. If anything in the
     // search path resolves, skip implicit init.
-    if firma_config::ConfigResolver::default()
-        .resolve_config(None)?
-        .is_some()
-    {
-        return Ok(());
+    if let Some(resolved) = firma_config::ConfigResolver::default().resolve_config(None)? {
+        return Ok(Some(resolved.config_file().to_path_buf()));
     }
 
     // Spec §4.1: implicit init creates a long-lived Ed25519 key under
@@ -145,7 +135,7 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<()> {
         warn!(%error, "implicit init failed; continuing — firma-run will surface the underlying error");
         return Err(error.context("implicit init"));
     }
-    Ok(())
+    Ok(Some(firma_toml))
 }
 
 /// Decide the authority shape for implicit init.

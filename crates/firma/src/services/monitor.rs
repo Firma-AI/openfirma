@@ -35,13 +35,14 @@ pub fn run(args: &Args) -> ExitCode {
         "firma monitor starting"
     );
 
-    let (state_dir, audit_path) = match resolve_paths(args.state_dir.as_ref()) {
-        Ok(paths) => paths,
-        Err(error) => {
-            crate::output::err(format!("monitor: {error}"));
-            return ExitCode::from(2);
-        }
-    };
+    let (state_dir, audit_path) =
+        match resolve_paths(args.state_dir.as_ref(), args.config.as_deref()) {
+            Ok(paths) => paths,
+            Err(error) => {
+                crate::output::err(format!("monitor: {error}"));
+                return ExitCode::from(2);
+            }
+        };
     maybe_print_wait_hint(follow, &audit_path);
 
     let backfill = match parse_since(args.since.as_deref()) {
@@ -104,9 +105,13 @@ pub fn run(args: &Args) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn resolve_paths(state_dir_flag: Option<&PathBuf>) -> Result<(PathBuf, PathBuf), String> {
+fn resolve_paths(
+    state_dir_flag: Option<&PathBuf>,
+    config_override: Option<&Path>,
+) -> Result<(PathBuf, PathBuf), String> {
     let state_dir = crate::services::config::resolve_state_dir(state_dir_flag.cloned())?;
-    let audit_path = crate::services::config::resolve_audit_log_path(state_dir_flag)?;
+    let audit_path =
+        crate::services::config::resolve_audit_log_path(state_dir_flag, config_override)?;
     Ok((state_dir, audit_path))
 }
 

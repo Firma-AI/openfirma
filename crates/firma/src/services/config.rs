@@ -1089,14 +1089,17 @@ pub fn resolve_state_dir(flag: Option<PathBuf>) -> Result<PathBuf, String> {
 ///
 /// Priority: explicit `--state-dir` → `sidecar.audit.file_path` from a
 /// discovered `firma.toml` → `<state_dir>/audit.jsonl`.
-pub fn resolve_audit_log_path(state_dir_flag: Option<&PathBuf>) -> Result<PathBuf, String> {
+pub fn resolve_audit_log_path(
+    state_dir_flag: Option<&PathBuf>,
+    config_override: Option<&Path>,
+) -> Result<PathBuf, String> {
     let state_dir = resolve_state_dir(state_dir_flag.cloned())?;
     if state_dir_flag.is_some() {
         return Ok(state_dir.join("audit.jsonl"));
     }
 
     if let Some(resolved) = firma_config::ConfigResolver::default()
-        .resolve_config(None)
+        .resolve_config(config_override)
         .map_err(|error| format!("resolve discovered config: {error}"))?
         && let Ok(body) = resolved.config.section("sidecar.audit")
     {
@@ -1306,6 +1309,25 @@ mod tests {
 
     fn parse_rules(content: &str) -> firma_sidecar::config::MappingRulesFile {
         toml::from_str(content).unwrap()
+    }
+
+    #[test]
+    fn audit_log_path_honors_explicit_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("firma.toml");
+        let audit_log = dir.path().join("explicit-audit.jsonl");
+        std::fs::write(
+            &config,
+            format!(
+                "[sidecar.audit]\nfile_path = {:?}\n",
+                audit_log.to_string_lossy()
+            ),
+        )
+        .unwrap();
+
+        let resolved = resolve_audit_log_path(None, Some(&config)).unwrap();
+
+        assert_eq!(resolved, audit_log);
     }
 
     // ── Rendering ────────────────────────────────────────────────────────────
