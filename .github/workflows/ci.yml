@@ -98,6 +98,8 @@ jobs:
           persist-credentials: false
 
       - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
+        with:
+          rustflags: ""
 
       - name: Load tool versions
         shell: bash
