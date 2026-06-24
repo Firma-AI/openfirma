@@ -56,7 +56,7 @@ pub struct SidecarEntry {
     pub started_at: String,
     /// Coarse-grained liveness state derived from pid + socket probes.
     pub state: crate::status::State,
-    /// Path to the sidecar's listen socket (`<marker_dir>/sidecar.sock`).
+    /// Interceptor listen endpoint: a TCP `host:port` value or Unix-domain socket path.
     pub listen: PathBuf,
     /// Seconds since `sidecar.pid` was written in the marker directory, used as a proxy for sidecar start time. `None` if the file is absent or its mtime is in the future.
     pub uptime_secs: Option<u64>,
