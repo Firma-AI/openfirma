@@ -1,4 +1,4 @@
-//! Runtime filesystem state primitives shared by `OpenFirma` crates.
+//! Runtime state contracts and local liveness primitives shared by `OpenFirma` crates.
 
 pub mod error;
 pub mod fs;
