@@ -17,6 +17,8 @@
 use std::path::Path;
 use std::process::Command;
 
+use firma_config::CONFIG_FILE_NAME;
+
 fn firma() -> Command {
     Command::new(env!("CARGO_BIN_EXE_firma"))
 }
@@ -111,7 +113,7 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         String::from_utf8_lossy(&first.stdout),
         String::from_utf8_lossy(&first.stderr),
     );
-    let firma_toml_path = config_dir.join("firma.toml");
+    let firma_toml_path = config_dir.join(CONFIG_FILE_NAME);
     // Add a custom env_set key inside [run.profiles.generic.env_set] so the
     // merge contract test can verify it survives subsequent firma config runs.
     let mut existing_firma_toml_text = std::fs::read_to_string(&firma_toml_path).unwrap();
@@ -137,7 +139,7 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         String::from_utf8_lossy(&defaults.stdout),
         String::from_utf8_lossy(&defaults.stderr),
     );
-    let firma_toml_out = extract_dry_run_file(&defaults.stdout, "firma.toml");
+    let firma_toml_out = extract_dry_run_file(&defaults.stdout, CONFIG_FILE_NAME);
     let value: toml::Value = toml::from_str(&firma_toml_out).unwrap();
     assert_eq!(
         value["authority"]["listen_addr"].as_str(),
@@ -186,7 +188,7 @@ fn reads_existing_config_as_defaults_and_allows_overrides() {
         String::from_utf8_lossy(&override_output.stdout),
         String::from_utf8_lossy(&override_output.stderr),
     );
-    let firma_toml_out = extract_dry_run_file(&override_output.stdout, "firma.toml");
+    let firma_toml_out = extract_dry_run_file(&override_output.stdout, CONFIG_FILE_NAME);
     let value: toml::Value = toml::from_str(&firma_toml_out).unwrap();
     assert_eq!(
         value["authority"]["listen_addr"].as_str(),
@@ -264,7 +266,7 @@ fn agent_remote_switch_drops_local_authority_section() {
         String::from_utf8_lossy(&output.stderr),
     );
 
-    let firma_toml = extract_dry_run_file(&output.stdout, "firma.toml");
+    let firma_toml = extract_dry_run_file(&output.stdout, CONFIG_FILE_NAME);
     let value: toml::Value = toml::from_str(&firma_toml).unwrap();
     assert!(
         value.get("authority").is_none(),
@@ -435,7 +437,7 @@ fn agent_remote_to_local_switch_persists_authority_section() {
         String::from_utf8_lossy(&remote.stderr),
     );
 
-    let firma_toml_path = config_dir.join("firma.toml");
+    let firma_toml_path = config_dir.join(CONFIG_FILE_NAME);
     let before: toml::Value =
         toml::from_str(&std::fs::read_to_string(&firma_toml_path).unwrap()).unwrap();
     assert!(
@@ -525,7 +527,7 @@ fn authority_mode_honors_selected_posture() {
         !stdout.contains("policies/dev.cedar"),
         "authority mode should not also generate the default dev policy:\n{stdout}"
     );
-    let firma_toml = extract_dry_run_file(&output.stdout, "firma.toml");
+    let firma_toml = extract_dry_run_file(&output.stdout, CONFIG_FILE_NAME);
     let value: toml::Value = toml::from_str(&firma_toml).unwrap();
     assert!(
         value.get("authority").is_some(),
@@ -591,7 +593,7 @@ fn init_writes_parseable_config() {
 
     run_init(&config_dir, &state_dir);
 
-    let firma_toml = config_dir.join("firma.toml");
+    let firma_toml = config_dir.join(CONFIG_FILE_NAME);
     assert!(firma_toml.is_file(), "firma.toml in config_dir");
     assert!(!config_dir.join("authority.toml").exists());
     assert!(!config_dir.join("sidecar.toml").exists());
@@ -625,7 +627,7 @@ fn scaffold_supports_standalone_sidecar_startup() {
 
     run_init(&config_dir, &state_dir);
 
-    let firma_toml = config_dir.join("firma.toml");
+    let firma_toml = config_dir.join(CONFIG_FILE_NAME);
     let text = std::fs::read_to_string(&firma_toml).unwrap();
     let value: toml::Value = toml::from_str(&text).unwrap();
 
@@ -669,7 +671,7 @@ fn init_state_paths_in_config_are_absolute() {
 
     run_init(&config_dir, &state_dir);
 
-    let text = std::fs::read_to_string(config_dir.join("firma.toml")).unwrap();
+    let text = std::fs::read_to_string(config_dir.join(CONFIG_FILE_NAME)).unwrap();
     let value: toml::Value = toml::from_str(&text).unwrap();
 
     let key_file = value["authority"]["key_file"]

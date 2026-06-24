@@ -284,6 +284,8 @@ pub enum ConfigError {
 
 #[cfg(test)]
 mod tests {
+    use firma_config::CONFIG_FILE_NAME;
+
     use super::*;
 
     #[test]
@@ -363,7 +365,7 @@ mod tests {
     #[test]
     fn load_from_resolved_applies_rebase() {
         let tmp = tempfile::tempdir().unwrap();
-        let p = tmp.path().join("firma.toml");
+        let p = tmp.path().join(CONFIG_FILE_NAME);
         std::fs::write(
             &p,
             "max_ttl_seconds = 1800\ntls_cert_path = \"authority.crt\"\ntls_key_path = \"authority.key\"\n",

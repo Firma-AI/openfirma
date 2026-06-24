@@ -12,6 +12,8 @@
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use firma_config::CONFIG_FILE_NAME;
+
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn firma_bin() -> std::path::PathBuf {
@@ -58,7 +60,7 @@ fn write_authority_fixture(dir: &std::path::Path) -> std::path::PathBuf {
     // Unified sectioned config: `firma authority` resolves the
     // `[authority]` section out of one `firma.toml` via the strict
     // section loader.
-    let config_path = dir.join("firma.toml");
+    let config_path = dir.join(CONFIG_FILE_NAME);
     let toml = format!(
         r#"
 [authority]

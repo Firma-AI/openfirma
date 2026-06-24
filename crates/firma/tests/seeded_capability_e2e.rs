@@ -15,6 +15,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use firma_config::CONFIG_FILE_NAME;
 use firma_sidecar::config::CapabilitySeedConfig;
 use firma_sidecar::startup::{build_token_verifier, load_capability_map};
 
@@ -56,7 +57,7 @@ fn issued_token_seeds_capability_map_and_admits_stage1() {
     // 2. Write a unified sectioned firma.toml that points at the
     //    policies + key; `firma authority` resolves `[authority]` via the
     //    strict section loader.
-    let auth_toml = tmp.path().join("firma.toml");
+    let auth_toml = tmp.path().join(CONFIG_FILE_NAME);
     let revocation_file = tmp.path().join("revocations.txt");
     std::fs::write(
         &auth_toml,

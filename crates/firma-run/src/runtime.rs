@@ -674,6 +674,8 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
+    use firma_config::CONFIG_FILE_NAME;
+
     use crate::config::{
         CapabilityLeaseConfig, CapabilitySource, ExecutableLaunchPolicy, MountSpec, NetworkPolicy,
         ResolvedProfile, SandboxIdentityMode, SidecarEndpoint,
@@ -1133,7 +1135,7 @@ mod tests {
     #[test]
     fn resolve_sidecar_template_falls_back_to_user_config_when_present() {
         let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let user_cfg = tmp.path().join("firma.toml");
+        let user_cfg = tmp.path().join(CONFIG_FILE_NAME);
         fs::write(&user_cfg, "[sidecar]\n").unwrap_or_else(|e| panic!("{e}"));
 
         let args = super::RunInput {

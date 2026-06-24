@@ -12,6 +12,7 @@
 use std::net::TcpListener;
 use std::path::PathBuf;
 
+use firma_config::CONFIG_FILE_NAME;
 use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
 use firma_run::routing::{AutostartFlags, resolve_authority};
 
@@ -31,7 +32,7 @@ fn pre_bound_port_without_plaintext_h2_fails_closed() {
     let address = listener.local_addr().unwrap();
 
     let tmp = tempfile::tempdir().unwrap();
-    let cfg = tmp.path().join("firma.toml");
+    let cfg = tmp.path().join(CONFIG_FILE_NAME);
     std::fs::write(&cfg, format!("[authority]\nlisten_addr = \"{address}\"\n")).unwrap();
     let identity = firma_run::identity::RunIdentity::new("test");
     let runtime_dir = tmp.path().join("runtime");

@@ -15,6 +15,7 @@
 
 use std::path::PathBuf;
 
+use firma_config::CONFIG_FILE_NAME;
 use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
 use firma_run::error::RunError;
 use firma_run::identity::RunIdentity;
@@ -53,7 +54,7 @@ fn fake_firma_exe(tmp: &std::path::Path) -> PathBuf {
 #[test]
 fn prompt_fires_when_no_commit_and_persists_on_yes() {
     let tmp = tempfile::tempdir().unwrap();
-    let cfg = tmp.path().join("firma.toml");
+    let cfg = tmp.path().join(CONFIG_FILE_NAME);
     let identity = RunIdentity::new("test");
     let runtime_dir = tmp.path().join("runtime");
 
@@ -95,7 +96,7 @@ fn prompt_fires_when_no_commit_and_persists_on_yes() {
 #[test]
 fn prompt_declined_returns_typed_error_and_does_not_persist() {
     let tmp = tempfile::tempdir().unwrap();
-    let cfg = tmp.path().join("firma.toml");
+    let cfg = tmp.path().join(CONFIG_FILE_NAME);
     let identity = RunIdentity::new("test");
     let runtime_dir = tmp.path().join("runtime");
 
@@ -125,7 +126,7 @@ fn prompt_declined_returns_typed_error_and_does_not_persist() {
 #[test]
 fn no_tty_returns_typed_error_without_calling_confirm() {
     let tmp = tempfile::tempdir().unwrap();
-    let cfg = tmp.path().join("firma.toml");
+    let cfg = tmp.path().join(CONFIG_FILE_NAME);
     let identity = RunIdentity::new("test");
     let runtime_dir = tmp.path().join("runtime");
 
@@ -152,7 +153,7 @@ fn no_tty_returns_typed_error_without_calling_confirm() {
 #[test]
 fn cli_local_skips_prompt_even_without_config() {
     let tmp = tempfile::tempdir().unwrap();
-    let cfg = tmp.path().join("firma.toml");
+    let cfg = tmp.path().join(CONFIG_FILE_NAME);
     let identity = RunIdentity::new("test");
     let runtime_dir = tmp.path().join("runtime");
 
@@ -188,7 +189,7 @@ fn cli_local_skips_prompt_even_without_config() {
 #[test]
 fn config_authority_section_skips_prompt() {
     let tmp = tempfile::tempdir().unwrap();
-    let cfg = tmp.path().join("firma.toml");
+    let cfg = tmp.path().join(CONFIG_FILE_NAME);
     std::fs::write(&cfg, "[authority]\nlisten_addr = \"[::1]:0\"\n").unwrap();
     let identity = RunIdentity::new("test");
     let runtime_dir = tmp.path().join("runtime");

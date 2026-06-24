@@ -40,6 +40,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use firma_config::CONFIG_FILE_NAME;
 use firma_sidecar::config::CapabilitySeedConfig;
 use firma_sidecar::startup::{build_token_verifier, load_capability_map};
 
@@ -121,7 +122,7 @@ fn spawn_live_authority() -> LiveAuthority {
     assert!(status.success(), "generate-key failed");
 
     let revocation_file = tmp.path().join("revocations.txt");
-    let auth_toml = tmp.path().join("firma.toml");
+    let auth_toml = tmp.path().join(CONFIG_FILE_NAME);
     std::fs::write(
         &auth_toml,
         format!(

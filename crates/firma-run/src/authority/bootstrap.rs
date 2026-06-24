@@ -13,6 +13,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use firma_config::CONFIG_DIR_NAME;
+use firma_config::CONFIG_FILE_NAME;
 use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::authority::AuthorityPromptIo;
@@ -65,7 +67,7 @@ pub fn resolve_persist_target(existing_config: Option<&Path>) -> Result<PathBuf,
     }
     let cwd = std::env::current_dir()
         .map_err(|e| RunError::Internal(format!("read cwd for firma.toml persist target: {e}")))?;
-    Ok(cwd.join(".firma").join("firma.toml"))
+    Ok(cwd.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME))
 }
 
 /// Merge an `[authority]` table into `path` via a toml round-trip.
@@ -125,7 +127,7 @@ mod tests {
     #[test]
     fn persist_creates_file_with_section_when_missing() {
         let tmp = tempdir().unwrap();
-        let target = tmp.path().join(".firma").join("firma.toml");
+        let target = tmp.path().join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
         persist_authority_section(&target).unwrap();
         let contents = fs::read_to_string(&target).unwrap();
         assert!(contents.contains("[authority]"));
@@ -135,7 +137,7 @@ mod tests {
     #[test]
     fn persist_preserves_other_sections() {
         let tmp = tempdir().unwrap();
-        let target = tmp.path().join("firma.toml");
+        let target = tmp.path().join(CONFIG_FILE_NAME);
         fs::write(&target, "[other]\nkeep = true\n").unwrap();
         persist_authority_section(&target).unwrap();
         let contents = fs::read_to_string(&target).unwrap();
@@ -151,7 +153,7 @@ mod tests {
     #[test]
     fn persist_is_idempotent_when_section_already_present() {
         let tmp = tempdir().unwrap();
-        let target = tmp.path().join("firma.toml");
+        let target = tmp.path().join(CONFIG_FILE_NAME);
         let original = "[authority]\nlisten_addr = \"127.0.0.1:50051\"\n";
         fs::write(&target, original).unwrap();
         persist_authority_section(&target).unwrap();
@@ -166,7 +168,7 @@ mod tests {
     #[test]
     fn persist_rejects_malformed_toml() {
         let tmp = tempdir().unwrap();
-        let target = tmp.path().join("firma.toml");
+        let target = tmp.path().join(CONFIG_FILE_NAME);
         fs::write(&target, "not = valid = toml\n").unwrap();
         let err = persist_authority_section(&target).unwrap_err();
         assert!(matches!(err, RunError::ConfigParse { .. }));
@@ -183,7 +185,7 @@ mod tests {
     #[test]
     fn resolve_persist_target_falls_back_to_cwd_dotfirma() {
         let resolved = resolve_persist_target(None).unwrap();
-        assert!(resolved.ends_with(Path::new(".firma").join("firma.toml")));
+        assert!(resolved.ends_with(Path::new(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME)));
     }
 
     struct MockPrompt {

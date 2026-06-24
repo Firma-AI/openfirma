@@ -56,11 +56,13 @@ pub fn check_loaded(parsed: &firma_config::FirmaConfig) -> Check {
 
 #[cfg(test)]
 mod tests {
+    use firma_config::CONFIG_FILE_NAME;
+
     use super::*;
     use crate::doctor::report::Status;
 
     fn write(dir: &Path, body: &str) -> std::path::PathBuf {
-        let p = dir.join("firma.toml");
+        let p = dir.join(CONFIG_FILE_NAME);
         std::fs::write(&p, body).unwrap();
         p
     }

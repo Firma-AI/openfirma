@@ -152,6 +152,7 @@ fn validate_connect_section(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use firma_config::CONFIG_FILE_NAME;
     use tempfile::tempdir;
 
     #[test]
@@ -164,7 +165,7 @@ mod tests {
     #[test]
     fn read_authority_returns_none_when_neither_section_present() {
         let tmp = tempdir().unwrap();
-        let path = tmp.path().join("firma.toml");
+        let path = tmp.path().join(CONFIG_FILE_NAME);
         fs::write(&path, "[other]\nkeep = true\n").unwrap();
         assert_eq!(read_authority(&path).unwrap(), None);
     }
@@ -172,7 +173,7 @@ mod tests {
     #[test]
     fn authority_section_marks_local() {
         let tmp = tempdir().unwrap();
-        let path = tmp.path().join("firma.toml");
+        let path = tmp.path().join(CONFIG_FILE_NAME);
         fs::write(&path, "[authority]\nlisten_addr = \"127.0.0.1:0\"\n").unwrap();
         let section = read_authority(&path).unwrap().unwrap();
         assert!(section.local);
@@ -182,7 +183,7 @@ mod tests {
     #[test]
     fn sidecar_authority_url_is_lifted_into_connect() {
         let tmp = tempdir().unwrap();
-        let path = tmp.path().join("firma.toml");
+        let path = tmp.path().join(CONFIG_FILE_NAME);
         fs::write(&path, "[sidecar.authority]\nurl = \"https://x\"\n").unwrap();
         let section = read_authority(&path).unwrap().unwrap();
         assert!(!section.local);
@@ -195,7 +196,7 @@ mod tests {
     #[test]
     fn sidecar_authority_credentials_are_lifted_into_connect() {
         let tmp = tempdir().unwrap();
-        let path = tmp.path().join("firma.toml");
+        let path = tmp.path().join(CONFIG_FILE_NAME);
         fs::write(
             &path,
             "[sidecar.authority.credentials]\n\
