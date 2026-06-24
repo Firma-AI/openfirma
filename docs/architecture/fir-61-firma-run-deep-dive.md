@@ -48,7 +48,7 @@ Sandbox / wrapped runtime:
 4. Sidecar enforces Stage 1 + Stage 2 and dispatches allowed call.
 5. Response returns through sidecar and bridge to agent.
 
-### Path of direct bypass attempt
+### Path of direct bypass attempt on structural backends
 
 1. Agent attempts direct external connect (ignores proxy vars).
 2. Network confinement blocks external path (no direct egress route from sandbox).
@@ -63,6 +63,8 @@ DNS confinement was required but initially lacked concrete implementation. With 
 
 ### Implementation decision
 
+On Linux structural `bwrap`:
+
 1. `firma-run` generates sandbox-specific `resolv.conf`.
 2. `resolv.conf` points to sandbox-local DNS stub (`127.0.0.1`).
 3. Current V1 DNS path refuses lookups deterministically when the DNS stub can
@@ -73,9 +75,15 @@ DNS confinement was required but initially lacked concrete implementation. With 
    proxy bridge to the sidecar mediation endpoint.
 5. Direct resolver traffic outside the controlled path is blocked by sandbox confinement.
 
+Default macOS `vz` and WSL2 do not claim this DNS boundary. The experimental
+macOS `sandbox-exec` mode blocks non-loopback DNS by denying non-loopback network
+egress, while the VZ guest mode records the DNS-stub requirement in the launch
+contract for the external runner to enforce inside the guest.
+
 ### Security invariant
 
-DNS resolution from inside sandbox is Firma-controlled or fails; host ambient resolver is never a successful bypass path.
+On structural backends, DNS resolution from inside the sandbox is Firma-controlled
+or fails; host ambient resolver is never a successful bypass path.
 
 ## Decision: Long-Running Agent Capability Lifecycle (Comment 2)
 
@@ -109,8 +117,9 @@ These values are injected into mediated requests (header/claim projection), so s
 ## Failure Modes and Required Behavior
 
 1. Sidecar unreachable at startup -> wrapped agent must not launch.
-2. Sidecar unreachable mid-session -> requests fail deterministically; no external fallback.
-3. Bridge failure -> fail-closed, no direct egress.
+2. Sidecar unreachable mid-session -> structurally confined egress fails deterministically;
+   proxy-only clients fail only for traffic that actually uses the proxy.
+3. Bridge failure -> fail-closed on structural backends, with no direct egress fallback.
 4. DNS stub failure -> resolution fails closed.
 5. Capability renewal failure past grace window -> egress blocked until valid capability restored.
 
