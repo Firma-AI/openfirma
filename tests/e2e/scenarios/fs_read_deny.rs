@@ -20,6 +20,7 @@ impl EnforcementScenario for FsReadDeny {
     }
 
     fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
+        ctx.git_init_workspace()?;
         ctx.firma_config().run()?;
         self.secrets_file = ctx.protected_dir.join(SECRET_FILE_NAME);
         fs_err::write(&self.secrets_file, SECRET_CONTENT).context("write secret")?;
