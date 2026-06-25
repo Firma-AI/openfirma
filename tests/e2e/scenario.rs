@@ -13,6 +13,11 @@ pub struct PhaseOutput {
 pub trait EnforcementScenario: Send + Sync {
     fn name(&self) -> &'static str;
 
+    /// Skip the scenario if `true`. Defaults to `false`.
+    fn skip(&self) -> bool {
+        false
+    }
+
     /// Maximum wall-clock time allowed for the enforcement phase.
     fn timeout(&self) -> Duration {
         Duration::from_mins(5)

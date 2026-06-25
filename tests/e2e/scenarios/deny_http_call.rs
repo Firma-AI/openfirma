@@ -14,6 +14,7 @@ impl EnforcementScenario for DenyHttpCall {
 
     fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.firma_config().run()?;
+        ctx.git_init_workspace()?;
         ctx.add_mapping_rule(
             &ctx.mock_server.address().to_string(),
             "POST",

@@ -47,6 +47,11 @@ async fn drive_scenario_for_agent(
     scenario: &mut dyn EnforcementScenario,
     kind: AgentKind,
 ) -> Result<(), anyhow::Error> {
+    if scenario.skip() {
+        eprintln!("skipping scenario {} on this platform", scenario.name());
+        return Ok(());
+    }
+
     let agent = default_agent(kind);
 
     run_scenario(scenario, &agent)
@@ -80,7 +85,6 @@ macro_rules! scenario_tests {
         mod $agent {
             use super::*;
             $(
-                $(#[$meta])*
                 #[tokio::test]
                 #[ignore = "integration test — run with --include-ignored"]
                 async fn $name() -> Result<(), anyhow::Error> {
@@ -99,11 +103,8 @@ scenario_tests! {
         deny_forbidden_http_resource => scenarios::DenyForbiddenHttpResource,
         deny_unmapped_http_call      => scenarios::DenyUnmappedHttpCall,
         deny_http_call               => scenarios::DenyHttpCall,
-        #[cfg(not(target_os = "macos"))]
         block_raw_tcp_egress         => scenarios::BlockRawTcpEgress,
-        #[cfg(not(target_os = "macos"))]
         fs_read_deny                 => scenarios::FsReadDeny::default(),
-        #[cfg(not(target_os = "macos"))]
         fs_delete_deny               => scenarios::FsDeleteDeny::default(),
     )
 }

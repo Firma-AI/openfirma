@@ -15,6 +15,10 @@ impl EnforcementScenario for FsReadDeny {
         "fs_read_deny"
     }
 
+    fn skip(&self) -> bool {
+        cfg!(target_os = "macos")
+    }
+
     fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.firma_config().run()?;
         self.secrets_file = ctx.protected_dir.join(SECRET_FILE_NAME);
