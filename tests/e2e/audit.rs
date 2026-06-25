@@ -17,11 +17,11 @@ pub enum Decision {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 pub struct AuditEvent {
-    pub action: String,
-    pub resource: String,
-    pub decision: Decision,
-    pub deny_reason: String,
-    pub dispatch_status: u16,
+    action: String,
+    resource: String,
+    decision: Decision,
+    deny_reason: String,
+    dispatch_status: u16,
 }
 
 /// Sidecar audit events from the enforcement phase.
@@ -66,22 +66,6 @@ impl FirmaAuditTrail {
             !(event.decision == Decision::Allow && is_provider)
         });
         self
-    }
-
-    #[must_use]
-    pub fn allow_events(&self) -> Vec<&AuditEvent> {
-        self.0
-            .iter()
-            .filter(|event| event.decision == Decision::Allow)
-            .collect()
-    }
-
-    #[must_use]
-    pub fn deny_events(&self) -> Vec<&AuditEvent> {
-        self.0
-            .iter()
-            .filter(|event| event.decision == Decision::Deny)
-            .collect()
     }
 
     #[track_caller]
