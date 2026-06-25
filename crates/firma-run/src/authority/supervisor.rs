@@ -345,9 +345,7 @@ impl Drop for AuthoritySupervisor {
 /// enforced. The authority is spawned with an ephemeral port + no TLS
 /// (plaintext loopback).
 #[cfg(unix)]
-fn persisted_authority_config(
-    user_config: &std::path::Path,
-) -> Result<AuthorityConfig, RunError> {
+fn persisted_authority_config(user_config: &std::path::Path) -> Result<AuthorityConfig, RunError> {
     let config_dir = user_config
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))

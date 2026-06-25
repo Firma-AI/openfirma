@@ -76,10 +76,11 @@ macro_rules! scenario_tests {
     ([$($agent:ident),+]; $scenarios:tt) => {
         $( scenario_tests!(@agent $agent $scenarios); )+
     };
-    (@agent $agent:ident ($($name:ident => $scenario:expr),* $(,)?)) => {
+    (@agent $agent:ident ($($(#[$meta:meta])* $name:ident => $scenario:expr),* $(,)?)) => {
         mod $agent {
             use super::*;
             $(
+                $(#[$meta])*
                 #[tokio::test]
                 #[ignore = "integration test — run with --include-ignored"]
                 async fn $name() -> Result<(), anyhow::Error> {
@@ -98,8 +99,11 @@ scenario_tests! {
         deny_forbidden_http_resource => scenarios::DenyForbiddenHttpResource,
         deny_unmapped_http_call      => scenarios::DenyUnmappedHttpCall,
         deny_http_call               => scenarios::DenyHttpCall,
+        #[cfg(not(target_os = "macos"))]
         block_raw_tcp_egress         => scenarios::BlockRawTcpEgress,
+        #[cfg(not(target_os = "macos"))]
         fs_read_deny                 => scenarios::FsReadDeny::default(),
+        #[cfg(not(target_os = "macos"))]
         fs_delete_deny               => scenarios::FsDeleteDeny::default(),
     )
 }
