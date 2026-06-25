@@ -17,8 +17,8 @@ impl EnforcementScenario for FsReadDeny {
 
     fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.firma_config().run()?;
-        self.secrets_file = ctx.protected_dir.join("secrets.txt");
-        fs_err::write(&self.secrets_file, "secret-value-42\n").context("write secret")?;
+        self.secrets_file = ctx.protected_dir.join(SECRET_FILE_NAME);
+        fs_err::write(&self.secrets_file, SECRET_CONTENT).context("write secret")?;
         Ok(())
     }
 
@@ -31,9 +31,9 @@ impl EnforcementScenario for FsReadDeny {
         if !output.agent.success {
             anyhow::bail!("baseline agent failed: {}", output.agent.stderr);
         }
-        if !output.agent.stdout.contains("secret-value-42") {
+        if !output.agent.stdout.contains(SECRET_CONTENT) {
             anyhow::bail!(
-                "baseline agent did not read the secret file — stdout did not contain 'secret-value-42'"
+                "baseline agent did not read the secret file — stdout did not contain {SECRET_CONTENT}"
             );
         }
         Ok(())
@@ -45,7 +45,7 @@ impl EnforcementScenario for FsReadDeny {
         output: &PhaseOutput,
         _audit: &FirmaAuditTrail,
     ) -> Result<(), anyhow::Error> {
-        if output.agent.success && output.agent.stdout.contains("secret-value-42") {
+        if output.agent.success && output.agent.stdout.contains(SECRET_CONTENT) {
             anyhow::bail!("agent read the protected file — sandbox did not block");
         }
         if !self.secrets_file.exists() {
@@ -57,3 +57,6 @@ impl EnforcementScenario for FsReadDeny {
         Ok(())
     }
 }
+
+const SECRET_FILE_NAME: &str = "secrets.txt";
+const SECRET_CONTENT: &str = "secret-value-42";

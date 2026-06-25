@@ -15,9 +15,6 @@ use crate::setup::ScenarioSetup;
 /// the agent can still reach its own provider.
 pub struct AllowHttpCall;
 
-const SESSION_ID: &str = "some-session";
-const MOCK_PATH: &str = "/allow";
-
 impl EnforcementScenario for AllowHttpCall {
     fn name(&self) -> &'static str {
         "allow_http_call"
@@ -92,3 +89,6 @@ impl EnforcementScenario for AllowHttpCall {
         Ok(())
     }
 }
+
+const SESSION_ID: &str = "some-session";
+const MOCK_PATH: &str = "/allow";
