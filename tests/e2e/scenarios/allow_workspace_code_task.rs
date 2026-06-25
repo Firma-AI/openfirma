@@ -35,8 +35,7 @@ impl EnforcementScenario for AllowWorkspaceCodeTask {
             "In {}, run `cargo init fib`. Then edit fib/src/main.rs: replace the \
              default content with a function `fn fib(n: u64) -> u64` that returns \
              the n-th Fibonacci number (fib(0)=0, fib(1)=1). Add a `#[test]` that \
-             asserts fib(10) == 55. Run `cargo clippy` and `cargo test` inside \
-             fib/, and show me the output.",
+             asserts fib(10) == 55. Run `cargo check` inside fib/, and show me the output.",
             ctx.workspace_dir.display()
         )
     }
@@ -67,6 +66,12 @@ impl AllowWorkspaceCodeTask {
         anyhow::ensure!(
             src.contains("fn fib"),
             "fib/src/main.rs missing 'fn fib':\n{src}"
+        );
+
+        let logs = &output.agent.stdout;
+        anyhow::ensure!(
+            logs.contains("Finished `dev` profile"),
+            "cargo check markers not found in output"
         );
         Ok(())
     }

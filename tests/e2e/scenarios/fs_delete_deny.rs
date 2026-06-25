@@ -45,7 +45,7 @@ impl EnforcementScenario for FsDeleteDeny {
         _output: &PhaseOutput,
         _audit: &FirmaAuditTrail,
     ) -> Result<(), anyhow::Error> {
-        if self.important_file.exists() {
+        if !self.important_file.exists() {
             anyhow::bail!(
                 "important file was deleted — sandbox did not block: {}",
                 self.important_file.display()
