@@ -1,5 +1,4 @@
-//! Ed25519 (PASETO v4) signing-key generation shared by the
-//! `firma authority generate-key` CLI and the per-run autostart supervisor.
+//! Ed25519 (PASETO v4) signing-key generation.
 //!
 //! Keeping the on-disk format in one place guarantees every producer writes
 //! exactly what [`crate::server`] reads back: raw PASETO v4 key bytes, secret
