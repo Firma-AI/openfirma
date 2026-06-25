@@ -95,7 +95,6 @@ scenario_tests! {
     (
         simple_prompt                => scenarios::SimplePrompt,
         allow_http_call              => scenarios::AllowHttpCall,
-        allow_workspace_code_task    => scenarios::AllowWorkspaceCodeTask::default(),
         deny_forbidden_http_resource => scenarios::DenyForbiddenHttpResource,
         deny_unmapped_http_call      => scenarios::DenyUnmappedHttpCall,
         deny_http_call               => scenarios::DenyHttpCall,

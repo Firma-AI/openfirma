@@ -132,9 +132,9 @@ impl AuthoritySupervisor {
         // Ephemeral path: no user config — generate a fresh key and write a
         // permissive issuance policy into a per-run temp dir.
         let mut authority_config = if let Some(ref user_config) = req.user_config_path {
-            resolve_persisted_paths(user_config, &log_path)?
+            persisted_authority_config(user_config, &log_path)?
         } else {
-            setup_ephemeral_paths(&req, &log_path)?
+            ephemeral_authority_config(&req, &log_path)?
         };
 
         let supervisor_pub_key_path = authority_config.key_file.with_extension("pub");
@@ -351,7 +351,7 @@ impl Drop for AuthoritySupervisor {
 /// file`. The authority is spawned with an ephemeral port + no TLS (plaintext
 /// loopback).
 #[cfg(unix)]
-fn resolve_persisted_paths(
+fn persisted_authority_config(
     user_config: &std::path::Path,
     log_path: &std::path::Path,
 ) -> Result<AuthorityConfig, RunError> {
@@ -443,7 +443,7 @@ fn ensure_authority_key(
 /// and writes a permissive issuance Cedar policy so any action class can be
 /// granted during local development.
 #[cfg(unix)]
-fn setup_ephemeral_paths(
+fn ephemeral_authority_config(
     req: &SpawnRequest<'_>,
     log_path: &std::path::Path,
 ) -> Result<AuthorityConfig, RunError> {
@@ -612,7 +612,7 @@ pub mod testing {
 
 #[cfg(all(test, unix))]
 mod persisted_key_tests {
-    use super::resolve_persisted_paths;
+    use super::persisted_authority_config;
 
     /// A `[authority]` section without a generated key (as first-run bootstrap
     /// persists it) must trigger key generation so the authority can start.
@@ -624,7 +624,7 @@ mod persisted_key_tests {
             .expect("write firma.toml");
         let log = dir.path().join("authority.log");
 
-        let cfg = resolve_persisted_paths(&config, &log).expect("resolve persisted");
+        let cfg = persisted_authority_config(&config, &log).expect("resolve persisted");
 
         // key_file defaults to <config_dir>/firma-authority.key and is created.
         assert_eq!(cfg.key_file, dir.path().join("firma-authority.key"));
@@ -652,7 +652,7 @@ mod persisted_key_tests {
         .expect("write firma.toml");
         let log = dir.path().join("authority.log");
 
-        let cfg = resolve_persisted_paths(&config, &log).expect("resolve persisted");
+        let cfg = persisted_authority_config(&config, &log).expect("resolve persisted");
 
         assert_eq!(cfg.key_file, key);
         assert_eq!(fs_err::read(&cfg.key_file).expect("read key"), b"existing");
