@@ -19,6 +19,7 @@ impl EnforcementScenario for FsDeleteDeny {
     }
 
     fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
+        ctx.git_init_workspace()?;
         ctx.firma_config().run()?;
         self.important_file = ctx.protected_dir.join("important.txt");
         Ok(())
