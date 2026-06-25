@@ -2,7 +2,6 @@ name: E2E Tests
 
 on:
   push:
-    branches: [fir-368-integration-tests]
     tags:
       - "v*.*.*"
   workflow_dispatch:
