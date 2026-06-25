@@ -62,6 +62,7 @@ rand = { workspace = true }
 serde_repr = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 tempfile = { workspace = true }
+wait-timeout = { workspace = true }
 wiremock = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]

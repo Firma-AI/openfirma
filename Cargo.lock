@@ -1589,6 +1589,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "wait-timeout",
  "windows-sys 0.59.0",
  "wiremock",
  "x509-parser",
