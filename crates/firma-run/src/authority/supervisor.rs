@@ -132,7 +132,7 @@ impl AuthoritySupervisor {
         // Ephemeral path: no user config — generate a fresh key and write a
         // permissive issuance policy into a per-run temp dir.
         let mut authority_config = if let Some(ref user_config) = req.user_config_path {
-            persisted_authority_config(user_config, &log_path)?
+            persisted_authority_config(user_config)?
         } else {
             ephemeral_authority_config(&req, &log_path)?
         };
@@ -339,21 +339,14 @@ impl Drop for AuthoritySupervisor {
 
 /// Resolve key, policy, and revocation paths from the user's `firma.toml`.
 ///
-/// Called when `user_config_path` is set. Typically `firma config init` has
-/// already generated the key and populated the policy dirs, so the persisted
-/// key and policies are reused — tokens survive authority restarts and the real
-/// Cedar posture is enforced.
-///
-/// When the resolved `key_file` does not yet exist (e.g. a `firma.toml` whose
-/// `[authority]` section was written by first-run bootstrap, which persists the
-/// section but does not generate a key), a fresh keypair is generated at that
-/// path. Without this, the authority would fail to start on `failed to read key
-/// file`. The authority is spawned with an ephemeral port + no TLS (plaintext
-/// loopback).
+/// Called when `user_config_path` is set. `firma config` has already generated
+/// the key and populated the policy dirs, so the persisted key and policies are
+/// reused — tokens survive authority restarts and the real Cedar posture is
+/// enforced. The authority is spawned with an ephemeral port + no TLS
+/// (plaintext loopback).
 #[cfg(unix)]
 fn persisted_authority_config(
     user_config: &std::path::Path,
-    log_path: &std::path::Path,
 ) -> Result<AuthorityConfig, RunError> {
     let config_dir = user_config
         .parent()
@@ -370,18 +363,6 @@ fn persisted_authority_config(
     let mut cfg = toml::from_str::<firma_authority::AuthorityConfig>(&body)
         .map_err(|e| RunError::Internal(format!("parse authority config: {e}")))?;
     cfg.rebase_defaults(&config_dir);
-
-    // Ensure a signing key exists at the configured path, generating one when
-    // absent so a bootstrap-persisted or hand-written `[authority]` section
-    // still starts. Only create the parent dir when missing — never re-touch an
-    // existing config dir's permissions.
-    if let Some(parent) = cfg.key_file.parent()
-        && !parent.exists()
-    {
-        firma_stack::fs::create_private_dir_all(parent)
-            .map_err(|e| RunError::Internal(e.to_string()))?;
-    }
-    ensure_authority_key(&cfg.key_file, log_path)?;
 
     // Per-run authority always runs plaintext on loopback — strip any TLS
     // config from the user's persisted settings, and pick an ephemeral port
@@ -408,33 +389,6 @@ fn generate_authority_key(
         log_path: log_path.to_path_buf(),
     })?;
     Ok(())
-}
-
-/// Ensure an Ed25519 authority keypair exists at `key_path`, generating one if
-/// absent.
-///
-/// Generation is atomic: [`firma_authority::write_keypair`] opens the key with
-/// `create_new`, so a concurrent writer that wins the race surfaces as
-/// `AlreadyExists` — treated here as "key present, reuse it" rather than an
-/// error. This avoids a time-of-check/time-of-use gap between probing for the
-/// key and writing it.
-#[cfg(unix)]
-fn ensure_authority_key(
-    key_path: &std::path::Path,
-    log_path: &std::path::Path,
-) -> Result<(), RunError> {
-    match firma_authority::write_keypair(key_path) {
-        Ok(_) => Ok(()),
-        Err(firma_authority::KeygenError::Write { source, .. })
-            if source.kind() == std::io::ErrorKind::AlreadyExists =>
-        {
-            Ok(())
-        }
-        Err(e) => Err(RunError::AuthorityStartupFailed {
-            reason: format!("generate authority key: {e}"),
-            log_path: log_path.to_path_buf(),
-        }),
-    }
 }
 
 /// Set up ephemeral key, policy dir, and revocation file in `marker_dir`.
@@ -614,30 +568,9 @@ pub mod testing {
 mod persisted_key_tests {
     use super::persisted_authority_config;
 
-    /// A `[authority]` section without a generated key (as first-run bootstrap
-    /// persists it) must trigger key generation so the authority can start.
+    /// The configured `key_file` path is resolved and left untouched.
     #[test]
-    fn generates_key_when_missing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let config = dir.path().join("firma.toml");
-        fs_err::write(&config, "[authority]\nlisten_addr = \"[::1]:0\"\n")
-            .expect("write firma.toml");
-        let log = dir.path().join("authority.log");
-
-        let cfg = persisted_authority_config(&config, &log).expect("resolve persisted");
-
-        // key_file defaults to <config_dir>/firma-authority.key and is created.
-        assert_eq!(cfg.key_file, dir.path().join("firma-authority.key"));
-        assert!(cfg.key_file.exists(), "key file should have been generated");
-        assert!(
-            cfg.key_file.with_extension("pub").exists(),
-            "public key should have been generated"
-        );
-    }
-
-    /// An already-present key must be reused, not regenerated.
-    #[test]
-    fn reuses_existing_key() {
+    fn resolves_configured_key_path() {
         let dir = tempfile::tempdir().expect("tempdir");
         let key = dir.path().join("authority.key");
         fs_err::write(&key, b"existing").expect("write key");
@@ -650,9 +583,8 @@ mod persisted_key_tests {
             ),
         )
         .expect("write firma.toml");
-        let log = dir.path().join("authority.log");
 
-        let cfg = persisted_authority_config(&config, &log).expect("resolve persisted");
+        let cfg = persisted_authority_config(&config).expect("resolve persisted");
 
         assert_eq!(cfg.key_file, key);
         assert_eq!(fs_err::read(&cfg.key_file).expect("read key"), b"existing");
