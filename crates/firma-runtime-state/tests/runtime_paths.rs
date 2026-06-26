@@ -1,8 +1,8 @@
-//! Resolver matrix for `firma_stack::runtime_paths`.
+//! Resolver matrix for `firma_runtime_state::runtime_paths`.
 
 use std::path::PathBuf;
 
-use firma_stack::runtime_paths::{default_runtime_dir_from, run_dir_from, run_entry_from};
+use firma_runtime_state::runtime_paths::{default_runtime_dir_from, run_dir_from, run_entry_from};
 
 #[test]
 #[cfg(unix)]

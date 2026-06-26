@@ -18,13 +18,15 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+use firma_config::CONFIG_FILE_NAME;
+
 fn firma_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_firma"))
 }
 
 fn write_config(toml_body: &str) -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("firma.toml");
+    let path = tmp.path().join(CONFIG_FILE_NAME);
     std::fs::write(&path, toml_body).unwrap();
     (tmp, path)
 }

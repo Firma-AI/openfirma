@@ -16,6 +16,8 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+use firma_config::CONFIG_DIR_NAME;
+
 fn firma_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_firma"))
 }
@@ -54,8 +56,8 @@ fn non_tty_without_authority_flag_errors_before_scaffolding() {
 
     // Verify no scaffolding happened. .firma/ must not exist.
     assert!(
-        !cwd.join(".firma").exists(),
-        ".firma/ must not be created on non-TTY abort"
+        !cwd.join(CONFIG_DIR_NAME).exists(),
+        "{CONFIG_DIR_NAME}/ must not be created on non-TTY abort"
     );
 }
 
@@ -85,8 +87,8 @@ fn no_autostart_without_firma_toml_errors_with_hint() {
         "stderr should hint at firma config:\n{stderr}"
     );
     assert!(
-        !cwd.join(".firma").exists(),
-        ".firma/ must not be created on --no-autostart abort"
+        !cwd.join(CONFIG_DIR_NAME).exists(),
+        "{CONFIG_DIR_NAME}/ must not be created on --no-autostart abort"
     );
 }
 
@@ -110,8 +112,8 @@ fn explicit_missing_run_config_does_not_scaffold() {
 
     assert!(!out.status.success(), "missing explicit --config must fail");
     assert!(
-        !cwd.join(".firma").exists(),
-        ".firma/ must not be created when explicit --config is missing"
+        !cwd.join(CONFIG_DIR_NAME).exists(),
+        "{CONFIG_DIR_NAME}/ must not be created when explicit --config is missing"
     );
 }
 
@@ -145,7 +147,7 @@ fn remote_authority_does_not_implicit_scaffold_without_trust_material() {
         "stderr should explain how to configure remote authority trust material:\n{stderr}"
     );
     assert!(
-        !cwd.join(".firma").exists(),
-        ".firma/ must not be created for incomplete remote implicit init"
+        !cwd.join(CONFIG_DIR_NAME).exists(),
+        "{CONFIG_DIR_NAME}/ must not be created for incomplete remote implicit init"
     );
 }

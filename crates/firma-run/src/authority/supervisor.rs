@@ -114,7 +114,7 @@ impl AuthoritySupervisor {
             }
         })?;
 
-        firma_stack::fs::create_private_dir_all(&req.marker_dir)
+        firma_runtime_state::fs::create_private_dir_all(&req.marker_dir)
             .map_err(|e| RunError::Internal(e.to_string()))?;
 
         let authority_toml = req.marker_dir.join("authority.toml");
@@ -247,7 +247,7 @@ impl AuthoritySupervisor {
             log_path: log_path.clone(),
         })?;
 
-        firma_stack::pidfile::write(&pid_path, pid)
+        firma_runtime_state::pidfile::write(&pid_path, pid)
             .map_err(|e| RunError::Internal(format!("write authority.pid: {e}")))?;
         crate::authority::metadata::write(
             &metadata_path,
@@ -402,9 +402,9 @@ fn ephemeral_authority_config(
     let key_path = keys_dir.join("authority.key");
     let revocation_file = req.marker_dir.join("revocations.txt");
 
-    firma_stack::fs::create_private_dir_all(&policy_dir)
+    firma_runtime_state::fs::create_private_dir_all(&policy_dir)
         .map_err(|e| RunError::Internal(e.to_string()))?;
-    firma_stack::fs::create_private_dir_all(&keys_dir)
+    firma_runtime_state::fs::create_private_dir_all(&keys_dir)
         .map_err(|e| RunError::Internal(e.to_string()))?;
 
     let cedar_text = if req.profile_name == firma_authority::DEFAULT_PROFILE {

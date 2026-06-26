@@ -924,17 +924,17 @@ const MANAGED_SECCOMP_POLICY: &str = include_str!("../seccomp/generic-local-comm
 /// To override, set `FIRMA_RUN_MANAGED_SECCOMP_POLICY_PATH` or `seccomp_policy.source_policy_path` in the profile config.
 /// Creates the directory with restricted permissions (0o700/0o600).
 fn ensure_managed_policy_path() -> PathBuf {
-    let dir = firma_stack::runtime_paths::default_runtime_dir().join("seccomp");
+    let dir = firma_runtime_state::runtime_paths::default_runtime_dir().join("seccomp");
     write_managed_policy_to_dir(&dir)
 }
 
 fn write_managed_policy_to_dir(dir: &std::path::Path) -> PathBuf {
     let path = dir.join(DEFAULT_MANAGED_POLICY_FILE);
-    if let Err(error) = firma_stack::fs::create_private_dir_all(dir) {
+    if let Err(error) = firma_runtime_state::fs::create_private_dir_all(dir) {
         tracing::warn!(%error, "failed to create seccomp policy dir; falling back to unextracted path");
         return path;
     }
-    match firma_stack::fs::write_private_file(&path, MANAGED_SECCOMP_POLICY.as_bytes()) {
+    match firma_runtime_state::fs::write_private_file(&path, MANAGED_SECCOMP_POLICY.as_bytes()) {
         Ok(()) => {
             tracing::debug!(path = %path.display(), "wrote default managed seccomp policy");
         }
@@ -944,7 +944,7 @@ fn write_managed_policy_to_dir(dir: &std::path::Path) -> PathBuf {
 }
 
 fn default_managed_artifact_dir() -> PathBuf {
-    let dir = firma_stack::runtime_paths::default_runtime_dir().join("seccomp-artifacts");
+    let dir = firma_runtime_state::runtime_paths::default_runtime_dir().join("seccomp-artifacts");
     tracing::debug!(path = %dir.display(), "seccomp artifact dir");
     dir
 }
@@ -1013,6 +1013,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
+    use firma_config::CONFIG_FILE_NAME;
     use pretty_assertions::assert_eq;
 
     use crate::runtime::RunInput;
@@ -1140,7 +1141,7 @@ mod tests {
     #[test]
     fn toml_config_overrides_profile() {
         let tmpdir = tempfile::tempdir().unwrap();
-        let config_path = tmpdir.path().join("firma.toml");
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
 
         let toml = r#"
 [run.defaults]
@@ -1181,7 +1182,7 @@ path = "/tmp/capability.token"
     #[test]
     fn user_executable_policy_overrides_builtin_sandbox_mode() {
         let tmpdir = tempfile::tempdir().unwrap();
-        let config_path = tmpdir.path().join("firma.toml");
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         let toml = r#"
 [run.profiles.codex.executable_policies.codex]
 enforce_wrapper_defaults = true
@@ -1281,7 +1282,7 @@ approval_policy = "never"
     #[test]
     fn structural_network_true_on_non_bwrap_backend_is_rejected() {
         let tmpdir = tempfile::tempdir().unwrap();
-        let config_path = tmpdir.path().join("firma.toml");
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         let backend = non_bwrap_backend_for_current_host();
         let toml = format!(
             r#"
@@ -1324,7 +1325,7 @@ deny_actions = ["filesystem.delete"]
         .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
 
-        let config_path = tmpdir.path().join("firma.toml");
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         let toml = format!(
             r#"
 [run.profiles.generic]
@@ -1363,7 +1364,7 @@ deny_actions = ["filesystem.delete"]
         .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
 
-        let config_path = tmpdir.path().join("firma.toml");
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         let backend = non_bwrap_backend_for_current_host();
         let toml = format!(
             r#"
@@ -1406,7 +1407,7 @@ deny_actions = ["filesystem.delete"]
         .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
 
-        let config_path = tmpdir.path().join("firma.toml");
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         let toml = format!(
             r#"
 [run.profiles.generic]
@@ -1446,7 +1447,7 @@ deny_actions = ["filesystem.delete"]
         .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
 
-        let config_path = tmpdir.path().join("firma.toml");
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         let toml = format!(
             r#"
 [run.profiles.generic]
@@ -1490,7 +1491,7 @@ deny_actions = ["filesystem.delete"]
         .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
         let socket_path = tmpdir.path().join("mediator.sock");
-        let config_path = tmpdir.path().join("firma.toml");
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         let toml = format!(
             r#"
 [run.profiles.generic]
@@ -1534,7 +1535,7 @@ deny_actions = ["filesystem.delete"]
         )
         .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
-        let config_path = tmpdir.path().join("firma.toml");
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         let toml = format!(
             r#"
 [run.profiles.generic]
@@ -1580,7 +1581,7 @@ deny_actions = ["filesystem.delete"]
         )
         .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
-        let config_path = tmpdir.path().join("firma.toml");
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         let endpoint = if cfg!(target_family = "unix") {
             "unix:///tmp/sidecar-local-exec.sock"
         } else {
@@ -1632,7 +1633,7 @@ deny_actions = ["filesystem.delete"]
         )
         .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
-        let config_path = tmpdir.path().join("firma.toml");
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         let endpoint = if cfg!(target_family = "unix") {
             "unix:///tmp/sidecar-local-exec.sock"
         } else {
@@ -1688,7 +1689,7 @@ deny_actions = ["filesystem.delete"]
         )
         .unwrap();
         let artifact_dir = tmpdir.path().join("artifacts");
-        let config_path = tmpdir.path().join("firma.toml");
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
         let sidecar_sock = tmpdir.path().join("sidecar.sock");
         let toml = format!(
             r#"

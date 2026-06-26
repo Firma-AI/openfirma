@@ -7,13 +7,13 @@ use tracing::{debug, info};
 
 use crate::config::StackConfig;
 use crate::error::{Result, StackError};
-use crate::pidfile;
 use crate::platform::{Platform, SystemPlatform};
 use crate::readiness::{
     read_authority_listen_addr, read_sidecar_listen_addr, wait_for_ca_material, wait_for_tcp,
 };
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::supervisor::{Children, block_until_exit};
+use firma_runtime_state::pidfile;
 
 /// Mode in which [`start`] manages the stack after readiness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,7 +59,7 @@ pub struct StackHandle {
 /// removes any pid/listen/lock files it created before returning the error.
 pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
     info!(state_dir = %state_dir.display(), "spawning firma stack");
-    crate::fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
+    firma_runtime_state::fs::create_private_dir_all(state_dir).map_err(StackError::StateDir)?;
     debug!("acquiring stack lock");
     acquire_lock(state_dir)?;
     debug!("reaping stale pidfiles");

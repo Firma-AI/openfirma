@@ -7,7 +7,7 @@ use std::{
 
 use fs_err as fs;
 
-use crate::{CONFIG_ENV_NAME, FirmaConfig};
+use crate::{CONFIG_DIR_NAME, CONFIG_ENV_NAME, CONFIG_FILE_NAME, FirmaConfig};
 
 /// A helper to determine which configuration should be applied to the
 /// `firma` command that's about to execute.
@@ -69,8 +69,6 @@ pub struct ConfigResolveError {
     #[source]
     pub reason: anyhow::Error,
 }
-
-use crate::CONFIG_FILE_NAME as FILE_NAME;
 
 impl ConfigResolver {
     /// Create a new [`ConfigResolver`].
@@ -160,7 +158,7 @@ impl ConfigResolver {
             walk_ceiling
         };
         for dir in cwd.ancestors() {
-            let candidate = dir.join(".firma").join(FILE_NAME);
+            let candidate = dir.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
             match fs::read_to_string(&candidate) {
                 Ok(text) => {
                     let config = FirmaConfig::parse(&candidate, &text).map_err(|reason| {

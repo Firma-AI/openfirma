@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
+use firma_config::CONFIG_FILE_NAME;
 use tracing::debug;
 
 use crate::error::{Result, StackError};
@@ -15,7 +16,7 @@ use crate::error::{Result, StackError};
 #[derive(Debug, Clone)]
 pub struct StackConfig {
     /// Optional override for the runtime state directory. When `None`,
-    /// the caller resolves it via [`crate::resolve_state_dir`].
+    /// the caller resolves it via [`firma_runtime_state::resolve_state_dir`].
     pub state_dir: Option<PathBuf>,
     /// The single unified `firma.toml` shared by both components.
     pub config_file: PathBuf,
@@ -42,7 +43,7 @@ pub fn resolve_stack_config(cli_override: Option<&Path>) -> Result<StackConfig> 
             source: std::io::Error::new(std::io::ErrorKind::NotFound, error.to_string()),
         })?
         .ok_or_else(|| StackError::ConfigRead {
-            path: cli_override.map_or_else(|| PathBuf::from("firma.toml"), Path::to_path_buf),
+            path: cli_override.map_or_else(|| PathBuf::from(CONFIG_FILE_NAME), Path::to_path_buf),
             source: std::io::Error::new(std::io::ErrorKind::NotFound, "no firma.toml found"),
         })?;
     debug!(config = %resolved.config_file().display(), "resolved unified firma.toml");
@@ -61,7 +62,7 @@ mod tests {
     #[test]
     fn resolve_with_explicit_override() {
         let tmp = tempdir().unwrap();
-        let p = tmp.path().join("firma.toml");
+        let p = tmp.path().join(CONFIG_FILE_NAME);
         std::fs::write(&p, "[authority]\nlisten_addr = \"127.0.0.1:50051\"\n").unwrap();
         let cfg = resolve_stack_config(Some(&p)).unwrap();
         assert_eq!(cfg.config_file, p);

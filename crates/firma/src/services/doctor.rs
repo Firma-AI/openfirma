@@ -65,7 +65,7 @@ pub fn run(args: Args) -> ExitCode {
 /// dir, unreadable marker) is treated as "none live" — doctor must never fail
 /// because the optional run dir is absent.
 fn count_live_per_run_sidecars(runtime_dir: &std::path::Path) -> usize {
-    firma_stack::sidecar_markers::list(runtime_dir).map_or(0, |entries| {
+    firma_runtime_state::sidecar_markers::list(runtime_dir).map_or(0, |entries| {
         entries
             .iter()
             .filter(|e| marker_state_is_live(e.state))
@@ -77,8 +77,8 @@ fn count_live_per_run_sidecars(runtime_dir: &std::path::Path) -> usize {
 /// per-run sidecar binds a TCP port and has no responding `sidecar.sock`, so
 /// its marker is `Unhealthy` (pid alive, UDS probe fails) rather than
 /// `Running` — both mean an agent is actively running under it.
-fn marker_state_is_live(state: firma_stack::status::State) -> bool {
-    use firma_stack::status::State;
+fn marker_state_is_live(state: firma_runtime_state::status::State) -> bool {
+    use firma_runtime_state::status::State;
     matches!(state, State::Running | State::Unhealthy)
 }
 
@@ -206,7 +206,7 @@ async fn build_report(args: Args) -> RenderedReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use firma_stack::status::State;
+    use firma_runtime_state::status::State;
 
     #[test]
     fn live_includes_running_and_unhealthy_but_not_stopped() {

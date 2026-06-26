@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use firma_config::CONFIG_DIR_NAME;
 use firma_run::authority::AuthorityPromptIo;
 use firma_run::runtime::{RunInput, execute_run};
 use tracing::{info, warn};
@@ -103,14 +104,14 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<Option<PathBuf>> {
 
     let cwd = std::env::current_dir()
         .map_err(|e| anyhow::anyhow!("resolve cwd for implicit init: {e}"))?;
-    let resolved = cwd.join(".firma");
+    let resolved = cwd.join(CONFIG_DIR_NAME);
     let firma_toml = resolved.join(firma_config::CONFIG_FILE_NAME);
     info!(
         path = %firma_toml.display(),
         "no firma.toml found; running implicit init with defaults into cwd/.firma"
     );
 
-    let state_dir = firma_stack::resolve_state_dir(None)
+    let state_dir = firma_runtime_state::resolve_state_dir(None)
         .map_err(|e| anyhow::anyhow!("resolve state_dir for implicit init: {e}"))?;
 
     // Infer profile from --profile flag, falling back to the command name so

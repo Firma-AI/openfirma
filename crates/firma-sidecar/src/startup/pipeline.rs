@@ -91,8 +91,8 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
 
     tracing::debug!("Stage 1 using configured capability seed and authority public key");
     let token_verifier = build_token_verifier(config.authority.public_key_path.as_deref())?;
-    let runtime_dir = firma_stack::runtime_paths::default_runtime_dir();
-    let capabilities_dir = firma_stack::runtime_paths::capabilities_dir_from(&runtime_dir);
+    let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
+    let capabilities_dir = firma_runtime_state::runtime_paths::capabilities_dir_from(&runtime_dir);
     let capability_map = load_capability_map(
         &config.capability_seed,
         token_verifier.as_ref(),

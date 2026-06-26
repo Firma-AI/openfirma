@@ -25,6 +25,8 @@ use std::net::TcpListener;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use firma_config::CONFIG_FILE_NAME;
+
 const PRE_READY_PREFIXES: &[&str] = &[
     "config loaded",
     "mapping table loaded",
@@ -105,7 +107,7 @@ action_class = "communication.external.send"
     let authority_port = pick_free_port();
     let authority_url = format!("http://127.0.0.1:{authority_port}");
 
-    let sidecar_toml = tmp.path().join("firma.toml");
+    let sidecar_toml = tmp.path().join(CONFIG_FILE_NAME);
     std::fs::write(
         &sidecar_toml,
         format!(

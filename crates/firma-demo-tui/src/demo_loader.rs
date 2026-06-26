@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, ensure};
+use firma_config::CONFIG_FILE_NAME;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -127,7 +128,7 @@ pub fn load(dir: &Path) -> Result<DemoManifest> {
         .canonicalize()
         .with_context(|| format!("demo directory not found: {}", dir.display()))?;
 
-    let config_file = required_path(&root, "firma.toml")?;
+    let config_file = required_path(&root, CONFIG_FILE_NAME)?;
     let agent_script = required_path(&root, "agent.py")?;
     let session_id = parse_preflight_session_id(&config_file);
     let prompt = std::fs::read_to_string(root.join("prompt.md")).unwrap_or_default();

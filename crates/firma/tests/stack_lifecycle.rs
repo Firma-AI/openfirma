@@ -3,6 +3,8 @@
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use firma_config::CONFIG_FILE_NAME;
+
 fn firma() -> Command {
     Command::new(env!("CARGO_BIN_EXE_firma"))
 }
@@ -23,7 +25,7 @@ fn lifecycle_detached() {
         .output()
         .expect("init");
     assert!(init.status.success(), "init failed: {init:?}");
-    let cfg_path = config_dir.join("firma.toml");
+    let cfg_path = config_dir.join(CONFIG_FILE_NAME);
     assert!(cfg_path.is_file(), "scaffolded firma.toml missing");
 
     let out = firma()

@@ -13,6 +13,7 @@
     reason = "forces clap linkage for compile-time validation"
 )]
 use clap::Parser as _;
+use firma_config::CONFIG_FILE_NAME;
 
 // Re-import the binary's CLI module by depending on the binary as a
 // library would not work, so we duplicate the parse via a small
@@ -127,7 +128,7 @@ fn parse_config_scripted() {
 
 #[test]
 fn parse_sidecar_start() {
-    parse_ok(&["sidecar", "start", "--config", "firma.toml", "--detach"]);
+    parse_ok(&["sidecar", "start", "--config", CONFIG_FILE_NAME, "--detach"]);
 }
 
 #[test]

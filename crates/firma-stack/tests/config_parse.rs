@@ -1,11 +1,12 @@
 //! Unified `firma.toml` resolution round-trips.
 
+use firma_config::CONFIG_FILE_NAME;
 use firma_stack::resolve_stack_config;
 
 #[test]
 fn resolves_explicit_override() {
     let dir = tempfile::tempdir().expect("dir");
-    let cfg_path = dir.path().join("firma.toml");
+    let cfg_path = dir.path().join(CONFIG_FILE_NAME);
     std::fs::write(
         &cfg_path,
         "[authority]\nlisten_addr = \"127.0.0.1:50051\"\n\

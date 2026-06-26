@@ -24,6 +24,7 @@ firma-authority = { workspace = true }
 firma-config = { workspace = true, features = ["clap"] }
 firma-core = { workspace = true }
 firma-run = { workspace = true }
+firma-runtime-state = { workspace = true }
 firma-sidecar = { workspace = true }
 firma-stack = { workspace = true }
 miette = { workspace = true }
@@ -66,6 +67,7 @@ regex = { workspace = true }
 serde_repr = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 tempfile = { workspace = true }
+wait-timeout = { workspace = true }
 wiremock = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]

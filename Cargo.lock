@@ -1548,7 +1548,7 @@ checksum = "9844ddc3a6e533d62bba727eb6c28b5d360921d5175e9ff0f1e621a5c590a4d5"
 
 [[package]]
 name = "firma"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "cedar-policy",
@@ -1560,6 +1560,7 @@ dependencies = [
  "firma-config",
  "firma-core",
  "firma-run",
+ "firma-runtime-state",
  "firma-sidecar",
  "firma-stack",
  "fs-err",
@@ -1593,6 +1594,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "wait-timeout",
  "windows-sys 0.59.0",
  "wiremock",
  "x509-parser",
@@ -1600,12 +1602,13 @@ dependencies = [
 
 [[package]]
 name = "firma-authority"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-stream",
  "cedar-policy",
  "chrono",
+ "firma-config",
  "firma-core",
  "firma-protobuf",
  "fs-err",
@@ -1634,7 +1637,7 @@ dependencies = [
 
 [[package]]
 name = "firma-config"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1650,7 +1653,7 @@ dependencies = [
 
 [[package]]
 name = "firma-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "cedar-policy",
@@ -1669,7 +1672,7 @@ dependencies = [
 
 [[package]]
 name = "firma-demo-fixture"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1686,12 +1689,14 @@ dependencies = [
 
 [[package]]
 name = "firma-demo-tui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ansi-to-tui",
  "anyhow",
  "clap",
  "crossterm 0.28.1",
+ "firma-config",
+ "firma-runtime-state",
  "firma-stack",
  "ratatui",
  "serde",
@@ -1704,7 +1709,7 @@ dependencies = [
 
 [[package]]
 name = "firma-grpc-interceptor-proto"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "prost",
  "tonic",
@@ -1729,7 +1734,7 @@ dependencies = [
 
 [[package]]
 name = "firma-run"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1740,8 +1745,8 @@ dependencies = [
  "firma-config",
  "firma-core",
  "firma-protobuf",
+ "firma-runtime-state",
  "firma-sidecar",
- "firma-stack",
  "fs-err",
  "hex",
  "nix 0.31.3",
@@ -1763,8 +1768,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "firma-runtime-state"
+version = "0.1.2"
+dependencies = [
+ "nix 0.31.3",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
+ "tracing",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "firma-sidecar"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1777,7 +1795,7 @@ dependencies = [
  "firma-core",
  "firma-grpc-interceptor-proto",
  "firma-protobuf",
- "firma-stack",
+ "firma-runtime-state",
  "governor",
  "hex",
  "http-body",
@@ -1824,12 +1842,11 @@ dependencies = [
 
 [[package]]
 name = "firma-stack"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
- "chrono",
  "ctrlc",
- "dirs",
  "firma-config",
+ "firma-runtime-state",
  "nix 0.31.3",
  "serde",
  "serial_test",

@@ -40,6 +40,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use firma_config::CONFIG_FILE_NAME;
 use firma_sidecar::config::CapabilitySeedConfig;
 use firma_sidecar::startup::{build_token_verifier, load_capability_map};
 
@@ -121,7 +122,7 @@ fn spawn_live_authority() -> LiveAuthority {
     assert!(status.success(), "generate-key failed");
 
     let revocation_file = tmp.path().join("revocations.txt");
-    let auth_toml = tmp.path().join("firma.toml");
+    let auth_toml = tmp.path().join(CONFIG_FILE_NAME);
     std::fs::write(
         &auth_toml,
         format!(
@@ -245,14 +246,15 @@ fn live_mint_writes_seed_and_admits_stage1() {
 
     // Sanity: this is the same path `firma_stack` resolves for the pinned
     // FIRMA_STATE_DIR, so the assertion below tracks the production location.
-    let resolved_runtime = firma_stack::runtime_paths::default_runtime_dir_from(
+    let resolved_runtime = firma_runtime_state::runtime_paths::default_runtime_dir_from(
         None,
         Some(runtime_dir.to_string_lossy().into_owned()),
         None,
         0,
     );
-    let resolved_seed = firma_stack::runtime_paths::capabilities_dir_from(&resolved_runtime)
-        .join(format!("{sandbox_id}.toml"));
+    let resolved_seed =
+        firma_runtime_state::runtime_paths::capabilities_dir_from(&resolved_runtime)
+            .join(format!("{sandbox_id}.toml"));
     assert_eq!(
         resolved_seed, seed_path,
         "seed path must match the runtime-path helper for the pinned state dir"
@@ -391,7 +393,7 @@ fn no_autostart_unreachable_authority_fails_loudly() {
 
     // No fallback occurred: no capability seed file was created anywhere under
     // the pinned runtime dir.
-    let caps_dir = firma_stack::runtime_paths::capabilities_dir_from(runtime_dir);
+    let caps_dir = firma_runtime_state::runtime_paths::capabilities_dir_from(runtime_dir);
     assert!(
         !has_any_file(&caps_dir),
         "no capability file should be created on the failed-authority path"

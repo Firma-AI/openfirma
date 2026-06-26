@@ -6,8 +6,7 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use nix::sys::signal::{Signal, kill, killpg};
-use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 
 use crate::error::{Result, StackError};
@@ -19,10 +18,6 @@ fn raw_pid(pid: u32) -> Result<Pid> {
     let raw = i32::try_from(pid)
         .map_err(|_| StackError::Platform(format!("pid {pid} does not fit platform pid_t")))?;
     Ok(Pid::from_raw(raw))
-}
-
-fn raw_pid_lossy(pid: u32) -> Option<Pid> {
-    i32::try_from(pid).ok().map(Pid::from_raw)
 }
 
 impl Platform for UnixPlatform {
@@ -70,21 +65,6 @@ impl Platform for UnixPlatform {
     }
 
     fn is_alive(pid: u32) -> bool {
-        let Some(pid) = raw_pid_lossy(pid) else {
-            return false;
-        };
-        // If `pid` is our child and has exited, reap the zombie here. Otherwise
-        // `kill(pid, 0)` would still return Ok for the zombie entry and we would
-        // wait forever for an already-dead child. When `pid` is not our child
-        // (e.g. external `firma stack stop` against a detached supervisor) the
-        // `ECHILD` branch falls back to the kill probe.
-        match waitpid(pid, Some(WaitPidFlag::WNOHANG)) {
-            Ok(WaitStatus::Exited(_, _) | WaitStatus::Signaled(_, _, _)) => false,
-            Ok(_) => true,
-            Err(nix::errno::Errno::ECHILD) => {
-                matches!(kill(pid, None), Ok(()) | Err(nix::errno::Errno::EPERM))
-            }
-            Err(_) => false,
-        }
+        firma_runtime_state::is_pid_alive(pid)
     }
 }

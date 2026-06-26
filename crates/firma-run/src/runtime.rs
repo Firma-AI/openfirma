@@ -197,7 +197,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         }
         let firma_exe = std::env::current_exe()
             .map_err(|e| RunError::Internal(format!("resolve current_exe: {e}")))?;
-        let runtime_dir = firma_stack::runtime_paths::default_runtime_dir();
+        let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
         let mut prompt = crate::authority::StdAuthorityPrompt;
         let authority = crate::routing::resolve_authority(
             &identity,
@@ -681,6 +681,8 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
+    use firma_config::CONFIG_FILE_NAME;
+
     use crate::config::{
         CapabilityLeaseConfig, CapabilitySource, ExecutableLaunchPolicy, MountSpec, NetworkPolicy,
         ResolvedProfile, SandboxIdentityMode, SidecarEndpoint,
@@ -1140,7 +1142,7 @@ mod tests {
     #[test]
     fn resolve_sidecar_template_falls_back_to_user_config_when_present() {
         let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let user_cfg = tmp.path().join("firma.toml");
+        let user_cfg = tmp.path().join(CONFIG_FILE_NAME);
         fs::write(&user_cfg, "[sidecar]\n").unwrap_or_else(|e| panic!("{e}"));
 
         let args = super::RunInput {

@@ -4,27 +4,13 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+pub use firma_runtime_state::State;
 use serde::Serialize;
 use tracing::{debug, trace};
 
 use crate::error::Result;
-use crate::pidfile;
 use crate::platform::{Platform, SystemPlatform};
-
-/// Reported state of an individual stack component.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum State {
-    /// Pidfile present, process alive, listen port accepting connections.
-    Running,
-    /// Pidfile present, process alive, but the listen port is closed.
-    Unhealthy,
-    /// No pidfile, or the recorded pid no longer exists.
-    Stopped,
-    /// Pidfile present but liveness or port probe could not be performed
-    /// reliably (typically `EPERM` on Unix or access-denied on Windows).
-    Unknown,
-}
+use firma_runtime_state::pidfile;
 
 /// Snapshot of one component's runtime state.
 #[derive(Debug, Clone, Serialize)]
