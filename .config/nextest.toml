@@ -1,0 +1,9 @@
+# nextest configuration.
+#
+# Some e2e enforcement scenarios require structural confinement (Linux `bwrap`).
+# On macOS `firma run` falls back to non-structural compatibility mode
+# (sandbox-exec + HTTP_PROXY), so those scenarios cannot assert real
+# enforcement.
+[[profile.default.overrides]]
+platform = 'cfg(target_os = "macos")'
+default-filter = 'not (binary_id(firma::e2e) & test(/^(claude|codex)::(block_raw_tcp_egress|fs_read_deny|fs_delete_deny)$/))'

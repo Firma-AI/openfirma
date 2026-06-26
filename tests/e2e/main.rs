@@ -47,11 +47,6 @@ async fn drive_scenario_for_agent(
     scenario: &mut dyn EnforcementScenario,
     kind: AgentKind,
 ) -> Result<(), anyhow::Error> {
-    if scenario.skip() {
-        eprintln!("skipping scenario {} on this platform", scenario.name());
-        return Ok(());
-    }
-
     let agent = default_agent(kind);
 
     run_scenario(scenario, &agent)

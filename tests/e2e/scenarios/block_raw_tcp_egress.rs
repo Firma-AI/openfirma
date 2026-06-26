@@ -9,10 +9,6 @@ impl EnforcementScenario for BlockRawTcpEgress {
         "block_raw_tcp_egress"
     }
 
-    fn skip(&self) -> bool {
-        cfg!(target_os = "macos")
-    }
-
     fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.git_init_workspace()?;
         ctx.firma_config().run()?;
