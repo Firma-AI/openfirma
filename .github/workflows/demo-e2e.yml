@@ -38,7 +38,7 @@ jobs:
         run: sudo apt-get install -y jq netcat-openbsd
 
       - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@30b5ca8b54e1dcffd9548bc87ede1531310fdc67 # v1.20.0
+        uses: cargo-bins/cargo-binstall@732870f031d2fb36309d0deaf36abcc704a7be65 # v1.20.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
