@@ -8,7 +8,7 @@ pub mod sidecar_markers;
 pub mod state_dir;
 pub mod status;
 
-mod process;
+mod liveness;
 
 pub use error::{Result, RuntimeStateError};
 pub use runtime_paths::{capabilities_dir_from, default_runtime_dir, run_dir_from, run_entry_from};
