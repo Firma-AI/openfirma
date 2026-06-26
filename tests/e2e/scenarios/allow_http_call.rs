@@ -58,7 +58,7 @@ impl EnforcementScenario for AllowHttpCall {
 
     fn assert_baseline(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
         if !output.agent.success {
-            anyhow::bail!("baseline agent failed");
+            anyhow::bail!("agent failed");
         }
         if !output
             .http_requests

@@ -27,7 +27,7 @@ impl EnforcementScenario for BlockRawTcpEgress {
 
     fn assert_baseline(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
         if !output.agent.success {
-            anyhow::bail!("baseline agent failed: {}", output.agent.stderr);
+            anyhow::bail!("agent failed");
         }
         if !output.agent.stdout.contains("CONNECTED") {
             anyhow::bail!(

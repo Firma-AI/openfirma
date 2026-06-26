@@ -29,11 +29,11 @@ impl EnforcementScenario for FsReadDeny {
 
     fn assert_baseline(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
         if !output.agent.success {
-            anyhow::bail!("baseline agent failed: {}", output.agent.stderr);
+            anyhow::bail!("agent failed");
         }
         if !output.agent.stdout.contains(SECRET_CONTENT) {
             anyhow::bail!(
-                "baseline agent did not read the secret file — stdout did not contain {SECRET_CONTENT}"
+                "agent did not read the secret file — stdout did not contain {SECRET_CONTENT}"
             );
         }
         Ok(())

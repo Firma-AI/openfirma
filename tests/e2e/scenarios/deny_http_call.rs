@@ -42,14 +42,14 @@ impl EnforcementScenario for DenyHttpCall {
 
     fn assert_baseline(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
         if !output.agent.success {
-            anyhow::bail!("baseline agent failed: {}", output.agent.stderr);
+            anyhow::bail!("agent failed");
         }
         if !output
             .http_requests
             .iter()
             .any(|req| req.url.path() == MOCK_PATH)
         {
-            anyhow::bail!("baseline: POST did not reach mock server");
+            anyhow::bail!("POST did not reach mock server");
         }
         Ok(())
     }
