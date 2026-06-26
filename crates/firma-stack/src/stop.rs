@@ -40,12 +40,12 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
         .flatten()
     {
         if SystemPlatform::is_alive(pid) {
-            debug!(pid, "sending soft signal");
+            debug!(pid = %pid, "sending soft signal");
             if let Err(e) = SystemPlatform::signal_soft(pid) {
                 // Not fatal: hard-kill will still run after the grace window.
                 // Common when a child crashed before installing its shutdown
                 // listener; log so the failure isn't silent.
-                debug!(pid, error = %e, "soft signal failed");
+                debug!(pid = %pid, error = %e, "soft signal failed");
             }
         }
     }
@@ -71,7 +71,7 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
         .flatten()
     {
         if SystemPlatform::is_alive(pid) {
-            info!(pid, "soft-signal grace exceeded; hard-killing");
+            info!(pid = %pid, "soft-signal grace exceeded; hard-killing");
             let _ = SystemPlatform::signal_hard(pid);
             forced = true;
         }

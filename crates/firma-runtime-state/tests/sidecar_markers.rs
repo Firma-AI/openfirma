@@ -49,7 +49,7 @@ fn metadata_file_parses_all_fields() {
     assert_eq!(meta.session_id, "sess-1");
     assert_eq!(meta.authority_url, "https://authority.local");
     assert_eq!(meta.policy_bundle_version, "deadbeef");
-    assert_eq!(meta.pid, 4242);
+    assert_eq!(meta.pid.get(), 4242);
     assert_eq!(meta.started_at, "2026-05-18T10:00:00Z");
 }
 

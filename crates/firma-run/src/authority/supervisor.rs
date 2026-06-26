@@ -278,8 +278,10 @@ impl AuthoritySupervisor {
             reason: "authority tee thread missing after startup".into(),
             log_path: log_path.clone(),
         })?;
+        let process_id = firma_runtime_state::NonZeroProcessId::new(pid)
+            .ok_or_else(|| RunError::Internal("authority returned reserved pid 0".into()))?;
 
-        firma_runtime_state::pidfile::write(&pid_path, pid)
+        firma_runtime_state::pidfile::write(&pid_path, process_id)
             .map_err(|e| RunError::Internal(format!("write authority.pid: {e}")))?;
         crate::authority::metadata::write(
             &metadata_path,

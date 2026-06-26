@@ -268,8 +268,10 @@ impl SidecarSupervisor {
                 }),
             );
         };
+        let process_id = firma_runtime_state::NonZeroProcessId::new(pid)
+            .ok_or_else(|| RunError::Internal("sidecar returned reserved pid 0".into()))?;
 
-        firma_runtime_state::pidfile::write(&pid_path, pid)
+        firma_runtime_state::pidfile::write(&pid_path, process_id)
             .map_err(|error| RunError::Internal(format!("write sidecar.pid: {error}")))?;
         crate::sidecar::metadata::write(
             &metadata_path,
@@ -279,7 +281,7 @@ impl SidecarSupervisor {
                 session_id: req.session_id.to_string(),
                 authority_url: capture.authority_url,
                 policy_bundle_version: capture.policy_bundle_version,
-                pid,
+                pid: process_id,
                 started_at: chrono::Utc::now().to_rfc3339(),
                 // Persist the real interceptor endpoint so `firma sidecar
                 // status` probes the correct transport (FIR-195): a TCP port

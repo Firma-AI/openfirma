@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 pub use firma_runtime_state::State;
+use firma_runtime_state::NonZeroProcessId;
 use serde::Serialize;
 use tracing::{debug, trace};
 
@@ -18,7 +19,7 @@ pub struct ComponentStatus {
     /// Logical component name (`authority` / `sidecar`).
     pub name: String,
     /// PID read from `<state_dir>/<name>.pid`, when present.
-    pub pid: Option<u32>,
+    pub pid: Option<NonZeroProcessId>,
     /// Coarse-grained state. See [`State`].
     pub state: State,
     /// Listen address read from `<state_dir>/<name>.listen` (written at

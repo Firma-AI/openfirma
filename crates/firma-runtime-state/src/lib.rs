@@ -24,6 +24,6 @@ pub use status::State;
 /// for non-child processes. It is intended for local runtime-state observation,
 /// not for process ownership or signaling.
 #[must_use]
-pub fn is_pid_alive(pid: u32) -> bool {
+pub fn is_pid_alive(pid: NonZeroProcessId) -> bool {
     liveness::is_alive(pid)
 }

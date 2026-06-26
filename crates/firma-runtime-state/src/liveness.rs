@@ -1,8 +1,10 @@
 //! Minimal process liveness probe used by runtime-state readers.
 
+use crate::process_id::NonZeroProcessId;
+
 #[cfg(unix)]
-pub fn is_alive(pid: u32) -> bool {
-    let Ok(raw) = i32::try_from(pid) else {
+pub fn is_alive(pid: NonZeroProcessId) -> bool {
+    let Ok(raw) = i32::try_from(pid.get()) else {
         return false;
     };
     let pid = nix::unistd::Pid::from_raw(raw);
@@ -30,13 +32,13 @@ pub fn is_alive(pid: u32) -> bool {
         reason = "Windows process liveness uses raw Win32 process handles"
     )
 )]
-pub fn is_alive(pid: u32) -> bool {
+pub fn is_alive(pid: NonZeroProcessId) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
     use windows_sys::Win32::System::Threading::{
         GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
     };
 
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid.get()) };
     if handle.is_null() {
         return false;
     }
@@ -47,6 +49,6 @@ pub fn is_alive(pid: u32) -> bool {
 }
 
 #[cfg(not(any(unix, windows)))]
-pub fn is_alive(_pid: u32) -> bool {
+pub fn is_alive(_pid: NonZeroProcessId) -> bool {
     false
 }

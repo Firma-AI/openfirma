@@ -8,11 +8,12 @@ use tracing::{debug, info, warn};
 
 use crate::error::Result;
 use crate::platform::{Platform, SystemPlatform};
+use firma_runtime_state::NonZeroProcessId;
 
 #[derive(Clone, Copy)]
 pub struct Children {
-    pub authority_pid: u32,
-    pub sidecar_pid: u32,
+    pub authority_pid: NonZeroProcessId,
+    pub sidecar_pid: NonZeroProcessId,
 }
 
 pub fn block_until_exit(children: Children) -> Result<()> {
@@ -22,8 +23,8 @@ pub fn block_until_exit(children: Children) -> Result<()> {
         stop_handler.store(true, Ordering::SeqCst);
     });
     debug!(
-        authority_pid = children.authority_pid,
-        sidecar_pid = children.sidecar_pid,
+        authority_pid = %children.authority_pid,
+        sidecar_pid = %children.sidecar_pid,
         "supervisor watching children"
     );
 
@@ -39,13 +40,13 @@ pub fn block_until_exit(children: Children) -> Result<()> {
         }
         if !SystemPlatform::is_alive(children.authority_pid) {
             warn!(
-                pid = children.authority_pid,
+                pid = %children.authority_pid,
                 "authority exited unexpectedly"
             );
             return Ok(());
         }
         if !SystemPlatform::is_alive(children.sidecar_pid) {
-            warn!(pid = children.sidecar_pid, "sidecar exited unexpectedly");
+            warn!(pid = %children.sidecar_pid, "sidecar exited unexpectedly");
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(200));

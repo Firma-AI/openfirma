@@ -138,7 +138,7 @@ fn collect_daemon() -> anyhow::Result<Vec<SidecarEntry>> {
         session_id: String::new(),
         authority_url: String::new(),
         policy_bundle_version: String::new(),
-        pid: c.pid.unwrap_or(0),
+        pid: c.pid.map_or(0, firma_runtime_state::NonZeroProcessId::get),
         started_at: String::new(),
         state: c.state,
         listen: c
