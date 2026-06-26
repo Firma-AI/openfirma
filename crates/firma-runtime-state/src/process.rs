@@ -1,13 +1,5 @@
 //! Minimal process liveness probe used by runtime-state readers.
 
-#![cfg_attr(
-    windows,
-    expect(
-        unsafe_code,
-        reason = "Windows process liveness uses raw Win32 process handles"
-    )
-)]
-
 #[cfg(unix)]
 pub fn is_alive(pid: u32) -> bool {
     let Ok(raw) = i32::try_from(pid) else {
@@ -31,6 +23,13 @@ pub fn is_alive(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
+#[cfg_attr(
+    windows,
+    expect(
+        unsafe_code,
+        reason = "Windows process liveness uses raw Win32 process handles"
+    )
+)]
 pub fn is_alive(pid: u32) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
     use windows_sys::Win32::System::Threading::{

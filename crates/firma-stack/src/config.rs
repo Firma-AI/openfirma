@@ -16,7 +16,7 @@ use crate::error::{Result, StackError};
 #[derive(Debug, Clone)]
 pub struct StackConfig {
     /// Optional override for the runtime state directory. When `None`,
-    /// the caller resolves it via [`crate::resolve_state_dir`].
+    /// the caller resolves it via [`firma_runtime_state::resolve_state_dir`].
     pub state_dir: Option<PathBuf>,
     /// The single unified `firma.toml` shared by both components.
     pub config_file: PathBuf,
