@@ -102,7 +102,7 @@ fn is_stale(marker_dir: &Path) -> bool {
         return false;
     };
     match toml::from_str::<MetadataFile>(&text) {
-        Ok(meta) => !crate::liveness::is_alive(meta.pid),
+        Ok(meta) => !crate::is_pid_alive(meta.pid),
         Err(_) => false,
     }
 }
@@ -225,7 +225,7 @@ pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
     } else {
         PathBuf::from(&meta.listen)
     };
-    let state = if !crate::liveness::is_alive(meta.pid) {
+    let state = if !crate::is_pid_alive(meta.pid) {
         State::Stopped
     } else if endpoint_responds(&meta.listen, &listen) {
         State::Running
