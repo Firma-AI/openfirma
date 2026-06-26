@@ -93,7 +93,7 @@ impl TryFrom<u32> for UserProcessId {
     type Error = UserProcessIdError;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        Self::new(value).ok_or(UserProcessIdError::Zero)
+        Self::new(value).ok_or(UserProcessIdError)
     }
 }
 
@@ -111,11 +111,9 @@ impl fmt::Display for UserProcessId {
 
 /// Error returned when converting a raw integer into [`UserProcessId`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum UserProcessIdError {
-    /// `OpenFirma` runtime-state process IDs cannot be zero.
-    #[error("process id must be non-zero")]
-    Zero,
-}
+#[error("process id must be non-zero")]
+#[non_exhaustive]
+pub struct UserProcessIdError;
 
 #[cfg(test)]
 mod tests {
@@ -129,7 +127,7 @@ mod tests {
     #[test]
     fn rejects_zero() {
         assert_eq!(UserProcessId::new(0), None);
-        assert_eq!(UserProcessId::try_from(0), Err(UserProcessIdError::Zero));
+        assert_eq!(UserProcessId::try_from(0), Err(UserProcessIdError));
     }
 
     #[test]
