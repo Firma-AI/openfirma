@@ -11,11 +11,11 @@ use nix::unistd::Pid;
 
 use crate::error::{Result, StackError};
 use crate::platform::{Group, Platform, SpawnedChild};
-use firma_runtime_state::NonZeroProcessId;
+use firma_runtime_state::UserProcessId;
 
 pub struct UnixPlatform;
 
-fn raw_pid(pid: NonZeroProcessId) -> Result<Pid> {
+fn raw_pid(pid: UserProcessId) -> Result<Pid> {
     let raw = i32::try_from(pid.get())
         .map_err(|_| StackError::Platform(format!("pid {pid} does not fit platform pid_t")))?;
     Ok(Pid::from_raw(raw))
@@ -50,24 +50,23 @@ impl Platform for UnixPlatform {
                 .to_string(),
             source,
         })?;
-        let pid = NonZeroProcessId::new(child.id()).ok_or_else(|| {
-            StackError::Platform("spawned child returned reserved pid 0".into())
-        })?;
+        let pid = UserProcessId::new(child.id())
+            .ok_or_else(|| StackError::Platform("spawned child returned reserved pid 0".into()))?;
         std::mem::forget(child);
         Ok(SpawnedChild { pid })
     }
 
-    fn signal_soft(group_pid: NonZeroProcessId) -> Result<()> {
+    fn signal_soft(group_pid: UserProcessId) -> Result<()> {
         killpg(raw_pid(group_pid)?, Signal::SIGTERM)
             .map_err(|error| StackError::Platform(format!("killpg(SIGTERM) failed: {error}")))
     }
 
-    fn signal_hard(group_pid: NonZeroProcessId) -> Result<()> {
+    fn signal_hard(group_pid: UserProcessId) -> Result<()> {
         killpg(raw_pid(group_pid)?, Signal::SIGKILL)
             .map_err(|error| StackError::Platform(format!("killpg(SIGKILL) failed: {error}")))
     }
 
-    fn is_alive(pid: NonZeroProcessId) -> bool {
+    fn is_alive(pid: UserProcessId) -> bool {
         firma_runtime_state::is_pid_alive(pid)
     }
 }

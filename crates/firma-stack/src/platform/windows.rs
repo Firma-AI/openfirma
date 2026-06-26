@@ -19,7 +19,7 @@ use windows_sys::Win32::System::Threading::{
 use crate::error::{Result, StackError};
 use crate::platform::{Group, Platform, SpawnedChild};
 use crate::shutdown_event::windows_shutdown_event_name;
-use firma_runtime_state::NonZeroProcessId;
+use firma_runtime_state::UserProcessId;
 
 pub struct WindowsPlatform;
 
@@ -65,16 +65,14 @@ impl Platform for WindowsPlatform {
                 .to_string(),
             source,
         })?;
-        let pid = NonZeroProcessId::new(child.id()).ok_or_else(|| {
-            StackError::Platform("spawned child returned reserved pid 0".into())
-        })?;
+        let pid = UserProcessId::new(child.id())
+            .ok_or_else(|| StackError::Platform("spawned child returned reserved pid 0".into()))?;
         // AssignProcessToJobObject requires PROCESS_SET_QUOTA and PROCESS_TERMINATE
         // on the process handle (per MSDN). Opening with only
         // PROCESS_QUERY_LIMITED_INFORMATION makes the assignment fail with
         // ERROR_ACCESS_DENIED.
-        let process_handle = unsafe {
-            OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid.get())
-        };
+        let process_handle =
+            unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid.get()) };
         if process_handle.is_null() {
             let err = unsafe { GetLastError() };
             return Err(StackError::Platform(format!(
@@ -97,7 +95,7 @@ impl Platform for WindowsPlatform {
         Ok(SpawnedChild { pid })
     }
 
-    fn signal_soft(group_pid: NonZeroProcessId) -> Result<()> {
+    fn signal_soft(group_pid: UserProcessId) -> Result<()> {
         // `GenerateConsoleCtrlEvent` only delivers to processes that share the
         // caller's console. The stop process runs in a different console than the
         // children, and the children are spawned with `CREATE_NO_WINDOW` (no
@@ -131,7 +129,7 @@ impl Platform for WindowsPlatform {
         Ok(())
     }
 
-    fn signal_hard(group_pid: NonZeroProcessId) -> Result<()> {
+    fn signal_hard(group_pid: UserProcessId) -> Result<()> {
         let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, group_pid.get()) };
         if handle.is_null() {
             return Err(StackError::Platform("OpenProcess(TERMINATE) failed".into()));
@@ -144,7 +142,7 @@ impl Platform for WindowsPlatform {
         Ok(())
     }
 
-    fn is_alive(pid: NonZeroProcessId) -> bool {
+    fn is_alive(pid: UserProcessId) -> bool {
         firma_runtime_state::is_pid_alive(pid)
     }
 }
@@ -165,7 +163,7 @@ mod tests {
     fn signal_soft_signals_named_event() {
         // Use a synthetic PID so the test never collides with a real
         // shutdown listener on the same machine.
-        let pid = NonZeroProcessId::new((std::process::id() ^ 0xDEAD_BEEF).wrapping_add(1))
+        let pid = UserProcessId::new((std::process::id() ^ 0xDEAD_BEEF).wrapping_add(1))
             .expect("synthetic pid is non-zero");
         let name = windows_shutdown_event_name(pid.get());
         let wide: Vec<u16> = OsStr::new(&name)
@@ -192,7 +190,7 @@ mod tests {
     #[test]
     fn signal_soft_errors_when_event_absent() {
         // PID with no matching event — `OpenEventW` must return null.
-        let pid = NonZeroProcessId::new(0xDEAD_BEEF).expect("synthetic pid is non-zero");
+        let pid = UserProcessId::new(0xDEAD_BEEF).expect("synthetic pid is non-zero");
         let err =
             WindowsPlatform::signal_soft(pid).expect_err("signal_soft must fail with no event");
         let msg = err.to_string();

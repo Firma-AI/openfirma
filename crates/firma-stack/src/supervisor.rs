@@ -8,12 +8,12 @@ use tracing::{debug, info, warn};
 
 use crate::error::Result;
 use crate::platform::{Platform, SystemPlatform};
-use firma_runtime_state::NonZeroProcessId;
+use firma_runtime_state::UserProcessId;
 
 #[derive(Clone, Copy)]
 pub struct Children {
-    pub authority_pid: NonZeroProcessId,
-    pub sidecar_pid: NonZeroProcessId,
+    pub authority_pid: UserProcessId,
+    pub sidecar_pid: UserProcessId,
 }
 
 pub fn block_until_exit(children: Children) -> Result<()> {

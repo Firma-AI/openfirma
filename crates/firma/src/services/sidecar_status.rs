@@ -164,7 +164,7 @@ mod tests {
             session_id: String::new(),
             authority_url: String::new(),
             policy_bundle_version: String::new(),
-            pid: firma_runtime_state::NonZeroProcessId::new(1234),
+            pid: firma_runtime_state::UserProcessId::new(1234),
             started_at: String::new(),
             state,
             listen: PathBuf::from("/tmp/sidecar.sock"),

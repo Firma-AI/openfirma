@@ -12,7 +12,7 @@ pub mod status;
 mod liveness;
 
 pub use error::{Result, RuntimeStateError};
-pub use process_id::{NonZeroProcessId, ProcessIdError};
+pub use process_id::{UserProcessId, UserProcessIdError};
 pub use runtime_paths::{capabilities_dir_from, default_runtime_dir, run_dir_from, run_entry_from};
 pub use sidecar_markers::{MetadataFile, SidecarEntry, gc_stale, get, list};
 pub use state_dir::resolve_state_dir;
@@ -24,6 +24,6 @@ pub use status::State;
 /// for non-child processes. It is intended for local runtime-state observation,
 /// not for process ownership or signaling.
 #[must_use]
-pub fn is_pid_alive(pid: NonZeroProcessId) -> bool {
+pub fn is_pid_alive(pid: UserProcessId) -> bool {
     liveness::is_alive(pid)
 }

@@ -5,7 +5,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::error::RunError;
-use firma_runtime_state::NonZeroProcessId;
+use firma_runtime_state::UserProcessId;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Metadata {
@@ -14,7 +14,7 @@ pub struct Metadata {
     pub session_id: String,
     pub profile: String,
     pub listen_addr: String,
-    pub pid: NonZeroProcessId,
+    pub pid: UserProcessId,
     pub started_at: String,
 }
 

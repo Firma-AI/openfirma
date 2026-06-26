@@ -1,16 +1,15 @@
 //! Pidfile helper behavior.
 
-use firma_runtime_state::{NonZeroProcessId, pidfile};
+use firma_runtime_state::{UserProcessId, pidfile};
 use tempfile::tempdir;
 
 #[test]
 fn write_then_read_pid() {
     let dir = tempdir().expect("dir");
     let path = dir.path().join("child.pid");
-    pidfile::write(&path, NonZeroProcessId::new(4242).expect("non-zero pid"))
-        .expect("write");
+    pidfile::write(&path, UserProcessId::new(4242).expect("non-zero pid")).expect("write");
     let got = pidfile::read(&path).expect("read");
-    assert_eq!(got.map(NonZeroProcessId::get), Some(4242));
+    assert_eq!(got.map(UserProcessId::get), Some(4242));
 }
 
 #[test]

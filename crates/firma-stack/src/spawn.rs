@@ -7,7 +7,7 @@ use tracing::debug;
 
 use crate::error::Result;
 use crate::platform::{Group, Platform, SpawnedChild, SystemPlatform};
-use firma_runtime_state::{NonZeroProcessId, pidfile};
+use firma_runtime_state::{UserProcessId, pidfile};
 
 #[derive(Clone, Copy)]
 pub struct SpawnRequest<'a> {
@@ -20,7 +20,7 @@ pub struct SpawnRequest<'a> {
 }
 
 pub struct SpawnedComponent {
-    pub pid: NonZeroProcessId,
+    pub pid: UserProcessId,
 }
 
 pub fn spawn_component(group: &Group, req: &SpawnRequest<'_>) -> Result<SpawnedComponent> {

@@ -5,15 +5,15 @@ use std::num::NonZeroU32;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// Non-zero operating-system process identifier used in `OpenFirma` runtime state.
+/// Operating-system process identifier for spawned user processes.
 ///
 /// OS PID `0` can have platform-specific meaning, but `OpenFirma` pidfiles and
-/// markers only record spawned user processes. Use `Option<NonZeroProcessId>`
+/// markers only record spawned user processes. Use `Option<UserProcessId>`
 /// when a runtime-state record may not have a process ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NonZeroProcessId(NonZeroU32);
+pub struct UserProcessId(NonZeroU32);
 
-impl NonZeroProcessId {
+impl UserProcessId {
     /// Construct a process ID from its raw integer representation.
     #[must_use]
     pub fn new(raw: u32) -> Option<Self> {
@@ -27,27 +27,27 @@ impl NonZeroProcessId {
     }
 }
 
-impl TryFrom<u32> for NonZeroProcessId {
-    type Error = ProcessIdError;
+impl TryFrom<u32> for UserProcessId {
+    type Error = UserProcessIdError;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        Self::new(value).ok_or(ProcessIdError::Zero)
+        Self::new(value).ok_or(UserProcessIdError::Zero)
     }
 }
 
-impl From<NonZeroProcessId> for u32 {
-    fn from(value: NonZeroProcessId) -> Self {
+impl From<UserProcessId> for u32 {
+    fn from(value: UserProcessId) -> Self {
         value.get()
     }
 }
 
-impl fmt::Display for NonZeroProcessId {
+impl fmt::Display for UserProcessId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl Serialize for NonZeroProcessId {
+impl Serialize for UserProcessId {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -56,7 +56,7 @@ impl Serialize for NonZeroProcessId {
     }
 }
 
-impl<'de> Deserialize<'de> for NonZeroProcessId {
+impl<'de> Deserialize<'de> for UserProcessId {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -66,9 +66,9 @@ impl<'de> Deserialize<'de> for NonZeroProcessId {
     }
 }
 
-/// Error returned when converting a raw integer into [`NonZeroProcessId`].
+/// Error returned when converting a raw integer into [`UserProcessId`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum ProcessIdError {
+pub enum UserProcessIdError {
     /// `OpenFirma` runtime-state process IDs cannot be zero.
     #[error("process id must be non-zero")]
     Zero,
@@ -85,13 +85,13 @@ mod tests {
 
     #[test]
     fn rejects_zero() {
-        assert_eq!(NonZeroProcessId::new(0), None);
-        assert_eq!(NonZeroProcessId::try_from(0), Err(ProcessIdError::Zero));
+        assert_eq!(UserProcessId::new(0), None);
+        assert_eq!(UserProcessId::try_from(0), Err(UserProcessIdError::Zero));
     }
 
     #[test]
     fn exposes_raw_value() {
-        let pid = NonZeroProcessId::try_from(42).expect("non-zero pid");
+        let pid = UserProcessId::try_from(42).expect("non-zero pid");
 
         assert_eq!(pid.get(), 42);
         assert_eq!(u32::from(pid), 42);
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn serializes_as_integer() {
-        let pid = NonZeroProcessId::try_from(42).expect("non-zero pid");
+        let pid = UserProcessId::try_from(42).expect("non-zero pid");
 
         let value = toml::Value::try_from(pid).expect("serialize pid");
 
@@ -111,7 +111,7 @@ mod tests {
     fn deserializes_from_integer() {
         let value = toml::Value::Integer(42);
 
-        let pid: NonZeroProcessId = value.try_into().expect("deserialize pid");
+        let pid: UserProcessId = value.try_into().expect("deserialize pid");
 
         assert_eq!(pid.get(), 42);
     }
@@ -120,7 +120,7 @@ mod tests {
     fn deserialize_rejects_zero() {
         let value = toml::Value::Integer(0);
 
-        let error = value.try_into::<NonZeroProcessId>().expect_err("zero pid");
+        let error = value.try_into::<UserProcessId>().expect_err("zero pid");
 
         assert!(error.to_string().contains("process id must be non-zero"));
     }

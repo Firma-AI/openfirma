@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-use crate::process_id::NonZeroProcessId;
+use crate::process_id::UserProcessId;
 use crate::runtime_paths::{run_dir_from, run_entry_from};
 
 /// Connect timeout for the TCP liveness probe of an `http_proxy` interceptor.
@@ -26,7 +26,7 @@ pub struct MetadataFile {
     /// Policy bundle version digest string, as written by firma-run at startup.
     pub policy_bundle_version: String,
     /// PID of the sidecar process.
-    pub pid: NonZeroProcessId,
+    pub pid: UserProcessId,
     /// RFC 3339 UTC timestamp of when the sidecar process started.
     pub started_at: String,
     /// Interceptor listen endpoint to health-probe: a `host:port` pair for an
@@ -52,7 +52,7 @@ pub struct SidecarEntry {
     /// Policy bundle version digest string.
     pub policy_bundle_version: String,
     /// PID of the sidecar process, when known.
-    pub pid: Option<NonZeroProcessId>,
+    pub pid: Option<UserProcessId>,
     /// RFC 3339 UTC timestamp of when the sidecar process started.
     pub started_at: String,
     /// Coarse-grained liveness state derived from pid + socket probes.

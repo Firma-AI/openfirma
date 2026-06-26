@@ -47,6 +47,6 @@ pub mod test_support {
     #[must_use]
     pub fn is_process_alive(pid: u32) -> bool {
         use crate::platform::{Platform, SystemPlatform};
-        firma_runtime_state::NonZeroProcessId::new(pid).is_some_and(SystemPlatform::is_alive)
+        firma_runtime_state::UserProcessId::new(pid).is_some_and(SystemPlatform::is_alive)
     }
 }

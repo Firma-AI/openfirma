@@ -15,7 +15,7 @@ use wait_timeout::ChildExt;
 
 use crate::error::RunError;
 use crate::identity::SandboxId;
-use firma_runtime_state::NonZeroProcessId;
+use firma_runtime_state::UserProcessId;
 
 /// Per-spec default ready-line wait. CLI flag overrides.
 pub const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
@@ -70,7 +70,7 @@ pub enum ScrapeResult {
 pub struct AuthoritySupervisor {
     listen_addr: String,
     marker_dir: PathBuf,
-    pid: NonZeroProcessId,
+    pid: UserProcessId,
     child: Option<Child>,
     tee_handle: Option<JoinHandle<()>>,
 }
@@ -165,7 +165,7 @@ impl AuthoritySupervisor {
 
         let mut capture: Option<ReadyCapture> = None;
         let mut child: Option<Child> = None;
-        let mut pid: Option<NonZeroProcessId> = None;
+        let mut pid: Option<UserProcessId> = None;
         let mut tee_handle: Option<JoinHandle<()>> = None;
         let mut last_error: Option<RunError> = None;
         for attempt in 0..MAX_BIND_ATTEMPTS {
@@ -202,7 +202,7 @@ impl AuthoritySupervisor {
                     reason: format!("spawn firma authority: {e}"),
                     log_path: log_path.clone(),
                 })?;
-            let Some(try_pid) = NonZeroProcessId::new(try_child.id()) else {
+            let Some(try_pid) = UserProcessId::new(try_child.id()) else {
                 let _ = try_child.kill();
                 let _ = try_child.wait();
                 return Err(RunError::Internal(
@@ -329,7 +329,7 @@ impl AuthoritySupervisor {
 
     #[doc(hidden)]
     #[must_use]
-    pub fn pid(&self) -> NonZeroProcessId {
+    pub fn pid(&self) -> UserProcessId {
         self.pid
     }
 
@@ -380,7 +380,7 @@ impl Drop for AuthoritySupervisor {
 }
 
 #[cfg(unix)]
-fn send_sigterm(pid: NonZeroProcessId) {
+fn send_sigterm(pid: UserProcessId) {
     let Ok(raw) = i32::try_from(pid.get()) else {
         warn!(pid = %pid, "pid does not fit in i32; skipping SIGTERM");
         return;
@@ -403,7 +403,7 @@ fn select_loopback_v6_port() -> Result<SocketAddr, RunError> {
 }
 
 #[cfg(not(unix))]
-fn send_sigterm(_pid: NonZeroProcessId) {}
+fn send_sigterm(_pid: UserProcessId) {}
 
 const LISTENING_TOKEN: &str = "listening";
 

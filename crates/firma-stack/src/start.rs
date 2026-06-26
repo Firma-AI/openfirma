@@ -13,7 +13,7 @@ use crate::readiness::{
 };
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::supervisor::{Children, block_until_exit};
-use firma_runtime_state::{NonZeroProcessId, pidfile};
+use firma_runtime_state::{UserProcessId, pidfile};
 
 /// Mode in which [`start`] manages the stack after readiness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,9 +36,9 @@ pub enum StartMode {
 /// via [`crate::stop()`].
 pub struct StackHandle {
     /// PID of the authority component.
-    pub authority_pid: NonZeroProcessId,
+    pub authority_pid: UserProcessId,
     /// PID of the sidecar component.
-    pub sidecar_pid: NonZeroProcessId,
+    pub sidecar_pid: UserProcessId,
     /// Resolved state directory the stack is writing to.
     pub state_dir: PathBuf,
 }
@@ -181,9 +181,8 @@ fn rollback(state_dir: &Path) {
 ///
 /// Returns pidfile or supervision errors.
 pub fn supervise(state_dir: &Path) -> Result<()> {
-    let supervisor_pid = NonZeroProcessId::new(std::process::id()).ok_or_else(|| {
-        StackError::Platform("current process has reserved pid 0".into())
-    })?;
+    let supervisor_pid = UserProcessId::new(std::process::id())
+        .ok_or_else(|| StackError::Platform("current process has reserved pid 0".into()))?;
     info!(supervisor_pid = %supervisor_pid, state_dir = %state_dir.display(), "supervisor attaching");
     pidfile::write(&state_dir.join("stack.pid"), supervisor_pid)?;
     let authority_pid = pidfile::read(&state_dir.join("authority.pid"))?
