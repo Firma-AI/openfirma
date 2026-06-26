@@ -1548,7 +1548,7 @@ checksum = "9844ddc3a6e533d62bba727eb6c28b5d360921d5175e9ff0f1e621a5c590a4d5"
 
 [[package]]
 name = "firma"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "cedar-policy",
@@ -1573,9 +1573,9 @@ dependencies = [
  "pretty_assertions",
  "rand 0.9.4",
  "rcgen",
+ "regex",
  "serde",
  "serde_json",
- "serde_repr",
  "serde_yaml",
  "sha2 0.11.0",
  "strum 0.28.0",
@@ -1598,7 +1598,7 @@ dependencies = [
 
 [[package]]
 name = "firma-authority"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1632,7 +1632,7 @@ dependencies = [
 
 [[package]]
 name = "firma-config"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1648,7 +1648,7 @@ dependencies = [
 
 [[package]]
 name = "firma-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "cedar-policy",
@@ -1667,7 +1667,7 @@ dependencies = [
 
 [[package]]
 name = "firma-demo-fixture"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1684,7 +1684,7 @@ dependencies = [
 
 [[package]]
 name = "firma-demo-tui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ansi-to-tui",
  "anyhow",
@@ -1704,7 +1704,7 @@ dependencies = [
 
 [[package]]
 name = "firma-grpc-interceptor-proto"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "prost",
  "tonic",
@@ -1729,7 +1729,7 @@ dependencies = [
 
 [[package]]
 name = "firma-run"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1763,7 +1763,7 @@ dependencies = [
 
 [[package]]
 name = "firma-runtime-state"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "nix 0.31.3",
  "serde",
@@ -1776,7 +1776,7 @@ dependencies = [
 
 [[package]]
 name = "firma-sidecar"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1815,6 +1815,7 @@ dependencies = [
  "rustls-pemfile",
  "serde",
  "serde_json",
+ "serde_repr",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.18",
@@ -1836,7 +1837,7 @@ dependencies = [
 
 [[package]]
 name = "firma-stack"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ctrlc",
  "firma-config",

@@ -14,7 +14,7 @@ use firma_core::{
 };
 use tokio::sync::mpsc;
 
-use crate::audit::AuditPayload;
+use crate::audit::{AuditPayload, Decision};
 use crate::connector::ConnectorRegistry;
 use crate::normalizer::NormalizedEnvelope;
 use crate::pipeline::{EnforcementDecision, EnforcementPipeline, RawRequest};
@@ -221,7 +221,7 @@ struct DispatchOutcome {
 /// payload when the connector layer overrides the pipeline's Allow
 /// outcome.
 struct DecisionOverride {
-    decision: i32,
+    decision: Decision,
     deny_reason: String,
 }
 
@@ -232,7 +232,7 @@ impl DispatchOutcome {
     fn abort_from_connector(reason: AbortReason, detail: &str) -> Self {
         Self {
             decision_override: Some(DecisionOverride {
-                decision: crate::pipeline::DECISION_ABORT,
+                decision: Decision::Abort,
                 deny_reason: format!("{}: {detail}", reason.code()),
             }),
             dispatch_status: 0,
@@ -464,7 +464,7 @@ impl RequestHandler {
     ///
     /// Reuses the verified ALLOW payload (so `agent_id` / `token_id` are
     /// preserved, as the post-ALLOW abort always has an identity) and rewrites
-    /// the decision to `DECISION_ABORT`. No upstream response was produced, so
+    /// the decision to [`Decision::Abort`]. No upstream response was produced, so
     /// the dispatch fields stay zero.
     pub async fn emit_upgrade_abort_audit(
         &self,
@@ -472,7 +472,7 @@ impl RequestHandler {
         reason: AbortReason,
         detail: &str,
     ) {
-        payload.decision = crate::pipeline::DECISION_ABORT;
+        payload.decision = Decision::Abort;
         payload.deny_reason = format!("{}: {detail}", reason.code());
         payload.dispatch_status = 0;
         payload.dispatch_latency_us = 0;
@@ -496,7 +496,7 @@ impl RequestHandler {
             agent_id: String::new(),
             action: "network.connect".to_string(),
             resource: format!("{host}/"),
-            decision: crate::pipeline::DECISION_ABORT,
+            decision: Decision::Abort,
             deny_reason: format!("CONNECT_RELAY_FAILURE: {detail}"),
             enforcement_latency_us: 0,
             context_hash: String::new(),
@@ -532,7 +532,7 @@ impl RequestHandler {
             agent_id: String::new(),
             action: action.to_string(),
             resource: resource.to_string(),
-            decision: crate::pipeline::DECISION_DENY,
+            decision: Decision::Deny,
             deny_reason: format!("{reason}: {detail}"),
             enforcement_latency_us: 0,
             context_hash: String::new(),
@@ -575,7 +575,7 @@ impl RequestHandler {
                 let detail = format!("connector timeout after {duration:?}");
                 let outcome = DispatchOutcome {
                     decision_override: Some(DecisionOverride {
-                        decision: crate::pipeline::DECISION_ABORT,
+                        decision: Decision::Abort,
                         deny_reason: format!(
                             "{code}: {detail}",
                             code = AbortReason::ConnectorTimeout.code()
@@ -975,7 +975,7 @@ pub(crate) mod tests {
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_allow");
-        assert_eq!(payload.decision, 1);
+        assert_eq!(payload.decision, Decision::Allow);
         assert!(rx.try_recv().is_err());
         upstream_cancel.cancel();
     }
@@ -1013,7 +1013,7 @@ pub(crate) mod tests {
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_deny");
-        assert_eq!(payload.decision, 2);
+        assert_eq!(payload.decision, Decision::Deny);
         assert!(rx.try_recv().is_err());
     }
 
@@ -1037,7 +1037,7 @@ pub(crate) mod tests {
         let payload = rx
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
-        assert_eq!(payload.decision, 1);
+        assert_eq!(payload.decision, Decision::Allow);
         assert_eq!(payload.dispatch_status, 201);
         assert_eq!(payload.response_size, 2);
         assert!(
@@ -1064,7 +1064,7 @@ pub(crate) mod tests {
         let payload = rx
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
-        assert_eq!(payload.decision, 2);
+        assert_eq!(payload.decision, Decision::Deny);
         assert_eq!(payload.dispatch_status, 0);
         assert_eq!(payload.dispatch_latency_us, 0);
         assert_eq!(payload.response_size, 0);
@@ -1097,7 +1097,7 @@ pub(crate) mod tests {
         let payload = rx
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
-        assert_eq!(payload.decision, 3);
+        assert_eq!(payload.decision, Decision::Abort);
         assert!(
             payload.deny_reason.starts_with("CONNECTOR_FAILURE"),
             "deny_reason should carry CONNECTOR_FAILURE prefix, got {:?}",
@@ -1155,7 +1155,7 @@ pub(crate) mod tests {
         let payload = rx
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
-        assert_eq!(payload.decision, 3);
+        assert_eq!(payload.decision, Decision::Abort);
         assert!(
             payload.deny_reason.starts_with("CONNECTOR_TIMEOUT"),
             "deny_reason should carry CONNECTOR_TIMEOUT prefix, got {:?}",
@@ -1193,7 +1193,7 @@ pub(crate) mod tests {
         let payload = rx
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
-        assert_eq!(payload.decision, crate::pipeline::DECISION_ABORT);
+        assert_eq!(payload.decision, Decision::Abort);
         assert!(
             payload.deny_reason.starts_with("CONNECTOR_INVALID_REQUEST"),
             "deny_reason should carry CONNECTOR_INVALID_REQUEST prefix, got {:?}",
@@ -1237,7 +1237,7 @@ pub(crate) mod tests {
         let payload = rx
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
-        assert_eq!(payload.decision, 1);
+        assert_eq!(payload.decision, Decision::Allow);
         assert_eq!(payload.dispatch_status, 503);
     }
 
@@ -1441,7 +1441,7 @@ pub(crate) mod tests {
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_passthrough");
-        assert_eq!(payload.decision, 1);
+        assert_eq!(payload.decision, Decision::Allow);
         assert!(rx.try_recv().is_err());
         upstream_cancel.cancel();
     }
@@ -1473,7 +1473,7 @@ pub(crate) mod tests {
         let payload = rx
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
-        assert_eq!(payload.decision, crate::pipeline::DECISION_DENY);
+        assert_eq!(payload.decision, Decision::Deny);
         assert_eq!(payload.session_id, "sess_x");
         assert_eq!(payload.action, "network.connect");
         assert_eq!(payload.resource, "exa_mple.com/");
@@ -1509,7 +1509,7 @@ pub(crate) mod tests {
             action: "communication.external.send".to_string(),
             resource: "api.openai.com/".to_string(),
             // Inbound ALLOW decision (wire value 1); the helper rewrites it.
-            decision: 1,
+            decision: Decision::Allow,
             deny_reason: String::new(),
             enforcement_latency_us: 0,
             context_hash: "ctx".to_string(),
@@ -1530,7 +1530,7 @@ pub(crate) mod tests {
         let payload = rx
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
-        assert_eq!(payload.decision, crate::pipeline::DECISION_ABORT);
+        assert_eq!(payload.decision, Decision::Abort);
         assert!(
             payload.deny_reason.starts_with("CONNECTOR_FAILURE"),
             "deny_reason should carry CONNECTOR_FAILURE prefix, got {:?}",
@@ -1581,7 +1581,7 @@ pub(crate) mod tests {
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_001");
-        assert_eq!(payload.decision, 1);
+        assert_eq!(payload.decision, Decision::Allow);
         assert_eq!(payload.dispatch_status, 200);
     }
 
@@ -1628,7 +1628,7 @@ pub(crate) mod tests {
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_001");
-        assert_eq!(payload.decision, 2);
+        assert_eq!(payload.decision, Decision::Deny);
     }
 
     #[tokio::test]
@@ -1674,7 +1674,7 @@ pub(crate) mod tests {
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_connect_abort");
-        assert_eq!(payload.decision, crate::pipeline::DECISION_ABORT);
+        assert_eq!(payload.decision, Decision::Abort);
         assert!(
             payload
                 .deny_reason
@@ -1713,7 +1713,7 @@ pub(crate) mod tests {
             .try_recv()
             .unwrap_or_else(|e| panic!("expected one audit payload: {e}"));
         assert_eq!(payload.session_id, "sess_upgrade_abort");
-        assert_eq!(payload.decision, crate::pipeline::DECISION_ABORT);
+        assert_eq!(payload.decision, Decision::Abort);
         assert!(
             payload
                 .deny_reason

@@ -3302,7 +3302,7 @@ Content-Length: 10\r\n\
         let payload = audit_rx.try_recv().unwrap_or_else(|e| {
             panic!("expected a deny audit event for fail-closed preflight: {e}")
         });
-        assert_eq!(payload.decision, crate::pipeline::DECISION_DENY);
+        assert_eq!(payload.decision, crate::audit::Decision::Deny);
         assert!(
             payload.deny_reason.contains("HTTPS_MITM_SETUP_FAILED"),
             "deny audit should carry the fail-closed detail, got {:?}",

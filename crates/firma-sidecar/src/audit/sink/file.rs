@@ -128,6 +128,7 @@ impl AuditSink for FileAuditSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audit::Decision;
 
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
@@ -142,7 +143,7 @@ mod tests {
             agent_id: "agent-1".parse().expect("literal agent id"),
             action: "http_get".to_string(),
             resource: "https://api.example.com/v1".to_string(),
-            decision: 1,
+            decision: Decision::Allow,
             deny_reason: String::new(),
             enforcement_latency_us: 42,
             context_hash: "abc123".to_string(),
