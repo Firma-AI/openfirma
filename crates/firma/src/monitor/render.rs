@@ -89,14 +89,16 @@ fn render_audit_pretty(parsed: &AuditLite) -> String {
         || MISSING.to_string(),
         |nanos| format_timestamp_nanos(nanos).unwrap_or_else(|| MISSING.to_string()),
     );
-    let decision = format!("{:<7}", decision_label(parsed.decision));
+    let decision = parsed
+        .decision
+        .map_or_else(|| "MISSING".to_owned(), |d| d.to_string());
     let method = method_from_action(parsed.action.as_deref());
     let resource = parsed.resource.as_deref().unwrap_or(MISSING);
     let action = parsed.action.as_deref().unwrap_or(MISSING);
     let agent = parsed.agent_id.as_deref().unwrap_or(MISSING);
 
     let mut line =
-        format!("{timestamp}  {decision}  {method}  {resource}  class={action}  agent={agent}");
+        format!("{timestamp}  {decision:<7}  {method}  {resource}  class={action}  agent={agent}");
     if let Some(sandbox) = parsed.sandbox_id.as_deref()
         && !sandbox.is_empty()
     {
@@ -112,15 +114,6 @@ fn render_audit_pretty(parsed: &AuditLite) -> String {
         line.push_str(reason);
     }
     line
-}
-
-fn decision_label(decision: Option<i32>) -> &'static str {
-    match decision {
-        Some(1) => "ALLOW",
-        Some(2) => "DENY",
-        Some(3) => "ABORT",
-        _ => MISSING,
-    }
 }
 
 fn method_from_action(action: Option<&str>) -> &str {

@@ -1508,7 +1508,7 @@ pub(crate) mod tests {
             agent_id: "agent_ws".to_string(),
             action: "communication.external.send".to_string(),
             resource: "api.openai.com/".to_string(),
-            // Inbound ALLOW decision (wire value 1); the helper rewrites it.
+            // Inbound ALLOW decision; the helper rewrites it.
             decision: Decision::Allow,
             deny_reason: String::new(),
             enforcement_latency_us: 0,

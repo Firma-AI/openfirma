@@ -7,14 +7,52 @@
 //! `timestamp`, `token_id`) and leaves the rest as opaque so format
 //! additions on the sink side do not break the monitor.
 
+use firma_sidecar::audit::Decision as AuditDecision;
 use serde::Deserialize;
 
-use crate::args::monitor::Decision;
+use crate::args::monitor::Decision as DecisionFilter;
 
-/// Proto wire value for `ENFORCEMENT_DECISION_ALLOW`.
-const PROTO_DECISION_ALLOW: i32 = 1;
-/// Proto wire value for `ENFORCEMENT_DECISION_DENY`.
-const PROTO_DECISION_DENY: i32 = 2;
+/// Parsed `decision` field. Distinguishes a recognized outcome from a
+/// present-but-unrecognized wire value (forward-compat or corruption), so
+/// the two never collapse into the "absent" (`None`) case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditLiteDecision {
+    /// A recognized [`AuditDecision`].
+    Known(AuditDecision),
+    /// Present on the record but not a recognized code; carries the raw
+    /// integer (`0` when the value was not even an integer).
+    Unknown(i64),
+}
+
+impl std::fmt::Display for AuditLiteDecision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            Self::Known(AuditDecision::Allow) => "ALLOW",
+            Self::Known(AuditDecision::Deny) => "DENY",
+            Self::Known(AuditDecision::Abort) => "ABORT",
+            Self::Unknown(_) => "UNKNOWN",
+        };
+        f.write_str(label)
+    }
+}
+
+/// Decodes the numeric `decision` wire value, keeping the unknown / known
+/// distinction. An unrecognized or non-integer value becomes
+/// [`AuditLiteDecision::Unknown`] rather than failing, so a single off-range
+/// code never drops the whole record from the monitor output. Absence is
+/// handled by the surrounding `Option<AuditLiteDecision>` field (`None`).
+impl<'de> Deserialize<'de> for AuditLiteDecision {
+    fn deserialize<D>(de: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(de)?;
+        Ok(AuditDecision::deserialize(&value).map_or_else(
+            |_| Self::Unknown(value.as_i64().unwrap_or_default()),
+            Self::Known,
+        ))
+    }
+}
 
 /// Minimal projection of `ExecutionEvent` needed by the monitor
 /// filters. Fields not listed here are silently ignored during
@@ -32,9 +70,9 @@ pub struct AuditLite {
     pub action: Option<String>,
     /// `resource` top-level field, conventionally `host/path`.
     pub resource: Option<String>,
-    /// `decision` top-level field, encoded as the proto enum int
-    /// (1=ALLOW, 2=DENY, 3=ABORT).
-    pub decision: Option<i32>,
+    /// `decision` top-level field. Serialized as the numeric wire value;
+    /// [`AuditLiteDecision::Unknown`] when present but unrecognized.
+    pub decision: Option<AuditLiteDecision>,
     /// `deny_reason` top-level field; empty on ALLOW.
     pub deny_reason: Option<String>,
     /// `timestamp` top-level field, nanoseconds since the Unix epoch.
@@ -54,7 +92,7 @@ pub struct AuditLite {
 #[must_use]
 pub fn audit_passes(
     raw: &str,
-    decision: Option<Decision>,
+    decision: Option<DecisionFilter>,
     action_class: Option<&str>,
     agent_id: Option<&str>,
     sandbox_id: Option<&str>,
@@ -88,18 +126,21 @@ pub fn audit_passes(
     Some(parsed)
 }
 
-/// Map the user-facing `Decision` enum to the audit-record encoding
+/// Map the user-facing `--decision` filter to the audit-record encoding
 /// and check whether `parsed` matches.
 ///
 /// `Passthrough` in the audit log is encoded as `decision = ALLOW`
 /// AND `token_id` empty (see `firma_sidecar::audit::builder` tests).
-fn decision_matches(parsed: &AuditLite, want: Decision) -> bool {
-    let got = parsed.decision.unwrap_or(0);
+fn decision_matches(parsed: &AuditLite, want: DecisionFilter) -> bool {
+    let Some(AuditLiteDecision::Known(decision)) = parsed.decision else {
+        return false;
+    };
     match want {
-        Decision::Allow => got == PROTO_DECISION_ALLOW,
-        Decision::Deny => got == PROTO_DECISION_DENY,
-        Decision::Passthrough => {
-            got == PROTO_DECISION_ALLOW && parsed.token_id.as_deref().is_some_and(str::is_empty)
+        DecisionFilter::Allow => decision == AuditDecision::Allow,
+        DecisionFilter::Deny => decision == AuditDecision::Deny,
+        DecisionFilter::Passthrough => {
+            decision == AuditDecision::Allow
+                && parsed.token_id.as_deref().is_some_and(str::is_empty)
         }
     }
 }
@@ -126,22 +167,57 @@ mod tests {
             parsed.resource.as_deref(),
             Some("api.github.com/repos/x/y/issues")
         );
-        assert_eq!(parsed.decision, Some(1));
+        assert_eq!(
+            parsed.decision,
+            Some(AuditLiteDecision::Known(AuditDecision::Allow))
+        );
         assert_eq!(parsed.deny_reason.as_deref(), Some(""));
         assert_eq!(parsed.timestamp, Some(1_715_169_751_000_000_000));
         assert_eq!(parsed.token_id.as_deref(), Some("tok_a"));
     }
 
+    /// Present but unrecognized decision code — kept, but classified
+    /// `Unknown` (distinct from an absent field).
+    const UNKNOWN_DECISION_LINE: &str = r#"{"agent_id":"agent_codex","action":"x.y","resource":"r","decision":7,"deny_reason":"","token_id":"tok_a"}"#;
+
+    /// `decision` field absent entirely.
+    const NO_DECISION_LINE: &str = r#"{"agent_id":"agent_codex","action":"x.y","resource":"r","deny_reason":"","token_id":"tok_a"}"#;
+
+    #[test]
+    fn unknown_decision_code_is_kept_and_classified_unknown() {
+        let parsed: AuditLite = serde_json::from_str(UNKNOWN_DECISION_LINE).expect("parse unknown");
+        assert_eq!(parsed.decision, Some(AuditLiteDecision::Unknown(7)));
+        // No `--decision` filter selects an unknown code.
+        assert!(
+            audit_passes(
+                UNKNOWN_DECISION_LINE,
+                Some(DecisionFilter::Allow),
+                None,
+                None,
+                None
+            )
+            .is_none()
+        );
+        // But the record still passes when no decision filter is set.
+        assert!(audit_passes(UNKNOWN_DECISION_LINE, None, None, None, None).is_some());
+    }
+
+    #[test]
+    fn absent_decision_field_is_none() {
+        let parsed: AuditLite = serde_json::from_str(NO_DECISION_LINE).expect("parse no-decision");
+        assert_eq!(parsed.decision, None);
+    }
+
     #[test]
     fn decision_allow_filter_matches_allow_line() {
-        assert!(audit_passes(ALLOW_LINE, Some(Decision::Allow), None, None, None).is_some());
-        assert!(audit_passes(DENY_LINE, Some(Decision::Allow), None, None, None).is_none());
+        assert!(audit_passes(ALLOW_LINE, Some(DecisionFilter::Allow), None, None, None).is_some());
+        assert!(audit_passes(DENY_LINE, Some(DecisionFilter::Allow), None, None, None).is_none());
     }
 
     #[test]
     fn decision_deny_filter_matches_deny_line() {
-        assert!(audit_passes(DENY_LINE, Some(Decision::Deny), None, None, None).is_some());
-        assert!(audit_passes(ALLOW_LINE, Some(Decision::Deny), None, None, None).is_none());
+        assert!(audit_passes(DENY_LINE, Some(DecisionFilter::Deny), None, None, None).is_some());
+        assert!(audit_passes(ALLOW_LINE, Some(DecisionFilter::Deny), None, None, None).is_none());
     }
 
     #[test]
@@ -149,14 +225,23 @@ mod tests {
         assert!(
             audit_passes(
                 PASSTHROUGH_LINE,
-                Some(Decision::Passthrough),
+                Some(DecisionFilter::Passthrough),
                 None,
                 None,
                 None
             )
             .is_some()
         );
-        assert!(audit_passes(ALLOW_LINE, Some(Decision::Passthrough), None, None, None).is_none());
+        assert!(
+            audit_passes(
+                ALLOW_LINE,
+                Some(DecisionFilter::Passthrough),
+                None,
+                None,
+                None
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -177,7 +262,7 @@ mod tests {
         assert!(
             audit_passes(
                 DENY_LINE,
-                Some(Decision::Deny),
+                Some(DecisionFilter::Deny),
                 Some("stripe.payment.create"),
                 Some("agent_codex"),
                 None,
@@ -187,7 +272,7 @@ mod tests {
         assert!(
             audit_passes(
                 DENY_LINE,
-                Some(Decision::Deny),
+                Some(DecisionFilter::Deny),
                 Some("stripe.payment.create"),
                 Some("wrong_agent"),
                 None,
