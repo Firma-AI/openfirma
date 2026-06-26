@@ -64,7 +64,7 @@ jobs:
           fi
           echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
-      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           target: ${{ matrix.target }}
           cache: false
@@ -94,7 +94,7 @@ jobs:
 
       - name: Install cross (linux musl aarch64)
         if: matrix.use_cross == true
-        uses: taiki-e/install-action@b8cecb83565409bcc297b2df6e77f030b2a468d5 # v2.82.0
+        uses: taiki-e/install-action@682e7d9e49c5e653d371fc6adbda67653461378a # v2.82.4
         with:
           tool: cross@${{ env.CROSS_VERSION }}
 
