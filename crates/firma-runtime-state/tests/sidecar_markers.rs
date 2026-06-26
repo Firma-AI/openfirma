@@ -65,7 +65,10 @@ fn live_pid_no_socket_is_unhealthy() {
 
     let entry = probe_entry(&run_dir.join("live-no-sock")).expect("probe");
     assert_eq!(entry.sandbox_id, "live-no-sock");
-    assert_eq!(entry.pid, me);
+    assert_eq!(
+        entry.pid.map(firma_runtime_state::NonZeroProcessId::get),
+        Some(me)
+    );
     assert_eq!(entry.state, State::Unhealthy);
     assert_eq!(entry.listen, run_dir.join("live-no-sock/sidecar.sock"));
 }

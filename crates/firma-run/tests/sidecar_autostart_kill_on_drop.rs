@@ -75,14 +75,14 @@ fn drop_terminates_child_within_grace() {
     .expect("supervisor spawned");
 
     let pid = supervisor.pid();
-    assert!(is_alive(pid), "child should be alive after spawn");
+    assert!(is_alive(pid.get()), "child should be alive after spawn");
 
     // The fake sidecar traps SIGTERM. Drop must escalate to SIGKILL after
     // the 5s grace window.
     drop(supervisor);
 
     let deadline = Instant::now() + Duration::from_secs(8);
-    while is_alive(pid) {
+    while is_alive(pid.get()) {
         assert!(
             Instant::now() < deadline,
             "sidecar pid {pid} still alive after Drop + SIGKILL"
@@ -151,7 +151,7 @@ fn marker_files_present_between_ready_and_drop() {
     );
     assert_eq!(
         table.get("pid").and_then(toml::Value::as_integer),
-        Some(i64::from(supervisor.pid()))
+        Some(i64::from(supervisor.pid().get()))
     );
     let started_at = table
         .get("started_at")

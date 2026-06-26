@@ -24,6 +24,7 @@ use wait_timeout::ChildExt;
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 use crate::identity::SandboxId;
+use firma_runtime_state::NonZeroProcessId;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 /// Per-spec default ready-line wait. CLI flag overrides this value.
@@ -103,7 +104,7 @@ pub enum ScrapeResult {
 pub struct SidecarSupervisor {
     endpoint: SidecarEndpoint,
     marker_dir: PathBuf,
-    pid: u32,
+    pid: NonZeroProcessId,
     child: Option<Child>,
     tee_handle: Option<JoinHandle<()>>,
 }
@@ -152,7 +153,7 @@ impl SidecarSupervisor {
         // Pre-clean any leftover socket file from a crashed run.
         let _ = std::fs::remove_file(&sock_path);
         let mut last_error: Option<RunError> = None;
-        let mut ready: Option<(Child, JoinHandle<()>, u32, ReadyCapture)> = None;
+        let mut ready: Option<(Child, JoinHandle<()>, NonZeroProcessId, ReadyCapture)> = None;
         for attempt in 0..max_attempts {
             let proxy_listen_addr = if use_http_proxy_interceptor {
                 Some(select_loopback_port())
@@ -197,7 +198,11 @@ impl SidecarSupervisor {
                     reason: format!("spawn firma sidecar: {error}"),
                     log_path: log_path.clone(),
                 })?;
-            let pid = child.id();
+            let Some(pid) = NonZeroProcessId::new(child.id()) else {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(RunError::Internal("sidecar returned reserved pid 0".into()));
+            };
 
             let stderr = child
                 .stderr
@@ -268,10 +273,7 @@ impl SidecarSupervisor {
                 }),
             );
         };
-        let process_id = firma_runtime_state::NonZeroProcessId::new(pid)
-            .ok_or_else(|| RunError::Internal("sidecar returned reserved pid 0".into()))?;
-
-        firma_runtime_state::pidfile::write(&pid_path, process_id)
+        firma_runtime_state::pidfile::write(&pid_path, pid)
             .map_err(|error| RunError::Internal(format!("write sidecar.pid: {error}")))?;
         crate::sidecar::metadata::write(
             &metadata_path,
@@ -281,7 +283,7 @@ impl SidecarSupervisor {
                 session_id: req.session_id.to_string(),
                 authority_url: capture.authority_url,
                 policy_bundle_version: capture.policy_bundle_version,
-                pid: process_id,
+                pid,
                 started_at: chrono::Utc::now().to_rfc3339(),
                 // Persist the real interceptor endpoint so `firma sidecar
                 // status` probes the correct transport (FIR-195): a TCP port
@@ -292,7 +294,7 @@ impl SidecarSupervisor {
 
         info!(
             sandbox_id = req.sandbox_id.compact(),
-            pid,
+            pid = %pid,
             endpoint = %capture.interceptor_addr,
             "sidecar started"
         );
@@ -323,7 +325,7 @@ impl SidecarSupervisor {
     /// need to assert kill-on-Drop semantics.
     #[doc(hidden)]
     #[must_use]
-    pub fn pid(&self) -> u32 {
+    pub fn pid(&self) -> NonZeroProcessId {
         self.pid
     }
 
@@ -342,10 +344,10 @@ impl Drop for SidecarSupervisor {
             send_sigterm(self.pid);
             match child.wait_timeout(STOP_GRACE) {
                 Ok(Some(_)) => {
-                    info!(pid = self.pid, "sidecar stopped");
+                    info!(pid = %self.pid, "sidecar stopped");
                 }
                 Ok(None) => {
-                    warn!(pid = self.pid, "sidecar SIGKILL after grace");
+                    warn!(pid = %self.pid, "sidecar SIGKILL after grace");
                     let _ = child.kill();
                     let _ = child.wait();
                 }
@@ -371,19 +373,19 @@ impl Drop for SidecarSupervisor {
 }
 
 #[cfg(unix)]
-fn send_sigterm(pid: u32) {
-    let Ok(raw) = i32::try_from(pid) else {
-        warn!(pid, "pid does not fit in i32; skipping SIGTERM");
+fn send_sigterm(pid: NonZeroProcessId) {
+    let Ok(raw) = i32::try_from(pid.get()) else {
+        warn!(pid = %pid, "pid does not fit in i32; skipping SIGTERM");
         return;
     };
     let target = nix::unistd::Pid::from_raw(raw);
     if let Err(error) = nix::sys::signal::kill(target, nix::sys::signal::Signal::SIGTERM) {
-        warn!(%error, pid, "SIGTERM to sidecar failed");
+        warn!(%error, pid = %pid, "SIGTERM to sidecar failed");
     }
 }
 
 #[cfg(not(unix))]
-fn send_sigterm(_pid: u32) {}
+fn send_sigterm(_pid: NonZeroProcessId) {}
 
 #[cfg(unix)]
 fn select_loopback_port() -> SocketAddr {

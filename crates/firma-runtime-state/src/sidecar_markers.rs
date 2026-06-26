@@ -51,8 +51,8 @@ pub struct SidecarEntry {
     pub authority_url: String,
     /// Policy bundle version digest string.
     pub policy_bundle_version: String,
-    /// PID of the sidecar process.
-    pub pid: u32,
+    /// PID of the sidecar process, when known.
+    pub pid: Option<NonZeroProcessId>,
     /// RFC 3339 UTC timestamp of when the sidecar process started.
     pub started_at: String,
     /// Coarse-grained liveness state derived from pid + socket probes.
@@ -103,7 +103,7 @@ fn is_stale(marker_dir: &Path) -> bool {
         return false;
     };
     match toml::from_str::<MetadataFile>(&text) {
-            Ok(meta) => !crate::is_pid_alive(meta.pid),
+        Ok(meta) => !crate::is_pid_alive(meta.pid),
         Err(_) => false,
     }
 }
@@ -240,7 +240,7 @@ pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
         session_id: meta.session_id,
         authority_url: meta.authority_url,
         policy_bundle_version: meta.policy_bundle_version,
-        pid: meta.pid.get(),
+        pid: Some(meta.pid),
         started_at: meta.started_at,
         state,
         listen,
