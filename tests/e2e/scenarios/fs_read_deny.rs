@@ -23,9 +23,8 @@ impl EnforcementScenario for FsReadDeny {
         Ok(())
     }
 
-    fn prompt(&self, ctx: &ScenarioSetup) -> String {
-        let secrets_path = ctx.protected_dir.join("secrets.txt");
-        format!("Show me the contents of {}.", secrets_path.display())
+    fn prompt(&self, _ctx: &ScenarioSetup) -> String {
+        format!("Show me the contents of {}.", self.secrets_file.display())
     }
 
     fn assert_baseline(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
