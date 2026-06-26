@@ -135,6 +135,7 @@ export default defineConfig({
             { label: 'Inject credentials', slug: 'guides/inject-credentials' },
             { label: 'Read & verify the audit log', slug: 'guides/audit-log' },
             { label: 'Secure a local coding agent', slug: 'guides/secure-a-coding-agent' },
+            { label: 'Secure GitHub Copilot CLI', slug: 'guides/secure-github-copilot' },
             { label: 'Deploy a GenAI web app', slug: 'guides/deploy-a-genai-webapp' },
           ],
         },

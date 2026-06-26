@@ -7,7 +7,9 @@ use serde::Serialize;
 
 use crate::backend::{LaunchSpec, PrepareRequest, build_backend};
 use crate::capability::CapabilityLeaseManager;
-use crate::config::{CapabilitySource, ResolvedProfile, SidecarEndpoint, resolve_profile};
+use crate::config::{
+    CaTrustMode, CapabilitySource, ResolvedProfile, SidecarEndpoint, resolve_profile,
+};
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 use crate::mediator::enforce_local_command_governance;
@@ -501,7 +503,13 @@ fn build_execution_env(
     }
 
     if let Some(ca_cert_path) = resolve_sidecar_ca_cert_path(network_overrides) {
-        inject_sidecar_ca_trust_env(&mut env, &ca_cert_path);
+        let effective = match profile.ca_trust_mode {
+            CaTrustMode::AppendSystemRoots => {
+                build_appended_ca_bundle(&ca_cert_path).unwrap_or(ca_cert_path)
+            }
+            CaTrustMode::Sole => ca_cert_path,
+        };
+        inject_sidecar_ca_trust_env(&mut env, &effective);
     }
 
     env.extend(network_overrides.clone());
@@ -579,6 +587,57 @@ fn maybe_apply_claude_settings(
     merged.push(settings_path.display().to_string());
     merged.extend(args);
     Ok(merged)
+}
+
+/// Common Linux system CA bundle locations, probed in order.
+const SYSTEM_CA_BUNDLE_CANDIDATES: &[&str] = &[
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/ca-bundle.pem",
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    "/etc/ssl/cert.pem",
+];
+
+/// Build `firma-ca-bundle.crt` next to `firma_ca_path`, containing the first
+/// discovered system root bundle followed by the firma CA. Returns `None`
+/// (caller falls back to sole firma-ca) when no system bundle is found or the
+/// write fails.
+fn build_appended_ca_bundle(firma_ca_path: &Path) -> Option<PathBuf> {
+    let roots: Vec<PathBuf> = SYSTEM_CA_BUNDLE_CANDIDATES
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+    build_appended_ca_bundle_with_roots(firma_ca_path, &roots)
+}
+
+/// Testable core of [`build_appended_ca_bundle`]: takes explicit candidate root
+/// paths and concatenates the first existing one with the firma CA.
+fn build_appended_ca_bundle_with_roots(firma_ca_path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
+    let system_roots = roots.iter().find(|p| p.is_file())?;
+    let mut bundle = match std::fs::read(system_roots) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::warn!(%error, path = %system_roots.display(), "failed to read system CA bundle; using sole firma-ca");
+            return None;
+        }
+    };
+    let firma_ca = match std::fs::read(firma_ca_path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::warn!(%error, path = %firma_ca_path.display(), "failed to read firma-ca; using sole firma-ca");
+            return None;
+        }
+    };
+    if !bundle.ends_with(b"\n") {
+        bundle.push(b'\n');
+    }
+    bundle.extend_from_slice(&firma_ca);
+    let bundle_path = firma_ca_path.with_file_name("firma-ca-bundle.crt");
+    if let Err(error) = std::fs::write(&bundle_path, &bundle) {
+        tracing::warn!(%error, path = %bundle_path.display(), "failed to write combined CA bundle; using sole firma-ca");
+        return None;
+    }
+    Some(bundle_path)
 }
 
 fn inject_sidecar_ca_trust_env(env: &mut BTreeMap<String, String>, ca_cert_path: &Path) {
@@ -685,6 +744,32 @@ mod tests {
     use crate::backend::SandboxHandle;
 
     #[test]
+    fn appended_ca_bundle_concatenates_system_roots_and_firma_ca() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let system = dir.path().join("system-roots.pem");
+        std::fs::write(&system, b"-----SYSTEM ROOT-----\n").unwrap_or_else(|e| panic!("{e}"));
+        let firma_ca = dir.path().join("firma-ca.crt");
+        std::fs::write(&firma_ca, b"-----FIRMA CA-----\n").unwrap_or_else(|e| panic!("{e}"));
+
+        let bundle =
+            super::build_appended_ca_bundle_with_roots(&firma_ca, std::slice::from_ref(&system))
+                .unwrap_or_else(|| panic!("bundle should be built"));
+        assert_eq!(bundle, dir.path().join("firma-ca-bundle.crt"));
+        let body = std::fs::read_to_string(&bundle).unwrap_or_else(|e| panic!("{e}"));
+        assert!(body.contains("SYSTEM ROOT"));
+        assert!(body.contains("FIRMA CA"));
+    }
+
+    #[test]
+    fn appended_ca_bundle_falls_back_when_no_system_roots() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let firma_ca = dir.path().join("firma-ca.crt");
+        std::fs::write(&firma_ca, b"-----FIRMA CA-----\n").unwrap_or_else(|e| panic!("{e}"));
+        let missing = dir.path().join("does-not-exist.pem");
+        assert!(super::build_appended_ca_bundle_with_roots(&firma_ca, &[missing]).is_none());
+    }
+
+    #[test]
     fn execution_env_includes_identity_and_proxy() {
         let profile = ResolvedProfile {
             id: "generic".to_string(),
@@ -712,6 +797,7 @@ mod tests {
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: false,
             allow_non_structural: false,
+            ca_trust_mode: crate::config::CaTrustMode::Sole,
         };
 
         let identity = RunIdentity::new("generic");
@@ -770,6 +856,7 @@ mod tests {
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: false,
             allow_non_structural: false,
+            ca_trust_mode: crate::config::CaTrustMode::Sole,
         };
 
         let identity = RunIdentity::new("generic");
@@ -821,6 +908,7 @@ mod tests {
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: false,
             allow_non_structural: false,
+            ca_trust_mode: crate::config::CaTrustMode::Sole,
         };
 
         let identity = RunIdentity::new("generic");
@@ -856,6 +944,106 @@ mod tests {
     }
 
     #[test]
+    fn ca_trust_mode_selects_appended_bundle_at_injection_site() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let ca_cert = dir.path().join("firma-ca.crt");
+        std::fs::write(&ca_cert, b"-----FIRMA CA-----\n").unwrap_or_else(|e| panic!("{e}"));
+
+        let make_profile = |mode: crate::config::CaTrustMode| ResolvedProfile {
+            id: "copilot".to_string(),
+            backend: crate::backend::BackendKind::Bwrap,
+            sidecar_endpoint: SidecarEndpoint::Tcp {
+                addr: "127.0.0.1:8080".parse().unwrap_or_else(|e| panic!("{e}")),
+            },
+            sidecar_selection: crate::sidecar::SidecarSelection::Local,
+            env_passthrough: BTreeSet::default(),
+            env_set: BTreeMap::default(),
+            mounts: Vec::new(),
+            seccomp_policy: None,
+            allowed_domains: Vec::new(),
+            network: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+            identity_mode: SandboxIdentityMode::SandboxUser,
+            capability: CapabilityLeaseConfig {
+                source: CapabilitySource::Disabled,
+                refresh_ratio: 0.60,
+                grace_seconds: 30,
+            },
+            sidecar_local_exec: None,
+            executable_policies: BTreeMap::new(),
+            use_http_proxy_sidecar: false,
+            allow_non_structural: false,
+            ca_trust_mode: mode,
+        };
+
+        // Route resolve_sidecar_ca_cert_path to our temp firma-ca via the
+        // network override. `env.extend(network_overrides)` later clobbers the
+        // injected FIRMA_SIDECAR_CA_CERT_PATH, so assert on a sibling var
+        // (SSL_CERT_FILE) which reflects the effective, mode-selected path.
+        let mut overrides = BTreeMap::new();
+        overrides.insert(
+            "FIRMA_SIDECAR_CA_CERT_PATH".to_string(),
+            ca_cert.display().to_string(),
+        );
+
+        let identity = RunIdentity::new("copilot");
+        let lease = crate::capability::CapabilityLeaseManager::new(
+            &make_profile(crate::config::CaTrustMode::Sole).capability,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        let sole_profile = make_profile(crate::config::CaTrustMode::Sole);
+        let sole_env = build_execution_env(
+            &sole_profile,
+            &identity,
+            &lease,
+            &sole_profile.sidecar_endpoint,
+            &overrides,
+        );
+        // Sole mode always injects the raw firma-ca path, never a bundle.
+        assert_eq!(
+            sole_env.get("SSL_CERT_FILE"),
+            Some(&ca_cert.display().to_string())
+        );
+
+        let append_profile = make_profile(crate::config::CaTrustMode::AppendSystemRoots);
+        let append_env = build_execution_env(
+            &append_profile,
+            &identity,
+            &lease,
+            &append_profile.sidecar_endpoint,
+            &overrides,
+        );
+        let bundle_path = ca_cert.with_file_name("firma-ca-bundle.crt");
+        let system_roots_present = super::SYSTEM_CA_BUNDLE_CANDIDATES
+            .iter()
+            .any(|p| std::path::Path::new(p).is_file());
+        if system_roots_present {
+            // A system bundle exists: AppendSystemRoots must point at the
+            // generated sibling bundle, and it must contain the firma CA.
+            assert_eq!(
+                append_env.get("SSL_CERT_FILE"),
+                Some(&bundle_path.display().to_string())
+            );
+            let body = std::fs::read_to_string(&bundle_path).unwrap_or_else(|e| panic!("{e}"));
+            assert!(body.contains("FIRMA CA"));
+            assert_ne!(
+                append_env.get("SSL_CERT_FILE"),
+                sole_env.get("SSL_CERT_FILE")
+            );
+        } else {
+            // No system bundle on this host: AppendSystemRoots falls back to
+            // the sole firma-ca path, matching Sole mode.
+            assert_eq!(
+                append_env.get("SSL_CERT_FILE"),
+                Some(&ca_cert.display().to_string())
+            );
+        }
+    }
+
+    #[test]
     fn codex_policy_injects_defaults_when_missing() {
         let profile = ResolvedProfile {
             id: "codex".to_string(),
@@ -882,6 +1070,7 @@ mod tests {
             sidecar_local_exec: None,
             use_http_proxy_sidecar: true,
             allow_non_structural: false,
+            ca_trust_mode: crate::config::CaTrustMode::Sole,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
@@ -950,6 +1139,7 @@ mod tests {
             executable_policies: BTreeMap::new(),
             use_http_proxy_sidecar: true,
             allow_non_structural: false,
+            ca_trust_mode: crate::config::CaTrustMode::Sole,
         };
         let identity = RunIdentity::new("codex");
         let lease = crate::capability::CapabilityLeaseManager::new(&profile.capability)
@@ -992,6 +1182,7 @@ mod tests {
             sidecar_local_exec: None,
             use_http_proxy_sidecar: true,
             allow_non_structural: false,
+            ca_trust_mode: crate::config::CaTrustMode::Sole,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {
@@ -1062,6 +1253,7 @@ mod tests {
             sidecar_local_exec: None,
             use_http_proxy_sidecar: true,
             allow_non_structural: false,
+            ca_trust_mode: crate::config::CaTrustMode::Sole,
             executable_policies: BTreeMap::from([(
                 "codex".to_string(),
                 ExecutableLaunchPolicy {

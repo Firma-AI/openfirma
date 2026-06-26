@@ -1,0 +1,29 @@
+# GitHub Copilot CLI mapping — CONNECT-level classification for Copilot's
+# outbound hosts. github.com / api.github.com are NOT MITM'd for Copilot
+# (they are added to https_mitm.bypass_hosts by `firma config`), so only these
+# CONNECT rules fire. All Copilot traffic is communication.external.send.
+
+[[rules]]
+method = "CONNECT"
+host = "api.individual.githubcopilot.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "telemetry.individual.githubcopilot.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "api.github.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "github.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "uploads.github.com"
+action_class = "communication.external.send"

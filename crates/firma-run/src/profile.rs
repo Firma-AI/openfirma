@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use firma_config::AgentProfile;
 
 use crate::config::{
-    CapabilityLeasePatch, CapabilitySourcePatch, ExecutableLaunchPolicyPatch, MountPatch,
-    NetworkPolicyPatch, ProfilePatch,
+    CaTrustMode, CapabilityLeasePatch, CapabilitySourcePatch, ExecutableLaunchPolicyPatch,
+    MountPatch, NetworkPolicyPatch, ProfilePatch,
 };
 use crate::error::RunError;
 
@@ -15,8 +15,9 @@ pub(crate) fn built_in_profile(profile: &str) -> Result<ProfilePatch, RunError> 
         Some(AgentProfile::Generic) => Ok(generic_profile()),
         Some(AgentProfile::Codex) => Ok(codex_profile()),
         Some(AgentProfile::ClaudeCode) => Ok(claude_code_profile()),
+        Some(AgentProfile::Copilot) => Ok(copilot_profile()),
         None => Err(RunError::ConfigValidation(format!(
-            "unknown profile '{profile}'; supported profiles: generic, codex, claude-code"
+            "unknown profile '{profile}'; supported profiles: generic, codex, claude-code, copilot"
         ))),
     }
 }
@@ -65,6 +66,7 @@ fn generic_profile() -> ProfilePatch {
         use_http_proxy_sidecar: true,
         allow_non_structural: false,
         mask_home_paths: None,
+        ca_trust_mode: None,
     }
 }
 
@@ -144,9 +146,39 @@ fn claude_code_profile() -> ProfilePatch {
     base
 }
 
+fn copilot_profile() -> ProfilePatch {
+    let mut base = generic_profile();
+    base.env_set
+        .insert("FIRMA_RUN_PROFILE".to_string(), "copilot".to_string());
+    // Copilot authenticates to GitHub via env-provided tokens; the SQLite
+    // session store lives on the per-session runtime home (no host persistence).
+    base.env_passthrough.extend([
+        "GITHUB_TOKEN".to_string(),
+        "GH_TOKEN".to_string(),
+        "GH_COPILOT_TOKEN".to_string(),
+    ]);
+    // Copilot reaches real (non-MITM'd) GitHub hosts, so the sandbox CA store
+    // must contain the system roots in addition to firma-ca. The copilot managed
+    // seccomp baseline (config.rs) permits filesystem.delete for SQLite.
+    base.ca_trust_mode = Some(CaTrustMode::AppendSystemRoots);
+    base.use_http_proxy_sidecar = true;
+    base
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copilot_profile_sets_append_ca_and_github_env() {
+        let patch = built_in_profile("copilot").unwrap();
+        assert_eq!(patch.ca_trust_mode, Some(CaTrustMode::AppendSystemRoots));
+        assert!(patch.env_passthrough.contains(&"GITHUB_TOKEN".to_string()));
+        assert_eq!(
+            patch.env_set.get("FIRMA_RUN_PROFILE"),
+            Some(&"copilot".to_string())
+        );
+    }
 
     #[test]
     fn codex_policy_workspace_write_includes_network_access() {
