@@ -67,6 +67,6 @@ impl Platform for UnixPlatform {
     }
 
     fn is_alive(pid: UserProcessId) -> bool {
-        firma_runtime_state::is_pid_alive(pid)
+        pid.is_alive()
     }
 }
