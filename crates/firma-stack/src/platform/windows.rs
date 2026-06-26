@@ -9,12 +9,11 @@ use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, STILL_ACTIVE};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
 use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
 use windows_sys::Win32::System::Threading::{
-    CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, EVENT_MODIFY_STATE, GetExitCodeProcess, OpenEventW,
-    OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE, SetEvent,
-    TerminateProcess,
+    CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, EVENT_MODIFY_STATE, OpenEventW, OpenProcess,
+    PROCESS_SET_QUOTA, PROCESS_TERMINATE, SetEvent, TerminateProcess,
 };
 
 use crate::error::{Result, StackError};
@@ -141,14 +140,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn is_alive(pid: u32) -> bool {
-        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-        if handle.is_null() {
-            return false;
-        }
-        let mut code: u32 = 0;
-        let ok = unsafe { GetExitCodeProcess(handle, &raw mut code) };
-        unsafe { CloseHandle(handle) };
-        ok != 0 && code == STILL_ACTIVE as u32
+        firma_runtime_state::is_pid_alive(pid)
     }
 }
 

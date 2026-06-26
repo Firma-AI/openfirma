@@ -111,7 +111,7 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<Option<PathBuf>> {
         "no firma.toml found; running implicit init with defaults into cwd/.firma"
     );
 
-    let state_dir = firma_stack::resolve_state_dir(None)
+    let state_dir = firma_runtime_state::resolve_state_dir(None)
         .map_err(|e| anyhow::anyhow!("resolve state_dir for implicit init: {e}"))?;
 
     // Infer profile from --profile flag, falling back to the command name so

@@ -1,33 +1,13 @@
 //! `metadata.toml` builder for the per-run sidecar marker dir.
 //!
-//! `firma sidecar status` reads exactly these fields via
-//! `firma_stack::sidecar_markers::MetadataFile`. Any field change here
-//! MUST be mirrored there in lockstep (the two crates cannot share a
-//! type without a dependency cycle).
+//! `firma sidecar status` reads the same shared schema from
+//! `firma-runtime-state`.
 
 use std::path::Path;
 
-use serde::Serialize;
-
 use crate::error::RunError;
 
-/// On-disk schema for `<marker_dir>/metadata.toml`.
-#[derive(Debug, Clone, Serialize)]
-pub struct Metadata {
-    pub sandbox_id: String,
-    pub agent_id: String,
-    pub session_id: String,
-    pub authority_url: String,
-    pub policy_bundle_version: String,
-    pub pid: u32,
-    pub started_at: String,
-    /// Interceptor listen endpoint, as captured from the sidecar's ready log:
-    /// a `host:port` pair for an `http_proxy` interceptor, or a socket path for
-    /// a Unix-domain-socket interceptor. `firma sidecar status` health-probes
-    /// this endpoint to distinguish a healthy per-run sidecar from a dead one
-    /// (FIR-195).
-    pub listen: String,
-}
+pub use firma_runtime_state::sidecar_markers::MetadataFile as Metadata;
 
 /// Serialize `meta` and write it atomically to `out`. Creates parent
 /// directories on demand.

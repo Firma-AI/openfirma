@@ -41,24 +41,13 @@ pub enum StackError {
         field: &'static str,
     },
 
-    /// A sidecar marker file (`metadata.toml`) is present but not valid TOML.
-    #[error("failed to parse sidecar marker '{path}': {source}")]
-    MarkerParse {
-        /// Path of the offending marker file.
-        path: PathBuf,
-        /// Underlying TOML parser error (boxed to keep `StackError` small).
-        #[source]
-        source: Box<toml::de::Error>,
-    },
-
-    /// State-dir resolution chain (flag, env, platform default) produced
-    /// no usable path. The string carries a human-readable cause.
-    #[error("state dir resolution failed: {0}")]
-    StateDirResolve(String),
-
     /// Creating or securing the state directory failed.
     #[error(transparent)]
-    StateDir(crate::fs::CreatePrivateDirError),
+    StateDir(firma_runtime_state::fs::CreatePrivateDirError),
+
+    /// Reading or writing shared runtime state failed.
+    #[error(transparent)]
+    RuntimeState(#[from] firma_runtime_state::RuntimeStateError),
 
     /// Another supervisor already holds the stack lock for this state dir.
     #[error("stack already running (lock held at '{path}')")]

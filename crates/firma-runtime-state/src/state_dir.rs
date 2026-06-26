@@ -6,7 +6,7 @@ use tracing::debug;
 
 use crate::error::Result;
 
-/// Resolve the stack runtime state directory.
+/// Resolve the shared runtime state directory.
 ///
 /// # Errors
 ///
@@ -64,7 +64,7 @@ pub fn resolve_state_dir_from(
         if let Some(tmp) = temp.filter(|value| !value.is_empty()) {
             return Ok(PathBuf::from(tmp).join("firma"));
         }
-        Err(crate::StackError::StateDirResolve(
+        Err(crate::RuntimeStateError::StateDirResolve(
             "neither LOCALAPPDATA nor TEMP is set".into(),
         ))
     }

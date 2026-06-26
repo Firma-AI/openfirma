@@ -8,7 +8,7 @@
 use std::fs;
 use std::path::Path;
 
-use firma_stack::MetadataFile;
+use firma_runtime_state::MetadataFile;
 
 fn write_marker(run_dir: &Path, sandbox_id: &str, pid: u32) {
     write_marker_with_listen(run_dir, sandbox_id, pid, None);
@@ -53,8 +53,8 @@ fn metadata_file_parses_all_fields() {
     assert_eq!(meta.started_at, "2026-05-18T10:00:00Z");
 }
 
-use firma_stack::sidecar_markers::probe_entry;
-use firma_stack::status::State;
+use firma_runtime_state::sidecar_markers::probe_entry;
+use firma_runtime_state::status::State;
 
 #[test]
 fn live_pid_no_socket_is_unhealthy() {
@@ -98,6 +98,36 @@ fn dead_pid_is_stopped() {
 
     let entry = probe_entry(&run_dir.join("dead")).expect("probe");
     assert_eq!(entry.state, State::Stopped);
+}
+
+#[cfg(unix)]
+#[test]
+fn exited_unreaped_child_is_stopped() {
+    use std::time::{Duration, Instant};
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let run_dir = tmp.path().join("run");
+    let mut child = std::process::Command::new("true")
+        .spawn()
+        .expect("spawn throwaway child");
+    let pid = child.id();
+    write_marker(&run_dir, "zombie", pid);
+
+    let marker_dir = run_dir.join("zombie");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut observed = None;
+    while Instant::now() < deadline {
+        let entry = probe_entry(&marker_dir).expect("probe");
+        observed = Some(entry.state);
+        if entry.state == State::Stopped {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(observed, Some(State::Stopped));
 }
 
 #[test]
@@ -185,7 +215,7 @@ fn live_pid_with_listening_socket_is_running() {
     assert_eq!(entry.state, State::Running);
 }
 
-use firma_stack::sidecar_markers::{gc_stale, get, list};
+use firma_runtime_state::sidecar_markers::{gc_stale, get, list};
 
 #[test]
 fn list_skips_and_gcs_dead_markers() {

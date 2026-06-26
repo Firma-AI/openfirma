@@ -2,13 +2,8 @@
 
 pub mod config;
 pub mod error;
-pub mod fs;
-pub mod pidfile;
-pub mod runtime_paths;
 pub mod shutdown_event;
-pub mod sidecar_markers;
 pub mod start;
-pub mod state_dir;
 pub mod status;
 pub mod stop;
 
@@ -20,16 +15,13 @@ mod supervisor;
 
 pub use config::{StackConfig, resolve_stack_config};
 pub use error::StackError;
-pub use runtime_paths::{capabilities_dir_from, default_runtime_dir, run_dir_from, run_entry_from};
-pub use sidecar_markers::{MetadataFile, SidecarEntry, gc_stale, get, list};
 pub use start::{StackHandle, StartMode, spawn_stack, start, supervise};
-pub use state_dir::resolve_state_dir;
 pub use status::{ComponentStatus, StackStatus, State, status};
 pub use stop::{StopOutcome, stop};
 
 #[doc(hidden)]
 pub mod test_support {
-    pub use crate::pidfile;
+    pub use firma_runtime_state::pidfile;
 
     /// Spawn an arbitrary command into the same process grouping used by the stack.
     ///
@@ -46,7 +38,7 @@ pub mod test_support {
         let log_path = state_dir.join(format!("{name}.log"));
         let pidfile_path = state_dir.join(format!("{name}.pid"));
         let child = SystemPlatform::spawn_in_group(&group, cmd, &log_path)?;
-        crate::pidfile::write(&pidfile_path, child.pid)?;
+        firma_runtime_state::pidfile::write(&pidfile_path, child.pid)?;
         std::fs::write(state_dir.join(format!("{name}.listen")), "127.0.0.1:0\n")?;
         Ok(child.pid)
     }

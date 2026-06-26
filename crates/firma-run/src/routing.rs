@@ -297,8 +297,8 @@ fn maybe_mint_capability_seed(
     if !(flags.sidecar_autostart && !skip_mint && flags.authority_pub_key.is_some()) {
         return Ok(None);
     }
-    let runtime_dir = firma_stack::runtime_paths::default_runtime_dir();
-    let cap_dir = firma_stack::runtime_paths::capabilities_dir_from(&runtime_dir);
+    let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
+    let cap_dir = firma_runtime_state::runtime_paths::capabilities_dir_from(&runtime_dir);
     let out_path = cap_dir.join(format!("{}.toml", identity.sandbox_id));
     let pub_key_path = flags
         .authority_pub_key
@@ -458,8 +458,9 @@ fn autostart_sidecar(
     identity: &RunIdentity,
     flags: &AutostartFlags,
 ) -> Result<SidecarSupervisor, RunError> {
-    let runtime_dir = firma_stack::runtime_paths::default_runtime_dir();
-    let marker_dir = firma_stack::runtime_paths::run_entry_from(&runtime_dir, &identity.sandbox_id);
+    let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
+    let marker_dir =
+        firma_runtime_state::runtime_paths::run_entry_from(&runtime_dir, &identity.sandbox_id);
     let firma_exe = std::env::current_exe().map_err(|error| {
         RunError::Internal(format!(
             "failed to resolve current executable path: {error}"
@@ -618,9 +619,11 @@ pub fn resolve_authority(
                     crate::authority::bootstrap::resolve_persist_target(user_config_path)?;
                 crate::authority::bootstrap::persist_authority_section(&target_path)?;
             }
-            let marker =
-                firma_stack::runtime_paths::run_entry_from(runtime_dir, &identity.sandbox_id)
-                    .join("authority");
+            let marker = firma_runtime_state::runtime_paths::run_entry_from(
+                runtime_dir,
+                &identity.sandbox_id,
+            )
+            .join("authority");
             match crate::authority::AuthoritySupervisor::spawn(crate::authority::SpawnRequest {
                 sandbox_id: &identity.sandbox_id,
                 agent_id: &identity.profile,
