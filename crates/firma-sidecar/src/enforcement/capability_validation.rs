@@ -38,7 +38,7 @@ use crate::config::TenancyMode;
 use crate::normalizer::NormalizedEnvelope;
 
 use super::capability_map::CapabilityMap;
-use super::decision::{CapabilityValidationStage, EnforcementDecision, EnforcementStage};
+use super::decision::{CapabilityValidationStage, DenyIdentity, EnforcementDecision, EnforcementStage};
 use super::error::EnforcementError;
 
 /// A capability token that has been selected from the map and
@@ -135,8 +135,8 @@ impl CapabilityValidator {
                         "agent_id '{}' does not match first observed agent_id '{}'",
                         claims.agent_id, first_agent
                     ),
-                    envelope: None,
-                    identity: None,
+                    envelope: Some(envelope.clone()),
+                    identity: Some(DenyIdentity::from_claims(&claims)),
                 });
             }
         }
