@@ -38,7 +38,9 @@ use crate::config::TenancyMode;
 use crate::normalizer::NormalizedEnvelope;
 
 use super::capability_map::CapabilityMap;
-use super::decision::{CapabilityValidationStage, DenyIdentity, EnforcementDecision, EnforcementStage};
+use super::decision::{
+    CapabilityValidationStage, DenyIdentity, EnforcementDecision, EnforcementStage,
+};
 use super::error::EnforcementError;
 
 /// A capability token that has been selected from the map and
@@ -529,9 +531,7 @@ mod tests {
     #[test]
     fn test_enforce_single_agent_tenancy_mismatch_denies() {
         let mut first_claims = valid_claims();
-        first_claims.agent_id = "agent_first"
-            .parse()
-            .expect("literal agent id");
+        first_claims.agent_id = "agent_first".parse().expect("literal agent id");
         let verifier = MutableVerifier::new(first_claims);
 
         let validator = CapabilityValidator::new(
@@ -565,9 +565,7 @@ mod tests {
         );
 
         let mut second_claims = valid_claims();
-        second_claims.agent_id = "agent_second"
-            .parse()
-            .expect("literal agent id");
+        second_claims.agent_id = "agent_second".parse().expect("literal agent id");
         verifier.set(second_claims);
 
         let second = validator.enforce(&envelope, "sess_001");
