@@ -46,7 +46,13 @@ pub enum Decision {
 
 /// Typed reason code explaining why a request was denied.
 ///
-/// Deferred variants (add back when corresponding mechanisms exist):
+/// `StepUpRequired` and `Deferred` carry the AARM R4 `STEP_UP` and `DEFER`
+/// outcomes: the call does not proceed, so the agent-visible surface is a
+/// structured denial whose reason tells the agent how to recover (request
+/// approval, retry later). This is distinct from the feature-backlog variants
+/// below, which are unrelated to AARM DEFER.
+///
+/// Backlog variants (add back when corresponding mechanisms exist):
 /// - `BudgetExceeded` — when budget tracking mechanism is designed
 /// - `RiskThreshold` — when anomaly detection is designed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
@@ -120,6 +126,41 @@ pub enum DenyReason {
     /// Sidecar process. Enforces single-agent tenancy (V1 ADR §2).
     #[error("tenant mismatch")]
     TenantMismatch,
+    /// AARM R4 `STEP_UP`: the call is blocked pending human approval or
+    /// stronger authentication before it may proceed. The agent should
+    /// request approval and retry with the resulting approval credential.
+    #[error("step up required")]
+    StepUpRequired,
+    /// AARM R4 `DEFER`: the call is blocked and should be retried after the
+    /// supplied backoff window, pending additional context or rate budget.
+    #[error("deferred")]
+    Deferred,
+}
+
+/// Description of a transformation to apply to a request under the AARM R4
+/// `MODIFY` decision.
+///
+/// V1 carries an opaque, human-authored description string sourced from the
+/// `@modify("…")` Cedar policy annotation. The Sidecar records it in the
+/// audit trail and surfaces it to the agent so an operator can reconcile the
+/// transformed execution against the policy intent. A future task may replace
+/// the free-form string with a structured patch (header redactions, param
+/// rewrites), at which point this type gains tagged variants without a wire
+/// break.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ModificationSpec {
+    /// Human-readable description of the modification to apply.
+    pub description: String,
+}
+
+impl ModificationSpec {
+    /// Builds a [`ModificationSpec`] from a description string.
+    #[must_use]
+    pub fn new(description: impl Into<String>) -> Self {
+        Self {
+            description: description.into(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -201,6 +242,9 @@ mod tests {
                 "connector invalid request",
             ),
             (DenyReason::UnclassifiedIntent, "unclassified intent"),
+            (DenyReason::TenantMismatch, "tenant mismatch"),
+            (DenyReason::StepUpRequired, "step up required"),
+            (DenyReason::Deferred, "deferred"),
         ];
         for (reason, expected) in cases {
             assert_eq!(reason.to_string(), expected);
@@ -212,6 +256,29 @@ mod tests {
         let reason = DenyReason::TokenExpired;
         let copied = reason;
         assert_eq!(reason, copied);
+    }
+
+    #[test]
+    fn modification_spec_round_trip() {
+        let spec = ModificationSpec::new("redact api key from authorization header");
+        let json = serde_json::to_string(&spec).unwrap_or_else(|e| panic!("{e}"));
+        let parsed: ModificationSpec =
+            serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(spec, parsed);
+        assert_eq!(spec.description, "redact api key from authorization header");
+    }
+
+    #[test]
+    fn step_up_required_and_deferred_display_and_serde() {
+        assert_eq!(DenyReason::StepUpRequired.to_string(), "step up required");
+        assert_eq!(DenyReason::Deferred.to_string(), "deferred");
+        for json in [r#""StepUpRequired""#, r#""Deferred""#] {
+            let parsed: DenyReason = serde_json::from_str(json).unwrap_or_else(|e| panic!("{e}"));
+            assert!(matches!(
+                parsed,
+                DenyReason::StepUpRequired | DenyReason::Deferred
+            ));
+        }
     }
 
     #[test]
@@ -310,6 +377,8 @@ mod tests {
                 DenyReason::ConnectorInvalidRequest => r#""ConnectorInvalidRequest""#,
                 DenyReason::UnclassifiedIntent => r#""UnclassifiedIntent""#,
                 DenyReason::TenantMismatch => r#""TenantMismatch""#,
+                DenyReason::StepUpRequired => r#""StepUpRequired""#,
+                DenyReason::Deferred => r#""Deferred""#,
             };
             let parsed: DenyReason = serde_json::from_str(json).unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(parsed, reason);
