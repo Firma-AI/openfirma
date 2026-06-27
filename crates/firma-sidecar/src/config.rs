@@ -215,9 +215,6 @@ impl SidecarConfig {
         if let Some(ref le) = self.local_exec {
             le.validate().map_err(|e| format!("local_exec: {e}"))?;
         }
-        self.tenancy
-            .validate()
-            .map_err(|e| format!("tenancy: {e}"))?;
         Ok(())
     }
 

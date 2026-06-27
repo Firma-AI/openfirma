@@ -23,16 +23,3 @@ pub struct TenancyConfig {
     #[serde(default)]
     pub mode: TenancyMode,
 }
-
-impl TenancyConfig {
-    /// Validate the tenancy configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the configuration is invalid.
-    pub fn validate(&self) -> Result<(), String> {
-        // Currently no validation needed for tenancy mode.
-        // Future modes may require additional validation.
-        Ok(())
-    }
-}
