@@ -2,7 +2,6 @@
 
 use firma_config::{CONFIG_FILE_NAME, load_section};
 use fs_err as fs;
-use std::assert_matches;
 
 #[test]
 fn extracts_named_section() {
@@ -12,7 +11,7 @@ fn extracts_named_section() {
     let out = load_section(&path, "sidecar").expect("load section");
     let table: toml::Table = out.parse().expect("parse section");
     assert_eq!(table.get("foo").and_then(toml::Value::as_integer), Some(1));
-    assert_matches!(table.get("bar"), None);
+    assert!(table.get("bar").is_none());
 }
 
 #[test]
@@ -26,13 +25,17 @@ fn nested_subtables_are_preserved() {
     .expect("write config");
     let out = load_section(&path, "sidecar").expect("load section");
     let table: toml::Table = out.parse().expect("parse section");
-    assert_matches!(
-        table.get("interceptor").and_then(toml::Value::as_table),
-        Some(_)
+    assert!(
+        table
+            .get("interceptor")
+            .and_then(toml::Value::as_table)
+            .is_some()
     );
-    assert_matches!(
-        table.get("authority").and_then(toml::Value::as_table),
-        Some(_)
+    assert!(
+        table
+            .get("authority")
+            .and_then(toml::Value::as_table)
+            .is_some()
     );
 }
 

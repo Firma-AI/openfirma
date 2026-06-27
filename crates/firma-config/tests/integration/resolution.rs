@@ -3,7 +3,6 @@
 
 use firma_config::{CONFIG_FILE_NAME, ConfigResolver, ConfigSource};
 use fs_err as fs;
-use std::assert_matches;
 
 #[test]
 fn explicit_flag_sectioned_file_round_trips() {
@@ -24,6 +23,6 @@ fn explicit_flag_sectioned_file_round_trips() {
         .section("sidecar")
         .expect("load sidecar section");
     let table: toml::Table = body.parse().expect("parse sidecar section");
-    assert_matches!(table.get("policy"), Some(_));
-    assert_matches!(table.get("bar"), None);
+    assert!(table.get("policy").is_some());
+    assert!(table.get("bar").is_none());
 }
