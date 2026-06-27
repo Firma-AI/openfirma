@@ -290,7 +290,7 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
     ///
     /// On a Cedar `Deny`, scans `Response::diagnostics().reason()` for the
     /// `forbid` policy IDs that fired and looks each up in the pre-built
-    /// [`remediation`](Self::remediation) map. If a firing policy carries a
+    /// remediation map. If a firing policy carries a
     /// `@modify` / `@step_up` / `@defer` annotation, the deny is lifted into a
     /// `MODIFY` / `STEP_UP` / `DEFER` verdict (precedence `StepUp > Defer >
     /// Modify` when several fire). Otherwise the deny is a hard
