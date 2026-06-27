@@ -15,7 +15,9 @@ just build # cargo build --workspace
 Tests run via `cargo nextest` (process-per-test isolation); doctests run
 separately via `cargo test --doc` since nextest does not run them.
 
-Requires `protoc` installed for `firma-proto` protobuf compilation.
+Requires `protoc` installed for protobuf compilation (`firma-protobuf` and
+`firma-grpc-interceptor-proto` both compile `.proto` files via
+`tonic-prost-build` against a system `protoc`).
 
 ## Formatting
 
@@ -76,8 +78,12 @@ agent call passes through the Sidecar before reaching external systems.
 - `firma-core` — shared types and trait contracts such as `Decision`,
   `ExecutionEnvelope`, `CapabilityClaims`, `TokenVerifier`, `TokenSigner`,
   `PolicyEvaluator`, and `RevocationStore`. No dependencies on other crates.
-- `firma-proto` — gRPC wire contract via protobuf. `build.rs` compiles `.proto`
-  files with `tonic-build`.
+- `firma-protobuf` — gRPC wire contract via protobuf, vendored in-tree at
+  `crates/firma-protobuf`. `build.rs` compiles `.proto` files with
+  `tonic-prost-build`. Owns the `firma.v1.EnforcementDecision` enum
+  (AARM R4: ALLOW/DENY/ABORT/MODIFY/STEP_UP/DEFER).
+- `firma-grpc-interceptor-proto` — the agent↔sidecar interceptor hook
+  proto, separate from `firma-protobuf` (Authority↔Sidecar contract).
 - `firma-sidecar` — enforcement proxy binary. Key top-level modules:
   - `interceptor` — captures outbound agent traffic.
   - `normalizer` — maps raw HTTP requests to canonical `ExecutionEnvelope`

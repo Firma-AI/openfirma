@@ -45,7 +45,7 @@ graph LR
 | Crate                          | Role                                                                                                     |
 | ------------------------------ | -------------------------------------------------------------------------------------------------------- |
 | `firma-core`                   | Domain types (`ExecutionEnvelope`, `CapabilityClaims`, `Decision`) and traits.                           |
-| `firma-protobuf`               | External crate (crates.io): generated `firma.v1` gRPC contract used by audit sink and Authority streams. |
+| `firma-protobuf`               | Vendored in-tree (`crates/firma-protobuf`): generated `firma.v1` gRPC contract used by audit sink and Authority streams. Owns the `EnforcementDecision` enum (AARM R4). |
 | `firma-grpc-interceptor-proto` | Contract for the in-process gRPC hook interceptor.                                                       |
 | `firma-sidecar`                | The enforcement binary — interceptors, pipeline, connector, audit, startup.                              |
 | `firma-authority`              | Reference Authority for local dev. Issues PASETO tokens, streams policy bundles.                         |
@@ -166,7 +166,7 @@ sequenceDiagram
     Stage1-->>Pipeline: ValidatedCapability | DENY
     Pipeline->>Stage2: evaluate(&norm, &claims)
     Stage2->>Stage2: scope → freshness → Cedar eval
-    Stage2-->>Pipeline: Ok(()) | DENY
+    Stage2-->>Pipeline: Ok(verdict) | DENY
     Pipeline->>Pipeline: assemble ExecutionEnvelope
     Pipeline->>Injector: inject(&env, connector_id, target)
     Injector-->>Pipeline: InjectedCredentials | empty | DENY
@@ -442,16 +442,26 @@ stateDiagram-v2
     Passthrough --> [*]
 ```
 
-Three proto-wire decision codes are emitted in audit events:
+The AARM R4 five-decision set is emitted as proto-wire decision codes in
+audit events (`PASSTHROUGH` is serialized as `ALLOW` with an empty
+`token_id`):
 
-| Code | Meaning | Source                                                                             |
-| ---- | ------- | ---------------------------------------------------------------------------------- |
-| `1`  | ALLOW   | Pipeline allowed and connector returned a response (any status). Also PASSTHROUGH. |
-| `2`  | DENY    | Pipeline denied, or connector reported `Network` / `InvalidRequest`.               |
-| `3`  | ABORT   | Approved call aborted mid-flight (`ConnectorError::Timeout`).                      |
+| Code | Meaning   | Source                                                                             |
+| ---- | --------- | ---------------------------------------------------------------------------------- |
+| `1`  | ALLOW     | Pipeline allowed and connector returned a response (any status). Also PASSTHROUGH. |
+| `2`  | DENY      | Pipeline denied, or connector reported `Network` / `InvalidRequest`.               |
+| `3`  | ABORT     | Approved call aborted mid-flight (`ConnectorError::Timeout`).                      |
+| `4`  | MODIFY    | AARM R4: a transformed version of the request was dispatched (audit records the `@modify` description). |
+| `5`  | STEP_UP   | AARM R4: blocked pending human approval (`DenyReason::StepUpRequired`).            |
+| `6`  | DEFER     | AARM R4: blocked and deferred for retry (`DenyReason::Deferred`).                  |
 
 ABORT is distinct from DENY because the pipeline did approve the call;
 the token stays ACTIVE and the agent sees a gateway-timeout-class error.
+MODIFY dispatches like ALLOW; the modification description is recorded in
+the audit `deny_reason` field. STEP_UP and DEFER block the call (the
+agent receives a structured 403 whose `DenyReason` tells it how to
+recover) and are sourced from `@step_up` / `@defer` annotations on
+`forbid` Cedar policies.
 
 ### 6.1 Error mapping
 
