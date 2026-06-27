@@ -138,7 +138,7 @@ fn signing_payload(event: &ExecutionEvent) -> Vec<u8> {
     hasher.update(b"\n");
     hasher.update(event.resource.as_bytes());
     hasher.update(b"\n");
-    hasher.update(event.decision.to_string().as_bytes());
+    hasher.update((event.decision as i32).to_string().as_bytes());
     hasher.update(b"\n");
     hasher.update(event.deny_reason.as_bytes());
     hasher.update(b"\n");
@@ -190,6 +190,7 @@ mod tests {
     };
     use p256::ecdsa::VerifyingKey;
 
+    use crate::audit::Decision;
     use crate::enforcement::decision::{
         CapabilityValidationStage, EnforcementDecision, EnforcementStage,
     };
@@ -202,10 +203,6 @@ MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgS+9b9zHd22EAeg9M
 bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 3wlh7RZmOnI0E3wNCaMKd3B7Sd/fXknJ0WmI6BsrvfidxQEAYvsndbvx
 -----END PRIVATE KEY-----";
-
-    /// Proto wire values for the `EnforcementDecision` enum.
-    const DECISION_ALLOW: i32 = 1;
-    const DECISION_DENY: i32 = 2;
 
     fn test_claims() -> CapabilityClaims {
         CapabilityClaims {
@@ -308,7 +305,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         assert_eq!(event.agent_id, "agent_test");
         assert_eq!(event.action, "communication.external.send");
         assert_eq!(event.resource, "api.openai.com/v1/chat/completions");
-        assert_eq!(event.decision, DECISION_ALLOW);
+        assert_eq!(event.decision, Decision::Allow);
         assert!(event.deny_reason.is_empty());
         assert_eq!(event.enforcement_latency_us, 150);
         assert_eq!(event.context_hash, "ctx_abc");
@@ -334,7 +331,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let event = builder.build(payload);
 
         assert_eq!(event.session_id, "sess_deny");
-        assert_eq!(event.decision, DECISION_DENY);
+        assert_eq!(event.decision, Decision::Deny);
         assert!(event.deny_reason.contains("token expired"));
         assert_eq!(event.action, "communication.external.send");
         assert!(!event.signature.is_empty());
@@ -351,7 +348,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let payload = payload_from_decision(&decision, "sess_pt", Duration::from_micros(5));
         let event = builder.build(payload);
 
-        assert_eq!(event.decision, DECISION_ALLOW);
+        assert_eq!(event.decision, Decision::Allow);
         assert!(event.token_id.is_empty());
         assert!(event.agent_id.is_empty());
     }
@@ -474,7 +471,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             agent_id: "_test_".parse().expect("literal agent id"),
             action: String::new(),
             resource: String::new(),
-            decision: 1,
+            decision: Decision::Allow,
             deny_reason: String::new(),
             enforcement_latency_us: 0,
             context_hash: String::new(),
@@ -540,7 +537,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let payload = payload_from_decision(&decision, "sess_no_env", Duration::from_micros(10));
         let event = builder.build(payload);
 
-        assert_eq!(event.decision, DECISION_DENY);
+        assert_eq!(event.decision, Decision::Deny);
         assert!(event.deny_reason.contains("unclassified intent"));
         assert_eq!(event.action, "raw.http.POST");
         assert_eq!(event.resource, "api.openai.com/v1/chat/completions");

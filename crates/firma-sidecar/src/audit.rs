@@ -86,6 +86,33 @@ pub enum AuditSinkError {
     ServerError(String),
 }
 
+/// Enforcement outcome as recorded in the audit log.
+///
+/// Serialized as its numeric proto wire value (`1` = ALLOW, `2` = DENY,
+/// `3` = ABORT), matching the `i32` `decision` field on [`AuditPayload`] and
+/// [`ExecutionEvent`]. This typed view is for consumers that read back the
+/// JSON audit records and want to match on the outcome instead of bare ints.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde_repr::Serialize_repr,
+    serde_repr::Deserialize_repr,
+)]
+#[repr(u8)]
+pub enum Decision {
+    /// Request passed enforcement and was dispatched.
+    Allow = 1,
+    /// Request was denied before dispatch.
+    Deny = 2,
+    /// Critical failure aborted the request.
+    Abort = 3,
+}
+
 /// Lightweight audit payload sent from the pipeline hot path through the channel.
 ///
 /// Contains only the fields extracted from the enforcement decision — no signing,
@@ -103,8 +130,8 @@ pub struct AuditPayload {
     pub action: String,
     /// Target resource identifier (e.g., URL, table name).
     pub resource: String,
-    /// Enforcement outcome (proto wire value: 1 = ALLOW, 2 = DENY).
-    pub decision: i32,
+    /// Enforcement outcome.
+    pub decision: Decision,
     /// Human-readable reason when decision is DENY or ABORT. Empty on
     /// ALLOW, except in monitor mode where an overridden DENY carries
     /// `"monitor_mode: <original_deny_reason>"`.
@@ -145,7 +172,7 @@ pub struct ExecutionEvent {
     /// Target resource identifier (e.g., URL, table name).
     pub resource: String,
     /// Enforcement outcome.
-    pub decision: i32,
+    pub decision: Decision,
     /// Human-readable reason when decision is DENY or ABORT. Empty on
     /// ALLOW, except in monitor mode where an overridden DENY carries
     /// `"monitor_mode: <original_deny_reason>"`.
@@ -185,7 +212,7 @@ impl From<ExecutionEvent> for firma_protobuf::v1::ExecutionEvent {
             agent_id: value.agent_id,
             action: value.action,
             resource: value.resource,
-            decision: value.decision,
+            decision: value.decision as i32,
             deny_reason: value.deny_reason,
             enforcement_latency_us: value.enforcement_latency_us,
             context_hash: value.context_hash,

@@ -1,19 +1,11 @@
 use std::path::Path;
 
 use anyhow::Context;
+use firma_sidecar::audit::Decision;
 use serde::Deserialize;
-use serde_repr::Deserialize_repr;
 use std::collections::BTreeSet;
 
 use crate::agent::AgentKind;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize_repr)]
-#[repr(u8)]
-pub enum Decision {
-    Allow = 1,
-    Deny = 2,
-    Abort = 3,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 pub struct AuditEvent {

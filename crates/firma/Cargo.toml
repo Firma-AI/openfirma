@@ -60,7 +60,7 @@ fs-err = { workspace = true }
 insta = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
-serde_repr = { workspace = true }
+regex = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 tempfile = { workspace = true }
 wait-timeout = { workspace = true }
