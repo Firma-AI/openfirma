@@ -116,6 +116,10 @@ pub enum DenyReason {
     /// Protected action could not be mapped to any canonical action class.
     #[error("unclassified intent")]
     UnclassifiedIntent,
+    /// Token's `agent_id` differs from the first `agent_id` observed by this
+    /// Sidecar process. Enforces single-agent tenancy (V1 ADR §2).
+    #[error("tenant mismatch")]
+    TenantMismatch,
 }
 
 #[cfg(test)]
@@ -305,6 +309,7 @@ mod tests {
                 DenyReason::ConnectorNetworkError => r#""ConnectorNetworkError""#,
                 DenyReason::ConnectorInvalidRequest => r#""ConnectorInvalidRequest""#,
                 DenyReason::UnclassifiedIntent => r#""UnclassifiedIntent""#,
+                DenyReason::TenantMismatch => r#""TenantMismatch""#,
             };
             let parsed: DenyReason = serde_json::from_str(json).unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(parsed, reason);

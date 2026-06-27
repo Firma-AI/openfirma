@@ -109,6 +109,7 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
                 .capability_validation
                 .clock_skew_tolerance_seconds,
         ),
+        config.tenancy.mode.clone(),
     );
 
     let initial_policy: Box<dyn pipeline::PolicyEvaluation + Send + Sync> =

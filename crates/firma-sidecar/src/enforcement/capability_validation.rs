@@ -27,17 +27,20 @@
 //! - **Revoked token reuse** — bloom filter + LRU cache check rejects tokens
 //!   that have been explicitly invalidated.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 #[cfg(test)]
 use firma_core::TokenId;
-use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
+use firma_core::{AgentId, CapabilityClaims, RevocationStore, TokenError, TokenVerifier};
 
+use crate::config::TenancyMode;
 use crate::normalizer::NormalizedEnvelope;
 
 use super::capability_map::CapabilityMap;
-use super::decision::{CapabilityValidationStage, EnforcementDecision, EnforcementStage};
+use super::decision::{
+    CapabilityValidationStage, DenyIdentity, EnforcementDecision, EnforcementStage,
+};
 use super::error::EnforcementError;
 
 /// A capability token that has been selected from the map and
@@ -63,6 +66,8 @@ pub struct CapabilityValidator {
     capability_map: CapabilityMap,
     revocation: Arc<dyn RevocationStore + Send + Sync>,
     verifier: Box<dyn TokenVerifier + Send + Sync>,
+    tenancy_mode: TenancyMode,
+    first_agent_id: OnceLock<AgentId>,
 }
 
 impl CapabilityValidator {
@@ -74,12 +79,15 @@ impl CapabilityValidator {
         verifier: Box<dyn TokenVerifier + Send + Sync>,
         revocation: Arc<dyn RevocationStore + Send + Sync>,
         clock_skew_tolerance: Duration,
+        tenancy_mode: TenancyMode,
     ) -> Self {
         Self {
             clock_skew_tolerance,
             capability_map,
             revocation,
             verifier,
+            tenancy_mode,
+            first_agent_id: OnceLock::new(),
         }
     }
 
@@ -115,6 +123,26 @@ impl CapabilityValidator {
 
         // Step 2: Validate selected token
         let claims = self.validate(&entry.raw_token)?;
+
+        // Step 3: Enforce single-agent tenancy (V1 ADR §2)
+        if self.tenancy_mode == TenancyMode::SingleAgent {
+            let first_agent = self.first_agent_id.get_or_init(|| claims.agent_id.clone());
+            if first_agent != &claims.agent_id {
+                return Err(EnforcementDecision::Deny {
+                    reason: firma_core::DenyReason::TenantMismatch,
+                    stage: EnforcementStage::CapabilityValidation(
+                        CapabilityValidationStage::TokenValidation,
+                    ),
+                    detail: format!(
+                        "agent_id '{}' does not match first observed agent_id '{}'",
+                        claims.agent_id, first_agent
+                    ),
+                    envelope: Some(envelope.clone()),
+                    identity: Some(DenyIdentity::from_claims(&claims)),
+                });
+            }
+        }
+
         Ok(ValidatedCapability {
             raw_token: entry.raw_token.clone(),
             claims,
@@ -189,6 +217,7 @@ mod tests {
     use crate::enforcement::capability_map::CapabilityEntry;
     use chrono::Utc;
     use firma_core::CapabilityClaims;
+    use std::sync::{Arc, Mutex};
 
     struct MockVerifier {
         claims: CapabilityClaims,
@@ -197,6 +226,29 @@ mod tests {
     impl TokenVerifier for MockVerifier {
         fn verify(&self, _raw_token: &str) -> Result<CapabilityClaims, TokenError> {
             Ok(self.claims.clone())
+        }
+    }
+
+    #[derive(Clone)]
+    struct MutableVerifier {
+        claims: Arc<Mutex<CapabilityClaims>>,
+    }
+
+    impl MutableVerifier {
+        fn new(claims: CapabilityClaims) -> Self {
+            Self {
+                claims: Arc::new(Mutex::new(claims)),
+            }
+        }
+
+        fn set(&self, claims: CapabilityClaims) {
+            *self.claims.lock().expect("not poisoned") = claims;
+        }
+    }
+
+    impl TokenVerifier for MutableVerifier {
+        fn verify(&self, _raw_token: &str) -> Result<CapabilityClaims, TokenError> {
+            Ok(self.claims.lock().expect("not poisoned").clone())
         }
     }
 
@@ -245,16 +297,21 @@ mod tests {
         }])
     }
 
-    #[test]
-    fn test_valid_token_passes() {
-        let validator = CapabilityValidator::new(
+    fn make_validator() -> CapabilityValidator {
+        CapabilityValidator::new(
             test_capability_map(),
             Box::new(MockVerifier {
                 claims: valid_claims(),
             }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
-        );
+            TenancyMode::SingleAgent,
+        )
+    }
+
+    #[test]
+    fn test_valid_token_passes() {
+        let validator = make_validator();
 
         let result = validator.validate("v4.public.test_token");
         assert!(result.is_ok());
@@ -267,6 +324,7 @@ mod tests {
             Box::new(FailingVerifier),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let result = validator.validate("v4.public.bad_token");
@@ -289,6 +347,7 @@ mod tests {
                 revoked: vec!["3713c5fc-b569-650c-c780-c64051473370".to_string()],
             }),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let result = validator.validate("v4.public.test_token");
@@ -310,6 +369,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let result = validator.validate("v4.public.test_token");
@@ -337,6 +397,7 @@ mod tests {
             Box::new(MalformedVerifier),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let result = validator.validate("garbage-not-a-token");
@@ -357,6 +418,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(5),
+            TenancyMode::SingleAgent,
         );
 
         let result = validator.validate("v4.public.test_token");
@@ -390,6 +452,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let result = validator.enforce(&envelope, "sess_001");
@@ -426,6 +489,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let result = validator.enforce(&envelope, "sess_001");
@@ -453,6 +517,7 @@ mod tests {
                 verifier,
                 Arc::new(MockRevocationStore { revoked: vec![] }),
                 Duration::from_secs(0),
+                TenancyMode::SingleAgent,
             );
             let result = validator.validate("any");
             assert!(
@@ -460,6 +525,81 @@ mod tests {
                 "every TokenVerifier error must produce DENY"
             );
             assert!(result.unwrap_err().is_deny());
+        }
+    }
+
+    #[test]
+    fn test_enforce_single_agent_tenancy_mismatch_denies() {
+        let mut first_claims = valid_claims();
+        first_claims.agent_id = "agent_first".parse().expect("literal agent id");
+        let verifier = MutableVerifier::new(first_claims);
+
+        let validator = CapabilityValidator::new(
+            test_capability_map(),
+            Box::new(verifier.clone()),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
+            Duration::from_secs(0),
+            TenancyMode::SingleAgent,
+        );
+
+        let envelope = NormalizedEnvelope {
+            intent: firma_core::ExecutionIntent {
+                action_class: "communication.external.send".to_string(),
+                resource: firma_core::ExecutionIntent::resource_map_from("api.openai.com/v1/chat"),
+                params: firma_core::ActionParams::Http(firma_core::HttpParams {
+                    method: firma_core::HttpMethod::POST,
+                    headers: std::collections::HashMap::new(),
+                    body: None,
+                    query: std::collections::HashMap::new(),
+                }),
+                raw_transport: "https".to_string(),
+                raw_action_ref: "POST /v1/chat".to_string(),
+            },
+            timestamp: Utc::now(),
+        };
+
+        let first = validator.enforce(&envelope, "sess_001");
+        assert!(
+            first.is_ok(),
+            "first call with agent_first should succeed and establish OnceLock"
+        );
+
+        let mut second_claims = valid_claims();
+        second_claims.agent_id = "agent_second".parse().expect("literal agent id");
+        verifier.set(second_claims);
+
+        let second = validator.enforce(&envelope, "sess_001");
+        assert!(
+            second.is_err(),
+            "second call with mismatched agent must deny"
+        );
+        let decision = second.unwrap_err();
+        assert!(decision.is_deny());
+        assert_eq!(
+            decision.deny_reason(),
+            Some(firma_core::DenyReason::TenantMismatch)
+        );
+        assert_eq!(
+            decision.stage(),
+            Some(EnforcementStage::CapabilityValidation(
+                CapabilityValidationStage::TokenValidation
+            ))
+        );
+
+        match &decision {
+            EnforcementDecision::Deny {
+                identity,
+                envelope: deny_envelope,
+                detail,
+                ..
+            } => {
+                let identity = identity.as_ref().expect("deny must carry identity");
+                assert_eq!(identity.agent_id, "agent_second");
+                assert!(deny_envelope.is_some(), "deny must carry envelope");
+                assert!(detail.contains("agent_first"));
+                assert!(detail.contains("agent_second"));
+            }
+            _ => panic!("expected Deny variant"),
         }
     }
 }
