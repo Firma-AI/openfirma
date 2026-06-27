@@ -560,7 +560,7 @@ fn extract_host(resource: &str) -> &str {
 mod tests {
     use super::*;
     use crate::audit::Decision;
-    use crate::config::{MappingRuleConfig, MappingRulesFile};
+    use crate::config::{MappingRuleConfig, MappingRulesFile, TenancyMode};
     use crate::credential::NullCredentialInjector;
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
