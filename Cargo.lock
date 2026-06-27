@@ -1765,6 +1765,7 @@ dependencies = [
 name = "firma-runtime-state"
 version = "0.1.1"
 dependencies = [
+ "insta",
  "nix 0.31.3",
  "serde",
  "tempfile",
