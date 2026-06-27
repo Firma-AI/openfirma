@@ -27,7 +27,7 @@
 //! - **Revoked token reuse** — bloom filter + LRU cache check rejects tokens
 //!   that have been explicitly invalidated.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 #[cfg(test)]
@@ -65,7 +65,7 @@ pub struct CapabilityValidator {
     revocation: Arc<dyn RevocationStore + Send + Sync>,
     verifier: Box<dyn TokenVerifier + Send + Sync>,
     tenancy_mode: TenancyMode,
-    first_agent_id: Mutex<Option<AgentId>>,
+    first_agent_id: OnceLock<AgentId>,
 }
 
 impl CapabilityValidator {
@@ -85,7 +85,7 @@ impl CapabilityValidator {
             revocation,
             verifier,
             tenancy_mode,
-            first_agent_id: Mutex::new(None),
+            first_agent_id: OnceLock::new(),
         }
     }
 
@@ -102,15 +102,10 @@ impl CapabilityValidator {
     ///
     /// Returns `EnforcementDecision::Deny` if no token matches or token
     /// validation fails.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the mutex guarding the first observed `agent_id` is poisoned.
     #[expect(
         clippy::result_large_err,
         reason = "domain decision carries denial context"
     )]
-    #[allow(clippy::unwrap_used, reason = "mutex poison is fatal")]
     pub fn enforce(
         &self,
         envelope: &NormalizedEnvelope,
@@ -129,24 +124,20 @@ impl CapabilityValidator {
 
         // Step 3: Enforce single-agent tenancy (V1 ADR §2)
         if self.tenancy_mode == TenancyMode::SingleAgent {
-            let mut first_agent = self.first_agent_id.lock().unwrap();
-            match &*first_agent {
-                None => *first_agent = Some(claims.agent_id.clone()),
-                Some(observed) if observed != &claims.agent_id => {
-                    return Err(EnforcementDecision::Deny {
-                        reason: firma_core::DenyReason::TenantMismatch,
-                        stage: EnforcementStage::CapabilityValidation(
-                            CapabilityValidationStage::TokenValidation,
-                        ),
-                        detail: format!(
-                            "agent_id '{}' does not match first observed agent_id '{}'",
-                            claims.agent_id, observed
-                        ),
-                        envelope: None,
-                        identity: None,
-                    });
-                }
-                _ => {}
+            let first_agent = self.first_agent_id.get_or_init(|| claims.agent_id.clone());
+            if first_agent != &claims.agent_id {
+                return Err(EnforcementDecision::Deny {
+                    reason: firma_core::DenyReason::TenantMismatch,
+                    stage: EnforcementStage::CapabilityValidation(
+                        CapabilityValidationStage::TokenValidation,
+                    ),
+                    detail: format!(
+                        "agent_id '{}' does not match first observed agent_id '{}'",
+                        claims.agent_id, first_agent
+                    ),
+                    envelope: None,
+                    identity: None,
+                });
             }
         }
 
