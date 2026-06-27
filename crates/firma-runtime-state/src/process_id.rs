@@ -56,6 +56,25 @@ impl UserProcessId {
             Err(_) => false,
         }
     }
+
+    /// Send `SIGTERM` to this process ID.
+    ///
+    /// This is a best-effort process signal by PID, not an ownership guarantee.
+    /// The operating system may reuse process IDs after the original process
+    /// exits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the process ID cannot be represented as the
+    /// platform `pid_t`, or if the signal cannot be delivered.
+    pub fn send_sigterm_signal(self) -> Result<(), SignalProcessError> {
+        let raw = i32::try_from(self.get()).map_err(|_| SignalProcessError::PidOutOfRange(self))?;
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(raw),
+            nix::sys::signal::Signal::SIGTERM,
+        )
+        .map_err(|source| SignalProcessError::Signal { pid: self, source })
+    }
 }
 
 #[cfg(windows)]
@@ -87,6 +106,42 @@ impl UserProcessId {
         unsafe { CloseHandle(handle) };
         ok != 0 && code == STILL_ACTIVE as u32
     }
+
+    /// Send a graceful termination signal to this process ID.
+    ///
+    /// This currently does nothing on non-Unix platforms; Windows process
+    /// shutdown uses higher-level named events in `firma-stack`.
+    ///
+    /// # Errors
+    ///
+    /// This method currently always succeeds on Windows.
+    pub fn send_sigterm_signal(self) -> Result<(), SignalProcessError> {
+        let _ = self;
+        Ok(())
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+impl UserProcessId {
+    /// Return whether this process ID appears to identify a live process.
+    #[must_use]
+    pub fn is_alive(self) -> bool {
+        let _ = self;
+        false
+    }
+
+    /// Send a graceful termination signal to this process ID.
+    ///
+    /// This currently does nothing on platforms without a supported process
+    /// signaling implementation.
+    ///
+    /// # Errors
+    ///
+    /// This method currently always succeeds on unsupported platforms.
+    pub fn send_sigterm_signal(self) -> Result<(), SignalProcessError> {
+        let _ = self;
+        Ok(())
+    }
 }
 
 impl TryFrom<u32> for UserProcessId {
@@ -114,3 +169,20 @@ impl fmt::Display for UserProcessId {
 #[error("process id must be non-zero")]
 #[non_exhaustive]
 pub struct UserProcessIdError;
+
+/// Error returned when signaling a process ID fails.
+#[derive(Debug, thiserror::Error)]
+pub enum SignalProcessError {
+    /// The process ID does not fit the platform `pid_t` type.
+    #[error("process id {0} does not fit platform pid_t")]
+    PidOutOfRange(UserProcessId),
+    /// The operating system rejected the signal operation.
+    #[cfg(unix)]
+    #[error("SIGTERM to process id {pid} failed: {source}")]
+    Signal {
+        /// Process ID targeted by the signal.
+        pid: UserProcessId,
+        /// OS error returned by `kill`.
+        source: nix::errno::Errno,
+    },
+}

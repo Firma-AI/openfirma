@@ -341,7 +341,9 @@ impl SidecarSupervisor {
 impl Drop for SidecarSupervisor {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            send_sigterm(self.pid);
+            if let Err(error) = self.pid.send_sigterm_signal() {
+                warn!(%error, pid = %self.pid, "SIGTERM to sidecar failed");
+            }
             match child.wait_timeout(STOP_GRACE) {
                 Ok(Some(_)) => {
                     info!(pid = %self.pid, "sidecar stopped");
@@ -371,21 +373,6 @@ impl Drop for SidecarSupervisor {
         }
     }
 }
-
-#[cfg(unix)]
-fn send_sigterm(pid: UserProcessId) {
-    let Ok(raw) = i32::try_from(pid.get()) else {
-        warn!(pid = %pid, "pid does not fit in i32; skipping SIGTERM");
-        return;
-    };
-    let target = nix::unistd::Pid::from_raw(raw);
-    if let Err(error) = nix::sys::signal::kill(target, nix::sys::signal::Signal::SIGTERM) {
-        warn!(%error, pid = %pid, "SIGTERM to sidecar failed");
-    }
-}
-
-#[cfg(not(unix))]
-fn send_sigterm(_pid: UserProcessId) {}
 
 #[cfg(unix)]
 fn select_loopback_port() -> SocketAddr {

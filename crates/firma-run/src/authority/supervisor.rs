@@ -349,7 +349,9 @@ impl AuthoritySupervisor {
 impl Drop for AuthoritySupervisor {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            send_sigterm(self.pid);
+            if let Err(error) = self.pid.send_sigterm_signal() {
+                warn!(%error, pid = %self.pid, "SIGTERM to authority failed");
+            }
             match child.wait_timeout(STOP_GRACE) {
                 Ok(Some(_)) => {
                     info!(pid = %self.pid, "authority stopped");
@@ -380,18 +382,6 @@ impl Drop for AuthoritySupervisor {
 }
 
 #[cfg(unix)]
-fn send_sigterm(pid: UserProcessId) {
-    let Ok(raw) = i32::try_from(pid.get()) else {
-        warn!(pid = %pid, "pid does not fit in i32; skipping SIGTERM");
-        return;
-    };
-    let target = nix::unistd::Pid::from_raw(raw);
-    if let Err(e) = nix::sys::signal::kill(target, nix::sys::signal::Signal::SIGTERM) {
-        warn!(error = %e, pid = %pid, "SIGTERM to authority failed");
-    }
-}
-
-#[cfg(unix)]
 fn select_loopback_v6_port() -> Result<SocketAddr, RunError> {
     let addr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0));
     let listener =
@@ -401,9 +391,6 @@ fn select_loopback_v6_port() -> Result<SocketAddr, RunError> {
         .map_err(|e| RunError::Internal(format!("read local addr for authority port: {e}")))?;
     Ok(selected)
 }
-
-#[cfg(not(unix))]
-fn send_sigterm(_pid: UserProcessId) {}
 
 const LISTENING_TOKEN: &str = "listening";
 
