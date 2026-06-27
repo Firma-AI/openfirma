@@ -11,6 +11,9 @@ pub enum AgentProfile {
     /// Anthropic Claude Code CLI.
     #[cfg_attr(feature = "clap", value(name = "claude-code", alias = "claude"))]
     ClaudeCode,
+    /// GitHub Copilot CLI.
+    #[cfg_attr(feature = "clap", value(name = "copilot", alias = "copilot-cli"))]
+    Copilot,
 }
 
 impl AgentProfile {
@@ -21,6 +24,7 @@ impl AgentProfile {
             Self::Generic => "generic",
             Self::Codex => "codex",
             Self::ClaudeCode => "claude-code",
+            Self::Copilot => "copilot",
         }
     }
 
@@ -31,6 +35,7 @@ impl AgentProfile {
             "generic" => Some(Self::Generic),
             "codex" => Some(Self::Codex),
             "claude-code" | "claude" => Some(Self::ClaudeCode),
+            "copilot" | "copilot-cli" => Some(Self::Copilot),
             _ => None,
         }
     }
@@ -41,6 +46,7 @@ impl AgentProfile {
         match self {
             Self::Generic | Self::ClaudeCode => "anthropic",
             Self::Codex => "openai",
+            Self::Copilot => "github",
         }
     }
 
@@ -51,6 +57,28 @@ impl AgentProfile {
             Self::Generic => "general-purpose sandbox, no agent-specific defaults",
             Self::Codex => "OpenAI Codex CLI — sets up OpenAI mapping by default",
             Self::ClaudeCode => "Anthropic Claude Code — sets up Anthropic mapping by default",
+            Self::Copilot => {
+                "GitHub Copilot CLI — sets up Copilot mapping and github MITM bypass by default"
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copilot_round_trips_name_and_provider() {
+        assert_eq!(AgentProfile::Copilot.as_str(), "copilot");
+        assert_eq!(AgentProfile::Copilot.provider(), "github");
+        assert_eq!(
+            AgentProfile::from_name("copilot"),
+            Some(AgentProfile::Copilot)
+        );
+        assert_eq!(
+            AgentProfile::from_name("copilot-cli"),
+            Some(AgentProfile::Copilot)
+        );
     }
 }

@@ -59,6 +59,7 @@ pub struct DocInputs<'a> {
     pub tls_key_path: &'a str,
     pub mapping_paths: &'a [String],
     pub mitm_hosts: &'a [&'a str],
+    pub mitm_bypass_hosts: &'a [&'a str],
     pub workspace: &'a str,
     pub extra_hosts: &'a [String],
 }
@@ -174,22 +175,35 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
         set_str_if_absent(interceptor, "mode", "http_proxy");
         set_str_if_absent(interceptor, "listen_addr", "127.0.0.1:8080");
         let https = ensure_table(interceptor, "https_mitm")?;
-        if inputs.mitm_hosts.is_empty() {
-            // No MITM mappings selected: disable MITM and clear any stale host
-            // lists from a previous run. Writing empty arrays would leave
-            // `enabled = true` (the sidecar default) with no hosts — invalid.
+        let has_intercept = !inputs.mitm_hosts.is_empty();
+        let has_bypass = !inputs.mitm_bypass_hosts.is_empty();
+        if !has_intercept && !has_bypass {
+            // No MITM mappings selected and nothing to bypass: disable MITM and
+            // clear any stale host lists from a previous run. Writing empty
+            // arrays would leave `enabled = true` (the sidecar default) with no
+            // hosts — invalid.
             https.insert("enabled", value(false));
             https.remove("intercept_hosts");
             https.remove("strict_hosts");
+            https.remove("bypass_hosts");
         } else {
             https.insert("enabled", value(true));
-            // intercept_hosts reflects the current selection → full replace.
-            set_string_array(https, "intercept_hosts", inputs.mitm_hosts);
-            // strict_hosts is decoupled: merge (not replace) so operator
-            // hand-added hosts survive while newly intercepted hosts are still
-            // seeded. Adding a single strict host never requires re-listing the
-            // whole set. See the module-level field-policy note.
-            merge_string_array(https, "strict_hosts", inputs.mitm_hosts);
+            if has_intercept {
+                // intercept_hosts reflects the current selection → full replace.
+                set_string_array(https, "intercept_hosts", inputs.mitm_hosts);
+                // strict_hosts is decoupled: merge (not replace) so operator
+                // hand-added hosts survive while newly intercepted hosts are
+                // still seeded. Adding a single strict host never requires
+                // re-listing the whole set. See the module-level field-policy note.
+                merge_string_array(https, "strict_hosts", inputs.mitm_hosts);
+            } else {
+                https.remove("intercept_hosts");
+                https.remove("strict_hosts");
+            }
+            if has_bypass {
+                // Merge (not replace) so operator hand-added bypass hosts survive.
+                merge_string_array(https, "bypass_hosts", inputs.mitm_bypass_hosts);
+            }
         }
     }
 
@@ -571,6 +585,7 @@ mod tests {
             tls_key_path: "/state/tls/authority.key",
             mapping_paths: &[],
             mitm_hosts: &[],
+            mitm_bypass_hosts: &[],
             workspace: "/workspace",
             extra_hosts: &[],
         }
@@ -814,6 +829,26 @@ enabled = false
             .filter_map(|v| v.as_str())
             .collect();
         assert_eq!(hosts, vec!["api.github.com"]);
+    }
+
+    #[test]
+    fn bypass_hosts_emitted_and_mitm_stays_enabled_for_copilot() {
+        let mut inputs = dummy_inputs(&Mode::AgentLocal);
+        inputs.mitm_hosts = &[];
+        let bypass = ["github.com", "api.github.com"];
+        inputs.mitm_bypass_hosts = &bypass;
+        let out = render_firma_toml("", &inputs).unwrap();
+        let parsed: toml::Value = toml::from_str(&out).unwrap();
+        let https = &parsed["sidecar"]["interceptor"]["https_mitm"];
+        assert_eq!(https["enabled"].as_bool(), Some(true));
+        let got: Vec<&str> = https["bypass_hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(got.contains(&"github.com"));
+        assert!(got.contains(&"api.github.com"));
     }
 
     #[test]

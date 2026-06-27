@@ -174,6 +174,8 @@ pub enum Mapping {
     Cargo,
     /// Stripe REST API (`api.stripe.com`).
     Stripe,
+    /// GitHub Copilot CLI hosts — CONNECT-only, github hosts MITM-bypassed.
+    Copilot,
 }
 
 impl Mapping {
@@ -188,6 +190,7 @@ impl Mapping {
             Self::Pypi => "pypi",
             Self::Cargo => "cargo",
             Self::Stripe => "stripe",
+            Self::Copilot => "copilot",
         }
     }
 
@@ -208,6 +211,7 @@ impl Mapping {
             Self::Stripe => {
                 "api.stripe.com — Stripe REST API (MITM optional — check SDK cert pinning first)"
             }
+            Self::Copilot => "GitHub Copilot CLI hosts (CONNECT only; github MITM-bypassed)",
         }
     }
 
@@ -216,6 +220,15 @@ impl Mapping {
         match self {
             Self::Github => &["api.github.com"],
             Self::Gmail => &["gmail.googleapis.com"],
+            _ => &[],
+        }
+    }
+
+    /// Hosts to add to `https_mitm.bypass_hosts` — intercepted-by-default hosts
+    /// this agent needs passed through untouched (real upstream TLS).
+    pub fn mitm_bypass_hosts(&self) -> &'static [&'static str] {
+        match self {
+            Self::Copilot => &["github.com", "api.github.com", "uploads.github.com"],
             _ => &[],
         }
     }
@@ -231,6 +244,27 @@ impl Mapping {
             Self::Pypi => include_str!("../../templates/mappings/pypi.toml"),
             Self::Cargo => include_str!("../../templates/mappings/cargo.toml"),
             Self::Stripe => include_str!("../../templates/mappings/stripe.toml"),
+            Self::Copilot => include_str!("../../templates/mappings/copilot.toml"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copilot_mapping_bypasses_github_and_has_no_mitm() {
+        assert_eq!(Mapping::Copilot.as_str(), "copilot");
+        assert!(Mapping::Copilot.mitm_hosts().is_empty());
+        let bypass = Mapping::Copilot.mitm_bypass_hosts();
+        assert!(bypass.contains(&"github.com"));
+        assert!(bypass.contains(&"api.github.com"));
+        assert!(Mapping::Anthropic.mitm_bypass_hosts().is_empty());
+        assert!(
+            Mapping::Copilot
+                .static_content()
+                .contains("githubcopilot.com")
+        );
     }
 }

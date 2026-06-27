@@ -256,6 +256,13 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
         .flat_map(Mapping::mitm_hosts)
         .copied()
         .collect();
+    let mitm_bypass_hosts: Vec<&str> = inputs
+        .sidecar
+        .mappings
+        .iter()
+        .flat_map(Mapping::mitm_bypass_hosts)
+        .copied()
+        .collect();
 
     let state_dir = &inputs.state_dir;
     let tls_dir = state_dir.join("tls");
@@ -285,6 +292,7 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
         tls_key_path: &tls_key_path,
         mapping_paths: &mapping_paths,
         mitm_hosts: &mitm_hosts,
+        mitm_bypass_hosts: &mitm_bypass_hosts,
         workspace: &workspace_display,
         extra_hosts: &inputs.sidecar.extra_hosts,
     };
@@ -982,10 +990,10 @@ fn prompt_profile_with_default(theme: &ColorfulTheme, default: AgentProfile) -> 
 }
 
 fn profile_default_mappings(profile: &str) -> Vec<Mapping> {
-    if profile == "codex" {
-        vec![Mapping::Openai]
-    } else {
-        vec![Mapping::Anthropic]
+    match profile {
+        "codex" => vec![Mapping::Openai],
+        "copilot" => vec![Mapping::Copilot],
+        _ => vec![Mapping::Anthropic],
     }
 }
 
@@ -1249,6 +1257,7 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
 fn provider_to_mappings(provider: &str) -> Vec<Mapping> {
     match provider {
         "openai" => vec![Mapping::Openai],
+        "github" => vec![Mapping::Copilot],
         _ => vec![Mapping::Anthropic],
     }
 }
@@ -1260,6 +1269,7 @@ fn provider_to_profile(provider: &str) -> String {
         p if AgentProfile::ClaudeCode.provider() == p => {
             AgentProfile::ClaudeCode.as_str().to_string()
         }
+        p if AgentProfile::Copilot.provider() == p => AgentProfile::Copilot.as_str().to_string(),
         _ => AgentProfile::Generic.as_str().to_string(),
     }
 }
@@ -1271,6 +1281,25 @@ mod tests {
     use super::*;
 
     const TEST_WORKSPACE: &str = "/tmp/test-workspace";
+
+    #[test]
+    fn copilot_profile_scaffolds_copilot_mapping_and_bypass() {
+        assert_eq!(
+            super::profile_default_mappings("copilot")
+                .iter()
+                .map(Mapping::as_str)
+                .collect::<Vec<_>>(),
+            vec!["copilot"]
+        );
+        assert_eq!(super::provider_to_profile("github"), "copilot");
+        assert_eq!(
+            super::provider_to_mappings("github")
+                .iter()
+                .map(Mapping::as_str)
+                .collect::<Vec<_>>(),
+            vec!["copilot"]
+        );
+    }
 
     fn make_files(
         posture: &Posture,
@@ -1436,6 +1465,28 @@ mod tests {
         let path_strs: Vec<_> = paths.iter().filter_map(|v| v.as_str()).collect();
         assert!(path_strs.contains(&"mappings/anthropic.toml"));
         assert!(path_strs.contains(&"mappings/github.toml"));
+    }
+
+    #[test]
+    fn firma_toml_copilot_mapping_bypasses_github_and_lists_rules_path() {
+        let files = make_files(&Posture::Dev, &[Mapping::Copilot], &[]);
+        let t: toml::Value = toml::from_str(get(&files, CONFIG_FILE_NAME)).unwrap();
+        let https_mitm = &t["sidecar"]["interceptor"]["https_mitm"];
+        let bypass: Vec<_> = https_mitm["bypass_hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(bypass.contains(&"github.com"));
+        assert!(bypass.contains(&"api.github.com"));
+        let paths = t["sidecar"]["mapping"]["rules_paths"].as_array().unwrap();
+        assert!(
+            paths
+                .iter()
+                .filter_map(|v| v.as_str())
+                .any(|p| p == "mappings/copilot.toml")
+        );
     }
 
     // ── mapping-rules.toml ───────────────────────────────────────────────────
