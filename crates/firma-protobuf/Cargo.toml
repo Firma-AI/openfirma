@@ -1,17 +1,17 @@
 [package]
 name = "firma-protobuf"
 version = "0.2.0"
+build = "build.rs"
 edition.workspace = true
+include = [
+  "src/**/*.rs",
+  "build.rs",
+  "proto/**/*.proto",
+  "LICENSE",
+]
 license.workspace = true
 repository.workspace = true
 description = "Shared Protobuf/gRPC wire contract (firma.v1) for the Firma stack: Authority, Sidecar, and audit planes"
-build = "build.rs"
-include = [
-    "src/**/*.rs",
-    "build.rs",
-    "proto/**/*.proto",
-    "LICENSE",
-]
 
 [lib]
 name = "firma_protobuf"

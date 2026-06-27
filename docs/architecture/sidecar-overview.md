@@ -42,13 +42,13 @@ graph LR
     authority --> proto
 ```
 
-| Crate                          | Role                                                                                                     |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| `firma-core`                   | Domain types (`ExecutionEnvelope`, `CapabilityClaims`, `Decision`) and traits.                           |
+| Crate                          | Role                                                                                                                                                                    |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `firma-core`                   | Domain types (`ExecutionEnvelope`, `CapabilityClaims`, `Decision`) and traits.                                                                                          |
 | `firma-protobuf`               | Vendored in-tree (`crates/firma-protobuf`): generated `firma.v1` gRPC contract used by audit sink and Authority streams. Owns the `EnforcementDecision` enum (AARM R4). |
-| `firma-grpc-interceptor-proto` | Contract for the in-process gRPC hook interceptor.                                                       |
-| `firma-sidecar`                | The enforcement binary — interceptors, pipeline, connector, audit, startup.                              |
-| `firma-authority`              | Reference Authority for local dev. Issues PASETO tokens, streams policy bundles.                         |
+| `firma-grpc-interceptor-proto` | Contract for the in-process gRPC hook interceptor.                                                                                                                      |
+| `firma-sidecar`                | The enforcement binary — interceptors, pipeline, connector, audit, startup.                                                                                             |
+| `firma-authority`              | Reference Authority for local dev. Issues PASETO tokens, streams policy bundles.                                                                                        |
 
 ## 3. Top-level runtime
 
@@ -446,14 +446,14 @@ The AARM R4 five-decision set is emitted as proto-wire decision codes in
 audit events (`PASSTHROUGH` is serialized as `ALLOW` with an empty
 `token_id`):
 
-| Code | Meaning   | Source                                                                             |
-| ---- | --------- | ---------------------------------------------------------------------------------- |
-| `1`  | ALLOW     | Pipeline allowed and connector returned a response (any status). Also PASSTHROUGH. |
-| `2`  | DENY      | Pipeline denied, or connector reported `Network` / `InvalidRequest`.               |
-| `3`  | ABORT     | Approved call aborted mid-flight (`ConnectorError::Timeout`).                      |
-| `4`  | MODIFY    | AARM R4: a transformed version of the request was dispatched (audit records the `@modify` description). |
-| `5`  | STEP_UP   | AARM R4: blocked pending human approval (`DenyReason::StepUpRequired`).            |
-| `6`  | DEFER     | AARM R4: blocked and deferred for retry (`DenyReason::Deferred`).                  |
+| Code | Meaning | Source                                                                                                  |
+| ---- | ------- | ------------------------------------------------------------------------------------------------------- |
+| `1`  | ALLOW   | Pipeline allowed and connector returned a response (any status). Also PASSTHROUGH.                      |
+| `2`  | DENY    | Pipeline denied, or connector reported `Network` / `InvalidRequest`.                                    |
+| `3`  | ABORT   | Approved call aborted mid-flight (`ConnectorError::Timeout`).                                           |
+| `4`  | MODIFY  | AARM R4: a transformed version of the request was dispatched (audit records the `@modify` description). |
+| `5`  | STEP_UP | AARM R4: blocked pending human approval (`DenyReason::StepUpRequired`).                                 |
+| `6`  | DEFER   | AARM R4: blocked and deferred for retry (`DenyReason::Deferred`).                                       |
 
 ABORT is distinct from DENY because the pipeline did approve the call;
 the token stays ACTIVE and the agent sees a gateway-timeout-class error.
