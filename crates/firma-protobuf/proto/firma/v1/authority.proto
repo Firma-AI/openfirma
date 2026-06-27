@@ -1,0 +1,112 @@
+syntax = "proto3";
+
+package firma.v1;
+
+import "firma/v1/types.proto";
+import "google/protobuf/timestamp.proto";
+
+// =============================================================================
+// AuthorityService — Control-Plane Contract
+// =============================================================================
+//
+// The Authority is the control-plane component that evaluates policies at
+// issuance time and issues capability tokens. It defines the permission
+// perimeter before execution begins (scope, budget, expiry) and distributes
+// policy bundles and revocations to Sidecars.
+//
+// Key invariant: the Authority is contacted only at pre-flight (capability
+// issuance) and for streaming updates. It is never on the hot path —
+// all enforcement is fully local in the Sidecar.
+//
+// The permission perimeter defined by the Authority is a ceiling:
+// the Sidecar can enforce within it but cannot extend or override it.
+// =============================================================================
+
+service AuthorityService {
+  // IssueCapability evaluates the agent's request against loaded Cedar policies
+  // and, on success, returns a signed capability token. On denial, returns a
+  // reason code. Called at session start or during a session to obtain
+  // additional or refreshed capability tokens.
+  rpc IssueCapability(IssueCapabilityRequest) returns (IssueCapabilityResponse);
+
+  // WatchPolicyBundle is a persistent server-streaming call. Immediately streams
+  // the current policy bundle on connect, then pushes incremental updates.
+  // If this stream disconnects and the Sidecar's cached bundle TTL expires
+  // (default 30s), the Sidecar enters fail-closed mode.
+  rpc WatchPolicyBundle(WatchPolicyBundleRequest) returns (stream PolicyBundleUpdate);
+
+  // WatchRevocations is a persistent server-streaming call that pushes
+  // revocation events. The Sidecar Stage 1 maintains a bloom filter and
+  // LRU cache from this stream, enabling sub-microsecond revocation checks
+  // with no network I/O.
+  rpc WatchRevocations(WatchRevocationsRequest) returns (stream RevocationEvent);
+}
+
+// SidecarCredentials are the credentials a Sidecar presents on every Authority
+// request. The Authority resolves (workspace_id, sidecar_id) and verifies
+// pre_shared_key against the stored hash.
+message SidecarCredentials {
+  // Workspace the Sidecar belongs to.
+  string workspace_id = 1;
+  // Authority-assigned Sidecar identity.
+  string sidecar_id = 2;
+  // The Sidecar's pre-shared key, verified against the Authority's stored hash.
+  string pre_shared_key = 3;
+}
+
+// IssueCapabilityRequest carries the agent's identity and requested scope
+// for capability issuance.
+message IssueCapabilityRequest {
+  // Identity of the requesting agent.
+  string agent_id = 1;
+  // Actions the agent is requesting authorization for.
+  repeated string requested_actions = 2;
+  // Resource scope the agent needs access to.
+  string resource_scope = 3;
+  // Session identifier for correlation.
+  string session_id = 4;
+  // Requested TTL in seconds for the capability token.
+  int32 requested_ttl_seconds = 5;
+  // Credentials authenticating the connecting Sidecar.
+  SidecarCredentials credentials = 6;
+}
+
+// IssueCapabilityResponse returns either a signed capability token
+// or a denial with reason.
+message IssueCapabilityResponse {
+  // True if the capability was granted.
+  bool granted = 1;
+  // The signed capability token (populated only if granted).
+  CapabilityToken token = 2;
+  // Reason code if denied (e.g., "POLICY_DENIED", "SCOPE_EXCEEDED").
+  string deny_reason = 3;
+  // Human-readable denial message for debugging.
+  string deny_message = 4;
+}
+
+// WatchPolicyBundleRequest initiates a policy bundle subscription.
+message WatchPolicyBundleRequest {
+  // The sidecar's current bundle version (empty string on first connect).
+  // Authority uses this to determine whether to send a full bundle or
+  // incremental update.
+  string current_version = 1;
+  // Credentials authenticating the connecting Sidecar.
+  SidecarCredentials credentials = 2;
+}
+
+// PolicyBundleUpdate wraps a policy bundle push from Authority to Sidecar.
+message PolicyBundleUpdate {
+  // The updated policy bundle.
+  PolicyBundle bundle = 1;
+  // Server timestamp of this update.
+  google.protobuf.Timestamp updated_at = 2;
+}
+
+// WatchRevocationsRequest initiates a revocation event subscription.
+message WatchRevocationsRequest {
+  // Timestamp of the last revocation event the sidecar received.
+  // Authority replays any events after this timestamp on reconnect.
+  google.protobuf.Timestamp since = 1;
+  // Credentials authenticating the connecting Sidecar.
+  SidecarCredentials credentials = 2;
+}
