@@ -10,11 +10,11 @@ description = "Runtime state contracts and local liveness primitives shared by O
 workspace = true
 
 [dependencies]
+insta = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
-insta = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true }
