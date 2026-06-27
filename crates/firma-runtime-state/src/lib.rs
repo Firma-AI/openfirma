@@ -15,9 +15,3 @@ pub use runtime_paths::{capabilities_dir_from, default_runtime_dir, run_dir_from
 pub use sidecar_markers::{MetadataFile, SidecarEntry, gc_stale, get, list};
 pub use state_dir::resolve_state_dir;
 pub use status::State;
-
-/// Return whether `pid` appears to identify a live process.
-#[must_use]
-pub fn is_pid_alive(pid: UserProcessId) -> bool {
-    pid.is_alive()
-}
