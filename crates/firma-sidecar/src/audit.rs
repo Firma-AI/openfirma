@@ -88,10 +88,13 @@ pub enum AuditSinkError {
 
 /// Enforcement outcome as recorded in the audit log.
 ///
-/// Serialized as its numeric proto wire value (`1` = ALLOW, `2` = DENY,
-/// `3` = ABORT), matching the `i32` `decision` field on [`AuditPayload`] and
-/// [`ExecutionEvent`]. This typed view is for consumers that read back the
-/// JSON audit records and want to match on the outcome instead of bare ints.
+/// Serialized as its numeric proto wire value (`1` = `ALLOW`, `2` = `DENY`,
+/// `3` = `ABORT`, `4` = `MODIFY`, `5` = `STEP_UP`, `6` = `DEFER`), matching the
+/// `i32` `decision` field on [`AuditPayload`] and [`ExecutionEvent`] and the
+/// `firma.v1.EnforcementDecision` proto enum (AARM R4). This typed view is
+/// for consumers that read back the JSON audit records and want to match on
+/// the outcome instead of bare ints. `PASSTHROUGH` is serialized as
+/// `ALLOW` (`1`) with an empty `token_id`.
 #[derive(
     Clone,
     Copy,
@@ -111,6 +114,12 @@ pub enum Decision {
     Deny = 2,
     /// Critical failure aborted the request.
     Abort = 3,
+    /// AARM R4 `MODIFY`: a transformed version of the request was dispatched.
+    Modify = 4,
+    /// AARM R4 `STEP_UP`: the request was blocked pending human approval.
+    StepUp = 5,
+    /// AARM R4 `DEFER`: the request was blocked and deferred for retry.
+    Defer = 6,
 }
 
 /// Lightweight audit payload sent from the pipeline hot path through the channel.

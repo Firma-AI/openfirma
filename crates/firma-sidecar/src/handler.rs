@@ -326,7 +326,16 @@ impl RequestHandler {
                 envelope,
                 credentials,
                 ..
+            }
+            | EnforcementDecision::Modify {
+                envelope,
+                credentials,
+                ..
             } => {
+                // AARM R4 `MODIFY` dispatches like `ALLOW` in V1: the
+                // modification is recorded in the audit trail (decision =
+                // MODIFY) and the request is forwarded. The `modifications`
+                // description is opaque to the connector layer in V1.
                 let mut dispatch_envelope = *envelope;
                 hydrate_dispatch_http_fields(&mut dispatch_envelope, &request);
                 let (response, outcome) = self.dispatch(dispatch_envelope, credentials).await;
@@ -372,6 +381,36 @@ impl RequestHandler {
             EnforcementDecision::Abort { reason, detail, .. } => {
                 HandledResponse::Aborted { reason, detail }
             }
+            EnforcementDecision::StepUp {
+                challenge,
+                envelope,
+                ..
+            } => {
+                // AARM R4 `STEP_UP` blocks the call. The agent receives a
+                // structured denial whose reason tells it to request human
+                // approval and retry.
+                let context = denial_context_of(envelope.as_ref());
+                HandledResponse::Deny {
+                    reason: firma_core::DenyReason::StepUpRequired,
+                    detail: challenge,
+                    context,
+                }
+            }
+            EnforcementDecision::Defer {
+                retry_after_ms,
+                envelope,
+                ..
+            } => {
+                // AARM R4 `DEFER` blocks the call. The agent receives a
+                // structured denial whose reason tells it to retry after
+                // the backoff window.
+                let context = denial_context_of(envelope.as_ref());
+                HandledResponse::Deny {
+                    reason: firma_core::DenyReason::Deferred,
+                    detail: format!("retry_after_ms: {retry_after_ms}"),
+                    context,
+                }
+            }
         };
 
         if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
@@ -389,7 +428,11 @@ impl RequestHandler {
         let (decision, mut audit_payload) = self.pipeline.enforce(&request, session_id).await;
 
         let outcome = match decision {
-            EnforcementDecision::Allow { .. } | EnforcementDecision::Passthrough { .. } => {
+            EnforcementDecision::Allow { .. }
+            | EnforcementDecision::Passthrough { .. }
+            | EnforcementDecision::Modify { .. } => {
+                // AARM R4 `MODIFY` proceeds like `ALLOW` for tunnel
+                // establishment; the modification is audit-recorded.
                 audit_payload.dispatch_status = 200;
                 ConnectDecision::Allow
             }
@@ -399,6 +442,14 @@ impl RequestHandler {
             EnforcementDecision::Abort { reason, detail, .. } => {
                 ConnectDecision::Abort { reason, detail }
             }
+            EnforcementDecision::StepUp { challenge, .. } => ConnectDecision::Deny {
+                reason: firma_core::DenyReason::StepUpRequired,
+                detail: challenge,
+            },
+            EnforcementDecision::Defer { retry_after_ms, .. } => ConnectDecision::Deny {
+                reason: firma_core::DenyReason::Deferred,
+                detail: format!("retry_after_ms: {retry_after_ms}"),
+            },
         };
 
         if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
@@ -421,10 +472,15 @@ impl RequestHandler {
         let (decision, audit_payload) = self.pipeline.enforce(&request, session_id).await;
 
         match decision {
-            EnforcementDecision::Allow { credentials, .. } => UpgradeAuthorization::Allow {
-                credentials,
-                audit_payload: Box::new(audit_payload),
-            },
+            EnforcementDecision::Allow { credentials, .. }
+            | EnforcementDecision::Modify { credentials, .. } => {
+                // AARM R4 `MODIFY` authorizes the upgrade like `ALLOW`;
+                // the modification is audit-recorded (decision = `MODIFY`).
+                UpgradeAuthorization::Allow {
+                    credentials,
+                    audit_payload: Box::new(audit_payload),
+                }
+            }
             EnforcementDecision::Passthrough { .. } => UpgradeAuthorization::Allow {
                 credentials: InjectedCredentials::empty(),
                 audit_payload: Box::new(audit_payload),
@@ -440,6 +496,24 @@ impl RequestHandler {
                     tracing::error!("failed to send audit event: {err}");
                 }
                 UpgradeAuthorization::Abort { reason, detail }
+            }
+            EnforcementDecision::StepUp { challenge, .. } => {
+                if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
+                    tracing::error!("failed to send audit event: {err}");
+                }
+                UpgradeAuthorization::Deny {
+                    reason: firma_core::DenyReason::StepUpRequired,
+                    detail: challenge,
+                }
+            }
+            EnforcementDecision::Defer { retry_after_ms, .. } => {
+                if let Err(err) = self.audit_sink_sender.send(audit_payload).await {
+                    tracing::error!("failed to send audit event: {err}");
+                }
+                UpgradeAuthorization::Deny {
+                    reason: firma_core::DenyReason::Deferred,
+                    detail: format!("retry_after_ms: {retry_after_ms}"),
+                }
             }
         }
     }

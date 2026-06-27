@@ -36,11 +36,48 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use firma_core::token::matches_resource_scope;
-use firma_core::{AgentId, CapabilityClaims, DenyReason};
+use firma_core::{AgentId, CapabilityClaims, DenyReason, ModificationSpec};
 
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
 use crate::enforcement::session_state::RuntimeSignals;
 use crate::normalizer::NormalizedEnvelope;
+
+/// The verdict a policy engine returns for one evaluated action.
+///
+/// Cedar natively produces only `Allow`/`Deny`. The three remediation
+/// variants (`Modify`, `StepUp`, `Defer`) are sourced from `@modify` /
+/// `@step_up` / `@defer` annotations on `forbid` policies — see
+/// [`CedarPolicyEvaluator`](super::cedar_evaluator::CedarPolicyEvaluator).
+/// This is the AARM R4 five-decision set at the engine layer; the pipeline
+/// lifts it into [`EnforcementDecision`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicyVerdict {
+    /// Request authorized. Proceed to envelope assembly + dispatch.
+    Allow,
+    /// Request denied by policy. Mapped to a hard
+    /// [`EnforcementDecision::Deny`] by the enforcer.
+    Deny,
+    /// AARM R4 `MODIFY`: execute a transformed version. `modifications`
+    /// is sourced from the `@modify("…")` annotation.
+    Modify {
+        /// Description of the transformation to apply.
+        modifications: ModificationSpec,
+    },
+    /// AARM R4 `STEP_UP`: require human approval / stronger authn before
+    /// proceeding. `challenge` is sourced from the `@step_up("…")`
+    /// annotation; `retry_after_ms` is supplied by the pipeline.
+    StepUp {
+        /// Human-readable challenge / approval description.
+        challenge: String,
+    },
+    /// AARM R4 `DEFER`: delay execution pending additional context or
+    /// rate budget. `retry_after_ms` is sourced from the `@defer("<ms>")`
+    /// annotation.
+    Defer {
+        /// Backoff window before the agent should retry, in milliseconds.
+        retry_after_ms: u64,
+    },
+}
 
 /// Trait for policy evaluation — abstracts Cedar or any other policy engine.
 ///
@@ -50,6 +87,11 @@ use crate::normalizer::NormalizedEnvelope;
 pub trait PolicyEvaluation: Send + Sync {
     /// Evaluate policy against the given context attributes.
     /// Returns true for ALLOW, false for DENY.
+    ///
+    /// Implementations that can express AARM R4 remediation outcomes
+    /// (`MODIFY`, `STEP_UP`, `DEFER`) should override
+    /// [`Self::evaluate_verdict`] instead; this bool view is retained for
+    /// backward compatibility with deny-all / allow-all test stubs.
     ///
     /// # Errors
     ///
@@ -62,6 +104,33 @@ pub trait PolicyEvaluation: Send + Sync {
         resource: &str,
         context: &serde_json::Value,
     ) -> Result<bool, String>;
+
+    /// Evaluate policy and return the full AARM R4 verdict, including
+    /// remediation outcomes.
+    ///
+    /// The default delegates to [`Self::evaluate`] and collapses the bool to
+    /// [`PolicyVerdict::Allow`] / [`PolicyVerdict::Deny`], so deny-all and
+    /// allow-all test stubs keep working without modification. The concrete
+    /// Cedar evaluator overrides this to surface `@modify` / `@step_up` /
+    /// `@defer` annotations as remediation verdicts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if policy evaluation fails (e.g., malformed
+    /// context or engine error).
+    fn evaluate_verdict(
+        &self,
+        principal: &AgentId,
+        action: &str,
+        resource: &str,
+        context: &serde_json::Value,
+    ) -> Result<PolicyVerdict, String> {
+        if self.evaluate(principal, action, resource, context)? {
+            Ok(PolicyVerdict::Allow)
+        } else {
+            Ok(PolicyVerdict::Deny)
+        }
+    }
 
     /// Check if the policy bundle is still fresh (TTL not expired).
     fn is_fresh(&self) -> bool;
@@ -102,22 +171,23 @@ impl ConstraintEnforcer {
 
     /// Evaluate the request against Cedar policies.
     ///
-    /// Returns `Ok(())` if the request passes all checks, or
-    /// `Err(EnforcementDecision::Deny)` if any check fails.
-    /// The pipeline is responsible for constructing the `Allow` decision
-    /// with a fully populated `ExecutionEnvelope`.
+    /// Returns `Ok(PolicyVerdict)` for a passing or remediation outcome
+    /// (`Allow`, `Modify`, `StepUp`, `Defer`), or
+    /// `Err(EnforcementDecision::Deny)` if any check fails (scope, freshness,
+    /// or a hard policy deny). The pipeline is responsible for lifting the
+    /// verdict into a fully populated [`EnforcementDecision`].
     ///
     /// Sequence:
     /// 1. Scope check -- is `action_class` in the token's `action_set`?
     /// 2. Check policy availability
     /// 3. Check policy bundle freshness
     /// 4. Build Cedar context
-    /// 5. Evaluate Cedar policies
+    /// 5. Evaluate Cedar policies (incl. AARM R4 remediation annotations)
     ///
     /// # Errors
     ///
     /// Returns `EnforcementDecision::Deny` if scope check, bundle freshness,
-    /// or Cedar policy evaluation fails.
+    /// or Cedar policy evaluation fails, or if the policy denies the action.
     #[expect(
         clippy::result_large_err,
         reason = "domain decision carries denial context"
@@ -127,7 +197,7 @@ impl ConstraintEnforcer {
         envelope: &NormalizedEnvelope,
         claims: &CapabilityClaims,
         signals: &RuntimeSignals,
-    ) -> Result<(), EnforcementDecision> {
+    ) -> Result<PolicyVerdict, EnforcementDecision> {
         // Step 1: Scope check (pre-Cedar gate)
         self.check_scope(envelope, claims)?;
 
@@ -160,16 +230,28 @@ impl ConstraintEnforcer {
         // Step 4: Build context
         let context = self.build_context(envelope, claims, signals);
 
-        // Step 5: Evaluate policies
+        // Step 5: Evaluate policies (verdict carries AARM R4 remediation)
         let resource_display = envelope.intent.resource_display();
-        match self.policy.evaluate(
-            &claims.agent_id,
-            &envelope.intent.action_class,
-            &resource_display,
-            &context,
-        ) {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(EnforcementDecision::Deny {
+        let verdict = self
+            .policy
+            .evaluate_verdict(
+                &claims.agent_id,
+                &envelope.intent.action_class,
+                &resource_display,
+                &context,
+            )
+            .map_err(|err| EnforcementDecision::Deny {
+                reason: DenyReason::FailClosed,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::PolicyEvaluation,
+                ),
+                detail: format!("policy evaluation failed; failing closed: {err}"),
+                envelope: Some(envelope.clone()),
+                identity: None,
+            })?;
+
+        if matches!(verdict, PolicyVerdict::Deny) {
+            return Err(EnforcementDecision::Deny {
                 reason: DenyReason::PolicyDenied,
                 stage: EnforcementStage::ConstraintEnforcement(
                     ConstraintEnforcementStage::PolicyEvaluation,
@@ -180,23 +262,16 @@ impl ConstraintEnforcer {
                 ),
                 envelope: Some(envelope.clone()),
                 identity: None,
-            }),
-            Err(err) => Err(EnforcementDecision::Deny {
-                reason: DenyReason::FailClosed,
-                stage: EnforcementStage::ConstraintEnforcement(
-                    ConstraintEnforcementStage::PolicyEvaluation,
-                ),
-                detail: format!("policy evaluation failed; failing closed: {err}"),
-                envelope: Some(envelope.clone()),
-                identity: None,
-            }),
+            });
         }
+        Ok(verdict)
     }
 
     /// Timeout-aware Stage 2 evaluation.
     ///
     /// Policy evaluation is bounded and any timeout yields a fail-closed DENY
-    /// with `EnforcementTimeout`.
+    /// with `EnforcementTimeout`. Otherwise mirrors [`Self::evaluate`],
+    /// returning the AARM R4 [`PolicyVerdict`] on the `Ok` path.
     ///
     /// # Errors
     ///
@@ -204,14 +279,14 @@ impl ConstraintEnforcer {
     /// policy bundle is unavailable (`FailClosed`) or stale
     /// (`PolicyBundleStale`), policy evaluation times out
     /// (`EnforcementTimeout`), or the policy evaluator returns an error
-    /// (`FailClosed`).
+    /// (`FailClosed`), or the policy denies the action (`PolicyDenied`).
     pub async fn evaluate_with_timeout(
         &self,
         envelope: &NormalizedEnvelope,
         claims: &CapabilityClaims,
         signals: &RuntimeSignals,
         timeout: Duration,
-    ) -> Result<(), EnforcementDecision> {
+    ) -> Result<PolicyVerdict, EnforcementDecision> {
         // Step 1: Scope check (pre-Cedar gate)
         self.check_scope(envelope, claims)?;
 
@@ -248,10 +323,10 @@ impl ConstraintEnforcer {
         let action = envelope.intent.action_class.clone();
         let resource = envelope.intent.resource_display();
         let eval_task = tokio::task::spawn_blocking(move || {
-            policy.evaluate(&principal, &action, &resource, &context)
+            policy.evaluate_verdict(&principal, &action, &resource, &context)
         });
 
-        let eval_result = tokio::time::timeout(timeout, eval_task)
+        let verdict = tokio::time::timeout(timeout, eval_task)
             .await
             .map_err(|_| EnforcementDecision::Deny {
                 reason: DenyReason::EnforcementTimeout,
@@ -273,11 +348,19 @@ impl ConstraintEnforcer {
                 detail: format!("policy evaluation task failed; failing closed: {join_err}"),
                 envelope: Some(envelope.clone()),
                 identity: None,
+            })?
+            .map_err(|err| EnforcementDecision::Deny {
+                reason: DenyReason::FailClosed,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::PolicyEvaluation,
+                ),
+                detail: format!("policy evaluation failed; failing closed: {err}"),
+                envelope: Some(envelope.clone()),
+                identity: None,
             })?;
 
-        match eval_result {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(EnforcementDecision::Deny {
+        if matches!(verdict, PolicyVerdict::Deny) {
+            return Err(EnforcementDecision::Deny {
                 reason: DenyReason::PolicyDenied,
                 stage: EnforcementStage::ConstraintEnforcement(
                     ConstraintEnforcementStage::PolicyEvaluation,
@@ -289,17 +372,9 @@ impl ConstraintEnforcer {
                 ),
                 envelope: Some(envelope.clone()),
                 identity: None,
-            }),
-            Err(err) => Err(EnforcementDecision::Deny {
-                reason: DenyReason::FailClosed,
-                stage: EnforcementStage::ConstraintEnforcement(
-                    ConstraintEnforcementStage::PolicyEvaluation,
-                ),
-                detail: format!("policy evaluation failed; failing closed: {err}"),
-                envelope: Some(envelope.clone()),
-                identity: None,
-            }),
+            });
         }
+        Ok(verdict)
     }
 
     /// Scope check: verify `action_class` is in the token's allowed action set.
