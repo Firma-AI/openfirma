@@ -215,6 +215,7 @@ mod tests {
     use crate::enforcement::capability_map::CapabilityEntry;
     use chrono::Utc;
     use firma_core::CapabilityClaims;
+    use std::sync::{Arc, Mutex};
 
     struct MockVerifier {
         claims: CapabilityClaims,
@@ -223,6 +224,29 @@ mod tests {
     impl TokenVerifier for MockVerifier {
         fn verify(&self, _raw_token: &str) -> Result<CapabilityClaims, TokenError> {
             Ok(self.claims.clone())
+        }
+    }
+
+    #[derive(Clone)]
+    struct MutableVerifier {
+        claims: Arc<Mutex<CapabilityClaims>>,
+    }
+
+    impl MutableVerifier {
+        fn new(claims: CapabilityClaims) -> Self {
+            Self {
+                claims: Arc::new(Mutex::new(claims)),
+            }
+        }
+
+        fn set(&self, claims: CapabilityClaims) {
+            *self.claims.lock().expect("not poisoned") = claims;
+        }
+    }
+
+    impl TokenVerifier for MutableVerifier {
+        fn verify(&self, _raw_token: &str) -> Result<CapabilityClaims, TokenError> {
+            Ok(self.claims.lock().expect("not poisoned").clone())
         }
     }
 
@@ -499,6 +523,85 @@ mod tests {
                 "every TokenVerifier error must produce DENY"
             );
             assert!(result.unwrap_err().is_deny());
+        }
+    }
+
+    #[test]
+    fn test_enforce_single_agent_tenancy_mismatch_denies() {
+        let mut first_claims = valid_claims();
+        first_claims.agent_id = "agent_first"
+            .parse()
+            .expect("literal agent id");
+        let verifier = MutableVerifier::new(first_claims);
+
+        let validator = CapabilityValidator::new(
+            test_capability_map(),
+            Box::new(verifier.clone()),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
+            Duration::from_secs(0),
+            TenancyMode::SingleAgent,
+        );
+
+        let envelope = NormalizedEnvelope {
+            intent: firma_core::ExecutionIntent {
+                action_class: "communication.external.send".to_string(),
+                resource: firma_core::ExecutionIntent::resource_map_from("api.openai.com/v1/chat"),
+                params: firma_core::ActionParams::Http(firma_core::HttpParams {
+                    method: firma_core::HttpMethod::POST,
+                    headers: std::collections::HashMap::new(),
+                    body: None,
+                    query: std::collections::HashMap::new(),
+                }),
+                raw_transport: "https".to_string(),
+                raw_action_ref: "POST /v1/chat".to_string(),
+            },
+            timestamp: Utc::now(),
+        };
+
+        let first = validator.enforce(&envelope, "sess_001");
+        assert!(
+            first.is_ok(),
+            "first call with agent_first should succeed and establish OnceLock"
+        );
+
+        let mut second_claims = valid_claims();
+        second_claims.agent_id = "agent_second"
+            .parse()
+            .expect("literal agent id");
+        verifier.set(second_claims);
+
+        let second = validator.enforce(&envelope, "sess_001");
+        assert!(
+            second.is_err(),
+            "second call with mismatched agent must deny"
+        );
+        let decision = second.unwrap_err();
+        assert!(decision.is_deny());
+        assert_eq!(
+            decision.deny_reason(),
+            Some(firma_core::DenyReason::TenantMismatch)
+        );
+        assert_eq!(
+            decision.stage(),
+            Some(EnforcementStage::CapabilityValidation(
+                CapabilityValidationStage::TokenValidation
+            ))
+        );
+
+        match &decision {
+            EnforcementDecision::Deny {
+                identity,
+                envelope: deny_envelope,
+                detail,
+                ..
+            } => {
+                let identity = identity.as_ref().expect("deny must carry identity");
+                assert_eq!(identity.agent_id, "agent_second");
+                assert!(deny_envelope.is_some(), "deny must carry envelope");
+                assert!(detail.contains("agent_first"));
+                assert!(detail.contains("agent_second"));
+            }
+            _ => panic!("expected Deny variant"),
         }
     }
 }
