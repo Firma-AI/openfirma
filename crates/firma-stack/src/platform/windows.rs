@@ -170,7 +170,7 @@ mod tests {
         let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, wide.as_ptr()) };
         assert!(!event.is_null(), "CreateEventW failed");
 
-        WindowsPlatform::signal_soft(pid).expect("signal_soft");
+        WindowsPlatform::signal_soft(pid.get()).expect("signal_soft");
 
         let waited = unsafe { WaitForSingleObject(event, 5_000) };
         unsafe { CloseHandle(event) };
@@ -187,8 +187,8 @@ mod tests {
     fn signal_soft_errors_when_event_absent() {
         // PID with no matching event — `OpenEventW` must return null.
         let pid = UserProcessId::new(0xDEAD_BEEF).expect("synthetic pid is non-zero");
-        let err =
-            WindowsPlatform::signal_soft(pid).expect_err("signal_soft must fail with no event");
+        let err = WindowsPlatform::signal_soft(pid.get())
+            .expect_err("signal_soft must fail with no event");
         let msg = err.to_string();
         assert!(
             msg.contains("OpenEventW"),
