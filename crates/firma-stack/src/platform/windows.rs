@@ -19,7 +19,7 @@ use windows_sys::Win32::System::Threading::{
 use crate::error::{Result, StackError};
 use crate::platform::{Group, Platform, SpawnedChild};
 use crate::shutdown_event::windows_shutdown_event_name;
-use firma_runtime_state::UserProcessId;
+use firma_runtime_state::{ChildExt as _, UserProcessId};
 
 pub struct WindowsPlatform;
 
@@ -65,8 +65,7 @@ impl Platform for WindowsPlatform {
                 .to_string(),
             source,
         })?;
-        let pid = UserProcessId::new(child.id())
-            .ok_or_else(|| StackError::Platform("spawned child returned reserved pid 0".into()))?;
+        let pid = child.process_id();
         // AssignProcessToJobObject requires PROCESS_SET_QUOTA and PROCESS_TERMINATE
         // on the process handle (per MSDN). Opening with only
         // PROCESS_QUERY_LIMITED_INFORMATION makes the assignment fail with

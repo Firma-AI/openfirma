@@ -15,7 +15,7 @@ use wait_timeout::ChildExt;
 
 use crate::error::RunError;
 use crate::identity::SandboxId;
-use firma_runtime_state::UserProcessId;
+use firma_runtime_state::{ChildExt as _, UserProcessId};
 
 /// Per-spec default ready-line wait. CLI flag overrides.
 pub const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
@@ -202,13 +202,7 @@ impl AuthoritySupervisor {
                     reason: format!("spawn firma authority: {e}"),
                     log_path: log_path.clone(),
                 })?;
-            let Some(try_pid) = UserProcessId::new(try_child.id()) else {
-                let _ = try_child.kill();
-                let _ = try_child.wait();
-                return Err(RunError::Internal(
-                    "authority returned reserved pid 0".into(),
-                ));
-            };
+            let try_pid = try_child.process_id();
             let stderr =
                 try_child
                     .stderr

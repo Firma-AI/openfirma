@@ -24,7 +24,7 @@ use wait_timeout::ChildExt;
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 use crate::identity::SandboxId;
-use firma_runtime_state::UserProcessId;
+use firma_runtime_state::{ChildExt as _, UserProcessId};
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 /// Per-spec default ready-line wait. CLI flag overrides this value.
@@ -198,11 +198,7 @@ impl SidecarSupervisor {
                     reason: format!("spawn firma sidecar: {error}"),
                     log_path: log_path.clone(),
                 })?;
-            let Some(pid) = UserProcessId::new(child.id()) else {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(RunError::Internal("sidecar returned reserved pid 0".into()));
-            };
+            let pid = child.process_id();
 
             let stderr = child
                 .stderr

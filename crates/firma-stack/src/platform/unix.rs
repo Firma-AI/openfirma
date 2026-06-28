@@ -11,7 +11,7 @@ use nix::unistd::Pid;
 
 use crate::error::{Result, StackError};
 use crate::platform::{Group, Platform, SpawnedChild};
-use firma_runtime_state::UserProcessId;
+use firma_runtime_state::{ChildExt as _, UserProcessId};
 
 pub struct UnixPlatform;
 
@@ -50,8 +50,7 @@ impl Platform for UnixPlatform {
                 .to_string(),
             source,
         })?;
-        let pid = UserProcessId::new(child.id())
-            .ok_or_else(|| StackError::Platform("spawned child returned reserved pid 0".into()))?;
+        let pid = child.process_id();
         std::mem::forget(child);
         Ok(SpawnedChild { pid })
     }

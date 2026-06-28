@@ -3,8 +3,10 @@
 use std::fmt;
 use std::num::NonZeroU32;
 
+pub use child_ext::ChildExt;
 use serde::{Deserialize, Serialize};
 
+mod child_ext;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
@@ -32,7 +34,6 @@ impl UserProcessId {
         self.0.get()
     }
 }
-
 impl TryFrom<u32> for UserProcessId {
     type Error = UserProcessIdError;
 
