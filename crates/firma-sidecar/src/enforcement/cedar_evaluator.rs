@@ -58,6 +58,22 @@ pub enum CedarEvaluatorError {
     /// via `Box<dyn Error>` while preserving the source chain.
     #[error("failed to build Cedar request: {0}")]
     RequestBuild(#[source] Box<dyn std::error::Error + Send + Sync>),
+
+    /// A `forbid` policy carried a remediation annotation (`@modify`,
+    /// `@step_up`, `@defer`) whose value could not be interpreted. The bundle
+    /// is rejected at load time so the caller retains the previous good
+    /// snapshot; the operator gets an immediate, actionable error instead of a
+    /// silent semantic divergence between the authored policy and the one
+    /// actually enforced.
+    #[error(
+        "malformed @{annotation} annotation on policy `{policy_id}`: {reason} (raw: {raw_value})"
+    )]
+    MalformedAnnotation {
+        policy_id: String,
+        annotation: &'static str,
+        raw_value: String,
+        reason: String,
+    },
 }
 
 /// Concrete Cedar policy evaluator for Sidecar Stage 2.
@@ -130,7 +146,7 @@ impl CedarPolicyEvaluator {
         let (schema, _warnings) = Schema::from_cedarschema_str(schema_src)
             .map_err(|e| CedarEvaluatorError::SchemaParse(Box::new(e)))?;
 
-        let remediation = build_remediation_map(&policy_set);
+        let remediation = build_remediation_map(&policy_set)?;
 
         Ok(Self {
             policy_set,
@@ -181,11 +197,15 @@ impl CedarPolicyEvaluator {
 /// remediation annotations and build a `PolicyId -> Remediation` map.
 ///
 /// Only `forbid` policies are eligible: a `permit` cannot raise a deny, so a
-/// remediation annotation on it has no effect on the decision. Malformed
-/// annotations (e.g. `@defer("not-a-number")`) are logged and skipped so the
-/// policy degrades to a plain `forbid` (fail-closed per call), not a
-/// fail-bundle — a single bad annotation never blocks bundle installation.
-fn build_remediation_map(policy_set: &PolicySet) -> HashMap<PolicyId, Remediation> {
+/// remediation annotation on it has no effect on the decision. A malformed
+/// annotation (e.g. `@defer("not-a-number")`) rejects the entire bundle at
+/// load time — the caller (`apply_bundle`) keeps the previous good snapshot
+/// active, so the operator gets an immediate, actionable error rather than a
+/// silent semantic divergence between the authored policy and the one
+/// actually enforced.
+fn build_remediation_map(
+    policy_set: &PolicySet,
+) -> Result<HashMap<PolicyId, Remediation>, CedarEvaluatorError> {
     let mut map = HashMap::new();
     for policy in policy_set.policies() {
         // Remediation only applies to `forbid` policies. A `permit` policy
@@ -208,19 +228,18 @@ fn build_remediation_map(policy_set: &PolicySet) -> HashMap<PolicyId, Remediatio
                 Ok(ms) => {
                     map.insert(id, Remediation::Defer(ms));
                 }
-                Err(_) => {
-                    tracing::warn!(
-                        policy_id = %id,
-                        annotation = ANNOTATION_DEFER,
-                        raw_value = %value,
-                        "malformed @defer annotation: value is not a u64 retry_after_ms; \
-                         policy degrades to a plain forbid (fail-closed per call)"
-                    );
+                Err(parse_err) => {
+                    return Err(CedarEvaluatorError::MalformedAnnotation {
+                        policy_id: id.to_string(),
+                        annotation: ANNOTATION_DEFER,
+                        raw_value: value.to_string(),
+                        reason: parse_err.to_string(),
+                    });
                 }
             }
         }
     }
-    map
+    Ok(map)
 }
 
 /// Precedence when multiple remediation annotations fire on the same Deny.
@@ -997,16 +1016,19 @@ forbid(principal, action, resource);"#,
     }
 
     #[test]
-    fn malformed_defer_annotation_degrades_to_plain_deny() {
-        // `@defer("not-a-number")` cannot parse to u64 ms; the policy is
-        // kept as a plain forbid (fail-closed per call) rather than failing
-        // bundle installation.
-        let evaluator = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+    fn malformed_defer_annotation_rejects_bundle() {
+        // `@defer("not-a-number")` cannot parse to u64 ms; the bundle is
+        // rejected at load time so the caller keeps the previous good
+        // snapshot active rather than silently degrading to a plain deny.
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
             r#"@defer("not-a-number")
 forbid(principal, action, resource);"#,
         ))
-        .unwrap();
-        assert_eq!(verdict_for(&evaluator), PolicyVerdict::Deny);
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::MalformedAnnotation { .. }),
+            "expected MalformedAnnotation, got {err}"
+        );
     }
 
     #[test]
