@@ -10,7 +10,6 @@ use serde::Serialize;
 use tracing::{debug, trace};
 
 use crate::error::Result;
-use crate::platform::{Platform, SystemPlatform};
 use firma_runtime_state::pidfile;
 
 /// Snapshot of one component's runtime state.
@@ -70,7 +69,7 @@ fn probe(state_dir: &Path, name: &str) -> ComponentStatus {
         };
     };
 
-    if !SystemPlatform::is_alive(pid) {
+    if !pid.is_alive() {
         return ComponentStatus {
             name: name.into(),
             pid: Some(pid),

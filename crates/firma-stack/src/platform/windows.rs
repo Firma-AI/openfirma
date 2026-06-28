@@ -94,14 +94,14 @@ impl Platform for WindowsPlatform {
         Ok(SpawnedChild { pid })
     }
 
-    fn signal_soft(group_pid: UserProcessId) -> Result<()> {
+    fn signal_soft(group_pid: u32) -> Result<()> {
         // `GenerateConsoleCtrlEvent` only delivers to processes that share the
         // caller's console. The stop process runs in a different console than the
         // children, and the children are spawned with `CREATE_NO_WINDOW` (no
         // console at all). So we use a per-PID named event that the child
         // creates at startup (see `firma::signal`); opening + signalling it is
         // the cross-console graceful-shutdown signal.
-        let name = windows_shutdown_event_name(group_pid.get());
+        let name = windows_shutdown_event_name(group_pid);
         let wide: Vec<u16> = OsStr::new(&name)
             .encode_wide()
             .chain(std::iter::once(0))
@@ -128,8 +128,8 @@ impl Platform for WindowsPlatform {
         Ok(())
     }
 
-    fn signal_hard(group_pid: UserProcessId) -> Result<()> {
-        let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, group_pid.get()) };
+    fn signal_hard(group_pid: u32) -> Result<()> {
+        let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, group_pid) };
         if handle.is_null() {
             return Err(StackError::Platform("OpenProcess(TERMINATE) failed".into()));
         }
@@ -139,10 +139,6 @@ impl Platform for WindowsPlatform {
             return Err(StackError::Platform("TerminateProcess failed".into()));
         }
         Ok(())
-    }
-
-    fn is_alive(pid: UserProcessId) -> bool {
-        pid.is_alive()
     }
 }
 

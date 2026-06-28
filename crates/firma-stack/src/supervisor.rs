@@ -7,7 +7,6 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::error::Result;
-use crate::platform::{Platform, SystemPlatform};
 use firma_runtime_state::UserProcessId;
 
 #[derive(Clone, Copy)]
@@ -38,14 +37,14 @@ pub fn block_until_exit(children: Children) -> Result<()> {
             // confuse tonic graceful shutdown and leave children stuck.
             return Ok(());
         }
-        if !SystemPlatform::is_alive(children.authority_pid) {
+        if !children.authority_pid.is_alive() {
             warn!(
                 pid = %children.authority_pid,
                 "authority exited unexpectedly"
             );
             return Ok(());
         }
-        if !SystemPlatform::is_alive(children.sidecar_pid) {
+        if !children.sidecar_pid.is_alive() {
             warn!(pid = %children.sidecar_pid, "sidecar exited unexpectedly");
             return Ok(());
         }

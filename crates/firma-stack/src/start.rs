@@ -158,9 +158,9 @@ fn rollback(state_dir: &Path) {
     // original failure that triggered this path.
     for name in ["authority.pid", "sidecar.pid"] {
         if let Ok(Some(pid)) = pidfile::read(&state_dir.join(name))
-            && SystemPlatform::is_alive(pid)
+            && pid.is_alive()
         {
-            let _ = SystemPlatform::signal_hard(pid);
+            let _ = SystemPlatform::signal_hard(pid.get());
         }
     }
     for name in [
@@ -251,7 +251,7 @@ fn is_stack_stale(state_dir: &Path) -> Result<bool> {
     // Stale when no recorded supervisor or component pid is still alive.
     for name in ["stack.pid", "authority.pid", "sidecar.pid"] {
         if let Some(pid) = pidfile::read(&state_dir.join(name))?
-            && SystemPlatform::is_alive(pid)
+            && pid.is_alive()
         {
             return Ok(false);
         }
@@ -263,7 +263,7 @@ fn reap_stale(state_dir: &Path) -> Result<()> {
     for name in ["authority.pid", "sidecar.pid", "stack.pid"] {
         let path = state_dir.join(name);
         if let Some(pid) = pidfile::read(&path)?
-            && !SystemPlatform::is_alive(pid)
+            && !pid.is_alive()
         {
             pidfile::remove(&path)?;
         }

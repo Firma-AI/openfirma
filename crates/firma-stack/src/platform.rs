@@ -63,17 +63,14 @@ pub trait Platform {
     /// # Errors
     ///
     /// Returns a platform error if the signal cannot be delivered.
-    fn signal_soft(group_pid: UserProcessId) -> Result<()>;
+    fn signal_soft(group_pid: u32) -> Result<()>;
 
     /// Forcefully terminate the process group.
     ///
     /// # Errors
     ///
     /// Returns a platform error if termination cannot be requested.
-    fn signal_hard(group_pid: UserProcessId) -> Result<()>;
-
-    /// Report whether `pid` is currently a live process.
-    fn is_alive(pid: UserProcessId) -> bool;
+    fn signal_hard(group_pid: u32) -> Result<()>;
 }
 
 #[cfg(unix)]

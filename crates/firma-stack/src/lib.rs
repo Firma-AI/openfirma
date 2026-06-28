@@ -42,11 +42,4 @@ pub mod test_support {
         std::fs::write(state_dir.join(format!("{name}.listen")), "127.0.0.1:0\n")?;
         Ok(child.pid.get())
     }
-
-    #[doc(hidden)]
-    #[must_use]
-    pub fn is_process_alive(pid: u32) -> bool {
-        use crate::platform::{Platform, SystemPlatform};
-        firma_runtime_state::UserProcessId::new(pid).is_some_and(SystemPlatform::is_alive)
-    }
 }
