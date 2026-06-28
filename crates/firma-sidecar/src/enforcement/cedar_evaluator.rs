@@ -87,6 +87,18 @@ pub enum CedarEvaluatorError {
         policy_id: String,
         annotations: String,
     },
+
+    /// A `permit` policy carried a remediation annotation (`@modify` /
+    /// `@step_up` / `@defer`). The bundle is rejected at load time because a
+    /// `permit` cannot raise a deny, so a remediation annotation on it has no
+    /// effect — the author almost certainly attached it to the wrong policy.
+    #[error(
+        "policy `{policy_id}` (permit) carries remediation annotation(s) that only apply to forbid policies: {annotations}"
+    )]
+    AnnotationOnPermit {
+        policy_id: String,
+        annotations: String,
+    },
 }
 
 /// Concrete Cedar policy evaluator for Sidecar Stage 2.
@@ -208,34 +220,33 @@ impl CedarPolicyEvaluator {
     }
 }
 
-/// Scan the parsed `PolicySet` for `forbid` policies carrying AARM R4
-/// remediation annotations and build a `PolicyId -> Remediation` map.
+/// Scan the parsed `PolicySet` for remediation annotations and build a
+/// `PolicyId -> Remediation` map for `forbid` policies.
 ///
-/// Only `forbid` policies are eligible: a `permit` cannot raise a deny, so a
-/// remediation annotation on it has no effect on the decision. A malformed
-/// annotation (e.g. `@defer("not-a-number")`) rejects the entire bundle at
-/// load time — the caller (`apply_bundle`) keeps the previous good snapshot
-/// active, so the operator gets an immediate, actionable error rather than a
-/// silent semantic divergence between the authored policy and the one
-/// actually enforced.
+/// Validation is fail-fast at load time:
+/// - A `permit` policy carrying any remediation annotation is rejected
+///   (`AnnotationOnPermit`): a permit cannot raise a deny, so the annotation
+///   is a misconfiguration.
+/// - A `forbid` policy carrying more than one annotation is rejected
+///   (`ConflictingAnnotations`): the cross-policy precedence does not apply
+///   within a single policy.
+/// - A `@modify` or `@step_up` value that is empty or whitespace-only is
+///   rejected (`MalformedAnnotation`): these carry human-readable
+///   descriptions, and an empty value is a misconfiguration.
+/// - A `@defer` value that is not a `u64` or is zero is rejected
+///   (`MalformedAnnotation`).
+///
+/// On any of these errors the caller (`apply_bundle`) keeps the previous
+/// good snapshot active, so the operator gets an immediate, actionable error
+/// rather than a silent semantic divergence between the authored policy and
+/// the one actually enforced.
 fn build_remediation_map(
     policy_set: &PolicySet,
 ) -> Result<HashMap<PolicyId, Remediation>, CedarEvaluatorError> {
     let mut map = HashMap::new();
     for policy in policy_set.policies() {
-        // Remediation only applies to `forbid` policies. A `permit` policy
-        // cannot produce a Deny, so its annotation is irrelevant to the
-        // decision outcome.
-        if policy.effect() != Effect::Forbid {
-            continue;
-        }
         let id = policy.id().clone();
-        // Collect every remediation annotation present on this policy. At most
-        // one is allowed: the cross-policy precedence (`StepUp > Defer >
-        // Modify`) does not apply within a single policy, so multiple
-        // annotations would resolve by implicit check order rather than the
-        // documented semantics. Reject the bundle so the author splits the
-        // policy if they need different remediations for different conditions.
+        let is_forbid = policy.effect() == Effect::Forbid;
         let modify = policy.annotation(ANNOTATION_MODIFY).map(str::to_string);
         let step_up = policy.annotation(ANNOTATION_STEP_UP).map(str::to_string);
         let defer = policy.annotation(ANNOTATION_DEFER).map(str::to_string);
@@ -247,21 +258,40 @@ fn build_remediation_map(
         .into_iter()
         .flatten()
         .collect();
+
+        if present.is_empty() {
+            continue;
+        }
+
+        // Remediation annotations only make sense on `forbid` policies: a
+        // `permit` cannot raise a deny, so a remediation annotation on it is a
+        // misconfiguration. Reject the bundle so the operator removes it.
+        if !is_forbid {
+            return Err(CedarEvaluatorError::AnnotationOnPermit {
+                policy_id: id.to_string(),
+                annotations: present.join(", "),
+            });
+        }
+
+        // At most one annotation per `forbid` policy: the cross-policy
+        // precedence (`StepUp > Defer > Modify`) does not apply within a
+        // single policy, so multiple annotations would resolve by implicit
+        // check order rather than the documented semantics.
         if present.len() > 1 {
             return Err(CedarEvaluatorError::ConflictingAnnotations {
                 policy_id: id.to_string(),
                 annotations: present.join(", "),
             });
         }
+
+        // Exactly one annotation — validate its value.
         if let Some(value) = modify {
+            validate_non_empty(&id, ANNOTATION_MODIFY, &value)?;
             map.insert(id, Remediation::Modify(value));
-            continue;
-        }
-        if let Some(value) = step_up {
+        } else if let Some(value) = step_up {
+            validate_non_empty(&id, ANNOTATION_STEP_UP, &value)?;
             map.insert(id, Remediation::StepUp(value));
-            continue;
-        }
-        if let Some(value) = defer {
+        } else if let Some(value) = defer {
             match value.parse::<u64>() {
                 Ok(0) => {
                     return Err(CedarEvaluatorError::MalformedAnnotation {
@@ -286,6 +316,23 @@ fn build_remediation_map(
         }
     }
     Ok(map)
+}
+
+/// Reject an annotation value that is empty or whitespace-only.
+fn validate_non_empty(
+    id: &PolicyId,
+    annotation: &'static str,
+    value: &str,
+) -> Result<(), CedarEvaluatorError> {
+    if value.trim().is_empty() {
+        return Err(CedarEvaluatorError::MalformedAnnotation {
+            policy_id: id.to_string(),
+            annotation,
+            raw_value: value.to_string(),
+            reason: "value must not be empty or whitespace-only".to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// Precedence when multiple remediation annotations fire on the same Deny.
@@ -1102,15 +1149,45 @@ forbid(principal, action, resource);"#,
     }
 
     #[test]
-    fn modify_annotation_on_permit_is_ignored() {
-        // A `permit` cannot raise a deny, so its remediation annotation never
-        // applies. The verdict is `Allow`.
-        let evaluator = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
-            r#"@modify("ignored on permit")
+    fn annotation_on_permit_rejects_bundle() {
+        // A `permit` cannot raise a deny, so a remediation annotation on it
+        // is a misconfiguration. The bundle is rejected at load time so the
+        // operator removes the annotation or switches the effect to forbid.
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@modify("on a permit")
 permit(principal, action, resource);"#,
         ))
-        .unwrap();
-        assert_eq!(verdict_for(&evaluator), PolicyVerdict::Allow);
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::AnnotationOnPermit { .. }),
+            "expected AnnotationOnPermit, got {err}"
+        );
+    }
+
+    #[test]
+    fn empty_modify_annotation_rejects_bundle() {
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@modify("")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::MalformedAnnotation { .. }),
+            "expected MalformedAnnotation, got {err}"
+        );
+    }
+
+    #[test]
+    fn whitespace_step_up_annotation_rejects_bundle() {
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@step_up("   ")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::MalformedAnnotation { .. }),
+            "expected MalformedAnnotation, got {err}"
+        );
     }
 
     #[test]
