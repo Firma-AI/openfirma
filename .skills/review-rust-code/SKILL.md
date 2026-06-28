@@ -98,6 +98,9 @@ Look for:
 - unchecked conversions or lossy assumptions
 - stale or ambiguous config behavior
 - surprising defaults in operator-facing code
+- platform-specific code that adds fallback, no-op, passthrough, stub, or
+  `compile_error!` implementations outside the supported Unix and Windows
+  targets
 
 #### 2c. Documentation and tests
 
