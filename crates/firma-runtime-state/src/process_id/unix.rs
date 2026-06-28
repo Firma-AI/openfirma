@@ -1,18 +1,14 @@
 use super::{SignalProcessError, UserProcessId};
 
-pub(super) fn raw_process_id_is_supported(raw: u32) -> bool {
+pub(super) fn in_range_for_platform(raw: u32) -> bool {
     u32::try_from(nix::libc::pid_t::MAX).is_ok_and(|max| raw <= max)
 }
 
 impl UserProcessId {
     /// Return this process ID as a `nix` PID.
     #[must_use]
-    #[expect(
-        clippy::cast_possible_wrap,
-        reason = "UserProcessId only stores values that fit Unix pid_t"
-    )]
     pub fn as_nix_pid(&self) -> nix::unistd::Pid {
-        nix::unistd::Pid::from_raw(self.get() as nix::libc::pid_t)
+        (*self).into()
     }
 
     /// Return whether this process ID appears to identify a live process.
@@ -49,7 +45,17 @@ impl UserProcessId {
     ///
     /// Returns an error if the signal cannot be delivered.
     pub fn send_sigterm_signal(self) -> Result<(), SignalProcessError> {
-        nix::sys::signal::kill(self.as_nix_pid(), nix::sys::signal::Signal::SIGTERM)
+        nix::sys::signal::kill(self.into(), nix::sys::signal::Signal::SIGTERM)
             .map_err(|source| SignalProcessError::Signal { pid: self, source })
+    }
+}
+
+impl From<UserProcessId> for nix::unistd::Pid {
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "Type invariant: UserProcessId only stores values that fit Unix pid_t"
+    )]
+    fn from(value: UserProcessId) -> Self {
+        Self::from_raw(value.get() as nix::libc::pid_t)
     }
 }

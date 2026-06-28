@@ -1,6 +1,7 @@
 use super::{SignalProcessError, UserProcessId};
 
-pub(super) fn raw_process_id_is_supported(_raw: u32) -> bool {
+pub(super) fn in_range_for_platform(_raw: u32) -> bool {
+    // All `u32` are (potentially) valid process ids on Windows.
     true
 }
 
@@ -38,6 +39,7 @@ impl UserProcessId {
     /// # Errors
     ///
     /// This method currently always succeeds on Windows.
+    #[must_use]
     pub fn send_sigterm_signal(self) -> Result<(), SignalProcessError> {
         let _ = self;
         Ok(())

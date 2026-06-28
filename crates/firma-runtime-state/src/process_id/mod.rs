@@ -10,17 +10,22 @@ mod child_ext;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
-use unix::raw_process_id_is_supported;
+use unix::in_range_for_platform;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-use windows::raw_process_id_is_supported;
+use windows::in_range_for_platform;
 
 /// Operating-system process identifier for spawned user processes.
 ///
-/// OS PID `0` can have platform-specific meaning, but `OpenFirma` pidfiles and
-/// markers only record spawned user processes. Use `Option<UserProcessId>`
-/// when a runtime-state record may not have a process ID.
+/// # Invariants
+///
+/// An instance of `UserProcessId` is guaranteed to be:
+///
+/// - Greater than 0. Process id 0 is valid on our supported platforms,
+///   but it's never allowed for user processes.
+/// - Fit in the range used by the underlying platform to represent
+///   process ids (e.g. `i32` on Linux).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct UserProcessId(NonZeroU32);
 
@@ -29,7 +34,7 @@ impl UserProcessId {
     #[must_use]
     pub fn new(raw: u32) -> Option<Self> {
         let raw = NonZeroU32::new(raw)?;
-        if !raw_process_id_is_supported(raw.get()) {
+        if !in_range_for_platform(raw.get()) {
             return None;
         }
         Some(Self(raw))
