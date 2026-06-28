@@ -17,7 +17,7 @@
 //! | `resource`  | `Firma::Resource::"<resource_uri>"`  |
 
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use cedar_policy::{
     Authorizer, Context, Decision, Effect, Entities, EntityUid, PolicyId, PolicySet, Request,
@@ -105,9 +105,11 @@ enum Remediation {
     /// `@step_up("…")` — require human approval; the annotation value is the
     /// human-readable challenge / approval description.
     StepUp(String),
-    /// `@defer("<ms>")` — delay execution; the annotation value is the
-    /// retry-after backoff in milliseconds.
-    Defer(u64),
+    /// `@defer("<ms>")` — delay execution; the annotation value is parsed
+    /// into a `Duration`. A zero duration is rejected at load time: a defer
+    /// with no backoff is indistinguishable from a plain deny, so the author
+    /// almost certainly misconfigured the policy.
+    Defer(Duration),
 }
 
 /// Annotation keys recognised on `forbid` policies for AARM R4 remediation.
@@ -225,8 +227,16 @@ fn build_remediation_map(
         }
         if let Some(value) = policy.annotation(ANNOTATION_DEFER) {
             match value.parse::<u64>() {
+                Ok(0) => {
+                    return Err(CedarEvaluatorError::MalformedAnnotation {
+                        policy_id: id.to_string(),
+                        annotation: ANNOTATION_DEFER,
+                        raw_value: value.to_string(),
+                        reason: "defer duration must be > 0".to_string(),
+                    });
+                }
                 Ok(ms) => {
-                    map.insert(id, Remediation::Defer(ms));
+                    map.insert(id, Remediation::Defer(Duration::from_millis(ms)));
                 }
                 Err(parse_err) => {
                     return Err(CedarEvaluatorError::MalformedAnnotation {
@@ -338,9 +348,9 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
                         modifications: firma_core::ModificationSpec::new(description),
                     },
                     Some(Remediation::StepUp(challenge)) => PolicyVerdict::StepUp { challenge },
-                    Some(Remediation::Defer(retry_after_ms)) => {
-                        PolicyVerdict::Defer { retry_after_ms }
-                    }
+                    Some(Remediation::Defer(backoff)) => PolicyVerdict::Defer {
+                        retry_after_ms: u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX),
+                    },
                     None => PolicyVerdict::Deny,
                 })
             }
@@ -1022,6 +1032,22 @@ forbid(principal, action, resource);"#,
         // snapshot active rather than silently degrading to a plain deny.
         let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
             r#"@defer("not-a-number")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::MalformedAnnotation { .. }),
+            "expected MalformedAnnotation, got {err}"
+        );
+    }
+
+    #[test]
+    fn zero_defer_duration_rejects_bundle() {
+        // `@defer("0")` parses but is rejected: a defer with no backoff is
+        // indistinguishable from a plain deny, so the author almost certainly
+        // misconfigured the policy.
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@defer("0")
 forbid(principal, action, resource);"#,
         ))
         .unwrap_err();
