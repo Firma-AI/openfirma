@@ -560,10 +560,10 @@ fn audit_decision_fields(
             action: envelope.intent().action_class.clone(),
             resource: redact_sensitive_query_params(&envelope.intent().resource_display()),
             decision_code: Decision::Modify,
-            // Surface the modification description in the reason field so
-            // operators can reconcile the transformed execution against
-            // policy intent (no dedicated modification column exists yet).
-            deny_reason: sanitize_audit_reason(&modifications.description),
+            // Surface the applied transformation in the reason field so
+            // operators can reconcile the transformed execution against policy
+            // intent (no dedicated modification column exists yet).
+            deny_reason: sanitize_audit_reason(&modifications.to_string()),
             context_hash: claims.context_hash.clone(),
             bundle_version: bundle_version.unwrap_or("").to_string(),
         },
@@ -2213,13 +2213,13 @@ mod tests {
         let modify = EnforcementDecision::Modify {
             claims: claims.clone(),
             envelope: Box::new(test_execution_envelope(&claims)),
-            modifications: firma_core::ModificationSpec::new("redact authorization header"),
+            modifications: firma_core::ModificationSpec::RedactHeader("authorization".to_string()),
             credentials: InjectedCredentials::empty(),
         };
         let payload =
             audit_payload_from_decision(&modify, &request, "sess_001", Duration::ZERO, None);
         assert_eq!(payload.decision, Decision::Modify);
-        assert_eq!(payload.deny_reason, "redact authorization header");
+        assert_eq!(payload.deny_reason, "redacted_header:authorization");
         assert_eq!(payload.token_id, "3713c5fc-b569-650c-c780-c64051473370");
         assert_eq!(payload.action, "communication.external.send");
     }

@@ -326,18 +326,26 @@ impl RequestHandler {
                 envelope,
                 credentials,
                 ..
-            }
-            | EnforcementDecision::Modify {
-                envelope,
-                credentials,
-                ..
             } => {
-                // AARM R4 `MODIFY` dispatches like `ALLOW` in V1: the
-                // modification is recorded in the audit trail (decision =
-                // MODIFY) and the request is forwarded. The `modifications`
-                // description is opaque to the connector layer in V1.
                 let mut dispatch_envelope = *envelope;
                 hydrate_dispatch_http_fields(&mut dispatch_envelope, &request);
+                let (response, outcome) = self.dispatch(dispatch_envelope, credentials).await;
+                outcome.enrich(&mut audit_payload);
+                response
+            }
+            EnforcementDecision::Modify {
+                envelope,
+                credentials,
+                modifications,
+                ..
+            } => {
+                // AARM R4 `MODIFY`: apply the structural transformation to the
+                // dispatch clone (not the immutable envelope on the decision),
+                // then forward. The original envelope is preserved for audit;
+                // the audit record carries the applied transformation.
+                let mut dispatch_envelope = *envelope;
+                hydrate_dispatch_http_fields(&mut dispatch_envelope, &request);
+                modifications.apply(&mut dispatch_envelope);
                 let (response, outcome) = self.dispatch(dispatch_envelope, credentials).await;
                 outcome.enrich(&mut audit_payload);
                 response

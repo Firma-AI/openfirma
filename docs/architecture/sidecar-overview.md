@@ -446,19 +446,21 @@ The AARM R4 five-decision set is emitted as proto-wire decision codes in
 audit events (`PASSTHROUGH` is serialized as `ALLOW` with an empty
 `token_id`):
 
-| Code | Meaning | Source                                                                                                  |
-| ---- | ------- | ------------------------------------------------------------------------------------------------------- |
-| `1`  | ALLOW   | Pipeline allowed and connector returned a response (any status). Also PASSTHROUGH.                      |
-| `2`  | DENY    | Pipeline denied, or connector reported `Network` / `InvalidRequest`.                                    |
-| `3`  | ABORT   | Approved call aborted mid-flight (`ConnectorError::Timeout`).                                           |
-| `4`  | MODIFY  | AARM R4: a transformed version of the request was dispatched (audit records the `@modify` description). |
-| `5`  | STEP_UP | AARM R4: blocked pending human approval (`DenyReason::StepUpRequired`).                                 |
-| `6`  | DEFER   | AARM R4: blocked and deferred for retry (`DenyReason::Deferred`).                                       |
+| Code | Meaning | Source                                                                                                                                                          |
+| ---- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `1`  | ALLOW   | Pipeline allowed and connector returned a response (any status). Also PASSTHROUGH.                                                                              |
+| `2`  | DENY    | Pipeline denied, or connector reported `Network` / `InvalidRequest`.                                                                                            |
+| `3`  | ABORT   | Approved call aborted mid-flight (`ConnectorError::Timeout`).                                                                                                   |
+| `4`  | MODIFY  | AARM R4: a structural transformation (e.g. header redaction) was applied to the dispatch clone before forwarding; the audit records the applied transformation. |
+| `5`  | STEP_UP | AARM R4: blocked pending human approval (`DenyReason::StepUpRequired`).                                                                                         |
+| `6`  | DEFER   | AARM R4: blocked and deferred for retry (`DenyReason::Deferred`).                                                                                               |
 
 ABORT is distinct from DENY because the pipeline did approve the call;
 the token stays ACTIVE and the agent sees a gateway-timeout-class error.
-MODIFY dispatches like ALLOW; the modification description is recorded in
-the audit `deny_reason` field. STEP_UP and DEFER block the call (the
+MODIFY applies a structural transformation to the dispatch clone (V1
+supports `redact_header:<name>`) before forwarding; the original envelope
+is preserved for audit, and the applied transformation is recorded in the
+audit `deny_reason` field. STEP_UP and DEFER block the call (the
 agent receives a structured 403 whose `DenyReason` tells it how to
 recover) and are sourced from `@step_up` / `@defer` annotations on
 `forbid` Cedar policies.

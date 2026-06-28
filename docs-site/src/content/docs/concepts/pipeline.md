@@ -296,7 +296,7 @@ decisions for an evaluated action:
 | `ALLOW`     | `1` | The request is dispatched to the connector as-is. |
 | `DENY`      | `2` | The call is blocked before dispatch; the agent gets a structured 403 with a `DenyReason`. |
 | `ABORT`     | `3` | An already-approved call aborted mid-flight (e.g. credential fetch or connector timeout). |
-| `MODIFY`    | `4` | A transformed version of the request is dispatched; the audit records the `@modify` description. |
+| `MODIFY`    | `4` | The named HTTP header is stripped from the request before dispatch; the audit records the applied transformation. |
 | `STEP_UP`   | `5` | The call is blocked pending human approval / stronger auth; `DenyReason::StepUpRequired`. |
 | `DEFER`     | `6` | The call is blocked and deferred for retry; `DenyReason::Deferred`. |
 
@@ -313,21 +313,24 @@ forbid (principal, action, resource) when { context.risk_score >= 80 };
 @defer("500")
 forbid (principal, action, resource) when { context.transfers_last_10m >= 10 };
 
-// Forward with a documented transformation (V1 records the description).
-@modify("redact the authorization header")
+// Strip the Authorization header before dispatch.
+@modify("redact_header:authorization")
 forbid (principal, action, resource) when { context.has_embedded_secret };
 ```
 
 When a `forbid` policy fires, the post-Cedar layer looks up its annotation
 and lifts the deny into the matching remediation verdict (precedence
 `STEP_UP > DEFER > MODIFY` when several fire). A `forbid` without an
-annotation remains a hard `DENY`. `MODIFY` dispatches like `ALLOW` (the
-modification description is opaque to the connector layer in V1 and is
-recorded in the audit `deny_reason`); `STEP_UP` and `DEFER` block the call.
-Annotations on `permit` policies have no effect — a `permit` cannot raise a
-deny. Malformed annotations (e.g. a non-numeric `@defer` value) degrade
-the policy to a plain `forbid`, failing closed per call rather than blocking
-bundle installation.
+annotation remains a hard `DENY`. `MODIFY` applies a structural
+transformation to the dispatch clone — V1 supports `redact_header:<name>`
+(case-insensitive header match) — and forwards the modified request; the
+applied transformation is recorded in the audit `deny_reason`.
+`STEP_UP` and `DEFER` block the call. A `forbid` policy carrying more
+than one remediation annotation, or a `permit` carrying any, rejects the
+bundle at load time. Malformed annotations (e.g. a non-numeric `@defer`
+value, an unknown `@modify` kind, or an empty annotation value) also
+reject the bundle so the operator gets an immediate, actionable error
+rather than a silent semantic divergence.
 
 `PASSTHROUGH` (non-protected traffic) is serialized on the wire as `ALLOW`
 (`1`) with an empty `token_id`. In monitor mode, `DENY`, `MODIFY`, `STEP_UP`,

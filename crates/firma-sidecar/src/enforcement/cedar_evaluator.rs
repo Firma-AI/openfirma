@@ -23,9 +23,9 @@ use cedar_policy::{
     Authorizer, Context, Decision, Effect, Entities, EntityUid, PolicyId, PolicySet, Request,
     Response, Schema,
 };
-use firma_core::FirmaEntityUid;
 use firma_core::agent::AgentId;
 use firma_core::policy::PolicyBundle;
+use firma_core::{FirmaEntityUid, ModificationSpec};
 
 use super::constraint_enforcement::{PolicyEvaluation, PolicyVerdict};
 
@@ -124,9 +124,10 @@ pub struct CedarPolicyEvaluator {
 /// annotation. Drives the AARM R4 `MODIFY` / `STEP_UP` / `DEFER` verdicts.
 #[derive(Debug, Clone)]
 enum Remediation {
-    /// `@modify("…")` — execute a transformed version; the annotation value
-    /// is the human-readable modification description.
-    Modify(String),
+    /// `@modify("redact_header:<name>")` — strip the named HTTP header before
+    /// dispatch. The annotation value is parsed into a [`ModificationSpec`] at
+    /// load time so the hot path just copies it out.
+    Modify(ModificationSpec),
     /// `@step_up("…")` — require human approval; the annotation value is the
     /// human-readable challenge / approval description.
     StepUp(String),
@@ -286,8 +287,15 @@ fn build_remediation_map(
 
         // Exactly one annotation — validate its value.
         if let Some(value) = modify {
-            validate_non_empty(&id, ANNOTATION_MODIFY, &value)?;
-            map.insert(id, Remediation::Modify(value));
+            let spec = ModificationSpec::parse(&value).map_err(|reason| {
+                CedarEvaluatorError::MalformedAnnotation {
+                    policy_id: id.to_string(),
+                    annotation: ANNOTATION_MODIFY,
+                    raw_value: value,
+                    reason,
+                }
+            })?;
+            map.insert(id, Remediation::Modify(spec));
         } else if let Some(value) = step_up {
             validate_non_empty(&id, ANNOTATION_STEP_UP, &value)?;
             map.insert(id, Remediation::StepUp(value));
@@ -417,8 +425,8 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
                     .filter_map(|id| self.remediation.get(id))
                     .collect();
                 Ok(match pick_remediation(&candidates) {
-                    Some(Remediation::Modify(description)) => PolicyVerdict::Modify {
-                        modifications: firma_core::ModificationSpec::new(description),
+                    Some(Remediation::Modify(spec)) => PolicyVerdict::Modify {
+                        modifications: spec,
                     },
                     Some(Remediation::StepUp(challenge)) => PolicyVerdict::StepUp { challenge },
                     Some(Remediation::Defer(backoff)) => PolicyVerdict::Defer { backoff },
@@ -1039,13 +1047,16 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
     #[test]
     fn modify_annotation_lifts_deny_to_modify_verdict() {
         let evaluator = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
-            r#"@modify("redact the authorization header")
+            r#"@modify("redact_header:authorization")
 forbid(principal, action, resource);"#,
         ))
         .unwrap();
         match verdict_for(&evaluator) {
             PolicyVerdict::Modify { modifications } => {
-                assert_eq!(modifications.description, "redact the authorization header");
+                assert_eq!(
+                    modifications,
+                    ModificationSpec::RedactHeader("authorization".to_string())
+                );
             }
             other => panic!("expected Modify, got {other:?}"),
         }
@@ -1178,6 +1189,36 @@ forbid(principal, action, resource);"#,
     }
 
     #[test]
+    fn unknown_modify_kind_rejects_bundle() {
+        // `@modify("rewrite_body:foo")` parses but the kind is unknown; the
+        // bundle is rejected at load time so the operator fixes the policy.
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@modify("rewrite_body:foo")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::MalformedAnnotation { .. }),
+            "expected MalformedAnnotation, got {err}"
+        );
+    }
+
+    #[test]
+    fn empty_redact_header_name_rejects_bundle() {
+        // `@modify("redact_header:")` has no header name; rejected at load
+        // time because the transformation would be a no-op.
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@modify("redact_header:")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::MalformedAnnotation { .. }),
+            "expected MalformedAnnotation, got {err}"
+        );
+    }
+
+    #[test]
     fn whitespace_step_up_annotation_rejects_bundle() {
         let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
             r#"@step_up("   ")
@@ -1195,7 +1236,7 @@ forbid(principal, action, resource);"#,
         // Three forbid policies fire on the same request, each with a
         // different remediation annotation. StepUp must win.
         let evaluator = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
-            r#"@modify("m")
+            r#"@modify("redact_header:authorization")
 forbid(principal, action, resource);
 @defer("100")
 forbid(principal, action, resource);
@@ -1212,7 +1253,7 @@ forbid(principal, action, resource);"#,
     #[test]
     fn defer_precedence_over_modify() {
         let evaluator = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
-            r#"@modify("m")
+            r#"@modify("redact_header:authorization")
 forbid(principal, action, resource);
 @defer("200")
 forbid(principal, action, resource);"#,

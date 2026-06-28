@@ -157,19 +157,24 @@ when { context.risk_score >= 80 };
 forbid (principal, action, resource)
 when { context.transfers_last_10m >= 10 };
 
-// Forward with a documented transformation (V1 records the description).
-@modify("redact the authorization header")
+// Strip the Authorization header before dispatch.
+@modify("redact_header:authorization")
 forbid (principal, action, resource)
 when { context.has_embedded_secret };
 ```
 
 Notes:
 
-- Annotations only apply to `forbid` policies. A `permit` cannot raise a
-  deny, so annotating one has no effect.
-- `@defer` takes a numeric retry-after in milliseconds; a non-numeric value
-  degrades the policy to a plain `forbid` (fail-closed per call) rather than
-  rejecting the whole bundle.
+- Annotations only apply to `forbid` policies. A `permit` carrying a
+  remediation annotation is a misconfiguration and rejects the bundle at
+  load time.
+- A `forbid` policy may carry at most one remediation annotation; multiple
+  annotations reject the bundle because the cross-policy precedence does not
+  apply within a single policy.
+- `@defer` takes a numeric retry-after in milliseconds (must be > 0);
+  `@modify` takes a `<kind>:<value>` DSL (V1 supports `redact_header:<name>`).
+  Malformed values reject the bundle at load time so the operator gets an
+  immediate, actionable error.
 - If several annotated forbids fire at once, precedence is
   `STEP_UP > DEFER > MODIFY`.
 - A `forbid` with no annotation is still a hard `DENY`. Remediation is opt-in

@@ -131,28 +131,81 @@ pub enum DenyReason {
     Deferred,
 }
 
-/// Description of a transformation to apply to a request under the AARM R4
-/// `MODIFY` decision.
+/// Structured transformation applied to a request under the AARM R4 `MODIFY`
+/// decision.
 ///
-/// V1 carries an opaque, human-authored description string sourced from the
-/// `@modify("…")` Cedar policy annotation. The Sidecar records it in the
-/// audit trail and surfaces it to the agent so an operator can reconcile the
-/// transformed execution against the policy intent. A future task may replace
-/// the free-form string with a structured patch (header redactions, param
-/// rewrites), at which point this type gains tagged variants without a wire
-/// break.
+/// Sourced from a `@modify("…")` Cedar policy annotation. The annotation
+/// value is a small DSL: `<kind>:<value>`. V1 supports a single kind:
+///
+/// - `redact_header:<name>` — strip the named HTTP header (case-insensitive)
+///   from the outbound request before dispatch. The audit record carries
+///   `redacted_header:<name>` so an operator can reconcile the transformed
+///   execution against policy intent.
+///
+/// Unknown kinds, empty header names, or a missing `:` reject the bundle at
+/// load time (`MalformedAnnotation`) — the author must fix the policy. New
+/// kinds (e.g. `strip_query_param`) can be added later as enum variants
+/// without a wire break.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ModificationSpec {
-    /// Human-readable description of the modification to apply.
-    pub description: String,
+pub enum ModificationSpec {
+    /// Strip the named HTTP header from the outbound request before dispatch.
+    /// Header-name matching is case-insensitive (HTTP semantics).
+    RedactHeader(String),
 }
 
+/// DSL prefix for the header-redaction transformation.
+const MODIFICATION_REDACT_HEADER: &str = "redact_header:";
+
 impl ModificationSpec {
-    /// Builds a [`ModificationSpec`] from a description string.
-    #[must_use]
-    pub fn new(description: impl Into<String>) -> Self {
-        Self {
-            description: description.into(),
+    /// Parse a `@modify("…")` annotation value into a [`ModificationSpec`].
+    ///
+    /// Returns `Err(reason)` if the value is not a recognised `<kind>:<value>`
+    /// form or the payload is empty. The caller maps the reason into a
+    /// `MalformedAnnotation` error at the sidecar layer.
+    ///
+    /// # Errors
+    ///
+    /// - `redact_header:<name>` with an empty `<name>` → `Err`.
+    /// - Unknown kind (no recognised prefix) → `Err`.
+    pub fn parse(annotation: &str) -> Result<Self, String> {
+        let value = annotation.trim();
+        if value.is_empty() {
+            return Err("modify annotation value must not be empty".to_string());
+        }
+        if let Some(name) = value.strip_prefix(MODIFICATION_REDACT_HEADER) {
+            let name = name.trim();
+            if name.is_empty() {
+                return Err("redact_header: header name must not be empty".to_string());
+            }
+            return Ok(Self::RedactHeader(name.to_string()));
+        }
+        Err(format!(
+            "unknown @modify kind; expected `{MODIFICATION_REDACT_HEADER}<name>`, got: {value:?}"
+        ))
+    }
+
+    /// Apply this transformation in place to a dispatch-bound envelope.
+    ///
+    /// Mutates only the HTTP headers map of the dispatch clone; the original
+    /// envelope stored on the sidecar's `EnforcementDecision::Modify` is
+    /// untouched, preserving the immutability invariant. No-op for non-HTTP
+    /// action params so the same call site is safe for all envelope shapes.
+    pub fn apply(&self, envelope: &mut crate::envelope::ExecutionEnvelope) {
+        let crate::envelope::ActionParams::Http(http) = &mut envelope.intent.params else {
+            return;
+        };
+        match self {
+            Self::RedactHeader(name) => {
+                http.headers.retain(|k, _| !k.eq_ignore_ascii_case(name));
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for ModificationSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RedactHeader(name) => write!(f, "redacted_header:{name}"),
         }
     }
 }
@@ -254,12 +307,146 @@ mod tests {
 
     #[test]
     fn modification_spec_round_trip() {
-        let spec = ModificationSpec::new("redact api key from authorization header");
+        let spec = ModificationSpec::RedactHeader("authorization".to_string());
         let json = serde_json::to_string(&spec).unwrap_or_else(|e| panic!("{e}"));
         let parsed: ModificationSpec =
             serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(spec, parsed);
-        assert_eq!(spec.description, "redact api key from authorization header");
+    }
+
+    #[test]
+    fn modification_spec_parse_redact_header() {
+        let spec = ModificationSpec::parse("redact_header:authorization")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            spec,
+            ModificationSpec::RedactHeader("authorization".to_string())
+        );
+    }
+
+    #[test]
+    fn modification_spec_parse_trims_whitespace() {
+        let spec = ModificationSpec::parse("  redact_header:  x-api-key  ")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            spec,
+            ModificationSpec::RedactHeader("x-api-key".to_string())
+        );
+    }
+
+    #[test]
+    fn modification_spec_parse_rejects_empty_header_name() {
+        let err = ModificationSpec::parse("redact_header:").unwrap_err();
+        assert!(err.contains("header name must not be empty"), "got: {err}");
+    }
+
+    #[test]
+    fn modification_spec_parse_rejects_unknown_kind() {
+        let err = ModificationSpec::parse("rewrite_body:foo").unwrap_err();
+        assert!(err.contains("unknown @modify kind"), "got: {err}");
+    }
+
+    #[test]
+    fn modification_spec_parse_rejects_empty_value() {
+        let err = ModificationSpec::parse("   ").unwrap_err();
+        assert!(err.contains("must not be empty"), "got: {err}");
+    }
+
+    #[test]
+    fn modification_spec_display_redacted_header() {
+        let spec = ModificationSpec::RedactHeader("authorization".to_string());
+        assert_eq!(spec.to_string(), "redacted_header:authorization");
+    }
+
+    #[test]
+    fn modification_spec_apply_strips_header_case_insensitive() {
+        use crate::envelope::{
+            ActionParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod,
+            HttpParams,
+        };
+
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer secret".to_string());
+        headers.insert("X-Trace-Id".to_string(), "abc".to_string());
+        let envelope = ExecutionEnvelope::new(
+            ExecutionIntent {
+                action_class: "communication.external.send".to_string(),
+                resource: std::collections::BTreeMap::new(),
+                params: ActionParams::Http(HttpParams {
+                    method: HttpMethod::POST,
+                    headers,
+                    body: None,
+                    query: std::collections::HashMap::new(),
+                }),
+                raw_transport: "https".to_string(),
+                raw_action_ref: "POST /v1/chat".to_string(),
+            },
+            "raw-token".to_string(),
+            ExecutionMetadata {
+                session_id: "sess".parse().unwrap(),
+                agent_id: "agent".parse().unwrap(),
+                timestamp: chrono::Utc::now(),
+                trace_id: None,
+                budget_consumed: 0.0,
+                risk_score: None,
+            },
+            None,
+        );
+
+        // Redact the Authorization header (case-insensitive match against "Authorization").
+        let mut envelope = envelope;
+        ModificationSpec::RedactHeader("authorization".to_string()).apply(&mut envelope);
+
+        let ActionParams::Http(http) = &envelope.intent.params else {
+            panic!("expected Http params");
+        };
+        assert!(
+            !http.headers.contains_key("Authorization"),
+            "Authorization should be stripped"
+        );
+        assert!(
+            http.headers.contains_key("X-Trace-Id"),
+            "X-Trace-Id should survive the redaction"
+        );
+    }
+
+    #[test]
+    fn modification_spec_apply_noop_for_non_http() {
+        use crate::envelope::{
+            ActionParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, ToolUseParams,
+        };
+
+        let envelope = ExecutionEnvelope::new(
+            ExecutionIntent {
+                action_class: "tool.use".to_string(),
+                resource: std::collections::BTreeMap::new(),
+                params: ActionParams::ToolUse(ToolUseParams {
+                    tool_name: "search".to_string(),
+                    input: std::collections::HashMap::new(),
+                }),
+                raw_transport: "https".to_string(),
+                raw_action_ref: "tool:search".to_string(),
+            },
+            "raw-token".to_string(),
+            ExecutionMetadata {
+                session_id: "sess".parse().unwrap(),
+                agent_id: "agent".parse().unwrap(),
+                timestamp: chrono::Utc::now(),
+                trace_id: None,
+                budget_consumed: 0.0,
+                risk_score: None,
+            },
+            None,
+        );
+
+        // Applying a RedactHeader to a non-HTTP envelope is a no-op.
+        let mut envelope = envelope;
+        ModificationSpec::RedactHeader("authorization".to_string()).apply(&mut envelope);
+
+        let ActionParams::ToolUse(tool) = &envelope.intent.params else {
+            panic!("expected ToolUse params");
+        };
+        assert_eq!(tool.tool_name, "search");
     }
 
     #[test]
