@@ -257,26 +257,16 @@ fn build_remediation_map(
 /// approval should not be silently transformed or merely delayed, and a
 /// deferred request should not be silently transformed in the meantime.
 fn pick_remediation(candidates: &[&Remediation]) -> Option<Remediation> {
-    let has = |kind: fn(&Remediation) -> bool| candidates.iter().any(|r| kind(r));
-    if has(|r| matches!(r, Remediation::StepUp(_))) {
-        return candidates
-            .iter()
-            .copied()
-            .find(|r| matches!(r, Remediation::StepUp(_)))
-            .cloned();
+    /// Priority rank: higher wins. `None` filters out the non-remediation
+    /// arms (which can't appear here, but keeps the lookup total).
+    fn rank(r: &Remediation) -> u8 {
+        match r {
+            Remediation::StepUp(_) => 3,
+            Remediation::Defer(_) => 2,
+            Remediation::Modify(_) => 1,
+        }
     }
-    if has(|r| matches!(r, Remediation::Defer(_))) {
-        return candidates
-            .iter()
-            .copied()
-            .find(|r| matches!(r, Remediation::Defer(_)))
-            .cloned();
-    }
-    candidates
-        .iter()
-        .copied()
-        .find(|r| matches!(r, Remediation::Modify(_)))
-        .cloned()
+    candidates.iter().copied().max_by_key(|r| rank(r)).cloned()
 }
 
 impl PolicyEvaluation for CedarPolicyEvaluator {
