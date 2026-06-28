@@ -40,13 +40,6 @@ fn write_fake_sidecar(dir: &std::path::Path, body: &str) -> PathBuf {
     path
 }
 
-fn is_alive(pid: u32) -> bool {
-    let Ok(raw) = i32::try_from(pid) else {
-        return false;
-    };
-    nix::sys::signal::kill(nix::unistd::Pid::from_raw(raw), None).is_ok()
-}
-
 #[test]
 fn drop_terminates_child_within_grace() {
     let tmp = TempDir::new().expect("tmp");
@@ -75,14 +68,14 @@ fn drop_terminates_child_within_grace() {
     .expect("supervisor spawned");
 
     let pid = supervisor.pid();
-    assert!(is_alive(pid.get()), "child should be alive after spawn");
+    assert!(pid.is_alive(), "child should be alive after spawn");
 
     // The fake sidecar traps SIGTERM. Drop must escalate to SIGKILL after
     // the 5s grace window.
     drop(supervisor);
 
     let deadline = Instant::now() + Duration::from_secs(8);
-    while is_alive(pid.get()) {
+    while pid.is_alive() {
         assert!(
             Instant::now() < deadline,
             "sidecar pid {pid} still alive after Drop + SIGKILL"
