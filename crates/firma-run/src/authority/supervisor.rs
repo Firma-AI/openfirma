@@ -15,7 +15,7 @@ use wait_timeout::ChildExt;
 
 use crate::error::RunError;
 use crate::identity::SandboxId;
-use firma_runtime_state::{ChildExt as _, UserProcessId};
+use firma_runtime_state::UserProcessId;
 
 /// Per-spec default ready-line wait. CLI flag overrides.
 pub const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
@@ -106,6 +106,8 @@ impl AuthoritySupervisor {
         reason = "single linear spawn-then-scrape sequence reads more clearly inline"
     )]
     pub fn spawn(req: SpawnRequest<'_>) -> Result<Self, RunError> {
+        use firma_runtime_state::ChildExt as _;
+
         firma_authority::cedar_for(req.profile_name).map_err(|_| {
             RunError::AuthorityUnknownProfile {
                 name: req.profile_name.to_string(),

@@ -24,7 +24,7 @@ use wait_timeout::ChildExt;
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 use crate::identity::SandboxId;
-use firma_runtime_state::{ChildExt as _, UserProcessId};
+use firma_runtime_state::UserProcessId;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 /// Per-spec default ready-line wait. CLI flag overrides this value.
@@ -138,6 +138,8 @@ impl SidecarSupervisor {
         reason = "single linear spawn-then-scrape sequence reads more clearly inline than split"
     )]
     pub fn spawn(req: SpawnRequest<'_>) -> Result<Self, RunError> {
+        use firma_runtime_state::ChildExt as _;
+
         std::fs::create_dir_all(&req.marker_dir).map_err(|error| {
             RunError::Internal(format!("mkdir {}: {error}", req.marker_dir.display()))
         })?;
