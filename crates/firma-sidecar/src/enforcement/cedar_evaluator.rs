@@ -74,6 +74,19 @@ pub enum CedarEvaluatorError {
         raw_value: String,
         reason: String,
     },
+
+    /// A `forbid` policy carried more than one remediation annotation
+    /// (`@modify` / `@step_up` / `@defer`). The bundle is rejected at load
+    /// time because the author's intent is ambiguous: the cross-policy
+    /// precedence (`StepUp > Defer > Modify`) does not apply within a single
+    /// policy, so the result would depend on an implicit check order rather
+    /// than the documented semantics. Split into separate `forbid` policies
+    /// if different remediations are wanted for different conditions.
+    #[error("policy `{policy_id}` carries multiple remediation annotations: {annotations}")]
+    ConflictingAnnotations {
+        policy_id: String,
+        annotations: String,
+    },
 }
 
 /// Concrete Cedar policy evaluator for Sidecar Stage 2.
@@ -217,21 +230,44 @@ fn build_remediation_map(
             continue;
         }
         let id = policy.id().clone();
-        if let Some(value) = policy.annotation(ANNOTATION_MODIFY) {
-            map.insert(id.clone(), Remediation::Modify(value.to_string()));
+        // Collect every remediation annotation present on this policy. At most
+        // one is allowed: the cross-policy precedence (`StepUp > Defer >
+        // Modify`) does not apply within a single policy, so multiple
+        // annotations would resolve by implicit check order rather than the
+        // documented semantics. Reject the bundle so the author splits the
+        // policy if they need different remediations for different conditions.
+        let modify = policy.annotation(ANNOTATION_MODIFY).map(str::to_string);
+        let step_up = policy.annotation(ANNOTATION_STEP_UP).map(str::to_string);
+        let defer = policy.annotation(ANNOTATION_DEFER).map(str::to_string);
+        let present: Vec<&'static str> = [
+            modify.as_ref().map(|_| ANNOTATION_MODIFY),
+            step_up.as_ref().map(|_| ANNOTATION_STEP_UP),
+            defer.as_ref().map(|_| ANNOTATION_DEFER),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if present.len() > 1 {
+            return Err(CedarEvaluatorError::ConflictingAnnotations {
+                policy_id: id.to_string(),
+                annotations: present.join(", "),
+            });
+        }
+        if let Some(value) = modify {
+            map.insert(id, Remediation::Modify(value));
             continue;
         }
-        if let Some(value) = policy.annotation(ANNOTATION_STEP_UP) {
-            map.insert(id.clone(), Remediation::StepUp(value.to_string()));
+        if let Some(value) = step_up {
+            map.insert(id, Remediation::StepUp(value));
             continue;
         }
-        if let Some(value) = policy.annotation(ANNOTATION_DEFER) {
+        if let Some(value) = defer {
             match value.parse::<u64>() {
                 Ok(0) => {
                     return Err(CedarEvaluatorError::MalformedAnnotation {
                         policy_id: id.to_string(),
                         annotation: ANNOTATION_DEFER,
-                        raw_value: value.to_string(),
+                        raw_value: value,
                         reason: "defer duration must be > 0".to_string(),
                     });
                 }
@@ -242,7 +278,7 @@ fn build_remediation_map(
                     return Err(CedarEvaluatorError::MalformedAnnotation {
                         policy_id: id.to_string(),
                         annotation: ANNOTATION_DEFER,
-                        raw_value: value.to_string(),
+                        raw_value: value,
                         reason: parse_err.to_string(),
                     });
                 }
@@ -1044,6 +1080,24 @@ forbid(principal, action, resource);"#,
         assert!(
             matches!(err, CedarEvaluatorError::MalformedAnnotation { .. }),
             "expected MalformedAnnotation, got {err}"
+        );
+    }
+
+    #[test]
+    fn conflicting_annotations_reject_bundle() {
+        // A single `forbid` policy carrying both `@modify` and `@step_up` is
+        // ambiguous: the cross-policy precedence does not apply within one
+        // policy, so the result would depend on implicit check order. The
+        // bundle is rejected; the author must split into separate policies.
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@modify("redact")
+@step_up("admin")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::ConflictingAnnotations { .. }),
+            "expected ConflictingAnnotations, got {err}"
         );
     }
 
