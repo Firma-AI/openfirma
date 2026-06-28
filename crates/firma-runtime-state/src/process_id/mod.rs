@@ -19,6 +19,7 @@ mod windows;
 /// when a runtime-state record may not have a process ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
+#[cfg_attr(windows, expect(clippy::unsafe_derive_deserialize))]
 pub struct UserProcessId(NonZeroU32);
 
 impl UserProcessId {

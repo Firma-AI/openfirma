@@ -19,7 +19,7 @@ use windows_sys::Win32::System::Threading::{
 use crate::error::{Result, StackError};
 use crate::platform::{Group, Platform, SpawnedChild};
 use crate::shutdown_event::windows_shutdown_event_name;
-use firma_runtime_state::{ChildExt as _, UserProcessId};
+use firma_runtime_state::ChildExt as _;
 
 pub struct WindowsPlatform;
 
@@ -144,6 +144,7 @@ impl Platform for WindowsPlatform {
 
 #[cfg(test)]
 mod tests {
+    use firma_runtime_state::UserProcessId;
     use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
     use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
