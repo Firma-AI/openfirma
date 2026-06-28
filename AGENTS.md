@@ -37,6 +37,14 @@ Workspace lints are strict and enforced in CI:
 Do not use `.unwrap()`, `.expect()`, `panic!()`, or `unsafe`. Prefer
 `Result<T, E>` with `thiserror` for error handling.
 
+## Supported Platforms
+
+OpenFirma supports only Unix and Windows targets. When implementing
+platform-specific behavior, use `#[cfg(unix)]` and `#[cfg(windows)]` code paths.
+Do not add fallback, no-op, passthrough, stub, or `compile_error!` code for
+unsupported targets. It is acceptable for unsupported targets to fail naturally
+due to missing platform-specific implementations.
+
 ## Version Control
 
 Some contributors use Git, some use Jujutsu.
