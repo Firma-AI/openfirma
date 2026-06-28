@@ -13,7 +13,7 @@ use crate::readiness::{
 };
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::supervisor::{Children, block_until_exit};
-use firma_runtime_state::pidfile;
+use firma_runtime_state::{UserProcessId, pidfile};
 
 /// Mode in which [`start`] manages the stack after readiness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,9 +36,9 @@ pub enum StartMode {
 /// via [`crate::stop()`].
 pub struct StackHandle {
     /// PID of the authority component.
-    pub authority_pid: u32,
+    pub authority_pid: UserProcessId,
     /// PID of the sidecar component.
-    pub sidecar_pid: u32,
+    pub sidecar_pid: UserProcessId,
     /// Resolved state directory the stack is writing to.
     pub state_dir: PathBuf,
 }
@@ -68,8 +68,8 @@ pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
     match spawn_stack_inner(cfg, state_dir) {
         Ok(handle) => {
             info!(
-                authority_pid = handle.authority_pid,
-                sidecar_pid = handle.sidecar_pid,
+                authority_pid = %handle.authority_pid,
+                sidecar_pid = %handle.sidecar_pid,
                 "firma stack ready"
             );
             Ok(handle)
@@ -87,7 +87,7 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
     let exe = cfg.firma_bin.as_deref();
     debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning authority");
     let auth = spawn_with_config(&group, state_dir, "authority", &cfg.config_file, exe)?;
-    info!(pid = auth.pid, "authority spawned");
+    info!(pid = %auth.pid, "authority spawned");
     let auth_addr = read_authority_listen_addr(&cfg.config_file)?;
     std::fs::write(state_dir.join("authority.listen"), format!("{auth_addr}\n"))?;
     debug!(addr = %auth_addr, "waiting for authority TCP listen");
@@ -96,7 +96,7 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
 
     debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning sidecar");
     let side = spawn_with_config(&group, state_dir, "sidecar", &cfg.config_file, exe)?;
-    info!(pid = side.pid, "sidecar spawned");
+    info!(pid = %side.pid, "sidecar spawned");
     let side_addr = read_sidecar_listen_addr(&cfg.config_file)?;
     std::fs::write(state_dir.join("sidecar.listen"), format!("{side_addr}\n"))?;
     debug!(addr = %side_addr, "waiting for sidecar TCP listen");
@@ -158,9 +158,9 @@ fn rollback(state_dir: &Path) {
     // original failure that triggered this path.
     for name in ["authority.pid", "sidecar.pid"] {
         if let Ok(Some(pid)) = pidfile::read(&state_dir.join(name))
-            && SystemPlatform::is_alive(pid)
+            && pid.is_alive()
         {
-            let _ = SystemPlatform::signal_hard(pid);
+            let _ = SystemPlatform::signal_hard(pid.get());
         }
     }
     for name in [
@@ -181,16 +181,19 @@ fn rollback(state_dir: &Path) {
 ///
 /// Returns pidfile or supervision errors.
 pub fn supervise(state_dir: &Path) -> Result<()> {
-    let supervisor_pid = std::process::id();
-    info!(supervisor_pid, state_dir = %state_dir.display(), "supervisor attaching");
+    let supervisor_pid = UserProcessId::new(std::process::id()).ok_or_else(|| {
+        StackError::Platform("current process returned invalid process id".into())
+    })?;
+    info!(supervisor_pid = %supervisor_pid, state_dir = %state_dir.display(), "supervisor attaching");
     pidfile::write(&state_dir.join("stack.pid"), supervisor_pid)?;
     let authority_pid = pidfile::read(&state_dir.join("authority.pid"))?
         .ok_or_else(|| StackError::Platform("authority.pid missing".into()))?;
     let sidecar_pid = pidfile::read(&state_dir.join("sidecar.pid"))?
         .ok_or_else(|| StackError::Platform("sidecar.pid missing".into()))?;
     debug!(
-        authority_pid,
-        sidecar_pid, "supervisor re-attached to children"
+        authority_pid = %authority_pid,
+        sidecar_pid = %sidecar_pid,
+        "supervisor re-attached to children"
     );
     block_until_exit(Children {
         authority_pid,
@@ -249,7 +252,7 @@ fn is_stack_stale(state_dir: &Path) -> Result<bool> {
     // Stale when no recorded supervisor or component pid is still alive.
     for name in ["stack.pid", "authority.pid", "sidecar.pid"] {
         if let Some(pid) = pidfile::read(&state_dir.join(name))?
-            && SystemPlatform::is_alive(pid)
+            && pid.is_alive()
         {
             return Ok(false);
         }
@@ -261,7 +264,7 @@ fn reap_stale(state_dir: &Path) -> Result<()> {
     for name in ["authority.pid", "sidecar.pid", "stack.pid"] {
         let path = state_dir.join(name);
         if let Some(pid) = pidfile::read(&path)?
-            && !SystemPlatform::is_alive(pid)
+            && !pid.is_alive()
         {
             pidfile::remove(&path)?;
         }

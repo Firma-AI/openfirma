@@ -71,6 +71,9 @@ Emits a single JSON array — one object per sidecar. An empty list prints `[]`.
 ]
 ```
 
+When a marker has no recorded PID, table mode renders `PID` as `-` and JSON
+mode emits `"pid": null`.
+
 ## Modes
 
 ### Default: all per-run sidecars

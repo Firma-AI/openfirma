@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 pub use firma_runtime_state::State;
+use firma_runtime_state::UserProcessId;
 use serde::Serialize;
 use tracing::{debug, trace};
 
 use crate::error::Result;
-use crate::platform::{Platform, SystemPlatform};
 use firma_runtime_state::pidfile;
 
 /// Snapshot of one component's runtime state.
@@ -18,7 +18,7 @@ pub struct ComponentStatus {
     /// Logical component name (`authority` / `sidecar`).
     pub name: String,
     /// PID read from `<state_dir>/<name>.pid`, when present.
-    pub pid: Option<u32>,
+    pub pid: Option<UserProcessId>,
     /// Coarse-grained state. See [`State`].
     pub state: State,
     /// Listen address read from `<state_dir>/<name>.listen` (written at
@@ -69,7 +69,7 @@ fn probe(state_dir: &Path, name: &str) -> ComponentStatus {
         };
     };
 
-    if !SystemPlatform::is_alive(pid) {
+    if !pid.is_alive() {
         return ComponentStatus {
             name: name.into(),
             pid: Some(pid),

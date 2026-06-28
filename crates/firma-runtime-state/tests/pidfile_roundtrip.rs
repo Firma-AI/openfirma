@@ -1,15 +1,15 @@
 //! Pidfile helper behavior.
 
-use firma_runtime_state::pidfile;
+use firma_runtime_state::{UserProcessId, pidfile};
 use tempfile::tempdir;
 
 #[test]
 fn write_then_read_pid() {
     let dir = tempdir().expect("dir");
     let path = dir.path().join("child.pid");
-    pidfile::write(&path, 4242).expect("write");
+    pidfile::write(&path, UserProcessId::new(4242).expect("non-zero pid")).expect("write");
     let got = pidfile::read(&path).expect("read");
-    assert_eq!(got, Some(4242));
+    assert_eq!(got.map(UserProcessId::get), Some(4242));
 }
 
 #[test]
@@ -24,6 +24,15 @@ fn malformed_pidfile_is_none() {
     let dir = tempdir().expect("dir");
     let path = dir.path().join("bad.pid");
     std::fs::write(&path, "not-a-pid\n").expect("write bad");
+    let got = pidfile::read(&path).expect("read");
+    assert_eq!(got, None);
+}
+
+#[test]
+fn zero_pidfile_is_none() {
+    let dir = tempdir().expect("dir");
+    let path = dir.path().join("zero.pid");
+    std::fs::write(&path, "0\n").expect("write zero");
     let got = pidfile::read(&path).expect("read");
     assert_eq!(got, None);
 }

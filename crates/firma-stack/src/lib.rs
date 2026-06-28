@@ -40,13 +40,6 @@ pub mod test_support {
         let child = SystemPlatform::spawn_in_group(&group, cmd, &log_path)?;
         firma_runtime_state::pidfile::write(&pidfile_path, child.pid)?;
         std::fs::write(state_dir.join(format!("{name}.listen")), "127.0.0.1:0\n")?;
-        Ok(child.pid)
-    }
-
-    #[doc(hidden)]
-    #[must_use]
-    pub fn is_process_alive(pid: u32) -> bool {
-        use crate::platform::{Platform, SystemPlatform};
-        SystemPlatform::is_alive(pid)
+        Ok(child.pid.get())
     }
 }

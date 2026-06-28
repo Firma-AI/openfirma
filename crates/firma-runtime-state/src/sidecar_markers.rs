@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
+use crate::process_id::UserProcessId;
 use crate::runtime_paths::{run_dir_from, run_entry_from};
 
 /// Connect timeout for the TCP liveness probe of an `http_proxy` interceptor.
@@ -25,7 +26,7 @@ pub struct MetadataFile {
     /// Policy bundle version digest string, as written by firma-run at startup.
     pub policy_bundle_version: String,
     /// PID of the sidecar process.
-    pub pid: u32,
+    pub pid: UserProcessId,
     /// RFC 3339 UTC timestamp of when the sidecar process started.
     pub started_at: String,
     /// Interceptor listen endpoint to health-probe: a `host:port` pair for an
@@ -50,8 +51,8 @@ pub struct SidecarEntry {
     pub authority_url: String,
     /// Policy bundle version digest string.
     pub policy_bundle_version: String,
-    /// PID of the sidecar process.
-    pub pid: u32,
+    /// PID of the sidecar process, when known.
+    pub pid: Option<UserProcessId>,
     /// RFC 3339 UTC timestamp of when the sidecar process started.
     pub started_at: String,
     /// Coarse-grained liveness state derived from pid + socket probes.
@@ -102,7 +103,7 @@ fn is_stale(marker_dir: &Path) -> bool {
         return false;
     };
     match toml::from_str::<MetadataFile>(&text) {
-        Ok(meta) => !crate::is_pid_alive(meta.pid),
+        Ok(meta) => !meta.pid.is_alive(),
         Err(_) => false,
     }
 }
@@ -225,7 +226,7 @@ pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
     } else {
         PathBuf::from(&meta.listen)
     };
-    let state = if !crate::is_pid_alive(meta.pid) {
+    let state = if !meta.pid.is_alive() {
         State::Stopped
     } else if endpoint_responds(&meta.listen, &listen) {
         State::Running
@@ -239,7 +240,7 @@ pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
         session_id: meta.session_id,
         authority_url: meta.authority_url,
         policy_bundle_version: meta.policy_bundle_version,
-        pid: meta.pid,
+        pid: Some(meta.pid),
         started_at: meta.started_at,
         state,
         listen,

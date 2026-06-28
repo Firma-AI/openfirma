@@ -15,6 +15,7 @@ use wait_timeout::ChildExt;
 
 use crate::error::RunError;
 use crate::identity::SandboxId;
+use firma_runtime_state::UserProcessId;
 
 /// Per-spec default ready-line wait. CLI flag overrides.
 pub const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 10;
@@ -69,7 +70,7 @@ pub enum ScrapeResult {
 pub struct AuthoritySupervisor {
     listen_addr: String,
     marker_dir: PathBuf,
-    pid: u32,
+    pid: UserProcessId,
     child: Option<Child>,
     tee_handle: Option<JoinHandle<()>>,
 }
@@ -105,6 +106,8 @@ impl AuthoritySupervisor {
         reason = "single linear spawn-then-scrape sequence reads more clearly inline"
     )]
     pub fn spawn(req: SpawnRequest<'_>) -> Result<Self, RunError> {
+        use firma_runtime_state::ChildExt as _;
+
         firma_authority::cedar_for(req.profile_name).map_err(|_| {
             RunError::AuthorityUnknownProfile {
                 name: req.profile_name.to_string(),
@@ -164,7 +167,7 @@ impl AuthoritySupervisor {
 
         let mut capture: Option<ReadyCapture> = None;
         let mut child: Option<Child> = None;
-        let mut pid: u32 = 0;
+        let mut pid: Option<UserProcessId> = None;
         let mut tee_handle: Option<JoinHandle<()>> = None;
         let mut last_error: Option<RunError> = None;
         for attempt in 0..MAX_BIND_ATTEMPTS {
@@ -201,7 +204,7 @@ impl AuthoritySupervisor {
                     reason: format!("spawn firma authority: {e}"),
                     log_path: log_path.clone(),
                 })?;
-            let try_pid = try_child.id();
+            let try_pid = try_child.process_id();
             let stderr =
                 try_child
                     .stderr
@@ -229,7 +232,7 @@ impl AuthoritySupervisor {
                 Ok(ScrapeResult::Ready(c)) => {
                     capture = Some(c);
                     child = Some(try_child);
-                    pid = try_pid;
+                    pid = Some(try_pid);
                     tee_handle = Some(try_tee_handle);
                     break;
                 }
@@ -278,6 +281,10 @@ impl AuthoritySupervisor {
             reason: "authority tee thread missing after startup".into(),
             log_path: log_path.clone(),
         })?;
+        let pid = pid.ok_or_else(|| RunError::AuthorityStartupFailed {
+            reason: "authority pid missing after startup".into(),
+            log_path: log_path.clone(),
+        })?;
 
         firma_runtime_state::pidfile::write(&pid_path, pid)
             .map_err(|e| RunError::Internal(format!("write authority.pid: {e}")))?;
@@ -296,7 +303,7 @@ impl AuthoritySupervisor {
 
         info!(
             sandbox_id = req.sandbox_id.compact(),
-            pid,
+            pid = %pid,
             listen_addr = %capture.listen_addr,
             "authority started"
         );
@@ -318,7 +325,7 @@ impl AuthoritySupervisor {
 
     #[doc(hidden)]
     #[must_use]
-    pub fn pid(&self) -> u32 {
+    pub fn pid(&self) -> UserProcessId {
         self.pid
     }
 
@@ -338,13 +345,15 @@ impl AuthoritySupervisor {
 impl Drop for AuthoritySupervisor {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            send_sigterm(self.pid);
+            if let Err(error) = self.pid.send_sigterm_signal() {
+                warn!(%error, pid = %self.pid, "SIGTERM to authority failed");
+            }
             match child.wait_timeout(STOP_GRACE) {
                 Ok(Some(_)) => {
-                    info!(pid = self.pid, "authority stopped");
+                    info!(pid = %self.pid, "authority stopped");
                 }
                 Ok(None) => {
-                    warn!(pid = self.pid, "authority SIGKILL after grace");
+                    warn!(pid = %self.pid, "authority SIGKILL after grace");
                     let _ = child.kill();
                     let _ = child.wait();
                 }
@@ -369,18 +378,6 @@ impl Drop for AuthoritySupervisor {
 }
 
 #[cfg(unix)]
-fn send_sigterm(pid: u32) {
-    let Ok(raw) = i32::try_from(pid) else {
-        warn!(pid, "pid does not fit in i32; skipping SIGTERM");
-        return;
-    };
-    let target = nix::unistd::Pid::from_raw(raw);
-    if let Err(e) = nix::sys::signal::kill(target, nix::sys::signal::Signal::SIGTERM) {
-        warn!(error = %e, pid, "SIGTERM to authority failed");
-    }
-}
-
-#[cfg(unix)]
 fn select_loopback_v6_port() -> Result<SocketAddr, RunError> {
     let addr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0));
     let listener =
@@ -390,9 +387,6 @@ fn select_loopback_v6_port() -> Result<SocketAddr, RunError> {
         .map_err(|e| RunError::Internal(format!("read local addr for authority port: {e}")))?;
     Ok(selected)
 }
-
-#[cfg(not(unix))]
-fn send_sigterm(_pid: u32) {}
 
 const LISTENING_TOKEN: &str = "listening";
 

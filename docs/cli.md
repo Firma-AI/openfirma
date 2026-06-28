@@ -307,6 +307,8 @@ State directory resolution: `FIRMA_STATE_DIR` → `$XDG_RUNTIME_DIR/firma` →
 | `LISTEN`     | UDS path or address the sidecar is bound to, or `-`. |
 | `UPTIME`     | `HH:MM:SS` since the marker was written, or `-`.     |
 
+In JSON mode, an absent PID is emitted as `null`.
+
 ### STATE semantics
 
 | State       | Meaning                                                         |

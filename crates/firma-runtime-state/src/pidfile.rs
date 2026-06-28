@@ -3,13 +3,14 @@
 use std::path::Path;
 
 use crate::error::Result;
+use crate::process_id::UserProcessId;
 
 /// Write a pid file.
 ///
 /// # Errors
 ///
 /// Returns filesystem errors.
-pub fn write(path: &Path, pid: u32) -> Result<()> {
+pub fn write(path: &Path, pid: UserProcessId) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -22,9 +23,9 @@ pub fn write(path: &Path, pid: u32) -> Result<()> {
 /// # Errors
 ///
 /// Returns filesystem errors other than not-found.
-pub fn read(path: &Path) -> Result<Option<u32>> {
+pub fn read(path: &Path) -> Result<Option<UserProcessId>> {
     match std::fs::read_to_string(path) {
-        Ok(text) => Ok(text.trim().parse().ok()),
+        Ok(text) => Ok(text.trim().parse().ok().and_then(UserProcessId::new)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }

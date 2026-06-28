@@ -11,6 +11,7 @@ use nix::unistd::Pid;
 
 use crate::error::{Result, StackError};
 use crate::platform::{Group, Platform, SpawnedChild};
+use firma_runtime_state::ChildExt as _;
 
 pub struct UnixPlatform;
 
@@ -49,7 +50,7 @@ impl Platform for UnixPlatform {
                 .to_string(),
             source,
         })?;
-        let pid = child.id();
+        let pid = child.process_id();
         std::mem::forget(child);
         Ok(SpawnedChild { pid })
     }
@@ -62,9 +63,5 @@ impl Platform for UnixPlatform {
     fn signal_hard(group_pid: u32) -> Result<()> {
         killpg(raw_pid(group_pid)?, Signal::SIGKILL)
             .map_err(|error| StackError::Platform(format!("killpg(SIGKILL) failed: {error}")))
-    }
-
-    fn is_alive(pid: u32) -> bool {
-        firma_runtime_state::is_pid_alive(pid)
     }
 }
