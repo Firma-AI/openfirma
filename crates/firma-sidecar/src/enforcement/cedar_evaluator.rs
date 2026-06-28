@@ -348,9 +348,7 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
                         modifications: firma_core::ModificationSpec::new(description),
                     },
                     Some(Remediation::StepUp(challenge)) => PolicyVerdict::StepUp { challenge },
-                    Some(Remediation::Defer(backoff)) => PolicyVerdict::Defer {
-                        retry_after_ms: u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX),
-                    },
+                    Some(Remediation::Defer(backoff)) => PolicyVerdict::Defer { backoff },
                     None => PolicyVerdict::Deny,
                 })
             }
@@ -1014,7 +1012,9 @@ forbid(principal, action, resource);"#,
         ))
         .unwrap();
         match verdict_for(&evaluator) {
-            PolicyVerdict::Defer { retry_after_ms } => assert_eq!(retry_after_ms, 750),
+            PolicyVerdict::Defer { backoff } => {
+                assert_eq!(backoff, Duration::from_millis(750));
+            }
             other => panic!("expected Defer, got {other:?}"),
         }
     }

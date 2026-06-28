@@ -71,11 +71,10 @@ pub enum PolicyVerdict {
         challenge: String,
     },
     /// AARM R4 `DEFER`: delay execution pending additional context or
-    /// rate budget. `retry_after_ms` is sourced from the `@defer("<ms>")`
-    /// annotation.
+    /// rate budget. `backoff` is sourced from the `@defer("<ms>")` annotation.
     Defer {
-        /// Backoff window before the agent should retry, in milliseconds.
-        retry_after_ms: u64,
+        /// Backoff window before the agent should retry.
+        backoff: Duration,
     },
 }
 

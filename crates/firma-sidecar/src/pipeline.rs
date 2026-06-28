@@ -267,8 +267,9 @@ impl EnforcementPipeline {
                     identity: Some(identity),
                 };
             }
-            PolicyVerdict::Defer { retry_after_ms } => {
+            PolicyVerdict::Defer { backoff } => {
                 let identity = DenyIdentity::from_claims(&capability.claims);
+                let retry_after_ms = u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX);
                 return EnforcementDecision::Defer {
                     claims: Some(capability.claims),
                     envelope: Some(normalized),
