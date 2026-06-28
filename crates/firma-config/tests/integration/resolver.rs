@@ -1,5 +1,6 @@
 //! Config discovery behavior through the public resolver API.
 
+use std::assert_matches;
 use std::path::{Path, PathBuf};
 
 use firma_config::{
@@ -61,13 +62,13 @@ fn explicit_missing_config_is_an_error() {
         let error = ConfigResolver::default()
             .resolve_config(Some(&missing))
             .expect_err("resolution should fail");
-        assert!(matches!(
+        assert_matches!(
             error,
             ConfigResolveError {
                 config_source: ConfigSource::Flag,
                 ..
             }
-        ));
+        );
     });
 }
 
@@ -80,13 +81,7 @@ fn explicit_invalid_toml_is_an_error() {
         let error = ConfigResolver::default()
             .resolve_config(Some(&invalid))
             .expect_err("resolution should fail");
-        let ConfigResolveError {
-            config_source,
-            path,
-            ..
-        } = error;
-        assert_eq!(config_source, ConfigSource::Flag);
-        assert_eq!(path, invalid);
+        assert_matches!(error, ConfigResolveError { config_source: ConfigSource::Flag, path, .. } if path == invalid);
     });
 }
 
@@ -116,13 +111,13 @@ fn env_missing_config_is_an_error() {
             let error = ConfigResolver::default()
                 .resolve_config(None)
                 .expect_err("resolution should fail");
-            assert!(matches!(
+            assert_matches!(
                 error,
                 ConfigResolveError {
                     config_source: ConfigSource::EnvVar,
                     ..
                 }
-            ));
+            );
         },
     );
 }
@@ -138,13 +133,7 @@ fn env_invalid_toml_is_an_error() {
             let error = ConfigResolver::default()
                 .resolve_config(None)
                 .expect_err("resolution should fail");
-            let ConfigResolveError {
-                config_source,
-                path,
-                ..
-            } = error;
-            assert_eq!(config_source, ConfigSource::EnvVar);
-            assert_eq!(path, invalid);
+            assert_matches!(error, ConfigResolveError { config_source: ConfigSource::EnvVar, path, .. } if path == invalid);
         },
     );
 }
@@ -218,13 +207,7 @@ fn project_local_invalid_toml_fails_closed_without_continuing_to_parent() {
         let error = ConfigResolver::default()
             .resolve_config(None)
             .expect_err("resolution should fail");
-        let ConfigResolveError {
-            config_source,
-            path,
-            ..
-        } = error;
-        assert_eq!(config_source, ConfigSource::ProjectLocal);
-        assert_eq!(path, invalid);
+        assert_matches!(error, ConfigResolveError { config_source: ConfigSource::ProjectLocal, path, .. } if path == invalid);
     });
 }
 
@@ -259,13 +242,7 @@ fn project_local_unreadable_file_fails_closed_without_continuing_to_parent() {
         let error = ConfigResolver::default()
             .resolve_config(None)
             .expect_err("resolution should fail");
-        let ConfigResolveError {
-            config_source,
-            path,
-            ..
-        } = error;
-        assert_eq!(config_source, ConfigSource::ProjectLocal);
-        assert_eq!(path, unreadable);
+        assert_matches!(error, ConfigResolveError { config_source: ConfigSource::ProjectLocal, path, .. } if path == unreadable);
 
         set_mode(&unreadable, 0o600);
     });
@@ -292,12 +269,7 @@ fn resolver_stops_walk_at_ceiling() {
         touch_project_local(root);
         let provider = ConfigResolver::default().walk_up_to(&ceiling);
 
-        assert!(
-            provider
-                .resolve_config(None)
-                .expect("resolve config")
-                .is_none()
-        );
+        assert_matches!(provider.resolve_config(None).expect("resolve config"), None);
     });
 }
 
@@ -308,12 +280,7 @@ fn cwd_outside_ceiling_stops_before_searching() {
         touch_project_local(root);
         let provider = ConfigResolver::default().walk_up_to(&ceiling);
 
-        assert!(
-            provider
-                .resolve_config(None)
-                .expect("resolve config")
-                .is_none()
-        );
+        assert_matches!(provider.resolve_config(None).expect("resolve config"), None);
     });
 }
 
@@ -322,11 +289,6 @@ fn nothing_found_returns_none() {
     helper::run_isolated(|root| {
         let provider = ConfigResolver::default().walk_up_to(root);
 
-        assert!(
-            provider
-                .resolve_config(None)
-                .expect("resolve config")
-                .is_none()
-        );
+        assert_matches!(provider.resolve_config(None).expect("resolve config"), None);
     });
 }
