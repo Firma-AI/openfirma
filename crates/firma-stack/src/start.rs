@@ -181,8 +181,9 @@ fn rollback(state_dir: &Path) {
 ///
 /// Returns pidfile or supervision errors.
 pub fn supervise(state_dir: &Path) -> Result<()> {
-    let supervisor_pid = UserProcessId::new(std::process::id())
-        .ok_or_else(|| StackError::Platform("current process has reserved pid 0".into()))?;
+    let supervisor_pid = UserProcessId::new(std::process::id()).ok_or_else(|| {
+        StackError::Platform("current process returned invalid process id".into())
+    })?;
     info!(supervisor_pid = %supervisor_pid, state_dir = %state_dir.display(), "supervisor attaching");
     pidfile::write(&state_dir.join("stack.pid"), supervisor_pid)?;
     let authority_pid = pidfile::read(&state_dir.join("authority.pid"))?

@@ -55,9 +55,8 @@ fn drop_reaps_child_within_grace() {
     drop(sup);
 
     let deadline = Instant::now() + Duration::from_secs(7);
-    let pid_i32 = i32::try_from(pid.get()).expect("pid fits in i32");
     while Instant::now() < deadline {
-        match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid_i32), None) {
+        match nix::sys::signal::kill(pid.as_nix_pid(), None) {
             Err(nix::errno::Errno::ESRCH) => return,
             _ => std::thread::sleep(Duration::from_millis(100)),
         }

@@ -12,9 +12,12 @@ pub trait ChildExt {
 }
 
 impl ChildExt for std::process::Child {
-    #[expect(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "spawned child process IDs are valid on supported platforms"
+    )]
     fn process_id(&self) -> UserProcessId {
         UserProcessId::new(self.id())
-            .expect("spawned child process IDs are non-zero on supported platforms")
+            .expect("spawned child process IDs are valid on supported platforms")
     }
 }

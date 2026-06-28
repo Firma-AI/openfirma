@@ -1,5 +1,9 @@
 use super::{SignalProcessError, UserProcessId};
 
+pub(super) fn raw_process_id_is_supported(_raw: u32) -> bool {
+    true
+}
+
 #[expect(
     unsafe_code,
     reason = "Windows process liveness uses raw Win32 process handles"
