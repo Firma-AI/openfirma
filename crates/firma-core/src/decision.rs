@@ -46,12 +46,6 @@ pub enum Decision {
 
 /// Typed reason code explaining why a request was denied.
 ///
-/// `StepUpRequired` and `Deferred` carry the AARM R4 `STEP_UP` and `DEFER`
-/// outcomes: the call does not proceed, so the agent-visible surface is a
-/// structured denial whose reason tells the agent how to recover (request
-/// approval, retry later). This is distinct from the feature-backlog variants
-/// below, which are unrelated to AARM DEFER.
-///
 /// Backlog variants (add back when corresponding mechanisms exist):
 /// - `BudgetExceeded` — when budget tracking mechanism is designed
 /// - `RiskThreshold` — when anomaly detection is designed
