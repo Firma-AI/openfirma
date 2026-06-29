@@ -21,6 +21,7 @@ Guidelines for writing new tests for Rust code.
 
 ## Code organization
 
-1. Put tests in crate-level `tests/` integration suites when they exercise public behavior.
-2. Use `#[cfg(test)]` modules for private helpers or internal edge cases that cannot be reached through public interfaces.
-3. Add doctests only when the example is genuinely useful documentation, not just another place to duplicate unit coverage.
+1. Put all new Rust tests in crate-level `tests/` integration suites.
+2. Do not add `#[cfg(test)]` modules or inline tests to `src/` files.
+3. If behavior is only reachable through private helpers, prefer testing it through public behavior. If that is impractical, ask before changing visibility or adding test-only APIs.
+4. Add doctests only when the example is genuinely useful documentation, not just another place to duplicate unit coverage.
