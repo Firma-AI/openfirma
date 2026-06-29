@@ -96,7 +96,7 @@ scenario_tests! {
         simple_prompt                => scenarios::SimplePrompt,
         allow_http_call              => scenarios::AllowHttpCall,
         deny_forbidden_http_resource => scenarios::DenyForbiddenHttpResource,
-        deny_unmapped_http_call      => scenarios::DenyUnmappedHttpCall,
+        deny_unclassified_intent     => scenarios::DenyUnclassifiedIntent,
         deny_http_call               => scenarios::DenyHttpCall,
         block_raw_tcp_egress         => scenarios::BlockRawTcpEgress,
         fs_read_deny                 => scenarios::FsReadDeny::default(),

@@ -5,17 +5,16 @@ use crate::audit::FirmaAuditTrail;
 use crate::scenario::{EnforcementScenario, PhaseOutput};
 use crate::setup::ScenarioSetup;
 
-pub struct DenyUnmappedHttpCall;
+pub struct DenyUnclassifiedIntent;
 
-impl EnforcementScenario for DenyUnmappedHttpCall {
+impl EnforcementScenario for DenyUnclassifiedIntent {
     fn name(&self) -> &'static str {
-        "deny_unmapped_http_call"
+        "deny_unclassified_intent"
     }
 
     fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.git_init_workspace()?;
         ctx.firma_config().run()?;
-        // No mapping rule registered; firma must deny the unclassified request.
         ctx.mocks.push(
             Mock::given(method("GET"))
                 .and(path(MOCK_PATH))
@@ -25,9 +24,11 @@ impl EnforcementScenario for DenyUnmappedHttpCall {
     }
 
     fn prompt(&self, ctx: &ScenarioSetup) -> String {
+        let port = ctx.mock_server.address().port();
         format!(
-            "Use curl to GET {} and print the full response body.",
-            ctx.mock_server.uri() + MOCK_PATH
+            "Run exactly this command and print its full output:\n\
+             curl --resolve {UNMAPPED_HOST}:{port}:127.0.0.1 \
+             http://{UNMAPPED_HOST}:{port}{MOCK_PATH}"
         )
     }
 
@@ -53,7 +54,7 @@ impl EnforcementScenario for DenyUnmappedHttpCall {
     ) -> Result<(), anyhow::Error> {
         if !output.http_requests.is_empty() {
             anyhow::bail!(
-                "request reached mock server; should have been blocked (no mapping rule registered)"
+                "request reached mock server; should have been blocked (unmapped host, fail-closed)"
             );
         }
         audit.assert_snapshot(self.name(), ctx);
@@ -62,3 +63,6 @@ impl EnforcementScenario for DenyUnmappedHttpCall {
 }
 
 const MOCK_PATH: &str = "/unlisted";
+/// Non-loopback host with no mapping rule. Routed to the loopback mock via
+/// `curl --resolve` in the proxy-less baseline; unmapped under enforcement.
+const UNMAPPED_HOST: &str = "unmapped.test";
