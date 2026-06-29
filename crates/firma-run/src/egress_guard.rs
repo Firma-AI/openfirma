@@ -521,11 +521,9 @@ impl Drop for EgressGuardHandle {
 /// or the socket cannot be bound.
 pub fn start(config: SupervisorConfig) -> Result<EgressGuardHandle, RunError> {
     if let Some(parent) = config.socket_path.parent() {
-        firma_runtime_state::fs::create_private_dir_all(parent).map_err(|error| {
-            RunError::Backend {
-                backend: "egress_guard".to_string(),
-                reason: format!("create guard socket dir {}: {error}", parent.display()),
-            }
+        firma_fs::create_private_dir_all(parent).map_err(|error| RunError::Backend {
+            backend: "egress_guard".to_string(),
+            reason: format!("create guard socket dir {}: {error}", parent.display()),
         })?;
     }
     let _ = std::fs::remove_file(&config.socket_path);

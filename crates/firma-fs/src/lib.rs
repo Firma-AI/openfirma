@@ -1,4 +1,4 @@
-//! Filesystem helpers for private runtime state.
+//! Filesystem helpers shared by `OpenFirma` crates.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -24,6 +24,32 @@ pub enum CreatePrivateDirError {
         #[source]
         source: io::Error,
     },
+}
+
+/// Error returned by file write helpers.
+#[derive(Debug, thiserror::Error)]
+#[error("{op} {path}: {source}")]
+pub struct FsError {
+    op: &'static str,
+    path: PathBuf,
+    #[source]
+    source: io::Error,
+}
+
+impl FsError {
+    fn new(op: &'static str, path: &Path, source: io::Error) -> Self {
+        Self {
+            op,
+            path: path.to_path_buf(),
+            source,
+        }
+    }
+
+    /// Return the underlying I/O error kind.
+    #[must_use]
+    pub fn kind(&self) -> io::ErrorKind {
+        self.source.kind()
+    }
 }
 
 /// Write `contents` to `path` with mode 0600 on Unix (owner read/write only, umask-independent).
@@ -87,4 +113,63 @@ pub fn create_private_dir_all(path: &Path) -> Result<(), CreatePrivateDirError> 
         })?;
     }
     Ok(())
+}
+
+/// Write `bytes` to `path`, creating or truncating it, with the given Unix mode.
+/// On Windows the `mode` argument is ignored.
+///
+/// # Errors
+///
+/// Returns [`FsError`] on any I/O failure.
+pub fn write_file(path: &Path, bytes: &[u8], mode: u32) -> Result<(), FsError> {
+    use std::io::Write as _;
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(mode);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    opts.open(path)
+        .map_err(|e| FsError::new("open", path, e))?
+        .write_all(bytes)
+        .map_err(|e| FsError::new("write", path, e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            .map_err(|e| FsError::new("chmod", path, e))?;
+    }
+    Ok(())
+}
+
+/// Write `bytes` to a new file at `path` with the given Unix mode.
+///
+/// Returns [`FsError`] with [`FsError::kind`] equal to
+/// [`io::ErrorKind::AlreadyExists`] if the file already exists. Callers decide
+/// whether to treat that as an error or ignore it. On Windows the `mode`
+/// argument is ignored.
+///
+/// # Errors
+///
+/// Returns [`FsError`] on any I/O failure.
+pub fn write_new_file(path: &Path, bytes: &[u8], mode: u32) -> Result<(), FsError> {
+    use std::io::Write as _;
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(mode);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    opts.open(path)
+        .map_err(|e| FsError::new("create", path, e))?
+        .write_all(bytes)
+        .map_err(|e| FsError::new("write", path, e))
 }

@@ -1,7 +1,6 @@
 //! Runtime state contracts and local liveness primitives shared by `OpenFirma` crates.
 
 pub mod error;
-pub mod fs;
 pub mod pidfile;
 pub mod process_id;
 pub mod runtime_paths;

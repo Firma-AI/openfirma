@@ -181,7 +181,7 @@ pub fn run_bootstrap_tls(out_dir: &Path, hosts: &[String]) -> Result<()> {
         hosts.to_vec()
     };
 
-    crate::fs::create_private_dir_all(out_dir)?;
+    firma_fs::create_private_dir_all(out_dir)?;
 
     let ca_cert_path: PathBuf = out_dir.join("authority-ca.crt");
     let ca_key_path: PathBuf = out_dir.join("authority-ca.key");
@@ -216,10 +216,10 @@ pub fn run_bootstrap_tls(out_dir: &Path, hosts: &[String]) -> Result<()> {
         .signed_by(&server_key, &ca_cert, &ca_key)
         .context("failed to sign server certificate with CA")?;
 
-    crate::fs::write_new_file(&ca_cert_path, ca_cert.pem().as_bytes(), 0o644)?;
-    crate::fs::write_new_file(&ca_key_path, ca_key.serialize_pem().as_bytes(), 0o600)?;
-    crate::fs::write_new_file(&server_cert_path, server_cert.pem().as_bytes(), 0o644)?;
-    crate::fs::write_new_file(
+    firma_fs::write_new_file(&ca_cert_path, ca_cert.pem().as_bytes(), 0o644)?;
+    firma_fs::write_new_file(&ca_key_path, ca_key.serialize_pem().as_bytes(), 0o600)?;
+    firma_fs::write_new_file(&server_cert_path, server_cert.pem().as_bytes(), 0o644)?;
+    firma_fs::write_new_file(
         &server_key_path,
         server_key.serialize_pem().as_bytes(),
         0o600,

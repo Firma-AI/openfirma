@@ -6,6 +6,7 @@ members = [
   "crates/firma-core",
   "crates/firma-demo-fixture",
   "crates/firma-demo-tui",
+  "crates/firma-fs",
   "crates/firma-grpc-interceptor-proto",
   "crates/firma-protobuf",
   "crates/firma-run",
@@ -56,6 +57,7 @@ elliptic-curve = { version = "0.13", features = ["pem"] }
 firma-authority = { path = "crates/firma-authority" }
 firma-config-loader = { path = "crates/firma-config-loader" }
 firma-core = { path = "crates/firma-core" }
+firma-fs = { path = "crates/firma-fs" }
 firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto" }
 firma-protobuf = { path = "crates/firma-protobuf" }
 firma-run = { path = "crates/firma-run" }

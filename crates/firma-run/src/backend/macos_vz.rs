@@ -297,14 +297,12 @@ impl SandboxBackend for VzBackend {
 /// so the whole runtime tree must be private before any contract or runner
 /// artifacts appear there.
 fn create_vz_runtime_dir(runtime_dir: &Path) -> Result<(), RunError> {
-    firma_runtime_state::fs::create_private_dir_all(runtime_dir).map_err(|error| {
-        RunError::Backend {
-            backend: BackendKind::Vz.to_string(),
-            reason: format!(
-                "failed to create private runtime dir {}: {error}",
-                runtime_dir.display()
-            ),
-        }
+    firma_fs::create_private_dir_all(runtime_dir).map_err(|error| RunError::Backend {
+        backend: BackendKind::Vz.to_string(),
+        reason: format!(
+            "failed to create private runtime dir {}: {error}",
+            runtime_dir.display()
+        ),
     })
 }
 
@@ -647,14 +645,12 @@ fn write_vz_guest_launch_contract(
     contract: &VzGuestLaunchContract,
 ) -> Result<PathBuf, RunError> {
     let contract_dir = handle.runtime_dir.join(VZ_GUEST_CONTRACT_DIR);
-    firma_runtime_state::fs::create_private_dir_all(&contract_dir).map_err(|error| {
-        RunError::Backend {
-            backend: BackendKind::Vz.to_string(),
-            reason: format!(
-                "failed to create private VZ guest contract dir {}: {error}",
-                contract_dir.display()
-            ),
-        }
+    firma_fs::create_private_dir_all(&contract_dir).map_err(|error| RunError::Backend {
+        backend: BackendKind::Vz.to_string(),
+        reason: format!(
+            "failed to create private VZ guest contract dir {}: {error}",
+            contract_dir.display()
+        ),
     })?;
 
     let contract_path = contract_dir.join(VZ_GUEST_CONTRACT_FILE);
@@ -664,14 +660,12 @@ fn write_vz_guest_launch_contract(
         ))
     })?;
 
-    firma_runtime_state::fs::write_private_file(&contract_path, &json).map_err(|error| {
-        RunError::Backend {
-            backend: BackendKind::Vz.to_string(),
-            reason: format!(
-                "failed to write VZ guest launch contract {}: {error}",
-                contract_path.display()
-            ),
-        }
+    firma_fs::write_private_file(&contract_path, &json).map_err(|error| RunError::Backend {
+        backend: BackendKind::Vz.to_string(),
+        reason: format!(
+            "failed to write VZ guest launch contract {}: {error}",
+            contract_path.display()
+        ),
     })?;
 
     Ok(contract_path)

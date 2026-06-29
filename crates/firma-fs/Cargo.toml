@@ -1,0 +1,13 @@
+[package]
+name = "firma-fs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Filesystem helpers shared by OpenFirma crates"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }

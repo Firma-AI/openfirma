@@ -16,6 +16,7 @@ dialoguer.workspace = true
 firma-authority.workspace = true
 firma-config-loader.workspace = true
 firma-core.workspace = true
+firma-fs.workspace = true
 firma-protobuf.workspace = true
 firma-runtime-state.workspace = true
 firma-sidecar.workspace = true

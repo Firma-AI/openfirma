@@ -105,7 +105,7 @@ pub fn spawn_listener(
     exit: CancellationToken,
 ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     if let Some(parent) = socket_path.parent() {
-        firma_runtime_state::fs::create_private_dir_all(parent).map_err(|error| {
+        firma_fs::create_private_dir_all(parent).map_err(|error| {
             anyhow::anyhow!(
                 "failed to create run-audit socket dir {}: {error}",
                 parent.display()
