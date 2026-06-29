@@ -1,6 +1,6 @@
 //! User-level `firma.toml` reader.
 //!
-//! Path resolution is delegated to the shared `firma-config` crate so
+//! Path resolution is delegated to the shared `firma-config-loader` crate so
 //! every binary discovers the same `firma.toml`.
 
 use std::fs;
@@ -152,7 +152,7 @@ fn validate_connect_section(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use firma_config::CONFIG_FILE_NAME;
+    use firma_config_loader::CONFIG_FILE_NAME;
     use tempfile::tempdir;
 
     #[test]

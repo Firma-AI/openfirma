@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use firma_config::AgentProfile;
+use firma_config_loader::AgentProfile;
 
 use crate::config::{
     CaTrustMode, CapabilityLeasePatch, CapabilitySourcePatch, ExecutableLaunchPolicyPatch,

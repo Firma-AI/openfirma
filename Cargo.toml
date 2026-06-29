@@ -2,7 +2,7 @@
 members = [
   "crates/firma",
   "crates/firma-authority",
-  "crates/firma-config",
+  "crates/firma-config-loader",
   "crates/firma-core",
   "crates/firma-demo-fixture",
   "crates/firma-demo-tui",
@@ -47,7 +47,7 @@ dirs = "6"
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
 elliptic-curve = { version = "0.13", features = ["pem"] }
 firma-authority = { path = "crates/firma-authority" }
-firma-config = { path = "crates/firma-config" }
+firma-config-loader = { path = "crates/firma-config-loader" }
 firma-core = { path = "crates/firma-core" }
 firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto" }
 firma-protobuf = "0.1.1"

@@ -15,7 +15,7 @@
 
 use std::path::PathBuf;
 
-use firma_config::CONFIG_FILE_NAME;
+use firma_config_loader::CONFIG_FILE_NAME;
 use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
 use firma_run::error::RunError;
 use firma_run::identity::RunIdentity;

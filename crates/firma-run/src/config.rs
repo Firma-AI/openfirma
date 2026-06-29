@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use firma_config::AgentProfile;
+use firma_config_loader::AgentProfile;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::BackendKind;
@@ -1003,7 +1003,7 @@ pub(crate) fn env_truthy(name: &str) -> bool {
 }
 
 fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
-    let section = firma_config::load_section(path, "run").map_err(|reason| {
+    let section = firma_config_loader::load_section(path, "run").map_err(|reason| {
         // load_section prefixes the path; strip it to avoid doubling in the
         // RunError::ConfigParse display ("{path}: {reason}").
         let prefix = format!("{}: ", path.display());
@@ -1036,7 +1036,7 @@ fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
 /// Returns an error when the file cannot be read or the `[run]` section
 /// cannot be parsed as `FileConfig`.
 pub fn read_configured_profile(path: &Path) -> Result<Option<String>, RunError> {
-    let section = firma_config::load_section(path, "run").map_err(|reason| {
+    let section = firma_config_loader::load_section(path, "run").map_err(|reason| {
         let prefix = format!("{}: ", path.display());
         let reason = reason.to_string();
         let reason = reason.strip_prefix(&prefix).unwrap_or(&reason).to_string();
@@ -1057,7 +1057,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use firma_config::CONFIG_FILE_NAME;
+    use firma_config_loader::CONFIG_FILE_NAME;
     use pretty_assertions::assert_eq;
 
     use crate::runtime::RunInput;

@@ -16,7 +16,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use firma_config::CONFIG_DIR_NAME;
+use firma_config_loader::CONFIG_DIR_NAME;
 
 fn firma_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_firma"))

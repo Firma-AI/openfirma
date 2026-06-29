@@ -85,7 +85,7 @@ fn fail(msg: &str) -> ExitCode {
 async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode> {
     debug!("firma sidecar starting");
 
-    let resolved = firma_config::ConfigResolver::default()
+    let resolved = firma_config_loader::ConfigResolver::default()
         .resolve_config(args.config.as_deref())?
         .ok_or_else(|| anyhow::anyhow!("no firma.toml found for `sidecar`"))?;
     info!(
@@ -236,7 +236,9 @@ fn emit_operator_routing_hints(config: &config::SidecarConfig, interceptor_addr:
     }
 }
 
-fn read_config(resolved: &firma_config::ResolvedConfig) -> anyhow::Result<config::SidecarConfig> {
+fn read_config(
+    resolved: &firma_config_loader::ResolvedConfig,
+) -> anyhow::Result<config::SidecarConfig> {
     let body = resolved
         .config
         .section("sidecar")

@@ -12,7 +12,7 @@
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use firma_config::CONFIG_FILE_NAME;
+use firma_config_loader::CONFIG_FILE_NAME;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
 

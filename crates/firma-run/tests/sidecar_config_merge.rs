@@ -14,7 +14,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use firma_config::CONFIG_FILE_NAME;
+use firma_config_loader::CONFIG_FILE_NAME;
 use firma_run::sidecar::config::testing::{SynthesizeRequest, TemplateSource, synthesize};
 use tempfile::TempDir;
 

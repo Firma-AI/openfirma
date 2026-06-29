@@ -13,8 +13,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use firma_config::CONFIG_DIR_NAME;
-use firma_config::CONFIG_FILE_NAME;
+use firma_config_loader::CONFIG_DIR_NAME;
+use firma_config_loader::CONFIG_FILE_NAME;
 use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::authority::AuthorityPromptIo;

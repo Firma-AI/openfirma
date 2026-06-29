@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use firma_config::CONFIG_FILE_NAME;
+use firma_config_loader::CONFIG_FILE_NAME;
 use tracing::debug;
 
 use crate::error::{Result, StackError};
@@ -29,14 +29,14 @@ pub struct StackConfig {
 /// Resolve the unified config for the stack.
 ///
 /// `cli_override` is the explicit `--config` flag (if any); otherwise the
-/// `firma-config` discovery precedence is used.
+/// `firma-config-loader` discovery precedence is used.
 ///
 /// # Errors
 ///
 /// Returns [`StackError::ConfigRead`] when no `firma.toml` can be
 /// resolved.
 pub fn resolve_stack_config(cli_override: Option<&Path>) -> Result<StackConfig> {
-    let resolved = firma_config::ConfigResolver::default()
+    let resolved = firma_config_loader::ConfigResolver::default()
         .resolve_config(cli_override)
         .map_err(|error| StackError::ConfigRead {
             path: error.path.clone(),

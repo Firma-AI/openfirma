@@ -17,7 +17,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use firma_config::CONFIG_FILE_NAME;
+use firma_config_loader::CONFIG_FILE_NAME;
 
 fn firma() -> Command {
     Command::new(env!("CARGO_BIN_EXE_firma"))
@@ -60,12 +60,12 @@ fn assert_unified_config_parses(firma_toml: &Path) {
     toml::from_str::<toml::Value>(&text)
         .unwrap_or_else(|e| panic!("parse {}: {e}\n---\n{text}", firma_toml.display()));
 
-    let abody = firma_config::load_section(firma_toml, "authority")
+    let abody = firma_config_loader::load_section(firma_toml, "authority")
         .unwrap_or_else(|e| panic!("[authority] section: {e}"));
     toml::from_str::<firma_authority::AuthorityConfig>(&abody)
         .unwrap_or_else(|e| panic!("[authority] deserialize: {e}\n---\n{abody}"));
 
-    let sbody = firma_config::load_section(firma_toml, "sidecar")
+    let sbody = firma_config_loader::load_section(firma_toml, "sidecar")
         .unwrap_or_else(|e| panic!("[sidecar] section: {e}"));
     let sidecar: firma_sidecar::config::SidecarConfig = toml::from_str(&sbody)
         .unwrap_or_else(|e| panic!("[sidecar] deserialize: {e}\n---\n{sbody}"));
@@ -656,7 +656,7 @@ fn scaffold_supports_standalone_sidecar_startup() {
     );
 
     // The whole section must pass strict validation.
-    let sbody = firma_config::load_section(&firma_toml, "sidecar").unwrap();
+    let sbody = firma_config_loader::load_section(&firma_toml, "sidecar").unwrap();
     let sidecar: firma_sidecar::config::SidecarConfig = toml::from_str(&sbody).unwrap();
     sidecar
         .validate()

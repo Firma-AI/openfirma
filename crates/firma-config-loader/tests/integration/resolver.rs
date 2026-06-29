@@ -3,7 +3,7 @@
 use std::assert_matches;
 use std::path::{Path, PathBuf};
 
-use firma_config::{
+use firma_config_loader::{
     CONFIG_DIR_NAME, CONFIG_ENV_NAME, ConfigResolveError, ConfigResolver, ConfigSource,
 };
 use fs_err as fs;
@@ -11,8 +11,8 @@ use fs_err as fs;
 use crate::helper;
 
 fn unwrap_resolved(
-    result: Result<Option<firma_config::ResolvedConfig>, ConfigResolveError>,
-) -> firma_config::ResolvedConfig {
+    result: Result<Option<firma_config_loader::ResolvedConfig>, ConfigResolveError>,
+) -> firma_config_loader::ResolvedConfig {
     result
         .expect("resolve config")
         .expect("config should be found")
@@ -21,7 +21,7 @@ fn unwrap_resolved(
 fn touch_project_local(dir: &Path) -> PathBuf {
     let d = dir.join(CONFIG_DIR_NAME);
     fs::create_dir_all(&d).expect("create .firma dir");
-    let f = d.join(firma_config::CONFIG_FILE_NAME);
+    let f = d.join(firma_config_loader::CONFIG_FILE_NAME);
     fs::write(&f, "").expect("write config file");
     f
 }
@@ -201,7 +201,7 @@ fn project_local_invalid_toml_fails_closed_without_continuing_to_parent() {
         touch_project_local(&project);
         let invalid = nested
             .join(CONFIG_DIR_NAME)
-            .join(firma_config::CONFIG_FILE_NAME);
+            .join(firma_config_loader::CONFIG_FILE_NAME);
         fs::write(&invalid, "=").expect("write invalid config");
 
         let error = ConfigResolver::default()
@@ -231,7 +231,7 @@ fn project_local_unreadable_file_fails_closed_without_continuing_to_parent() {
         touch_project_local(&project);
         let unreadable = nested
             .join(CONFIG_DIR_NAME)
-            .join(firma_config::CONFIG_FILE_NAME);
+            .join(firma_config_loader::CONFIG_FILE_NAME);
         fs::write(&unreadable, "").expect("write unreadable config");
         set_mode(&unreadable, 0o000);
         if fs::read_to_string(&unreadable).is_ok() {

@@ -1,6 +1,6 @@
 //! Unified `firma.toml` resolution round-trips.
 
-use firma_config::CONFIG_FILE_NAME;
+use firma_config_loader::CONFIG_FILE_NAME;
 use firma_stack::resolve_stack_config;
 
 #[test]
