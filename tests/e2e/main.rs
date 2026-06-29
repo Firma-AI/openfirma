@@ -76,7 +76,7 @@ macro_rules! scenario_tests {
     ([$($agent:ident),+]; $scenarios:tt) => {
         $( scenario_tests!(@agent $agent $scenarios); )+
     };
-    (@agent $agent:ident ($($(#[$meta:meta])* $name:ident => $scenario:expr),* $(,)?)) => {
+    (@agent $agent:ident ($($name:ident => $scenario:expr),* $(,)?)) => {
         mod $agent {
             use super::*;
             $(
