@@ -339,30 +339,14 @@ impl RequestHandler {
                 modifications,
                 ..
             } => {
-                // AARM R4 `MODIFY`: apply the structural transformation to the
-                // dispatch clone (not the immutable envelope on the decision),
-                // then forward. The original envelope is preserved for audit;
-                // the audit record carries the applied transformation.
-                //
-                // `redact_header` strips the header from the agent-produced
-                // request only; it does not prevent credential injection from
-                // adding the same header back to the outbound request. The
-                // redaction is scoped to what the agent sent, not to what the
-                // sidecar injects downstream.
-                let mut dispatch_envelope = *envelope;
-                hydrate_dispatch_http_fields(&mut dispatch_envelope, &request);
-                modifications
-                    .apply(&mut dispatch_envelope)
-                    .unwrap_or_else(|err| {
-                        tracing::error!(
-                            error = %err,
-                            "modification failed to apply; the policy targets HTTP headers \
-                             but the action is not HTTP — failing closed"
-                        );
-                    });
-                let (response, outcome) = self.dispatch(dispatch_envelope, credentials).await;
-                outcome.enrich(&mut audit_payload);
-                response
+                self.dispatch_modify(
+                    *envelope,
+                    &request,
+                    credentials,
+                    modifications,
+                    &mut audit_payload,
+                )
+                .await
             }
             EnforcementDecision::Passthrough { .. } => {
                 let envelope = passthrough_envelope(&request, session_id);
@@ -439,6 +423,37 @@ impl RequestHandler {
             tracing::error!("failed to send audit event: {err}");
         }
 
+        response
+    }
+
+    /// Dispatches a `MODIFY` decision: applies the structural transformation
+    /// to the dispatch clone, then forwards to the connector.
+    ///
+    /// `redact_header` strips the header from the agent-produced request only;
+    /// it does not prevent credential injection from adding the same header
+    /// back to the outbound request. The redaction is scoped to what the
+    /// agent sent, not to what the sidecar injects downstream.
+    async fn dispatch_modify(
+        &self,
+        envelope: ExecutionEnvelope,
+        request: &RawRequest,
+        credentials: InjectedCredentials,
+        modifications: firma_core::ModificationSpec,
+        audit_payload: &mut AuditPayload,
+    ) -> HandledResponse {
+        let mut dispatch_envelope = envelope;
+        hydrate_dispatch_http_fields(&mut dispatch_envelope, request);
+        modifications
+            .apply(&mut dispatch_envelope)
+            .unwrap_or_else(|err| {
+                tracing::error!(
+                    error = %err,
+                    "modification failed to apply; the policy targets HTTP headers \
+                     but the action is not HTTP — failing closed"
+                );
+            });
+        let (response, outcome) = self.dispatch(dispatch_envelope, credentials).await;
+        outcome.enrich(audit_payload);
         response
     }
 
