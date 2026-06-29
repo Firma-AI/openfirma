@@ -36,7 +36,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use firma_core::token::matches_resource_scope;
-use firma_core::{AgentId, CapabilityClaims, DenyReason, ModificationSpec};
+use firma_core::{AgentId, CapabilityClaims, DenyReason, ModificationSpec, StepUpSpec};
 
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
 use crate::enforcement::session_state::RuntimeSignals;
@@ -67,13 +67,15 @@ pub enum PolicyVerdict {
     /// proceeding. `challenge` is sourced from the `@step_up("…")`
     /// annotation; `retry_after_ms` is supplied by the pipeline.
     StepUp {
-        /// Human-readable challenge / approval description.
-        challenge: String,
+        /// Human-readable challenge / approval description, validated
+        /// non-empty at load time.
+        challenge: StepUpSpec,
     },
     /// AARM R4 `DEFER`: delay execution pending additional context or
     /// rate budget. `backoff` is sourced from the `@defer("<ms>")` annotation.
     Defer {
-        /// Backoff window before the agent should retry.
+        /// Backoff window before the agent should retry, validated > 0 at
+        /// load time.
         backoff: Duration,
     },
 }

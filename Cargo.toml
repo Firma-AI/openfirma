@@ -59,6 +59,7 @@ firma-stack = { path = "crates/firma-stack" }
 fs-err = "3.3"
 governor = "0.10"
 hex = "0.4"
+http = "1"
 http-body = "1"
 http-body-util = "0.1"
 hyper = { version = "1", default-features = false }

@@ -262,7 +262,7 @@ impl EnforcementPipeline {
                 return EnforcementDecision::StepUp {
                     claims: Some(capability.claims),
                     envelope: Some(normalized),
-                    challenge,
+                    challenge: challenge.to_string(),
                     retry_after_ms: STEP_UP_RETRY_AFTER_MS,
                     identity: Some(identity),
                 };
@@ -2213,7 +2213,9 @@ mod tests {
         let modify = EnforcementDecision::Modify {
             claims: claims.clone(),
             envelope: Box::new(test_execution_envelope(&claims)),
-            modifications: firma_core::ModificationSpec::RedactHeader("authorization".to_string()),
+            modifications: firma_core::ModificationSpec::RedactHeader(
+                http::HeaderName::from_static("authorization"),
+            ),
             credentials: InjectedCredentials::empty(),
         };
         let payload =

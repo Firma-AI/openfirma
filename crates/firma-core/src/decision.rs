@@ -1,4 +1,6 @@
+use http::HeaderName;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 /// Typed reason code explaining why an already-authorized request was aborted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
@@ -131,6 +133,32 @@ pub enum DenyReason {
     Deferred,
 }
 
+/// Errors that can arise when parsing or applying a [`ModificationSpec`].
+#[derive(Debug, thiserror::Error)]
+pub enum ModificationError {
+    /// The `@modify` annotation value was empty.
+    #[error("modify annotation value must not be empty")]
+    EmptyValue,
+    /// The header name in `redact_header:<name>` was empty.
+    #[error("redact_header: header name must not be empty")]
+    EmptyHeaderName,
+    /// The header name could not be parsed as a valid HTTP header name.
+    #[error("invalid header name `{raw}`: {source}")]
+    InvalidHeaderName {
+        raw: String,
+        #[source]
+        source: http::header::InvalidHeaderName,
+    },
+    /// The `@modify` kind was not recognised.
+    #[error("unknown @modify kind; expected `redact_header:<name>`, got: {value:?}")]
+    UnknownKind { value: String },
+    /// The transformation targets HTTP headers, but the envelope's action
+    /// params are not HTTP (e.g. `ToolUse`, `DbQuery`). Failing closed
+    /// ensures the operator knows the policy doesn't match the traffic shape.
+    #[error("modification targets HTTP headers but the action is not HTTP")]
+    UnsupportedModificationTarget,
+}
+
 /// Structured transformation applied to a request under the AARM R4 `MODIFY`
 /// decision.
 ///
@@ -142,15 +170,58 @@ pub enum DenyReason {
 ///   `redacted_header:<name>` so an operator can reconcile the transformed
 ///   execution against policy intent.
 ///
-/// Unknown kinds, empty header names, or a missing `:` reject the bundle at
-/// load time (`MalformedAnnotation`) — the author must fix the policy. New
-/// kinds (e.g. `strip_query_param`) can be added later as enum variants
-/// without a wire break.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// `redact_header` strips the header from the agent-produced request. It does
+/// **not** prevent the sidecar's credential-injection stage from adding the
+/// same header back to the outbound request — the redaction is scoped to
+/// what the agent sent, not to what the sidecar injects.
+///
+/// Unknown kinds, empty header names, or an invalid header name reject the
+/// bundle at load time — the author must fix the policy. New kinds (e.g.
+/// `strip_query_param`) can be added later as enum variants without a wire
+/// break.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModificationSpec {
     /// Strip the named HTTP header from the outbound request before dispatch.
     /// Header-name matching is case-insensitive (HTTP semantics).
-    RedactHeader(String),
+    RedactHeader(HeaderName),
+}
+
+impl serde::Serialize for ModificationSpec {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::RedactHeader(name) => serializer.serialize_newtype_variant(
+                "ModificationSpec",
+                0,
+                "RedactHeader",
+                name.as_str(),
+            ),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ModificationSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        #[expect(non_snake_case, reason = "serde variant field name must match the tag")]
+        enum Helper {
+            RedactHeader { RedactHeader: String },
+        }
+        let helper = Helper::deserialize(deserializer)?;
+        match helper {
+            Helper::RedactHeader { RedactHeader: s } => {
+                let name =
+                    HeaderName::from_bytes(s.as_bytes()).map_err(serde::de::Error::custom)?;
+                Ok(Self::RedactHeader(name))
+            }
+        }
+    }
 }
 
 /// DSL prefix for the header-redaction transformation.
@@ -159,46 +230,63 @@ const MODIFICATION_REDACT_HEADER: &str = "redact_header:";
 impl ModificationSpec {
     /// Parse a `@modify("…")` annotation value into a [`ModificationSpec`].
     ///
-    /// Returns `Err(reason)` if the value is not a recognised `<kind>:<value>`
-    /// form or the payload is empty. The caller maps the reason into a
-    /// `MalformedAnnotation` error at the sidecar layer.
-    ///
     /// # Errors
     ///
-    /// - `redact_header:<name>` with an empty `<name>` → `Err`.
-    /// - Unknown kind (no recognised prefix) → `Err`.
-    pub fn parse(annotation: &str) -> Result<Self, String> {
+    /// - Empty value → [`ModificationError::EmptyValue`].
+    /// - `redact_header:` with an empty name → [`ModificationError::EmptyHeaderName`].
+    /// - Invalid header name → [`ModificationError::InvalidHeaderName`].
+    /// - Unknown kind → [`ModificationError::UnknownKind`].
+    pub fn parse(annotation: &str) -> Result<Self, ModificationError> {
         let value = annotation.trim();
         if value.is_empty() {
-            return Err("modify annotation value must not be empty".to_string());
+            return Err(ModificationError::EmptyValue);
         }
         if let Some(name) = value.strip_prefix(MODIFICATION_REDACT_HEADER) {
             let name = name.trim();
             if name.is_empty() {
-                return Err("redact_header: header name must not be empty".to_string());
+                return Err(ModificationError::EmptyHeaderName);
             }
-            return Ok(Self::RedactHeader(name.to_string()));
+            let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|source| {
+                ModificationError::InvalidHeaderName {
+                    raw: name.to_string(),
+                    source,
+                }
+            })?;
+            return Ok(Self::RedactHeader(header_name));
         }
-        Err(format!(
-            "unknown @modify kind; expected `{MODIFICATION_REDACT_HEADER}<name>`, got: {value:?}"
-        ))
+        Err(ModificationError::UnknownKind {
+            value: value.to_string(),
+        })
     }
 
     /// Apply this transformation in place to a dispatch-bound envelope.
     ///
     /// Mutates only the HTTP headers map of the dispatch clone; the original
     /// envelope stored on the sidecar's `EnforcementDecision::Modify` is
-    /// untouched, preserving the immutability invariant. No-op for non-HTTP
-    /// action params so the same call site is safe for all envelope shapes.
-    pub fn apply(&self, envelope: &mut crate::envelope::ExecutionEnvelope) {
+    /// untouched, preserving the immutability invariant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModificationError::UnsupportedModificationTarget`] if the
+    /// envelope's action params are not HTTP — the policy author asked for
+    /// header redaction on a non-HTTP target, which is a misconfiguration.
+    /// Failing closed ensures the operator knows the policy doesn't match
+    /// the traffic shape.
+    pub fn apply(
+        &self,
+        envelope: &mut crate::envelope::ExecutionEnvelope,
+    ) -> Result<(), ModificationError> {
         let crate::envelope::ActionParams::Http(http) = &mut envelope.intent.params else {
-            return;
+            return Err(ModificationError::UnsupportedModificationTarget);
         };
         match self {
             Self::RedactHeader(name) => {
-                http.headers.retain(|k, _| !k.eq_ignore_ascii_case(name));
+                http.headers.retain(|k, _| {
+                    HeaderName::from_bytes(k.as_bytes()).map_or(true, |hn| hn != *name)
+                });
             }
         }
+        Ok(())
     }
 }
 
@@ -207,6 +295,81 @@ impl std::fmt::Display for ModificationSpec {
         match self {
             Self::RedactHeader(name) => write!(f, "redacted_header:{name}"),
         }
+    }
+}
+
+/// Human-readable challenge description for an AARM R4 `STEP_UP` decision.
+///
+/// Validates at construction that the value is not empty or whitespace-only,
+/// so any value that survives into a [`crate::DenyReason::StepUpRequired`] or
+/// a `PolicyVerdict::StepUp` is guaranteed to carry a meaningful message.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StepUpSpec(String);
+
+impl StepUpSpec {
+    /// Construct a [`StepUpSpec`] from a challenge string.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the value is empty or whitespace-only.
+    pub fn new(value: impl Into<String>) -> Result<Self, ModificationError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err(ModificationError::EmptyValue);
+        }
+        Ok(Self(value))
+    }
+
+    /// Return the challenge description as a `&str`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for StepUpSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for StepUpSpec {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Backoff duration for an AARM R4 `DEFER` decision.
+///
+/// Validates at construction that the duration is strictly positive, so any
+/// value that survives into a `PolicyVerdict::Defer` is guaranteed to carry a
+/// non-zero retry window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DeferDuration(Duration);
+
+impl DeferDuration {
+    /// Construct a [`DeferDuration`] from a [`Duration`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the duration is zero.
+    pub fn new(duration: Duration) -> Result<Self, ModificationError> {
+        if duration.is_zero() {
+            return Err(ModificationError::EmptyValue);
+        }
+        Ok(Self(duration))
+    }
+
+    /// Return the inner [`Duration`].
+    #[must_use]
+    pub fn duration(&self) -> Duration {
+        self.0
+    }
+}
+
+impl From<DeferDuration> for Duration {
+    fn from(value: DeferDuration) -> Self {
+        value.0
     }
 }
 
@@ -307,7 +470,7 @@ mod tests {
 
     #[test]
     fn modification_spec_round_trip() {
-        let spec = ModificationSpec::RedactHeader("authorization".to_string());
+        let spec = ModificationSpec::RedactHeader(HeaderName::from_static("authorization"));
         let json = serde_json::to_string(&spec).unwrap_or_else(|e| panic!("{e}"));
         let parsed: ModificationSpec =
             serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
@@ -320,7 +483,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(
             spec,
-            ModificationSpec::RedactHeader("authorization".to_string())
+            ModificationSpec::RedactHeader(HeaderName::from_static("authorization"))
         );
     }
 
@@ -330,31 +493,51 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(
             spec,
-            ModificationSpec::RedactHeader("x-api-key".to_string())
+            ModificationSpec::RedactHeader(HeaderName::from_static("x-api-key"))
         );
     }
 
     #[test]
     fn modification_spec_parse_rejects_empty_header_name() {
         let err = ModificationSpec::parse("redact_header:").unwrap_err();
-        assert!(err.contains("header name must not be empty"), "got: {err}");
+        assert!(
+            matches!(err, ModificationError::EmptyHeaderName),
+            "expected EmptyHeaderName, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn modification_spec_parse_rejects_invalid_header_name() {
+        // `redact_header:<invalid>` — header name with illegal characters
+        // is rejected by http::HeaderName::from_bytes.
+        let err = ModificationSpec::parse("redact_header:invalid header").unwrap_err();
+        assert!(
+            matches!(err, ModificationError::InvalidHeaderName { .. }),
+            "expected InvalidHeaderName, got {err:?}"
+        );
     }
 
     #[test]
     fn modification_spec_parse_rejects_unknown_kind() {
         let err = ModificationSpec::parse("rewrite_body:foo").unwrap_err();
-        assert!(err.contains("unknown @modify kind"), "got: {err}");
+        assert!(
+            matches!(err, ModificationError::UnknownKind { .. }),
+            "expected UnknownKind, got {err:?}"
+        );
     }
 
     #[test]
     fn modification_spec_parse_rejects_empty_value() {
         let err = ModificationSpec::parse("   ").unwrap_err();
-        assert!(err.contains("must not be empty"), "got: {err}");
+        assert!(
+            matches!(err, ModificationError::EmptyValue),
+            "expected EmptyValue, got {err:?}"
+        );
     }
 
     #[test]
     fn modification_spec_display_redacted_header() {
-        let spec = ModificationSpec::RedactHeader("authorization".to_string());
+        let spec = ModificationSpec::RedactHeader(HeaderName::from_static("authorization"));
         assert_eq!(spec.to_string(), "redacted_header:authorization");
     }
 
@@ -393,9 +576,11 @@ mod tests {
             None,
         );
 
-        // Redact the Authorization header (case-insensitive match against "Authorization").
+        // Redact the Authorization header (case-insensitive match).
         let mut envelope = envelope;
-        ModificationSpec::RedactHeader("authorization".to_string()).apply(&mut envelope);
+        ModificationSpec::RedactHeader(HeaderName::from_static("authorization"))
+            .apply(&mut envelope)
+            .unwrap_or_else(|e| panic!("{e}"));
 
         let ActionParams::Http(http) = &envelope.intent.params else {
             panic!("expected Http params");
@@ -411,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn modification_spec_apply_noop_for_non_http() {
+    fn modification_spec_apply_fails_closed_on_non_http() {
         use crate::envelope::{
             ActionParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, ToolUseParams,
         };
@@ -439,14 +624,28 @@ mod tests {
             None,
         );
 
-        // Applying a RedactHeader to a non-HTTP envelope is a no-op.
+        // Applying a RedactHeader to a non-HTTP envelope fails closed.
         let mut envelope = envelope;
-        ModificationSpec::RedactHeader("authorization".to_string()).apply(&mut envelope);
+        let err = ModificationSpec::RedactHeader(HeaderName::from_static("authorization"))
+            .apply(&mut envelope)
+            .unwrap_err();
+        assert!(
+            matches!(err, ModificationError::UnsupportedModificationTarget),
+            "expected UnsupportedModificationTarget, got {err:?}"
+        );
+    }
 
-        let ActionParams::ToolUse(tool) = &envelope.intent.params else {
-            panic!("expected ToolUse params");
-        };
-        assert_eq!(tool.tool_name, "search");
+    #[test]
+    fn step_up_spec_rejects_empty() {
+        assert!(StepUpSpec::new("").is_err());
+        assert!(StepUpSpec::new("   ").is_err());
+        assert!(StepUpSpec::new("require admin approval").is_ok());
+    }
+
+    #[test]
+    fn defer_duration_rejects_zero() {
+        assert!(DeferDuration::new(Duration::ZERO).is_err());
+        assert!(DeferDuration::new(Duration::from_millis(1)).is_ok());
     }
 
     #[test]

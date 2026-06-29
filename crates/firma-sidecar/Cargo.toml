@@ -23,6 +23,7 @@ firma-protobuf = { workspace = true }
 firma-runtime-state = { workspace = true }
 governor = { workspace = true }
 hex = { workspace = true }
+http = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }

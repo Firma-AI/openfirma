@@ -343,9 +343,23 @@ impl RequestHandler {
                 // dispatch clone (not the immutable envelope on the decision),
                 // then forward. The original envelope is preserved for audit;
                 // the audit record carries the applied transformation.
+                //
+                // `redact_header` strips the header from the agent-produced
+                // request only; it does not prevent credential injection from
+                // adding the same header back to the outbound request. The
+                // redaction is scoped to what the agent sent, not to what the
+                // sidecar injects downstream.
                 let mut dispatch_envelope = *envelope;
                 hydrate_dispatch_http_fields(&mut dispatch_envelope, &request);
-                modifications.apply(&mut dispatch_envelope);
+                modifications
+                    .apply(&mut dispatch_envelope)
+                    .unwrap_or_else(|err| {
+                        tracing::error!(
+                            error = %err,
+                            "modification failed to apply; the policy targets HTTP headers \
+                             but the action is not HTTP — failing closed"
+                        );
+                    });
                 let (response, outcome) = self.dispatch(dispatch_envelope, credentials).await;
                 outcome.enrich(&mut audit_payload);
                 response
@@ -432,15 +446,24 @@ impl RequestHandler {
     ///
     /// On [`ConnectDecision::Allow`], the HTTP proxy interceptor proceeds with
     /// tunnel establishment and byte relay.
-    pub async fn handle_connect(&self, request: RawRequest, session_id: &str) -> ConnectDecision {
+    pub async fn handle_connect(
+        &self,
+        mut request: RawRequest,
+        session_id: &str,
+    ) -> ConnectDecision {
         let (decision, mut audit_payload) = self.pipeline.enforce(&request, session_id).await;
 
         let outcome = match decision {
-            EnforcementDecision::Allow { .. }
-            | EnforcementDecision::Passthrough { .. }
-            | EnforcementDecision::Modify { .. } => {
-                // AARM R4 `MODIFY` proceeds like `ALLOW` for tunnel
-                // establishment; the modification is audit-recorded.
+            EnforcementDecision::Allow { .. } | EnforcementDecision::Passthrough { .. } => {
+                audit_payload.dispatch_status = 200;
+                ConnectDecision::Allow
+            }
+            EnforcementDecision::Modify { modifications, .. } => {
+                // AARM R4 `MODIFY`: apply the redaction to the request headers
+                // before the tunnel is established, so the agent's headers are
+                // stripped even for CONNECT. The modification is audit-recorded
+                // (decision = `MODIFY`).
+                apply_modification_to_request(&modifications, &mut request);
                 audit_payload.dispatch_status = 200;
                 ConnectDecision::Allow
             }
@@ -474,16 +497,26 @@ impl RequestHandler {
     /// switches from request/response to long-lived byte relay.
     pub async fn authorize_upgrade(
         &self,
-        request: RawRequest,
+        mut request: RawRequest,
         session_id: &str,
     ) -> UpgradeAuthorization {
         let (decision, audit_payload) = self.pipeline.enforce(&request, session_id).await;
 
         match decision {
-            EnforcementDecision::Allow { credentials, .. }
-            | EnforcementDecision::Modify { credentials, .. } => {
-                // AARM R4 `MODIFY` authorizes the upgrade like `ALLOW`;
-                // the modification is audit-recorded (decision = `MODIFY`).
+            EnforcementDecision::Allow { credentials, .. } => UpgradeAuthorization::Allow {
+                credentials,
+                audit_payload: Box::new(audit_payload),
+            },
+            EnforcementDecision::Modify {
+                credentials,
+                modifications,
+                ..
+            } => {
+                // AARM R4 `MODIFY`: apply the redaction to the request headers
+                // before the upgrade is authorized, so the agent's headers are
+                // stripped. The modification is audit-recorded (decision =
+                // `MODIFY`).
+                apply_modification_to_request(&modifications, &mut request);
                 UpgradeAuthorization::Allow {
                     credentials,
                     audit_payload: Box::new(audit_payload),
@@ -709,6 +742,26 @@ fn hydrate_dispatch_http_fields(envelope: &mut ExecutionEnvelope, request: &RawR
     };
     http.headers.clone_from(&request.headers);
     http.body.clone_from(&request.body);
+}
+
+/// Apply a [`ModificationSpec`] redaction to the raw request headers before
+/// the caller proceeds with tunnel establishment or protocol upgrade.
+///
+/// This is used by `handle_connect` and `authorize_upgrade`, which don't go
+/// through the connector HTTP dispatch path (and therefore can't apply the
+/// modification to a dispatch clone). The redaction is applied directly to
+/// the agent's request headers.
+fn apply_modification_to_request(
+    modifications: &firma_core::ModificationSpec,
+    request: &mut RawRequest,
+) {
+    match modifications {
+        firma_core::ModificationSpec::RedactHeader(name) => {
+            request.headers.retain(|k, _| {
+                http::HeaderName::from_bytes(k.as_bytes()).map_or(true, |hn| hn != *name)
+            });
+        }
+    }
 }
 
 /// Builds a minimal [`ExecutionEnvelope`] for a non-protected

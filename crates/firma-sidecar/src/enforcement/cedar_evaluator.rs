@@ -25,7 +25,7 @@ use cedar_policy::{
 };
 use firma_core::agent::AgentId;
 use firma_core::policy::PolicyBundle;
-use firma_core::{FirmaEntityUid, ModificationSpec};
+use firma_core::{DeferDuration, FirmaEntityUid, ModificationSpec, StepUpSpec};
 
 use super::constraint_enforcement::{PolicyEvaluation, PolicyVerdict};
 
@@ -77,11 +77,9 @@ pub enum CedarEvaluatorError {
 
     /// A `forbid` policy carried more than one remediation annotation
     /// (`@modify` / `@step_up` / `@defer`). The bundle is rejected at load
-    /// time because the author's intent is ambiguous: the cross-policy
-    /// precedence (`StepUp > Defer > Modify`) does not apply within a single
-    /// policy, so the result would depend on an implicit check order rather
-    /// than the documented semantics. Split into separate `forbid` policies
-    /// if different remediations are wanted for different conditions.
+    /// time because the author's intent is ambiguous. Split into separate
+    /// `forbid` policies if different remediations are wanted for different
+    /// conditions.
     #[error("policy `{policy_id}` carries multiple remediation annotations: {annotations}")]
     ConflictingAnnotations {
         policy_id: String,
@@ -128,14 +126,12 @@ enum Remediation {
     /// dispatch. The annotation value is parsed into a [`ModificationSpec`] at
     /// load time so the hot path just copies it out.
     Modify(ModificationSpec),
-    /// `@step_up("…")` — require human approval; the annotation value is the
-    /// human-readable challenge / approval description.
-    StepUp(String),
+    /// `@step_up("…")` — require human approval; the annotation value is
+    /// validated as a non-empty [`StepUpSpec`] at load time.
+    StepUp(StepUpSpec),
     /// `@defer("<ms>")` — delay execution; the annotation value is parsed
-    /// into a `Duration`. A zero duration is rejected at load time: a defer
-    /// with no backoff is indistinguishable from a plain deny, so the author
-    /// almost certainly misconfigured the policy.
-    Defer(Duration),
+    /// into a [`DeferDuration`] at load time.
+    Defer(DeferDuration),
 }
 
 /// Annotation keys recognised on `forbid` policies for AARM R4 remediation.
@@ -287,18 +283,25 @@ fn build_remediation_map(
 
         // Exactly one annotation — validate its value.
         if let Some(value) = modify {
-            let spec = ModificationSpec::parse(&value).map_err(|reason| {
+            let spec = ModificationSpec::parse(&value).map_err(|err| {
                 CedarEvaluatorError::MalformedAnnotation {
                     policy_id: id.to_string(),
                     annotation: ANNOTATION_MODIFY,
                     raw_value: value,
-                    reason,
+                    reason: err.to_string(),
                 }
             })?;
             map.insert(id, Remediation::Modify(spec));
         } else if let Some(value) = step_up {
-            validate_non_empty(&id, ANNOTATION_STEP_UP, &value)?;
-            map.insert(id, Remediation::StepUp(value));
+            let spec = StepUpSpec::new(value.clone()).map_err(|err| {
+                CedarEvaluatorError::MalformedAnnotation {
+                    policy_id: id.to_string(),
+                    annotation: ANNOTATION_STEP_UP,
+                    raw_value: value,
+                    reason: err.to_string(),
+                }
+            })?;
+            map.insert(id, Remediation::StepUp(spec));
         } else if let Some(value) = defer {
             match value.parse::<u64>() {
                 Ok(0) => {
@@ -309,9 +312,19 @@ fn build_remediation_map(
                         reason: "defer duration must be > 0".to_string(),
                     });
                 }
-                Ok(ms) => {
-                    map.insert(id, Remediation::Defer(Duration::from_millis(ms)));
-                }
+                Ok(ms) => match DeferDuration::new(Duration::from_millis(ms)) {
+                    Ok(d) => {
+                        map.insert(id, Remediation::Defer(d));
+                    }
+                    Err(err) => {
+                        return Err(CedarEvaluatorError::MalformedAnnotation {
+                            policy_id: id.to_string(),
+                            annotation: ANNOTATION_DEFER,
+                            raw_value: value,
+                            reason: err.to_string(),
+                        });
+                    }
+                },
                 Err(parse_err) => {
                     return Err(CedarEvaluatorError::MalformedAnnotation {
                         policy_id: id.to_string(),
@@ -324,23 +337,6 @@ fn build_remediation_map(
         }
     }
     Ok(map)
-}
-
-/// Reject an annotation value that is empty or whitespace-only.
-fn validate_non_empty(
-    id: &PolicyId,
-    annotation: &'static str,
-    value: &str,
-) -> Result<(), CedarEvaluatorError> {
-    if value.trim().is_empty() {
-        return Err(CedarEvaluatorError::MalformedAnnotation {
-            policy_id: id.to_string(),
-            annotation,
-            raw_value: value.to_string(),
-            reason: "value must not be empty or whitespace-only".to_string(),
-        });
-    }
-    Ok(())
 }
 
 /// Precedence when multiple remediation annotations fire on the same Deny.
@@ -428,8 +424,10 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
                     Some(Remediation::Modify(spec)) => PolicyVerdict::Modify {
                         modifications: spec,
                     },
-                    Some(Remediation::StepUp(challenge)) => PolicyVerdict::StepUp { challenge },
-                    Some(Remediation::Defer(backoff)) => PolicyVerdict::Defer { backoff },
+                    Some(Remediation::StepUp(spec)) => PolicyVerdict::StepUp { challenge: spec },
+                    Some(Remediation::Defer(spec)) => PolicyVerdict::Defer {
+                        backoff: spec.duration(),
+                    },
                     None => PolicyVerdict::Deny,
                 })
             }
@@ -1055,7 +1053,7 @@ forbid(principal, action, resource);"#,
             PolicyVerdict::Modify { modifications } => {
                 assert_eq!(
                     modifications,
-                    ModificationSpec::RedactHeader("authorization".to_string())
+                    ModificationSpec::RedactHeader(http::HeaderName::from_static("authorization"))
                 );
             }
             other => panic!("expected Modify, got {other:?}"),
@@ -1082,7 +1080,7 @@ forbid(principal, action, resource);"#,
         .unwrap();
         match verdict_for(&evaluator) {
             PolicyVerdict::StepUp { challenge } => {
-                assert_eq!(challenge, "require admin approval");
+                assert_eq!(challenge.as_str(), "require admin approval");
             }
             other => panic!("expected StepUp, got {other:?}"),
         }
