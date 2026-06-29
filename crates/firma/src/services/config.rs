@@ -13,7 +13,7 @@ use dialoguer::theme::ColorfulTheme;
 use crate::args::config::{InitArgs, Mapping, Mode, Posture};
 use crate::fs::create_private_dir_all;
 use doc::DocInputs;
-use firma_config::{AgentProfile, CONFIG_DIR_NAME, CONFIG_FILE_NAME};
+use firma_config_loader::{AgentProfile, CONFIG_DIR_NAME, CONFIG_FILE_NAME};
 
 struct AuthorityInputs {
     /// gRPC listen address (agent-local + authority modes).
@@ -453,7 +453,7 @@ fn resolve_config_dir(
         return std::path::absolute(p).with_context(|| format!("resolve path {}", p.display()));
     }
 
-    let default = firma_config::ConfigResolver::default()
+    let default = firma_config_loader::ConfigResolver::default()
         .resolve_config(None)?
         .map_or_else(default_output_dir, |resolved| resolved.config_dir());
 
@@ -470,7 +470,7 @@ fn resolve_config_dir(
 }
 
 fn load_existing_defaults(config_dir: &Path) -> Result<ExistingConfigDefaults> {
-    let firma_toml = config_dir.join(firma_config::CONFIG_FILE_NAME);
+    let firma_toml = config_dir.join(firma_config_loader::CONFIG_FILE_NAME);
     if !firma_toml.exists() {
         return Ok(ExistingConfigDefaults::default());
     }
@@ -1106,7 +1106,7 @@ pub fn resolve_audit_log_path(
         return Ok(state_dir.join("audit.jsonl"));
     }
 
-    if let Some(resolved) = firma_config::ConfigResolver::default()
+    if let Some(resolved) = firma_config_loader::ConfigResolver::default()
         .resolve_config(config_override)
         .map_err(|error| format!("resolve discovered config: {error}"))?
         && let Ok(body) = resolved.config.section("sidecar.audit")
@@ -1191,7 +1191,7 @@ pub fn scaffold_from_plan(plan: &ScaffoldPlan) -> Result<()> {
         },
         config_dir: plan.config_dir.clone(),
         state_dir: plan.state_dir.clone(),
-        profile: firma_config::AgentProfile::from_name(&plan.agent).map_or_else(
+        profile: firma_config_loader::AgentProfile::from_name(&plan.agent).map_or_else(
             || provider_to_profile(&plan.provider),
             |p| p.as_str().to_string(),
         ),
@@ -1263,7 +1263,7 @@ fn provider_to_mappings(provider: &str) -> Vec<Mapping> {
 }
 
 fn provider_to_profile(provider: &str) -> String {
-    use firma_config::AgentProfile;
+    use firma_config_loader::AgentProfile;
     match provider {
         p if AgentProfile::Codex.provider() == p => AgentProfile::Codex.as_str().to_string(),
         p if AgentProfile::ClaudeCode.provider() == p => {
@@ -1408,7 +1408,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(CONFIG_FILE_NAME);
         std::fs::write(&path, get(&files, CONFIG_FILE_NAME)).unwrap();
-        let body = firma_config::load_section(&path, "authority").unwrap();
+        let body = firma_config_loader::load_section(&path, "authority").unwrap();
         let _: firma_authority::AuthorityConfig = toml::from_str(&body).unwrap();
     }
 
@@ -1424,7 +1424,7 @@ mod tests {
                 let dir = tempfile::tempdir().unwrap();
                 let path = dir.path().join(CONFIG_FILE_NAME);
                 std::fs::write(&path, get(&files, CONFIG_FILE_NAME)).unwrap();
-                let body = firma_config::load_section(&path, "sidecar").unwrap();
+                let body = firma_config_loader::load_section(&path, "sidecar").unwrap();
                 let _: firma_sidecar::config::SidecarConfig = toml::from_str(&body).unwrap();
             }
         }

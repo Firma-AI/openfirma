@@ -77,7 +77,7 @@ fn section_to_selection(s: &AuthoritySection) -> Option<AuthoritySelection> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use firma_config::CONFIG_FILE_NAME;
+    use firma_config_loader::CONFIG_FILE_NAME;
     use tempfile::tempdir;
 
     #[test]

@@ -149,7 +149,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         // Resolve firma.toml: explicit CLI path > env var > walk up from
         // cwd for `.firma/firma.toml`. `None` means no config — zero-config
         // defaults kick in downstream.
-        let resolved_user_config = firma_config::ConfigResolver::default()
+        let resolved_user_config = firma_config_loader::ConfigResolver::default()
             .resolve_config(args.user_config_path.as_deref())
             .map_err(|error| RunError::ConfigParse {
                 path: error.path.clone(),
@@ -171,7 +171,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         );
         let user_config_dir = resolved_user_config
             .as_ref()
-            .map(firma_config::ResolvedConfig::config_dir);
+            .map(firma_config_loader::ResolvedConfig::config_dir);
         let sidecar_template_path =
             resolve_sidecar_template_path(args, user_config_path.as_deref());
         let flags = AutostartFlags {
@@ -733,7 +733,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use firma_config::CONFIG_FILE_NAME;
+    use firma_config_loader::CONFIG_FILE_NAME;
 
     use crate::config::{
         CapabilityLeaseConfig, CapabilitySource, ExecutableLaunchPolicy, MountSpec, NetworkPolicy,

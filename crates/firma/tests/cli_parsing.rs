@@ -13,7 +13,7 @@
     reason = "forces clap linkage for compile-time validation"
 )]
 use clap::Parser as _;
-use firma_config::CONFIG_FILE_NAME;
+use firma_config_loader::CONFIG_FILE_NAME;
 
 // Re-import the binary's CLI module by depending on the binary as a
 // library would not work, so we duplicate the parse via a small

@@ -3,7 +3,7 @@
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use firma_config::CONFIG_FILE_NAME;
+use firma_config_loader::CONFIG_FILE_NAME;
 
 fn firma() -> Command {
     Command::new(env!("CARGO_BIN_EXE_firma"))

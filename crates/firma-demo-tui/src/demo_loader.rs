@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, ensure};
-use firma_config::CONFIG_FILE_NAME;
+use firma_config_loader::CONFIG_FILE_NAME;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

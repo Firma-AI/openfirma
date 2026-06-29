@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-use firma_config::CONFIG_FILE_NAME;
+use firma_config_loader::CONFIG_FILE_NAME;
 use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
 use firma_run::routing::{AutostartFlags, resolve_authority};
 

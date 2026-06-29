@@ -98,6 +98,8 @@ agent call passes through the Sidecar before reaching external systems.
 - `firma-authority` — local/dev Authority reference implementation. Issues
   PASETO v4 tokens and streams policy bundles and revocations. Never on the hot
   path.
+- `firma-config-loader` — shared `firma.toml` discovery, schema loading, and
+  agent profile parsing used by the CLI and runtime crates.
 
 ### Key Invariants
 

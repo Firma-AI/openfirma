@@ -1,10 +1,10 @@
 [package]
-name = "firma-config"
+name = "firma-config-loader"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Platform config-path discovery for the firma CLI"
+description = "Config discovery and schema loading for OpenFirma"
 
 [lints]
 workspace = true
@@ -15,7 +15,7 @@ test-utils = []
 
 [dependencies]
 anyhow = { workspace = true }
-clap = { workspace = true, optional = true, features = ["derive"] }
+clap = { workspace = true, optional = true, features = ["derive", "std"] }
 dirs = { workspace = true }
 fs-err = { workspace = true }
 serde = { workspace = true }
@@ -23,6 +23,6 @@ thiserror = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
-firma-config = { path = ".", features = ["test-utils"] }
+firma-config-loader = { path = ".", features = ["test-utils"] }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

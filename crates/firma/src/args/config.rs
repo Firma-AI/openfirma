@@ -9,7 +9,7 @@ static POSTURE_DEV: &str = include_str!("../../templates/policies/dev.cedar");
 static POSTURE_DEV_DELETE: &str =
     include_str!("../../templates/policies/dev-with-delete-watch.cedar");
 
-pub use firma_config::AgentProfile;
+pub use firma_config_loader::AgentProfile;
 
 /// What component to scaffold.
 #[derive(Debug, Clone, ValueEnum)]

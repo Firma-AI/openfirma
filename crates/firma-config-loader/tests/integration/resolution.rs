@@ -1,7 +1,7 @@
 //! End-to-end: a sectioned firma.toml resolves and the sidecar section
 //! parses through `load_section`.
 
-use firma_config::{CONFIG_FILE_NAME, ConfigResolver, ConfigSource};
+use firma_config_loader::{CONFIG_FILE_NAME, ConfigResolver, ConfigSource};
 use fs_err as fs;
 use std::assert_matches;
 

@@ -1557,7 +1557,7 @@ dependencies = [
  "ctrlc",
  "dialoguer",
  "firma-authority",
- "firma-config",
+ "firma-config-loader",
  "firma-core",
  "firma-run",
  "firma-runtime-state",
@@ -1604,7 +1604,7 @@ dependencies = [
  "async-stream",
  "cedar-policy",
  "chrono",
- "firma-config",
+ "firma-config-loader",
  "firma-core",
  "firma-protobuf",
  "hex",
@@ -1631,13 +1631,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "firma-config"
+name = "firma-config-loader"
 version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
  "dirs",
- "firma-config",
+ "firma-config-loader",
  "fs-err",
  "pretty_assertions",
  "serde",
@@ -1690,7 +1690,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm 0.28.1",
- "firma-config",
+ "firma-config-loader",
  "firma-runtime-state",
  "firma-stack",
  "ratatui",
@@ -1737,7 +1737,7 @@ dependencies = [
  "dialoguer",
  "dirs",
  "firma-authority",
- "firma-config",
+ "firma-config-loader",
  "firma-core",
  "firma-protobuf",
  "firma-runtime-state",
@@ -1841,7 +1841,7 @@ name = "firma-stack"
 version = "0.1.2"
 dependencies = [
  "ctrlc",
- "firma-config",
+ "firma-config-loader",
  "firma-runtime-state",
  "nix 0.31.3",
  "serde",
