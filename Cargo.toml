@@ -50,7 +50,7 @@ firma-authority = { path = "crates/firma-authority" }
 firma-config-loader = { path = "crates/firma-config-loader" }
 firma-core = { path = "crates/firma-core" }
 firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto" }
-firma-protobuf = "0.1.1"
+firma-protobuf = "0.1.2"
 firma-run = { path = "crates/firma-run" }
 firma-runtime-state = { path = "crates/firma-runtime-state" }
 firma-sidecar = { path = "crates/firma-sidecar" }
