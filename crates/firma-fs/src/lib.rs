@@ -54,8 +54,9 @@ impl FsError {
 
 /// Write `contents` to `path` with mode 0600 on Unix (owner read/write only, umask-independent).
 ///
-/// Uses `O_CREAT | O_TRUNC` so the mode is set atomically on creation with no write-then-chmod
-/// race. Falls back to [`std::fs::write`] on non-Unix platforms.
+/// Uses `O_CREAT | O_TRUNC` so the mode is set atomically on creation, then
+/// reapplies mode 0600 after writing to tighten pre-existing files. Falls back
+/// to [`std::fs::write`] on non-Unix platforms.
 ///
 /// # Errors
 ///
@@ -64,7 +65,7 @@ pub fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::io::Write as _;
-        use std::os::unix::fs::OpenOptionsExt as _;
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .truncate(true)
@@ -72,6 +73,7 @@ pub fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
             .mode(0o600)
             .open(path)?;
         file.write_all(contents)?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         Ok(())
     }
     #[cfg(not(unix))]
