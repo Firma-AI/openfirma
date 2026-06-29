@@ -362,8 +362,12 @@ fn persisted_authority_config(user_config: &std::path::Path) -> Result<Authority
         .map_err(|e| RunError::Internal(format!("parse authority config: {e}")))?;
     cfg.rebase_defaults(&config_dir);
 
-    // Per-run authority always runs plaintext on loopback — strip any TLS
+    // Per-run authority always runs plaintext on loopback — strip any TLS and
+    // override any configured listen_addr with an ephemeral loopback port.
+    // Honoring the user's listen_addr could bind wide (e.g. 0.0.0.0) with no
+    // TLS, or collide with another run on a fixed port.
     cfg.tls = firma_authority::AuthorityTlsConfig::default();
+    cfg.listen_addr = select_loopback_v6_port()?.to_string();
 
     Ok(cfg)
 }

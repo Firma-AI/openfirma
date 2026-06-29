@@ -35,8 +35,12 @@ impl EnforcementScenario for DenyUnmappedHttpCall {
         if !output.agent.success {
             anyhow::bail!("agent failed");
         }
-        if output.http_requests.is_empty() {
-            anyhow::bail!("no HTTP request reached mock server");
+        if !output
+            .http_requests
+            .iter()
+            .any(|req| req.method.as_str() == "GET" && req.url.path() == MOCK_PATH)
+        {
+            anyhow::bail!("expected GET {MOCK_PATH} did not reach mock server");
         }
         Ok(())
     }

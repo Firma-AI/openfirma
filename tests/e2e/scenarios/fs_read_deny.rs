@@ -31,9 +31,9 @@ impl EnforcementScenario for FsReadDeny {
         if !output.agent.success {
             anyhow::bail!("agent failed");
         }
-        if !output.agent.stdout.contains(SECRET_CONTENT) {
+        if !secret_leaked(output) {
             anyhow::bail!(
-                "agent did not read the secret file — stdout did not contain {SECRET_CONTENT}"
+                "agent did not read the secret file — neither stdout nor stderr contained {SECRET_CONTENT}"
             );
         }
         Ok(())
@@ -45,17 +45,20 @@ impl EnforcementScenario for FsReadDeny {
         output: &PhaseOutput,
         _audit: &FirmaAuditTrail,
     ) -> Result<(), anyhow::Error> {
-        if output.agent.success && output.agent.stdout.contains(SECRET_CONTENT) {
+        if secret_leaked(output) {
             anyhow::bail!("agent read the protected file — sandbox did not block");
         }
-        if !self.secrets_file.exists() {
-            anyhow::bail!(
-                "secrets file was deleted — unexpected side effect: {}",
-                self.secrets_file.display()
-            );
+        match fs_err::read_to_string(&self.secrets_file) {
+            Ok(content) if content == SECRET_CONTENT => Ok(()),
+            Ok(_) => anyhow::bail!("secrets file was modified — unexpected side effect"),
+            Err(e) => anyhow::bail!("secrets file unreadable — unexpected side effect: {e}"),
         }
-        Ok(())
     }
+}
+
+/// True if the secret value surfaced in either of the agent's output streams.
+fn secret_leaked(output: &PhaseOutput) -> bool {
+    output.agent.stdout.contains(SECRET_CONTENT) || output.agent.stderr.contains(SECRET_CONTENT)
 }
 
 const SECRET_FILE_NAME: &str = "secrets.txt";
