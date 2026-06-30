@@ -332,11 +332,12 @@ fn start_loopback_guard(
         allow_ports.push(addr.port());
     }
 
-    // Report blocked attempts to the autostarted Sidecar's egress-report
-    // socket so they become signed audit events. With an external Sidecar we do
-    // not control its env, so reporting is skipped (blocks are still enforced).
-    let report = sidecar_supervisor.map(|supervisor| crate::egress_guard::ReportTarget {
-        socket_path: firma_sidecar::egress_report::socket_path_in(supervisor.marker_dir()),
+    // Report blocked attempts to the autostarted Sidecar over the `firma run`
+    // audit channel so they become signed audit events. With an external
+    // Sidecar we do not control its env, so reporting is skipped (blocks are
+    // still enforced).
+    let report = sidecar_supervisor.map(|supervisor| crate::egress_guard::AuditChannel {
+        socket_path: firma_sidecar::run_audit::socket_path_in(supervisor.marker_dir()),
         session_id: identity.session_id.clone(),
         agent_id: identity.profile.clone(),
     });

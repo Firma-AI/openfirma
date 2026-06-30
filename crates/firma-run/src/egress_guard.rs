@@ -52,7 +52,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use firma_core::BlockedLoopbackReport;
+use firma_core::{RunAuditEvent, RunAuditMessage};
 use nix::sys::socket::{ControlMessage, ControlMessageOwned, MsgFlags, recvmsg, sendmsg};
 
 use crate::error::RunError;
@@ -394,13 +394,13 @@ fn recv_listener_fd(stream: &UnixStream) -> io::Result<OwnedFd> {
 
 // ── supervisor side (runs on the host) ──────────────────────────────────────
 
-/// Where and how blocked attempts are reported for signed auditing.
+/// Where and how blocked attempts are reported for signed auditing — the
+/// `firma run` audit channel to the Sidecar.
 #[derive(Debug, Clone)]
-pub struct ReportTarget {
-    /// Sidecar egress-report control socket
-    /// (`FIRMA_SIDECAR_EGRESS_REPORT_SOCK`).
+pub struct AuditChannel {
+    /// Sidecar run-audit control socket (`FIRMA_RUN_AUDIT_SOCK`).
     pub socket_path: PathBuf,
-    /// Session and agent identity stamped onto each report.
+    /// Session and agent identity stamped onto each message.
     pub session_id: String,
     pub agent_id: String,
 }
@@ -416,7 +416,7 @@ pub struct SupervisorConfig {
     /// Optional sink for signed audit reports. When `None` (e.g. an external
     /// Sidecar whose env we do not control), blocks are still enforced but only
     /// logged locally.
-    pub report: Option<ReportTarget>,
+    pub report: Option<AuditChannel>,
 }
 
 /// Live handle to a running guard supervisor. Dropping it stops the supervisor
@@ -577,8 +577,8 @@ fn handle_notification(notify_fd: RawFd, req: &libc::seccomp_notif, config: &Sup
             };
             let _ = notif_send(notify_fd, &resp);
             tracing::warn!(dst = %addr, "blocked agent connection to loopback");
-            if let Some(report) = &config.report {
-                report_block(report, addr);
+            if let Some(channel) = &config.report {
+                report_event(channel, addr);
             }
         }
     }
@@ -627,28 +627,30 @@ fn wait_readable(fd: RawFd, timeout: Duration) -> bool {
     rc > 0 && (pfd.revents & libc::POLLIN) != 0
 }
 
-/// Best-effort: forward a blocked attempt to the Sidecar's egress-report socket
-/// as a newline-delimited JSON [`BlockedLoopbackReport`].
-fn report_block(target: &ReportTarget, addr: SocketAddr) {
-    let report = BlockedLoopbackReport {
-        session_id: target.session_id.clone(),
-        agent_id: target.agent_id.clone(),
-        dst_ip: addr.ip().to_string(),
-        dst_port: addr.port(),
+/// Best-effort: forward a blocked attempt to the Sidecar over the `firma run`
+/// audit channel as a newline-delimited JSON [`RunAuditMessage`].
+fn report_event(channel: &AuditChannel, addr: SocketAddr) {
+    let message = RunAuditMessage {
+        session_id: channel.session_id.clone(),
+        agent_id: channel.agent_id.clone(),
+        event: RunAuditEvent::LoopbackBlocked {
+            dst_ip: addr.ip().to_string(),
+            dst_port: addr.port(),
+        },
     };
-    let Ok(mut line) = serde_json::to_string(&report) else {
+    let Ok(mut line) = serde_json::to_string(&message) else {
         return;
     };
     line.push('\n');
 
-    match UnixStream::connect(&target.socket_path) {
+    match UnixStream::connect(&channel.socket_path) {
         Ok(mut stream) => {
             if let Err(error) = stream.write_all(line.as_bytes()) {
-                tracing::debug!(%error, "egress guard: failed to write block report");
+                tracing::debug!(%error, "egress guard: failed to write audit message");
             }
         }
         Err(error) => {
-            tracing::debug!(%error, "egress guard: report socket unreachable");
+            tracing::debug!(%error, "egress guard: run-audit socket unreachable");
         }
     }
 }

@@ -1,27 +1,27 @@
-//! Out-of-band egress report ingest.
+//! `firma run` audit channel ingest.
 //!
-//! The `firma run` egress guard blocks an agent's direct loopback connections
-//! at the sandbox boundary — before they ever reach `HTTP_PROXY` and therefore
-//! before they could enter the enforcement pipeline. To keep the audit trail
-//! complete, the guard reports each blocked attempt to the Sidecar over a local
-//! control socket. This module turns those reports into signed audit events by
-//! feeding the same [`AuditPayload`] channel the enforcement hot path uses, so
-//! a blocked loopback connection surfaces in `firma monitor` exactly like a
-//! hot-path DENY.
+//! `firma run` performs some enforcement outside the Sidecar's request pipeline
+//! — most notably the egress guard, which blocks an agent's direct loopback
+//! connections at the sandbox boundary before they could reach `HTTP_PROXY`. To
+//! keep the audit trail complete, `firma run` reports each such fact to the
+//! Sidecar over a local control socket as a [`RunAuditMessage`]. This module
+//! turns those messages into signed audit events by feeding the same
+//! [`AuditPayload`] channel the enforcement hot path uses, so an out-of-band
+//! block surfaces in `firma monitor` exactly like a hot-path DENY.
 //!
-//! The listener is intentionally mode-independent: it works whether the
-//! interceptor runs in HTTP-proxy or Unix-socket mode, because it sits beside
-//! the audit channel rather than inside the interceptor.
+//! The Sidecar owns the audit semantics: <code>[AuditPayload]::from(&msg)</code> maps
+//! each [`RunAuditEvent`] variant to a fixed `(action_class, decision,
+//! deny_reason, resource)`. The producer only states observations, so the
+//! signature over the resulting event keeps meaning.
 //!
-//! The control socket is a Unix domain socket, so this module is Unix-only.
-//! Windows guests report through their own guest↔host channel (handled by the
-//! respective backend), not through this listener.
+//! The listener is mode-independent (it sits beside the audit channel, not
+//! inside the interceptor) and Unix-only (the control socket is a UDS).
 
 #![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 
-use firma_core::{BlockedLoopbackReport, DenyReason, NETWORK_LOOPBACK_ACTION_CLASS};
+use firma_core::{DenyReason, RunAuditEvent, RunAuditMessage};
 use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
@@ -30,37 +30,67 @@ use tracing::{debug, info, warn};
 
 use crate::audit::{AuditPayload, Decision};
 
-/// Converts a blocked-loopback report into a DENY [`AuditPayload`].
+/// Canonical action class for a blocked loopback connection attempt.
 ///
-/// The payload carries the [`NETWORK_LOOPBACK_ACTION_CLASS`] action and the
-/// [`DenyReason::LoopbackBlocked`] reason string; dispatch and latency fields
-/// are zero because the call never reached a connector.
-#[must_use]
-pub fn build_loopback_audit_payload(report: &BlockedLoopbackReport) -> AuditPayload {
-    AuditPayload {
-        session_id: report.session_id.clone(),
-        token_id: String::new(),
-        agent_id: report.agent_id.clone(),
-        action: NETWORK_LOOPBACK_ACTION_CLASS.to_string(),
-        resource: report.resource(),
-        decision: Decision::Deny,
-        deny_reason: DenyReason::LoopbackBlocked.to_string(),
-        enforcement_latency_us: 0,
-        context_hash: String::new(),
-        bundle_version: String::new(),
-        dispatch_status: 0,
-        dispatch_latency_us: 0,
-        response_size: 0,
+/// Registered in `docs/markdown/firma_action_class_registry.md` as an
+/// out-of-band, audit-only class. Owned by the Sidecar because the Sidecar
+/// signs the event and therefore owns its meaning.
+pub const NETWORK_LOOPBACK_ACTION_CLASS: &str = "network.loopback";
+
+/// Maps a `firma run` audit message to a signed-ready [`AuditPayload`].
+///
+/// This is where the Sidecar assigns audit semantics to a bare observation:
+/// each [`RunAuditEvent`] variant resolves to a fixed action class, decision,
+/// and reason. Dispatch/latency fields are zero because the call never reached
+/// a connector.
+impl From<&RunAuditMessage> for AuditPayload {
+    fn from(msg: &RunAuditMessage) -> Self {
+        let (action, decision, deny_reason, resource) = match &msg.event {
+            RunAuditEvent::LoopbackBlocked { dst_ip, dst_port } => (
+                NETWORK_LOOPBACK_ACTION_CLASS.to_string(),
+                Decision::Deny,
+                DenyReason::LoopbackBlocked.to_string(),
+                loopback_resource(dst_ip, *dst_port),
+            ),
+        };
+        Self {
+            session_id: msg.session_id.clone(),
+            token_id: String::new(),
+            agent_id: msg.agent_id.clone(),
+            action,
+            resource,
+            decision,
+            deny_reason,
+            enforcement_latency_us: 0,
+            context_hash: String::new(),
+            bundle_version: String::new(),
+            dispatch_status: 0,
+            dispatch_latency_us: 0,
+            response_size: 0,
+        }
     }
 }
 
-/// Binds the egress-report control socket and serves reports until `exit`.
+/// Renders a blocked loopback destination as an audit `resource` string.
 ///
-/// Each accepted connection streams newline-delimited JSON
-/// [`BlockedLoopbackReport`]s. Every well-formed report is converted into a
-/// DENY [`AuditPayload`] and forwarded to `audit_tx`; malformed lines are
-/// logged and skipped (fail-open on parsing keeps a noisy guard from stalling
-/// the audit pipeline, while the block itself already happened in the guard).
+/// IPv6 destinations are bracketed so the `host:port` form stays unambiguous
+/// (`[::1]:9000`); IPv4 destinations are left bare. The `tcp://` scheme marks
+/// the transport.
+fn loopback_resource(dst_ip: &str, dst_port: u16) -> String {
+    if dst_ip.contains(':') {
+        format!("tcp://[{dst_ip}]:{dst_port}")
+    } else {
+        format!("tcp://{dst_ip}:{dst_port}")
+    }
+}
+
+/// Binds the audit control socket and serves messages until `exit`.
+///
+/// Each accepted connection streams newline-delimited JSON [`RunAuditMessage`]s.
+/// Every well-formed message is converted into an [`AuditPayload`] and forwarded
+/// to `audit_tx`; malformed lines are logged and skipped (the enforcement that
+/// the message describes already happened in `firma run`, so a parse failure
+/// must not stall the audit pipeline).
 ///
 /// A stale socket file at `socket_path` is removed before binding so a crashed
 /// previous run does not block startup.
@@ -77,7 +107,7 @@ pub fn spawn_listener(
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| {
             anyhow::anyhow!(
-                "failed to create egress-report socket dir {}: {error}",
+                "failed to create run-audit socket dir {}: {error}",
                 parent.display()
             )
         })?;
@@ -88,17 +118,17 @@ pub fn spawn_listener(
 
     let listener = UnixListener::bind(&socket_path).map_err(|error| {
         anyhow::anyhow!(
-            "failed to bind egress-report socket {}: {error}",
+            "failed to bind run-audit socket {}: {error}",
             socket_path.display()
         )
     })?;
-    info!(socket = %socket_path.display(), "egress-report listener bound");
+    info!(socket = %socket_path.display(), "run-audit listener bound");
 
     Ok(tokio::spawn(async move {
         serve(&listener, &audit_tx, &exit).await;
         // Best-effort cleanup so the next run starts clean.
         let _ = std::fs::remove_file(&socket_path);
-        debug!("egress-report listener stopped");
+        debug!("run-audit listener stopped");
     }))
 }
 
@@ -120,7 +150,7 @@ async fn serve(
                         });
                     }
                     Err(error) => {
-                        warn!(%error, "egress-report accept failed");
+                        warn!(%error, "run-audit accept failed");
                     }
                 }
             }
@@ -147,7 +177,7 @@ async fn handle_connection(
                     }
                     Ok(None) => break,
                     Err(error) => {
-                        warn!(%error, "egress-report connection read failed");
+                        warn!(%error, "run-audit connection read failed");
                         break;
                     }
                 }
@@ -157,30 +187,30 @@ async fn handle_connection(
 }
 
 async fn ingest_line(line: &str, audit_tx: &mpsc::Sender<AuditPayload>) {
-    match serde_json::from_str::<BlockedLoopbackReport>(line) {
-        Ok(report) => {
+    match serde_json::from_str::<RunAuditMessage>(line) {
+        Ok(msg) => {
             debug!(
-                session_id = %report.session_id,
-                dst = %report.resource(),
-                "loopback connection blocked; emitting audit event"
+                session_id = %msg.session_id,
+                event = ?msg.event,
+                "run-audit message received; emitting audit event"
             );
-            let payload = build_loopback_audit_payload(&report);
+            let payload = AuditPayload::from(&msg);
             if audit_tx.send(payload).await.is_err() {
-                warn!("audit channel closed; dropping egress report");
+                warn!("audit channel closed; dropping run-audit message");
             }
         }
         Err(error) => {
-            warn!(%error, "skipping malformed egress report");
+            warn!(%error, "skipping malformed run-audit message");
         }
     }
 }
 
-/// Resolves the per-run egress-report socket path from the directory the
-/// Sidecar shares with `firma run`. Kept here so the producer and consumer
-/// agree on the filename.
+/// Resolves the per-run audit socket path from the directory the Sidecar shares
+/// with `firma run`. Kept here so the producer and consumer agree on the
+/// filename.
 #[must_use]
 pub fn socket_path_in(dir: &Path) -> PathBuf {
-    dir.join("egress-report.sock")
+    dir.join("run-audit.sock")
 }
 
 #[cfg(test)]
@@ -188,15 +218,20 @@ mod tests {
     use super::*;
     use tokio::io::AsyncWriteExt as _;
 
-    #[test]
-    fn builds_deny_payload_with_loopback_action() {
-        let report = BlockedLoopbackReport {
+    fn loopback_msg(dst_ip: &str, dst_port: u16) -> RunAuditMessage {
+        RunAuditMessage {
             session_id: "sess-1".to_string(),
             agent_id: "claude-code".to_string(),
-            dst_ip: "127.0.0.1".to_string(),
-            dst_port: 6379,
-        };
-        let payload = build_loopback_audit_payload(&report);
+            event: RunAuditEvent::LoopbackBlocked {
+                dst_ip: dst_ip.to_string(),
+                dst_port,
+            },
+        }
+    }
+
+    #[test]
+    fn loopback_event_maps_to_deny_payload() {
+        let payload = AuditPayload::from(&loopback_msg("127.0.0.1", 6379));
         assert_eq!(payload.decision, Decision::Deny);
         assert_eq!(payload.action, "network.loopback");
         assert_eq!(payload.resource, "tcp://127.0.0.1:6379");
@@ -205,8 +240,14 @@ mod tests {
         assert_eq!(payload.agent_id, "claude-code");
     }
 
+    #[test]
+    fn ipv6_loopback_resource_is_bracketed() {
+        let payload = AuditPayload::from(&loopback_msg("::1", 53));
+        assert_eq!(payload.resource, "tcp://[::1]:53");
+    }
+
     #[tokio::test]
-    async fn listener_emits_audit_payload_for_reported_block() {
+    async fn listener_emits_audit_payload_for_reported_message() {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket = socket_path_in(dir.path());
         let (tx, mut rx) = mpsc::channel(4);
@@ -215,13 +256,7 @@ mod tests {
             spawn_listener(socket.clone(), tx, exit.clone()).expect("listener should bind");
 
         let mut client = UnixStream::connect(&socket).await.expect("connect");
-        let report = BlockedLoopbackReport {
-            session_id: "s".to_string(),
-            agent_id: "a".to_string(),
-            dst_ip: "::1".to_string(),
-            dst_port: 9000,
-        };
-        let mut line = serde_json::to_string(&report).expect("serialize");
+        let mut line = serde_json::to_string(&loopback_msg("::1", 9000)).expect("serialize");
         line.push('\n');
         client.write_all(line.as_bytes()).await.expect("write");
         client.flush().await.expect("flush");

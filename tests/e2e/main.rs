@@ -99,6 +99,7 @@ scenario_tests! {
         deny_unclassified_intent     => scenarios::DenyUnclassifiedIntent,
         deny_http_call               => scenarios::DenyHttpCall,
         block_raw_tcp_egress         => scenarios::BlockRawTcpEgress,
+        block_loopback_egress        => scenarios::BlockLoopbackEgress,
         fs_read_deny                 => scenarios::FsReadDeny::default(),
         fs_delete_deny               => scenarios::FsDeleteDeny::default(),
     )

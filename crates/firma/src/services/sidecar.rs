@@ -120,12 +120,12 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         exit.clone(),
     )?;
 
-    // Out-of-band ingest for loopback connections the `firma run` egress guard
-    // blocks at the sandbox boundary. Bound only when `firma run` provisions a
-    // control socket; absent in plain daemon mode. Clone the sender before it
-    // is moved into the RequestHandler below.
+    // Out-of-band ingest for the `firma run` audit channel (e.g. loopback
+    // connections the egress guard blocks at the sandbox boundary). Bound only
+    // when `firma run` provisions a control socket; absent in plain daemon
+    // mode. Clone the sender before it is moved into the RequestHandler below.
     #[cfg(unix)]
-    let egress_report_handle = spawn_egress_report_listener(&audit_payload_tx, &exit);
+    let run_audit_handle = spawn_run_audit_listener(&audit_payload_tx, &exit);
 
     let pipeline_runtime = startup::build_pipeline_runtime(&config)?;
     let authority_handle =
@@ -169,9 +169,9 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
             let _ = handle.await;
         }
     };
-    let egress_report_task = async {
+    let run_audit_task = async {
         #[cfg(unix)]
-        if let Some(handle) = egress_report_handle {
+        if let Some(handle) = run_audit_handle {
             let _ = handle.await;
         }
     };
@@ -182,27 +182,27 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         shutdown_handler,
         authority_stream_tasks,
         local_exec_task,
-        egress_report_task,
+        run_audit_task,
     );
     debug!("firma sidecar exiting");
 
     Ok(ExitCode::SUCCESS)
 }
 
-/// Spawns the egress-report listener when `firma run` provisions a control
-/// socket via `FIRMA_SIDECAR_EGRESS_REPORT_SOCK`. Returns `None` in plain
-/// daemon mode (no socket configured) or when binding fails — in the latter
-/// case the Sidecar still serves traffic, but loopback blocks go unaudited, so
-/// the failure is logged loudly.
+/// Spawns the `firma run` audit-channel listener when `firma run` provisions a
+/// control socket via `FIRMA_RUN_AUDIT_SOCK`. Returns `None` in plain daemon
+/// mode (no socket configured) or when binding fails — in the latter case the
+/// Sidecar still serves traffic, but out-of-band reports (e.g. loopback blocks)
+/// go unaudited, so the failure is logged loudly.
 #[cfg(unix)]
-fn spawn_egress_report_listener(
+fn spawn_run_audit_listener(
     audit_payload_tx: &tokio::sync::mpsc::Sender<firma_sidecar::audit::AuditPayload>,
     exit: &CancellationToken,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    let socket = std::env::var("FIRMA_SIDECAR_EGRESS_REPORT_SOCK")
+    let socket = std::env::var("FIRMA_RUN_AUDIT_SOCK")
         .ok()
         .filter(|value| !value.trim().is_empty())?;
-    match firma_sidecar::egress_report::spawn_listener(
+    match firma_sidecar::run_audit::spawn_listener(
         std::path::PathBuf::from(socket),
         audit_payload_tx.clone(),
         exit.clone(),
@@ -211,7 +211,7 @@ fn spawn_egress_report_listener(
         Err(error) => {
             tracing::warn!(
                 %error,
-                "failed to start egress-report listener; blocked loopback connections will not be audited"
+                "failed to start run-audit listener; out-of-band firma run reports will not be audited"
             );
             None
         }

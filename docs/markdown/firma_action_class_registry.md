@@ -138,6 +138,13 @@ daemon, or MCP server, then reports the attempt to the Sidecar, which signs and
 records it. The proxy bridge and DNS stub are exempt so Firma's own loopback
 traffic is unaffected.
 
+`network.loopback` is the first message kind of the **`firma run` audit
+channel** (`firma_core::RunAuditEvent::LoopbackBlocked`): a generic out-of-band
+path for `firma run` to report enforcement facts to the Sidecar over a control
+socket, which the Sidecar maps to fixed audit semantics and signs. Future
+message kinds (other seccomp blocks, blocked tool launches, command-governance
+denials) add their own audit-only action classes here.
+
 Reserved for a future minor revision (MUST NOT appear in v0.1 policies):
 `memory.read`, `memory.write`, `browser.navigate`.
 
