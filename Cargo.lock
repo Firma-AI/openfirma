@@ -149,9 +149,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "ar_archive_writer"
@@ -1564,6 +1564,9 @@ dependencies = [
  "firma-sidecar",
  "firma-stack",
  "fs-err",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "insta",
  "miette",
  "nix 0.31.3",
@@ -1576,6 +1579,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "serde_repr",
  "serde_yaml",
  "sha2 0.11.0",
  "strum 0.28.0",
@@ -1607,6 +1611,7 @@ dependencies = [
  "firma-config-loader",
  "firma-core",
  "firma-protobuf",
+ "fs-err",
  "hex",
  "notify",
  "pasetors",
@@ -1742,6 +1747,7 @@ dependencies = [
  "firma-protobuf",
  "firma-runtime-state",
  "firma-sidecar",
+ "fs-err",
  "hex",
  "nix 0.31.3",
  "p256",
@@ -2595,8 +2601,10 @@ dependencies = [
  "once_cell",
  "pest",
  "pest_derive",
+ "regex",
  "serde",
  "similar",
+ "strip-ansi-escapes",
  "tempfile",
 ]
 
@@ -5311,6 +5319,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "strip-ansi-escapes"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a8f8038e7e7969abb3f1b7c2a811225e9296da208539e0f79c5251d6cac0025"
+dependencies = [
+ "vte",
+]
+
+[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6273,6 +6290,15 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vte"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "231fdcd7ef3037e8330d8e17e61011a2c244126acc0a982f4040ac3f9f0bc077"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "vtparse"

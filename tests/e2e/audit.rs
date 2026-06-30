@@ -5,7 +5,7 @@ use firma_sidecar::audit::Decision;
 use serde::Deserialize;
 use std::collections::BTreeSet;
 
-use crate::agent::AgentKind;
+use crate::{agent::AgentKind, setup::ScenarioSetup};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 pub struct AuditEvent {
@@ -58,5 +58,19 @@ impl FirmaAuditTrail {
             !(event.decision == Decision::Allow && is_provider)
         });
         self
+    }
+
+    #[track_caller]
+    pub fn assert_snapshot(&self, scenario_name: &str, ctx: &ScenarioSetup) {
+        let name = format!("{}_{}", ctx.agent.kind.as_ref(), scenario_name);
+        let mock_port = ctx.mock_server.address().port().to_string();
+        let mock_port_filter = regex::escape(&mock_port);
+        insta::with_settings!({
+            filters => vec![
+                (mock_port_filter.as_str(), "<mock-port>"),
+            ],
+        }, {
+            insta::assert_debug_snapshot!(name, self);
+        });
     }
 }

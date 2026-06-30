@@ -68,7 +68,7 @@ impl ScenarioSetup {
         &mut self,
         agent_id: &str,
         session_id: &str,
-        action: &str,
+        actions: &[&str],
         scope: &str,
         ttl_secs: u64,
     ) -> Result<(), anyhow::Error> {
@@ -76,12 +76,26 @@ impl ScenarioSetup {
             &self.config_dir,
             agent_id,
             session_id,
-            action,
+            actions,
             scope,
             ttl_secs,
         )?;
         self.capability_seed = Some(seed_path);
         self.capability_session_id = Some(session_id.to_string());
+        Ok(())
+    }
+
+    /// Reset `workspace_dir` to an empty directory.
+    ///
+    /// Use from `before_assert` for scenarios whose baseline run mutates the
+    /// workspace (e.g. `cargo init`), so the enforcement phase starts clean.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be recreated.
+    pub fn reset_workspace(&self) -> Result<(), anyhow::Error> {
+        fs_err::remove_dir_all(&self.workspace_dir)?;
+        fs_err::create_dir_all(&self.workspace_dir)?;
         Ok(())
     }
 

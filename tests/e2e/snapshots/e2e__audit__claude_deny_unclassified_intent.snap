@@ -1,0 +1,15 @@
+---
+source: crates/firma/../../tests/e2e/audit.rs
+expression: self
+---
+FirmaAuditTrail(
+    {
+        AuditEvent {
+            action: "raw.http.GET",
+            resource: "unmapped.test:<mock-port>/unlisted",
+            decision: Deny,
+            deny_reason: "unclassified intent: protected action could not be classified: GET /unlisted (host: unmapped.test:<mock-port>)",
+            dispatch_status: 0,
+        },
+    },
+)

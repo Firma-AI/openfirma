@@ -1,7 +1,0 @@
----
-source: crates/firma/../../tests/e2e/scenarios/simple_prompt.rs
-expression: "&audit"
----
-FirmaAuditTrail(
-    {},
-)

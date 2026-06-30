@@ -9,7 +9,7 @@ impl EnforcementScenario for SimplePrompt {
         "simple_prompt"
     }
 
-    fn setup(&self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
+    fn setup(&mut self, ctx: &mut ScenarioSetup) -> Result<(), anyhow::Error> {
         ctx.git_init_workspace()?;
         ctx.firma_config().run()?;
         Ok(())
@@ -21,7 +21,7 @@ impl EnforcementScenario for SimplePrompt {
 
     fn assert_baseline(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
         if !output.agent.success {
-            anyhow::bail!("baseline agent failed: {}", output.agent.stderr);
+            anyhow::bail!("agent failed");
         }
         Ok(())
     }
@@ -33,9 +33,9 @@ impl EnforcementScenario for SimplePrompt {
         audit: &FirmaAuditTrail,
     ) -> Result<(), anyhow::Error> {
         if !output.agent.success {
-            anyhow::bail!("enforcement agent failed: {}", output.agent.stderr);
+            anyhow::bail!("agent failed");
         }
-        insta::assert_debug_snapshot!(ctx.agent.kind.as_ref(), &audit);
+        audit.assert_snapshot(self.name(), ctx);
         Ok(())
     }
 }

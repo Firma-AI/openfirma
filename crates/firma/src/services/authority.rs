@@ -13,8 +13,6 @@ use firma_authority::{
 };
 use firma_core::token::paseto::PasetoV4Signer;
 use firma_core::{AgentId, SessionId, TokenId};
-use pasetors::keys::{AsymmetricKeyPair, Generate};
-use pasetors::version4::V4;
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SanType,
 };
@@ -128,37 +126,10 @@ async fn run_compact(config: &AuthorityConfig) -> Result<()> {
 }
 
 pub fn run_generate_key(path: &std::path::Path) -> Result<()> {
-    let mut secret_opts = std::fs::OpenOptions::new();
-    secret_opts.create_new(true).write(true);
-    let mut public_opts = std::fs::OpenOptions::new();
-    public_opts.create_new(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        secret_opts.mode(0o600);
-        public_opts.mode(0o644);
-    }
-
-    let kp = AsymmetricKeyPair::<V4>::generate().context("failed to generate key pair")?;
-
-    let mut private_key_file = secret_opts
-        .open(path)
-        .context("failed to open output key file")?;
-    private_key_file
-        .write_all(kp.secret.as_bytes())
-        .context("failed to write key file")?;
-
-    let pub_path = path.with_extension("pub");
-    let mut pub_key_file = public_opts
-        .open(&pub_path)
-        .context("failed to open public key file")?;
-    pub_key_file
-        .write_all(kp.public.as_bytes())
-        .context("failed to write public key file")?;
-
+    let paths = firma_authority::write_keypair(path).context("generate authority key pair")?;
     println!("generated Ed25519 key pair:");
-    println!("  secret: {}", path.display());
-    println!("  public: {}", pub_path.display());
+    println!("  secret: {}", paths.secret.display());
+    println!("  public: {}", paths.public.display());
     Ok(())
 }
 
