@@ -11,12 +11,12 @@ You should already have a Sidecar running with the `[sidecar.audit]` block confi
 
 The `[sidecar.audit]` block in `firma.toml` selects a sink:
 
-| Sink     | Configuration                                           | Use when                                                                     |
-| -------- | ------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `stdout` | `sink = "stdout"`                                       | Local dev; pipe into `jq` or a tail tool.                                    |
-| `file`   | `sink = "file"`, `file_path = "..."`                    | Single-host deployments with rotation handled outside.                       |
-| `wal`    | `sink = "wal"`, `wal_path = "..."`, `wal_max_bytes = N` | High-throughput; resilient to crashes; consume with a separate tail process. |
-| `grpc`   | `sink = "grpc"`, `grpc_url = "..."`                     | Centralized collector ingesting from many Sidecars.                          |
+| Sink     | Configuration                                           | Use when                                                                      |
+| -------- | ------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `stdout` | `sink = "stdout"`                                       | Local dev or production on Cloud Run; pipe into `jq` or ship structured JSON. |
+| `file`   | `sink = "file"`, `file_path = "..."`                    | Single-host deployments with rotation handled outside.                        |
+| `wal`    | `sink = "wal"`, `wal_path = "..."`, `wal_max_bytes = N` | High-throughput; resilient to crashes; consume with a separate tail process.  |
+| `grpc`   | `sink = "grpc"`, `grpc_url = "..."`                     | Centralized collector ingesting from many Sidecars.                           |
 
 For this guide, assume `sink = "file"` and `file_path = "/tmp/firma-standalone/logs/audit.jsonl"`.
 
@@ -44,7 +44,7 @@ A single line of the JSONL log decodes to something like:
   "dispatch_latency_us": 0,
   "response_size": 0,
   "sandbox_id": "",
-  "signature": [48, 69, 2, 33]
+  "signature": "MEUCIQ=="
 }
 ```
 
@@ -56,7 +56,7 @@ Field-by-field:
 - **`decision`** — numeric outcome (`1` = ALLOW, `2` = DENY). For DENYs, `deny_reason` is a lowercase string (often `"{reason}: {detail}"`, e.g. `"policy denied: …"`). The troubleshooting headings below use PascalCase labels for readability.
 - **`dispatch_status`, `dispatch_latency_us`, `response_size`** — connector result fields. They are zero when the call never dispatched.
 - **`sandbox_id`** — set for `firma run` sidecars; empty for externally started Sidecars.
-- **`signature`** — DER-encoded ECDSA P-256 signature as a JSON byte array.
+- **`signature`** — DER-encoded ECDSA P-256 signature, serialized as a standard (padded) base64 string. The compact opaque value round-trips through structured JSON log pipelines (such as Cloud Logging) without byte loss, so `sink = "stdout"` is reliable for production on Cloud Run.
 
 ## Tail the log
 
@@ -110,7 +110,7 @@ openssl ec -in /tmp/firma-standalone/audit.key -pubout -out /tmp/firma-standalon
 Verification of a single line is straightforward in any language with ECDSA P-256 support. The signed payload is the SHA-256 digest of all fields except `signature`, concatenated in declaration order with newlines. A pseudocode verifier:
 
 ```python
-import json, hashlib
+import base64, json, hashlib
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes, serialization
 
@@ -120,7 +120,7 @@ with open("/tmp/firma-standalone/audit.pub", "rb") as f:
 with open("/tmp/firma-standalone/logs/audit.jsonl") as f:
     for line in f:
         event = json.loads(line)
-        sig = bytes(event["signature"])
+        sig = base64.b64decode(event["signature"])
         fields = [
             "event_id", "session_id", "token_id", "agent_id", "action",
             "resource", "decision", "deny_reason", "enforcement_latency_us",

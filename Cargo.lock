@@ -1788,6 +1788,7 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "async-trait",
+ "base64",
  "cedar-policy",
  "chrono",
  "criterion",
