@@ -49,10 +49,6 @@ pub enum RunAuditEvent {
         /// Destination TCP port.
         dst_port: u16,
     },
-    // Future producers (each maps to fixed Sidecar-owned semantics):
-    //   SeccompBlocked { syscall: String, detail: String },
-    //   ToolLaunchBlocked { tool: String, reason: String },
-    //   CommandGovernanceDenied { command: String, reason: String },
 }
 
 #[cfg(test)]
