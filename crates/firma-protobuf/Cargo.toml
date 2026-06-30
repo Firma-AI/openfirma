@@ -1,6 +1,6 @@
 [package]
 name = "firma-protobuf"
-version = "0.2.0"
+version = "0.1.3"
 build = "build.rs"
 edition.workspace = true
 include = [
