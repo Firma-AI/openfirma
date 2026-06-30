@@ -37,6 +37,7 @@ anyhow = "1"
 arc-swap = "1"
 async-stream = "0.3"
 async-trait = "0.1"
+base64 = "0.22"
 cedar-policy = "3"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", default-features = false }

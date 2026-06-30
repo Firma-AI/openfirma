@@ -200,7 +200,44 @@ pub struct ExecutionEvent {
     /// `SidecarSupervisor`. Empty when the sidecar is not autostarted.
     pub sandbox_id: String,
     /// ECDSA signature (DER-encoded) over all preceding fields.
+    ///
+    /// Serialized in JSON as a standard base64 string so it round-trips
+    /// cleanly through structured log pipelines (e.g. Cloud Logging)
+    /// without byte loss or reinterpretation. The proto wire type keeps
+    /// the raw bytes unchanged.
+    #[serde(with = "base64_signature")]
     pub signature: Vec<u8>,
+}
+
+/// Serde adapter that encodes the audit signature as a standard,
+/// padded base64 string instead of a JSON array of bytes.
+///
+/// The in-memory representation stays `Vec<u8>`; only the JSON form
+/// changes. This keeps the signature a compact opaque value that
+/// survives any JSON log pipeline intact.
+mod base64_signature {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+    use serde::{Deserialize as _, Deserializer, Serializer};
+
+    /// Encodes the signature bytes as a base64 string.
+    pub(super) fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&STANDARD.encode(bytes))
+    }
+
+    /// Decodes a base64 string back into the raw signature bytes.
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let encoded = String::deserialize(deserializer)?;
+        STANDARD
+            .decode(encoded.as_bytes())
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 impl From<ExecutionEvent> for firma_protobuf::v1::ExecutionEvent {
@@ -235,5 +272,58 @@ impl From<ExecutionEvent> for firma_protobuf::v1::ExecutionEvent {
             response_size: value.response_size,
             sandbox_id: value.sandbox_id,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds an [`ExecutionEvent`] with deterministic fields and the
+    /// given signature bytes for serialization assertions.
+    fn sample_event(signature: Vec<u8>) -> ExecutionEvent {
+        ExecutionEvent {
+            event_id: "evt_1".to_string(),
+            session_id: "sess_1".to_string(),
+            token_id: "tok_1".to_string(),
+            agent_id: "agent_1".to_string(),
+            action: "http_get".to_string(),
+            resource: "api.example.com".to_string(),
+            decision: Decision::Allow,
+            deny_reason: String::new(),
+            enforcement_latency_us: 42,
+            context_hash: "ctx_1".to_string(),
+            bundle_version: "v1".to_string(),
+            timestamp: Some(1_700_000_000_000_000_000),
+            dispatch_status: 200,
+            dispatch_latency_us: 7,
+            response_size: 1024,
+            sandbox_id: "sbx_1".to_string(),
+            signature,
+        }
+    }
+
+    #[test]
+    fn signature_serializes_as_base64_string() {
+        // DER prefix bytes [0x30, 0x45, 0x02, 0x21] encode to "MEUCIQ==".
+        let event = sample_event(vec![0x30, 0x45, 0x02, 0x21]);
+
+        let value = serde_json::to_value(&event).expect("event serializes");
+
+        assert_eq!(
+            value["signature"],
+            serde_json::Value::String("MEUCIQ==".to_string()),
+            "signature must serialize as a base64 string, not a byte array"
+        );
+    }
+
+    #[test]
+    fn event_json_round_trips_through_base64_signature() {
+        let event = sample_event(vec![0xDE, 0xAD, 0xBE, 0xEF]);
+
+        let json = serde_json::to_string(&event).expect("event serializes");
+        let decoded: ExecutionEvent = serde_json::from_str(&json).expect("event deserializes");
+
+        assert_eq!(decoded, event, "event must survive a JSON round-trip");
     }
 }

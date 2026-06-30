@@ -382,6 +382,40 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
     }
 
     #[test]
+    fn test_signature_verifies_after_json_round_trip() {
+        let builder = EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
+
+        let decision = EnforcementDecision::Allow {
+            claims: test_claims(),
+            envelope: Box::new(test_envelope()),
+            credentials: firma_core::InjectedCredentials::empty(),
+        };
+
+        let payload = payload_from_decision(&decision, "sess_001", Duration::from_micros(100));
+        let event = builder.build(payload);
+
+        // Round-trip through JSON, exercising the base64 signature codec.
+        let json = serde_json::to_string(&event).unwrap_or_else(|e| panic!("{e}"));
+        let restored: ExecutionEvent =
+            serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
+
+        assert_eq!(restored.signature, event.signature);
+
+        let signing_key: SigningKey = TEST_KEY_PEM
+            .parse()
+            .unwrap_or_else(|e: ecdsa::Error| panic!("{e}"));
+        let verifying_key = VerifyingKey::from(&signing_key);
+
+        let payload = signing_payload(&restored);
+        let sig = DerSignature::from_bytes(&restored.signature).unwrap_or_else(|e| panic!("{e}"));
+
+        assert!(
+            verifying_key.verify(&payload, &sig).is_ok(),
+            "signature must verify after a base64 JSON round-trip"
+        );
+    }
+
+    #[test]
     fn test_tampered_event_fails_verification() {
         let builder = EventBuilder::new(TEST_KEY_PEM).unwrap_or_else(|e| panic!("{e}"));
 

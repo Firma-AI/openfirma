@@ -238,7 +238,7 @@ You'll see two records (one per curl), each with:
 - `resource`: the normalized host+path, such as `"wttr.in/london"` or `"paste.rs/"`.
 - `deny_reason`: empty for ALLOW; for the forbidden paste, a string like
   `"policy denied: policy denied action 'communication.external.send' on resource 'paste.rs/'"`.
-- `signature`: DER bytes that you can verify with the public side of `audit.key`.
+- `signature`: a base64-encoded DER signature that you can verify with the public side of `audit.key`.
 
 For verifying the signature, see [Read & verify the audit log](../audit-log/).
 
