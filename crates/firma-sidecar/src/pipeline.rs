@@ -24,7 +24,7 @@ use firma_core::{
 
 use std::sync::Arc;
 
-use crate::audit::AuditPayload;
+use crate::audit::{AuditPayload, Decision};
 use crate::authority_client::readiness::ReadinessView;
 use crate::config::SidecarMode;
 use crate::credential::{CredentialInjectionError, CredentialInjector};
@@ -36,14 +36,6 @@ pub use crate::enforcement::decision::EnforcementDecision;
 use crate::enforcement::decision::{DenyIdentity, EnforcementStage};
 pub use crate::enforcement::registry::ActionClassRegistry;
 pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
-
-/// Proto wire values for the enforcement decision enum.
-const DECISION_ALLOW: i32 = 1;
-pub(crate) const DECISION_DENY: i32 = 2;
-/// Proto wire value for the `ABORT` decision introduced by task 005
-/// step 6. Emitted when the connector aborts an already-approved call
-/// (currently only `CONNECTOR_TIMEOUT`).
-pub(crate) const DECISION_ABORT: i32 = 3;
 
 /// Construction arguments for [`EnforcementPipeline`].
 ///
@@ -168,7 +160,7 @@ impl EnforcementPipeline {
             && let EnforcementDecision::Deny { .. } = &decision
         {
             let original_reason = std::mem::take(&mut payload.deny_reason);
-            payload.decision = DECISION_ALLOW;
+            payload.decision = Decision::Allow;
             payload.deny_reason = format!("monitor_mode: {original_reason}");
             return (
                 EnforcementDecision::Passthrough {
@@ -382,7 +374,7 @@ struct AuditDecisionFields {
     agent_id: String,
     action: String,
     resource: String,
-    decision_code: i32,
+    decision_code: Decision,
     deny_reason: String,
     context_hash: String,
     bundle_version: String,
@@ -401,7 +393,7 @@ fn audit_decision_fields(
             agent_id: claims.agent_id.to_string(),
             action: envelope.intent().action_class.clone(),
             resource: redact_sensitive_query_params(&envelope.intent().resource_display()),
-            decision_code: DECISION_ALLOW,
+            decision_code: Decision::Allow,
             deny_reason: String::new(),
             context_hash: claims.context_hash.clone(),
             bundle_version: bundle_version.unwrap_or("").to_string(),
@@ -438,7 +430,7 @@ fn audit_decision_fields(
                 agent_id,
                 action,
                 resource,
-                decision_code: DECISION_DENY,
+                decision_code: Decision::Deny,
                 deny_reason: sanitize_audit_reason(&format!("{reason}: {detail}")),
                 context_hash,
                 bundle_version: String::new(),
@@ -455,7 +447,7 @@ fn audit_decision_fields(
                 agent_id,
                 action: raw_request_action_label(request),
                 resource: redact_sensitive_query_params(&raw_request_resource_display(request)),
-                decision_code: DECISION_ABORT,
+                decision_code: Decision::Abort,
                 deny_reason: sanitize_audit_reason(&format!("{}: {detail}", reason.code())),
                 context_hash,
                 bundle_version: String::new(),
@@ -466,7 +458,7 @@ fn audit_decision_fields(
             agent_id: String::new(),
             action: raw_request_action_label(request),
             resource: redact_sensitive_query_params(&raw_request_resource_display(request)),
-            decision_code: DECISION_ALLOW,
+            decision_code: Decision::Allow,
             deny_reason: String::new(),
             context_hash: String::new(),
             bundle_version: String::new(),
@@ -567,7 +559,8 @@ fn extract_host(resource: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{MappingRuleConfig, MappingRulesFile};
+    use crate::audit::Decision;
+    use crate::config::{MappingRuleConfig, MappingRulesFile, TenancyMode};
     use crate::credential::NullCredentialInjector;
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
@@ -689,6 +682,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
@@ -717,6 +711,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
@@ -844,6 +839,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -917,6 +913,7 @@ mod tests {
             }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(DenyDeletePolicy));
@@ -982,6 +979,7 @@ mod tests {
             }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(DenyAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1005,7 +1003,7 @@ mod tests {
 
         let (decision, payload) = pipeline.enforce(&request, "sess_001").await;
         assert!(decision.is_deny());
-        assert_eq!(payload.decision, DECISION_DENY);
+        assert_eq!(payload.decision, Decision::Deny);
         assert_eq!(
             payload.agent_id,
             claims.agent_id.to_string(),
@@ -1053,6 +1051,7 @@ mod tests {
             Box::new(RejectingVerifier),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -1105,6 +1104,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -1261,6 +1261,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(RevokedStore),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1308,6 +1309,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1356,6 +1358,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1451,6 +1454,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
 
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(StalePolicy));
@@ -1495,6 +1499,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1520,7 +1525,7 @@ mod tests {
         assert!(decision.is_allow());
 
         assert_eq!(payload.session_id, "sess_audit");
-        assert_eq!(payload.decision, 1); // ALLOW
+        assert_eq!(payload.decision, Decision::Allow);
         assert_eq!(payload.token_id, "3713c5fc-b569-650c-c780-c64051473370");
         assert_eq!(payload.agent_id, "agent_test");
         assert_eq!(payload.action, "communication.external.send");
@@ -1541,6 +1546,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1566,7 +1572,7 @@ mod tests {
         assert!(decision.is_deny());
 
         assert_eq!(payload.session_id, "sess_deny");
-        assert_eq!(payload.decision, 2); // DENY
+        assert_eq!(payload.decision, Decision::Deny);
         assert_eq!(payload.action, "raw.http.POST");
         assert_eq!(payload.resource, "api.openai.com/v1/chat/completions");
     }
@@ -1590,6 +1596,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1615,7 +1622,7 @@ mod tests {
         assert!(decision.is_passthrough());
 
         assert_eq!(payload.session_id, "sess_pt");
-        assert_eq!(payload.decision, 1); // Passthrough maps to ALLOW
+        assert_eq!(payload.decision, Decision::Allow); // Passthrough maps to ALLOW
         assert_eq!(payload.action, "raw.http.GET");
         assert_eq!(payload.resource, "not-protected.example.com/any");
     }
@@ -1633,6 +1640,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -1660,7 +1668,7 @@ mod tests {
         assert_eq!(decision.deny_reason(), Some(DenyReason::UnclassifiedIntent));
 
         assert_eq!(payload.session_id, "sess_norm");
-        assert_eq!(payload.decision, 2); // DENY
+        assert_eq!(payload.decision, Decision::Deny);
     }
 
     // ===== Credential injection tests =====
@@ -1679,6 +1687,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -1729,6 +1738,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -1776,6 +1786,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -1826,7 +1837,7 @@ mod tests {
         }
 
         assert_eq!(payload.session_id, "sess_fail");
-        assert_eq!(payload.decision, DECISION_ABORT);
+        assert_eq!(payload.decision, Decision::Abort);
         assert_eq!(payload.agent_id, "agent_test");
         assert!(
             payload
@@ -1907,7 +1918,7 @@ mod tests {
             decision.is_passthrough(),
             "monitor mode must convert DENY to Passthrough"
         );
-        assert_eq!(payload.decision, DECISION_ALLOW, "audit must record ALLOW");
+        assert_eq!(payload.decision, Decision::Allow, "audit must record ALLOW");
         assert!(
             payload.deny_reason.starts_with("monitor_mode:"),
             "audit reason must carry monitor_mode prefix, got: {}",
@@ -1939,7 +1950,7 @@ mod tests {
         let (decision, payload) = pipeline.enforce(&request, "sess_001").await;
 
         assert!(decision.is_allow(), "normal ALLOWs must remain Allow");
-        assert_eq!(payload.decision, DECISION_ALLOW);
+        assert_eq!(payload.decision, Decision::Allow);
         assert!(
             payload.deny_reason.is_empty(),
             "deny_reason must be empty for genuine ALLOWs"
@@ -1958,7 +1969,7 @@ mod tests {
             decision.is_deny(),
             "enforce mode must deny unclassified intent"
         );
-        assert_eq!(payload.decision, DECISION_DENY);
+        assert_eq!(payload.decision, Decision::Deny);
         assert!(!payload.deny_reason.is_empty(), "deny_reason must be set");
     }
 }

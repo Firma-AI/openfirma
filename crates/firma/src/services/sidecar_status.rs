@@ -49,12 +49,7 @@ pub fn render_pretty(rows: &[SidecarEntry]) -> String {
         "SANDBOX_ID", "AGENT", "PID", "STATE", "LISTEN", "UPTIME"
     );
     for r in rows {
-        // Absent PID (sentinel 0) and empty LISTEN path both render as `-`.
-        let pid_cell = if r.pid == 0 {
-            "-".to_string()
-        } else {
-            r.pid.to_string()
-        };
+        let pid_cell = r.pid.map_or_else(|| "-".to_string(), |pid| pid.to_string());
         let listen_str = r.listen.display().to_string();
         let listen_cell = if listen_str.is_empty() {
             "-"
@@ -138,7 +133,7 @@ fn collect_daemon() -> anyhow::Result<Vec<SidecarEntry>> {
         session_id: String::new(),
         authority_url: String::new(),
         policy_bundle_version: String::new(),
-        pid: c.pid.unwrap_or(0),
+        pid: c.pid,
         started_at: String::new(),
         state: c.state,
         listen: c
@@ -169,7 +164,7 @@ mod tests {
             session_id: String::new(),
             authority_url: String::new(),
             policy_bundle_version: String::new(),
-            pid: 1234,
+            pid: firma_runtime_state::UserProcessId::new(1234),
             started_at: String::new(),
             state,
             listen: PathBuf::from("/tmp/sidecar.sock"),
@@ -259,14 +254,14 @@ mod tests {
     }
 
     #[test]
-    fn render_pretty_sentinel_dash_for_zero_pid_and_empty_listen() {
+    fn render_pretty_dash_for_missing_pid_and_empty_listen() {
         let entry = SidecarEntry {
             sandbox_id: "s0".to_string(),
             agent_id: "agent".to_string(),
             session_id: String::new(),
             authority_url: String::new(),
             policy_bundle_version: String::new(),
-            pid: 0,
+            pid: None,
             started_at: String::new(),
             state: State::Unknown,
             listen: PathBuf::new(),
@@ -279,16 +274,13 @@ mod tests {
             data_row.contains(" - "),
             "data row must contain sentinel `-` for missing PID and LISTEN; row: {data_row:?}"
         );
-        // The literal "0" must not appear as the PID field.
+        // A missing PID must not be rendered as a numeric sentinel.
         // The row starts with the sandbox_id column; split on whitespace and
         // check the PID column (third token) is `-`, not `0`.
         let tokens: Vec<&str> = data_row.split_whitespace().collect();
         // tokens: [sandbox_id, agent_id, pid, state, listen, uptime]
         let pid_token = tokens.get(2).copied().unwrap_or("");
-        assert_eq!(
-            pid_token, "-",
-            "PID token must be `-`, not `0`; row: {data_row:?}"
-        );
+        assert_eq!(pid_token, "-", "PID token must be `-`; row: {data_row:?}");
     }
 
     #[test]

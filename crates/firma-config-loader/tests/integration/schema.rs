@@ -1,6 +1,6 @@
 //! Section extraction behavior through the public schema API.
 
-use firma_config::{CONFIG_FILE_NAME, load_section};
+use firma_config_loader::{CONFIG_FILE_NAME, load_section};
 use fs_err as fs;
 use std::assert_matches;
 

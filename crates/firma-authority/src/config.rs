@@ -284,7 +284,7 @@ pub enum ConfigError {
 
 #[cfg(test)]
 mod tests {
-    use firma_config::CONFIG_FILE_NAME;
+    use firma_config_loader::CONFIG_FILE_NAME;
 
     use super::*;
 

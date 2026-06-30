@@ -9,6 +9,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::error::Result;
+use firma_runtime_state::UserProcessId;
 
 pub struct Group {
     #[cfg(unix)]
@@ -38,7 +39,7 @@ impl Drop for Group {
 }
 
 pub struct SpawnedChild {
-    pub pid: u32,
+    pub pid: UserProcessId,
 }
 
 /// Platform-specific operations for managing process groups.
@@ -70,9 +71,6 @@ pub trait Platform {
     ///
     /// Returns a platform error if termination cannot be requested.
     fn signal_hard(group_pid: u32) -> Result<()>;
-
-    /// Report whether `pid` is currently a live process.
-    fn is_alive(pid: u32) -> bool;
 }
 
 #[cfg(unix)]

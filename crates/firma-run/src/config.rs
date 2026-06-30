@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use firma_config::AgentProfile;
+use firma_config_loader::AgentProfile;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::BackendKind;
@@ -44,6 +44,9 @@ pub struct ResolvedProfile {
     /// and is OR'd with the CLI `--allow-non-structural` flag and env var
     /// `FIRMA_RUN_ALLOW_NON_STRUCTURAL`.
     pub allow_non_structural: bool,
+    /// How the sandbox CA trust store is assembled (sole firma-ca vs. appended
+    /// to system roots).
+    pub ca_trust_mode: CaTrustMode,
 }
 
 impl ResolvedProfile {
@@ -285,6 +288,20 @@ pub struct SeccompPolicyConfig {
     pub runtime_mode: SeccompRuntimeMode,
 }
 
+/// How the sandbox CA trust store is assembled for the agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CaTrustMode {
+    /// Inject only the firma-ca path (current behavior). System roots are not
+    /// added; correct when every reachable host is MITM'd by firma.
+    #[default]
+    Sole,
+    /// Inject a bundle of system roots + firma-ca. Needed for agents that talk
+    /// to non-MITM'd hosts (e.g. Copilot → real GitHub) while still trusting
+    /// firma-ca for intercepted hosts.
+    AppendSystemRoots,
+}
+
 /// Runtime behavior for managed seccomp artifact selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -361,6 +378,9 @@ pub(crate) struct ProfilePatch {
     /// Overrides the built-in `DEFAULT_SENSITIVE_HOME_SUFFIXES` for this profile.
     /// Example: `[".ssh", ".gnupg", ".aws"]` leaves `.config` accessible.
     pub(crate) mask_home_paths: Option<Vec<String>>,
+    /// How the sandbox CA trust store is assembled. `None` resolves to the
+    /// default `CaTrustMode::Sole`.
+    pub(crate) ca_trust_mode: Option<CaTrustMode>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -462,6 +482,7 @@ impl ProfilePatch {
             use_http_proxy_sidecar: higher.use_http_proxy_sidecar || self.use_http_proxy_sidecar,
             allow_non_structural: higher.allow_non_structural || self.allow_non_structural,
             mask_home_paths: higher.mask_home_paths.or(self.mask_home_paths),
+            ca_trust_mode: higher.ca_trust_mode.or(self.ca_trust_mode),
         }
     }
 }
@@ -590,6 +611,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         executable_policies,
         use_http_proxy_sidecar: patch.use_http_proxy_sidecar,
         allow_non_structural: patch.allow_non_structural,
+        ca_trust_mode: patch.ca_trust_mode.unwrap_or_default(),
     };
 
     if matches!(
@@ -685,6 +707,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
         use_http_proxy_sidecar: false,
         allow_non_structural: args.allow_non_structural,
         mask_home_paths: None,
+        ca_trust_mode: None,
     }
 }
 
@@ -882,7 +905,7 @@ fn default_managed_seccomp_policy(
     let source_policy_path = std::env::var(MANAGED_POLICY_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .map_or_else(ensure_managed_policy_path, PathBuf::from);
+        .map_or_else(|| ensure_managed_policy_path(profile_id), PathBuf::from);
 
     let artifact_dir = std::env::var(MANAGED_ARTIFACT_DIR_ENV)
         .ok()
@@ -919,26 +942,47 @@ fn parse_managed_runtime_mode(value: &str) -> Result<SeccompRuntimeMode, RunErro
 /// override is set via env var or profile config.
 const MANAGED_SECCOMP_POLICY: &str = include_str!("../seccomp/generic-local-command-v1.toml");
 
+/// Copilot managed seccomp baseline. Permits `filesystem.delete` (`SQLite`
+/// session store) while keeping `credential.write` denied. Selected for the
+/// copilot profile.
+const COPILOT_SECCOMP_POLICY: &str = include_str!("../seccomp/copilot-local-command-v1.toml");
+const COPILOT_MANAGED_POLICY_FILE: &str = "copilot-local-command-v1.toml";
+
+/// Returns the embedded managed seccomp policy content and on-disk filename
+/// for `profile_id`. Copilot gets a baseline that permits `filesystem.delete`
+/// (`SQLite` session store); every other profile gets the strict generic baseline.
+fn managed_policy_for_profile(profile_id: &str) -> (&'static str, &'static str) {
+    if matches!(
+        AgentProfile::from_name(profile_id),
+        Some(AgentProfile::Copilot)
+    ) {
+        (COPILOT_SECCOMP_POLICY, COPILOT_MANAGED_POLICY_FILE)
+    } else {
+        (MANAGED_SECCOMP_POLICY, DEFAULT_MANAGED_POLICY_FILE)
+    }
+}
+
 /// Writes the embedded seccomp policy to the runtime dir and returns its path.
 /// Always overwrites — this is a binary-embedded fallback, not a user-editable file.
 /// To override, set `FIRMA_RUN_MANAGED_SECCOMP_POLICY_PATH` or `seccomp_policy.source_policy_path` in the profile config.
 /// Creates the directory with restricted permissions (0o700/0o600).
-fn ensure_managed_policy_path() -> PathBuf {
+fn ensure_managed_policy_path(profile_id: &str) -> PathBuf {
     let dir = firma_runtime_state::runtime_paths::default_runtime_dir().join("seccomp");
-    write_managed_policy_to_dir(&dir)
+    write_managed_policy_to_dir(&dir, profile_id)
 }
 
-fn write_managed_policy_to_dir(dir: &std::path::Path) -> PathBuf {
-    let path = dir.join(DEFAULT_MANAGED_POLICY_FILE);
+fn write_managed_policy_to_dir(dir: &std::path::Path, profile_id: &str) -> PathBuf {
+    let (content, filename) = managed_policy_for_profile(profile_id);
+    let path = dir.join(filename);
     if let Err(error) = firma_runtime_state::fs::create_private_dir_all(dir) {
         tracing::warn!(%error, "failed to create seccomp policy dir; falling back to unextracted path");
         return path;
     }
-    match firma_runtime_state::fs::write_private_file(&path, MANAGED_SECCOMP_POLICY.as_bytes()) {
+    match firma_runtime_state::fs::write_private_file(&path, content.as_bytes()) {
         Ok(()) => {
-            tracing::debug!(path = %path.display(), "wrote default managed seccomp policy");
+            tracing::debug!(path = %path.display(), "wrote managed seccomp policy");
         }
-        Err(error) => tracing::warn!(%error, "failed to write default seccomp policy"),
+        Err(error) => tracing::warn!(%error, "failed to write managed seccomp policy"),
     }
     path
 }
@@ -959,7 +1003,7 @@ pub(crate) fn env_truthy(name: &str) -> bool {
 }
 
 fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
-    let section = firma_config::load_section(path, "run").map_err(|reason| {
+    let section = firma_config_loader::load_section(path, "run").map_err(|reason| {
         // load_section prefixes the path; strip it to avoid doubling in the
         // RunError::ConfigParse display ("{path}: {reason}").
         let prefix = format!("{}: ", path.display());
@@ -992,7 +1036,7 @@ fn read_config(path: &Path, profile: &str) -> Result<ProfilePatch, RunError> {
 /// Returns an error when the file cannot be read or the `[run]` section
 /// cannot be parsed as `FileConfig`.
 pub fn read_configured_profile(path: &Path) -> Result<Option<String>, RunError> {
-    let section = firma_config::load_section(path, "run").map_err(|reason| {
+    let section = firma_config_loader::load_section(path, "run").map_err(|reason| {
         let prefix = format!("{}: ", path.display());
         let reason = reason.to_string();
         let reason = reason.strip_prefix(&prefix).unwrap_or(&reason).to_string();
@@ -1013,7 +1057,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use firma_config::CONFIG_FILE_NAME;
+    use firma_config_loader::CONFIG_FILE_NAME;
     use pretty_assertions::assert_eq;
 
     use crate::runtime::RunInput;
@@ -1110,6 +1154,24 @@ mod tests {
                 "managed seccomp must apply to profile '{profile}' on bwrap"
             );
         }
+    }
+
+    #[test]
+    fn copilot_managed_policy_drops_filesystem_delete() {
+        let (content, filename) = super::managed_policy_for_profile("copilot");
+        assert_eq!(filename, "copilot-local-command-v1.toml");
+        assert!(content.contains("credential.write"));
+        assert!(!content.contains("filesystem.delete"));
+        let (_, generic_filename) = super::managed_policy_for_profile("generic");
+        assert_eq!(generic_filename, "generic-local-command-v1.toml");
+    }
+
+    #[test]
+    fn managed_seccomp_applies_to_copilot_on_bwrap() {
+        assert!(super::managed_seccomp_applies(
+            "copilot",
+            BackendKind::Bwrap
+        ));
     }
 
     #[test]
@@ -1221,6 +1283,23 @@ approval_policy = "never"
             SidecarEndpoint::Tcp { .. }
         ));
         assert!(resolved.env_passthrough.contains("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn generic_profile_defaults_to_sole_ca_trust() {
+        let resolved = resolve_profile(&args("generic")).unwrap();
+        assert_eq!(resolved.ca_trust_mode, super::CaTrustMode::Sole);
+    }
+
+    #[test]
+    fn resolves_copilot_profile() {
+        let resolved = resolve_profile(&args("copilot")).unwrap();
+        assert_eq!(resolved.id, "copilot");
+        assert_eq!(
+            resolved.ca_trust_mode,
+            super::CaTrustMode::AppendSystemRoots
+        );
+        assert!(resolved.env_passthrough.contains("GITHUB_TOKEN"));
     }
 
     #[test]
@@ -1733,7 +1812,7 @@ timeout_ms = 700
         fs::write(&policy_path, b"stale content from old binary version")
             .unwrap_or_else(|e| panic!("{e}"));
 
-        let result_path = super::write_managed_policy_to_dir(&seccomp_dir);
+        let result_path = super::write_managed_policy_to_dir(&seccomp_dir, "generic");
 
         assert_eq!(result_path, policy_path);
         let written = fs::read_to_string(&policy_path).unwrap_or_else(|e| panic!("{e}"));

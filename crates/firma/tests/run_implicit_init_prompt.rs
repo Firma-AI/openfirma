@@ -16,7 +16,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use firma_config::CONFIG_DIR_NAME;
+use firma_config_loader::CONFIG_DIR_NAME;
 
 fn firma_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_firma"))
@@ -85,6 +85,39 @@ fn no_autostart_without_firma_toml_errors_with_hint() {
     assert!(
         stderr.contains("firma config") || stderr.contains("--no-autostart"),
         "stderr should hint at firma config:\n{stderr}"
+    );
+    assert!(
+        !cwd.join(CONFIG_DIR_NAME).exists(),
+        "{CONFIG_DIR_NAME}/ must not be created on --no-autostart abort"
+    );
+}
+
+#[test]
+fn copilot_command_auto_selects_profile_without_flag() {
+    // `firma run copilot` (no --profile) must infer the copilot profile and
+    // reach config resolution — same gating as codex — rather than rejecting
+    // `copilot` as an unknown command/profile.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let cwd = tmp.path();
+
+    let out = Command::new(firma_bin())
+        .current_dir(cwd)
+        .args(["run", "--no-autostart", "copilot"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env_remove("FIRMA_CONFIG")
+        .output()
+        .expect("spawn firma run");
+
+    assert!(
+        !out.status.success(),
+        "--no-autostart with no firma.toml must fail"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("firma config") || stderr.contains("--no-autostart"),
+        "copilot must be accepted and fail at config resolution, not as unknown profile:\n{stderr}"
     );
     assert!(
         !cwd.join(CONFIG_DIR_NAME).exists(),

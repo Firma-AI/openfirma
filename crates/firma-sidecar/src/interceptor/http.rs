@@ -1825,7 +1825,7 @@ mod tests {
     use tokio_rustls::TlsConnector;
 
     use super::*;
-    use crate::config::{MappingRuleConfig, MappingRulesFile};
+    use crate::config::{MappingRuleConfig, MappingRulesFile, TenancyMode};
     use crate::credential::NullCredentialInjector;
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
@@ -1926,6 +1926,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -1963,6 +1964,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -2020,6 +2022,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -2059,6 +2062,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -2096,6 +2100,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -2130,6 +2135,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -3302,7 +3308,7 @@ Content-Length: 10\r\n\
         let payload = audit_rx.try_recv().unwrap_or_else(|e| {
             panic!("expected a deny audit event for fail-closed preflight: {e}")
         });
-        assert_eq!(payload.decision, crate::pipeline::DECISION_DENY);
+        assert_eq!(payload.decision, crate::audit::Decision::Deny);
         assert!(
             payload.deny_reason.contains("HTTPS_MITM_SETUP_FAILED"),
             "deny audit should carry the fail-closed detail, got {:?}",

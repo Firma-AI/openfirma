@@ -167,7 +167,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
-    use crate::config::{MappingRuleConfig, MappingRulesFile};
+    use crate::config::{MappingRuleConfig, MappingRulesFile, TenancyMode};
     use crate::credential::NullCredentialInjector;
     use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
     use crate::enforcement::constraint_enforcement::PolicyEvaluation;
@@ -262,6 +262,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -333,6 +334,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 
@@ -389,6 +391,7 @@ mod tests {
             Box::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
+            TenancyMode::SingleAgent,
         );
         let constraint_enforcer = ConstraintEnforcer::new(std::sync::Arc::new(AllowAllPolicy));
 

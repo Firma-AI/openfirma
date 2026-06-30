@@ -7,7 +7,7 @@ use tracing::debug;
 
 use crate::error::Result;
 use crate::platform::{Group, Platform, SpawnedChild, SystemPlatform};
-use firma_runtime_state::pidfile;
+use firma_runtime_state::{UserProcessId, pidfile};
 
 #[derive(Clone, Copy)]
 pub struct SpawnRequest<'a> {
@@ -20,7 +20,7 @@ pub struct SpawnRequest<'a> {
 }
 
 pub struct SpawnedComponent {
-    pub pid: u32,
+    pub pid: UserProcessId,
 }
 
 pub fn spawn_component(group: &Group, req: &SpawnRequest<'_>) -> Result<SpawnedComponent> {
@@ -42,6 +42,6 @@ pub fn spawn_component(group: &Group, req: &SpawnRequest<'_>) -> Result<SpawnedC
     cmd.args(req.args);
     let SpawnedChild { pid } = SystemPlatform::spawn_in_group(group, &mut cmd, &log_path)?;
     pidfile::write(&pidfile_path, pid)?;
-    debug!(name = req.name, pid, pidfile = %pidfile_path.display(), "pidfile written");
+    debug!(name = req.name, pid = %pid, pidfile = %pidfile_path.display(), "pidfile written");
     Ok(SpawnedComponent { pid })
 }

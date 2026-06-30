@@ -39,13 +39,13 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
         .into_iter()
         .flatten()
     {
-        if SystemPlatform::is_alive(pid) {
-            debug!(pid, "sending soft signal");
-            if let Err(e) = SystemPlatform::signal_soft(pid) {
+        if pid.is_alive() {
+            debug!(pid = %pid, "sending soft signal");
+            if let Err(e) = SystemPlatform::signal_soft(pid.get()) {
                 // Not fatal: hard-kill will still run after the grace window.
                 // Common when a child crashed before installing its shutdown
                 // listener; log so the failure isn't silent.
-                debug!(pid, error = %e, "soft signal failed");
+                debug!(pid = %pid, error = %e, "soft signal failed");
             }
         }
     }
@@ -53,8 +53,8 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
     // Wait the whole timeout for them to exit on their own.
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        let authority_dead = authority_pid.is_none_or(|pid| !SystemPlatform::is_alive(pid));
-        let sidecar_dead = sidecar_pid.is_none_or(|pid| !SystemPlatform::is_alive(pid));
+        let authority_dead = authority_pid.is_none_or(|pid| !pid.is_alive());
+        let sidecar_dead = sidecar_pid.is_none_or(|pid| !pid.is_alive());
         if authority_dead && sidecar_dead {
             info!("all children exited cleanly");
             cleanup(state_dir)?;
@@ -70,9 +70,9 @@ pub fn stop(state_dir: &Path, timeout: Duration) -> Result<StopOutcome> {
         .into_iter()
         .flatten()
     {
-        if SystemPlatform::is_alive(pid) {
-            info!(pid, "soft-signal grace exceeded; hard-killing");
-            let _ = SystemPlatform::signal_hard(pid);
+        if pid.is_alive() {
+            info!(pid = %pid, "soft-signal grace exceeded; hard-killing");
+            let _ = SystemPlatform::signal_hard(pid.get());
             forced = true;
         }
     }

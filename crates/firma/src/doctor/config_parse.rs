@@ -16,7 +16,7 @@ use crate::doctor::report::Check;
 pub fn check(firma_toml: &Path) -> Check {
     let display = firma_toml.display().to_string();
 
-    let parsed = match firma_config::FirmaConfig::load(firma_toml) {
+    let parsed = match firma_config_loader::FirmaConfig::load(firma_toml) {
         Ok(parsed) => parsed,
         Err(error) => {
             return Check::fail("config parsed", error.to_string()).with_detail("path", display);
@@ -28,7 +28,7 @@ pub fn check(firma_toml: &Path) -> Check {
 
 /// Validate an already-loaded `firma.toml`.
 #[must_use]
-pub fn check_loaded(parsed: &firma_config::FirmaConfig) -> Check {
+pub fn check_loaded(parsed: &firma_config_loader::FirmaConfig) -> Check {
     let display = parsed.origin().display().to_string();
 
     // [authority] is optional — agent-remote configs have no server section.
@@ -56,7 +56,7 @@ pub fn check_loaded(parsed: &firma_config::FirmaConfig) -> Check {
 
 #[cfg(test)]
 mod tests {
-    use firma_config::CONFIG_FILE_NAME;
+    use firma_config_loader::CONFIG_FILE_NAME;
 
     use super::*;
     use crate::doctor::report::Status;

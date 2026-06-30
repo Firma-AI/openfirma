@@ -21,7 +21,7 @@ clap = { workspace = true, features = ["color", "derive", "env", "error-context"
 ctrlc = { workspace = true }
 dialoguer = { workspace = true }
 firma-authority = { workspace = true }
-firma-config = { workspace = true, features = ["clap"] }
+firma-config-loader = { workspace = true, features = ["clap"] }
 firma-core = { workspace = true }
 firma-run = { workspace = true }
 firma-runtime-state = { workspace = true }

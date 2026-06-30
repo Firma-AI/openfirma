@@ -100,6 +100,17 @@ FIRMA_RUN_BWRAP_RUNTIME_HOME = "false"
 # relative to $HOME.
 FIRMA_RUN_BWRAP_MASK_HOME_PATHS = ".ssh,.gnupg,.aws,.config/gcloud,.env"
 
+# Sandbox profile for `firma run --profile copilot` (or `firma run -- copilot`,
+# which auto-selects it). The seccomp baseline (permits filesystem.delete for
+# Copilot's SQLite session store), the github MITM bypass, and the system-root +
+# firma-ca trust bundle all come from the built-in copilot profile — the block
+# below only documents the user-facing toggles.
+[run.profiles.copilot]
+backend = "bwrap"
+
+[run.profiles.copilot.env_set]
+FIRMA_RUN_PROFILE = "copilot"
+
 # ── Sidecar preflight ────────────────────────────────────────────────────────
 
 [sidecar.preflight]

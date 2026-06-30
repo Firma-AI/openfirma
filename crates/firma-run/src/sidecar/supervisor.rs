@@ -24,6 +24,7 @@ use wait_timeout::ChildExt;
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 use crate::identity::SandboxId;
+use firma_runtime_state::UserProcessId;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 /// Per-spec default ready-line wait. CLI flag overrides this value.
@@ -103,7 +104,7 @@ pub enum ScrapeResult {
 pub struct SidecarSupervisor {
     endpoint: SidecarEndpoint,
     marker_dir: PathBuf,
-    pid: u32,
+    pid: UserProcessId,
     child: Option<Child>,
     tee_handle: Option<JoinHandle<()>>,
 }
@@ -137,6 +138,8 @@ impl SidecarSupervisor {
         reason = "single linear spawn-then-scrape sequence reads more clearly inline than split"
     )]
     pub fn spawn(req: SpawnRequest<'_>) -> Result<Self, RunError> {
+        use firma_runtime_state::ChildExt as _;
+
         std::fs::create_dir_all(&req.marker_dir).map_err(|error| {
             RunError::Internal(format!("mkdir {}: {error}", req.marker_dir.display()))
         })?;
@@ -152,7 +155,7 @@ impl SidecarSupervisor {
         // Pre-clean any leftover socket file from a crashed run.
         let _ = std::fs::remove_file(&sock_path);
         let mut last_error: Option<RunError> = None;
-        let mut ready: Option<(Child, JoinHandle<()>, u32, ReadyCapture)> = None;
+        let mut ready: Option<(Child, JoinHandle<()>, UserProcessId, ReadyCapture)> = None;
         for attempt in 0..max_attempts {
             let proxy_listen_addr = if use_http_proxy_interceptor {
                 Some(select_loopback_port())
@@ -197,7 +200,7 @@ impl SidecarSupervisor {
                     reason: format!("spawn firma sidecar: {error}"),
                     log_path: log_path.clone(),
                 })?;
-            let pid = child.id();
+            let pid = child.process_id();
 
             let stderr = child
                 .stderr
@@ -268,7 +271,6 @@ impl SidecarSupervisor {
                 }),
             );
         };
-
         firma_runtime_state::pidfile::write(&pid_path, pid)
             .map_err(|error| RunError::Internal(format!("write sidecar.pid: {error}")))?;
         crate::sidecar::metadata::write(
@@ -290,7 +292,7 @@ impl SidecarSupervisor {
 
         info!(
             sandbox_id = req.sandbox_id.compact(),
-            pid,
+            pid = %pid,
             endpoint = %capture.interceptor_addr,
             "sidecar started"
         );
@@ -321,7 +323,7 @@ impl SidecarSupervisor {
     /// need to assert kill-on-Drop semantics.
     #[doc(hidden)]
     #[must_use]
-    pub fn pid(&self) -> u32 {
+    pub fn pid(&self) -> UserProcessId {
         self.pid
     }
 
@@ -337,13 +339,15 @@ impl SidecarSupervisor {
 impl Drop for SidecarSupervisor {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            send_sigterm(self.pid);
+            if let Err(error) = self.pid.send_sigterm_signal() {
+                warn!(%error, pid = %self.pid, "SIGTERM to sidecar failed");
+            }
             match child.wait_timeout(STOP_GRACE) {
                 Ok(Some(_)) => {
-                    info!(pid = self.pid, "sidecar stopped");
+                    info!(pid = %self.pid, "sidecar stopped");
                 }
                 Ok(None) => {
-                    warn!(pid = self.pid, "sidecar SIGKILL after grace");
+                    warn!(pid = %self.pid, "sidecar SIGKILL after grace");
                     let _ = child.kill();
                     let _ = child.wait();
                 }
@@ -367,21 +371,6 @@ impl Drop for SidecarSupervisor {
         }
     }
 }
-
-#[cfg(unix)]
-fn send_sigterm(pid: u32) {
-    let Ok(raw) = i32::try_from(pid) else {
-        warn!(pid, "pid does not fit in i32; skipping SIGTERM");
-        return;
-    };
-    let target = nix::unistd::Pid::from_raw(raw);
-    if let Err(error) = nix::sys::signal::kill(target, nix::sys::signal::Signal::SIGTERM) {
-        warn!(%error, pid, "SIGTERM to sidecar failed");
-    }
-}
-
-#[cfg(not(unix))]
-fn send_sigterm(_pid: u32) {}
 
 #[cfg(unix)]
 fn select_loopback_port() -> SocketAddr {

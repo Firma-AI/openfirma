@@ -19,6 +19,7 @@ use windows_sys::Win32::System::Threading::{
 use crate::error::{Result, StackError};
 use crate::platform::{Group, Platform, SpawnedChild};
 use crate::shutdown_event::windows_shutdown_event_name;
+use firma_runtime_state::ChildExt as _;
 
 pub struct WindowsPlatform;
 
@@ -64,12 +65,13 @@ impl Platform for WindowsPlatform {
                 .to_string(),
             source,
         })?;
-        let pid = child.id();
+        let pid = child.process_id();
         // AssignProcessToJobObject requires PROCESS_SET_QUOTA and PROCESS_TERMINATE
         // on the process handle (per MSDN). Opening with only
         // PROCESS_QUERY_LIMITED_INFORMATION makes the assignment fail with
         // ERROR_ACCESS_DENIED.
-        let process_handle = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
+        let process_handle =
+            unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid.get()) };
         if process_handle.is_null() {
             let err = unsafe { GetLastError() };
             return Err(StackError::Platform(format!(
@@ -138,14 +140,11 @@ impl Platform for WindowsPlatform {
         }
         Ok(())
     }
-
-    fn is_alive(pid: u32) -> bool {
-        firma_runtime_state::is_pid_alive(pid)
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use firma_runtime_state::UserProcessId;
     use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
     use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
@@ -160,8 +159,9 @@ mod tests {
     fn signal_soft_signals_named_event() {
         // Use a synthetic PID so the test never collides with a real
         // shutdown listener on the same machine.
-        let pid: u32 = (std::process::id() ^ 0xDEAD_BEEF).wrapping_add(1);
-        let name = windows_shutdown_event_name(pid);
+        let pid = UserProcessId::new((std::process::id() ^ 0xDEAD_BEEF).wrapping_add(1))
+            .expect("synthetic pid is non-zero");
+        let name = windows_shutdown_event_name(pid.get());
         let wide: Vec<u16> = OsStr::new(&name)
             .encode_wide()
             .chain(std::iter::once(0))
@@ -170,7 +170,7 @@ mod tests {
         let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, wide.as_ptr()) };
         assert!(!event.is_null(), "CreateEventW failed");
 
-        WindowsPlatform::signal_soft(pid).expect("signal_soft");
+        WindowsPlatform::signal_soft(pid.get()).expect("signal_soft");
 
         let waited = unsafe { WaitForSingleObject(event, 5_000) };
         unsafe { CloseHandle(event) };
@@ -186,9 +186,9 @@ mod tests {
     #[test]
     fn signal_soft_errors_when_event_absent() {
         // PID with no matching event — `OpenEventW` must return null.
-        let pid: u32 = 0xDEAD_BEEF;
-        let err =
-            WindowsPlatform::signal_soft(pid).expect_err("signal_soft must fail with no event");
+        let pid = UserProcessId::new(0xDEAD_BEEF).expect("synthetic pid is non-zero");
+        let err = WindowsPlatform::signal_soft(pid.get())
+            .expect_err("signal_soft must fail with no event");
         let msg = err.to_string();
         assert!(
             msg.contains("OpenEventW"),
