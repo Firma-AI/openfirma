@@ -12,6 +12,7 @@
 
 use firma_core::{
     AbortReason, CapabilityClaims, DenyReason, ExecutionEnvelope, InjectedCredentials,
+    ModificationSpec,
 };
 
 use crate::normalizer::NormalizedEnvelope;
@@ -57,7 +58,7 @@ pub enum EnforcementStage {
 /// credential-injection denial has empty `agent_id`/`token_id`. That made
 /// `firma monitor --agent <id>` drop every deny while keeping allows — the
 /// gap reported in FIR-208.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DenyIdentity {
     /// Verified token id.
     pub token_id: String,
@@ -119,21 +120,86 @@ pub enum EnforcementDecision {
     },
     /// Non-protected traffic. Forward the request without enforcement.
     Passthrough { detail: String },
+    /// AARM R4 `MODIFY`: the request is authorized but a transformation must
+    /// be applied before dispatch. Carries the same payloads as [`Self::Allow`]
+    /// (verified claims, immutable envelope, injected credentials) plus a
+    /// [`ModificationSpec`] describing the transformation sourced from the
+    /// `@modify("…")` Cedar policy annotation. The connector dispatch path
+    /// treats `MODIFY` identically to `ALLOW` for forwarding; the modification
+    /// description is recorded in the audit trail so operators can reconcile
+    /// the transformed execution against policy intent.
+    Modify {
+        claims: CapabilityClaims,
+        envelope: Box<ExecutionEnvelope>,
+        modifications: ModificationSpec,
+        credentials: InjectedCredentials,
+    },
+    /// AARM R4 `STEP_UP`: the request is blocked pending human approval or
+    /// stronger authentication. The call does not proceed; the agent should
+    /// request approval and retry. Carries the verified identity (when raised
+    /// after Stage 1) and the originating normalized envelope for audit.
+    /// `claims`/`envelope` are `Option` because `STEP_UP` may also originate
+    /// from the local-exec HITL path, which has no capability envelope.
+    StepUp {
+        claims: Option<CapabilityClaims>,
+        envelope: Option<NormalizedEnvelope>,
+        challenge: String,
+        retry_after_ms: u64,
+        identity: Option<DenyIdentity>,
+    },
+    /// AARM R4 `DEFER`: the request is blocked and should be retried after
+    /// `retry_after_ms`, pending additional context or rate budget. The call
+    /// does not proceed. Like [`Self::StepUp`], `claims`/`envelope` are
+    /// `Option` for audit-only origination paths without a capability.
+    Defer {
+        claims: Option<CapabilityClaims>,
+        envelope: Option<NormalizedEnvelope>,
+        retry_after_ms: u64,
+        identity: Option<DenyIdentity>,
+    },
 }
 
 impl EnforcementDecision {
-    /// Attaches verified [`DenyIdentity`] to a `Deny` decision so the
-    /// audit record carries agent/token attribution. No-op for `Allow`
-    /// and `Passthrough`.
+    /// Attaches verified [`DenyIdentity`] to a decision that carries an
+    /// identity slot (`Deny`, `Abort`, `StepUp`, `Defer`) so the audit record
+    /// carries agent/token attribution. No-op for `Allow`, `Modify`, and
+    /// `Passthrough`.
     #[must_use]
     pub fn with_identity(mut self, identity: DenyIdentity) -> Self {
         match &mut self {
-            Self::Deny { identity: slot, .. } | Self::Abort { identity: slot, .. } => {
+            Self::Deny { identity: slot, .. }
+            | Self::Abort { identity: slot, .. }
+            | Self::StepUp { identity: slot, .. }
+            | Self::Defer { identity: slot, .. } => {
                 *slot = Some(identity);
             }
-            Self::Allow { .. } | Self::Passthrough { .. } => {}
+            Self::Allow { .. } | Self::Modify { .. } | Self::Passthrough { .. } => {}
         }
         self
+    }
+
+    /// Bridge the local-exec HITL pending outcome onto the unified
+    /// enforcement decision surface as an AARM R4 `STEP_UP`.
+    ///
+    /// The local-exec UDS wire format still serializes `pending_hitl`
+    /// (so `firma-run` is unchanged), but this constructor lets the
+    /// local-exec path project its outcome onto the same audit/wire
+    /// vocabulary used by the general enforcement pipeline. `claims` and
+    /// `envelope` are `None` because the local-exec path carries no
+    /// capability envelope; the approval token (if any) is surfaced as
+    /// the `challenge`.
+    #[must_use]
+    pub fn step_up_pending_hitl(
+        approval_token: Option<String>,
+        retry_after_ms: Option<u64>,
+    ) -> Self {
+        Self::StepUp {
+            claims: None,
+            envelope: None,
+            challenge: approval_token.unwrap_or_default(),
+            retry_after_ms: retry_after_ms.unwrap_or(0),
+            identity: None,
+        }
     }
 
     #[must_use]
@@ -156,11 +222,34 @@ impl EnforcementDecision {
         matches!(self, Self::Passthrough { .. })
     }
 
+    /// `true` for the AARM R4 `MODIFY` decision.
+    #[must_use]
+    pub fn is_modify(&self) -> bool {
+        matches!(self, Self::Modify { .. })
+    }
+
+    /// `true` for the AARM R4 `STEP_UP` decision.
+    #[must_use]
+    pub fn is_step_up(&self) -> bool {
+        matches!(self, Self::StepUp { .. })
+    }
+
+    /// `true` for the AARM R4 `DEFER` decision.
+    #[must_use]
+    pub fn is_defer(&self) -> bool {
+        matches!(self, Self::Defer { .. })
+    }
+
     #[must_use]
     pub fn deny_reason(&self) -> Option<DenyReason> {
         match self {
             Self::Deny { reason, .. } => Some(*reason),
-            Self::Allow { .. } | Self::Abort { .. } | Self::Passthrough { .. } => None,
+            Self::Allow { .. }
+            | Self::Abort { .. }
+            | Self::Passthrough { .. }
+            | Self::Modify { .. }
+            | Self::StepUp { .. }
+            | Self::Defer { .. } => None,
         }
     }
 
@@ -168,7 +257,12 @@ impl EnforcementDecision {
     pub fn stage(&self) -> Option<EnforcementStage> {
         match self {
             Self::Deny { stage, .. } => Some(*stage),
-            Self::Allow { .. } | Self::Abort { .. } | Self::Passthrough { .. } => None,
+            Self::Allow { .. }
+            | Self::Abort { .. }
+            | Self::Passthrough { .. }
+            | Self::Modify { .. }
+            | Self::StepUp { .. }
+            | Self::Defer { .. } => None,
         }
     }
 }
@@ -301,5 +395,84 @@ mod tests {
             };
             assert_eq!(decision.stage(), Some(stage));
         }
+    }
+
+    #[test]
+    fn step_up_defer_carry_identity_and_predicate_helpers() {
+        let identity = DenyIdentity {
+            token_id: "tok".to_string(),
+            agent_id: "agent".to_string(),
+            context_hash: "ctx".to_string(),
+        };
+
+        let step_up = EnforcementDecision::StepUp {
+            claims: None,
+            envelope: None,
+            challenge: "require admin approval".to_string(),
+            retry_after_ms: 500,
+            identity: None,
+        }
+        .with_identity(identity.clone());
+
+        assert!(step_up.is_step_up());
+        assert!(!step_up.is_allow());
+        assert!(!step_up.is_modify());
+        assert!(!step_up.is_defer());
+        assert_eq!(step_up.deny_reason(), None);
+        assert_eq!(step_up.stage(), None);
+        match step_up {
+            EnforcementDecision::StepUp {
+                identity: Some(id), ..
+            } => assert_eq!(id, identity),
+            _ => panic!("expected StepUp with identity"),
+        }
+
+        let defer = EnforcementDecision::Defer {
+            claims: None,
+            envelope: None,
+            retry_after_ms: 1_000,
+            identity: Some(identity.clone()),
+        };
+        assert!(defer.is_defer());
+        assert!(!defer.is_step_up());
+        match defer {
+            EnforcementDecision::Defer {
+                identity: Some(id),
+                retry_after_ms,
+                ..
+            } => {
+                assert_eq!(id, identity);
+                assert_eq!(retry_after_ms, 1_000);
+            }
+            _ => panic!("expected Defer"),
+        }
+    }
+
+    #[test]
+    fn step_up_pending_hitl_bridge_constructor() {
+        let bridged =
+            EnforcementDecision::step_up_pending_hitl(Some("tok-42".to_string()), Some(750));
+        assert!(bridged.is_step_up());
+        match bridged {
+            EnforcementDecision::StepUp {
+                challenge,
+                retry_after_ms,
+                claims,
+                envelope,
+                identity,
+            } => {
+                assert_eq!(challenge, "tok-42");
+                assert_eq!(retry_after_ms, 750);
+                assert!(claims.is_none());
+                assert!(envelope.is_none());
+                assert!(identity.is_none());
+            }
+            _ => panic!("expected StepUp"),
+        }
+
+        // Without an approval token or retry hint the bridge still yields a
+        // well-formed STEP_UP with an empty challenge and zero retry.
+        let empty = EnforcementDecision::step_up_pending_hitl(None, None);
+        assert!(empty.is_step_up());
     }
 }

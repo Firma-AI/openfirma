@@ -16,16 +16,18 @@
 //! | `action`    | `Firma::Action::"<action_class>"`    |
 //! | `resource`  | `Firma::Resource::"<resource_uri>"`  |
 
-use std::time::Instant;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use cedar_policy::{
-    Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request, Schema,
+    Authorizer, Context, Decision, Effect, Entities, EntityUid, PolicyId, PolicySet, Request,
+    Response, Schema,
 };
-use firma_core::FirmaEntityUid;
 use firma_core::agent::AgentId;
 use firma_core::policy::PolicyBundle;
+use firma_core::{DeferDuration, FirmaEntityUid, ModificationSpec, StepUpSpec};
 
-use super::constraint_enforcement::PolicyEvaluation;
+use super::constraint_enforcement::{PolicyEvaluation, PolicyVerdict};
 
 /// Errors produced by Cedar policy loading and evaluation.
 #[derive(Debug, thiserror::Error)]
@@ -56,6 +58,45 @@ pub enum CedarEvaluatorError {
     /// via `Box<dyn Error>` while preserving the source chain.
     #[error("failed to build Cedar request: {0}")]
     RequestBuild(#[source] Box<dyn std::error::Error + Send + Sync>),
+
+    /// A `forbid` policy carried a remediation annotation (`@modify`,
+    /// `@step_up`, `@defer`) whose value could not be interpreted. The bundle
+    /// is rejected at load time so the caller retains the previous good
+    /// snapshot; the operator gets an immediate, actionable error instead of a
+    /// silent semantic divergence between the authored policy and the one
+    /// actually enforced.
+    #[error(
+        "malformed @{annotation} annotation on policy `{policy_id}`: {reason} (raw: {raw_value})"
+    )]
+    MalformedAnnotation {
+        policy_id: String,
+        annotation: &'static str,
+        raw_value: String,
+        reason: String,
+    },
+
+    /// A `forbid` policy carried more than one remediation annotation
+    /// (`@modify` / `@step_up` / `@defer`). The bundle is rejected at load
+    /// time because the author's intent is ambiguous. Split into separate
+    /// `forbid` policies if different remediations are wanted for different
+    /// conditions.
+    #[error("policy `{policy_id}` carries multiple remediation annotations: {annotations}")]
+    ConflictingAnnotations {
+        policy_id: String,
+        annotations: String,
+    },
+
+    /// A `permit` policy carried a remediation annotation (`@modify` /
+    /// `@step_up` / `@defer`). The bundle is rejected at load time because a
+    /// `permit` cannot raise a deny, so a remediation annotation on it has no
+    /// effect — the author almost certainly attached it to the wrong policy.
+    #[error(
+        "policy `{policy_id}` (permit) carries remediation annotation(s) that only apply to forbid policies: {annotations}"
+    )]
+    AnnotationOnPermit {
+        policy_id: String,
+        annotations: String,
+    },
 }
 
 /// Concrete Cedar policy evaluator for Sidecar Stage 2.
@@ -70,7 +111,33 @@ pub struct CedarPolicyEvaluator {
     version: String,
     received_at: Instant,
     ttl_secs: u32,
+    /// `forbid` policies carrying an AARM R4 remediation annotation
+    /// (`@modify`, `@step_up`, `@defer`), keyed by `PolicyId`. Built once at
+    /// load time so the hot path only reads `Response::diagnostics().reason()`
+    /// and looks up the firing policy here.
+    remediation: HashMap<PolicyId, Remediation>,
 }
+
+/// Remediation directive attached to a `forbid` policy via a Cedar
+/// annotation. Drives the AARM R4 `MODIFY` / `STEP_UP` / `DEFER` verdicts.
+#[derive(Debug, Clone)]
+enum Remediation {
+    /// `@modify("redact_header:<name>")` — strip the named HTTP header before
+    /// dispatch. The annotation value is parsed into a [`ModificationSpec`] at
+    /// load time so the hot path just copies it out.
+    Modify(ModificationSpec),
+    /// `@step_up("…")` — require human approval; the annotation value is
+    /// validated as a non-empty [`StepUpSpec`] at load time.
+    StepUp(StepUpSpec),
+    /// `@defer("<ms>")` — delay execution; the annotation value is parsed
+    /// into a [`DeferDuration`] at load time.
+    Defer(DeferDuration),
+}
+
+/// Annotation keys recognised on `forbid` policies for AARM R4 remediation.
+const ANNOTATION_MODIFY: &str = "modify";
+const ANNOTATION_STEP_UP: &str = "step_up";
+const ANNOTATION_DEFER: &str = "defer";
 
 impl CedarPolicyEvaluator {
     /// Construct from a [`PolicyBundle`] received from the Authority.
@@ -103,22 +170,25 @@ impl CedarPolicyEvaluator {
         let (schema, _warnings) = Schema::from_cedarschema_str(schema_src)
             .map_err(|e| CedarEvaluatorError::SchemaParse(Box::new(e)))?;
 
+        let remediation = build_remediation_map(&policy_set)?;
+
         Ok(Self {
             policy_set,
             schema,
             version: bundle.version.clone(),
             received_at: Instant::now(),
             ttl_secs: bundle.ttl_seconds,
+            remediation,
         })
     }
 
-    fn evaluate_inner(
+    fn evaluate_response(
         &self,
         principal: &AgentId,
         action: &str,
         resource: &str,
         context: &serde_json::Value,
-    ) -> Result<bool, CedarEvaluatorError> {
+    ) -> Result<Response, CedarEvaluatorError> {
         let principal_uid: EntityUid = FirmaEntityUid::Agent(principal.clone())
             .try_into()
             .map_err(CedarEvaluatorError::EntityUidParse)?;
@@ -143,10 +213,147 @@ impl CedarPolicyEvaluator {
         .map_err(|e| CedarEvaluatorError::RequestBuild(Box::new(e)))?;
 
         let entities = Entities::empty();
-        let response = Authorizer::new().is_authorized(&request, &self.policy_set, &entities);
-
-        Ok(matches!(response.decision(), Decision::Allow))
+        Ok(Authorizer::new().is_authorized(&request, &self.policy_set, &entities))
     }
+}
+
+/// Scan the parsed `PolicySet` for remediation annotations and build a
+/// `PolicyId -> Remediation` map for `forbid` policies.
+///
+/// Validation is fail-fast at load time:
+/// - A `permit` policy carrying any remediation annotation is rejected
+///   (`AnnotationOnPermit`): a permit cannot raise a deny, so the annotation
+///   is a misconfiguration.
+/// - A `forbid` policy carrying more than one annotation is rejected
+///   (`ConflictingAnnotations`): the cross-policy precedence does not apply
+///   within a single policy.
+/// - A `@modify` or `@step_up` value that is empty or whitespace-only is
+///   rejected (`MalformedAnnotation`): these carry human-readable
+///   descriptions, and an empty value is a misconfiguration.
+/// - A `@defer` value that is not a `u64` or is zero is rejected
+///   (`MalformedAnnotation`).
+///
+/// On any of these errors the caller (`apply_bundle`) keeps the previous
+/// good snapshot active, so the operator gets an immediate, actionable error
+/// rather than a silent semantic divergence between the authored policy and
+/// the one actually enforced.
+fn build_remediation_map(
+    policy_set: &PolicySet,
+) -> Result<HashMap<PolicyId, Remediation>, CedarEvaluatorError> {
+    let mut map = HashMap::new();
+    for policy in policy_set.policies() {
+        let id = policy.id().clone();
+        let is_forbid = policy.effect() == Effect::Forbid;
+        let modify = policy.annotation(ANNOTATION_MODIFY).map(str::to_string);
+        let step_up = policy.annotation(ANNOTATION_STEP_UP).map(str::to_string);
+        let defer = policy.annotation(ANNOTATION_DEFER).map(str::to_string);
+        let present: Vec<&'static str> = [
+            modify.as_ref().map(|_| ANNOTATION_MODIFY),
+            step_up.as_ref().map(|_| ANNOTATION_STEP_UP),
+            defer.as_ref().map(|_| ANNOTATION_DEFER),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        if present.is_empty() {
+            continue;
+        }
+
+        // Remediation annotations only make sense on `forbid` policies: a
+        // `permit` cannot raise a deny, so a remediation annotation on it is a
+        // misconfiguration. Reject the bundle so the operator removes it.
+        if !is_forbid {
+            return Err(CedarEvaluatorError::AnnotationOnPermit {
+                policy_id: id.to_string(),
+                annotations: present.join(", "),
+            });
+        }
+
+        // At most one annotation per `forbid` policy: the cross-policy
+        // precedence (`StepUp > Defer > Modify`) does not apply within a
+        // single policy, so multiple annotations would resolve by implicit
+        // check order rather than the documented semantics.
+        if present.len() > 1 {
+            return Err(CedarEvaluatorError::ConflictingAnnotations {
+                policy_id: id.to_string(),
+                annotations: present.join(", "),
+            });
+        }
+
+        // Exactly one annotation — validate its value.
+        if let Some(value) = modify {
+            let spec = ModificationSpec::parse(&value).map_err(|err| {
+                CedarEvaluatorError::MalformedAnnotation {
+                    policy_id: id.to_string(),
+                    annotation: ANNOTATION_MODIFY,
+                    raw_value: value,
+                    reason: err.to_string(),
+                }
+            })?;
+            map.insert(id, Remediation::Modify(spec));
+        } else if let Some(value) = step_up {
+            let spec = StepUpSpec::new(value.clone()).map_err(|err| {
+                CedarEvaluatorError::MalformedAnnotation {
+                    policy_id: id.to_string(),
+                    annotation: ANNOTATION_STEP_UP,
+                    raw_value: value,
+                    reason: err.to_string(),
+                }
+            })?;
+            map.insert(id, Remediation::StepUp(spec));
+        } else if let Some(value) = defer {
+            match value.parse::<u64>() {
+                Ok(0) => {
+                    return Err(CedarEvaluatorError::MalformedAnnotation {
+                        policy_id: id.to_string(),
+                        annotation: ANNOTATION_DEFER,
+                        raw_value: value,
+                        reason: "defer duration must be > 0".to_string(),
+                    });
+                }
+                Ok(ms) => match DeferDuration::new(Duration::from_millis(ms)) {
+                    Ok(d) => {
+                        map.insert(id, Remediation::Defer(d));
+                    }
+                    Err(err) => {
+                        return Err(CedarEvaluatorError::MalformedAnnotation {
+                            policy_id: id.to_string(),
+                            annotation: ANNOTATION_DEFER,
+                            raw_value: value,
+                            reason: err.to_string(),
+                        });
+                    }
+                },
+                Err(parse_err) => {
+                    return Err(CedarEvaluatorError::MalformedAnnotation {
+                        policy_id: id.to_string(),
+                        annotation: ANNOTATION_DEFER,
+                        raw_value: value,
+                        reason: parse_err.to_string(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(map)
+}
+
+/// Precedence when multiple remediation annotations fire on the same Deny.
+/// `StepUp` wins over `Defer` over `Modify`: a request needing human
+/// approval should not be silently transformed or merely delayed, and a
+/// deferred request should not be silently transformed in the meantime.
+fn pick_remediation(candidates: &[&Remediation]) -> Option<Remediation> {
+    /// Priority rank: higher wins. `None` filters out the non-remediation
+    /// arms (which can't appear here, but keeps the lookup total).
+    fn rank(r: &Remediation) -> u8 {
+        match r {
+            Remediation::StepUp(_) => 3,
+            Remediation::Defer(_) => 2,
+            Remediation::Modify(_) => 1,
+        }
+    }
+    candidates.iter().copied().max_by_key(|r| rank(r)).cloned()
 }
 
 impl PolicyEvaluation for CedarPolicyEvaluator {
@@ -180,8 +387,51 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
         resource: &str,
         context: &serde_json::Value,
     ) -> Result<bool, String> {
-        self.evaluate_inner(principal, action, resource, context)
+        self.evaluate_response(principal, action, resource, context)
+            .map(|response| matches!(response.decision(), Decision::Allow))
             .map_err(|e| e.to_string())
+    }
+
+    /// Cedar-aware override that surfaces AARM R4 remediation outcomes.
+    ///
+    /// On a Cedar `Deny`, scans `Response::diagnostics().reason()` for the
+    /// `forbid` policy IDs that fired and looks each up in the pre-built
+    /// remediation map. If a firing policy carries a
+    /// `@modify` / `@step_up` / `@defer` annotation, the deny is lifted into a
+    /// `MODIFY` / `STEP_UP` / `DEFER` verdict (precedence `StepUp > Defer >
+    /// Modify` when several fire). Otherwise the deny is a hard
+    /// [`PolicyVerdict::Deny`]. A Cedar `Allow` (or default-deny with no
+    /// firing remediation policy) maps to `Allow` / `Deny` respectively.
+    fn evaluate_verdict(
+        &self,
+        principal: &AgentId,
+        action: &str,
+        resource: &str,
+        context: &serde_json::Value,
+    ) -> Result<PolicyVerdict, String> {
+        let response = self
+            .evaluate_response(principal, action, resource, context)
+            .map_err(|e| e.to_string())?;
+        match response.decision() {
+            Decision::Allow => Ok(PolicyVerdict::Allow),
+            Decision::Deny => {
+                let candidates: Vec<&Remediation> = response
+                    .diagnostics()
+                    .reason()
+                    .filter_map(|id| self.remediation.get(id))
+                    .collect();
+                Ok(match pick_remediation(&candidates) {
+                    Some(Remediation::Modify(spec)) => PolicyVerdict::Modify {
+                        modifications: spec,
+                    },
+                    Some(Remediation::StepUp(spec)) => PolicyVerdict::StepUp { challenge: spec },
+                    Some(Remediation::Defer(spec)) => PolicyVerdict::Defer {
+                        backoff: spec.duration(),
+                    },
+                    None => PolicyVerdict::Deny,
+                })
+            }
+        }
     }
 
     fn is_fresh(&self) -> bool {
@@ -768,5 +1018,248 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
             )
             .unwrap();
         assert!(allowed, "transfer within all limits must be permitted");
+    }
+
+    // ---- AARM R4 remediation annotation tests ----
+
+    fn remediation_bundle(policy_src: &str) -> PolicyBundle {
+        PolicyBundle::new(
+            "remediation-v1".to_string(),
+            policy_src.as_bytes().to_vec(),
+            TEST_SCHEMA.as_bytes().to_vec(),
+            30,
+        )
+    }
+
+    fn verdict_for(evaluator: &CedarPolicyEvaluator) -> PolicyVerdict {
+        evaluator
+            .evaluate_verdict(
+                &agent("agent_test"),
+                "communication.external.send",
+                "api.openai.com",
+                &test_context(),
+            )
+            .unwrap_or_else(|e| panic!("evaluate_verdict failed: {e}"))
+    }
+
+    #[test]
+    fn modify_annotation_lifts_deny_to_modify_verdict() {
+        let evaluator = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@modify("redact_header:authorization")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap();
+        match verdict_for(&evaluator) {
+            PolicyVerdict::Modify { modifications } => {
+                assert_eq!(
+                    modifications,
+                    ModificationSpec::RedactHeader(http::HeaderName::from_static("authorization"))
+                );
+            }
+            other => panic!("expected Modify, got {other:?}"),
+        }
+        // The bool view still reports a deny (Cedar's native decision).
+        assert!(
+            !evaluator
+                .evaluate(
+                    &agent("agent_test"),
+                    "communication.external.send",
+                    "api.openai.com",
+                    &test_context(),
+                )
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn step_up_annotation_lifts_deny_to_step_up_verdict() {
+        let evaluator = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@step_up("require admin approval")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap();
+        match verdict_for(&evaluator) {
+            PolicyVerdict::StepUp { challenge } => {
+                assert_eq!(challenge.as_str(), "require admin approval");
+            }
+            other => panic!("expected StepUp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn defer_annotation_lifts_deny_to_defer_verdict() {
+        let evaluator = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@defer("750")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap();
+        match verdict_for(&evaluator) {
+            PolicyVerdict::Defer { backoff } => {
+                assert_eq!(backoff, Duration::from_millis(750));
+            }
+            other => panic!("expected Defer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plain_forbid_without_annotation_stays_a_hard_deny() {
+        let evaluator = CedarPolicyEvaluator::from_bundle(&forbid_all_bundle()).unwrap();
+        assert_eq!(verdict_for(&evaluator), PolicyVerdict::Deny);
+    }
+
+    #[test]
+    fn malformed_defer_annotation_rejects_bundle() {
+        // `@defer("not-a-number")` cannot parse to u64 ms; the bundle is
+        // rejected at load time so the caller keeps the previous good
+        // snapshot active rather than silently degrading to a plain deny.
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@defer("not-a-number")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::MalformedAnnotation { .. }),
+            "expected MalformedAnnotation, got {err}"
+        );
+    }
+
+    #[test]
+    fn zero_defer_duration_rejects_bundle() {
+        // `@defer("0")` parses but is rejected: a defer with no backoff is
+        // indistinguishable from a plain deny, so the author almost certainly
+        // misconfigured the policy.
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@defer("0")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::MalformedAnnotation { .. }),
+            "expected MalformedAnnotation, got {err}"
+        );
+    }
+
+    #[test]
+    fn conflicting_annotations_reject_bundle() {
+        // A single `forbid` policy carrying both `@modify` and `@step_up` is
+        // ambiguous: the cross-policy precedence does not apply within one
+        // policy, so the result would depend on implicit check order. The
+        // bundle is rejected; the author must split into separate policies.
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@modify("redact")
+@step_up("admin")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::ConflictingAnnotations { .. }),
+            "expected ConflictingAnnotations, got {err}"
+        );
+    }
+
+    #[test]
+    fn annotation_on_permit_rejects_bundle() {
+        // A `permit` cannot raise a deny, so a remediation annotation on it
+        // is a misconfiguration. The bundle is rejected at load time so the
+        // operator removes the annotation or switches the effect to forbid.
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@modify("on a permit")
+permit(principal, action, resource);"#,
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::AnnotationOnPermit { .. }),
+            "expected AnnotationOnPermit, got {err}"
+        );
+    }
+
+    #[test]
+    fn empty_modify_annotation_rejects_bundle() {
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@modify("")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::MalformedAnnotation { .. }),
+            "expected MalformedAnnotation, got {err}"
+        );
+    }
+
+    #[test]
+    fn unknown_modify_kind_rejects_bundle() {
+        // `@modify("rewrite_body:foo")` parses but the kind is unknown; the
+        // bundle is rejected at load time so the operator fixes the policy.
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@modify("rewrite_body:foo")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::MalformedAnnotation { .. }),
+            "expected MalformedAnnotation, got {err}"
+        );
+    }
+
+    #[test]
+    fn empty_redact_header_name_rejects_bundle() {
+        // `@modify("redact_header:")` has no header name; rejected at load
+        // time because the transformation would be a no-op.
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@modify("redact_header:")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::MalformedAnnotation { .. }),
+            "expected MalformedAnnotation, got {err}"
+        );
+    }
+
+    #[test]
+    fn whitespace_step_up_annotation_rejects_bundle() {
+        let err = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@step_up("   ")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, CedarEvaluatorError::MalformedAnnotation { .. }),
+            "expected MalformedAnnotation, got {err}"
+        );
+    }
+
+    #[test]
+    fn step_up_precedence_over_defer_and_modify() {
+        // Three forbid policies fire on the same request, each with a
+        // different remediation annotation. StepUp must win.
+        let evaluator = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@modify("redact_header:authorization")
+forbid(principal, action, resource);
+@defer("100")
+forbid(principal, action, resource);
+@step_up("s")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap();
+        assert!(matches!(
+            verdict_for(&evaluator),
+            PolicyVerdict::StepUp { .. }
+        ));
+    }
+
+    #[test]
+    fn defer_precedence_over_modify() {
+        let evaluator = CedarPolicyEvaluator::from_bundle(&remediation_bundle(
+            r#"@modify("redact_header:authorization")
+forbid(principal, action, resource);
+@defer("200")
+forbid(principal, action, resource);"#,
+        ))
+        .unwrap();
+        assert!(matches!(
+            verdict_for(&evaluator),
+            PolicyVerdict::Defer { .. }
+        ));
     }
 }

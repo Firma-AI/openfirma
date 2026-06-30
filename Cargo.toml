@@ -7,6 +7,7 @@ members = [
   "crates/firma-demo-fixture",
   "crates/firma-demo-tui",
   "crates/firma-grpc-interceptor-proto",
+  "crates/firma-protobuf",
   "crates/firma-run",
   "crates/firma-runtime-state",
   "crates/firma-sidecar",
@@ -51,7 +52,7 @@ firma-authority = { path = "crates/firma-authority" }
 firma-config-loader = { path = "crates/firma-config-loader" }
 firma-core = { path = "crates/firma-core" }
 firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto" }
-firma-protobuf = "0.1.1"
+firma-protobuf = { path = "crates/firma-protobuf" }
 firma-run = { path = "crates/firma-run" }
 firma-runtime-state = { path = "crates/firma-runtime-state" }
 firma-sidecar = { path = "crates/firma-sidecar" }
@@ -59,6 +60,7 @@ firma-stack = { path = "crates/firma-stack" }
 fs-err = "3.3"
 governor = "0.10"
 hex = "0.4"
+http = "1"
 http-body = "1"
 http-body-util = "0.1"
 hyper = { version = "1", default-features = false }

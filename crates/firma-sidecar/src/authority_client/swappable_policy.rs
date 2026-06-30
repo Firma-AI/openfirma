@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use arc_swap::{ArcSwap, ArcSwapOption};
 use firma_core::AgentId;
 
-use crate::enforcement::constraint_enforcement::PolicyEvaluation;
+use crate::enforcement::constraint_enforcement::{PolicyEvaluation, PolicyVerdict};
 
 /// Policy evaluator backed by an atomically swappable snapshot.
 pub struct SwappablePolicyEvaluation {
@@ -57,6 +57,22 @@ impl PolicyEvaluation for SwappablePolicyEvaluation {
         self.inner
             .load()
             .evaluate(principal, action, resource, context)
+    }
+
+    /// Delegate to the inner evaluator so a `CedarPolicyEvaluator` snapshot's
+    /// `@modify` / `@step_up` / `@defer` annotations surface through the swap
+    /// boundary. Without this override the trait default would collapse to
+    /// the bool `evaluate` view and drop remediation.
+    fn evaluate_verdict(
+        &self,
+        principal: &AgentId,
+        action: &str,
+        resource: &str,
+        context: &serde_json::Value,
+    ) -> Result<PolicyVerdict, String> {
+        self.inner
+            .load()
+            .evaluate_verdict(principal, action, resource, context)
     }
 
     fn is_fresh(&self) -> bool {

@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package firma.v1;
+
+import "firma/v1/types.proto";
+import "google/protobuf/timestamp.proto";
+
+// =============================================================================
+// AuditService — Audit Event Streaming
+// =============================================================================
+//
+// The AuditService receives signed audit events from the Sidecar after every
+// enforcement decision (ALLOW, DENY, ABORT). No call enters or exits the
+// Sidecar without a corresponding ExecutionEvent record.
+//
+// The Sidecar is the sole producer. It streams events over a long-lived
+// client-streaming RPC. If the connection drops, the Sidecar buffers events
+// in a local WAL and replays them on reconnect.
+//
+// Each event carries an ECDSA signature over all preceding fields, making
+// the audit log tamper-evident and independently verifiable.
+// =============================================================================
+
+service AuditService {
+  // StreamEvents is a client-streaming RPC. The Sidecar opens a persistent
+  // stream and pushes ExecutionEvent messages after every enforce() call.
+  // The server acknowledges with a summary containing the last received
+  // event ID and total count, enabling the client to detect gaps.
+  rpc StreamEvents(stream ExecutionEvent) returns (StreamEventsResponse);
+}
+
+// ExecutionEvent is the immutable audit record for a single enforcement
+// decision. Every field before `signature` is covered by the ECDSA
+// signature, making the event independently verifiable.
+message ExecutionEvent {
+  // Unique event identifier (UUID v7 — time-ordered).
+  string event_id = 1;
+  // Session that produced this event.
+  string session_id = 2;
+  // Capability token ID evaluated during enforcement.
+  string token_id = 3;
+  // Agent that initiated the action.
+  string agent_id = 4;
+  // Canonical action class from the normalizer (e.g., "http_get").
+  string action = 5;
+  // Target resource identifier (e.g., URL, table name).
+  string resource = 6;
+  // Enforcement outcome.
+  EnforcementDecision decision = 7;
+  // Human-readable reason when decision is DENY or ABORT. Empty on ALLOW.
+  string deny_reason = 8;
+  // Wall-clock time spent in the enforcement pipeline, in microseconds.
+  int64 enforcement_latency_us = 9;
+  // Integrity hash of the Cedar context used during evaluation.
+  string context_hash = 10;
+  // Policy bundle version active at decision time.
+  string bundle_version = 11;
+  // Event timestamp with nanosecond precision.
+  google.protobuf.Timestamp timestamp = 12;
+  // ECDSA signature (DER-encoded) over all preceding fields.
+  bytes signature = 13;
+  // HTTP status code returned by the connector. Zero when the call
+  // never dispatched (pre-dispatch DENY or ABORT).
+  int32 dispatch_status = 14;
+  // Wall-clock time spent in the connector dispatch, in microseconds.
+  // Zero when the call never dispatched.
+  int64 dispatch_latency_us = 15;
+  // Target response body size in bytes. Zero when the call never
+  // dispatched or the target returned no body.
+  int64 response_size = 16;
+  // Per-run identity that scopes this event to a single `firma run`
+  // invocation. Matches the directory name under
+  // `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/` written by the
+  // SidecarSupervisor. Empty when the sidecar was not autostarted
+  // by `firma run` (e.g. daemon mode). Covered by `signature`.
+  string sandbox_id = 17;
+}
+
+// StreamEventsResponse is returned when the client half-closes the stream.
+// It summarizes what the server received, allowing the client to verify
+// delivery completeness.
+message StreamEventsResponse {
+  // Event ID of the last event the server persisted.
+  string last_event_id = 1;
+  // Total number of events received in this stream session.
+  int64 events_received = 2;
+}

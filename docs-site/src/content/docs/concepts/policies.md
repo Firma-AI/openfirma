@@ -138,6 +138,51 @@ forbid (
 
 Use this for category-wide forbids — the rule is shorter and harder to drift.
 
+### Remediation annotations (AARM R4)
+
+A `forbid` policy normally produces a hard `DENY`. To turn a deny into a
+remediation outcome — `MODIFY`, `STEP_UP`, or `DEFER` — annotate the
+`forbid` with one of `@modify`, `@step_up`, or `@defer`. The post-Cedar
+layer reads the annotation when the policy fires and lifts the deny into the
+matching decision:
+
+```cedar
+// Require a human to approve high-risk transfers before they run.
+@step_up("require admin approval")
+forbid (principal, action, resource)
+when { context.risk_score >= 80 };
+
+// Defer high-frequency transfers to a retry window (ms).
+@defer("500")
+forbid (principal, action, resource)
+when { context.transfers_last_10m >= 10 };
+
+// Strip the Authorization header before dispatch.
+@modify("redact_header:authorization")
+forbid (principal, action, resource)
+when { context.has_embedded_secret };
+```
+
+Notes:
+
+- Annotations only apply to `forbid` policies. A `permit` carrying a
+  remediation annotation is a misconfiguration and rejects the bundle at
+  load time.
+- A `forbid` policy may carry at most one remediation annotation; multiple
+  annotations reject the bundle because the cross-policy precedence does not
+  apply within a single policy.
+- `@defer` takes a numeric retry-after in milliseconds (must be > 0);
+  `@modify` takes a `<kind>:<value>` DSL (V1 supports `redact_header:<name>`).
+  Malformed values reject the bundle at load time so the operator gets an
+  immediate, actionable error.
+- If several annotated forbids fire at once, precedence is
+  `STEP_UP > DEFER > MODIFY`.
+- A `forbid` with no annotation is still a hard `DENY`. Remediation is opt-in
+  per rule, never the default.
+
+See [Pipeline > Authorization Decisions](../pipeline/#authorization-decisions-aarm-r4)
+for how each decision is dispatched and audited.
+
 ## Bundle freshness
 
 The Sidecar holds the policy bundle in memory and reloads it from the Authority's `WatchPolicyBundle` gRPC stream. Two configuration knobs in `firma.toml` govern freshness:

@@ -30,6 +30,9 @@ impl std::fmt::Display for AuditLiteDecision {
             Self::Known(AuditDecision::Allow) => "ALLOW",
             Self::Known(AuditDecision::Deny) => "DENY",
             Self::Known(AuditDecision::Abort) => "ABORT",
+            Self::Known(AuditDecision::Modify) => "MODIFY",
+            Self::Known(AuditDecision::StepUp) => "STEP_UP",
+            Self::Known(AuditDecision::Defer) => "DEFER",
             Self::Unknown(_) => "UNKNOWN",
         };
         f.write_str(label)
@@ -142,6 +145,9 @@ fn decision_matches(parsed: &AuditLite, want: DecisionFilter) -> bool {
             decision == AuditDecision::Allow
                 && parsed.token_id.as_deref().is_some_and(str::is_empty)
         }
+        DecisionFilter::Modify => decision == AuditDecision::Modify,
+        DecisionFilter::StepUp => decision == AuditDecision::StepUp,
+        DecisionFilter::Defer => decision == AuditDecision::Defer,
     }
 }
 
@@ -248,6 +254,76 @@ mod tests {
     fn action_class_filter_matches_action_field() {
         assert!(audit_passes(ALLOW_LINE, None, Some("github.issue.create"), None, None).is_some());
         assert!(audit_passes(ALLOW_LINE, None, Some("other.class"), None, None).is_none());
+    }
+
+    /// AARM R4 remediation decisions on the wire: `4` = `MODIFY`, `5` = `STEP_UP`,
+    /// `6` = `DEFER`. These are now recognized `Known` codes (not `Unknown`),
+    /// and each `--decision` filter selects its own code.
+    #[test]
+    fn aarm_r4_decisions_are_known_and_filterable() {
+        for (raw, expected, label) in [
+            (4, AuditLiteDecision::Known(AuditDecision::Modify), "MODIFY"),
+            (
+                5,
+                AuditLiteDecision::Known(AuditDecision::StepUp),
+                "STEP_UP",
+            ),
+            (6, AuditLiteDecision::Known(AuditDecision::Defer), "DEFER"),
+        ] {
+            let line = format!(
+                r#"{{"agent_id":"a","action":"x.y","resource":"r","decision":{raw},"deny_reason":"d","token_id":"t"}}"#
+            );
+            let parsed: AuditLite = serde_json::from_str(&line).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(
+                parsed.decision,
+                Some(expected),
+                "code {raw} should be Known"
+            );
+            assert_eq!(parsed.decision.expect("present").to_string(), label);
+        }
+
+        // The forward-compat fallback still catches codes beyond the known
+        // set; 7 remains Unknown (unchanged).
+        let parsed: AuditLite =
+            serde_json::from_str(UNKNOWN_DECISION_LINE).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(parsed.decision, Some(AuditLiteDecision::Unknown(7)));
+    }
+
+    #[test]
+    fn decision_modify_step_up_defer_filters_select_their_codes() {
+        let lines = [
+            (
+                4,
+                r#"{"agent_id":"a","action":"x.y","resource":"r","decision":4,"deny_reason":"m","token_id":"t"}"#,
+                DecisionFilter::Modify,
+            ),
+            (
+                5,
+                r#"{"agent_id":"a","action":"x.y","resource":"r","decision":5,"deny_reason":"s","token_id":"t"}"#,
+                DecisionFilter::StepUp,
+            ),
+            (
+                6,
+                r#"{"agent_id":"a","action":"x.y","resource":"r","decision":6,"deny_reason":"d","token_id":"t"}"#,
+                DecisionFilter::Defer,
+            ),
+        ];
+        for (code, line, filter) in lines {
+            // Its own filter selects it.
+            assert!(
+                audit_passes(line, Some(filter), None, None, None).is_some(),
+                "code {code} should pass its own filter"
+            );
+            // A different remediation filter does not.
+            let other = match filter {
+                DecisionFilter::Modify => DecisionFilter::StepUp,
+                _ => DecisionFilter::Modify,
+            };
+            assert!(
+                audit_passes(line, Some(other), None, None, None).is_none(),
+                "code {code} should not pass a different filter"
+            );
+        }
     }
 
     #[test]

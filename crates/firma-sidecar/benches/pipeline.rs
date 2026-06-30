@@ -9,7 +9,7 @@ use std::time::Duration;
 use chrono::Utc;
 use criterion::{Criterion, criterion_group, criterion_main};
 use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenId, TokenVerifier};
-use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile};
+use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile, TenancyMode};
 use firma_sidecar::credential::NullCredentialInjector;
 use firma_sidecar::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
 use firma_sidecar::enforcement::capability_validation::CapabilityValidator;
@@ -89,6 +89,7 @@ fn build_pipeline() -> EnforcementPipeline {
         Box::new(MockVerifier { claims }),
         Arc::new(NoRevocations),
         Duration::from_secs(0),
+        TenancyMode::SingleAgent,
     );
     let evaluator: Arc<dyn firma_sidecar::enforcement::constraint_enforcement::PolicyEvaluation> =
         Arc::new(
