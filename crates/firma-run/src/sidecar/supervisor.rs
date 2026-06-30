@@ -190,6 +190,14 @@ impl SidecarSupervisor {
                 // Per-run identity stamped on every audit ExecutionEvent
                 // (FIR-185). Matches the marker directory name.
                 .env("FIRMA_RUN_SANDBOX_ID", req.sandbox_id)
+                // Control socket the loopback egress guard reports blocked
+                // connections to, turned into signed audit events. Shares the
+                // marker dir so the guard derives the same path; the filename
+                // mirrors `firma_sidecar::egress_report::socket_path_in`.
+                .env(
+                    "FIRMA_SIDECAR_EGRESS_REPORT_SOCK",
+                    req.marker_dir.join("egress-report.sock"),
+                )
                 .env("NO_COLOR", "1")
                 .env("CLICOLOR", "0")
                 .stdin(std::process::Stdio::null())

@@ -23,6 +23,8 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Authority(a) => block_on_async(services::authority::run(a)),
         Command::DnsStub(a) => services::dns_stub::run(a),
+        #[cfg(target_os = "linux")]
+        Command::EgressGuardInstall(a) => services::egress_guard_install::run(a),
         Command::Doctor(a) => Ok(services::doctor::run(a)),
         Command::Config(a) => services::config::run(&a),
         Command::Policy(a) => services::policy::run(a),

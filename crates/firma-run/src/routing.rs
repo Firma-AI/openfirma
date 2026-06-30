@@ -55,6 +55,10 @@ pub struct NetworkRuntime {
     _host_dns_stub: Option<crate::dns_stub::HostDnsStubHandle>,
     #[cfg(unix)]
     _adapter: Option<SidecarAdapter>,
+    /// Loopback egress guard supervisor. Held so the seccomp notify loop runs
+    /// for the agent's lifetime and is torn down on Drop. Linux-only.
+    #[cfg(target_os = "linux")]
+    _egress_guard: Option<crate::egress_guard::EgressGuardHandle>,
     _sidecar_supervisor: Option<SidecarSupervisor>,
     _authority_supervisor: Option<crate::authority::AuthoritySupervisor>,
     // Declared last so it drops last: the sidecar reads the seed file, so the
@@ -162,6 +166,10 @@ pub struct ResolvedAuthority {
 /// - [`RunError::UnsupportedPlatform`] when autostart is required on a
 ///   platform that does not support it.
 /// - [`RunError::Backend`] for adapter socket failures.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the structural and non-structural network setup paths read more clearly inline than split across helpers"
+)]
 pub fn prepare_network_runtime(
     handle: &SandboxHandle,
     proof: &EnforcementProof,
@@ -216,6 +224,8 @@ pub fn prepare_network_runtime(
             _host_dns_stub: host_dns_stub,
             #[cfg(unix)]
             _adapter: None,
+            #[cfg(target_os = "linux")]
+            _egress_guard: None,
             _sidecar_supervisor: sidecar_supervisor,
             _authority_supervisor: authority.supervisor,
             _capability_guard: capability_guard.take(),
@@ -267,16 +277,90 @@ pub fn prepare_network_runtime(
             current_exe.display().to_string(),
         );
 
+        // Loopback egress guard: trap the agent's connect(2)s and block direct
+        // connections to loopback addresses that are not the proxy bridge or
+        // DNS stub. The supervisor runs here on the host; the in-sandbox
+        // installer reaches it on a bind-mounted socket under runtime_dir.
+        #[cfg(target_os = "linux")]
+        let egress_guard = start_loopback_guard(
+            handle,
+            proxy_addr,
+            dns_addr,
+            sidecar_supervisor.as_ref(),
+            identity,
+            &mut env_overrides,
+        );
+
         Ok(NetworkRuntime {
             env_overrides,
             sidecar_endpoint: effective_endpoint,
             _host_bridge: None,
             _host_dns_stub: None,
             _adapter: Some(adapter),
+            #[cfg(target_os = "linux")]
+            _egress_guard: egress_guard,
             _sidecar_supervisor: sidecar_supervisor,
             _authority_supervisor: authority.supervisor,
             _capability_guard: capability_guard.take(),
         })
+    }
+}
+
+/// Starts the loopback egress guard supervisor for the structural Linux path
+/// and injects `FIRMA_RUN_EGRESS_GUARD_SOCK` so the in-sandbox entrypoint wraps
+/// the agent through the installer.
+///
+/// Fails open with a warning: if the guard cannot start (e.g. a kernel without
+/// seccomp user-notify), the run proceeds without it. In structural mode the
+/// private network namespace already isolates the agent from host loopback
+/// services, so the guard is defense in depth plus a direct-socket audit trail,
+/// not the sole boundary.
+#[cfg(target_os = "linux")]
+fn start_loopback_guard(
+    handle: &SandboxHandle,
+    proxy_addr: &str,
+    dns_addr: &str,
+    sidecar_supervisor: Option<&SidecarSupervisor>,
+    identity: &RunIdentity,
+    env_overrides: &mut BTreeMap<String, String>,
+) -> Option<crate::egress_guard::EgressGuardHandle> {
+    let mut allow_ports = Vec::new();
+    if let Ok(addr) = proxy_addr.parse::<std::net::SocketAddr>() {
+        allow_ports.push(addr.port());
+    }
+    if let Ok(addr) = dns_addr.parse::<std::net::SocketAddr>() {
+        allow_ports.push(addr.port());
+    }
+
+    // Report blocked attempts to the autostarted Sidecar's egress-report
+    // socket so they become signed audit events. With an external Sidecar we do
+    // not control its env, so reporting is skipped (blocks are still enforced).
+    let report = sidecar_supervisor.map(|supervisor| crate::egress_guard::ReportTarget {
+        socket_path: firma_sidecar::egress_report::socket_path_in(supervisor.marker_dir()),
+        session_id: identity.session_id.clone(),
+        agent_id: identity.profile.clone(),
+    });
+
+    let guard_sock = handle.runtime_dir.join("egress-guard.sock");
+    match crate::egress_guard::start(crate::egress_guard::SupervisorConfig {
+        socket_path: guard_sock.clone(),
+        allow_ports,
+        report,
+    }) {
+        Ok(handle) => {
+            env_overrides.insert(
+                "FIRMA_RUN_EGRESS_GUARD_SOCK".to_string(),
+                guard_sock.display().to_string(),
+            );
+            Some(handle)
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "loopback egress guard failed to start; continuing without direct-socket loopback blocking"
+            );
+            None
+        }
     }
 }
 

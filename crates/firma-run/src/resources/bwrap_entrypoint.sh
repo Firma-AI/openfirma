@@ -108,6 +108,15 @@ watch_bridge_and_parent &
 watchdog_pid="$!"
 
 # Run wrapped command in the foreground so interactive CLIs keep terminal semantics.
-"$@"
-status=$?
+# When the loopback egress guard is wired, launch the agent through the
+# installer: it installs the seccomp connect filter, hands the listener fd to
+# the host supervisor, then execs the agent (which inherits the filter).
+if [ -n "${FIRMA_RUN_EGRESS_GUARD_SOCK:-}" ]; then
+  "${FIRMA_RUN_SELF_EXE}" __egress-guard-install \
+    --supervisor-socket "${FIRMA_RUN_EGRESS_GUARD_SOCK}" -- "$@"
+  status=$?
+else
+  "$@"
+  status=$?
+fi
 exit "$status"
