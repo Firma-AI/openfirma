@@ -120,6 +120,13 @@ pub enum DenyReason {
     /// Sidecar process. Enforces single-agent tenancy (V1 ADR §2).
     #[error("tenant mismatch")]
     TenantMismatch,
+    /// Agent attempted a direct connection to a loopback address that is not a
+    /// sanctioned Firma endpoint. Blocked at the sandbox boundary before it
+    /// could reach a local admin port, daemon, or MCP server. The connection
+    /// never traverses the proxy, so it is reported out-of-band by the
+    /// `firma run` egress guard rather than the enforcement hot path.
+    #[error("loopback blocked")]
+    LoopbackBlocked,
 }
 
 #[cfg(test)]
@@ -173,38 +180,32 @@ mod tests {
 
     #[test]
     fn test_deny_reason_display_all_variants() {
-        let cases = [
-            (DenyReason::TokenInvalid, "token invalid"),
-            (DenyReason::TokenExpired, "token expired"),
-            (DenyReason::TokenRevoked, "token revoked"),
-            (DenyReason::PolicyDenied, "policy denied"),
-            (DenyReason::ScopeViolation, "scope violation"),
-            (DenyReason::ToolNotInScope, "tool not in scope"),
-            (DenyReason::MalformedRequest, "malformed request"),
-            (DenyReason::AuthorityUnavailable, "authority unavailable"),
-            (DenyReason::PolicyBundleStale, "policy bundle stale"),
-            (DenyReason::PolicyBundleNotReady, "policy bundle not ready"),
-            (
-                DenyReason::RevocationCacheNotReady,
-                "revocation cache not ready",
-            ),
-            (DenyReason::FailClosed, "fail closed"),
-            (DenyReason::EnforcementTimeout, "enforcement timeout"),
-            (
-                DenyReason::CredentialInjectionFailed,
-                "credential injection failed",
-            ),
-            (DenyReason::ConnectorTimeout, "connector timeout"),
-            (DenyReason::ConnectorNetworkError, "connector network error"),
-            (
-                DenyReason::ConnectorInvalidRequest,
-                "connector invalid request",
-            ),
-            (DenyReason::UnclassifiedIntent, "unclassified intent"),
-        ];
-        for (reason, expected) in cases {
-            assert_eq!(reason.to_string(), expected);
-        }
+        use strum::IntoEnumIterator;
+        let reasons: Vec<_> = DenyReason::iter().map(|d| d.to_string()).collect();
+        insta::assert_debug_snapshot!(reasons, @r#"
+        [
+            "token invalid",
+            "token expired",
+            "token revoked",
+            "policy denied",
+            "scope violation",
+            "tool not in scope",
+            "malformed request",
+            "authority unavailable",
+            "policy bundle stale",
+            "policy bundle not ready",
+            "revocation cache not ready",
+            "fail closed",
+            "enforcement timeout",
+            "credential injection failed",
+            "connector timeout",
+            "connector network error",
+            "connector invalid request",
+            "unclassified intent",
+            "tenant mismatch",
+            "loopback blocked",
+        ]
+        "#);
     }
 
     #[test]
@@ -310,8 +311,9 @@ mod tests {
                 DenyReason::ConnectorInvalidRequest => r#""ConnectorInvalidRequest""#,
                 DenyReason::UnclassifiedIntent => r#""UnclassifiedIntent""#,
                 DenyReason::TenantMismatch => r#""TenantMismatch""#,
+                DenyReason::LoopbackBlocked => r#""LoopbackBlocked""#,
             };
-            let parsed: DenyReason = serde_json::from_str(json).unwrap_or_else(|e| panic!("{e}"));
+            let parsed: DenyReason = serde_json::from_str(json).unwrap();
             assert_eq!(parsed, reason);
         }
     }

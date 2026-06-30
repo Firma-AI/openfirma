@@ -37,6 +37,8 @@ pub mod authority_credentials;
 pub mod config;
 pub mod connector;
 pub mod credential;
+#[cfg(unix)]
+pub mod egress_report;
 pub mod enforcement;
 pub mod handler;
 pub mod health;

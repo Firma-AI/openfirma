@@ -120,6 +120,13 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         exit.clone(),
     )?;
 
+    // Out-of-band ingest for loopback connections the `firma run` egress guard
+    // blocks at the sandbox boundary. Bound only when `firma run` provisions a
+    // control socket; absent in plain daemon mode. Clone the sender before it
+    // is moved into the RequestHandler below.
+    #[cfg(unix)]
+    let egress_report_handle = spawn_egress_report_listener(&audit_payload_tx, &exit);
+
     let pipeline_runtime = startup::build_pipeline_runtime(&config)?;
     let authority_handle =
         startup::spawn_authority_client(&config, &pipeline_runtime, exit.clone())?;
@@ -162,17 +169,53 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
             let _ = handle.await;
         }
     };
+    let egress_report_task = async {
+        #[cfg(unix)]
+        if let Some(handle) = egress_report_handle {
+            let _ = handle.await;
+        }
+    };
     let _ = tokio::join!(
         audit_sink,
         health_server,
         interceptor.handle,
         shutdown_handler,
         authority_stream_tasks,
-        local_exec_task
+        local_exec_task,
+        egress_report_task,
     );
     debug!("firma sidecar exiting");
 
     Ok(ExitCode::SUCCESS)
+}
+
+/// Spawns the egress-report listener when `firma run` provisions a control
+/// socket via `FIRMA_SIDECAR_EGRESS_REPORT_SOCK`. Returns `None` in plain
+/// daemon mode (no socket configured) or when binding fails — in the latter
+/// case the Sidecar still serves traffic, but loopback blocks go unaudited, so
+/// the failure is logged loudly.
+#[cfg(unix)]
+fn spawn_egress_report_listener(
+    audit_payload_tx: &tokio::sync::mpsc::Sender<firma_sidecar::audit::AuditPayload>,
+    exit: &CancellationToken,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let socket = std::env::var("FIRMA_SIDECAR_EGRESS_REPORT_SOCK")
+        .ok()
+        .filter(|value| !value.trim().is_empty())?;
+    match firma_sidecar::egress_report::spawn_listener(
+        std::path::PathBuf::from(socket),
+        audit_payload_tx.clone(),
+        exit.clone(),
+    ) {
+        Ok(handle) => Some(handle),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "failed to start egress-report listener; blocked loopback connections will not be audited"
+            );
+            None
+        }
+    }
 }
 
 async fn wait_for_streams_ready(runtime: &startup::PipelineRuntime, cancel: CancellationToken) {

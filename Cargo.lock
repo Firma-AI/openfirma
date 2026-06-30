@@ -1659,6 +1659,7 @@ dependencies = [
  "cedar-policy",
  "chrono",
  "criterion",
+ "insta",
  "pasetors",
  "pretty_assertions",
  "regex",
