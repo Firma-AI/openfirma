@@ -34,9 +34,9 @@ const VZ_GUEST_SECRET_ENV_KEYS: &[&str] = &["FIRMA_CAPABILITY_TOKEN"];
 ///
 /// - **Sandbox-exec structural mode** (`FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1`):
 ///   `sandbox-exec` with `deny network-outbound` policy that restricts the
-///   wrapped process to loopback connections only. The host-side proxy bridge
-///   and DNS stub run on loopback; other loopback services remain a residual
-///   caveat until the guest-backed path can narrow the boundary further. This mode
+///   wrapped process to the Firma proxy bridge and DNS stub on loopback — the
+///   re-allow is port-scoped to those endpoints, so other host loopback
+///   services (admin ports, daemons, MCP servers) are denied too. This mode
 ///   reports `structural=true` with `network_confinement=macos_sandbox_network_deny`.
 ///   This is an intermediate structural step before the guest-backed path.
 ///
@@ -171,8 +171,8 @@ impl SandboxBackend for VzBackend {
                 structural: true,
                 fail_closed: policy.fail_closed,
                 detail: "macOS sandbox-exec with deny network-outbound; wrapped process may only \
-                         reach loopback addresses (proxy bridge + DNS stub); all external outbound \
-                         denied by TrustedBSD MAC policy"
+                         reach the Firma proxy bridge + DNS stub on loopback (port-scoped); all \
+                         other loopback and external outbound denied by TrustedBSD MAC policy"
                     .to_string(),
                 network_confinement: NetworkConfinement::MacosSandboxNetworkDeny,
             }),
@@ -613,13 +613,14 @@ fn ensure_executable_file(name: &str, path: &Path) {
 /// Build the `sandbox-exec` SBPL profile for the given mode.
 ///
 /// In `SandboxExecNetworkDeny` mode the profile adds `deny network-outbound`
-/// after the default `allow`, then re-allows loopback. This means the wrapped
-/// process can only make outbound connections to localhost loopback endpoints
-/// (the host-side proxy bridge and DNS stub live there), and all external IP
-/// connections are denied by `TrustedBSD` MAC at the socket layer — including raw sockets,
-/// direct TCP/UDP, Unix-domain socket connects, and UDP-based DNS to external
-/// resolvers. This is not port-scoped: other host loopback services are a
-/// known residual caveat.
+/// after the default `allow`, then re-allows loopback **only to Firma's own
+/// endpoints** — the proxy bridge (`HTTP_PROXY`) and DNS stub
+/// (`FIRMA_DNS_STUB_ADDR`). All external IP connections are denied by
+/// `TrustedBSD` MAC at the socket layer — including raw sockets, direct
+/// TCP/UDP, Unix-domain socket connects, and UDP-based DNS to external
+/// resolvers — and so are other host loopback services (admin ports, daemons,
+/// MCP servers). See [`loopback_allow_rules`] for the port-scoping, including
+/// the unscoped fallback used when the endpoint ports are unknown.
 fn build_sandbox_profile(launch: &LaunchSpec, mode: VzStructuralMode) -> String {
     let home = launch
         .env
@@ -635,16 +636,15 @@ fn build_sandbox_profile(launch: &LaunchSpec, mode: VzStructuralMode) -> String 
 
     let mut profile = String::from("(version 1)\n(allow default)\n");
 
-    // Structural network denial: block all outbound, then re-allow loopback.
-    // This is applied for all profiles in structural mode. The rule blocks
-    // ambient external egress; loopback remains a documented residual caveat.
+    // Structural network denial: block all outbound, then re-allow loopback —
+    // but only to Firma's own endpoints (proxy bridge + DNS stub), so other
+    // host loopback services (admin ports, daemons, MCP servers) stay denied.
     if mode == VzStructuralMode::SandboxExecNetworkDeny {
         profile.push_str(
-            "; macOS structural: deny all outbound, allow loopback only\n\
-             (deny network-outbound)\n\
-             (allow network-outbound (remote ip4 \"localhost:*\"))\n\
-             (allow network-outbound (remote ip6 \"localhost:*\"))\n",
+            "; macOS structural: deny all outbound, allow only Firma loopback endpoints\n\
+             (deny network-outbound)\n",
         );
+        profile.push_str(&loopback_allow_rules(launch));
     }
 
     // Sensitive home path masking for claude-code profile.
@@ -660,6 +660,54 @@ fn build_sandbox_profile(launch: &LaunchSpec, mode: VzStructuralMode) -> String 
         }
     }
     profile
+}
+
+/// Builds the SBPL loopback allow rules for structural mode.
+///
+/// Scopes the loopback re-allow to Firma's own endpoints — the proxy bridge
+/// (from `HTTP_PROXY`) and the DNS stub (from `FIRMA_DNS_STUB_ADDR`) — so other
+/// host loopback services stay denied by the `(deny network-outbound)` above.
+///
+/// When neither port can be determined (e.g. a proxyless context) it falls back
+/// to allowing all loopback so functionality is preserved; that fallback is the
+/// old, unscoped behavior and the only path that leaves the residual caveat.
+fn loopback_allow_rules(launch: &LaunchSpec) -> String {
+    let mut ports: Vec<u16> = Vec::new();
+    if let Some(port) = loopback_port_from(launch.env.get("HTTP_PROXY")) {
+        ports.push(port);
+    }
+    if let Some(port) = loopback_port_from(launch.env.get("FIRMA_DNS_STUB_ADDR")) {
+        ports.push(port);
+    }
+    ports.sort_unstable();
+    ports.dedup();
+
+    if ports.is_empty() {
+        return "; loopback ports unknown — allow all loopback (unscoped fallback)\n\
+                (allow network-outbound (remote ip4 \"localhost:*\"))\n\
+                (allow network-outbound (remote ip6 \"localhost:*\"))\n"
+            .to_string();
+    }
+
+    let mut out = String::new();
+    for port in ports {
+        let _ = write!(
+            out,
+            "(allow network-outbound (remote ip4 \"localhost:{port}\"))\n\
+             (allow network-outbound (remote ip6 \"localhost:{port}\"))\n"
+        );
+    }
+    out
+}
+
+/// Extracts the port from a `host:port` or `scheme://host:port` env value
+/// (e.g. `http://127.0.0.1:18080` or `127.0.0.1:5353`).
+fn loopback_port_from(value: Option<&String>) -> Option<u16> {
+    let raw = value?.trim();
+    // Drop any scheme/path so only the authority remains, then take the port.
+    let authority = raw.rsplit('/').next().unwrap_or(raw);
+    let port_str = authority.rsplit(':').next()?;
+    port_str.parse::<u16>().ok()
 }
 
 fn is_absolute_sandbox_path(path: &str) -> bool {
@@ -825,20 +873,54 @@ mod tests {
     }
 
     #[test]
-    fn structural_mode_allows_loopback() {
+    fn structural_mode_allows_loopback_unscoped_fallback_when_ports_unknown() {
+        // `generic` launch has no HTTP_PROXY / FIRMA_DNS_STUB_ADDR, so the
+        // builder cannot scope ports and falls back to allowing all loopback.
         let launch = test_launch("generic");
         let profile = build_sandbox_profile(&launch, VzStructuralMode::SandboxExecNetworkDeny);
         assert!(
             profile.contains("(allow network-outbound (remote ip4 \"localhost:*\"))"),
-            "structural mode must allow IPv4 localhost loopback: {profile}"
+            "fallback must allow IPv4 localhost loopback: {profile}"
         );
         assert!(
             profile.contains("(allow network-outbound (remote ip6 \"localhost:*\"))"),
-            "structural mode must allow IPv6 localhost loopback: {profile}"
+            "fallback must allow IPv6 localhost loopback: {profile}"
         );
         assert!(
             !profile.contains("(remote ip4 \"127.0.0.1\")"),
             "sandbox-exec rejects loopback rules without a port: {profile}"
+        );
+    }
+
+    #[test]
+    fn structural_mode_port_scopes_loopback_to_firma_endpoints() {
+        let mut launch = test_launch("generic");
+        launch.env.insert(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:18080".to_string(),
+        );
+        launch.env.insert(
+            "FIRMA_DNS_STUB_ADDR".to_string(),
+            "127.0.0.1:5353".to_string(),
+        );
+        let profile = build_sandbox_profile(&launch, VzStructuralMode::SandboxExecNetworkDeny);
+
+        assert!(profile.contains("(deny network-outbound)"), "{profile}");
+        assert!(
+            profile.contains("(allow network-outbound (remote ip4 \"localhost:18080\"))"),
+            "proxy-bridge port must be allow-listed: {profile}"
+        );
+        assert!(
+            profile.contains("(allow network-outbound (remote ip6 \"localhost:18080\"))"),
+            "{profile}"
+        );
+        assert!(
+            profile.contains("(allow network-outbound (remote ip4 \"localhost:5353\"))"),
+            "DNS stub port must be allow-listed: {profile}"
+        );
+        assert!(
+            !profile.contains("localhost:*"),
+            "loopback must be port-scoped, not wildcard, when ports are known: {profile}"
         );
     }
 
