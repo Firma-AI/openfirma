@@ -45,13 +45,23 @@ Without the opt-in, `firma run` prints a typed error explaining that the selecte
 
 ### Structural backends
 
-1. **Network boundary.** On Linux `bwrap`, the agent runs in a network namespace where the only reachable network destination is a host-side process listening on `127.0.0.1:18080` (the proxy bridge). On experimental macOS network-deny mode, the agent is restricted to loopback and external IP egress is blocked. On macOS VZ guest mode, `firma run` writes a launch contract that requires the configured guest runner to expose only the sidecar bridge and DNS stub to the guest.
-2. **Proxy bridge.** A small helper inside the sandbox listens on `127.0.0.1:18080` and forwards bytes over a Unix socket to the host's Sidecar (typically at `$XDG_RUNTIME_DIR/firma/sidecar.sock`). On Linux `bwrap`, the agent's traffic has nowhere else to go. On experimental macOS network-deny mode, external IP egress is blocked but other loopback services remain a caveat. On macOS VZ guest mode, the bridge URL is part of the runner contract.
+1. **Network boundary.** On Linux `bwrap`, the agent runs in a network namespace where the only reachable network destination is a host-side process listening on `127.0.0.1:18080` (the proxy bridge). On experimental macOS network-deny mode, the agent is restricted to the Firma proxy bridge and DNS stub on loopback (port-scoped) and external IP egress is blocked. On macOS VZ guest mode, `firma run` writes a launch contract that requires the configured guest runner to expose only the sidecar bridge and DNS stub to the guest.
+2. **Proxy bridge.** A small helper inside the sandbox listens on `127.0.0.1:18080` and forwards bytes over a Unix socket to the host's Sidecar (typically at `$XDG_RUNTIME_DIR/firma/sidecar.sock`). On Linux `bwrap`, the agent's traffic has nowhere else to go. On experimental macOS network-deny mode, external IP egress is blocked and the loopback re-allow is port-scoped to the bridge and DNS stub. On macOS VZ guest mode, the bridge URL is part of the runner contract.
 3. **DNS stub.** A stub resolver answers DNS queries deterministically. On Linux it runs inside the sandbox path. On macOS structural paths, `firma run` starts a host-side refusal stub; sandbox-exec reaches it on loopback, and the VZ guest runner must wire guest DNS to it. Random outbound DNS must not be a successful bypass.
 4. **`HTTP_PROXY` injection.** For agents that *do* respect proxy env vars, `firma run` sets `HTTP_PROXY=http://127.0.0.1:18080` so they don't need any code change.
 5. **Identity remap.** The agent runs under a sandbox user (configurable via `--identity-mode`), so it can't read host secrets via filesystem.
 
-The result is that an agent running under Linux structural `firma run` can attempt to bypass the proxy in any way it likes — open raw sockets, set its own DNS, fork a child process — and every one of those attempts dead-ends inside the sandbox. Experimental macOS network-deny mode provides a narrower claim: external IP egress is blocked, while host loopback remains a known limit. Experimental macOS VZ guest mode has the stronger structural target, but depends on a runner and guest image bundle and still needs hardware E2E evidence before it becomes the default claim.
+The result is that an agent running under Linux structural `firma run` can attempt to bypass the proxy in any way it likes — open raw sockets, set its own DNS, fork a child process — and every one of those attempts dead-ends inside the sandbox. Experimental macOS network-deny mode provides a narrower claim: external IP egress is blocked, and the loopback re-allow is now port-scoped to Firma's own endpoints rather than all of loopback. Experimental macOS VZ guest mode has the stronger structural target, but depends on a runner and guest image bundle and still needs hardware E2E evidence before it becomes the default claim.
+
+### Loopback blocking
+
+A connection to `127.0.0.1`, `::1`, or any loopback address does not traverse `HTTP_PROXY`, so without extra controls an agent could reach local admin ports, internal daemons, or MCP servers with no policy evaluation and no audit trail. `firma run` closes this at the sandbox boundary — for the **agent process only**, never for Firma's own components:
+
+- **Linux (bwrap).** A seccomp `user-notify` filter traps every `connect(2)` the agent makes. A host-side supervisor classifies the destination and **blocks** any loopback target that is not the proxy bridge or DNS stub, returning `EACCES`. This catches direct sockets and proxy-ignoring clients alike. The deny path is race-free; the allow path uses `SECCOMP_USER_NOTIF_FLAG_CONTINUE` and carries the usual seccomp-notify TOCTOU caveat, which is acceptable because the allow-list is just Firma's two loopback ports and the network namespace is already private. Each blocked attempt is reported to the Sidecar and recorded as a **signed audit event** (`DENY`, action class `network.loopback`, reason `loopback blocked`) visible in `firma monitor`.
+- **macOS (sandbox-exec structural).** The `TrustedBSD` MAC profile denies all outbound, then re-allows loopback **only** to the proxy bridge and DNS stub ports. The block is structural, but sandbox-exec denials are not delivered to the Sidecar, so macOS does **not** emit a per-attempt signed audit event — a known gap.
+- **Proxy-only backends (vz default, wsl2).** No loopback guard; these remain cooperative proxy-only.
+
+The proxy bridge (`127.0.0.1:18080`) and DNS stub are explicitly exempt so Firma's own loopback traffic is unaffected. If the guard cannot start (for example, a kernel without seccomp user-notify), the run continues without it and logs a warning — in structural mode the private network namespace already isolates the agent from host loopback services, so the guard is defense in depth plus a direct-socket audit trail.
 
 ### Proxy-only backends (vz, wsl2)
 
@@ -108,6 +118,7 @@ Available modes:
 | Fail-closed runtime | **Yes.** With no direct egress route, sidecar or bridge loss breaks outbound traffic. | **Planned.** |
 | Child/process-tree bypass resistance | **Yes.** Child processes inherit the network namespace. | **Planned.** |
 | Syscall/seccomp enforcement | **Linux-only.** Static seccomp cBPF is supported with a bounded Cedar-subset projection. | **Planned.** Linux guest path should reuse static kernel controls where applicable. |
+| Loopback blocking + audit | **Yes.** A seccomp `user-notify` guard blocks the agent's direct `connect(2)` to any loopback target other than the proxy bridge / DNS stub, and reports each block as a signed `network.loopback` DENY in `firma monitor`. | **Planned.** |
 | Immutable execution envelope | **Yes.** Runtime fixes identity, env, mounts, routing, and optional seccomp before launch. | **Planned.** |
 | Interactive CLI/TUI support | **Yes.** Stdio, signals, and exit status are preserved through the wrapper path. | **Planned.** |
 | Evidence status | Runtime code, Linux E2E harness, and FIR-111 seccomp spike artifacts exist. | Planned backend; no release evidence. |
@@ -138,13 +149,14 @@ Available modes:
 
 | Runtime invariant | Status |
 | ----------------- | ------ |
-| Sidecar-only egress | **Partial / experimental.** External IP egress is denied by `sandbox-exec`, but all loopback remains reachable. |
+| Sidecar-only egress | **Partial / experimental.** External IP egress is denied by `sandbox-exec`, and the loopback re-allow is port-scoped to the proxy bridge + DNS stub (other loopback services are denied). |
 | DNS confinement | **Partial / experimental.** Non-loopback DNS is blocked by network denial; the host resolver is not replaced. |
 | Fail-closed startup | **Yes / experimental.** Network-deny mode still uses the same startup fail-closed path. |
-| Fail-closed runtime | **Partial / experimental.** External egress remains denied, but loopback-all scope is a residual caveat. |
-| Child/process-tree bypass resistance | **Partial / experimental.** Child processes should inherit the MAC sandbox label for external egress denial; loopback remains reachable and hardware E2E is pending. |
+| Fail-closed runtime | **Partial / experimental.** External egress denied and loopback port-scoped to Firma endpoints; hardware E2E is pending. |
+| Child/process-tree bypass resistance | **Partial / experimental.** Child processes should inherit the MAC sandbox label; loopback is port-scoped to Firma endpoints and hardware E2E is pending. |
 | Syscall/seccomp enforcement | **No seccomp.** Uses TrustedBSD MAC network rules, not syscall filtering. |
-| Immutable execution envelope | **Partial / experimental.** Launch envelope plus MAC profile are fixed before process start; residual loopback caveat remains. |
+| Loopback audit trail | **No.** The loopback block is structural, but `sandbox-exec` denials are not delivered to the Sidecar, so there is no per-attempt signed audit event (unlike the Linux seccomp guard). |
+| Immutable execution envelope | **Partial / experimental.** Launch envelope plus MAC profile are fixed before process start. |
 | Interactive CLI/TUI support | **Yes / experimental.** Still host-process based through `sandbox-exec`. |
 | Evidence status | Runtime code and unit tests exist; macOS hardware E2E assertions are written but not yet green evidence. |
 
