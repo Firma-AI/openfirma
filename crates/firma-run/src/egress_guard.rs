@@ -586,7 +586,7 @@ impl AuditSink {
             .name("firma-egress-audit".to_string())
             .spawn(move || {
                 while let Ok(addr) = rx.recv() {
-                    report_event(&channel, addr);
+                    Self::report_event(&channel, addr);
                 }
             }) {
             Ok(handle) => Some(Self {
@@ -607,6 +607,37 @@ impl AuditSink {
     fn send(&self, addr: SocketAddr) {
         if let Some(inner) = &self.inner {
             let _ = inner.tx.try_send(addr);
+        }
+    }
+
+    /// Best-effort: forward a blocked attempt to the Sidecar over the `firma run`
+    /// audit channel as a newline-delimited JSON [`RunAuditMessage`].
+    fn report_event(channel: &AuditChannel, addr: SocketAddr) {
+        let message = RunAuditMessage {
+            session_id: channel.session_id.clone(),
+            agent_id: channel.agent_id.clone(),
+            event: RunAuditEvent::LoopbackBlocked {
+                dst_ip: addr.ip().to_string(),
+                dst_port: addr.port(),
+            },
+        };
+        let Ok(mut line) = serde_json::to_string(&message) else {
+            return;
+        };
+        line.push('\n');
+
+        match UnixStream::connect(&channel.socket_path) {
+            Ok(mut stream) => {
+                // Bound the write so a stuck consumer cannot wedge the audit worker
+                // indefinitely. Enforcement is already off this thread.
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+                if let Err(error) = stream.write_all(line.as_bytes()) {
+                    tracing::debug!(%error, "egress guard: failed to write audit message");
+                }
+            }
+            Err(error) => {
+                tracing::debug!(%error, "egress guard: run-audit socket unreachable");
+            }
         }
     }
 }
@@ -746,37 +777,6 @@ fn wait_readable(fd: RawFd, timeout: Duration) -> bool {
     // SAFETY: poll reads/writes the single pollfd we own for the call.
     let rc = unsafe { libc::poll(std::ptr::from_mut(&mut pfd), 1, millis) };
     rc > 0 && (pfd.revents & libc::POLLIN) != 0
-}
-
-/// Best-effort: forward a blocked attempt to the Sidecar over the `firma run`
-/// audit channel as a newline-delimited JSON [`RunAuditMessage`].
-fn report_event(channel: &AuditChannel, addr: SocketAddr) {
-    let message = RunAuditMessage {
-        session_id: channel.session_id.clone(),
-        agent_id: channel.agent_id.clone(),
-        event: RunAuditEvent::LoopbackBlocked {
-            dst_ip: addr.ip().to_string(),
-            dst_port: addr.port(),
-        },
-    };
-    let Ok(mut line) = serde_json::to_string(&message) else {
-        return;
-    };
-    line.push('\n');
-
-    match UnixStream::connect(&channel.socket_path) {
-        Ok(mut stream) => {
-            // Bound the write so a stuck consumer cannot wedge the audit worker
-            // indefinitely. Enforcement is already off this thread.
-            let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-            if let Err(error) = stream.write_all(line.as_bytes()) {
-                tracing::debug!(%error, "egress guard: failed to write audit message");
-            }
-        }
-        Err(error) => {
-            tracing::debug!(%error, "egress guard: run-audit socket unreachable");
-        }
-    }
 }
 
 #[cfg(test)]
