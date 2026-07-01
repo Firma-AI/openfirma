@@ -58,15 +58,15 @@ mod tests {
     #[test]
     fn deserialize_loopback_message() {
         let msg = r#"{
-            "sessionId": "sess",
-            "agentId": "claude-code",
+            "session_id": "sess",
+            "agent_id": "claude-code",
             "event": {
                 "kind": "loopback_blocked",
-                "dstIp": "127.0.0.1",
-                "dstPort": 6379,
-            },
+                "dst_ip": "127.0.0.1",
+                "dst_port": 6379
+            }
         }"#;
-        let actual: RunAuditMessage = serde_json::from_str(&msg).expect("deserialize");
+        let actual: RunAuditMessage = serde_json::from_str(msg).expect("deserialize");
         assert_eq!(
             RunAuditMessage {
                 session_id: "sess".to_string(),
