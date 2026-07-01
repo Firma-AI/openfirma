@@ -21,8 +21,6 @@ pub fn run(args: EgressGuardInstallArgs) -> anyhow::Result<ExitCode> {
         supervisor_socket,
         command,
     } = args;
-    match firma_run::egress_guard::install_and_exec(&supervisor_socket, &command) {
-        Ok(never) => match never {},
-        Err(error) => Err(anyhow::anyhow!("{error}")),
-    }
+    let never = firma_run::egress_guard::install_and_exec(&supervisor_socket, &command)?;
+    match never {}
 }
