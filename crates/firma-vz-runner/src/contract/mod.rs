@@ -27,6 +27,8 @@ const SECRET_ENV_KEYS: &[&str] = &["FIRMA_CAPABILITY_TOKEN"];
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContractDocument {
+    #[serde(skip)]
+    source_path: Option<PathBuf>,
     version: u32,
     sandbox_id: String,
     runtime_dir: PathBuf,
@@ -45,9 +47,28 @@ impl ContractDocument {
     /// context fails before the runner trusts any contract contents.
     pub fn read_from_path(path: &Path) -> Result<Self> {
         validate_contract_file_access(path)?;
+        let source_path = absolute_path(path)?;
         let json = fs::read(path)
             .with_context(|| format!("read VZ launch contract {}", path.display()))?;
-        Self::parse_from_slice(path, &json)
+        let mut contract = Self::parse_from_slice(path, &json)?;
+        contract.source_path = Some(source_path);
+        Ok(contract)
+    }
+
+    /// Reads a source-path-aware contract fixture without file custody checks.
+    ///
+    /// Tests outside the contract module use this when they need a validated
+    /// contract with `source_path` populated, but should not also exercise Unix
+    /// file permission enforcement.
+    #[cfg(test)]
+    pub fn read_fixture_from_path_without_custody(path: &Path) -> Result<Self> {
+        let source_path = absolute_path(path)?;
+        let json = fs::read(path)
+            .with_context(|| format!("read VZ launch contract {}", path.display()))?;
+        let mut contract = Self::parse_from_slice(path, &json)?;
+        contract.source_path = Some(source_path);
+
+        Ok(contract)
     }
 
     /// Parses raw JSON bytes into the contract schema without semantic checks.
@@ -246,6 +267,22 @@ impl Contract {
     pub fn sandbox_id(&self) -> &str {
         &self.document.sandbox_id
     }
+
+    pub fn source_path(&self) -> Option<&Path> {
+        self.document.source_path.as_deref()
+    }
+
+    pub fn runtime_dir(&self) -> &Path {
+        &self.document.runtime_dir
+    }
+
+    pub fn guest(&self) -> &Guest {
+        &self.document.guest
+    }
+
+    pub fn mounts(&self) -> &[Mount] {
+        &self.document.mounts
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -256,10 +293,24 @@ struct Runner {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Guest {
+pub struct Guest {
     kernel: PathBuf,
     initrd: PathBuf,
     rootfs: PathBuf,
+}
+
+impl Guest {
+    pub fn kernel(&self) -> &Path {
+        &self.kernel
+    }
+
+    pub fn initrd(&self) -> &Path {
+        &self.initrd
+    }
+
+    pub fn rootfs(&self) -> &Path {
+        &self.rootfs
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -282,10 +333,20 @@ enum IdentityMode {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Mount {
+pub struct Mount {
     source: PathBuf,
     target: PathBuf,
     read_only: bool,
+}
+
+impl Mount {
+    pub fn source(&self) -> &Path {
+        &self.source
+    }
+
+    pub const fn read_only(&self) -> bool {
+        self.read_only
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -355,6 +416,16 @@ fn validate_invariants(invariants: &[Invariant]) -> ValidationResult<()> {
     }
 
     Ok(())
+}
+
+fn absolute_path(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+
+    Ok(std::env::current_dir()
+        .with_context(|| format!("resolve current directory for {}", path.display()))?
+        .join(path))
 }
 
 #[cfg(test)]

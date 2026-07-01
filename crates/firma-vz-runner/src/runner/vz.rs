@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use crate::contract::Contract;
+use crate::vm::VmPlan;
 
 use super::{RunnerError, RunnerResult};
 
@@ -124,11 +124,11 @@ use super::{RunnerError, RunnerResult};
 //     | returns exit status
 //     v
 //  firma-run
-pub fn run(contract: &Contract) -> RunnerResult<ExitCode> {
+pub fn run(vm_plan: &VmPlan) -> RunnerResult<ExitCode> {
     let linux_bootloader_type = std::any::type_name::<objc2_virtualization::VZLinuxBootLoader>();
     Err(RunnerError::AppleVzExecutionNotImplemented {
-        version: contract.version(),
-        sandbox_id: contract.sandbox_id().to_string(),
+        version: vm_plan.version(),
+        sandbox_id: vm_plan.sandbox_id().to_string(),
         bootloader_type: linux_bootloader_type,
     })
 }
@@ -138,12 +138,12 @@ mod tests {
     use anyhow::{Result, anyhow};
 
     use super::run;
-    use crate::runner::{RunnerError, runner_test_contract};
+    use crate::runner::{RunnerError, runner_test_vm_plan};
 
     #[test]
     fn run_reports_apple_vz_execution_not_implemented() -> Result<()> {
-        let contract = runner_test_contract()?;
-        let error = run(&contract).err().ok_or_else(|| {
+        let vm_plan = runner_test_vm_plan()?;
+        let error = run(&vm_plan).err().ok_or_else(|| {
             anyhow!("macOS runner should report unimplemented execution after contract validation")
         })?;
 
