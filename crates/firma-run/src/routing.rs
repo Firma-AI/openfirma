@@ -149,6 +149,16 @@ pub struct ResolvedAuthority {
     pub supervisor: Option<crate::authority::AuthoritySupervisor>,
 }
 
+/// Owned pieces threaded from [`prepare_network_runtime`] into the per-path
+/// builders and finally moved into the returned [`NetworkRuntime`].
+struct RuntimeParts {
+    effective_endpoint: SidecarEndpoint,
+    autostart_trust_env: BTreeMap<String, String>,
+    sidecar_supervisor: Option<SidecarSupervisor>,
+    authority_supervisor: Option<crate::authority::AuthoritySupervisor>,
+    capability_guard: Option<crate::capability::guard::CapabilityFileGuard>,
+}
+
 /// Prepare network runtime artifacts for a sandbox launch.
 ///
 /// When `flags.sidecar_autostart == true` (local selection), autostarts a
@@ -166,10 +176,6 @@ pub struct ResolvedAuthority {
 /// - [`RunError::UnsupportedPlatform`] when autostart is required on a
 ///   platform that does not support it.
 /// - [`RunError::Backend`] for adapter socket failures.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the structural and non-structural network setup paths read more clearly inline than split across helpers"
-)]
 pub fn prepare_network_runtime(
     handle: &SandboxHandle,
     proof: &EnforcementProof,
@@ -194,47 +200,27 @@ pub fn prepare_network_runtime(
     // synthesized sidecar config can reference it. The guard is moved into the
     // returned `NetworkRuntime` so the seed file is removed on Drop — declared
     // last in the struct so it drops AFTER the sidecar supervisor that reads it.
-    let mut capability_guard =
-        maybe_mint_capability_seed(identity, &mut flags, &authority, skip_mint)?;
+    let capability_guard = maybe_mint_capability_seed(identity, &mut flags, &authority, skip_mint)?;
 
     let (effective_endpoint, sidecar_supervisor) =
         resolve_effective_endpoint(handle, sidecar_endpoint, identity, &flags)?;
     let autostart_trust_env = sidecar_trust_env_overrides(sidecar_supervisor.as_ref());
 
+    let parts = RuntimeParts {
+        effective_endpoint,
+        autostart_trust_env,
+        sidecar_supervisor,
+        authority_supervisor: authority.supervisor,
+        capability_guard,
+    };
+
     if !handle.network_policy.enforce_network_namespace {
-        let env_overrides = autostart_trust_env;
-        #[cfg(unix)]
-        let mut env_overrides = env_overrides;
-        #[cfg(unix)]
-        let host_bridge = setup_host_bridge(&effective_endpoint, identity, &mut env_overrides)?;
-
-        // macOS structural modes without a Linux network namespace also need a
-        // host-side DNS refusal stub. sandbox-exec reaches it on loopback; the
-        // VZ guest runner receives it through the launch contract and must wire
-        // guest DNS to this endpoint.
-        #[cfg(unix)]
-        let host_dns_stub = maybe_start_host_dns_stub(handle, proof, &mut env_overrides)?;
-
-        return Ok(NetworkRuntime {
-            env_overrides,
-            sidecar_endpoint: effective_endpoint,
-            #[cfg(unix)]
-            _host_bridge: Some(host_bridge),
-            #[cfg(unix)]
-            _host_dns_stub: host_dns_stub,
-            #[cfg(unix)]
-            _adapter: None,
-            #[cfg(target_os = "linux")]
-            _egress_guard: None,
-            _sidecar_supervisor: sidecar_supervisor,
-            _authority_supervisor: authority.supervisor,
-            _capability_guard: capability_guard.take(),
-        });
+        return prepare_flat_runtime(handle, proof, identity, parts);
     }
 
     #[cfg(not(unix))]
     {
-        let _ = (effective_endpoint, sidecar_supervisor, authority);
+        let _ = parts;
         Err(RunError::UnsupportedBackend {
             backend: handle.backend.to_string(),
             reason: "structural network confinement currently requires unix sockets".to_string(),
@@ -242,68 +228,163 @@ pub fn prepare_network_runtime(
     }
 
     #[cfg(unix)]
-    {
-        let adapter_path = handle.runtime_dir.join("sidecar-upstream.sock");
-        let adapter = SidecarAdapter::start(&adapter_path, &effective_endpoint)?;
-        let current_exe = std::env::current_exe().map_err(|error| {
-            RunError::Internal(format!(
-                "failed to resolve current executable path: {error}"
-            ))
-        })?;
+    prepare_structural_runtime(handle, identity, parts)
+}
 
-        let proxy_addr = structural_proxy_listen_addr();
-        let dns_addr = structural_dns_stub_listen_addr();
-        let mut env_overrides = autostart_trust_env;
-        env_overrides.insert("HTTP_PROXY".to_string(), format!("http://{proxy_addr}"));
-        env_overrides.insert("HTTPS_PROXY".to_string(), format!("http://{proxy_addr}"));
-        env_overrides.insert("http_proxy".to_string(), format!("http://{proxy_addr}"));
-        env_overrides.insert("https_proxy".to_string(), format!("http://{proxy_addr}"));
-        env_overrides.insert("ALL_PROXY".to_string(), format!("http://{proxy_addr}"));
-        env_overrides.insert("all_proxy".to_string(), format!("http://{proxy_addr}"));
-        env_overrides.insert(
-            "FIRMA_RUN_PROXY_LISTEN_ADDR".to_string(),
-            proxy_addr.to_string(),
-        );
-        env_overrides.insert(
-            "FIRMA_RUN_DNS_STUB_LISTEN_ADDR".to_string(),
-            dns_addr.to_string(),
-        );
-        env_overrides.insert(
-            "FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS".to_string(),
-            adapter_path.display().to_string(),
-        );
-        env_overrides.insert(
-            "FIRMA_RUN_SELF_EXE".to_string(),
-            current_exe.display().to_string(),
-        );
+/// Builds the [`NetworkRuntime`] for the non-structural path (no enforced
+/// network namespace): the agent reaches the sidecar over a host bridge, plus a
+/// host-side DNS refusal stub on Unix. No adapter or egress guard.
+fn prepare_flat_runtime(
+    handle: &SandboxHandle,
+    proof: &EnforcementProof,
+    identity: &RunIdentity,
+    parts: RuntimeParts,
+) -> Result<NetworkRuntime, RunError> {
+    let RuntimeParts {
+        effective_endpoint,
+        autostart_trust_env,
+        sidecar_supervisor,
+        authority_supervisor,
+        capability_guard,
+    } = parts;
 
-        // Loopback egress guard: trap the agent's connect(2)s and block direct
-        // connections to loopback addresses that are not the proxy bridge or
-        // DNS stub. The supervisor runs here on the host; the in-sandbox
-        // installer reaches it on a bind-mounted socket under runtime_dir.
+    #[cfg(not(unix))]
+    let _ = (handle, proof, identity);
+
+    let env_overrides = autostart_trust_env;
+    #[cfg(unix)]
+    let mut env_overrides = env_overrides;
+    #[cfg(unix)]
+    let host_bridge = setup_host_bridge(&effective_endpoint, identity, &mut env_overrides)?;
+
+    // macOS structural modes without a Linux network namespace also need a
+    // host-side DNS refusal stub. sandbox-exec reaches it on loopback; the
+    // VZ guest runner receives it through the launch contract and must wire
+    // guest DNS to this endpoint.
+    #[cfg(unix)]
+    let host_dns_stub = maybe_start_host_dns_stub(handle, proof, &mut env_overrides)?;
+
+    Ok(NetworkRuntime {
+        env_overrides,
+        sidecar_endpoint: effective_endpoint,
+        #[cfg(unix)]
+        _host_bridge: Some(host_bridge),
+        #[cfg(unix)]
+        _host_dns_stub: host_dns_stub,
+        #[cfg(unix)]
+        _adapter: None,
         #[cfg(target_os = "linux")]
-        let egress_guard = start_loopback_guard(
-            handle,
-            proxy_addr,
-            dns_addr,
-            sidecar_supervisor.as_ref(),
-            identity,
-            &mut env_overrides,
-        );
+        _egress_guard: None,
+        _sidecar_supervisor: sidecar_supervisor,
+        _authority_supervisor: authority_supervisor,
+        _capability_guard: capability_guard,
+    })
+}
 
-        Ok(NetworkRuntime {
-            env_overrides,
-            sidecar_endpoint: effective_endpoint,
-            _host_bridge: None,
-            _host_dns_stub: None,
-            _adapter: Some(adapter),
-            #[cfg(target_os = "linux")]
-            _egress_guard: egress_guard,
-            _sidecar_supervisor: sidecar_supervisor,
-            _authority_supervisor: authority.supervisor,
-            _capability_guard: capability_guard.take(),
-        })
+/// Builds the [`NetworkRuntime`] for the structural Unix path: a sidecar
+/// upstream adapter, proxy/DNS env overrides, and (on Linux) the loopback
+/// egress guard.
+#[cfg(unix)]
+fn prepare_structural_runtime(
+    handle: &SandboxHandle,
+    identity: &RunIdentity,
+    parts: RuntimeParts,
+) -> Result<NetworkRuntime, RunError> {
+    let RuntimeParts {
+        effective_endpoint,
+        autostart_trust_env,
+        sidecar_supervisor,
+        authority_supervisor,
+        capability_guard,
+    } = parts;
+
+    #[cfg(not(target_os = "linux"))]
+    let _ = identity;
+
+    let adapter_path = handle.runtime_dir.join("sidecar-upstream.sock");
+    let adapter = SidecarAdapter::start(&adapter_path, &effective_endpoint)?;
+    let current_exe = std::env::current_exe().map_err(|error| {
+        RunError::Internal(format!(
+            "failed to resolve current executable path: {error}"
+        ))
+    })?;
+
+    let proxy_addr = structural_proxy_listen_addr();
+    let dns_addr = structural_dns_stub_listen_addr();
+    let mut env_overrides = structural_proxy_env(
+        autostart_trust_env,
+        proxy_addr,
+        dns_addr,
+        &adapter_path,
+        &current_exe,
+    );
+
+    // Loopback egress guard: trap the agent's connect(2)s and block direct
+    // connections to loopback addresses that are not the proxy bridge or
+    // DNS stub. The supervisor runs here on the host; the in-sandbox
+    // installer reaches it on a bind-mounted socket under runtime_dir.
+    #[cfg(target_os = "linux")]
+    let egress_guard = start_loopback_guard(
+        handle,
+        proxy_addr,
+        dns_addr,
+        sidecar_supervisor.as_ref(),
+        identity,
+        &mut env_overrides,
+    );
+
+    Ok(NetworkRuntime {
+        env_overrides,
+        sidecar_endpoint: effective_endpoint,
+        _host_bridge: None,
+        _host_dns_stub: None,
+        _adapter: Some(adapter),
+        #[cfg(target_os = "linux")]
+        _egress_guard: egress_guard,
+        _sidecar_supervisor: sidecar_supervisor,
+        _authority_supervisor: authority_supervisor,
+        _capability_guard: capability_guard,
+    })
+}
+
+/// Populates the proxy/DNS/adapter environment overrides the sandboxed agent
+/// needs to route egress through the structural proxy bridge.
+#[cfg(unix)]
+fn structural_proxy_env(
+    mut env_overrides: BTreeMap<String, String>,
+    proxy_addr: &str,
+    dns_addr: &str,
+    adapter_path: &std::path::Path,
+    current_exe: &std::path::Path,
+) -> BTreeMap<String, String> {
+    let proxy_url = format!("http://{proxy_addr}");
+    for key in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
+        env_overrides.insert(key.to_string(), proxy_url.clone());
     }
+    env_overrides.insert(
+        "FIRMA_RUN_PROXY_LISTEN_ADDR".to_string(),
+        proxy_addr.to_string(),
+    );
+    env_overrides.insert(
+        "FIRMA_RUN_DNS_STUB_LISTEN_ADDR".to_string(),
+        dns_addr.to_string(),
+    );
+    env_overrides.insert(
+        "FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS".to_string(),
+        adapter_path.display().to_string(),
+    );
+    env_overrides.insert(
+        "FIRMA_RUN_SELF_EXE".to_string(),
+        current_exe.display().to_string(),
+    );
+    env_overrides
 }
 
 /// Starts the loopback egress guard supervisor for the structural Linux path
