@@ -378,7 +378,37 @@ fn persisted_authority_config(user_config: &std::path::Path) -> Result<Authority
     cfg.tls = firma_authority::AuthorityTlsConfig::default();
     cfg.listen_addr = select_loopback_v6_port()?.to_string();
 
+    // Regenerate the signing key on demand when the configured path has none.
+    // `firma config` writes the key once, but the configured `key_file` often
+    // lives in a volatile location (e.g. `$XDG_RUNTIME_DIR`, a tmpfs cleared on
+    // logout): the persisted config keeps pointing at it after a reboot even
+    // though the file is gone. Without this, the spawned authority fails closed
+    // with "failed to read key file … No such file or directory".
+    ensure_authority_key(&cfg.key_file)?;
+
     Ok(cfg)
+}
+
+/// Ensure an Ed25519 authority keypair exists at `key_path`, generating one
+/// only when the secret is missing. Idempotent: an existing key is preserved so
+/// issued tokens survive authority restarts. Unlike [`generate_authority_key`],
+/// this tolerates — and reuses — a pre-existing key.
+#[cfg(unix)]
+fn ensure_authority_key(key_path: &std::path::Path) -> Result<(), RunError> {
+    if key_path.is_file() {
+        return Ok(());
+    }
+    if let Some(parent) = key_path.parent() {
+        firma_runtime_state::fs::create_private_dir_all(parent)
+            .map_err(|e| RunError::Internal(e.to_string()))?;
+    }
+    firma_authority::write_keypair(key_path).map_err(|e| {
+        RunError::Internal(format!(
+            "generate authority key at {}: {e}",
+            key_path.display()
+        ))
+    })?;
+    Ok(())
 }
 
 /// Generate an Ed25519 authority keypair at `key_path` and its `.pub` sibling.
@@ -581,5 +611,36 @@ mod persisted_key_tests {
 
         assert_eq!(cfg.key_file, key);
         assert_eq!(fs_err::read(&cfg.key_file).expect("read key"), b"existing");
+    }
+
+    /// A configured `key_file` that no longer exists (e.g. its `$XDG_RUNTIME_DIR`
+    /// tmpfs was wiped on reboot) is regenerated on demand rather than failing
+    /// closed at authority startup. Regression test for #174.
+    #[test]
+    fn regenerates_missing_key_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Point at a key inside a not-yet-created subdir to also cover parent
+        // directory creation, mirroring a wiped runtime dir.
+        let key = dir.path().join("wiped-runtime").join("authority.key");
+        let config = dir.path().join("firma.toml");
+        fs_err::write(
+            &config,
+            format!(
+                "[authority]\nlisten_addr = \"[::1]:0\"\nkey_file = \"{}\"\n",
+                key.display()
+            ),
+        )
+        .expect("write firma.toml");
+
+        assert!(!key.exists(), "precondition: key absent");
+
+        let cfg = persisted_authority_config(&config).expect("resolve persisted");
+
+        assert_eq!(cfg.key_file, key);
+        assert!(cfg.key_file.is_file(), "secret key generated on demand");
+        assert!(
+            cfg.key_file.with_extension("pub").is_file(),
+            "public key generated alongside the secret"
+        );
     }
 }
