@@ -555,38 +555,67 @@ fn supervise(listener: &UnixListener, config: &SupervisorConfig, stop: &AtomicBo
     // Audit delivery runs on its own thread so a slow or stuck Sidecar consumer
     // can never block the notify loop (which would hang the agent's next
     // connect, allowed connects included). Enforcement stays synchronous.
-    let audit = config.report.clone().and_then(spawn_audit_worker);
-    notify_loop(
-        listener_fd.as_raw_fd(),
-        config,
-        stop,
-        audit.as_ref().map(|(tx, _)| tx),
-    );
-    if let Some((tx, handle)) = audit {
-        drop(tx); // close the channel so the worker observes disconnect and exits
-        let _ = handle.join();
+    // Dropping `audit` at scope end closes the channel and joins the worker.
+    let audit = config.report.clone().and_then(AuditSink::try_new);
+    notify_loop(listener_fd.as_raw_fd(), config, stop, audit.as_ref());
+}
+
+/// The bounded sender the notify loop feeds and the delivery thread's join
+/// handle, kept together so [`AuditSink`]'s `Drop` can move both out.
+struct AuditInner {
+    tx: SyncSender<SocketAddr>,
+    handle: JoinHandle<()>,
+}
+
+/// Sink for blocked-connection audit reports, backed by a detached delivery
+/// thread. Reports are handed off with [`Self::send`] (non-blocking); dropping
+/// the sink closes the channel and joins the thread.
+///
+/// The inner is `Option` only so `Drop` can `take` it and move `tx`/`handle`
+/// out of `&mut self` to enforce close-then-join ordering.
+struct AuditSink {
+    inner: Option<AuditInner>,
+}
+
+impl AuditSink {
+    /// Creates a sink, spawning its delivery thread. On spawn failure returns
+    /// `None`; the guard still enforces blocks, just without audit.
+    fn try_new(channel: AuditChannel) -> Option<Self> {
+        let (tx, rx) = sync_channel::<SocketAddr>(AUDIT_QUEUE_DEPTH);
+        match std::thread::Builder::new()
+            .name("firma-egress-audit".to_string())
+            .spawn(move || {
+                while let Ok(addr) = rx.recv() {
+                    report_event(&channel, addr);
+                }
+            }) {
+            Ok(handle) => Some(Self {
+                inner: Some(AuditInner { tx, handle }),
+            }),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "egress guard: failed to spawn audit worker; blocks enforced without audit"
+                );
+                None
+            }
+        }
+    }
+
+    /// Non-blocking hand-off of a blocked destination. Drops the report rather
+    /// than stall the notify loop if the worker's queue is full.
+    fn send(&self, addr: SocketAddr) {
+        if let Some(inner) = &self.inner {
+            let _ = inner.tx.try_send(addr);
+        }
     }
 }
 
-/// Spawns the detached audit-delivery worker. Returns a bounded sender the
-/// notify loop uses with `try_send` (non-blocking) and the worker's join handle.
-/// On spawn failure the guard still enforces blocks, just without audit.
-fn spawn_audit_worker(channel: AuditChannel) -> Option<(SyncSender<SocketAddr>, JoinHandle<()>)> {
-    let (tx, rx) = sync_channel::<SocketAddr>(AUDIT_QUEUE_DEPTH);
-    match std::thread::Builder::new()
-        .name("firma-egress-audit".to_string())
-        .spawn(move || {
-            while let Ok(addr) = rx.recv() {
-                report_event(&channel, addr);
-            }
-        }) {
-        Ok(handle) => Some((tx, handle)),
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                "egress guard: failed to spawn audit worker; blocks enforced without audit"
-            );
-            None
+impl Drop for AuditSink {
+    fn drop(&mut self) {
+        if let Some(AuditInner { tx, handle }) = self.inner.take() {
+            drop(tx); // close the channel so the worker observes disconnect
+            let _ = handle.join();
         }
     }
 }
@@ -615,7 +644,7 @@ fn notify_loop(
     notify_fd: RawFd,
     config: &SupervisorConfig,
     stop: &AtomicBool,
-    audit: Option<&SyncSender<SocketAddr>>,
+    audit: Option<&AuditSink>,
 ) {
     // Reused across iterations; `notif_recv` re-zeroes it before every recv.
     let mut req: libc::seccomp_notif = unsafe { std::mem::zeroed() };
@@ -642,7 +671,7 @@ fn handle_notification(
     notify_fd: RawFd,
     req: &libc::seccomp_notif,
     config: &SupervisorConfig,
-    audit: Option<&SyncSender<SocketAddr>>,
+    audit: Option<&AuditSink>,
 ) {
     let verdict = classify_notification(req, &config.allow_ports);
     match verdict {
@@ -669,10 +698,8 @@ fn handle_notification(
             };
             let _ = notif_send(notify_fd, &resp);
             tracing::warn!(dst = %addr, "blocked agent connection to loopback");
-            // Non-blocking hand-off: drop the report rather than stall the loop
-            // if the audit worker's queue is full.
-            if let Some(tx) = audit {
-                let _ = tx.try_send(addr);
+            if let Some(audit) = audit {
+                audit.send(addr);
             }
         }
     }
