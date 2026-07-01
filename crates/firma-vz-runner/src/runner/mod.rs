@@ -12,10 +12,10 @@ pub use vz::run;
 use std::process::ExitCode;
 
 #[cfg(not(target_os = "macos"))]
-use crate::contract::Contract;
+use crate::vm::VmPlan;
 
 #[cfg(test)]
-fn runner_test_contract() -> anyhow::Result<crate::contract::Contract> {
+fn runner_test_vm_plan() -> anyhow::Result<crate::vm::VmPlan> {
     use anyhow::Context as _;
     use serde_json::Value;
 
@@ -47,17 +47,13 @@ fn runner_test_contract() -> anyhow::Result<crate::contract::Contract> {
     }
 
     let temp = tempfile::tempdir()?;
-    for artifact in [
-        "firma-vz-runner",
-        "vmlinuz",
-        "initrd.img",
-        "rootfs.img",
-        "seccomp.bpf",
-    ] {
+    for artifact in ["firma-vz-runner", "vmlinuz", "initrd.img", "seccomp.bpf"] {
         std::fs::write(temp.path().join(artifact), artifact)?;
     }
+    std::fs::write(temp.path().join("rootfs.img"), vec![0; 512])?;
 
-    std::fs::create_dir(temp.path().join("runtime"))?;
+    let contract_dir = temp.path().join("runtime").join("vz-guest");
+    std::fs::create_dir_all(&contract_dir)?;
 
     let root = temp
         .path()
@@ -66,7 +62,7 @@ fn runner_test_contract() -> anyhow::Result<crate::contract::Contract> {
     let mut json = serde_json::from_str::<Value>(VALID_CONTRACT_JSON)?;
     replace_root_placeholder(&mut json, root);
 
-    let contract_path = temp.path().join("vz-guest-launch.json");
+    let contract_path = contract_dir.join("vz-guest-launch.json");
     std::fs::write(&contract_path, serde_json::to_vec(&json)?)?;
 
     #[cfg(unix)]
@@ -75,7 +71,8 @@ fn runner_test_contract() -> anyhow::Result<crate::contract::Contract> {
         std::fs::set_permissions(&contract_path, std::fs::Permissions::from_mode(0o600))?;
     }
 
-    Ok(ContractDocument::read_from_path(&contract_path)?.validate()?)
+    let contract = ContractDocument::read_from_path(&contract_path)?.validate()?;
+    Ok(crate::vm::VmPlan::from_contract(&contract)?)
 }
 
 /// Rejects VZ runner execution on non-macOS hosts after contract validation.
@@ -84,10 +81,10 @@ fn runner_test_contract() -> anyhow::Result<crate::contract::Contract> {
 /// Apple Virtualization.framework. Keeping the unsupported-host path behind the
 /// same function preserves the CLI contract on every platform.
 #[cfg(not(target_os = "macos"))]
-pub fn run(contract: &Contract) -> RunnerResult<ExitCode> {
+pub fn run(vm_plan: &VmPlan) -> RunnerResult<ExitCode> {
     Err(RunnerError::UnsupportedHost {
-        version: contract.version(),
-        sandbox_id: contract.sandbox_id().to_string(),
+        version: vm_plan.version(),
+        sandbox_id: vm_plan.sandbox_id().to_string(),
     })
 }
 
@@ -95,12 +92,12 @@ pub fn run(contract: &Contract) -> RunnerResult<ExitCode> {
 mod tests {
     use anyhow::{Result, anyhow};
 
-    use super::{RunnerError, run, runner_test_contract};
+    use super::{RunnerError, run, runner_test_vm_plan};
 
     #[test]
     fn run_rejects_unsupported_host() -> Result<()> {
-        let contract = runner_test_contract()?;
-        let error = run(&contract).err().ok_or_else(|| {
+        let vm_plan = runner_test_vm_plan()?;
+        let error = run(&vm_plan).err().ok_or_else(|| {
             anyhow!("non-macOS runner should reject execution after contract validation")
         })?;
 
