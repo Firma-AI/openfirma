@@ -10,8 +10,7 @@ use std::time::Duration;
 use chrono::Utc;
 use criterion::{Criterion, criterion_group, criterion_main};
 use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenId, TokenVerifier};
-use firma_sidecar::config::TenancyMode;
-use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile};
+use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile, TenancyMode};
 use firma_sidecar::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
 use firma_sidecar::enforcement::capability_validation::CapabilityValidator;
 use firma_sidecar::enforcement::registry::ActionClassRegistry;
@@ -86,7 +85,7 @@ fn bench_stage1_validate(c: &mut Criterion) {
         Box::new(MockVerifier { claims }),
         revocations,
         Duration::from_secs(0),
-        TenancyMode::default(),
+        TenancyMode::SingleAgent,
     );
 
     c.bench_function("stage1_enforce", |b| {

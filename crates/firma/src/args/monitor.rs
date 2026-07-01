@@ -94,6 +94,15 @@ pub enum Decision {
     Deny,
     /// Match records that bypassed enforcement.
     Passthrough,
+    /// Match records where the sidecar transformed the request (AARM R4
+    /// `MODIFY`).
+    Modify,
+    /// Match records where the sidecar required human approval (AARM R4
+    /// `STEP_UP`).
+    StepUp,
+    /// Match records where the sidecar deferred the request (AARM R4
+    /// `DEFER`).
+    Defer,
 }
 
 /// Output format for `firma monitor`.

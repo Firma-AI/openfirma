@@ -286,6 +286,58 @@ The pipeline is built to short-circuit. Once a stage returns `DENY`, later stage
 
 The connector row is different from the others: by the time connector dispatch happens, enforcement has already allowed the call. A connector failure is recorded as a dispatch outcome, not as a retroactive policy denial.
 
+## Authorization Decisions (AARM R4)
+
+The policy engine is capable of producing all five AARM R4 authorization
+decisions for an evaluated action:
+
+| Decision | Wire code | What happens |
+| -------- | --------- | ------------ |
+| `ALLOW`     | `1` | The request is dispatched to the connector as-is. |
+| `DENY`      | `2` | The call is blocked before dispatch; the agent gets a structured 403 with a `DenyReason`. |
+| `ABORT`     | `3` | An already-approved call aborted mid-flight (e.g. credential fetch or connector timeout). |
+| `MODIFY`    | `4` | The named HTTP header is stripped from the request before dispatch; the audit records the applied transformation. |
+| `STEP_UP`   | `5` | The call is blocked pending human approval / stronger auth; `DenyReason::StepUpRequired`. |
+| `DEFER`     | `6` | The call is blocked and deferred for retry; `DenyReason::Deferred`. |
+
+Cedar natively only produces `Allow`/`Deny`. The three remediation outcomes
+are sourced from annotations on `forbid` policies, evaluated by a post-Cedar
+layer:
+
+```cedar
+// Require admin approval for high-risk transfers.
+@step_up("require admin approval")
+forbid (principal, action, resource) when { context.risk_score >= 80 };
+
+// Defer high-frequency transfers to a retry window.
+@defer("500")
+forbid (principal, action, resource) when { context.transfers_last_10m >= 10 };
+
+// Strip the Authorization header before dispatch.
+@modify("redact_header:authorization")
+forbid (principal, action, resource) when { context.has_embedded_secret };
+```
+
+When a `forbid` policy fires, the post-Cedar layer looks up its annotation
+and lifts the deny into the matching remediation verdict (precedence
+`STEP_UP > DEFER > MODIFY` when several fire). A `forbid` without an
+annotation remains a hard `DENY`. `MODIFY` applies a structural
+transformation to the dispatch clone — V1 supports `redact_header:<name>`
+(case-insensitive header match) — and forwards the modified request; the
+applied transformation is recorded in the audit `deny_reason`.
+`STEP_UP` and `DEFER` block the call. A `forbid` policy carrying more
+than one remediation annotation, or a `permit` carrying any, rejects the
+bundle at load time. Malformed annotations (e.g. a non-numeric `@defer`
+value, an unknown `@modify` kind, or an empty annotation value) also
+reject the bundle so the operator gets an immediate, actionable error
+rather than a silent semantic divergence.
+
+`PASSTHROUGH` (non-protected traffic) is serialized on the wire as `ALLOW`
+(`1`) with an empty `token_id`. In monitor mode, `DENY`, `MODIFY`, `STEP_UP`,
+and `DEFER` are all overridden to `PASSTHROUGH` so the call goes through,
+with the original reason preserved in the audit record prefixed with
+`monitor_mode:`.
+
 ## The Mental Model
 
 The pipeline is easiest to remember as a sequence of increasingly meaningful representations:

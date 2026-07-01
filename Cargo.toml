@@ -7,10 +7,12 @@ members = [
   "crates/firma-demo-fixture",
   "crates/firma-demo-tui",
   "crates/firma-grpc-interceptor-proto",
+  "crates/firma-protobuf",
   "crates/firma-run",
   "crates/firma-runtime-state",
   "crates/firma-sidecar",
   "crates/firma-stack",
+  "crates/firma-vz-runner",
 ]
 resolver = "3"
 
@@ -19,6 +21,7 @@ version = "0.1.2"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/Firma-AI/openfirma"
+rust-version = "1.96"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
@@ -37,6 +40,7 @@ anyhow = "1"
 arc-swap = "1"
 async-stream = "0.3"
 async-trait = "0.1"
+base64 = "0.22"
 cedar-policy = "3"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", default-features = false }
@@ -50,7 +54,7 @@ firma-authority = { path = "crates/firma-authority" }
 firma-config-loader = { path = "crates/firma-config-loader" }
 firma-core = { path = "crates/firma-core" }
 firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto" }
-firma-protobuf = "0.1.1"
+firma-protobuf = { path = "crates/firma-protobuf" }
 firma-run = { path = "crates/firma-run" }
 firma-runtime-state = { path = "crates/firma-runtime-state" }
 firma-sidecar = { path = "crates/firma-sidecar" }
@@ -58,6 +62,7 @@ firma-stack = { path = "crates/firma-stack" }
 fs-err = "3.3"
 governor = "0.10"
 hex = "0.4"
+http = "1"
 http-body = "1"
 http-body-util = "0.1"
 hyper = { version = "1", default-features = false }
@@ -68,6 +73,7 @@ lru = "0.17"
 miette = { version = "7", features = ["fancy-no-backtrace"] }
 nix = { version = "0.31", features = ["fs", "process", "signal", "socket", "user"] }
 notify = "8"
+objc2-virtualization = { version = "0.3.2", default-features = false }
 owo-colors = { version = "4", features = ["supports-colors"] }
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 pasetors = "0.7"

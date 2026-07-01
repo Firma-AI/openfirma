@@ -301,16 +301,30 @@ struct VzGuestLaunchInputs {
 
 impl VzGuestLaunchInputs {
     fn from_env() -> Result<Self, RunError> {
-        let runner = validate_required_file_env(VZ_GUEST_RUNNER_ENV)?;
+        Self::from_env_lookup(|name| std::env::var(name).ok())
+    }
+
+    fn from_env_lookup(mut lookup: impl FnMut(&str) -> Option<String>) -> Result<Self, RunError> {
+        let runner =
+            validate_required_file_env_value(VZ_GUEST_RUNNER_ENV, lookup(VZ_GUEST_RUNNER_ENV))?;
         #[cfg(unix)]
         ensure_executable_file(VZ_GUEST_RUNNER_ENV, &runner)?;
         #[cfg(not(unix))]
         ensure_executable_file(VZ_GUEST_RUNNER_ENV, &runner);
         Ok(Self {
             runner,
-            kernel: validate_required_file_env(VZ_GUEST_KERNEL_ENV)?,
-            initrd: validate_required_file_env(VZ_GUEST_INITRD_ENV)?,
-            rootfs: validate_required_file_env(VZ_GUEST_ROOTFS_ENV)?,
+            kernel: validate_required_file_env_value(
+                VZ_GUEST_KERNEL_ENV,
+                lookup(VZ_GUEST_KERNEL_ENV),
+            )?,
+            initrd: validate_required_file_env_value(
+                VZ_GUEST_INITRD_ENV,
+                lookup(VZ_GUEST_INITRD_ENV),
+            )?,
+            rootfs: validate_required_file_env_value(
+                VZ_GUEST_ROOTFS_ENV,
+                lookup(VZ_GUEST_ROOTFS_ENV),
+            )?,
         })
     }
 }
@@ -465,6 +479,14 @@ enum VzGuestInvariantMode {
 
 fn start_vz_guest_runner(handle: &SandboxHandle, launch: &LaunchSpec) -> Result<Child, RunError> {
     let inputs = VzGuestLaunchInputs::from_env()?;
+    start_vz_guest_runner_with_inputs(handle, launch, inputs)
+}
+
+fn start_vz_guest_runner_with_inputs(
+    handle: &SandboxHandle,
+    launch: &LaunchSpec,
+    inputs: VzGuestLaunchInputs,
+) -> Result<Child, RunError> {
     let runner = inputs.runner.clone();
     let contract = VzGuestLaunchContract::from_launch(handle, launch, inputs)?;
     let contract_path = write_vz_guest_launch_contract(handle, &contract)?;
@@ -555,8 +577,11 @@ fn required_launch_env<'a>(
         })
 }
 
-fn validate_required_file_env(name: &str) -> Result<PathBuf, RunError> {
-    let path = read_required_path_env(name)?;
+fn validate_required_file_env_value(
+    name: &str,
+    value: Option<String>,
+) -> Result<PathBuf, RunError> {
+    let path = read_required_path_env_value(name, value)?;
     if !path.exists() {
         return Err(RunError::Backend {
             backend: BackendKind::Vz.to_string(),
@@ -573,8 +598,8 @@ fn validate_required_file_env(name: &str) -> Result<PathBuf, RunError> {
     Ok(path)
 }
 
-fn read_required_path_env(name: &str) -> Result<PathBuf, RunError> {
-    let value = std::env::var(name).map_err(|_| RunError::Backend {
+fn read_required_path_env_value(name: &str, value: Option<String>) -> Result<PathBuf, RunError> {
+    let value = value.ok_or_else(|| RunError::Backend {
         backend: BackendKind::Vz.to_string(),
         reason: format!("VZ guest mode requires {name}"),
     })?;
@@ -740,6 +765,10 @@ fn remove_runtime_dir(runtime_dir: &std::path::Path) {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    #[cfg(unix)]
+    use std::collections::BTreeSet;
+    #[cfg(unix)]
+    use std::path::Path;
     use std::path::PathBuf;
 
     use crate::backend::{BackendKind, LaunchSpec, SandboxHandle};
@@ -747,6 +776,11 @@ mod tests {
     use crate::error::RunError;
     use crate::identity::RunIdentity;
 
+    #[cfg(unix)]
+    use super::{
+        VZ_GUEST_CONTRACT_DIR, VZ_GUEST_CONTRACT_FILE, VZ_GUEST_INITRD_ENV, VZ_GUEST_KERNEL_ENV,
+        VZ_GUEST_ROOTFS_ENV, VZ_GUEST_RUNNER_ENV, start_vz_guest_runner_with_inputs,
+    };
     use super::{
         VzGuestLaunchContract, VzGuestLaunchInputs, VzStructuralMode, build_sandbox_profile,
         vz_structural_mode_from_flags,
@@ -803,6 +837,112 @@ mod tests {
         .expect("guest contract should build from prepared launch")
     }
 
+    #[cfg(unix)]
+    fn json_keys(value: &serde_json::Value) -> BTreeSet<String> {
+        value
+            .as_object()
+            .expect("json object")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    #[cfg(unix)]
+    fn key_set(keys: &[&str]) -> BTreeSet<String> {
+        keys.iter().map(|key| (*key).to_string()).collect()
+    }
+
+    #[cfg(unix)]
+    fn assert_stable_vz_guest_contract_shape(json: &serde_json::Value) {
+        assert_eq!(
+            json_keys(json),
+            key_set(&[
+                "command",
+                "guest",
+                "invariants",
+                "mounts",
+                "network",
+                "runner",
+                "runtime_dir",
+                "sandbox_id",
+                "version",
+            ])
+        );
+        assert_eq!(json_keys(&json["runner"]), key_set(&["path"]));
+        assert_eq!(
+            json_keys(&json["guest"]),
+            key_set(&["initrd", "kernel", "rootfs"])
+        );
+        assert_eq!(
+            json_keys(&json["command"]),
+            key_set(&[
+                "args",
+                "cwd",
+                "env",
+                "executable",
+                "identity_mode",
+                "seccomp_filter_path",
+            ])
+        );
+        assert_eq!(
+            json_keys(&json["network"]),
+            key_set(&["attribution_headers", "dns_stub_addr", "proxy_url"])
+        );
+
+        let invariants = json["invariants"].as_array().expect("invariants array");
+        let invariant_names = invariants
+            .iter()
+            .map(|invariant| invariant["name"].as_str().expect("invariant name"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            invariant_names,
+            vec![
+                "sidecar_only_egress",
+                "dns_confined",
+                "fail_closed_startup",
+                "fail_closed_runtime",
+                "direct_bypass_resistant",
+                "preserve_stdio_signals_exit",
+            ]
+        );
+        for invariant in invariants {
+            assert_eq!(json_keys(invariant), key_set(&["mode", "name"]));
+        }
+    }
+
+    #[cfg(unix)]
+    fn assert_vz_guest_runner_contract_json(
+        json: &serde_json::Value,
+        identity: &RunIdentity,
+        expected_runner: &Path,
+        kernel: &Path,
+        initrd: &Path,
+        rootfs: &Path,
+    ) {
+        assert_stable_vz_guest_contract_shape(json);
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["sandbox_id"], identity.sandbox_id.to_string());
+        assert_eq!(
+            json["runner"]["path"],
+            expected_runner.display().to_string()
+        );
+        assert_eq!(json["guest"]["kernel"], kernel.display().to_string());
+        assert_eq!(json["guest"]["initrd"], initrd.display().to_string());
+        assert_eq!(json["guest"]["rootfs"], rootfs.display().to_string());
+        assert_eq!(json["command"]["executable"], "codex");
+        assert_eq!(json["command"]["args"][0], "--version");
+        assert_eq!(json["network"]["proxy_url"], "http://127.0.0.1:18080");
+        assert_eq!(json["network"]["dns_stub_addr"], "127.0.0.1:5353");
+        assert!(
+            json["command"]["env"]
+                .as_object()
+                .expect("contract env")
+                .get("FIRMA_CAPABILITY_TOKEN")
+                .is_none(),
+            "runner contract must not serialize capability tokens"
+        );
+    }
+
     fn assert_backend_error_contains(error: &RunError, expected: &str) {
         if let RunError::Backend { backend, reason } = error {
             assert_eq!(backend, "vz");
@@ -817,6 +957,70 @@ mod tests {
             matches!(error, RunError::Backend { .. }),
             "expected backend error containing {expected:?}, got {error:?}"
         );
+    }
+
+    #[cfg(unix)]
+    fn write_regular_file(path: &Path, contents: &str) -> PathBuf {
+        std::fs::write(path, contents).expect("write file");
+        path.to_path_buf()
+    }
+
+    #[cfg(unix)]
+    fn write_fake_vz_runner(
+        dir: &Path,
+        args_capture_path: &Path,
+        contract_copy_path: &Path,
+    ) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let runner_path = dir.join("fake-vz-runner.sh");
+        let script = include_str!("fixtures/fake-vz-runner.sh")
+            .replace(
+                "__FIRMA_ARGS_CAPTURE__",
+                &args_capture_path.display().to_string(),
+            )
+            .replace(
+                "__FIRMA_CONTRACT_COPY__",
+                &contract_copy_path.display().to_string(),
+            );
+
+        std::fs::write(&runner_path, script).expect("write fake runner");
+        let mut permissions = std::fs::metadata(&runner_path)
+            .expect("fake runner metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&runner_path, permissions).expect("chmod fake runner");
+
+        runner_path
+    }
+
+    #[cfg(unix)]
+    fn complete_vz_guest_input_env(root: &Path) -> BTreeMap<String, String> {
+        let args_capture_path = root.join("runner-args.txt");
+        let contract_copy_path = root.join("contract-copy.json");
+        let runner = write_fake_vz_runner(root, &args_capture_path, &contract_copy_path);
+        let kernel = write_regular_file(&root.join("vmlinuz"), "kernel");
+        let initrd = write_regular_file(&root.join("initrd.img"), "initrd");
+        let rootfs = write_regular_file(&root.join("rootfs.img"), "rootfs");
+
+        BTreeMap::from([
+            (
+                VZ_GUEST_RUNNER_ENV.to_string(),
+                runner.display().to_string(),
+            ),
+            (
+                VZ_GUEST_KERNEL_ENV.to_string(),
+                kernel.display().to_string(),
+            ),
+            (
+                VZ_GUEST_INITRD_ENV.to_string(),
+                initrd.display().to_string(),
+            ),
+            (
+                VZ_GUEST_ROOTFS_ENV.to_string(),
+                rootfs.display().to_string(),
+            ),
+        ])
     }
 
     // ── compatibility mode ────────────────────────────────────────────────────
@@ -1212,6 +1416,151 @@ mod tests {
         assert!(!written_contract.contains("secret-capability-token"));
 
         let _ = std::fs::remove_dir_all(runtime_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vz_guest_runner_receives_launch_contract_arg_and_stable_contract() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let args_capture_path = tempdir.path().join("runner-args.txt");
+        let contract_copy_path = tempdir.path().join("contract-copy.json");
+        let runner = write_fake_vz_runner(tempdir.path(), &args_capture_path, &contract_copy_path);
+        let expected_runner = runner.clone();
+        let kernel = write_regular_file(&tempdir.path().join("vmlinuz"), "kernel");
+        let initrd = write_regular_file(&tempdir.path().join("initrd.img"), "initrd");
+        let rootfs = write_regular_file(&tempdir.path().join("rootfs.img"), "rootfs");
+        let identity = RunIdentity::new("codex");
+        let handle = SandboxHandle {
+            backend: BackendKind::Vz,
+            runtime_dir: tempdir.path().join("runtime"),
+            identity: identity.clone(),
+            mounts: vec![crate::config::MountSpec {
+                source: PathBuf::from("/Users/tester/project"),
+                target: PathBuf::from("/workspace"),
+                read_only: false,
+            }],
+            network_policy: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+        };
+        let mut launch = test_launch("codex");
+        launch.executable = "codex".to_string();
+        launch.args = vec!["--version".to_string()];
+        launch.env.insert(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:18080".to_string(),
+        );
+        launch.env.insert(
+            "FIRMA_DNS_STUB_ADDR".to_string(),
+            "127.0.0.1:5353".to_string(),
+        );
+        launch.env.insert(
+            "FIRMA_CAPABILITY_TOKEN".to_string(),
+            "secret-capability-token".to_string(),
+        );
+
+        let mut child = start_vz_guest_runner_with_inputs(
+            &handle,
+            &launch,
+            VzGuestLaunchInputs {
+                runner,
+                kernel: kernel.clone(),
+                initrd: initrd.clone(),
+                rootfs: rootfs.clone(),
+            },
+        )
+        .expect("fake VZ runner should spawn");
+        let status = child.wait().expect("fake VZ runner should exit");
+        assert!(status.success(), "fake runner failed: {status:?}");
+
+        let captured_args =
+            std::fs::read_to_string(&args_capture_path).expect("fake runner should capture args");
+        let args = captured_args.lines().collect::<Vec<_>>();
+        assert_eq!(
+            args.len(),
+            2,
+            "runner must receive exactly --launch-contract and its path"
+        );
+        assert_eq!(args[0], "--launch-contract");
+        let contract_path = PathBuf::from(args[1]);
+        assert_eq!(
+            contract_path.file_name().expect("contract file name"),
+            std::ffi::OsStr::new(VZ_GUEST_CONTRACT_FILE)
+        );
+        assert_eq!(
+            contract_path
+                .parent()
+                .and_then(|path| path.file_name())
+                .expect("contract dir name"),
+            std::ffi::OsStr::new(VZ_GUEST_CONTRACT_DIR)
+        );
+        assert!(
+            contract_path.exists(),
+            "firma-run should write the source launch contract before spawning the runner"
+        );
+
+        let copied_contract =
+            std::fs::read_to_string(&contract_copy_path).expect("fake runner contract copy");
+        let json: serde_json::Value =
+            serde_json::from_str(&copied_contract).expect("contract json");
+        assert_vz_guest_runner_contract_json(
+            &json,
+            &identity,
+            &expected_runner,
+            &kernel,
+            &initrd,
+            &rootfs,
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vz_guest_inputs_fail_closed_when_required_env_is_unset() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let complete_env = complete_vz_guest_input_env(tempdir.path());
+
+        for missing_key in [
+            VZ_GUEST_RUNNER_ENV,
+            VZ_GUEST_KERNEL_ENV,
+            VZ_GUEST_INITRD_ENV,
+            VZ_GUEST_ROOTFS_ENV,
+        ] {
+            let mut values = complete_env.clone();
+            values.remove(missing_key);
+            let error = VzGuestLaunchInputs::from_env_lookup(|key| values.get(key).cloned())
+                .expect_err("missing VZ guest input must fail closed");
+            assert_backend_error_contains(&error, missing_key);
+            assert_backend_error_contains(&error, "requires");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vz_guest_inputs_fail_closed_when_required_artifacts_are_missing() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let complete_env = complete_vz_guest_input_env(tempdir.path());
+
+        for missing_key in [
+            VZ_GUEST_RUNNER_ENV,
+            VZ_GUEST_KERNEL_ENV,
+            VZ_GUEST_INITRD_ENV,
+            VZ_GUEST_ROOTFS_ENV,
+        ] {
+            let mut values = complete_env.clone();
+            values.insert(
+                missing_key.to_string(),
+                tempdir
+                    .path()
+                    .join(format!("missing-{missing_key}"))
+                    .display()
+                    .to_string(),
+            );
+            let error = VzGuestLaunchInputs::from_env_lookup(|key| values.get(key).cloned())
+                .expect_err("missing VZ guest artifact must fail closed");
+            assert_backend_error_contains(&error, missing_key);
+            assert_backend_error_contains(&error, "does not exist");
+        }
     }
 
     // ── EnforcementProof ─────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ description = "Shared types, capability tokens, Cedar wrapper, and error types f
 async-trait = { workspace = true }
 cedar-policy = { workspace = true }
 chrono = { workspace = true }
+http = { workspace = true }
 pasetors = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
@@ -19,7 +20,6 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-insta = { workspace = true }
 pretty_assertions = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 toml = { workspace = true }

@@ -19,7 +19,8 @@
 use std::time::Duration;
 
 use firma_core::{
-    AbortReason, DenyReason, ExecutionEnvelope, ExecutionMetadata, InjectedCredentials,
+    AbortReason, CapabilityClaims, DenyReason, ExecutionEnvelope, ExecutionMetadata,
+    InjectedCredentials,
 };
 
 use std::sync::Arc;
@@ -31,11 +32,20 @@ use crate::credential::{CredentialInjectionError, CredentialInjector};
 use crate::enforcement::SessionStateStore;
 pub use crate::enforcement::capability_map::CapabilityMap;
 pub use crate::enforcement::capability_validation::CapabilityValidator;
-pub use crate::enforcement::constraint_enforcement::{ConstraintEnforcer, PolicyEvaluation};
+pub use crate::enforcement::constraint_enforcement::{
+    ConstraintEnforcer, PolicyEvaluation, PolicyVerdict,
+};
 pub use crate::enforcement::decision::EnforcementDecision;
-use crate::enforcement::decision::{DenyIdentity, EnforcementStage};
+use crate::enforcement::decision::{ConstraintEnforcementStage, DenyIdentity, EnforcementStage};
 pub use crate::enforcement::registry::ActionClassRegistry;
+use crate::normalizer::NormalizedEnvelope;
 pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
+
+/// Default `retry_after_ms` surfaced to the agent for an AARM R4 `STEP_UP`
+/// decision raised by the general enforcement pipeline. Mirrors the
+/// local-exec default so the agent retry cadence is consistent across both
+/// enforcement surfaces.
+const STEP_UP_RETRY_AFTER_MS: u64 = 500;
 
 /// Construction arguments for [`EnforcementPipeline`].
 ///
@@ -153,11 +163,19 @@ impl EnforcementPipeline {
             bundle_version.as_deref(),
         );
 
-        // Monitor mode: override DENY → ALLOW (Passthrough) so the call goes
-        // through, but preserve the original deny reason in the audit record
-        // so operators can see what enforcement would have blocked.
+        // Monitor mode: override DENY / MODIFY / STEP_UP / DEFER → ALLOW
+        // (Passthrough) so the call goes through, but preserve the original
+        // deny/reason in the audit record so operators can see what
+        // enforcement would have blocked or remediated. The AARM R4
+        // remediation outcomes are observability-only in monitor mode.
         if self.mode == SidecarMode::Monitor
-            && let EnforcementDecision::Deny { .. } = &decision
+            && matches!(
+                &decision,
+                EnforcementDecision::Deny { .. }
+                    | EnforcementDecision::Modify { .. }
+                    | EnforcementDecision::StepUp { .. }
+                    | EnforcementDecision::Defer { .. }
+            )
         {
             let original_reason = std::mem::take(&mut payload.deny_reason);
             payload.decision = Decision::Allow;
@@ -175,6 +193,10 @@ impl EnforcementPipeline {
 
     /// Enforcement logic, separated so the outer [`enforce`](Self::enforce)
     /// can unconditionally audit the result.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the verdict match lifts the AARM R4 five-decision set into EnforcementDecision"
+    )]
     async fn enforce_inner(&self, request: &RawRequest, session_id: &str) -> EnforcementDecision {
         if let Err(deny) = self.check_readiness() {
             return deny;
@@ -218,19 +240,68 @@ impl EnforcementPipeline {
                 .constraint_enforcer
                 .evaluate(&normalized, &capability.claims, &signals),
         };
-        if let Err(deny) = stage2_result {
-            // Stage 2 runs after capability validation, so the verified
-            // identity is known. Attach it so the audit record is
-            // attributable and `firma monitor --agent <id>` keeps the
-            // deny (FIR-208).
-            return deny.with_identity(DenyIdentity::from_claims(&capability.claims));
-        }
+        let verdict = match stage2_result {
+            Ok(verdict) => verdict,
+            Err(deny) => {
+                // Stage 2 runs after capability validation, so the verified
+                // identity is known. Attach it so the audit record is
+                // attributable and `firma monitor --agent <id>` keeps the
+                // deny (FIR-208).
+                return deny.with_identity(DenyIdentity::from_claims(&capability.claims));
+            }
+        };
 
-        // All stages passed — assemble the fully populated envelope.
-        // Use the session_id from the verified token claims, NOT the
-        // caller-supplied header value. This prevents session spoofing
-        // where an attacker sets a victim's session_id in the header
-        // to manipulate audit logs and metadata.
+        // AARM R4 remediation outcomes that do NOT dispatch return the
+        // normalized envelope + verified claims for audit, with the
+        // verified identity attached. `PolicyVerdict::Deny` is converted to
+        // `Err` by the enforcer, so it only reaches this `Ok` path
+        // defensively; fail closed if it ever does.
+        let modifications = match verdict {
+            PolicyVerdict::StepUp { challenge } => {
+                let identity = DenyIdentity::from_claims(&capability.claims);
+                return EnforcementDecision::StepUp {
+                    claims: Some(capability.claims),
+                    envelope: Some(normalized),
+                    challenge: challenge.to_string(),
+                    retry_after_ms: STEP_UP_RETRY_AFTER_MS,
+                    identity: Some(identity),
+                };
+            }
+            PolicyVerdict::Defer { backoff } => {
+                let identity = DenyIdentity::from_claims(&capability.claims);
+                let retry_after_ms = u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX);
+                return EnforcementDecision::Defer {
+                    claims: Some(capability.claims),
+                    envelope: Some(normalized),
+                    retry_after_ms,
+                    identity: Some(identity),
+                };
+            }
+            PolicyVerdict::Deny => {
+                let identity = DenyIdentity::from_claims(&capability.claims);
+                return EnforcementDecision::Deny {
+                    reason: DenyReason::PolicyDenied,
+                    stage: EnforcementStage::ConstraintEnforcement(
+                        ConstraintEnforcementStage::PolicyEvaluation,
+                    ),
+                    detail: format!(
+                        "policy denied action '{}' on resource '{}'",
+                        normalized.intent.action_class,
+                        normalized.intent.resource_display()
+                    ),
+                    envelope: Some(normalized),
+                    identity: Some(identity),
+                };
+            }
+            PolicyVerdict::Allow => None,
+            PolicyVerdict::Modify { modifications } => Some(modifications),
+        };
+
+        // All stages passed (Allow or Modify) — assemble the fully populated
+        // envelope. Use the session_id from the verified token claims, NOT
+        // the caller-supplied header value. This prevents session spoofing
+        // where an attacker sets a victim's session_id in the header to
+        // manipulate audit logs and metadata.
         let session_id_typed = capability.claims.session_id.clone();
         let envelope = ExecutionEnvelope::new(
             normalized.intent,
@@ -277,10 +348,18 @@ impl EnforcementPipeline {
             }
         };
 
-        EnforcementDecision::Allow {
-            claims: capability.claims,
-            envelope: Box::new(envelope),
-            credentials,
+        match modifications {
+            Some(modifications) => EnforcementDecision::Modify {
+                claims: capability.claims,
+                envelope: Box::new(envelope),
+                modifications,
+                credentials,
+            },
+            None => EnforcementDecision::Allow {
+                claims: capability.claims,
+                envelope: Box::new(envelope),
+                credentials,
+            },
         }
     }
 
@@ -344,12 +423,15 @@ pub fn audit_payload_from_decision(
     let fields = audit_decision_fields(decision, request, bundle_version);
 
     let session_id_for_audit = match decision {
-        EnforcementDecision::Allow { envelope, .. } => {
+        EnforcementDecision::Allow { envelope, .. }
+        | EnforcementDecision::Modify { envelope, .. } => {
             envelope.metadata().session_id.as_ref().to_string()
         }
         EnforcementDecision::Deny { .. }
         | EnforcementDecision::Abort { .. }
-        | EnforcementDecision::Passthrough { .. } => session_id.to_string(),
+        | EnforcementDecision::Passthrough { .. }
+        | EnforcementDecision::StepUp { .. }
+        | EnforcementDecision::Defer { .. } => session_id.to_string(),
     };
 
     AuditPayload {
@@ -380,6 +462,10 @@ struct AuditDecisionFields {
     bundle_version: String,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive match over the AARM R4 five-decision EnforcementDecision"
+)]
 fn audit_decision_fields(
     decision: &EnforcementDecision,
     request: &RawRequest,
@@ -463,7 +549,121 @@ fn audit_decision_fields(
             context_hash: String::new(),
             bundle_version: String::new(),
         },
+        EnforcementDecision::Modify {
+            claims,
+            envelope,
+            modifications,
+            ..
+        } => AuditDecisionFields {
+            token_id: claims.token_id.to_string(),
+            agent_id: claims.agent_id.to_string(),
+            action: envelope.intent().action_class.clone(),
+            resource: redact_sensitive_query_params(&envelope.intent().resource_display()),
+            decision_code: Decision::Modify,
+            // Surface the applied transformation in the reason field so
+            // operators can reconcile the transformed execution against policy
+            // intent (no dedicated modification column exists yet).
+            deny_reason: sanitize_audit_reason(&modifications.to_string()),
+            context_hash: claims.context_hash.clone(),
+            bundle_version: bundle_version.unwrap_or("").to_string(),
+        },
+        EnforcementDecision::StepUp {
+            claims,
+            envelope,
+            challenge,
+            retry_after_ms,
+            identity,
+        } => {
+            let (action, resource) = remediation_action_resource(envelope.as_ref(), request);
+            let (token_id, agent_id, context_hash) =
+                identity_or_claims_fields(identity.as_ref(), claims.as_ref());
+            AuditDecisionFields {
+                token_id,
+                agent_id,
+                action,
+                resource,
+                decision_code: Decision::StepUp,
+                deny_reason: sanitize_audit_reason(&format!(
+                    "{}: {challenge}; retry_after_ms: {retry_after_ms}",
+                    DenyReason::StepUpRequired
+                )),
+                context_hash,
+                bundle_version: String::new(),
+            }
+        }
+        EnforcementDecision::Defer {
+            claims,
+            envelope,
+            retry_after_ms,
+            identity,
+        } => {
+            let (action, resource) = remediation_action_resource(envelope.as_ref(), request);
+            let (token_id, agent_id, context_hash) =
+                identity_or_claims_fields(identity.as_ref(), claims.as_ref());
+            AuditDecisionFields {
+                token_id,
+                agent_id,
+                action,
+                resource,
+                decision_code: Decision::Defer,
+                deny_reason: sanitize_audit_reason(&format!(
+                    "{}: retry_after_ms: {retry_after_ms}",
+                    DenyReason::Deferred
+                )),
+                context_hash,
+                bundle_version: String::new(),
+            }
+        }
     }
+}
+
+/// Resolve `(action, resource)` for a remediation decision (`StepUp`/`Defer`)
+/// from the carried normalized envelope, falling back to the raw request
+/// label/display when no envelope is attached (e.g. the local-exec HITL
+/// bridge path carries `None`).
+fn remediation_action_resource(
+    envelope: Option<&NormalizedEnvelope>,
+    request: &RawRequest,
+) -> (String, String) {
+    envelope.map_or_else(
+        || {
+            (
+                raw_request_action_label(request),
+                redact_sensitive_query_params(&raw_request_resource_display(request)),
+            )
+        },
+        |e| {
+            (
+                e.intent.action_class.clone(),
+                redact_sensitive_query_params(&e.intent.resource_display()),
+            )
+        },
+    )
+}
+
+/// Resolve `(token_id, agent_id, context_hash)` for a remediation decision
+/// (`StepUp`/`Defer`): prefer the verified [`DenyIdentity`], fall back to the
+/// carried [`CapabilityClaims`], and default to empty strings when neither is
+/// present (pre-validation / local-exec bridge origination).
+fn identity_or_claims_fields(
+    identity: Option<&DenyIdentity>,
+    claims: Option<&CapabilityClaims>,
+) -> (String, String, String) {
+    if let Some(id) = identity {
+        return (
+            id.token_id.clone(),
+            id.agent_id.clone(),
+            id.context_hash.clone(),
+        );
+    }
+    if let Some(claims) = claims {
+        return (
+            claims.token_id.to_string(),
+            claims.agent_id.to_string(),
+            claims.context_hash.clone(),
+        );
+    }
+    (String::new(), String::new(), String::new())
 }
 
 /// Destructures the optional [`DenyIdentity`] into the
@@ -1971,5 +2171,114 @@ mod tests {
         );
         assert_eq!(payload.decision, Decision::Deny);
         assert!(!payload.deny_reason.is_empty(), "deny_reason must be set");
+    }
+
+    // ---- AARM R4 remediation audit extraction ----
+    //
+    // These exercise `audit_payload_from_decision` directly so the audit
+    // shape of each remediation decision is pinned without coupling to a
+    // Cedar annotation fixture.
+
+    fn test_execution_envelope(claims: &CapabilityClaims) -> ExecutionEnvelope {
+        ExecutionEnvelope::new(
+            firma_core::ExecutionIntent {
+                action_class: "communication.external.send".to_string(),
+                resource: firma_core::ExecutionIntent::resource_map_from("api.openai.com"),
+                params: firma_core::ActionParams::Http(firma_core::HttpParams {
+                    method: firma_core::HttpMethod::POST,
+                    headers: HashMap::new(),
+                    body: None,
+                    query: HashMap::new(),
+                }),
+                raw_transport: "https".to_string(),
+                raw_action_ref: "POST /v1/chat/completions".to_string(),
+            },
+            "token".to_string(),
+            firma_core::ExecutionMetadata {
+                session_id: claims.session_id.clone(),
+                agent_id: claims.agent_id.clone(),
+                timestamp: chrono::Utc::now(),
+                trace_id: None,
+                budget_consumed: 0.0,
+                risk_score: None,
+            },
+            None,
+        )
+    }
+
+    #[test]
+    fn audit_modify_carries_modify_decision_and_description() {
+        let request = test_request("POST", "api.openai.com/v1/chat/completions");
+        let claims = test_claims();
+        let modify = EnforcementDecision::Modify {
+            claims: claims.clone(),
+            envelope: Box::new(test_execution_envelope(&claims)),
+            modifications: firma_core::ModificationSpec::RedactHeader(
+                http::HeaderName::from_static("authorization"),
+            ),
+            credentials: InjectedCredentials::empty(),
+        };
+        let payload =
+            audit_payload_from_decision(&modify, &request, "sess_001", Duration::ZERO, None);
+        assert_eq!(payload.decision, Decision::Modify);
+        assert_eq!(payload.deny_reason, "redacted_header:authorization");
+        assert_eq!(payload.token_id, "3713c5fc-b569-650c-c780-c64051473370");
+        assert_eq!(payload.action, "communication.external.send");
+    }
+
+    #[test]
+    fn audit_step_up_carries_step_up_decision_and_challenge_reason() {
+        let request = test_request("POST", "api.openai.com/v1/chat/completions");
+        let identity = DenyIdentity {
+            token_id: "tok".to_string(),
+            agent_id: "agent".to_string(),
+            context_hash: "ctx".to_string(),
+        };
+        let step_up = EnforcementDecision::StepUp {
+            claims: None,
+            envelope: None,
+            challenge: "require admin approval".to_string(),
+            retry_after_ms: 500,
+            identity: Some(identity),
+        };
+        let payload =
+            audit_payload_from_decision(&step_up, &request, "sess_001", Duration::ZERO, None);
+        assert_eq!(payload.decision, Decision::StepUp);
+        assert!(
+            payload.deny_reason.contains("step up required"),
+            "reason must carry typed StepUpRequired, got: {}",
+            payload.deny_reason
+        );
+        assert!(
+            payload.deny_reason.contains("require admin approval"),
+            "reason must carry the challenge, got: {}",
+            payload.deny_reason
+        );
+        assert!(payload.deny_reason.contains("retry_after_ms: 500"));
+        assert_eq!(payload.agent_id, "agent");
+        assert_eq!(payload.token_id, "tok");
+    }
+
+    #[test]
+    fn audit_defer_carries_defer_decision_and_retry_reason() {
+        let request = test_request("POST", "api.openai.com/v1/chat/completions");
+        let defer = EnforcementDecision::Defer {
+            claims: None,
+            envelope: None,
+            retry_after_ms: 1_000,
+            identity: None,
+        };
+        let payload =
+            audit_payload_from_decision(&defer, &request, "sess_001", Duration::ZERO, None);
+        assert_eq!(payload.decision, Decision::Defer);
+        assert!(
+            payload.deny_reason.contains("deferred"),
+            "reason must carry typed Deferred, got: {}",
+            payload.deny_reason
+        );
+        assert!(payload.deny_reason.contains("retry_after_ms: 1000"));
+        // No identity and no claims → empty attribution.
+        assert!(payload.agent_id.is_empty());
+        assert!(payload.token_id.is_empty());
     }
 }

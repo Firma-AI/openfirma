@@ -13,6 +13,7 @@ loom-tests = []
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
+base64 = { workspace = true }
 cedar-policy = { workspace = true }
 chrono = { workspace = true }
 ecdsa = { workspace = true }
@@ -23,6 +24,7 @@ firma-protobuf = { workspace = true }
 firma-runtime-state = { workspace = true }
 governor = { workspace = true }
 hex = { workspace = true }
+http = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
