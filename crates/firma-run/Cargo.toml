@@ -36,7 +36,7 @@ uuid.workspace = true
 wait-timeout.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-nix = { workspace = true, features = ["socket", "uio"] }
+nix = { workspace = true, features = ["process", "socket", "uio"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true }

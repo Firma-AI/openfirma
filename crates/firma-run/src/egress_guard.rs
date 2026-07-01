@@ -20,7 +20,7 @@
 //! 2. [`start`] runs the host-side supervisor (held in
 //!    [`crate::routing::NetworkRuntime`]). It receives the listener fd and
 //!    services notifications: it reads the target `sockaddr` from the agent via
-//!    `/proc/<pid>/mem`, classifies it, and answers each `connect`.
+//!    `process_vm_readv(2)`, classifies it, and answers each `connect`.
 //!
 //! ## Allow vs deny, and the TOCTOU caveat
 //!
@@ -33,7 +33,7 @@
 //! agent's own loopback, never a host service. This is defense in depth layered
 //! on the network-namespace boundary, not a standalone hard guarantee.
 //!
-//! Linux-only: seccomp and `/proc/<pid>/mem` are Linux primitives.
+//! Linux-only: seccomp and `process_vm_readv(2)` are Linux primitives.
 
 #![cfg(target_os = "linux")]
 #![expect(
@@ -105,7 +105,7 @@ const AF_INET6: u16 = 10;
 
 /// Maximum `sockaddr` length we read from the agent. `sockaddr_in6` is 28
 /// bytes; cap well above that but bounded so a bogus `addrlen` cannot make us
-/// read megabytes from `/proc/<pid>/mem`.
+/// read megabytes from the agent's address space.
 const MAX_SOCKADDR_LEN: usize = 128;
 
 // ── classification (pure, unit-tested) ──────────────────────────────────────
@@ -205,30 +205,54 @@ fn read_remote_mem(pid: u32, addr: u64, len: usize) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-// ── BPF program (safe builder) ──────────────────────────────────────────────
+// ── BPF program ─────────────────────────────────────────────────────────────
 
-fn sf(code: u16, jt: u8, jf: u8, k: u32) -> libc::sock_filter {
-    libc::sock_filter { code, jt, jf, k }
-}
-
-/// Builds the cBPF program: notify on `connect` for the native arch, allow
-/// everything else (including foreign-arch syscalls).
-fn build_connect_notify_program() -> [libc::sock_filter; 6] {
-    [
-        // 0: load arch
-        sf(BPF_LD_W_ABS, 0, 0, SECCOMP_DATA_ARCH_OFFSET),
-        // 1: if arch != native -> allow (skip 3 to idx5)
-        sf(BPF_JMP_JEQ_K, 0, 3, NATIVE_AUDIT_ARCH),
-        // 2: load syscall nr
-        sf(BPF_LD_W_ABS, 0, 0, SECCOMP_DATA_NR_OFFSET),
-        // 3: if nr != connect -> allow (skip 1 to idx5)
-        sf(BPF_JMP_JEQ_K, 0, 1, SYS_CONNECT_NR),
-        // 4: connect -> notify the supervisor
-        sf(BPF_RET_K, 0, 0, libc::SECCOMP_RET_USER_NOTIF),
-        // 5: allow
-        sf(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW),
-    ]
-}
+/// The cBPF program: notify on `connect` for the native arch, allow everything
+/// else (including foreign-arch syscalls).
+const CONNECT_NOTIFY_PROG: [libc::sock_filter; 6] = [
+    // 0: load arch
+    libc::sock_filter {
+        code: BPF_LD_W_ABS,
+        jt: 0,
+        jf: 0,
+        k: SECCOMP_DATA_ARCH_OFFSET,
+    },
+    // 1: if arch != native -> allow (skip 3 to idx5)
+    libc::sock_filter {
+        code: BPF_JMP_JEQ_K,
+        jt: 0,
+        jf: 3,
+        k: NATIVE_AUDIT_ARCH,
+    },
+    // 2: load syscall nr
+    libc::sock_filter {
+        code: BPF_LD_W_ABS,
+        jt: 0,
+        jf: 0,
+        k: SECCOMP_DATA_NR_OFFSET,
+    },
+    // 3: if nr != connect -> allow (skip 1 to idx5)
+    libc::sock_filter {
+        code: BPF_JMP_JEQ_K,
+        jt: 0,
+        jf: 1,
+        k: SYS_CONNECT_NR,
+    },
+    // 4: connect -> notify the supervisor
+    libc::sock_filter {
+        code: BPF_RET_K,
+        jt: 0,
+        jf: 0,
+        k: libc::SECCOMP_RET_USER_NOTIF,
+    },
+    // 5: allow
+    libc::sock_filter {
+        code: BPF_RET_K,
+        jt: 0,
+        jf: 0,
+        k: SECCOMP_RET_ALLOW,
+    },
+];
 
 // ── seccomp install (FFI) ───────────────────────────────────────────────────
 
@@ -236,14 +260,11 @@ fn build_connect_notify_program() -> [libc::sock_filter; 6] {
 /// notification listener fd.
 fn install_connect_notifier() -> io::Result<OwnedFd> {
     // Unprivileged seccomp requires no-new-privs.
-    // SAFETY: prctl with PR_SET_NO_NEW_PRIVS takes scalar args and has no
-    // memory effects; a non-zero return is surfaced as an io error.
-    let rc = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
-    if rc != 0 {
-        return Err(io::Error::last_os_error());
-    }
+    nix::sys::prctl::set_no_new_privs().map_err(io::Error::from)?;
 
-    let mut program = build_connect_notify_program();
+    // Local mutable copy: `sock_fprog.filter` is `*mut`, though the kernel only
+    // reads the program during `SYS_seccomp`.
+    let mut program = CONNECT_NOTIFY_PROG;
     let prog = libc::sock_fprog {
         len: u16::try_from(program.len()).unwrap_or(u16::MAX),
         filter: program.as_mut_ptr(),
@@ -816,7 +837,7 @@ mod tests {
 
     #[test]
     fn bpf_program_has_expected_shape() {
-        let prog = build_connect_notify_program();
+        let prog = CONNECT_NOTIFY_PROG;
         assert_eq!(prog.len(), 6);
         assert_eq!(prog[4].k, libc::SECCOMP_RET_USER_NOTIF);
         assert_eq!(prog[5].k, SECCOMP_RET_ALLOW);
