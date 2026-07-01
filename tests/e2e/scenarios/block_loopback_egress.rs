@@ -40,11 +40,7 @@ impl EnforcementScenario for BlockLoopbackEgress {
             anyhow::bail!("agent failed");
         }
         if !output.agent.stdout.contains("CONNECTED") {
-            anyhow::bail!(
-                "baseline: expected CONNECTED, got:\nstdout: {}\nstderr: {}",
-                output.agent.stdout.trim(),
-                output.agent.stderr.trim()
-            );
+            anyhow::bail!("expected CONNECTED");
         }
         Ok(())
     }

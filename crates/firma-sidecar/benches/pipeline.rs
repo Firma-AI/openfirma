@@ -12,6 +12,7 @@ use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenId, TokenVe
 use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile};
 use firma_sidecar::credential::NullCredentialInjector;
 use firma_sidecar::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
+use firma_sidecar::config::TenancyMode;
 use firma_sidecar::enforcement::capability_validation::CapabilityValidator;
 use firma_sidecar::enforcement::cedar_evaluator::CedarPolicyEvaluator;
 use firma_sidecar::enforcement::constraint_enforcement::ConstraintEnforcer;
@@ -89,6 +90,7 @@ fn build_pipeline() -> EnforcementPipeline {
         Box::new(MockVerifier { claims }),
         Arc::new(NoRevocations),
         Duration::from_secs(0),
+        TenancyMode::default(),
     );
     let evaluator: Arc<dyn firma_sidecar::enforcement::constraint_enforcement::PolicyEvaluation> =
         Arc::new(

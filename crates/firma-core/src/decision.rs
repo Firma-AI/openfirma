@@ -181,31 +181,8 @@ mod tests {
     #[test]
     fn test_deny_reason_display_all_variants() {
         use strum::IntoEnumIterator;
-        let reasons: Vec<_> = DenyReason::iter().map(|d| d.to_string()).collect();
-        insta::assert_debug_snapshot!(reasons, @r#"
-        [
-            "token invalid",
-            "token expired",
-            "token revoked",
-            "policy denied",
-            "scope violation",
-            "tool not in scope",
-            "malformed request",
-            "authority unavailable",
-            "policy bundle stale",
-            "policy bundle not ready",
-            "revocation cache not ready",
-            "fail closed",
-            "enforcement timeout",
-            "credential injection failed",
-            "connector timeout",
-            "connector network error",
-            "connector invalid request",
-            "unclassified intent",
-            "tenant mismatch",
-            "loopback blocked",
-        ]
-        "#);
+        let reasons: Vec<_> = DenyReason::iter().map(|d| (d, d.to_string())).collect();
+        insta::assert_compact_debug_snapshot!(reasons, @r#"[(TokenInvalid, "token invalid"), (TokenExpired, "token expired"), (TokenRevoked, "token revoked"), (PolicyDenied, "policy denied"), (ScopeViolation, "scope violation"), (ToolNotInScope, "tool not in scope"), (MalformedRequest, "malformed request"), (AuthorityUnavailable, "authority unavailable"), (PolicyBundleStale, "policy bundle stale"), (PolicyBundleNotReady, "policy bundle not ready"), (RevocationCacheNotReady, "revocation cache not ready"), (FailClosed, "fail closed"), (EnforcementTimeout, "enforcement timeout"), (CredentialInjectionFailed, "credential injection failed"), (ConnectorTimeout, "connector timeout"), (ConnectorNetworkError, "connector network error"), (ConnectorInvalidRequest, "connector invalid request"), (UnclassifiedIntent, "unclassified intent"), (TenantMismatch, "tenant mismatch"), (LoopbackBlocked, "loopback blocked")]"#);
     }
 
     #[test]
