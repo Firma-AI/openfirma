@@ -9,6 +9,14 @@
 //!
 //! The whole point: exercise the full `firma run` startup — authority + sidecar
 //! + sandbox — not just a subcommand's `--help`.
+//!
+//! Linux-only: `firma run` confines structurally via bubblewrap. When the
+//! sandbox itself is unavailable (bwrap not installed, or the host cannot
+//! create unprivileged user namespaces — common on CI runners, WSL, hardened
+//! kernels), the test skips rather than fails: a missing sandbox is an
+//! environment limitation, not the regression under test. The always-running
+//! `regenerates_missing_key_file` unit test in `firma-run` guards the fix
+//! itself on every platform without needing a sandbox.
 
 #![allow(
     clippy::unwrap_used,
@@ -17,20 +25,22 @@
     reason = "test code: panics are acceptable test failures"
 )]
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use std::process::Command;
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn firma_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_firma"))
 }
 
-/// Substrings that mean the host cannot create the unprivileged user namespace
-/// `firma run` needs (restricted CI, WSL, hardened kernels). When the sandbox
-/// itself is unavailable the test skips instead of failing — a missing sandbox
-/// is an environment limitation, not the regression under test.
-#[cfg(unix)]
+/// Substrings that mean the host cannot provide the bubblewrap sandbox
+/// `firma run` needs. All of these are emitted *before* the authority key is
+/// read, so none can mask the regression under test (a missing key surfaces as
+/// "authority autostart failed" / "failed to read key file").
+#[cfg(target_os = "linux")]
 const SANDBOX_UNAVAILABLE_MARKERS: &[&str] = &[
+    "bubblewrap is not installed",
+    "backend error (bwrap)",
     "user namespace creation is restricted",
     "unprivileged user namespaces",
     "max_user_namespaces",
@@ -38,7 +48,7 @@ const SANDBOX_UNAVAILABLE_MARKERS: &[&str] = &[
     "WSL",
 ];
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn run_executes_echo_after_authority_key_was_wiped() {
     let tmp = tempfile::tempdir().expect("tempdir");
