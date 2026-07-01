@@ -92,10 +92,10 @@ pub enum Command {
     /// Internal sandbox-local DNS stub.
     #[command(name = "__dns-stub", hide = true)]
     DnsStub(run::DnsStubArgs),
-    /// Internal in-sandbox seccomp loopback-egress guard installer.
+    /// Internal in-sandbox seccomp loopback-egress guard installer + agent runner.
     #[cfg(target_os = "linux")]
-    #[command(name = "__egress-guard-install", hide = true)]
-    EgressGuardInstall(run::EgressGuardInstallArgs),
+    #[command(name = "__egress-guarded-run", hide = true)]
+    EgressGuardedRun(run::EgressGuardedRunArgs),
     /// Diagnose a Firma install. Run this first when `firma run` misbehaves.
     Doctor(doctor::Args),
     /// Tail audit decisions and component logs. Use `--source` to switch log streams.

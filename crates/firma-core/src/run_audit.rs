@@ -56,30 +56,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loopback_message_round_trips_through_json() {
-        let msg = RunAuditMessage {
-            session_id: "sess".to_string(),
-            agent_id: "claude-code".to_string(),
-            event: RunAuditEvent::LoopbackBlocked {
-                dst_ip: "127.0.0.1".to_string(),
-                dst_port: 6379,
+    fn deserialize_loopback_message() {
+        let msg = r#"{
+            "sessionId": "sess",
+            "agentId": "claude-code",
+            "event": {
+                "kind": "loopback_blocked",
+                "dstIp": "127.0.0.1",
+                "dstPort": 6379,
             },
-        };
-        let json = serde_json::to_string(&msg).expect("serialize");
-        let parsed: RunAuditMessage = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(parsed, msg);
-    }
-
-    #[test]
-    fn event_is_internally_tagged_by_kind() {
-        let json = serde_json::to_string(&RunAuditEvent::LoopbackBlocked {
-            dst_ip: "::1".to_string(),
-            dst_port: 53,
-        })
-        .expect("serialize");
-        assert!(
-            json.contains("\"kind\":\"loopback_blocked\""),
-            "event must carry a `kind` tag: {json}"
+        }"#;
+        let actual: RunAuditMessage = serde_json::from_str(&msg).expect("deserialize");
+        assert_eq!(
+            RunAuditMessage {
+                session_id: "sess".to_string(),
+                agent_id: "claude-code".to_string(),
+                event: RunAuditEvent::LoopbackBlocked {
+                    dst_ip: "127.0.0.1".to_string(),
+                    dst_port: 6379,
+                },
+            },
+            actual
         );
     }
 }

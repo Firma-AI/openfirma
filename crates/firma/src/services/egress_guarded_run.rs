@@ -1,4 +1,4 @@
-//! Runner for `firma __egress-guard-install`.
+//! Runner for `firma __egress-guarded-run`.
 //!
 //! Runs inside the sandbox as the agent's launcher: installs the seccomp
 //! loopback filter, hands the notification listener fd to the host supervisor,
@@ -7,7 +7,7 @@
 
 use std::process::ExitCode;
 
-use crate::args::run::EgressGuardInstallArgs;
+use crate::args::run::EgressGuardedRunArgs;
 
 /// Install the loopback egress guard and exec the wrapped command.
 ///
@@ -16,8 +16,8 @@ use crate::args::run::EgressGuardInstallArgs;
 /// Returns an error when the guard cannot be installed, the listener fd cannot
 /// be handed to the supervisor, or `exec` fails. On success this never returns
 /// (the process image is replaced by the wrapped command).
-pub fn run(args: EgressGuardInstallArgs) -> anyhow::Result<ExitCode> {
-    let EgressGuardInstallArgs {
+pub fn run(args: EgressGuardedRunArgs) -> anyhow::Result<ExitCode> {
+    let EgressGuardedRunArgs {
         supervisor_socket,
         command,
     } = args;

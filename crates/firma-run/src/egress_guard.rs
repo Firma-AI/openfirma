@@ -13,7 +13,7 @@
 //! listener fd back to the parent, so:
 //!
 //! 1. [`install_and_exec`] runs as a thin wrapper inside the sandbox (invoked by
-//!    the entrypoint as `firma __egress-guard-install -- <agent> <args...>`). It
+//!    the entrypoint as `firma __egress-guarded-run -- <agent> <args...>`). It
 //!    installs a filter that returns `SECCOMP_RET_USER_NOTIF` for `connect`,
 //!    sends the resulting listener fd to the host supervisor over a Unix socket
 //!    (`SCM_RIGHTS`), then `execve`s the agent. The filter survives the exec.
@@ -41,7 +41,7 @@
     reason = "seccomp user-notify install and the NOTIF_RECV/SEND/ID_VALID ioctls have no safe wrapper in nix or libc; each unsafe call is a thin, checked FFI shim"
 )]
 
-use std::io::{self, IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write};
+use std::io::{self, IoSlice, IoSliceMut, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -55,6 +55,7 @@ use std::time::Duration;
 
 use firma_core::{RunAuditEvent, RunAuditMessage};
 use nix::sys::socket::{ControlMessage, ControlMessageOwned, MsgFlags, recvmsg, sendmsg};
+use nix::unistd::Pid;
 
 use crate::error::RunError;
 
@@ -181,21 +182,26 @@ pub(crate) fn parse_sockaddr(bytes: &[u8]) -> Option<SocketAddr> {
     }
 }
 
-// ── /proc/<pid>/mem reader (safe std I/O) ───────────────────────────────────
+// ── remote memory reader (process_vm_readv) ─────────────────────────────────
 
 /// Reads `len` bytes at virtual address `addr` from process `pid` via
-/// `/proc/<pid>/mem`. Used to recover the `sockaddr` a `connect(2)` points at.
+/// `process_vm_readv(2)`. Used to recover the `sockaddr` a `connect(2)` points
+/// at.
 ///
-/// This is plain file I/O — no `process_vm_readv` FFI required. It can fail
+/// `len` is capped at [`MAX_SOCKADDR_LEN`] *before* allocation so an
+/// agent-controlled `addrlen` cannot force a large allocation. It can fail
 /// (process gone, permission denied under an aggressive ptrace scope); callers
 /// treat a read failure as "allow" so the guard never wedges the agent on an
 /// unreadable address.
-fn read_proc_mem(pid: u32, addr: u64, len: usize) -> io::Result<Vec<u8>> {
+fn read_remote_mem(pid: u32, addr: u64, len: usize) -> io::Result<Vec<u8>> {
     let len = len.min(MAX_SOCKADDR_LEN);
-    let mut file = std::fs::File::open(format!("/proc/{pid}/mem"))?;
-    file.seek(SeekFrom::Start(addr))?;
     let mut buf = vec![0_u8; len];
-    file.read_exact(&mut buf)?;
+    let pid = i32::try_from(pid).map_err(|_| io::Error::other("pid out of range"))?;
+    let base = usize::try_from(addr).map_err(|_| io::Error::other("address out of range"))?;
+    let mut local_iov = [IoSliceMut::new(&mut buf)];
+    let remote_iov = [nix::sys::uio::RemoteIoVec { base, len }];
+    nix::sys::uio::process_vm_readv(Pid::from_raw(pid), &mut local_iov, &remote_iov)
+        .map_err(io::Error::from)?;
     Ok(buf)
 }
 
@@ -331,7 +337,7 @@ fn notif_id_is_valid(fd: RawFd, id: u64) -> bool {
 ///
 /// Returns a [`RunError`] when the supervisor socket cannot be reached, the
 /// filter cannot be installed, the fd cannot be sent, or `exec` fails. The
-/// caller (the `__egress-guard-install` subcommand) maps the error to a
+/// caller (the `__egress-guarded-run` subcommand) maps the error to a
 /// fail-closed non-zero exit.
 pub fn install_and_exec(
     socket_path: &Path,
@@ -668,7 +674,7 @@ fn classify_notification(req: &libc::seccomp_notif, allow_ports: &[u16]) -> Noti
     if addr_ptr == 0 || addr_len < 2 {
         return NotifOutcome::Allow;
     }
-    let Ok(bytes) = read_proc_mem(req.pid, addr_ptr, addr_len) else {
+    let Ok(bytes) = read_remote_mem(req.pid, addr_ptr, addr_len) else {
         return NotifOutcome::Allow;
     };
     let Some(addr) = parse_sockaddr(&bytes) else {
