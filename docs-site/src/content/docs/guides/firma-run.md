@@ -82,7 +82,7 @@ FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1 firma run --profile generic -- curl https://ex
 
 # Stronger target: launch through an operator-provided Virtualization.framework runner.
 FIRMA_RUN_VZ_GUEST=1 \
-FIRMA_RUN_VZ_GUEST_RUNNER=/Applications/Firma/vz-runner \
+FIRMA_RUN_VZ_GUEST_RUNNER=/Applications/Firma/firma-vz-runner \
 FIRMA_RUN_VZ_GUEST_KERNEL=/var/lib/firma/vz/vmlinuz \
 FIRMA_RUN_VZ_GUEST_INITRD=/var/lib/firma/vz/initrd.img \
 FIRMA_RUN_VZ_GUEST_ROOTFS=/var/lib/firma/vz/rootfs.img \

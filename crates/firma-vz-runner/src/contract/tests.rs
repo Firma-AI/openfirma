@@ -1,0 +1,410 @@
+use std::path::Path;
+
+use anyhow::Result;
+use serde_json::{Value, json};
+
+use super::{
+    Contract, ContractDocument, ContractValidationError, ContractValidationLimits, InvariantName,
+};
+
+const ROOT_PLACEHOLDER: &str = "${ROOT}";
+const VALID_CONTRACT_JSON: &str = include_str!("fixtures/valid-contract.json");
+
+#[test]
+fn validates_contract_v1() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let json = valid_contract_json(temp.path())?;
+    let contract = parse_contract(&json)?;
+
+    assert_eq!(contract.version(), 1);
+    assert_eq!(contract.sandbox_id(), "sandbox-test");
+
+    Ok(())
+}
+
+#[test]
+fn rejects_unknown_contract_fields_during_parse() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json.as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("contract json must be object"))?
+        .insert("new_field".to_string(), json!(true));
+
+    let error = parse_contract_document(&json);
+
+    assert!(error.is_err());
+    Ok(())
+}
+
+#[test]
+fn rejects_malformed_contract_json_fixture() {
+    let error = ContractDocument::parse_from_slice(
+        Path::new("malformed-contract.json"),
+        br#"{"version": 1,"#,
+    );
+
+    assert!(error.is_err());
+}
+
+#[test]
+fn rejects_missing_required_contract_fields() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["guest"]
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("guest must be object"))?
+        .remove("rootfs");
+
+    let error = parse_contract_document(&json);
+
+    assert!(error.is_err());
+    Ok(())
+}
+
+#[test]
+fn rejects_unknown_nested_contract_fields() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["guest"]["unexpected"] = json!(true);
+
+    let error = parse_contract_document(&json);
+
+    assert!(error.is_err());
+    Ok(())
+}
+
+#[test]
+fn rejects_unsupported_network_mode_field() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["network"]["mode"] = json!("nat");
+
+    let error = parse_contract_document(&json);
+
+    assert!(error.is_err());
+    Ok(())
+}
+
+#[test]
+fn rejects_relative_contract_paths() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json_without_artifacts(temp.path())?;
+    json["runtime_dir"] = json!("runtime");
+    let document = parse_contract_document(&json)?;
+
+    let error = document.validate_with_file_checker(|_| true);
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::RelativePath { field: "runtime_dir", path })
+            if path.as_path() == Path::new("runtime")
+    ));
+    Ok(())
+}
+
+#[test]
+fn rejects_relative_guest_mount_targets() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json_without_artifacts(temp.path())?;
+    json["mounts"][0]["target"] = json!("workspace");
+    let document = parse_contract_document(&json)?;
+
+    let error = document.validate_with_file_checker(|_| true);
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::RelativePath { field: "mount.target", path })
+            if path.as_path() == Path::new("workspace")
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn rejects_missing_guest_artifact_files() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let json = valid_contract_json_without_artifacts(temp.path())?;
+    let document = parse_contract_document(&json)?;
+
+    let error = document.validate();
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::MissingFile {
+            field: "guest.kernel",
+            path,
+        }) if path == temp.path().join("vmlinuz")
+    ));
+    Ok(())
+}
+
+#[test]
+fn rejects_capability_token_in_env() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["command"]["env"]["FIRMA_CAPABILITY_TOKEN"] = json!("secret");
+    let document = parse_contract_document(&json)?;
+
+    let error = document.validate();
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::SecretEnvSerialized {
+            key: "FIRMA_CAPABILITY_TOKEN"
+        })
+    ));
+    Ok(())
+}
+
+#[test]
+fn rejects_missing_required_invariant() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    let invariants = json["invariants"]
+        .as_array_mut()
+        .ok_or_else(|| anyhow::anyhow!("invariants must be array"))?;
+    invariants.retain(|invariant| invariant["name"] != "dns_confined");
+    let document = parse_contract_document(&json)?;
+
+    let error = document.validate();
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::MissingInvariant {
+            name: InvariantName::DnsConfined
+        })
+    ));
+    Ok(())
+}
+
+#[test]
+fn rejects_non_http_proxy() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["network"]["proxy_url"] = json!("socks5://127.0.0.1:8080");
+    let document = parse_contract_document(&json)?;
+
+    let error = document.validate();
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::NonHttpProxyUrl { value })
+            if value == "socks5://127.0.0.1:8080"
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn validates_contract_with_mocked_file_checks() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let json = valid_contract_json_without_artifacts(temp.path())?;
+    let document = parse_contract_document(&json)?;
+    let mut checked_paths = Vec::new();
+
+    document.validate_with_file_checker(|path| {
+        checked_paths.push(path.to_path_buf());
+        true
+    })?;
+
+    assert_eq!(
+        checked_paths,
+        vec![
+            temp.path().join("vmlinuz"),
+            temp.path().join("initrd.img"),
+            temp.path().join("rootfs.img"),
+            temp.path().join("seccomp.bpf"),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn rejects_contracts_exceeding_mount_limit() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let json = valid_contract_json_without_artifacts(temp.path())?;
+    let document = parse_contract_document(&json)?;
+    let limits = ContractValidationLimits {
+        mounts: 0,
+        ..ContractValidationLimits::default()
+    };
+
+    let error = document.validate_with_limits_and_file_checker(limits, |_| true);
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::TooManyItems {
+            field: "mounts",
+            actual: 1,
+            max: 0,
+        })
+    ));
+    Ok(())
+}
+
+#[test]
+fn rejects_contracts_exceeding_env_value_limit() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json_without_artifacts(temp.path())?;
+    json["command"]["env"]["BIG_VALUE"] = json!("abcd");
+    let document = parse_contract_document(&json)?;
+    let limits = ContractValidationLimits {
+        env_value_len: 3,
+        ..ContractValidationLimits::default()
+    };
+
+    let error = document.validate_with_limits_and_file_checker(limits, |_| true);
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::FieldTooLong {
+            field: "command.env value",
+            actual: 4,
+            max: 3,
+        })
+    ));
+    Ok(())
+}
+
+#[test]
+fn rejects_contracts_exceeding_path_length_limit() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let json = valid_contract_json_without_artifacts(temp.path())?;
+    let document = parse_contract_document(&json)?;
+    let limits = ContractValidationLimits {
+        path_len: 1,
+        ..ContractValidationLimits::default()
+    };
+
+    let error = document.validate_with_limits_and_file_checker(limits, |_| true);
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::FieldTooLong {
+            field: "runtime_dir",
+            actual,
+            max: 1,
+        }) if actual > 1
+    ));
+    Ok(())
+}
+
+#[test]
+fn mocked_file_checks_still_fail_closed_for_missing_artifacts() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rootfs = temp.path().join("rootfs.img");
+    let json = valid_contract_json_without_artifacts(temp.path())?;
+    let document = parse_contract_document(&json)?;
+
+    let error = document.validate_with_file_checker(|path| path != rootfs.as_path());
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::MissingFile {
+            field: "guest.rootfs",
+            path,
+        }) if path == rootfs
+    ));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_group_or_world_readable_contract_file() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir()?;
+    let path = temp.path().join("vz-guest-launch.json");
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&valid_contract_json(temp.path())?)?,
+    )?;
+    let mut permissions = std::fs::metadata(&path)?.permissions();
+    permissions.set_mode(0o644);
+    std::fs::set_permissions(&path, permissions)?;
+
+    let error = ContractDocument::read_from_path(&path);
+
+    assert!(error.as_ref().is_err_and(|err| {
+        err.to_string()
+            .contains("must not be readable or writable by group/other")
+    }));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn contract_file_mode_rule_is_testable_without_filesystem_metadata() -> Result<()> {
+    let path = Path::new("/tmp/vz-guest-launch.json");
+
+    super::validate_contract_file_mode(path, 0o600)?;
+    super::validate_contract_file_mode(path, 0o400)?;
+    let error = super::validate_contract_file_mode(path, 0o640);
+
+    assert!(error.as_ref().is_err_and(|err| {
+        err.to_string()
+            .contains("must not be readable or writable by group/other")
+    }));
+    Ok(())
+}
+
+/// Parses and validates a JSON value as a prepared contract.
+fn parse_contract(json: &Value) -> Result<Contract> {
+    Ok(parse_contract_document(json)?.validate()?)
+}
+
+/// Parses a JSON value as a raw contract document.
+fn parse_contract_document(json: &Value) -> Result<ContractDocument> {
+    ContractDocument::parse_from_slice(Path::new("test-contract.json"), &serde_json::to_vec(&json)?)
+}
+
+/// Builds a valid contract fixture with artifact files present.
+fn valid_contract_json(root: &Path) -> Result<Value> {
+    touch(root.join("firma-vz-runner"))?;
+    touch(root.join("vmlinuz"))?;
+    touch(root.join("initrd.img"))?;
+    touch(root.join("rootfs.img"))?;
+    touch(root.join("seccomp.bpf"))?;
+    std::fs::create_dir(root.join("runtime"))?;
+
+    valid_contract_json_without_artifacts(root)
+}
+
+/// Builds a valid contract fixture without creating artifact files.
+fn valid_contract_json_without_artifacts(root: &Path) -> Result<Value> {
+    let mut json = serde_json::from_str(VALID_CONTRACT_JSON)?;
+    let root = root
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("test root path must be UTF-8"))?;
+
+    replace_root_placeholder(&mut json, root);
+    Ok(json)
+}
+
+/// Replaces fixture root placeholders throughout a JSON tree.
+fn replace_root_placeholder(value: &mut Value, root: &str) {
+    match value {
+        Value::String(text) => {
+            if text.contains(ROOT_PLACEHOLDER) {
+                *text = text.replace(ROOT_PLACEHOLDER, root);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                replace_root_placeholder(value, root);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                replace_root_placeholder(value, root);
+            }
+        }
+        Value::Bool(_) | Value::Null | Value::Number(_) => {}
+    }
+}
+
+/// Creates an empty file fixture and returns its path.
+fn touch(path: std::path::PathBuf) -> Result<std::path::PathBuf> {
+    std::fs::write(&path, [])?;
+    Ok(path)
+}

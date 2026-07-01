@@ -145,11 +145,11 @@ Recommendation from scoring: pursue Option A as the primary path, keep ESF as an
 | ---- | ------ | ----- |
 | Proof metadata | Implemented | `NetworkConfinement` added to `EnforcementProof`; all backends updated. |
 | Intermediate macOS structural mode | Experimental | `sandbox-exec` network-deny mode via `FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1`. It blocks external IP egress but still allows host loopback. |
-| VZ guest runner contract | Experimental | `FIRMA_RUN_VZ_GUEST=1` validates runner/kernel/initrd/rootfs paths, checks runner executability, emits `macos_vz_guest` proof metadata, writes `vz-guest-launch.json`, and spawns the configured runner. |
+| VZ guest runner contract | Experimental | `FIRMA_RUN_VZ_GUEST=1` validates runner/kernel/initrd/rootfs paths, checks runner executability, emits `macos_vz_guest` proof metadata, writes `vz-guest-launch.json` in a private contract directory with capability tokens excluded from the serialized env and spawns the configured runner. |
 | Host DNS refusal stub | Implemented | `HostDnsStubHandle` wired into macOS structural routing paths and exposed to the VZ guest contract. |
 | Unit coverage | Implemented | Focused tests cover proof types, sandbox profile generation, guest contract generation, DNS stub behavior, and routing setup. |
 | macOS E2E schema | Written | `examples/firma-run/e2e/macos-structural-assertions.md` defines the hardware validation suite. |
-| VZ guest runner implementation | Planned | Signed Apple Virtualization.framework runner, guest image lifecycle, and in-guest route proof remain the strategic parity work. |
+| VZ guest runner implementation | Started | `firma-vz-runner` now accepts `--launch-contract`, validates the v1 contract fail-closed, and confirms the selected Rust Virtualization.framework binding exposes `VZLinuxBootLoader`. VM lifecycle, guest networking, and route proof remain unimplemented; normal execution still fails closed. |
 | ESF hardening | Planned | Separate enterprise hardening and audit path. |
 
 ## Recommended Milestones
@@ -214,8 +214,8 @@ Recommendation from scoring: pursue Option A as the primary path, keep ESF as an
 | -------------- | --------- | ------ | ----- |
 | Structural proof metadata | Baseline proof | Done | `NetworkConfinement` on `EnforcementProof`; preflight logging. |
 | Intermediate macOS network-deny mode | Intermediate structural mode | Done | `sandbox-exec` network-deny structural mode + DNS stub + routing wiring. |
-| VZ guest runner contract | VZ contract | Done | Fail-closed artifact validation, `macos_vz_guest` proof, launch-contract JSON, runner spawn path. |
-| VZ runner implementation | VZ runner | Planned | Apple Virtualization.framework guest lifecycle with stdio, TTY, signals, terminal resize, and exit code preservation. |
+| VZ guest runner contract | VZ contract | Done | Fail-closed artifact validation, private launch-contract JSON, `macos_vz_guest` proof, runner spawn path. |
+| VZ runner implementation | VZ runner | Started | Apple Virtualization.framework guest lifecycle with stdio, TTY, signals, terminal resize, and exit code preservation. |
 | Guest image and route proof | VZ runner | Planned | Guest image lifecycle, bridge-only route setup, DNS stub wiring, and machine-readable proof fields. |
 | macOS structural E2E suite | Evidence | Planned | Hardware tests for cooperative HTTP, policy deny, direct TCP/UDP, direct DNS, proxy-env-unset children, sidecar startup failure, and mid-session sidecar loss. |
 | macOS performance and UX pass | Productionization | Planned | Cold-start budget, image caching, TTY behavior, signal forwarding, exit status, and diagnostics. |
