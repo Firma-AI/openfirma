@@ -49,6 +49,7 @@ use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -68,9 +69,25 @@ const SECCOMP_DATA_ARCH_OFFSET: u32 = 4;
 
 const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
 
+/// `SECCOMP_USER_NOTIF_FLAG_CONTINUE` narrowed to the `seccomp_notif_resp.flags`
+/// field width. Statically checked against libc so the cast can never silently
+/// truncate into a wrong (fake-success) response.
+const USER_NOTIF_FLAG_CONTINUE: u32 = 1;
+const _: () =
+    assert!(libc::SECCOMP_USER_NOTIF_FLAG_CONTINUE == USER_NOTIF_FLAG_CONTINUE as libc::c_ulong);
+
+/// Bound on the audit hand-off queue. A block is always enforced; when the
+/// queue is full (a slow/stuck Sidecar consumer) the audit report is dropped
+/// rather than allowed to stall enforcement.
+const AUDIT_QUEUE_DEPTH: usize = 128;
+
 // AUDIT_ARCH_* and the `connect` syscall number for the targets OpenFirma
-// supports. Other Linux arches fail naturally: the filter allows them through
-// (it matches on the native arch only), so the guard simply does not engage.
+// supports. The filter matches the native arch only; a `connect(2)` issued via
+// a foreign ABI (e.g. i386/x32 compat on x86_64) is NOT trapped and reaches
+// loopback. This is an accepted V1 bypass: the private network namespace is the
+// real boundary and this guard is defense in depth on top of it. Closing it
+// would need per-arch `sockaddr` parsing (i386 routes connect through
+// `socketcall`) and risks breaking legitimate compat syscalls — out of scope.
 #[cfg(target_arch = "x86_64")]
 const NATIVE_AUDIT_ARCH: u32 = 0xC000_003E;
 #[cfg(target_arch = "x86_64")]
@@ -507,7 +524,44 @@ fn supervise(listener: &UnixListener, config: &SupervisorConfig, stop: &AtomicBo
         }
     };
     drop(stream);
-    notify_loop(listener_fd.as_raw_fd(), config, stop);
+
+    // Audit delivery runs on its own thread so a slow or stuck Sidecar consumer
+    // can never block the notify loop (which would hang the agent's next
+    // connect, allowed connects included). Enforcement stays synchronous.
+    let audit = config.report.clone().and_then(spawn_audit_worker);
+    notify_loop(
+        listener_fd.as_raw_fd(),
+        config,
+        stop,
+        audit.as_ref().map(|(tx, _)| tx),
+    );
+    if let Some((tx, handle)) = audit {
+        drop(tx); // close the channel so the worker observes disconnect and exits
+        let _ = handle.join();
+    }
+}
+
+/// Spawns the detached audit-delivery worker. Returns a bounded sender the
+/// notify loop uses with `try_send` (non-blocking) and the worker's join handle.
+/// On spawn failure the guard still enforces blocks, just without audit.
+fn spawn_audit_worker(channel: AuditChannel) -> Option<(SyncSender<SocketAddr>, JoinHandle<()>)> {
+    let (tx, rx) = sync_channel::<SocketAddr>(AUDIT_QUEUE_DEPTH);
+    match std::thread::Builder::new()
+        .name("firma-egress-audit".to_string())
+        .spawn(move || {
+            while let Ok(addr) = rx.recv() {
+                report_event(&channel, addr);
+            }
+        }) {
+        Ok(handle) => Some((tx, handle)),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "egress guard: failed to spawn audit worker; blocks enforced without audit"
+            );
+            None
+        }
+    }
 }
 
 /// Polls the (non-blocking) control listener for the single installer
@@ -530,14 +584,20 @@ fn accept_installer(listener: &UnixListener, stop: &AtomicBool) -> Option<UnixSt
 
 /// Services `connect` notifications until `stop` is set or the listener fd
 /// closes (agent exited).
-fn notify_loop(notify_fd: RawFd, config: &SupervisorConfig, stop: &AtomicBool) {
+fn notify_loop(
+    notify_fd: RawFd,
+    config: &SupervisorConfig,
+    stop: &AtomicBool,
+    audit: Option<&SyncSender<SocketAddr>>,
+) {
+    // Reused across iterations; `notif_recv` re-zeroes it before every recv.
+    let mut req: libc::seccomp_notif = unsafe { std::mem::zeroed() };
     while !stop.load(Ordering::SeqCst) {
         if !wait_readable(notify_fd, Duration::from_millis(200)) {
             continue;
         }
-        let mut req: libc::seccomp_notif = unsafe { std::mem::zeroed() };
         match notif_recv(notify_fd, &mut req) {
-            Ok(()) => handle_notification(notify_fd, &req, config),
+            Ok(()) => handle_notification(notify_fd, &req, config, audit),
             Err(error) => {
                 // ENOENT: target died before we read it — just continue.
                 // EINTR: retry. Anything else: the listener is likely gone.
@@ -551,7 +611,12 @@ fn notify_loop(notify_fd: RawFd, config: &SupervisorConfig, stop: &AtomicBool) {
 }
 
 /// Classifies one notification and answers it (allow-continue or block-EACCES).
-fn handle_notification(notify_fd: RawFd, req: &libc::seccomp_notif, config: &SupervisorConfig) {
+fn handle_notification(
+    notify_fd: RawFd,
+    req: &libc::seccomp_notif,
+    config: &SupervisorConfig,
+    audit: Option<&SyncSender<SocketAddr>>,
+) {
     let verdict = classify_notification(req, &config.allow_ports);
     match verdict {
         NotifOutcome::Allow => {
@@ -559,7 +624,7 @@ fn handle_notification(notify_fd: RawFd, req: &libc::seccomp_notif, config: &Sup
                 id: req.id,
                 val: 0,
                 error: 0,
-                flags: u32::try_from(libc::SECCOMP_USER_NOTIF_FLAG_CONTINUE).unwrap_or(0),
+                flags: USER_NOTIF_FLAG_CONTINUE,
             };
             let _ = notif_send(notify_fd, &resp);
         }
@@ -577,8 +642,10 @@ fn handle_notification(notify_fd: RawFd, req: &libc::seccomp_notif, config: &Sup
             };
             let _ = notif_send(notify_fd, &resp);
             tracing::warn!(dst = %addr, "blocked agent connection to loopback");
-            if let Some(channel) = &config.report {
-                report_event(channel, addr);
+            // Non-blocking hand-off: drop the report rather than stall the loop
+            // if the audit worker's queue is full.
+            if let Some(tx) = audit {
+                let _ = tx.try_send(addr);
             }
         }
     }
@@ -645,6 +712,9 @@ fn report_event(channel: &AuditChannel, addr: SocketAddr) {
 
     match UnixStream::connect(&channel.socket_path) {
         Ok(mut stream) => {
+            // Bound the write so a stuck consumer cannot wedge the audit worker
+            // indefinitely. Enforcement is already off this thread.
+            let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
             if let Err(error) = stream.write_all(line.as_bytes()) {
                 tracing::debug!(%error, "egress guard: failed to write audit message");
             }
