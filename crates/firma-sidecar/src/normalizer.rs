@@ -222,6 +222,16 @@ impl IntentNormalizer {
             .map_or((request.path.as_str(), ""), |(p, q)| (p, q));
 
         let normalized_path = normalize_path(path_without_query);
+        // Defense-in-depth host canonicalization: the interceptors are
+        // inconsistent about lowercasing the `Host` header, and the mapping
+        // table compares hosts case-sensitively. Without this, an attacker
+        // can evade every host-scoped rule (and thus enforcement) by sending
+        // `Host: API.GITHUB.COM` or `Host: api.openai.com.`. Normalizing here
+        // — the single chokepoint all three interceptor modes feed — closes
+        // the bypass for mapping, Cedar resource UID, scope check, and the
+        // outbound connector URL. `raw_action_ref` below still carries the
+        // original host for audit observability.
+        let normalized_host = normalize_host(&request.host);
 
         let (sanitized_path, query_params) = if query_string.is_empty() {
             (normalized_path.clone(), HashMap::new())
@@ -234,16 +244,16 @@ impl IntentNormalizer {
 
         let match_result =
             self.mapping_table
-                .find_match(&request.method, &request.host, &normalized_path);
+                .find_match(&request.method, &normalized_host, &normalized_path);
 
         match match_result {
             MatchResult::Matched(rule) => {
                 let raw_action_ref = format!("{} {}", request.method.to_uppercase(), request.path);
                 let raw_transport = if request.is_https { "https" } else { "http" };
                 let mut resource = BTreeMap::new();
-                resource.insert("host".to_string(), request.host.clone());
+                resource.insert("host".to_string(), normalized_host.clone());
                 resource.insert("path".to_string(), sanitized_path);
-                if let Some(provider) = provider_for_host(&request.host) {
+                if let Some(provider) = provider_for_host(&normalized_host) {
                     resource.insert("provider".to_string(), provider.to_string());
                 }
 
@@ -345,11 +355,44 @@ fn parse_query_string(query: &str) -> HashMap<String, String> {
         .collect()
 }
 
+/// Normalize a request host for case- and form-insensitive matching.
+///
+/// DNS names are ASCII case-insensitive (RFC 4343) and a trailing dot
+/// denotes a fully-qualified name with no semantic difference to the bare
+/// host. A default port (`:443` / `:80`) is also stripped so that
+/// `api.openai.com:443`, `api.openai.com:80`, and `api.openai.com` all match
+/// rules written for the bare host. IPv6 literals (`[::1]`, `[::1]:443`) are
+/// lowercased but otherwise preserved.
+///
+/// This runs on the hot path in [`IntentNormalizer::normalize`] before the
+/// mapping-table lookup so that an attacker cannot evade host-scoped rules by
+/// varying the case, trailing dot, or default port of the `Host` header.
+fn normalize_host(host: &str) -> String {
+    let trimmed = host.trim();
+    // IPv6 literal: lowercase only; preserve brackets and any port.
+    if trimmed.starts_with('[') {
+        return trimmed.to_ascii_lowercase();
+    }
+    let lower = trimmed.trim_end_matches('.').to_ascii_lowercase();
+    let without_default_port = lower
+        .strip_suffix(":443")
+        .or_else(|| lower.strip_suffix(":80"))
+        .unwrap_or(&lower);
+    without_default_port.to_string()
+}
+
 /// Normalize a request path according to the canonicalization rules:
 /// 1. Strip fragment (everything after '#')
 /// 2. Collapse double slashes to single slash
-/// 3. Strip trailing slash (except for root "/")
-/// 4. Apply NFC normalization to non-ASCII characters
+/// 3. Resolve `.` and `..` segments (RFC 3986 §5.2.4) so that
+///    `/v1/chat/../admin` canonicalizes to `/v1/admin` *before* mapping,
+///    scope checks, and Cedar resource-UID construction. Without this the
+///    sidecar classifies the un-resolved path under a permissive rule while
+///    the upstream URL parser (reqwest) resolves `..` to the strict path —
+///    bypassing enforcement. `..` above the root is clamped to the root
+///    (cannot escape above `/`).
+/// 4. Strip trailing slash (except for root "/")
+/// 5. Apply NFC normalization to non-ASCII characters
 fn normalize_path(path: &str) -> String {
     // Drop fragment
     let path = path.split('#').next().unwrap_or(path);
@@ -369,11 +412,16 @@ fn normalize_path(path: &str) -> String {
         }
     }
 
+    // Resolve "." and ".." segments before any rule matching or scope
+    // comparison so the sidecar's view of the path matches what the upstream
+    // URL parser will actually receive.
+    let resolved = resolve_dot_segments(&collapsed);
+
     // Strip trailing slash (except root)
-    let trimmed = if collapsed.len() > 1 && collapsed.ends_with('/') {
-        &collapsed[..collapsed.len() - 1]
+    let trimmed = if resolved.len() > 1 && resolved.ends_with('/') {
+        &resolved[..resolved.len() - 1]
     } else {
-        &collapsed
+        &resolved
     };
 
     // Apply NFC normalization if there are non-ASCII characters
@@ -382,6 +430,38 @@ fn normalize_path(path: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+/// Resolve `.` and `..` segments in an absolute HTTP path.
+///
+/// Operates on a path that has already had double slashes collapsed. `.` and
+/// empty segments are dropped; `..` removes the last resolved segment; `..`
+/// above the root is a no-op (clamped to `/`). The result is re-joined with
+/// leading `/` separators. A bare `/` (or empty input) yields `/`.
+fn resolve_dot_segments(path: &str) -> String {
+    let mut result: Vec<&str> = Vec::with_capacity(8);
+    for segment in path.split('/') {
+        match segment {
+            // Empty segments (leading, trailing, or from collapsed slashes)
+            // and current-directory `.` segments carry no path information.
+            "" | "." => {}
+            ".." => {
+                result.pop();
+            }
+            other => {
+                result.push(other);
+            }
+        }
+    }
+    let mut out = String::with_capacity(path.len());
+    for seg in &result {
+        out.push('/');
+        out.push_str(seg);
+    }
+    if out.is_empty() {
+        out.push('/');
+    }
+    out
 }
 
 #[cfg(test)]
@@ -479,6 +559,84 @@ mod tests {
             normalize_path("//api//v1//users//#section"),
             "/api/v1/users"
         );
+    }
+
+    // --- C2: `..` path-traversal resolution ---------------------------------
+
+    #[test]
+    fn test_normalize_path_resolves_parent_dir() {
+        assert_eq!(normalize_path("/v1/chat/../admin"), "/v1/admin");
+        assert_eq!(normalize_path("/a/b/../c"), "/a/c");
+        assert_eq!(normalize_path("/a/b/../../c"), "/c");
+    }
+
+    #[test]
+    fn test_normalize_path_resolves_current_dir() {
+        assert_eq!(normalize_path("/v1/./charges"), "/v1/charges");
+        assert_eq!(normalize_path("/a/./b/./c"), "/a/b/c");
+    }
+
+    #[test]
+    fn test_normalize_path_clamps_dot_above_root() {
+        assert_eq!(normalize_path("/.."), "/");
+        assert_eq!(normalize_path("/../admin"), "/admin");
+        assert_eq!(normalize_path("/a/../../b"), "/b");
+        assert_eq!(normalize_path("/../.."), "/");
+    }
+
+    #[test]
+    fn test_normalize_path_traversal_with_other_normalization() {
+        // Double-slash collapse + `..` + trailing slash + fragment.
+        assert_eq!(normalize_path("/v1//chat//../admin/#frag"), "/v1/admin");
+        assert_eq!(normalize_path("/v1/chat/./../admin/"), "/v1/admin");
+    }
+
+    #[test]
+    fn test_resolve_dot_segments_preserves_root() {
+        assert_eq!(resolve_dot_segments("/"), "/");
+        assert_eq!(resolve_dot_segments(""), "/");
+    }
+
+    #[test]
+    fn test_resolve_dot_segments_simple() {
+        assert_eq!(resolve_dot_segments("/v1/charges"), "/v1/charges");
+        assert_eq!(resolve_dot_segments("/v1/charges/"), "/v1/charges");
+    }
+
+    // --- C1: host canonicalization ------------------------------------------
+
+    #[test]
+    fn test_normalize_host_lowercases_mixed_case() {
+        assert_eq!(normalize_host("API.GITHUB.COM"), "api.github.com");
+        assert_eq!(normalize_host("Api.OpenAi.Com"), "api.openai.com");
+    }
+
+    #[test]
+    fn test_normalize_host_strips_trailing_dot() {
+        assert_eq!(normalize_host("api.openai.com."), "api.openai.com");
+        assert_eq!(normalize_host("api.openai.com.."), "api.openai.com");
+    }
+
+    #[test]
+    fn test_normalize_host_strips_default_port() {
+        assert_eq!(normalize_host("api.openai.com:443"), "api.openai.com");
+        assert_eq!(normalize_host("api.openai.com:80"), "api.openai.com");
+    }
+
+    #[test]
+    fn test_normalize_host_keeps_nondefault_port() {
+        assert_eq!(normalize_host("api.openai.com:8443"), "api.openai.com:8443");
+    }
+
+    #[test]
+    fn test_normalize_host_trims_whitespace() {
+        assert_eq!(normalize_host("  api.openai.com  "), "api.openai.com");
+    }
+
+    #[test]
+    fn test_normalize_host_ipv6_preserved() {
+        assert_eq!(normalize_host("[::1]"), "[::1]");
+        assert_eq!(normalize_host("[FE80::1]:443"), "[fe80::1]:443");
     }
 
     fn load_mapping_file(filename: &str) -> MappingRulesFile {
@@ -822,6 +980,162 @@ mod tests {
         )) {
             assert!(!envelope.intent.resource.contains_key("provider"));
         }
+    }
+
+    // --- C1 regression: mixed-case host must not bypass enforcement ---------
+
+    /// Regression for C1: a mixed-case `Host` header must match the
+    /// lowercase mapping rule and be enforced, not fall through to
+    /// `NotProtected` → `Passthrough`.
+    #[test]
+    fn test_normalize_mixed_case_host_matches_rule_not_passthrough() {
+        let normalizer = github_normalizer();
+        let envelope = normalizer
+            .normalize(&make_request("GET", "API.GITHUB.COM", "/repos/acme/widget"))
+            .unwrap_or_else(|_| panic!("mixed-case host must match the github rule"));
+        assert_eq!(envelope.intent.action_class, "code.read");
+        assert_eq!(
+            envelope.intent.resource.get("host"),
+            Some(&"api.github.com".to_string()),
+            "resource host must be canonicalized to lowercase"
+        );
+        assert_eq!(
+            envelope.intent.resource.get("provider"),
+            Some(&"github".to_string()),
+            "provider tag must be applied to the canonicalized host"
+        );
+    }
+
+    /// Regression for C1: a trailing-dot host and a default-port host must
+    /// match the same rules as the bare lowercase host.
+    #[test]
+    fn test_normalize_trailing_dot_and_default_port_match_rule() {
+        let normalizer = github_normalizer();
+        let env_dot = normalizer
+            .normalize(&make_request("GET", "api.github.com.", "/repos/x/y"))
+            .unwrap_or_else(|_| panic!("trailing-dot host must match"));
+        assert_eq!(env_dot.intent.action_class, "code.read");
+
+        let env_port = normalizer
+            .normalize(&make_request("GET", "api.github.com:443", "/repos/x/y"))
+            .unwrap_or_else(|_| panic!("default-port host must match"));
+        assert_eq!(env_port.intent.action_class, "code.read");
+    }
+
+    /// Regression for C1: with `default_protected = false`, a host that
+    /// differs only in case from a protected host must NOT passthrough — it
+    /// must be enforced. (The shipped e2e/demo configs use
+    /// `default_protected = false`.)
+    #[test]
+    fn test_normalize_mixed_case_host_not_passthrough_when_unprotected_default() {
+        let registry = ActionClassRegistry::v0_1();
+        let file = MappingRulesFile {
+            rules: vec![MappingRuleConfig {
+                method: Some("POST".to_string()),
+                host: "api.openai.com".to_string(),
+                path: Some("/v1/chat/completions".to_string()),
+                action_class: "communication.external.send".to_string(),
+            }],
+        };
+        // default_protected = false — the dangerous default from the example configs.
+        let table =
+            MappingTable::from_config(&file, &registry, false).unwrap_or_else(|e| panic!("{e}"));
+        let normalizer = IntentNormalizer::new(table);
+
+        let request = RawRequest {
+            method: "POST".to_string(),
+            host: "API.OPENAI.COM".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            is_https: true,
+        };
+
+        let envelope = normalizer
+            .normalize(&request)
+            .unwrap_or_else(|_| panic!("mixed-case host must be enforced, not passthrough"));
+        assert_eq!(envelope.intent.action_class, "communication.external.send");
+    }
+
+    // --- C2 regression: `..` path-traversal must not bypass mapping ---------
+
+    /// Regression for C2: `/v1/chat/../admin` must normalize to `/v1/admin`
+    /// and match the *strict* admin rule, not the permissive chat rule that
+    /// the un-resolved path would match. Before the fix, the sidecar
+    /// classified the request as `chat.send` (permissive) while reqwest
+    /// resolved `..` upstream to `/v1/admin` — bypassing admin enforcement.
+    #[test]
+    fn test_normalize_dotdot_traversal_matches_strict_rule() {
+        let registry = ActionClassRegistry::v0_1();
+        let file = MappingRulesFile {
+            rules: vec![
+                // Permissive rule that the un-resolved path would match.
+                MappingRuleConfig {
+                    method: Some("POST".to_string()),
+                    host: "api.example.com".to_string(),
+                    path: Some("/v1/chat/*".to_string()),
+                    action_class: "communication.external.send".to_string(),
+                },
+                // Strict rule the resolved path *should* match.
+                MappingRuleConfig {
+                    method: Some("POST".to_string()),
+                    host: "api.example.com".to_string(),
+                    path: Some("/v1/admin/*".to_string()),
+                    action_class: "account.permission.change".to_string(),
+                },
+            ],
+        };
+        let table =
+            MappingTable::from_config(&file, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let normalizer = IntentNormalizer::new(table);
+
+        let envelope = normalizer
+            .normalize(&make_request(
+                "POST",
+                "api.example.com",
+                "/v1/chat/../admin/users",
+            ))
+            .unwrap_or_else(|_| panic!("traversal path must be classified"));
+        assert_eq!(
+            envelope.intent.action_class, "account.permission.change",
+            "traversal path must resolve to /v1/admin and match the strict rule"
+        );
+        assert_eq!(
+            envelope.intent.resource.get("path"),
+            Some(&"/v1/admin/users".to_string()),
+            "resource path must carry the resolved path"
+        );
+    }
+
+    /// Regression for C2: the resolved path must also be the one stamped into
+    /// the resource (with a query string preserved) so the connector URL and
+    /// Cedar resource UID stay consistent with what the upstream receives.
+    #[test]
+    fn test_normalize_dotdot_traversal_preserves_query_in_resource() {
+        let registry = ActionClassRegistry::v0_1();
+        let file = MappingRulesFile {
+            rules: vec![MappingRuleConfig {
+                method: Some("POST".to_string()),
+                host: "api.example.com".to_string(),
+                path: Some("/v1/admin/*".to_string()),
+                action_class: "account.permission.change".to_string(),
+            }],
+        };
+        let table =
+            MappingTable::from_config(&file, &registry, true).unwrap_or_else(|e| panic!("{e}"));
+        let normalizer = IntentNormalizer::new(table);
+
+        let envelope = normalizer
+            .normalize(&make_request(
+                "POST",
+                "api.example.com",
+                "/v1/chat/../admin/users?x=1",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(
+            envelope.intent.resource.get("path"),
+            Some(&"/v1/admin/users?x=1".to_string())
+        );
     }
 
     #[test]
