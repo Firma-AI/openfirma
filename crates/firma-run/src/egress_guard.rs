@@ -191,8 +191,8 @@ pub(crate) fn parse_sockaddr(bytes: &[u8]) -> Option<SocketAddr> {
 /// `len` is capped at [`MAX_SOCKADDR_LEN`] *before* allocation so an
 /// agent-controlled `addrlen` cannot force a large allocation. It can fail
 /// (process gone, permission denied under an aggressive ptrace scope); callers
-/// treat a read failure as "allow" so the guard never wedges the agent on an
-/// unreadable address.
+/// fail closed for unreadable non-null sockaddrs because the agent controls its
+/// own memory permissions.
 fn read_remote_mem(pid: u32, addr: u64, len: usize) -> io::Result<Vec<u8>> {
     let len = len.min(MAX_SOCKADDR_LEN);
     let mut buf = vec![0_u8; len];
@@ -500,9 +500,11 @@ impl Drop for EgressGuardHandle {
 /// or the socket cannot be bound.
 pub fn start(config: SupervisorConfig) -> Result<EgressGuardHandle, RunError> {
     if let Some(parent) = config.socket_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| RunError::Backend {
-            backend: "egress_guard".to_string(),
-            reason: format!("create guard socket dir {}: {error}", parent.display()),
+        firma_runtime_state::fs::create_private_dir_all(parent).map_err(|error| {
+            RunError::Backend {
+                backend: "egress_guard".to_string(),
+                reason: format!("create guard socket dir {}: {error}", parent.display()),
+            }
         })?;
     }
     let _ = std::fs::remove_file(&config.socket_path);

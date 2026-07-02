@@ -140,7 +140,7 @@ impl SidecarSupervisor {
     pub fn spawn(req: SpawnRequest<'_>) -> Result<Self, RunError> {
         use firma_runtime_state::ChildExt as _;
 
-        std::fs::create_dir_all(&req.marker_dir).map_err(|error| {
+        firma_runtime_state::fs::create_private_dir_all(&req.marker_dir).map_err(|error| {
             RunError::Internal(format!("mkdir {}: {error}", req.marker_dir.display()))
         })?;
 

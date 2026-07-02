@@ -54,16 +54,7 @@ impl SandboxBackend for BwrapBackend {
             });
         }
 
-        let runtime_dir = std::env::temp_dir()
-            .join("firma-run")
-            .join(&request.identity.sandbox_id);
-        std::fs::create_dir_all(&runtime_dir).map_err(|error| RunError::Backend {
-            backend: BackendKind::Bwrap.to_string(),
-            reason: format!(
-                "failed to create runtime dir {}: {error}",
-                runtime_dir.display()
-            ),
-        })?;
+        let runtime_dir = create_bwrap_runtime_dir(&request.identity.sandbox_id)?;
 
         let mut mounts = request.profile.mounts.clone();
 
@@ -473,6 +464,30 @@ fn command_available(binary: &str) -> bool {
         .arg("--version")
         .status()
         .is_ok_and(|status| status.success())
+}
+
+fn create_bwrap_runtime_dir(sandbox_id: &crate::identity::SandboxId) -> Result<PathBuf, RunError> {
+    let runtime_root = std::env::temp_dir().join("firma-run");
+    firma_runtime_state::fs::create_private_dir_all(&runtime_root).map_err(|error| {
+        RunError::Backend {
+            backend: BackendKind::Bwrap.to_string(),
+            reason: format!(
+                "failed to create runtime root {}: {error}",
+                runtime_root.display()
+            ),
+        }
+    })?;
+    let runtime_dir = runtime_root.join(sandbox_id);
+    firma_runtime_state::fs::create_private_dir_all(&runtime_dir).map_err(|error| {
+        RunError::Backend {
+            backend: BackendKind::Bwrap.to_string(),
+            reason: format!(
+                "failed to create runtime dir {}: {error}",
+                runtime_dir.display()
+            ),
+        }
+    })?;
+    Ok(runtime_dir)
 }
 
 fn host_uid_gid() -> Result<(u32, u32), RunError> {
