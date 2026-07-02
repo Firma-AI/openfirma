@@ -8,6 +8,9 @@ mod contract;
 mod runner;
 mod vm;
 
+#[cfg(test)]
+pub(crate) mod test_utils;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "firma-vz-runner",
@@ -22,6 +25,7 @@ struct Args {
     validate_only: bool,
 }
 
+/// Parses CLI arguments and maps runner failures to a process exit code.
 fn main() -> ExitCode {
     let args = Args::parse();
     match run(&args) {
@@ -33,6 +37,7 @@ fn main() -> ExitCode {
     }
 }
 
+/// Validates the launch contract and optionally starts the configured VM.
 fn run(args: &Args) -> Result<ExitCode> {
     let contract = contract::ContractDocument::read_from_path(&args.launch_contract)?.validate()?;
     let vm_plan = vm::VmPlan::from_contract(&contract)?;
@@ -51,17 +56,13 @@ fn run(args: &Args) -> Result<ExitCode> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use anyhow::Result;
-    use serde_json::Value;
 
     use super::{Args, run};
-
-    const ROOT_PLACEHOLDER: &str = "${ROOT}";
-    const VALID_CONTRACT_JSON: &str = include_str!("contract/fixtures/valid-contract.json");
-    const VALID_ROOTFS_SIZE_BYTES: u64 = 512;
-    const UNALIGNED_ROOTFS_SIZE_BYTES: u64 = 513;
+    use crate::test_utils::{
+        UNALIGNED_ROOTFS_SIZE_BYTES, VALID_ROOTFS_SIZE_BYTES, make_contract_file_owner_only,
+        write_contract_at,
+    };
 
     #[test]
     fn validate_only_succeeds_after_vm_plan_preparation() -> Result<()> {
@@ -71,7 +72,14 @@ mod tests {
             .join("runtime")
             .join("vz-guest")
             .join("vz-guest-launch.json");
-        write_contract_with_rootfs_size(temp.path(), &contract_path, VALID_ROOTFS_SIZE_BYTES)?;
+        write_contract_at(
+            temp.path(),
+            temp.path(),
+            &temp.path().join("runtime"),
+            &contract_path,
+            VALID_ROOTFS_SIZE_BYTES,
+        )?;
+        make_contract_file_owner_only(&contract_path)?;
 
         let code = run(&Args {
             launch_contract: contract_path,
@@ -90,7 +98,14 @@ mod tests {
             .join("runtime")
             .join("vz-guest")
             .join("vz-guest-launch.json");
-        write_contract_with_rootfs_size(temp.path(), &contract_path, UNALIGNED_ROOTFS_SIZE_BYTES)?;
+        write_contract_at(
+            temp.path(),
+            temp.path(),
+            &temp.path().join("runtime"),
+            &contract_path,
+            UNALIGNED_ROOTFS_SIZE_BYTES,
+        )?;
+        make_contract_file_owner_only(&contract_path)?;
 
         let error = run(&Args {
             launch_contract: contract_path,
@@ -100,79 +115,6 @@ mod tests {
         .ok_or_else(|| anyhow::anyhow!("validate-only should fail on invalid VM plan"))?;
 
         assert!(error.to_string().contains("guest.rootfs size"));
-        Ok(())
-    }
-
-    /// Writes a valid contract with a rootfs fixture of the requested size.
-    fn write_contract_with_rootfs_size(
-        root: &Path,
-        contract_path: &Path,
-        rootfs_size: u64,
-    ) -> Result<()> {
-        if let Some(contract_dir) = contract_path.parent() {
-            std::fs::create_dir_all(contract_dir)?;
-        }
-
-        for artifact in ["firma-vz-runner", "vmlinuz", "initrd.img", "seccomp.bpf"] {
-            std::fs::write(root.join(artifact), artifact)?;
-        }
-        let rootfs = std::fs::File::create(root.join("rootfs.img"))?;
-        rootfs.set_len(rootfs_size)?;
-
-        let contract = valid_contract_json(root)?;
-        std::fs::write(contract_path, serde_json::to_vec(&contract)?)?;
-        make_contract_file_owner_only(contract_path)?;
-        Ok(())
-    }
-
-    /// Loads the shared valid contract fixture with its root placeholder resolved.
-    fn valid_contract_json(root: &Path) -> Result<Value> {
-        let mut contract = serde_json::from_str(VALID_CONTRACT_JSON)?;
-        replace_root_placeholder(
-            &mut contract,
-            root.to_str()
-                .ok_or_else(|| anyhow::anyhow!("test contract root path must be UTF-8"))?,
-        );
-        Ok(contract)
-    }
-
-    /// Replaces all root placeholders inside a JSON value tree.
-    fn replace_root_placeholder(value: &mut Value, root: &str) {
-        match value {
-            Value::String(text) => {
-                if text.contains(ROOT_PLACEHOLDER) {
-                    *text = text.replace(ROOT_PLACEHOLDER, root);
-                }
-            }
-            Value::Array(values) => {
-                for value in values {
-                    replace_root_placeholder(value, root);
-                }
-            }
-            Value::Object(values) => {
-                for value in values.values_mut() {
-                    replace_root_placeholder(value, root);
-                }
-            }
-            Value::Bool(_) | Value::Null | Value::Number(_) => {}
-        }
-    }
-
-    /// Applies owner-only contract file custody on platforms that support it.
-    #[cfg(unix)]
-    fn make_contract_file_owner_only(path: &Path) -> Result<()> {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let mut permissions = std::fs::metadata(path)?.permissions();
-        permissions.set_mode(0o600);
-        std::fs::set_permissions(path, permissions)?;
-        Ok(())
-    }
-
-    /// Keeps the test helper portable on non-Unix hosts.
-    #[cfg(not(unix))]
-    fn make_contract_file_owner_only(path: &Path) -> Result<()> {
-        let _ = std::fs::metadata(path)?;
         Ok(())
     }
 }

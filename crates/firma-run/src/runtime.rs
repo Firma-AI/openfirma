@@ -267,6 +267,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             args: launch_args,
             cwd: working_dir,
             env,
+            sidecar_endpoint: effective_endpoint,
             seccomp_filter_path: effective_seccomp.as_ref().map(|s| s.bpf_path.clone()),
             identity_mode: profile.identity_mode,
         };

@@ -3,12 +3,11 @@ use std::path::Path;
 use anyhow::Result;
 use serde_json::{Value, json};
 
+use crate::test_utils::{valid_contract_json, valid_contract_json_without_artifacts};
+
 use super::{
     Contract, ContractDocument, ContractValidationError, ContractValidationLimits, InvariantName,
 };
-
-const ROOT_PLACEHOLDER: &str = "${ROOT}";
-const VALID_CONTRACT_JSON: &str = include_str!("fixtures/valid-contract.json");
 
 #[test]
 fn validates_contract_v1() -> Result<()> {
@@ -356,55 +355,4 @@ fn parse_contract(json: &Value) -> Result<Contract> {
 /// Parses a JSON value as a raw contract document.
 fn parse_contract_document(json: &Value) -> Result<ContractDocument> {
     ContractDocument::parse_from_slice(Path::new("test-contract.json"), &serde_json::to_vec(&json)?)
-}
-
-/// Builds a valid contract fixture with artifact files present.
-fn valid_contract_json(root: &Path) -> Result<Value> {
-    touch(root.join("firma-vz-runner"))?;
-    touch(root.join("vmlinuz"))?;
-    touch(root.join("initrd.img"))?;
-    touch(root.join("rootfs.img"))?;
-    touch(root.join("seccomp.bpf"))?;
-    std::fs::create_dir(root.join("runtime"))?;
-
-    valid_contract_json_without_artifacts(root)
-}
-
-/// Builds a valid contract fixture without creating artifact files.
-fn valid_contract_json_without_artifacts(root: &Path) -> Result<Value> {
-    let mut json = serde_json::from_str(VALID_CONTRACT_JSON)?;
-    let root = root
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("test root path must be UTF-8"))?;
-
-    replace_root_placeholder(&mut json, root);
-    Ok(json)
-}
-
-/// Replaces fixture root placeholders throughout a JSON tree.
-fn replace_root_placeholder(value: &mut Value, root: &str) {
-    match value {
-        Value::String(text) => {
-            if text.contains(ROOT_PLACEHOLDER) {
-                *text = text.replace(ROOT_PLACEHOLDER, root);
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                replace_root_placeholder(value, root);
-            }
-        }
-        Value::Object(values) => {
-            for value in values.values_mut() {
-                replace_root_placeholder(value, root);
-            }
-        }
-        Value::Bool(_) | Value::Null | Value::Number(_) => {}
-    }
-}
-
-/// Creates an empty file fixture and returns its path.
-fn touch(path: std::path::PathBuf) -> Result<std::path::PathBuf> {
-    std::fs::write(&path, [])?;
-    Ok(path)
 }

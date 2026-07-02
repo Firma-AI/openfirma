@@ -254,6 +254,9 @@ mod tests {
             args: vec!["hello".to_string(), "world".to_string()],
             cwd: std::path::PathBuf::from("/tmp"),
             env,
+            sidecar_endpoint: crate::config::SidecarEndpoint::Tcp {
+                addr: "127.0.0.1:18080".parse().expect("test sidecar addr"),
+            },
             seccomp_filter_path: None,
             identity_mode: crate::config::SandboxIdentityMode::SandboxUser,
         }

@@ -41,12 +41,15 @@ arc-swap = "1"
 async-stream = "0.3"
 async-trait = "0.1"
 base64 = "0.22"
+block2 = "0.6"
 cedar-policy = "3"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", default-features = false }
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 ctrlc = "3.5"
 dialoguer = "0.11"
+dirs = "6"
+dispatch2 = "0.3"
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
 elliptic-curve = { version = "0.13", features = ["pem"] }
 firma-authority = { path = "crates/firma-authority" }
@@ -71,6 +74,8 @@ lru = "0.17"
 miette = { version = "7", features = ["fancy-no-backtrace"] }
 nix = { version = "0.31", features = ["fs", "process", "signal", "socket", "user"] }
 notify = "8"
+objc2 = "0.6"
+objc2-foundation = "0.3"
 objc2-virtualization = { version = "0.3.2", default-features = false }
 owo-colors = { version = "4", features = ["supports-colors"] }
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
