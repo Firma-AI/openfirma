@@ -877,4 +877,158 @@ mod tests {
         assert_eq!(prog[5].k, SECCOMP_RET_ALLOW);
         assert_eq!(prog[3].k, SYS_CONNECT_NR);
     }
+
+    /// `read_remote_mem` recovers bytes from a live process. Reading our own
+    /// process exercises the `process_vm_readv` path without a child.
+    #[test]
+    fn read_remote_mem_reads_own_memory() {
+        let payload = b"firma-egress-guard-remote-read".to_vec();
+        let out = read_remote_mem(std::process::id(), payload.as_ptr() as u64, payload.len())
+            .expect("read own memory");
+        assert_eq!(out, payload);
+    }
+
+    /// The requested length is capped at `MAX_SOCKADDR_LEN` before the read, so
+    /// an agent-controlled `addrlen` cannot force a large allocation or read.
+    #[test]
+    fn read_remote_mem_caps_length() {
+        let backing = vec![0xAB_u8; MAX_SOCKADDR_LEN * 4];
+        let out = read_remote_mem(std::process::id(), backing.as_ptr() as u64, backing.len())
+            .expect("read own memory");
+        assert_eq!(out.len(), MAX_SOCKADDR_LEN);
+    }
+
+    /// Builds a zeroed `connect` notification whose `sockaddr` pointer/len point
+    /// at a buffer in this process, so `classify_notification` can resolve it via
+    /// `read_remote_mem` against our own pid.
+    fn notif_pointing_at(buf: &[u8]) -> libc::seccomp_notif {
+        let mut req: libc::seccomp_notif = unsafe { std::mem::zeroed() };
+        req.pid = std::process::id();
+        req.data.args[1] = buf.as_ptr() as u64;
+        req.data.args[2] = buf.len() as u64;
+        req
+    }
+
+    fn v4_sockaddr(ip: [u8; 4], port: u16) -> Vec<u8> {
+        let mut bytes = vec![0_u8; 16];
+        bytes[0..2].copy_from_slice(&AF_INET.to_ne_bytes());
+        bytes[2..4].copy_from_slice(&port.to_be_bytes());
+        bytes[4..8].copy_from_slice(&ip);
+        bytes
+    }
+
+    #[test]
+    fn classify_notification_blocks_unsanctioned_loopback() {
+        let addr = v4_sockaddr([127, 0, 0, 1], 9000);
+        let req = notif_pointing_at(&addr);
+        match classify_notification(&req, &allow()) {
+            NotifOutcome::Block(got) => {
+                assert_eq!(got, "127.0.0.1:9000".parse().unwrap());
+            }
+            NotifOutcome::Allow => panic!("expected Block for unsanctioned loopback"),
+        }
+    }
+
+    #[test]
+    fn classify_notification_allows_sanctioned_loopback() {
+        let addr = v4_sockaddr([127, 0, 0, 1], PROXY);
+        let req = notif_pointing_at(&addr);
+        assert!(matches!(
+            classify_notification(&req, &allow()),
+            NotifOutcome::Allow
+        ));
+    }
+
+    #[test]
+    fn classify_notification_allows_external() {
+        let addr = v4_sockaddr([93, 184, 216, 34], 443);
+        let req = notif_pointing_at(&addr);
+        assert!(matches!(
+            classify_notification(&req, &allow()),
+            NotifOutcome::Allow
+        ));
+    }
+
+    #[test]
+    fn classify_notification_allows_null_or_short_addr() {
+        // Null pointer -> allow (nothing to classify).
+        let mut req: libc::seccomp_notif = unsafe { std::mem::zeroed() };
+        req.pid = std::process::id();
+        req.data.args[1] = 0;
+        req.data.args[2] = 16;
+        assert!(matches!(
+            classify_notification(&req, &allow()),
+            NotifOutcome::Allow
+        ));
+
+        // Non-null but too short to hold a `sa_family` -> allow.
+        let addr = v4_sockaddr([127, 0, 0, 1], 9000);
+        let mut short = notif_pointing_at(&addr);
+        short.data.args[2] = 1;
+        assert!(matches!(
+            classify_notification(&short, &allow()),
+            NotifOutcome::Allow
+        ));
+    }
+
+    /// The seccomp-notify ioctl request numbers are distinct and non-zero so the
+    /// three ioctls address different commands.
+    #[test]
+    fn notif_ioctl_requests_are_distinct() {
+        let recv = notif_recv_req();
+        let send = notif_send_req();
+        let valid = notif_id_valid_req();
+        assert_ne!(recv, 0);
+        assert_ne!(recv, send);
+        assert_ne!(send, valid);
+        assert_ne!(recv, valid);
+    }
+
+    /// `AuditSink` forwards a blocked destination to the run-audit socket as a
+    /// newline-delimited `RunAuditMessage`. Covers `try_new`, `send`,
+    /// `report_event`, and the close-then-join `Drop`.
+    #[test]
+    fn audit_sink_forwards_blocked_destination() {
+        use std::io::Read as _;
+
+        let dir = std::env::temp_dir().join(format!("firma-egress-audit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let socket_path = dir.join("run-audit.sock");
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path).expect("bind audit socket");
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let accept = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut line = String::new();
+                let _ = stream.read_to_string(&mut line);
+                let _ = tx.send(line);
+            }
+        });
+
+        let channel = AuditChannel {
+            socket_path: socket_path.clone(),
+            session_id: "sess-1".to_string(),
+            agent_id: "agent-1".to_string(),
+        };
+        let sink = AuditSink::try_new(channel).expect("spawn audit sink");
+        sink.send("127.0.0.1:9000".parse().unwrap());
+        drop(sink); // closes channel, joins worker after the send is delivered
+
+        accept.join().expect("accept thread");
+        let line = rx.recv().expect("audit line delivered");
+        assert!(
+            line.ends_with('\n'),
+            "line must be newline-delimited: {line:?}"
+        );
+        let value: serde_json::Value = serde_json::from_str(line.trim()).expect("valid JSON");
+        assert_eq!(value["session_id"], "sess-1");
+        assert_eq!(value["agent_id"], "agent-1");
+        assert_eq!(value["event"]["kind"], "loopback_blocked");
+        assert_eq!(value["event"]["dst_ip"], "127.0.0.1");
+        assert_eq!(value["event"]["dst_port"], 9000);
+
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_dir(&dir);
+    }
 }
