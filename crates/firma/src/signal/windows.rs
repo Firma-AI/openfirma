@@ -11,7 +11,10 @@
 //! `GenerateConsoleCtrlEvent` cannot be used because it only crosses
 //! processes that share a console — `stop` does not.
 
-#![allow(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "Windows shutdown listener uses raw Win32 event handles"
+)]
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
@@ -73,6 +76,11 @@ pub fn install_listener(token: CancellationToken) {
 
 #[cfg(test)]
 mod tests {
+    #![expect(
+        clippy::expect_used,
+        reason = "Windows shutdown-event tests use expect to fail fast on setup failures"
+    )]
+
     use std::time::Duration;
 
     use windows_sys::Win32::System::Threading::EVENT_MODIFY_STATE;

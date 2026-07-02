@@ -1,7 +1,10 @@
 //! Windows platform implementation.
 
 #![cfg(windows)]
-#![allow(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "Windows platform integration uses raw Win32 handles"
+)]
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
@@ -144,6 +147,11 @@ impl Platform for WindowsPlatform {
 
 #[cfg(test)]
 mod tests {
+    #![expect(
+        clippy::expect_used,
+        reason = "Windows platform tests use expect to fail fast on setup failures"
+    )]
+
     use firma_runtime_state::UserProcessId;
     use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
     use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};

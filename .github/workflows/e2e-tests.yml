@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - "v*.*.*"
-    branches:
-      - fir-383-block-loopback
   workflow_dispatch:
 
 permissions:
