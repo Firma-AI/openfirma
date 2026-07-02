@@ -47,7 +47,6 @@ clap = { version = "4", default-features = false }
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 ctrlc = "3.5"
 dialoguer = "0.11"
-dirs = "6"
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
 elliptic-curve = { version = "0.13", features = ["pem"] }
 firma-authority = { path = "crates/firma-authority" }
@@ -76,9 +75,6 @@ objc2-virtualization = { version = "0.3.2", default-features = false }
 owo-colors = { version = "4", features = ["supports-colors"] }
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 pasetors = "0.7"
-pingora-core = "0.8"
-pingora-http = "0.8"
-pingora-proxy = "0.8"
 pretty_assertions = "1"
 proptest = "1"
 prost = "0.14"
@@ -86,9 +82,10 @@ prost-types = "0.14"
 rand = { version = "0.9", default-features = false, features = ["small_rng"] }
 rcgen = { version = "0.13", features = ["x509-parser"] }
 regex = "1"
-reqwest = { version = "0.13", default-features = false, features = ["charset", "http2", "query", "rustls"] }
-rustls = "0.23"
+reqwest = { version = "0.13", default-features = false, features = ["charset", "http2", "query", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["logging", "ring", "std", "tls12"] }
 rustls-pemfile = "2"
+rustls-platform-verifier = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_repr = "0.1"
@@ -101,7 +98,7 @@ textwrap = "0.16"
 thiserror = "2"
 time = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros"] }
-tokio-rustls = "0.26"
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "ring", "tls12"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "1"

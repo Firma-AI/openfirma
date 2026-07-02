@@ -14,6 +14,7 @@
 use clap::Parser;
 use reqwest::{Proxy, Url};
 use serde::Deserialize;
+use std::sync::Arc;
 
 const SESSION_HEADER: &str = "x-firma-session-id";
 const SESSION_VALUE: &str = "demo-session";
@@ -54,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
     let proxy = normalize_loopback_url(&args.proxy)?;
     let target = normalize_loopback_url(&args.target)?;
     let client = reqwest::Client::builder()
+        .use_preconfigured_tls(build_reqwest_tls_config()?)
         .proxy(Proxy::all(proxy.as_str())?)
         .build()?;
 
@@ -67,6 +69,17 @@ async fn main() -> anyhow::Result<()> {
     }
     println!("[ok] ALLOW + DENY round-trips matched expectation.");
     Ok(())
+}
+
+fn build_reqwest_tls_config() -> anyhow::Result<rustls::ClientConfig> {
+    use rustls_platform_verifier::BuilderVerifierExt as _;
+
+    Ok(rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()?
+    .with_platform_verifier()?
+    .with_no_client_auth())
 }
 
 fn normalize_loopback_url(raw: &str) -> anyhow::Result<Url> {

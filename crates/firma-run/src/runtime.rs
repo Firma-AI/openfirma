@@ -56,7 +56,7 @@ pub struct RunInput {
     /// CLI value of `--authority-profile`. Default `developer`.
     pub authority_profile: String,
     /// Optional override of the user-config path. Default
-    /// `dirs::config_dir()/firma/firma.toml`. Tests inject a tmp path.
+    /// the default config discovery path. Tests inject a tmp path.
     pub user_config_path: Option<PathBuf>,
     /// When true, allow non-structural (proxy-only) backends without
     /// failing closed. Required for macOS vz and WSL2 backends when
