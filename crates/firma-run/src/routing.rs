@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -38,9 +38,90 @@ fn structural_dns_stub_listen_addr() -> &'static str {
     })
 }
 
+#[derive(Default)]
+pub struct EnvOverrides(BTreeMap<String, String>);
+
+impl EnvOverrides {
+    /// Sets all six proxy environment variables (upper/lowercase HTTP, HTTPS,
+    /// and ALL) to the same URL.
+    fn set_proxy_url(&mut self, url: &str) {
+        for key in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ] {
+            self.0.insert(key.to_string(), url.to_string());
+        }
+    }
+
+    fn structural_proxy_env(
+        mut self,
+        proxy_addr: &str,
+        dns_addr: &str,
+        adapter_path: &std::path::Path,
+        current_exe: &std::path::Path,
+    ) -> Self {
+        self.set_proxy_url(&format!("http://{proxy_addr}"));
+        self.0.insert(
+            "FIRMA_RUN_PROXY_LISTEN_ADDR".to_string(),
+            proxy_addr.to_string(),
+        );
+        self.0.insert(
+            "FIRMA_RUN_DNS_STUB_LISTEN_ADDR".to_string(),
+            dns_addr.to_string(),
+        );
+        self.0.insert(
+            "FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS".to_string(),
+            adapter_path.display().to_string(),
+        );
+        self.0.insert(
+            "FIRMA_RUN_SELF_EXE".to_string(),
+            current_exe.display().to_string(),
+        );
+        self
+    }
+    fn with_egress_sock(mut self, guard_sock: &Path) -> Self {
+        self.0.insert(
+            "FIRMA_RUN_EGRESS_GUARD_SOCK".to_string(),
+            guard_sock.display().to_string(),
+        );
+        self
+    }
+
+    fn with_bridge_address(mut self, bridge_addr: SocketAddr) -> Self {
+        self.set_proxy_url(&format!("http://{bridge_addr}"));
+        self
+    }
+
+    fn with_dns_stub_address(mut self, dns_stub_addr: Option<SocketAddr>) -> Self {
+        if let Some(addr) = dns_stub_addr {
+            self.0
+                .insert("FIRMA_DNS_STUB_ADDR".to_string(), addr.to_string());
+        }
+        self
+    }
+}
+
+impl std::ops::Deref for EnvOverrides {
+    type Target = BTreeMap<String, String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<BTreeMap<String, String>> for EnvOverrides {
+    fn from(value: BTreeMap<String, String>) -> Self {
+        Self(value)
+    }
+}
+
 /// Runtime-side network artifacts that must live while the wrapped process runs.
 pub struct NetworkRuntime {
-    env_overrides: BTreeMap<String, String>,
+    env_overrides: EnvOverrides,
     sidecar_endpoint: SidecarEndpoint,
     // Drop order matters: the host bridge and adapter hold connections to the
     // sidecar, so they must drop before the sidecar supervisor.  The sidecar
@@ -69,7 +150,7 @@ pub struct NetworkRuntime {
 impl NetworkRuntime {
     /// Returns environment values to merge into wrapped process launch env.
     #[must_use]
-    pub fn env_overrides(&self) -> &BTreeMap<String, String> {
+    pub fn env_overrides(&self) -> &EnvOverrides {
         &self.env_overrides
     }
 
@@ -251,18 +332,25 @@ fn prepare_flat_runtime(
     #[cfg(not(unix))]
     let _ = (handle, proof, identity);
 
-    let env_overrides = autostart_trust_env;
+    let env_overrides = EnvOverrides::from(autostart_trust_env);
     #[cfg(unix)]
-    let mut env_overrides = env_overrides;
-    #[cfg(unix)]
-    let host_bridge = setup_host_bridge(&effective_endpoint, identity, &mut env_overrides)?;
+    let (host_bridge, host_dns_stub, env_overrides) = {
+        let host_bridge = setup_host_bridge(&effective_endpoint, identity)?;
+        let dns_stub = maybe_start_host_dns_stub(handle, proof)?;
+        let env_overrides = env_overrides
+            .with_bridge_address(host_bridge.listen_addr())
+            .with_dns_stub_address(
+                dns_stub
+                    .as_ref()
+                    .map(crate::dns_stub::HostDnsStubHandle::listen_addr),
+            );
+        (host_bridge, dns_stub, env_overrides)
+    };
 
     // macOS structural modes without a Linux network namespace also need a
     // host-side DNS refusal stub. sandbox-exec reaches it on loopback; the
     // VZ guest runner receives it through the launch contract and must wire
     // guest DNS to this endpoint.
-    #[cfg(unix)]
-    let host_dns_stub = maybe_start_host_dns_stub(handle, proof, &mut env_overrides)?;
 
     Ok(NetworkRuntime {
         env_overrides,
@@ -311,13 +399,6 @@ fn prepare_structural_runtime(
 
     let proxy_addr = structural_proxy_listen_addr();
     let dns_addr = structural_dns_stub_listen_addr();
-    let mut env_overrides = structural_proxy_env(
-        autostart_trust_env,
-        proxy_addr,
-        dns_addr,
-        &adapter_path,
-        &current_exe,
-    );
 
     // Loopback egress guard: trap the agent's connect(2)s and block direct
     // connections to loopback addresses that are not the proxy bridge or
@@ -330,8 +411,20 @@ fn prepare_structural_runtime(
         dns_addr,
         sidecar_supervisor.as_ref(),
         identity,
-        &mut env_overrides,
     );
+
+    let env_overrides = EnvOverrides::from(autostart_trust_env).structural_proxy_env(
+        proxy_addr,
+        dns_addr,
+        &adapter_path,
+        &current_exe,
+    );
+
+    let env_overrides = if let Some(guard) = &egress_guard {
+        env_overrides.with_egress_sock(guard.socket_path())
+    } else {
+        env_overrides
+    };
 
     Ok(NetworkRuntime {
         env_overrides,
@@ -345,46 +438,6 @@ fn prepare_structural_runtime(
         _authority_supervisor: authority_supervisor,
         _capability_guard: capability_guard,
     })
-}
-
-/// Populates the proxy/DNS/adapter environment overrides the sandboxed agent
-/// needs to route egress through the structural proxy bridge.
-#[cfg(unix)]
-fn structural_proxy_env(
-    mut env_overrides: BTreeMap<String, String>,
-    proxy_addr: &str,
-    dns_addr: &str,
-    adapter_path: &std::path::Path,
-    current_exe: &std::path::Path,
-) -> BTreeMap<String, String> {
-    let proxy_url = format!("http://{proxy_addr}");
-    for key in [
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "ALL_PROXY",
-        "all_proxy",
-    ] {
-        env_overrides.insert(key.to_string(), proxy_url.clone());
-    }
-    env_overrides.insert(
-        "FIRMA_RUN_PROXY_LISTEN_ADDR".to_string(),
-        proxy_addr.to_string(),
-    );
-    env_overrides.insert(
-        "FIRMA_RUN_DNS_STUB_LISTEN_ADDR".to_string(),
-        dns_addr.to_string(),
-    );
-    env_overrides.insert(
-        "FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS".to_string(),
-        adapter_path.display().to_string(),
-    );
-    env_overrides.insert(
-        "FIRMA_RUN_SELF_EXE".to_string(),
-        current_exe.display().to_string(),
-    );
-    env_overrides
 }
 
 /// Starts the loopback egress guard supervisor for the structural Linux path
@@ -403,7 +456,6 @@ fn start_loopback_guard(
     dns_addr: &str,
     sidecar_supervisor: Option<&SidecarSupervisor>,
     identity: &RunIdentity,
-    env_overrides: &mut BTreeMap<String, String>,
 ) -> Option<crate::egress_guard::EgressGuardHandle> {
     let mut allow_ports = Vec::new();
     if let Ok(addr) = proxy_addr.parse::<std::net::SocketAddr>() {
@@ -425,17 +477,11 @@ fn start_loopback_guard(
 
     let guard_sock = handle.runtime_dir.join("egress-guard.sock");
     match crate::egress_guard::start(crate::egress_guard::SupervisorConfig {
-        socket_path: guard_sock.clone(),
+        socket_path: guard_sock,
         allow_ports,
         report,
     }) {
-        Ok(handle) => {
-            env_overrides.insert(
-                "FIRMA_RUN_EGRESS_GUARD_SOCK".to_string(),
-                guard_sock.display().to_string(),
-            );
-            Some(handle)
-        }
+        Ok(handle) => Some(handle),
         Err(error) => {
             tracing::warn!(
                 %error,
@@ -506,7 +552,6 @@ fn maybe_mint_capability_seed(
 fn setup_host_bridge(
     endpoint: &SidecarEndpoint,
     identity: &RunIdentity,
-    env_overrides: &mut BTreeMap<String, String>,
 ) -> Result<crate::proxy_bridge::HostBridgeHandle, RunError> {
     let SidecarEndpoint::Tcp { addr } = endpoint else {
         return Err(RunError::UnsupportedBackend {
@@ -526,14 +571,6 @@ fn setup_host_bridge(
         sidecar_addr = %addr,
         "host proxy bridge started for non-structural network path"
     );
-
-    env_overrides.insert("HTTP_PROXY".to_string(), format!("http://{bridge_addr}"));
-    env_overrides.insert("HTTPS_PROXY".to_string(), format!("http://{bridge_addr}"));
-    env_overrides.insert("http_proxy".to_string(), format!("http://{bridge_addr}"));
-    env_overrides.insert("https_proxy".to_string(), format!("http://{bridge_addr}"));
-    env_overrides.insert("ALL_PROXY".to_string(), format!("http://{bridge_addr}"));
-    env_overrides.insert("all_proxy".to_string(), format!("http://{bridge_addr}"));
-
     Ok(bridge)
 }
 
@@ -549,7 +586,6 @@ fn setup_host_bridge(
 fn maybe_start_host_dns_stub(
     handle: &SandboxHandle,
     proof: &EnforcementProof,
-    env_overrides: &mut BTreeMap<String, String>,
 ) -> Result<Option<crate::dns_stub::HostDnsStubHandle>, RunError> {
     if handle.backend != BackendKind::Vz {
         return Ok(None);
@@ -562,7 +598,6 @@ fn maybe_start_host_dns_stub(
     }
     let stub = crate::dns_stub::HostDnsStubHandle::start()?;
     let stub_addr = stub.listen_addr();
-    env_overrides.insert("FIRMA_DNS_STUB_ADDR".to_string(), stub_addr.to_string());
     tracing::info!(
         %stub_addr,
         network_confinement = ?proof.network_confinement,
@@ -1175,7 +1210,6 @@ fn relay_unix_to_unix(client: &UnixStream, target: &UnixStream) -> io::Result<()
 #[cfg(test)]
 #[cfg(unix)]
 mod non_structural_env_tests {
-    use std::collections::BTreeMap;
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::str::FromStr;
@@ -1186,7 +1220,9 @@ mod non_structural_env_tests {
     use crate::config::SidecarEndpoint;
     use crate::identity::RunIdentity;
 
-    use super::{AutostartFlags, ResolvedAuthority, prepare_network_runtime, setup_host_bridge};
+    use super::{
+        AutostartFlags, EnvOverrides, ResolvedAuthority, prepare_network_runtime, setup_host_bridge,
+    };
 
     /// Verifies that `setup_host_bridge` inserts all proxy env vars pointing
     /// to the bridge, and that the bridge port is distinct from the sidecar
@@ -1197,10 +1233,10 @@ mod non_structural_env_tests {
         let sidecar_addr = fake_sidecar.local_addr().expect("local_addr");
         let endpoint = SidecarEndpoint::Tcp { addr: sidecar_addr };
         let identity = RunIdentity::new("test-agent");
-        let mut env = BTreeMap::new();
 
-        let bridge = setup_host_bridge(&endpoint, &identity, &mut env)
-            .expect("setup_host_bridge should succeed");
+        let bridge =
+            setup_host_bridge(&endpoint, &identity).expect("setup_host_bridge should succeed");
+        let env = EnvOverrides::default().with_bridge_address(bridge.listen_addr());
 
         // All six proxy variants must be present.
         for key in &[
@@ -1244,9 +1280,7 @@ mod non_structural_env_tests {
             path: std::path::PathBuf::from("/tmp/test.sock"),
         };
         let identity = RunIdentity::new("test-agent");
-        let mut env = BTreeMap::new();
-
-        let Err(error) = setup_host_bridge(&endpoint, &identity, &mut env) else {
+        let Err(error) = setup_host_bridge(&endpoint, &identity) else {
             panic!("Unix endpoint should fail closed on non-structural path");
         };
         let rendered = error.to_string();
@@ -1254,7 +1288,6 @@ mod non_structural_env_tests {
             rendered.contains("requires a TCP sidecar endpoint"),
             "unexpected error: {rendered}"
         );
-        assert!(env.is_empty(), "No proxy env vars should be inserted");
     }
 
     /// Integration-style FIR-213 regression test across `prepare_network_runtime`:

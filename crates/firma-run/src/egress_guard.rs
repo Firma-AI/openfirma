@@ -471,6 +471,13 @@ pub struct EgressGuardHandle {
     socket_path: PathBuf,
 }
 
+impl EgressGuardHandle {
+    #[must_use]
+    pub fn socket_path(&self) -> &Path {
+        &self.socket_path
+    }
+}
+
 impl Drop for EgressGuardHandle {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
