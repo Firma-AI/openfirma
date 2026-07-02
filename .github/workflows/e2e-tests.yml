@@ -99,5 +99,5 @@ jobs:
       - name: Run e2e tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          FIRMA_RUN_VZ_STRUCTURAL_NETWORK: ${{ runner.os == 'macOS' && '1' || '' }}
+          FIRMA_RUN_VZ_STRUCTURAL_NETWORK: '1'
         run: cargo nextest run -p firma --test e2e --run-ignored all -E 'test(/${{ matrix.agent.name }}::/)'
