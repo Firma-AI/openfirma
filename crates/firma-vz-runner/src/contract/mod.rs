@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -18,7 +17,7 @@ pub use error::{ContractValidationError, ValidationResult};
 pub use validation::ContractValidationLimits;
 use validation::{
     require_count_at_most, require_file, require_guest_path, require_len_at_most,
-    require_non_empty, require_path,
+    require_loopback_socket_addr, require_non_empty, require_path,
 };
 
 const SUPPORTED_CONTRACT_VERSION: u32 = 1;
@@ -35,6 +34,7 @@ pub struct ContractDocument {
     runner: Runner,
     guest: Guest,
     command: Command,
+    terminal: Terminal,
     mounts: Vec<Mount>,
     network: Network,
     invariants: Vec<Invariant>,
@@ -104,6 +104,7 @@ impl ContractDocument {
         self.validate_runtime(&limits)?;
         self.validate_guest(&limits, &mut is_file)?;
         self.validate_command(&limits, &mut is_file)?;
+        self.validate_terminal()?;
         self.validate_mounts(&limits)?;
         self.validate_network(&limits)?;
         validate_invariants(&self.invariants)?;
@@ -186,6 +187,11 @@ impl ContractDocument {
         Ok(())
     }
 
+    /// Validates terminal metadata while PTY transport is still unsupported.
+    fn validate_terminal(&self) -> ValidationResult<()> {
+        self.terminal.validate()
+    }
+
     /// Validates mount declarations for count, path shape, and bounded size.
     fn validate_mounts(&self, limits: &ContractValidationLimits) -> ValidationResult<()> {
         require_count_at_most("mounts", self.mounts.len(), limits.mounts)?;
@@ -199,33 +205,47 @@ impl ContractDocument {
 
     /// Validates the sidecar proxy, DNS stub, and attribution header contract.
     fn validate_network(&self, limits: &ContractValidationLimits) -> ValidationResult<()> {
-        require_non_empty("network.proxy_url", &self.network.proxy_url)?;
+        let _ = self.network.mode;
+        let _ = self.network.dns_mode;
+
         require_len_at_most(
-            "network.proxy_url",
-            self.network.proxy_url.len(),
-            limits.proxy_url_len,
+            "network.guest_http_proxy_addr",
+            self.network.guest_http_proxy_addr.len(),
+            limits.dns_stub_addr_len,
         )?;
 
-        if !self.network.proxy_url.starts_with("http://") {
-            return Err(ContractValidationError::NonHttpProxyUrl {
-                value: self.network.proxy_url.clone(),
+        require_loopback_socket_addr(
+            "network.guest_http_proxy_addr",
+            &self.network.guest_http_proxy_addr,
+        )?;
+
+        require_len_at_most(
+            "network.guest_dns_stub_addr",
+            self.network.guest_dns_stub_addr.len(),
+            limits.dns_stub_addr_len,
+        )?;
+
+        require_loopback_socket_addr(
+            "network.guest_dns_stub_addr",
+            &self.network.guest_dns_stub_addr,
+        )?;
+
+        if self.network.vsock_sidecar_port == 0 {
+            return Err(ContractValidationError::ZeroPort {
+                field: "network.vsock_sidecar_port",
             });
         }
 
         require_len_at_most(
-            "network.dns_stub_addr",
-            self.network.dns_stub_addr.len(),
+            "network.sidecar_host_addr",
+            self.network.sidecar_host_addr.len(),
             limits.dns_stub_addr_len,
         )?;
+        require_loopback_socket_addr("network.sidecar_host_addr", &self.network.sidecar_host_addr)?;
 
-        self.network
-            .dns_stub_addr
-            .parse::<SocketAddr>()
-            .map_err(|source| ContractValidationError::InvalidSocketAddr {
-                field: "network.dns_stub_addr",
-                value: self.network.dns_stub_addr.clone(),
-                source,
-            })?;
+        if self.network.direct_network_devices_allowed {
+            return Err(ContractValidationError::DirectNetworkDevicesAllowed);
+        }
 
         require_count_at_most(
             "network.attribution_headers",
@@ -283,6 +303,11 @@ impl Contract {
     pub fn mounts(&self) -> &[Mount] {
         &self.document.mounts
     }
+
+    /// Returns host terminal metadata carried by the launch contract.
+    pub const fn terminal(&self) -> &Terminal {
+        &self.document.terminal
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -324,6 +349,94 @@ struct Command {
     seccomp_filter_path: Option<PathBuf>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Terminal {
+    interactive: bool,
+    pty: bool,
+    pty_vsock_port: Option<u32>,
+    pty_control_vsock_port: Option<u32>,
+    term: Option<String>,
+    rows: Option<u16>,
+    cols: Option<u16>,
+}
+
+impl Terminal {
+    /// Returns whether the host command was launched from an interactive TTY.
+    pub const fn interactive(&self) -> bool {
+        self.interactive
+    }
+
+    /// Returns whether the launch requested guest PTY transport.
+    pub const fn pty(&self) -> bool {
+        self.pty
+    }
+
+    /// Returns the host terminal type, when available.
+    pub fn term(&self) -> Option<&str> {
+        self.term.as_deref()
+    }
+
+    /// Returns the host terminal row count, when available.
+    pub const fn rows(&self) -> Option<u16> {
+        self.rows
+    }
+
+    /// Returns the host terminal column count, when available.
+    pub const fn cols(&self) -> Option<u16> {
+        self.cols
+    }
+
+    /// Validates terminal metadata without enabling guest PTY transport.
+    fn validate(&self) -> ValidationResult<()> {
+        if self.pty {
+            return Err(ContractValidationError::UnsupportedTerminalPty);
+        }
+
+        reject_port_without_pty("terminal.pty_vsock_port", self.pty_vsock_port)?;
+        reject_port_without_pty(
+            "terminal.pty_control_vsock_port",
+            self.pty_control_vsock_port,
+        )?;
+
+        require_optional_non_empty("terminal.term", self.term.as_deref())?;
+        reject_zero_terminal_dimension("terminal.rows", self.rows)?;
+        reject_zero_terminal_dimension("terminal.cols", self.cols)?;
+
+        Ok(())
+    }
+}
+
+/// Rejects a PTY VSOCK port when guest PTY transport is disabled.
+fn reject_port_without_pty(field: &'static str, port: Option<u32>) -> ValidationResult<()> {
+    if port.is_some() {
+        return Err(ContractValidationError::TerminalPtyPortWithoutPty { field });
+    }
+
+    Ok(())
+}
+
+/// Validates that an optional string is non-empty when present.
+fn require_optional_non_empty(field: &'static str, value: Option<&str>) -> ValidationResult<()> {
+    if let Some(value) = value {
+        require_non_empty(field, value)?;
+    }
+
+    Ok(())
+}
+
+/// Rejects terminal dimensions that are present but zero.
+fn reject_zero_terminal_dimension(
+    field: &'static str,
+    dimension: Option<u16>,
+) -> ValidationResult<()> {
+    if dimension == Some(0) {
+        return Err(ContractValidationError::ZeroTerminalDimension { field });
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum IdentityMode {
@@ -352,9 +465,26 @@ impl Mount {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Network {
-    proxy_url: String,
-    dns_stub_addr: String,
+    mode: NetworkMode,
+    guest_http_proxy_addr: String,
+    guest_dns_stub_addr: String,
+    vsock_sidecar_port: u32,
+    sidecar_host_addr: String,
+    direct_network_devices_allowed: bool,
+    dns_mode: DnsMode,
     attribution_headers: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum NetworkMode {
+    VsockSidecar,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum DnsMode {
+    ConfinedStub,
 }
 
 #[derive(Debug, Deserialize)]

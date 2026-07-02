@@ -156,6 +156,93 @@ fn rejects_capability_token_in_env() -> Result<()> {
 }
 
 #[test]
+fn accepts_noninteractive_terminal_metadata() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["terminal"]["interactive"] = json!(true);
+    json["terminal"]["term"] = json!("xterm-256color");
+    json["terminal"]["rows"] = json!(40);
+    json["terminal"]["cols"] = json!(120);
+
+    let contract = parse_contract(&json)?;
+
+    assert!(contract.terminal().interactive());
+    assert!(!contract.terminal().pty());
+    assert_eq!(contract.terminal().term(), Some("xterm-256color"));
+    assert_eq!(contract.terminal().rows(), Some(40));
+    assert_eq!(contract.terminal().cols(), Some(120));
+
+    Ok(())
+}
+
+#[test]
+fn rejects_pty_terminal_until_bridge_exists() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["terminal"]["interactive"] = json!(true);
+    json["terminal"]["pty"] = json!(true);
+
+    let document = parse_contract_document(&json)?;
+    let error = document.validate();
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::UnsupportedTerminalPty)
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn rejects_pty_ports_without_pty() -> Result<()> {
+    for field in ["pty_vsock_port", "pty_control_vsock_port"] {
+        let temp = tempfile::tempdir()?;
+        let mut json = valid_contract_json(temp.path())?;
+        json["terminal"][field] = json!(18081);
+
+        let document = parse_contract_document(&json)?;
+        let error = document.validate();
+        let expected = if field == "pty_vsock_port" {
+            "terminal.pty_vsock_port"
+        } else {
+            "terminal.pty_control_vsock_port"
+        };
+
+        assert!(matches!(
+            error,
+            Err(ContractValidationError::TerminalPtyPortWithoutPty { field })
+                if field == expected
+        ));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn rejects_invalid_terminal_dimensions() -> Result<()> {
+    for field in ["rows", "cols"] {
+        let temp = tempfile::tempdir()?;
+        let mut json = valid_contract_json(temp.path())?;
+        json["terminal"][field] = json!(0);
+
+        let document = parse_contract_document(&json)?;
+        let error = document.validate();
+        let expected = if field == "rows" {
+            "terminal.rows"
+        } else {
+            "terminal.cols"
+        };
+
+        assert!(matches!(
+            error,
+            Err(ContractValidationError::ZeroTerminalDimension { field }) if field == expected
+        ));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn rejects_missing_required_invariant() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let mut json = valid_contract_json(temp.path())?;
@@ -177,18 +264,37 @@ fn rejects_missing_required_invariant() -> Result<()> {
 }
 
 #[test]
-fn rejects_non_http_proxy() -> Result<()> {
+fn rejects_non_loopback_guest_proxy() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let mut json = valid_contract_json(temp.path())?;
-    json["network"]["proxy_url"] = json!("socks5://127.0.0.1:8080");
+    json["network"]["guest_http_proxy_addr"] = json!("10.0.0.2:18080");
     let document = parse_contract_document(&json)?;
 
     let error = document.validate();
 
     assert!(matches!(
         error,
-        Err(ContractValidationError::NonHttpProxyUrl { value })
-            if value == "socks5://127.0.0.1:8080"
+        Err(ContractValidationError::NonLoopbackSocketAddr {
+            field: "network.guest_http_proxy_addr",
+            value,
+        }) if value == "10.0.0.2:18080"
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn rejects_direct_network_devices() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["network"]["direct_network_devices_allowed"] = json!(true);
+    let document = parse_contract_document(&json)?;
+
+    let error = document.validate();
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::DirectNetworkDevicesAllowed)
     ));
 
     Ok(())

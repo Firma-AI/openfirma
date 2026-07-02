@@ -18,6 +18,11 @@ pub struct VmPlan {
     pub kernel_command_line: String,
     pub directory_shares: Vec<DirectorySharePlan>,
     pub network_devices: Vec<NetworkDevicePlan>,
+    pub interactive: bool,
+    pub pty: bool,
+    pub term: Option<String>,
+    pub rows: Option<u16>,
+    pub cols: Option<u16>,
 }
 
 impl VmPlan {
@@ -86,6 +91,11 @@ impl VmPlan {
             kernel_command_line: kernel_command_line(&guest_contract_path),
             directory_shares,
             network_devices: Vec::new(),
+            interactive: contract.terminal().interactive(),
+            pty: contract.terminal().pty(),
+            term: contract.terminal().term().map(str::to_string),
+            rows: contract.terminal().rows(),
+            cols: contract.terminal().cols(),
         })
     }
 }

@@ -14,12 +14,18 @@
     "executable": "codex",
     "args": ["--version"],
     "cwd": "${ROOT}",
-    "env": {
-      "HTTP_PROXY": "http://127.0.0.1:19080",
-      "FIRMA_DNS_STUB_ADDR": "127.0.0.1:19053"
-    },
+    "env": {},
     "identity_mode": "host_user",
     "seccomp_filter_path": "${ROOT}/seccomp.bpf"
+  },
+  "terminal": {
+    "interactive": false,
+    "pty": false,
+    "pty_vsock_port": null,
+    "pty_control_vsock_port": null,
+    "term": null,
+    "rows": null,
+    "cols": null
   },
   "mounts": [
     {
@@ -29,8 +35,13 @@
     }
   ],
   "network": {
-    "proxy_url": "http://127.0.0.1:19080",
-    "dns_stub_addr": "127.0.0.1:19053",
+    "mode": "vsock_sidecar",
+    "guest_http_proxy_addr": "127.0.0.1:18080",
+    "guest_dns_stub_addr": "127.0.0.1:1053",
+    "vsock_sidecar_port": 18080,
+    "sidecar_host_addr": "127.0.0.1:19080",
+    "direct_network_devices_allowed": false,
+    "dns_mode": "confined_stub",
     "attribution_headers": {
       "x-firma-sandbox-id": "sandbox-test"
     }
