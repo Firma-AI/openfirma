@@ -1,18 +1,36 @@
 use std::io;
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-/// A loopback TCP proxy that counts accepted client connections while forwarding
-/// their bytes to an upstream address.
+/// Best-effort discovery of this host's primary non-loopback (outbound) IP.
+///
+/// Uses the "connect a UDP socket and read its local address" trick: no packets
+/// are sent, but the kernel picks the source address it would route through.
+/// Returns `None` when the host has no non-loopback route (e.g. a stripped CI
+/// container), leaving the caller to fall back to loopback.
+#[must_use]
+pub fn outbound_host_ip() -> Option<IpAddr> {
+    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("8.8.8.8:80").ok()?;
+    let ip = sock.local_addr().ok()?.ip();
+    if ip.is_loopback() { None } else { Some(ip) }
+}
+
+/// A TCP proxy that counts accepted client connections while forwarding their
+/// bytes to an upstream address.
 ///
 /// wiremock only records *HTTP* requests, so a raw `connect()` + non-HTTP
 /// `send()` leaves no server-side trace. Fronting wiremock with this proxy gives
 /// the egress scenarios a real "the agent's socket reached us" signal — the
 /// count of accepted TCP connections — while HTTP scenarios keep working because
 /// every byte is spliced through to the wiremock backend.
+///
+/// The bind interface is caller-chosen: loopback exercises the seccomp loopback
+/// guard, while a non-loopback host IP exercises the network-namespace egress
+/// boundary.
 pub struct RawTcpProxy {
     addr: SocketAddr,
     count: Arc<AtomicUsize>,
@@ -29,7 +47,18 @@ impl RawTcpProxy {
     /// Returns an error if the front listener cannot bind or its address cannot
     /// be read.
     pub fn start(upstream: SocketAddr) -> io::Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
+        Self::start_on(IpAddr::from([127, 0, 0, 1]), upstream)
+    }
+
+    /// Like [`Self::start`] but binds the front listener on `bind_ip`, so the
+    /// agent's destination can be steered onto loopback or a routable interface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the front listener cannot bind or its address cannot
+    /// be read.
+    pub fn start_on(bind_ip: IpAddr, upstream: SocketAddr) -> io::Result<Self> {
+        let listener = TcpListener::bind(SocketAddr::new(bind_ip, 0))?;
         let addr = listener.local_addr()?;
         // Non-blocking accept so the loop can observe the stop flag between
         // connections instead of parking forever in `accept`.
@@ -50,7 +79,12 @@ impl RawTcpProxy {
                         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                             std::thread::sleep(Duration::from_millis(20));
                         }
-                        Err(_) => break,
+                        // A transient accept error (e.g. EMFILE) must not tear
+                        // down counting for the rest of the run, or a later phase
+                        // would silently see zero connections. Keep serving.
+                        Err(_) => {
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
                     }
                 }
             })
@@ -85,6 +119,9 @@ impl RawTcpProxy {
 
 impl Drop for RawTcpProxy {
     fn drop(&mut self) {
+        // Stops and joins only the accept loop. In-flight `forward` workers are
+        // detached; they wind down on their own via the read timeout in
+        // `forward`, well within the harness process lifetime.
         self.stop.store(true, Ordering::SeqCst);
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
@@ -96,7 +133,7 @@ impl Drop for RawTcpProxy {
 /// (including a non-HTTP payload that the upstream rejects) just ends the copy.
 /// The connection has already been counted before this runs.
 fn forward(client: TcpStream, upstream: SocketAddr) {
-    let Ok(server) = TcpStream::connect(upstream) else {
+    let Ok(server) = TcpStream::connect_timeout(&upstream, Duration::from_secs(5)) else {
         return;
     };
     // Bound each direction so a peer that never closes cannot pin the worker
