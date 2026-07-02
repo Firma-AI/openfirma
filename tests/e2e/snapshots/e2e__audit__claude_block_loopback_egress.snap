@@ -6,7 +6,7 @@ FirmaAuditTrail(
     {
         AuditEvent {
             action: "network.loopback",
-            resource: "tcp://127.0.0.1:<mock-port>",
+            resource: "tcp://127.0.0.1:<tcp-port>",
             decision: Deny,
             deny_reason: "loopback blocked",
             dispatch_status: 0,

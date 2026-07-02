@@ -46,6 +46,9 @@ pub async fn run_scenario(
     agent: &Agent,
 ) -> Result<(), anyhow::Error> {
     let mock_server = Arc::new(MockServer::start().await);
+    let raw_tcp = Arc::new(crate::tcp_proxy::RawTcpProxy::start(
+        *mock_server.address(),
+    )?);
 
     let cfg_tmp = tempfile::tempdir()?;
     let state_tmp = tempfile::tempdir()?;
@@ -64,6 +67,7 @@ pub async fn run_scenario(
         capability_session_id: None,
         mock_server: Arc::clone(&mock_server),
         mocks: Vec::new(),
+        raw_tcp: Arc::clone(&raw_tcp),
         config_dir: cfg_dir.clone(),
         state_dir: state_dir.clone(),
         agent: agent.clone(),
@@ -86,6 +90,7 @@ pub async fn run_scenario(
     let baseline_phase = PhaseOutput {
         agent: baseline_agent_output,
         http_requests: mock_server.received_requests().await.unwrap_or_default(),
+        tcp_connections: raw_tcp.connection_count(),
     };
 
     scenario.assert_baseline(&baseline_phase).with_context(|| {
@@ -98,6 +103,7 @@ pub async fn run_scenario(
 
     // Clear baseline captures; mount enforcement mocks built during setup.
     mock_server.reset().await;
+    raw_tcp.reset();
     for m in ctx.mocks.drain(..) {
         m.mount(&mock_server).await;
     }
@@ -111,6 +117,7 @@ pub async fn run_scenario(
     let enforcement_phase = PhaseOutput {
         agent: enforcement_agent_output,
         http_requests: mock_server.received_requests().await.unwrap_or_default(),
+        tcp_connections: raw_tcp.connection_count(),
     };
 
     let audit_path = state_dir.join("audit.jsonl");

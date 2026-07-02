@@ -22,6 +22,12 @@ pub struct ScenarioSetup {
     pub mock_server: Arc<MockServer>,
     pub mocks: Vec<Mock>,
 
+    /// Counting TCP proxy fronting `mock_server`. Egress scenarios point the
+    /// agent at `raw_tcp.address()` and assert on the accepted-connection count —
+    /// a real "socket reached us" signal that raw (non-HTTP) sockets produce and
+    /// wiremock alone cannot record.
+    pub raw_tcp: Arc<crate::tcp_proxy::RawTcpProxy>,
+
     pub(crate) config_dir: PathBuf,
     pub(crate) state_dir: PathBuf,
     pub(crate) agent: Agent,

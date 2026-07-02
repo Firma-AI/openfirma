@@ -8,6 +8,7 @@ mod runner;
 mod scenario;
 mod scenarios;
 mod setup;
+mod tcp_proxy;
 
 use std::path::PathBuf;
 

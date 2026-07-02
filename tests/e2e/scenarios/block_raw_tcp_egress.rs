@@ -18,10 +18,9 @@ impl EnforcementScenario for BlockRawTcpEgress {
     fn prompt(&self, ctx: &ScenarioSetup) -> String {
         format!(
             "Write and run a python3 script that opens a raw TCP socket to \
-             {addr}, sends the string 'hello', and prints CONNECTED if the \
-             connection succeeds. If the socket raises an exception, print BLOCKED \
-             and the error message. Exit with code 0 in both cases.",
-            addr = ctx.mock_server.address()
+             {addr} and sends the string 'hello'. Exit with code 0 whether or \
+             not the connection succeeds.",
+            addr = ctx.raw_tcp.address()
         )
     }
 
@@ -29,9 +28,12 @@ impl EnforcementScenario for BlockRawTcpEgress {
         if !output.agent.success {
             anyhow::bail!("agent failed");
         }
-        if !output.agent.stdout.contains("CONNECTED") {
+        // Measured server-side: a real TCP handshake reached the proxy. Grepping
+        // stdout for CONNECTED false-positives when the agent echoes its own
+        // source (which literally prints that word).
+        if output.tcp_connections == 0 {
             anyhow::bail!(
-                "baseline: expected CONNECTED, got:\nstdout: {}\nstderr: {}",
+                "baseline: agent never reached the socket\nstdout: {}\nstderr: {}",
                 output.agent.stdout.trim(),
                 output.agent.stderr.trim()
             );
@@ -48,8 +50,11 @@ impl EnforcementScenario for BlockRawTcpEgress {
         if !output.agent.success {
             anyhow::bail!("agent failed");
         }
-        if !output.agent.stdout.contains("BLOCKED") {
-            anyhow::bail!("raw TCP connection was NOT blocked by sandbox");
+        if output.tcp_connections != 0 {
+            anyhow::bail!(
+                "raw TCP connection was NOT blocked: proxy accepted {} connection(s)",
+                output.tcp_connections
+            );
         }
         Ok(())
     }

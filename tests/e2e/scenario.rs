@@ -8,6 +8,10 @@ use crate::setup::ScenarioSetup;
 pub struct PhaseOutput {
     pub agent: RunOutput,
     pub http_requests: Vec<wiremock::Request>,
+    /// TCP connections the raw-TCP proxy accepted during this phase. A raw
+    /// `connect()` that reaches the socket increments this even when no HTTP
+    /// request is parsed.
+    pub tcp_connections: usize,
 }
 
 pub trait EnforcementScenario: Send + Sync {
