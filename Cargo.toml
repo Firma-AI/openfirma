@@ -47,7 +47,6 @@ clap = { version = "4", default-features = false }
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 ctrlc = "3.5"
 dialoguer = "0.11"
-dirs = "6"
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
 elliptic-curve = { version = "0.13", features = ["pem"] }
 firma-authority = { path = "crates/firma-authority" }

@@ -2,8 +2,7 @@
 //!
 //! Linux uses `XDG_RUNTIME_DIR`. macOS and Windows have no XDG equivalent;
 //! the fallback path is `/tmp/firma-$UID` (Unix) or `%LOCALAPPDATA%\firma\runtime`
-//! (Windows). `dirs::runtime_dir()` returns `None` on those platforms, so the
-//! fallback branch is exercised in normal use, not only on error.
+//! (Windows).
 
 use std::path::{Path, PathBuf};
 
