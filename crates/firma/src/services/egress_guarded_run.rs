@@ -16,6 +16,7 @@ use crate::args::run::EgressGuardedRunArgs;
 /// Returns an error when the guard cannot be installed, the listener fd cannot
 /// be handed to the supervisor, or `exec` fails. On success this never returns
 /// (the process image is replaced by the wrapped command).
+#[cfg(target_os = "linux")]
 pub fn run(args: EgressGuardedRunArgs) -> anyhow::Result<ExitCode> {
     let EgressGuardedRunArgs {
         supervisor_socket,
@@ -23,4 +24,17 @@ pub fn run(args: EgressGuardedRunArgs) -> anyhow::Result<ExitCode> {
     } = args;
     let never = firma_run::egress_guard::install_and_exec(&supervisor_socket, &command)?;
     match never {}
+}
+
+/// The seccomp loopback egress guard has no non-Linux implementation. The
+/// `__egress-guarded-run` wrapper is only ever spawned by the Linux structural
+/// path, so on other targets it fails closed rather than silently running the
+/// wrapped command unguarded.
+///
+/// # Errors
+///
+/// Always returns an error: the guard is Linux-only.
+#[cfg(not(target_os = "linux"))]
+pub fn run(_args: EgressGuardedRunArgs) -> anyhow::Result<ExitCode> {
+    anyhow::bail!("the loopback egress guard is only supported on Linux")
 }

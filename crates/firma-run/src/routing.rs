@@ -41,6 +41,10 @@ fn structural_dns_stub_listen_addr() -> &'static str {
 #[derive(Default)]
 pub struct EnvOverrides(BTreeMap<String, String>);
 
+// The builder methods are only invoked on Unix structural/non-structural paths;
+// on Windows the runtime is assembled from `autostart_trust_env` alone, so the
+// whole impl would be dead code there.
+#[cfg(unix)]
 impl EnvOverrides {
     /// Sets all six proxy environment variables (upper/lowercase HTTP, HTTPS,
     /// and ALL) to the same URL.
@@ -83,6 +87,7 @@ impl EnvOverrides {
         );
         self
     }
+    #[cfg(target_os = "linux")]
     fn with_egress_sock(mut self, guard_sock: &Path) -> Self {
         self.0.insert(
             "FIRMA_RUN_EGRESS_GUARD_SOCK".to_string(),
@@ -315,6 +320,10 @@ pub fn prepare_network_runtime(
 /// Builds the [`NetworkRuntime`] for the non-structural path (no enforced
 /// network namespace): the agent reaches the sidecar over a host bridge, plus a
 /// host-side DNS refusal stub on Unix. No adapter or egress guard.
+// On non-Unix targets the body performs no fallible work, so the `Result` looks
+// redundant there; it is required on Unix, where the host bridge/DNS stub setup
+// can fail.
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
 fn prepare_flat_runtime(
     handle: &SandboxHandle,
     proof: &EnforcementProof,
@@ -420,6 +429,9 @@ fn prepare_structural_runtime(
         &current_exe,
     );
 
+    // The egress guard is Linux-only; on other structural targets (macOS
+    // sandbox-exec) there is no guard socket to advertise.
+    #[cfg(target_os = "linux")]
     let env_overrides = if let Some(guard) = &egress_guard {
         env_overrides.with_egress_sock(guard.socket_path())
     } else {

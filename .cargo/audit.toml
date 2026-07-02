@@ -44,4 +44,17 @@ ignore = [
   #     → local-ip-address → neli → getset → proc-macro-error2
   # Fix: blocked on pingora upstream
   "RUSTSEC-2026-0173",
+
+  # quick-xml 0.39.4 — quadratic run time checking a start tag for duplicate
+  # attribute names (XML-input DoS). Fix requires >=0.41.0.
+  # Path: firma-demo-tui → tui-markdown → syntect → plist → quick-xml
+  # Demo crate only; not on the enforcement hot path and never parses untrusted
+  # input there. Cannot bump in-range (plist 1.9.0 pins quick-xml ^0.39.2);
+  # blocked on upstream plist/syntect.
+  "RUSTSEC-2026-0194",
+
+  # quick-xml 0.39.4 — unbounded namespace-declaration allocation in `NsReader`
+  # (memory-exhaustion DoS). Fix requires >=0.41.0. Same demo-only path and
+  # upstream blocker as RUSTSEC-2026-0194.
+  "RUSTSEC-2026-0195",
 ]
