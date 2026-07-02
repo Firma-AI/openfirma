@@ -55,6 +55,12 @@ impl ReadinessFlag {
         *self.tx.borrow()
     }
 
+    /// Subscribe to readiness changes.
+    #[must_use]
+    pub fn subscribe(&self) -> watch::Receiver<ReadinessState> {
+        self.tx.subscribe()
+    }
+
     /// Resolve once both `policy_bundle_ready` and `revocation_ready` are
     /// true. Returns immediately when both are already set. Returns
     /// without panicking if every writer has been dropped (the sender

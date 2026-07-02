@@ -45,11 +45,11 @@ The rest of this guide uses **per-pod sidecar**. The patterns translate to the o
 
 In a multi-tenant web app, "the agent" is not the app. The agent is the **session** — what the app is doing on behalf of one user. The choice that matters most:
 
-| Choice                     | Meaning                                                | Use when                              |
-| -------------------------- | ------------------------------------------------------ | ------------------------------------- |
-| `agent_id = <tenant_id>`   | One agent identity per tenant; sessions are sub-units. | Per-tenant policies, shared models.   |
-| `agent_id = <user_id>`     | One agent identity per end user.                       | Strict per-user audit isolation.      |
-| `agent_id = <app_name>`    | A single agent identity for the whole app.             | Single-tenant; minimal isolation.     |
+| Choice                   | Meaning                                                | Use when                            |
+| ------------------------ | ------------------------------------------------------ | ----------------------------------- |
+| `agent_id = <tenant_id>` | One agent identity per tenant; sessions are sub-units. | Per-tenant policies, shared models. |
+| `agent_id = <user_id>`   | One agent identity per end user.                       | Strict per-user audit isolation.    |
+| `agent_id = <app_name>`  | A single agent identity for the whole app.             | Single-tenant; minimal isolation.   |
 
 This guide uses `agent_id = <tenant_id>` and `session_id = <user-session-uuid>`. That gives you per-tenant policies plus per-session isolation in the audit log.
 
@@ -222,11 +222,86 @@ A few things worth highlighting:
 
 - **`default_protected = true`** — anything not in mapping rules denies. Production posture.
 - **`[sidecar.authority].url` uses `https://` + `[sidecar.authority].ca_cert_path`** — sidecar verifies Authority identity before trusting streamed bundles/revocations.
+- **`reconnect_min_backoff_ms` / `reconnect_max_backoff_secs`** — Sidecars retry Authority streams with bounded exponential backoff. The defaults are `250` ms and `30` s.
 - **`grpc` audit sink** — events go to a centralized collector, not to a local file. Multiple Sidecars feed one collector.
 - **Vault Agent for credentials** — no API keys in the app. Vault Agent renders short-lived files and the Sidecar reads them per call.
 - **`strict_hosts` on the vendor** — if MITM fails (e.g. cert mismatch), the call denies rather than falling back to weaker CONNECT-only policy.
 
-## Step 6: Per-session capability issuance
+## Step 6: Configure startup ordering and readiness
+
+You can start the Authority and Sidecar at the same time. Do not add a
+shell loop that waits for the Authority before launching the Sidecar. The
+Sidecar connects to the Authority with independent `WatchPolicyBundle`
+and `WatchRevocations` streams. If either stream is unavailable, it keeps
+retrying with exponential backoff and stays fail-closed.
+
+The request path is blocked until both Authority-backed stores are ready:
+
+- The policy bundle stream has delivered and applied its first bundle.
+- The revocation stream has either delivered its first event or the
+  `revocation_readiness_grace_ms` window has elapsed.
+
+Only after both gates pass does the Sidecar emit `sidecar ready`. Before
+that point, protected traffic denies locally with readiness errors such as
+`POLICY_BUNDLE_NOT_READY` or `REVOCATION_CACHE_NOT_READY`; it is not sent
+upstream.
+
+Configure the backoff in `[sidecar.authority]` only when your platform
+needs different timing:
+
+```toml
+[sidecar.authority]
+url                           = "https://firma-authority.internal:50051"
+public_key_path               = "/etc/firma/firma-authority.pub"
+ca_cert_path                  = "/etc/firma/authority-ca.crt"
+reconnect_min_backoff_ms      = 250
+reconnect_max_backoff_secs    = 30
+revocation_readiness_grace_ms = 500
+```
+
+For Cloud Run multi-container services, make the Sidecar's health endpoint
+the probe that gates traffic. Use `GET /healthz` on port `9000`, the
+default `--health-bind-addr` port, for both startup and readiness. Cloud
+Run's
+[container health checks](https://docs.cloud.google.com/run/docs/configuring/healthchecks)
+distinguish startup, readiness, and liveness; the important rule is that
+startup success must also mean the container is safe to receive traffic.
+Pointing startup and readiness at the Sidecar ready gate satisfies that
+rule and avoids a separate sequencing script.
+
+```yaml
+containers:
+  - name: app
+    image: us-docker.pkg.dev/example/app:latest
+    env:
+      - name: HTTPS_PROXY
+        value: http://127.0.0.1:8080
+
+  - name: firma-sidecar
+    image: us-docker.pkg.dev/example/firma-sidecar:latest
+    ports:
+      - name: health
+        containerPort: 9000
+    startupProbe:
+      httpGet:
+        path: /healthz
+        port: 9000
+      periodSeconds: 1
+      failureThreshold: 60
+    readinessProbe:
+      httpGet:
+        path: /healthz
+        port: 9000
+      periodSeconds: 2
+      failureThreshold: 3
+```
+
+Use the same endpoint for a Kubernetes `readinessProbe` if you run the
+same container pair there. Keep liveness separate: a liveness failure
+should mean the Sidecar process is wedged and should be restarted, not
+that the Authority is briefly unreachable during startup.
+
+## Step 7: Per-session capability issuance
 
 The app's request handler issues a fresh capability for each user session. Pseudocode (Python):
 
@@ -259,7 +334,7 @@ When a user starts a session, the app calls `issue_capability_for_session(...)`,
 
 For a 15-minute TTL with 1000 active sessions, the Authority issues 1000 capabilities every 15 minutes. The Sidecar holds them in its `CapabilityMap`. The hot path is unchanged.
 
-## Step 7: Wire the app to the proxy
+## Step 8: Wire the app to the proxy
 
 Set the app's HTTP client to use the loopback Sidecar:
 
@@ -282,13 +357,13 @@ node app.js
 
 The app does *not* read `OPENAI_API_KEY` or vendor secrets. They live in Vault, the Sidecar pulls them, the app just makes calls without auth headers.
 
-## Step 8: Multi-tenancy in the audit log
+## Step 9: Multi-tenancy in the audit log
 
 Every request the app proxies produces an audit event tagged with `agent_id = tenant-<id>`, `session_id = <user-session>`. Ship those events to your collector keyed on `agent_id` and you have **per-tenant audit by construction** — no app-side instrumentation needed.
 
 For per-user accounting on top of that, the `session_id` is the unit. If you record the mapping `(session_id → user_id)` somewhere, you can join the audit stream against it.
 
-## Step 9: Operational concerns
+## Step 10: Operational concerns
 
 A few practices that come up only at production scale.
 
