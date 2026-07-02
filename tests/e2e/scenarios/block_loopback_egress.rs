@@ -49,9 +49,9 @@ impl EnforcementScenario for BlockLoopbackEgress {
 
     fn assert_enforcement(
         &self,
-        ctx: &ScenarioSetup,
+        _ctx: &ScenarioSetup,
         output: &PhaseOutput,
-        audit: &FirmaAuditTrail,
+        _audit: &FirmaAuditTrail,
     ) -> Result<(), anyhow::Error> {
         if !output.agent.success {
             anyhow::bail!("agent failed");
@@ -65,7 +65,11 @@ impl EnforcementScenario for BlockLoopbackEgress {
             );
         }
 
-        audit.assert_snapshot(self.name(), ctx);
+        // Linux seccomp user-notify reports a signed `network.loopback` denial.
+        // macOS sandbox-exec denies structurally but does not deliver per-attempt
+        // denials to the Sidecar audit channel.
+        #[cfg(target_os = "linux")]
+        _audit.assert_snapshot(self.name(), _ctx);
         Ok(())
     }
 }
