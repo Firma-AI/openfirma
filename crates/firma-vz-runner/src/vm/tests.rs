@@ -23,6 +23,11 @@ fn vm_plan_exposes_contract_and_mounts_without_network_devices() -> Result<()> {
     assert!(plan.kernel.ends_with("vmlinuz"));
     assert!(plan.initrd.ends_with("initrd.img"));
     assert!(plan.rootfs.ends_with("rootfs.img"));
+    assert!(!plan.interactive);
+    assert!(!plan.pty);
+    assert_eq!(plan.term, None);
+    assert_eq!(plan.rows, None);
+    assert_eq!(plan.cols, None);
     assert_eq!(plan.directory_shares.len(), 2);
     assert_eq!(plan.directory_shares[0].name, "runtime");
     assert!(plan.directory_shares[0].read_only);

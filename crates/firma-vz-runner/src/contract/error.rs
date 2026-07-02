@@ -33,14 +33,24 @@ pub enum ContractValidationError {
     EmptyCommandArgument,
     #[error("command.env must not serialize secret key {key}")]
     SecretEnvSerialized { key: &'static str },
-    #[error("network.proxy_url must be an HTTP proxy URL")]
-    NonHttpProxyUrl { value: String },
+    #[error("terminal.pty=true is not supported until the VZ PTY bridge is implemented")]
+    UnsupportedTerminalPty,
+    #[error("{field} must be null while terminal.pty=false")]
+    TerminalPtyPortWithoutPty { field: &'static str },
+    #[error("{field} must be non-zero when set")]
+    ZeroTerminalDimension { field: &'static str },
     #[error("{field} must be a host:port socket address, got {value}")]
     InvalidSocketAddr {
         field: &'static str,
         value: String,
         source: AddrParseError,
     },
+    #[error("{field} must be loopback, got {value}")]
+    NonLoopbackSocketAddr { field: &'static str, value: String },
+    #[error("{field} must be non-zero")]
+    ZeroPort { field: &'static str },
+    #[error("network.direct_network_devices_allowed must be false for VZ guest mode")]
+    DirectNetworkDevicesAllowed,
     #[error("duplicate VZ launch invariant {name:?}")]
     DuplicateInvariant { name: InvariantName },
     #[error("VZ launch invariant {name:?} cannot be disabled")]

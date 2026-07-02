@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::path::Path;
 
 use super::error::{ContractValidationError, ValidationResult};
@@ -15,7 +16,6 @@ pub struct ContractValidationLimits {
     pub command_args: usize,
     pub command_arg_len: usize,
     pub path_len: usize,
-    pub proxy_url_len: usize,
     pub dns_stub_addr_len: usize,
     pub attribution_headers: usize,
     pub attribution_header_name_len: usize,
@@ -32,7 +32,6 @@ impl Default for ContractValidationLimits {
             command_args: 256,
             command_arg_len: 4096,
             path_len: 4096,
-            proxy_url_len: 2048,
             dns_stub_addr_len: 128,
             attribution_headers: 32,
             attribution_header_name_len: 128,
@@ -121,6 +120,29 @@ pub fn require_len_at_most(field: &'static str, actual: usize, max: usize) -> Va
     }
 
     Ok(())
+}
+
+/// Requires a socket address to parse and point at loopback.
+pub fn require_loopback_socket_addr(
+    field: &'static str,
+    value: &str,
+) -> ValidationResult<SocketAddr> {
+    let addr = value.parse::<SocketAddr>().map_err(|source| {
+        ContractValidationError::InvalidSocketAddr {
+            field,
+            value: value.to_string(),
+            source,
+        }
+    })?;
+
+    if !addr.ip().is_loopback() {
+        return Err(ContractValidationError::NonLoopbackSocketAddr {
+            field,
+            value: value.to_string(),
+        });
+    }
+
+    Ok(addr)
 }
 
 /// Requires a string field to contain non-whitespace content.
