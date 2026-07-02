@@ -48,7 +48,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -137,7 +137,14 @@ fn is_loopback(ip: IpAddr) -> bool {
 ///
 /// Non-loopback destinations always pass — the guard only governs loopback,
 /// leaving external egress to the network-namespace / proxy boundary. Loopback
-/// destinations pass only when the port is one of Firma's own endpoints.
+/// destinations pass only when the port matches one of Firma's own endpoints.
+///
+/// Matching is **port-only**, not address-scoped: any loopback IP on a
+/// sanctioned port passes (e.g. `127.0.0.5:18080`), not just the exact bridge
+/// address. The agent picks the loopback IP its resolver returns for the proxy
+/// (`127.0.0.1` vs `::1`), so pinning a single address would spuriously block
+/// legitimate proxy traffic. The private network namespace is the real
+/// boundary; this guard is defense in depth plus an audit trail on top of it.
 pub(crate) fn classify(addr: SocketAddr, allow_ports: &[u16]) -> Verdict {
     if !is_loopback(addr.ip()) {
         return Verdict::Allow;
@@ -584,6 +591,10 @@ struct AuditInner {
 /// out of `&mut self` to enforce close-then-join ordering.
 struct AuditSink {
     inner: Option<AuditInner>,
+    /// Count of reports dropped because the worker's queue was full. Blocks are
+    /// always enforced; only the audit report is lost. Surfaced once at Drop so
+    /// a burst (e.g. a loopback port scan) is visible instead of silent.
+    dropped: AtomicU64,
 }
 
 impl AuditSink {
@@ -600,6 +611,7 @@ impl AuditSink {
             }) {
             Ok(handle) => Some(Self {
                 inner: Some(AuditInner { tx, handle }),
+                dropped: AtomicU64::new(0),
             }),
             Err(error) => {
                 tracing::warn!(
@@ -614,8 +626,10 @@ impl AuditSink {
     /// Non-blocking hand-off of a blocked destination. Drops the report rather
     /// than stall the notify loop if the worker's queue is full.
     fn send(&self, addr: SocketAddr) {
-        if let Some(inner) = &self.inner {
-            let _ = inner.tx.try_send(addr);
+        if let Some(inner) = &self.inner
+            && inner.tx.try_send(addr).is_err()
+        {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -653,6 +667,14 @@ impl AuditSink {
 
 impl Drop for AuditSink {
     fn drop(&mut self) {
+        let dropped = self.dropped.load(Ordering::Relaxed);
+        if dropped > 0 {
+            tracing::warn!(
+                dropped,
+                "egress guard: audit queue overflowed; some loopback blocks were \
+                 enforced but not audited (enforcement is never affected)"
+            );
+        }
         if let Some(AuditInner { tx, handle }) = self.inner.take() {
             drop(tx); // close the channel so the worker observes disconnect
             let _ = handle.join();

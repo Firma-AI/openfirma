@@ -725,12 +725,18 @@ fn loopback_allow_rules(launch: &LaunchSpec) -> String {
     out
 }
 
-/// Extracts the port from a `host:port` or `scheme://host:port` env value
-/// (e.g. `http://127.0.0.1:18080` or `127.0.0.1:5353`).
+/// Extracts the port from a `host:port` or `scheme://host:port[/path]` env value
+/// (e.g. `http://127.0.0.1:18080`, `http://127.0.0.1:18080/`, or `127.0.0.1:5353`).
 fn loopback_port_from(value: Option<&String>) -> Option<u16> {
     let raw = value?.trim();
-    // Drop any scheme/path so only the authority remains, then take the port.
-    let authority = raw.rsplit('/').next().unwrap_or(raw);
+    // Drop the scheme, then keep only the authority (everything before the
+    // first '/', '?', or '#') so a trailing slash or path cannot swallow the
+    // port. Finally take the last ':'-delimited field as the port.
+    let after_scheme = raw.split_once("://").map_or(raw, |(_, rest)| rest);
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
     let port_str = authority.rsplit(':').next()?;
     port_str.parse::<u16>().ok()
 }
@@ -783,7 +789,7 @@ mod tests {
     };
     use super::{
         VzGuestLaunchContract, VzGuestLaunchInputs, VzStructuralMode, build_sandbox_profile,
-        vz_structural_mode_from_flags,
+        loopback_port_from, vz_structural_mode_from_flags,
     };
 
     fn test_launch(profile_name: &str) -> LaunchSpec {
@@ -1126,6 +1132,28 @@ mod tests {
             !profile.contains("localhost:*"),
             "loopback must be port-scoped, not wildcard, when ports are known: {profile}"
         );
+    }
+
+    #[test]
+    fn loopback_port_parsing_handles_scheme_path_and_bare_forms() {
+        let cases = [
+            ("http://127.0.0.1:18080", Some(18080)),
+            ("http://127.0.0.1:18080/", Some(18080)),
+            ("http://127.0.0.1:18080/path?q=1", Some(18080)),
+            ("127.0.0.1:5353", Some(5353)),
+            ("http://[::1]:18080", Some(18080)),
+            ("127.0.0.1", None),
+            ("http://127.0.0.1:notaport", None),
+        ];
+        for (input, expected) in cases {
+            let value = input.to_string();
+            assert_eq!(
+                loopback_port_from(Some(&value)),
+                expected,
+                "parsing {input:?}"
+            );
+        }
+        assert_eq!(loopback_port_from(None), None);
     }
 
     #[test]

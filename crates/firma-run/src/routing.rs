@@ -469,12 +469,21 @@ fn start_loopback_guard(
     sidecar_supervisor: Option<&SidecarSupervisor>,
     identity: &RunIdentity,
 ) -> Option<crate::egress_guard::EgressGuardHandle> {
+    // Ports the agent may still reach on loopback. A parse failure here would
+    // silently drop the endpoint from the allow-list, and the guard would then
+    // BLOCK the agent's connect to the proxy/DNS stub — killing all egress with
+    // no obvious cause. Warn loudly so that misconfiguration is diagnosable.
     let mut allow_ports = Vec::new();
-    if let Ok(addr) = proxy_addr.parse::<std::net::SocketAddr>() {
-        allow_ports.push(addr.port());
-    }
-    if let Ok(addr) = dns_addr.parse::<std::net::SocketAddr>() {
-        allow_ports.push(addr.port());
+    for (label, raw) in [("proxy", proxy_addr), ("dns stub", dns_addr)] {
+        match raw.parse::<std::net::SocketAddr>() {
+            Ok(addr) => allow_ports.push(addr.port()),
+            Err(error) => tracing::warn!(
+                %error,
+                endpoint = raw,
+                "egress guard: {label} address is not a socket addr; its port will \
+                 NOT be allow-listed and the agent's connect to it will be blocked"
+            ),
+        }
     }
 
     // Report blocked attempts to the autostarted Sidecar over the `firma run`

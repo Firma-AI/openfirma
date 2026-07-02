@@ -151,6 +151,10 @@ impl SidecarSupervisor {
         let log_path = req.marker_dir.join("sidecar.log");
         let pid_path = req.marker_dir.join("sidecar.pid");
         let metadata_path = req.marker_dir.join("metadata.toml");
+        #[cfg(unix)]
+        let audit_sock_path = firma_sidecar::run_audit::socket_path_in(&req.marker_dir);
+        #[cfg(not(unix))]
+        let audit_sock_path = req.marker_dir.join("run-audit.sock");
 
         // Pre-clean any leftover socket file from a crashed run.
         let _ = std::fs::remove_file(&sock_path);
@@ -192,13 +196,9 @@ impl SidecarSupervisor {
                 .env("FIRMA_RUN_SANDBOX_ID", req.sandbox_id)
                 // Control socket for the `firma run` audit channel: out-of-band
                 // reports (e.g. loopback blocks) the Sidecar turns into signed
-                // audit events. Shares the marker dir so the guard derives the
-                // same path; the filename mirrors
-                // `firma_sidecar::run_audit::socket_path_in`.
-                .env(
-                    "FIRMA_RUN_AUDIT_SOCK",
-                    req.marker_dir.join("run-audit.sock"),
-                )
+                // audit events. Derived via `socket_path_in` so the guard and
+                // the Sidecar agree on the filename.
+                .env("FIRMA_RUN_AUDIT_SOCK", &audit_sock_path)
                 .env("NO_COLOR", "1")
                 .env("CLICOLOR", "0")
                 .stdin(std::process::Stdio::null())
