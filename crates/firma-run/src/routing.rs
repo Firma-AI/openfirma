@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -96,12 +96,12 @@ impl EnvOverrides {
         self
     }
 
-    fn with_bridge_address(mut self, bridge_addr: SocketAddr) -> Self {
+    fn with_bridge_address(mut self, bridge_addr: std::net::SocketAddr) -> Self {
         self.set_proxy_url(&format!("http://{bridge_addr}"));
         self
     }
 
-    fn with_dns_stub_address(mut self, dns_stub_addr: Option<SocketAddr>) -> Self {
+    fn with_dns_stub_address(mut self, dns_stub_addr: Option<std::net::SocketAddr>) -> Self {
         if let Some(addr) = dns_stub_addr {
             self.0
                 .insert("FIRMA_DNS_STUB_ADDR".to_string(), addr.to_string());
@@ -323,7 +323,7 @@ pub fn prepare_network_runtime(
 // On non-Unix targets the body performs no fallible work, so the `Result` looks
 // redundant there; it is required on Unix, where the host bridge/DNS stub setup
 // can fail.
-#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
+#[cfg_attr(not(unix), expect(clippy::unnecessary_wraps))]
 fn prepare_flat_runtime(
     handle: &SandboxHandle,
     proof: &EnforcementProof,

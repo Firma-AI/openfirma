@@ -49,9 +49,9 @@ impl EnforcementScenario for BlockLoopbackEgress {
 
     fn assert_enforcement(
         &self,
-        _ctx: &ScenarioSetup,
+        ctx: &ScenarioSetup,
         output: &PhaseOutput,
-        _audit: &FirmaAuditTrail,
+        audit: &FirmaAuditTrail,
     ) -> Result<(), anyhow::Error> {
         if !output.agent.success {
             anyhow::bail!("agent failed");
@@ -69,7 +69,9 @@ impl EnforcementScenario for BlockLoopbackEgress {
         // macOS sandbox-exec denies structurally but does not deliver per-attempt
         // denials to the Sidecar audit channel.
         #[cfg(target_os = "linux")]
-        _audit.assert_snapshot(self.name(), _ctx);
+        audit.assert_snapshot(self.name(), ctx);
+        #[cfg(not(target_os = "linux"))]
+        let _ = (ctx, audit);
         Ok(())
     }
 }

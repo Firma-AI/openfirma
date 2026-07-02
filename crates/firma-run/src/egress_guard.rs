@@ -735,9 +735,13 @@ fn handle_notification(
                 flags: 0,
             };
             let _ = notif_send(notify_fd, &resp);
-            tracing::warn!(dst = %addr, "blocked agent connection to loopback");
-            if let Some(audit) = audit {
-                audit.send(addr);
+            if let Some(addr) = addr {
+                tracing::warn!(dst = %addr, "blocked agent connection to loopback");
+                if let Some(audit) = audit {
+                    audit.send(addr);
+                }
+            } else {
+                tracing::warn!("blocked agent connection because sockaddr could not be read");
             }
         }
     }
@@ -745,14 +749,16 @@ fn handle_notification(
 
 enum NotifOutcome {
     Allow,
-    Block(SocketAddr),
+    Block(Option<SocketAddr>),
 }
 
 /// Reads and classifies the destination of a `connect` notification.
 ///
-/// Any failure to read or parse the address resolves to `Allow`: the guard
-/// only ever blocks a destination it positively identifies as non-sanctioned
-/// loopback, so an unreadable address never wedges the agent.
+/// A non-null sockaddr pointer that cannot be read resolves to `Block`: an
+/// agent can deliberately make its memory unreadable to the host supervisor, so
+/// continuing would create a loopback-bypass primitive. Non-IP or malformed
+/// sockaddrs still resolve to `Allow` so `AF_UNIX` and ordinary kernel validation
+/// paths are not governed by this loopback guard.
 fn classify_notification(req: &libc::seccomp_notif, allow_ports: &[u16]) -> NotifOutcome {
     // connect(fd, sockaddr_ptr, addrlen): args[1] = pointer, args[2] = len.
     let addr_ptr = req.data.args[1];
@@ -761,14 +767,14 @@ fn classify_notification(req: &libc::seccomp_notif, allow_ports: &[u16]) -> Noti
         return NotifOutcome::Allow;
     }
     let Ok(bytes) = read_remote_mem(req.pid, addr_ptr, addr_len) else {
-        return NotifOutcome::Allow;
+        return NotifOutcome::Block(None);
     };
     let Some(addr) = parse_sockaddr(&bytes) else {
         return NotifOutcome::Allow;
     };
     match classify(addr, allow_ports) {
         Verdict::Allow => NotifOutcome::Allow,
-        Verdict::Block => NotifOutcome::Block(addr),
+        Verdict::Block => NotifOutcome::Block(Some(addr)),
     }
 }
 
@@ -922,10 +928,12 @@ mod tests {
         let addr = v4_sockaddr([127, 0, 0, 1], 9000);
         let req = notif_pointing_at(&addr);
         match classify_notification(&req, &allow()) {
-            NotifOutcome::Block(got) => {
+            NotifOutcome::Block(Some(got)) => {
                 assert_eq!(got, "127.0.0.1:9000".parse().unwrap());
             }
-            NotifOutcome::Allow => panic!("expected Block for unsanctioned loopback"),
+            NotifOutcome::Allow | NotifOutcome::Block(None) => {
+                panic!("expected Block for unsanctioned loopback");
+            }
         }
     }
 
@@ -968,6 +976,19 @@ mod tests {
         assert!(matches!(
             classify_notification(&short, &allow()),
             NotifOutcome::Allow
+        ));
+    }
+
+    #[test]
+    fn classify_notification_blocks_unreadable_sockaddr() {
+        let mut req: libc::seccomp_notif = unsafe { std::mem::zeroed() };
+        req.pid = std::process::id();
+        req.data.args[1] = 1;
+        req.data.args[2] = 16;
+
+        assert!(matches!(
+            classify_notification(&req, &allow()),
+            NotifOutcome::Block(None)
         ));
     }
 
