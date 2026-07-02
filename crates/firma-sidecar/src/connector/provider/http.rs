@@ -90,6 +90,7 @@ impl GenericHttpConnector {
     /// invalid runtime defaults).
     pub fn new(config: &HttpConnectorConfig) -> Result<Self, HttpConnectorBuildError> {
         let client = reqwest::Client::builder()
+            .use_preconfigured_tls(build_reqwest_tls_config()?)
             .build()
             .map_err(|e| HttpConnectorBuildError::Client(e.to_string()))?;
         let rate_limiter = config.rate_limit.map(|rl| {
@@ -192,6 +193,19 @@ impl GenericHttpConnector {
             response_size,
         })
     }
+}
+
+fn build_reqwest_tls_config() -> Result<rustls::ClientConfig, HttpConnectorBuildError> {
+    use rustls_platform_verifier::BuilderVerifierExt as _;
+
+    let builder = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| HttpConnectorBuildError::Client(e.to_string()))?
+    .with_platform_verifier()
+    .map_err(|e| HttpConnectorBuildError::Client(e.to_string()))?;
+    Ok(builder.with_no_client_auth())
 }
 
 #[async_trait]

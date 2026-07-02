@@ -367,7 +367,7 @@ fn build_mtls_server_config(
     use rustls::pki_types::{CertificateDer, PrivateKeyDer};
     use rustls::server::WebPkiClientVerifier;
 
-    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
 
     let certs: Vec<CertificateDer<'static>> =
         rustls_pemfile::certs(&mut std::io::Cursor::new(cert_pem))
