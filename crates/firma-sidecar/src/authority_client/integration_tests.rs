@@ -44,6 +44,7 @@ use crate::enforcement::revocation::{BloomLruRevocationStore, RevocationConfig};
 struct MockAuthorityState {
     bundle_tx: broadcast::Sender<PolicyBundleUpdate>,
     revoc_tx: broadcast::Sender<RevocationEvent>,
+    revoc_disconnect_tx: broadcast::Sender<()>,
     initial_bundle: Mutex<Option<PolicyBundleUpdate>>,
     policy_credentials: Mutex<Option<SidecarCredentials>>,
     revocation_credentials: Mutex<Option<SidecarCredentials>>,
@@ -69,6 +70,10 @@ impl MockAuthorityHandle {
 
     fn push_revocation(&self, event: RevocationEvent) {
         let _ = self.state.revoc_tx.send(event);
+    }
+
+    fn disconnect_revocation_streams(&self) {
+        let _ = self.state.revoc_disconnect_tx.send(());
     }
 
     fn policy_credentials(&self) -> Option<SidecarCredentials> {
@@ -144,10 +149,19 @@ impl AuthorityService for MockAuthority {
         }
         let (tx, rx) = mpsc::channel::<Result<RevocationEvent, Status>>(16);
         let mut broadcast_rx = self.state.revoc_tx.subscribe();
+        let mut disconnect_rx = self.state.revoc_disconnect_tx.subscribe();
         tokio::spawn(async move {
-            while let Ok(event) = broadcast_rx.recv().await {
-                if tx.send(Ok(event)).await.is_err() {
-                    break;
+            loop {
+                tokio::select! {
+                    event = broadcast_rx.recv() => {
+                        let Ok(event) = event else {
+                            break;
+                        };
+                        if tx.send(Ok(event)).await.is_err() {
+                            break;
+                        }
+                    }
+                    _ = disconnect_rx.recv() => break,
                 }
             }
         });
@@ -184,9 +198,11 @@ async fn spawn_mock_authority() -> anyhow::Result<MockAuthorityServer> {
 
     let (bundle_tx, _) = broadcast::channel(16);
     let (revoc_tx, _) = broadcast::channel(64);
+    let (revoc_disconnect_tx, _) = broadcast::channel(16);
     let state = Arc::new(MockAuthorityState {
         bundle_tx,
         revoc_tx,
+        revoc_disconnect_tx,
         initial_bundle: Mutex::new(None),
         policy_credentials: Mutex::new(None),
         revocation_credentials: Mutex::new(None),
@@ -232,9 +248,11 @@ async fn spawn_mock_authority_tls(
 
     let (bundle_tx, _) = broadcast::channel(16);
     let (revoc_tx, _) = broadcast::channel(64);
+    let (revoc_disconnect_tx, _) = broadcast::channel(16);
     let state = Arc::new(MockAuthorityState {
         bundle_tx,
         revoc_tx,
+        revoc_disconnect_tx,
         initial_bundle: Mutex::new(None),
         policy_credentials: Mutex::new(None),
         revocation_credentials: Mutex::new(None),
@@ -610,6 +628,40 @@ async fn revocation_event_propagates_to_store_within_one_second() -> anyhow::Res
         propagated,
         "revocation did not propagate within 1 s (elapsed {:?})",
         pushed_at.elapsed()
+    );
+
+    harness.shutdown().await;
+    server.stop().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn revocation_disconnect_loses_readiness_when_fail_closed() -> anyhow::Result<()> {
+    let server = spawn_mock_authority().await?;
+    server
+        .handle
+        .set_initial_bundle(valid_bundle_update("v1", 60));
+    let mut config = test_config();
+    config.revocation_fail_closed_on_disconnect = true;
+    config.revocation_readiness_grace_ms = 10;
+    config.reconnect_min_backoff_ms = 500;
+    let harness = spawn_sidecar(&server.url, config, None, None, None)?;
+
+    let became_ready = wait_for(Duration::from_secs(2), || {
+        harness.readiness_view.snapshot().revocation_ready
+    })
+    .await;
+    assert!(became_ready, "revocation readiness never flipped true");
+
+    server.handle.disconnect_revocation_streams();
+
+    let lost_readiness = wait_for(Duration::from_secs(2), || {
+        !harness.readiness_view.snapshot().revocation_ready
+    })
+    .await;
+    assert!(
+        lost_readiness,
+        "revocation readiness stayed true after stream disconnect"
     );
 
     harness.shutdown().await;

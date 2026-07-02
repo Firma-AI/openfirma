@@ -246,9 +246,13 @@ For verifying the signature, see [Read & verify the audit log](../audit-log/).
 
 **HTTPS calls show up as method `CONNECT`.** Without MITM, the only thing the Sidecar sees about HTTPS is the CONNECT line. The path is `/` and the action class will be whatever your rule maps `CONNECT host:443` to — probably nothing. To enforce on the inner HTTP details, set up MITM ([guide](../https-mitm/)).
 
-**`policy bundle stale` denies.** This appears when `[sidecar.authority].url` is
-unset, the Authority is down, or the bundle stream has not hydrated before the
-first request. Start the Authority first and wait for `ready` on the Sidecar.
+**`policy bundle stale` or readiness denies.** This appears when the
+Sidecar cannot use a fresh Authority-backed policy bundle or revocation
+view. You do not need to sequence the Authority before the Sidecar by hand:
+the Sidecar retries Authority streams with backoff, stays fail-closed, and
+emits `sidecar ready` only after the required streams hydrate. For
+deployment probe guidance, see
+[startup ordering and readiness](../deploy-a-genai-webapp/#step-6-configure-startup-ordering-and-readiness).
 
 **`UnclassifiedIntent` for unfamiliar destinations.** With `default_protected = true`, anything you didn't map denies. That's the right shape in production; for development, leave `default_protected = false` until you've enumerated the rules you actually want.
 

@@ -5,7 +5,9 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+use firma_sidecar::authority_client::readiness::ReadinessFlag;
 use firma_sidecar::{config, handler, health, startup};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
@@ -97,7 +99,13 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     debug!("configuration loaded successfully");
 
     let exit = CancellationToken::new();
-    let health_server = spawn_health_server(args.health_bind_addr, exit.clone()).await?;
+    let health_ready = health::readiness_flag();
+    let health_server = spawn_health_server(
+        args.health_bind_addr,
+        exit.clone(),
+        Arc::clone(&health_ready),
+    )
+    .await?;
 
     debug!("registering signal handlers for graceful shutdown");
     let shutdown_handler = {
@@ -158,6 +166,12 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     // true in that mode.
     wait_for_streams_ready(&pipeline_runtime, exit.clone()).await;
     startup::log_ready_line();
+    health::mark_ready(&health_ready);
+    let health_readiness_mirror = spawn_health_readiness_mirror(
+        Arc::clone(&health_ready),
+        Arc::clone(&pipeline_runtime.readiness),
+        exit.clone(),
+    );
 
     let authority_stream_tasks = async {
         if let Some(handle) = authority_handle {
@@ -178,6 +192,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     let _ = tokio::join!(
         audit_sink,
         health_server,
+        health_readiness_mirror,
         interceptor.handle,
         shutdown_handler,
         authority_stream_tasks,
@@ -229,6 +244,32 @@ async fn wait_for_streams_ready(runtime: &startup::PipelineRuntime, cancel: Canc
     }
 }
 
+fn spawn_health_readiness_mirror(
+    ready: Arc<std::sync::atomic::AtomicBool>,
+    readiness: Arc<ReadinessFlag>,
+    exit: CancellationToken,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut updates = readiness.subscribe();
+        loop {
+            if updates.borrow().fully_ready() {
+                health::mark_ready(&ready);
+            } else {
+                health::mark_not_ready(&ready);
+            }
+
+            tokio::select! {
+                () = exit.cancelled() => return,
+                changed = updates.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    })
+}
+
 fn build_startup_report<'a>(
     config_path: &'a Path,
     config: &'a config::SidecarConfig,
@@ -259,9 +300,10 @@ fn build_startup_report<'a>(
 async fn spawn_health_server(
     health_bind_addr: std::net::SocketAddr,
     exit: CancellationToken,
+    ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     tracing::debug!("initializing health check server at {}", health_bind_addr);
-    let health_server = health::HealthcheckServer::bind(health_bind_addr, exit).await?;
+    let health_server = health::HealthcheckServer::bind(health_bind_addr, exit, ready).await?;
     tracing::debug!("health check server listening at {}", health_bind_addr);
     Ok(tokio::spawn(health_server.serve()))
 }
@@ -292,4 +334,57 @@ fn read_config(
         .validate()
         .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    use firma_sidecar::authority_client::readiness::{ReadinessFlag, ReadinessState};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn health_mirror_clears_ready_when_revocation_readiness_is_lost() {
+        let ready = health::readiness_flag();
+        let (readiness, _view) = ReadinessFlag::new(ReadinessState {
+            policy_bundle_ready: true,
+            revocation_ready: true,
+        });
+        let readiness = Arc::new(readiness);
+        let cancel = CancellationToken::new();
+        let handle = spawn_health_readiness_mirror(
+            Arc::clone(&ready),
+            Arc::clone(&readiness),
+            cancel.clone(),
+        );
+
+        assert!(
+            wait_for_health(&ready, true).await,
+            "health mirror did not mark ready"
+        );
+
+        readiness.set_revocation_ready(false);
+
+        assert!(
+            wait_for_health(&ready, false).await,
+            "health mirror did not clear ready after revocation readiness was lost"
+        );
+
+        cancel.cancel();
+        assert!(handle.await.is_ok(), "health mirror task panicked");
+    }
+
+    async fn wait_for_health(ready: &std::sync::atomic::AtomicBool, expected: bool) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(200) {
+            if ready.load(Ordering::Acquire) == expected {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        ready.load(Ordering::Acquire) == expected
+    }
 }
