@@ -10,74 +10,67 @@ use nix::unistd::Pid;
 
 /// Wait for the child while forwarding terminal signals to the sandbox.
 ///
-/// Event-driven, no polling: SIGINT, SIGTERM, SIGWINCH, and SIGCHLD are blocked
-/// on this thread and consumed synchronously with `sigwait(3)`. SIGCHLD wakes
-/// the loop to reap the child; SIGWINCH (TUI resize) and termination signals
-/// (SIGINT/SIGTERM) are forwarded into the sandboxed process group.
+/// The child is reaped with a plain blocking `Child::wait` on this thread — no
+/// SIGCHLD handling — so reaping is correct regardless of how many threads the
+/// caller runs (a `sigwait`/`SIGCHLD` scheme only works when the signal is
+/// blocked process-wide, which does not hold under the multi-threaded test
+/// harness and hangs on some platforms).
 ///
-/// A second termination signal escalates to SIGKILL; the first forwards the
-/// received signal so an interactive TUI can shut down cleanly.
-///
-/// The child is reaped with a non-blocking `try_wait` at the top of every
-/// iteration. Because SIGCHLD is blocked before that first check, a child that
-/// exits at any point leaves SIGCHLD pending, so the following `sigwait` never
-/// blocks past the exit — no missed-wakeup race.
-///
-/// Relies on these signals being effectively blocked process-wide; `firma run`
-/// waits from a single-threaded context, so no other thread competes for them.
+/// A background thread receives SIGINT, SIGTERM, and SIGWINCH via
+/// `signal_hook`'s self-pipe and forwards each into the sandbox. SIGWINCH (TUI
+/// resize) is relayed as-is; the first SIGINT/SIGTERM is forwarded so an
+/// interactive TUI can shut down cleanly, and a second termination signal
+/// escalates to SIGKILL. Once the child is reaped the signal source is closed,
+/// ending the forwarder thread.
 ///
 /// # Errors
 ///
-/// Returns an error when the signal mask cannot be installed or the child wait
-/// operation fails.
+/// Returns an error when the signal handlers cannot be installed or the child
+/// wait operation fails.
 #[cfg(unix)]
 pub fn wait_with_signal_forwarding(
     mut child: Child,
     backend: BackendKind,
 ) -> Result<i32, RunError> {
-    use nix::sys::signal::{SigSet, SigmaskHow};
+    use signal_hook::consts::{SIGINT, SIGTERM, SIGWINCH};
+    use signal_hook::iterator::Signals;
 
     let child_pid = child.id();
 
-    let mut wait_set: SigSet = SigSet::empty();
-    wait_set.add(Signal::SIGINT);
-    wait_set.add(Signal::SIGTERM);
-    wait_set.add(Signal::SIGWINCH);
-    wait_set.add(Signal::SIGCHLD);
+    let mut signals = Signals::new([SIGINT, SIGTERM, SIGWINCH])
+        .map_err(|error| RunError::Wait(format!("failed to install signal handlers: {error}")))?;
+    let handle = signals.handle();
 
-    // Block the handled signals so they queue for sigwait instead of running
-    // their default dispositions; keep the previous mask to restore on return.
-    let previous_mask = wait_set
-        .thread_swap_mask(SigmaskHow::SIG_BLOCK)
-        .map_err(|error| RunError::Wait(format!("failed to block signals: {error}")))?;
-
-    let mut termination_requested = false;
-    let result = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(exit_code(status)),
-            Ok(None) => {}
-            Err(error) => break Err(RunError::Wait(error.to_string())),
-        }
-
-        match wait_set.wait() {
-            Ok(Signal::SIGWINCH) => forward_signal(child_pid, backend, Signal::SIGWINCH),
-            Ok(sig @ (Signal::SIGINT | Signal::SIGTERM)) => {
-                let forwarded = if termination_requested {
-                    Signal::SIGKILL
-                } else {
-                    termination_requested = true;
-                    sig
-                };
-                forward_signal(child_pid, backend, forwarded);
+    let forwarder = std::thread::spawn(move || {
+        let mut termination_requested = false;
+        for raw in &mut signals {
+            let Ok(signal) = Signal::try_from(raw) else {
+                continue;
+            };
+            match signal {
+                Signal::SIGWINCH => forward_signal(child_pid, backend, Signal::SIGWINCH),
+                Signal::SIGINT | Signal::SIGTERM => {
+                    let forwarded = if termination_requested {
+                        Signal::SIGKILL
+                    } else {
+                        termination_requested = true;
+                        signal
+                    };
+                    forward_signal(child_pid, backend, forwarded);
+                }
+                _ => {}
             }
-            // SIGCHLD (or any other blocked signal) just loops back to the
-            // try_wait above, which is where the child is actually reaped.
-            Ok(_) => {}
-            Err(error) => break Err(RunError::Wait(format!("sigwait failed: {error}"))),
         }
-    };
+    });
 
-    let _ = previous_mask.thread_set_mask();
+    let result = child
+        .wait()
+        .map(exit_code)
+        .map_err(|error| RunError::Wait(error.to_string()));
+
+    // Break the forwarder's blocking iterator and reclaim the thread.
+    handle.close();
+    let _ = forwarder.join();
     result
 }
 
