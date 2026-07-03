@@ -45,7 +45,23 @@ pub struct IssueParams {
 }
 
 /// Default action set requested when none is configured.
-pub const DEFAULT_REQUESTED_ACTIONS: &[&str] = &["communication.external.send"];
+///
+/// Covers provider egress plus the GitHub action classes the dev posture
+/// grants. Codex expects the workspace to be a Git repository and probes Git
+/// and the GitHub API on startup, so the dev capability must cover those calls
+/// or they fail closed to DENY:
+///
+/// - `code.review.read` classifies the `CONNECT api.github.com` tunnel in
+///   non-MITM proxy mode.
+/// - `code.read` classifies decrypted `GET /repos/...` reads under MITM.
+/// - `code.write` classifies the `CONNECT github.com` Git HTTPS transport
+///   (clone/fetch/push).
+pub const DEFAULT_REQUESTED_ACTIONS: &[&str] = &[
+    "communication.external.send",
+    "code.read",
+    "code.review.read",
+    "code.write",
+];
 
 /// Default resource scope.
 pub const DEFAULT_RESOURCE_SCOPE: &str = "*";

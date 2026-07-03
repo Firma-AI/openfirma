@@ -991,7 +991,7 @@ fn prompt_profile_with_default(theme: &ColorfulTheme, default: AgentProfile) -> 
 
 fn profile_default_mappings(profile: &str) -> Vec<Mapping> {
     match profile {
-        "codex" => vec![Mapping::Openai],
+        "codex" => vec![Mapping::Openai, Mapping::Github],
         "copilot" => vec![Mapping::Copilot],
         _ => vec![Mapping::Anthropic],
     }
