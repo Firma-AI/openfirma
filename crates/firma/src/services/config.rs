@@ -1301,6 +1301,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn codex_profile_scaffolds_openai_and_github_mappings() {
+        assert_eq!(
+            super::profile_default_mappings("codex")
+                .iter()
+                .map(Mapping::as_str)
+                .collect::<Vec<_>>(),
+            vec!["openai", "github"]
+        );
+    }
+
     fn make_files(
         posture: &Posture,
         mappings: &[Mapping],

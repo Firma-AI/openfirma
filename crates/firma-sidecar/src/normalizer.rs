@@ -1,4 +1,4 @@
-//! Intent Normalizer / Envelope Builder.test_github_mapping_file_loads_and_has_46_rules
+//! Intent Normalizer / Envelope Builder.
 //!
 //! Runs in the Sidecar hot path immediately after interception and before
 //! token validation. Deterministically maps the raw intercepted event into a
