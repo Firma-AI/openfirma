@@ -74,8 +74,9 @@ pub struct Cli {
     #[arg(long, global = true, env = "FIRMA_LOG_FILE")]
     pub log_file: Option<PathBuf>,
     /// `tracing` `EnvFilter` directive controlling log verbosity (e.g. `info,firma=debug`).
-    #[arg(long, global = true, env = "FIRMA_LOG_FILTER", default_value = "info")]
-    pub log_filter: String,
+    /// Falls back to `RUST_LOG`, then `info`.
+    #[arg(long, global = true, env = "FIRMA_LOG_FILTER")]
+    pub log_filter: Option<String>,
 
     #[command(subcommand)]
     pub command: Command,
@@ -113,4 +114,34 @@ pub enum Command {
     Supervise(supervise::Args),
     /// Approve or revoke HITL governance tokens for high-risk actions.
     Token(token::TokenArgs),
+}
+
+pub fn resolve_log_filter(firma_log_filter: Option<&str>, rust_log: Option<&str>) -> String {
+    firma_log_filter.or(rust_log).unwrap_or("info").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn log_filter_falls_back_to_rust_log() {
+        assert_eq!(
+            super::resolve_log_filter(None, Some("debug")),
+            "debug",
+            "RUST_LOG should control logging when FIRMA_LOG_FILTER/--log-filter is absent"
+        );
+    }
+
+    #[test]
+    fn explicit_firma_log_filter_wins_over_rust_log() {
+        assert_eq!(
+            super::resolve_log_filter(Some("warn"), Some("debug")),
+            "warn",
+            "FIRMA_LOG_FILTER/--log-filter should keep precedence over RUST_LOG"
+        );
+    }
+
+    #[test]
+    fn default_log_filter_is_info() {
+        assert_eq!(super::resolve_log_filter(None, None), "info");
+    }
 }

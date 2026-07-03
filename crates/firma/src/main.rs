@@ -14,8 +14,10 @@ use crate::args::Command;
 
 fn main() -> ExitCode {
     let cli = args::parse();
+    let rust_log = std::env::var("RUST_LOG").ok();
+    let log_filter = args::resolve_log_filter(cli.log_filter.as_deref(), rust_log.as_deref());
 
-    if let Err(e) = log::init(&cli.log_filter, cli.log_file.as_deref()) {
+    if let Err(e) = log::init(&log_filter, cli.log_file.as_deref()) {
         output::err(format!("{e}"));
         return ExitCode::from(1);
     }

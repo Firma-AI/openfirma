@@ -15,7 +15,9 @@
 use std::io::Cursor;
 use std::sync::mpsc;
 
-use firma_run::sidecar::supervisor::testing::{ReadyCapture, ScrapeResult, run_scraper};
+use firma_run::sidecar::supervisor::testing::{
+    ReadyCapture, ScrapeResult, run_scraper, run_scraper_with_mirror,
+};
 
 const FULL: &str = "\
 2026-05-13T10:00:00Z  INFO firma_sidecar::startup::log_contract: config loaded path=\"/tmp/firma_sidecar.toml\"\n\
@@ -143,4 +145,19 @@ INFO firma_sidecar::startup::log_contract: sidecar ready\n";
         ScrapeResult::Ready(_) => {}
         other => panic!("expected Ready, got {other:?}"),
     }
+}
+
+#[test]
+fn scraper_can_mirror_child_logs_to_parent_output() {
+    let (tx, rx) = mpsc::sync_channel(1);
+    let mut log_sink = Vec::<u8>::new();
+    let mut mirror_sink = Vec::<u8>::new();
+
+    run_scraper_with_mirror(Cursor::new(FULL), &mut log_sink, &mut mirror_sink, true, tx);
+
+    assert!(matches!(rx.recv().expect("result"), ScrapeResult::Ready(_)));
+    assert_eq!(
+        String::from_utf8(log_sink).expect("log utf8"),
+        String::from_utf8(mirror_sink).expect("mirror utf8")
+    );
 }

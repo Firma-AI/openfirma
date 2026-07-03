@@ -16,11 +16,19 @@ use std::path::{Path, PathBuf};
 
 use firma_config_loader::CONFIG_FILE_NAME;
 use firma_run::sidecar::config::testing::{SynthesizeRequest, TemplateSource, synthesize};
+use firma_sidecar::enforcement::registry::ActionClassRegistry;
+use firma_sidecar::normalizer::{MappingTable, MatchResult};
 use tempfile::TempDir;
 
 fn read(path: &Path) -> toml::Value {
     let text = fs::read_to_string(path).expect("read synthesized");
     toml::from_str(&text).expect("parse synthesized")
+}
+
+fn synthesized_mapping_table(rules_path: &Path) -> MappingTable {
+    let rules = fs::read_to_string(rules_path).expect("read mapping rules");
+    let file = toml::from_str(&rules).expect("parse mapping rules");
+    MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).expect("mapping table")
 }
 
 /// Reads `[sidecar.audit]` from a synthesized config file.
@@ -441,6 +449,43 @@ fn nonexistent_template_paths_fall_through_to_minimal() {
     })
     .expect("synthesize");
     assert_eq!(source, TemplateSource::Minimal);
+}
+
+#[test]
+fn vscode_minimal_mapping_covers_github_sign_in_hosts() {
+    let tmp = TempDir::new().expect("tmp");
+    let out = tmp.path().join("sidecar.toml");
+    let sock = tmp.path().join("sidecar.sock");
+    synthesize(SynthesizeRequest {
+        agent_id: "vscode",
+        listen_addr: Some("127.0.0.1:18080".parse().expect("listen addr")),
+        ..req(&sock, &out)
+    })
+    .expect("synthesize");
+
+    let table = synthesized_mapping_table(&tmp.path().join("mapping-rules.toml"));
+    for host in [
+        "github.com",
+        "api.github.com",
+        "vscode.dev",
+        "insiders.vscode.dev",
+        "default.exp-tas.com",
+        "acme.ghe.com",
+        "api.acme.ghe.com",
+        "accounts.google.com",
+        "ssl.gstatic.com",
+        "avatars.githubusercontent.com",
+        "appleid.apple.com",
+        "idmsa.apple.com",
+        "appleid.cdn-apple.com",
+    ] {
+        match table.find_match("CONNECT", host, "/") {
+            MatchResult::Matched(rule) => {
+                assert_eq!(rule.action_class, "communication.external.send", "{host}");
+            }
+            other => panic!("expected {host} to be mapped, got {other:?}"),
+        }
+    }
 }
 
 #[test]

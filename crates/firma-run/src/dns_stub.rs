@@ -317,10 +317,23 @@ fn refused_response(query: &[u8]) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use std::net::UdpSocket;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream, UdpSocket};
     use std::time::Duration;
 
-    use super::{DNS_RCODE_REFUSED, HostDnsStubHandle, refused_response};
+    use super::{DNS_RCODE_REFUSED, HostDnsStubHandle, handle_tcp_client, refused_response};
+
+    fn sample_query() -> Vec<u8> {
+        vec![
+            0xAB, 0xCD, // transaction id
+            0x01, 0x00, // flags: standard query
+            0x00, 0x01, // 1 question
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // no answers/authority/additional
+            0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00,
+            0x01, // QTYPE A
+            0x00, 0x01, // QCLASS IN
+        ]
+    }
 
     #[test]
     fn refused_response_preserves_query_id_and_question() {
@@ -344,6 +357,72 @@ mod tests {
         assert!(refused_response(&[0_u8; 11]).is_none());
     }
 
+    #[test]
+    fn tcp_client_receives_length_prefixed_refused_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            handle_tcp_client(stream).expect("handle tcp client");
+        });
+
+        let mut client = TcpStream::connect(addr).expect("connect");
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("read timeout");
+        let query = sample_query();
+        let len = u16::try_from(query.len())
+            .expect("sample query fits u16")
+            .to_be_bytes();
+        client.write_all(&len).expect("write len");
+        client.write_all(&query).expect("write query");
+
+        let mut response_len = [0_u8; 2];
+        client.read_exact(&mut response_len).expect("read len");
+        let response_len = u16::from_be_bytes(response_len) as usize;
+        let mut response = vec![0_u8; response_len];
+        client.read_exact(&mut response).expect("read response");
+        drop(client);
+        server.join().expect("server thread");
+
+        assert_eq!(&response[..2], &[0xAB, 0xCD]);
+        assert_ne!(response[2] & 0x80, 0, "QR bit must be set");
+        assert_eq!(response[3] & 0x0F, DNS_RCODE_REFUSED);
+        assert_eq!(&response[12..], &query[12..]);
+    }
+
+    #[test]
+    fn tcp_client_skips_malformed_query_without_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            handle_tcp_client(stream).expect("handle tcp client");
+        });
+
+        let mut client = TcpStream::connect(addr).expect("connect");
+        client
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .expect("read timeout");
+        client.write_all(&5_u16.to_be_bytes()).expect("write len");
+        client.write_all(&[0_u8; 5]).expect("write malformed query");
+
+        let mut response_len = [0_u8; 2];
+        let error = client
+            .read_exact(&mut response_len)
+            .expect_err("malformed query must not produce a TCP response");
+        drop(client);
+        server.join().expect("server thread");
+
+        assert!(
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ),
+            "unexpected read error: {error}"
+        );
+    }
+
     // ── HostDnsStubHandle ─────────────────────────────────────────────────────
 
     #[test]
@@ -356,16 +435,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(2)))
             .expect("set timeout");
 
-        let query = [
-            0xAB, 0xCD, // transaction id
-            0x01, 0x00, // flags: standard query
-            0x00, 0x01, // 1 question
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // no answers/authority/additional
-            0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm',
-            0x00, // root
-            0x00, 0x01, // QTYPE A
-            0x00, 0x01, // QCLASS IN
-        ];
+        let query = sample_query();
         client.send_to(&query, addr).expect("send query");
 
         let mut buf = [0_u8; 512];

@@ -1,6 +1,6 @@
 //! Wire `firma doctor` CLI args to the doctor module.
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal as _, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -45,9 +45,12 @@ pub fn run(args: Args) -> ExitCode {
 
     let RenderedReport(report, json) = runtime.block_on(build_report(args));
 
+    let stdout_is_terminal = io::stdout().is_terminal();
     let mut stdout = io::stdout().lock();
     let render_result = if json {
         render::json(&report, &mut stdout)
+    } else if stdout_is_terminal {
+        render::pretty_for_stdout(&report, &mut stdout)
     } else {
         render::pretty(&report, &mut stdout)
     };
