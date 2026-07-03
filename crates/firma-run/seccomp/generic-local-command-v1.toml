@@ -6,8 +6,16 @@ policy_version = "v1"
 default_action = "allow"
 
 # Managed Cedar subset (deny actions) mapped to static seccomp syscall deny sets.
+#
+# The filesystem delete action class is intentionally NOT denied here. Seccomp is
+# a kernel-layer syscall filter and cannot encode path scopes, so denying the
+# delete syscalls would block deletes everywhere — including inside the
+# workspace, which breaks development tools like Cargo (atomic rename, target/
+# cleanup). Workspace-scoped delete is instead enforced structurally by the bwrap
+# backend: the rootfs is mounted read-only and only the workspace (and runtime
+# home) are mounted read-write, so deletes outside the workspace fail on the
+# read-only mount.
 deny_actions = [
-  "filesystem.delete",
   "credential.write",
 ]
 

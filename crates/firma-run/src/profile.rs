@@ -29,6 +29,15 @@ fn generic_profile() -> ProfilePatch {
         "FIRMA_RUN_BWRAP_RUNTIME_HOME".to_string(),
         "false".to_string(),
     );
+    // Read-only rootfs with a read-write workspace (and runtime home) is the
+    // structural boundary that scopes filesystem deletes to the workspace. The
+    // managed seccomp baseline no longer denies filesystem.delete (seccomp
+    // cannot encode path scopes), so this mount posture is what keeps deletes
+    // outside the workspace from succeeding. Inherited by codex and claude-code.
+    env_set.insert(
+        "FIRMA_RUN_BWRAP_ROOTFS_MODE".to_string(),
+        "readonly".to_string(),
+    );
     // On macOS (vz) and WSL2 backends, structural network-namespace confinement is
     // unavailable; enforcement is proxy-based. Clear NO_PROXY so host env cannot
     // accidentally route traffic around the HTTP proxy Sidecar.
@@ -127,10 +136,7 @@ fn claude_code_profile() -> ProfilePatch {
     let mut base = generic_profile();
     base.env_set
         .insert("FIRMA_RUN_PROFILE".to_string(), "claude-code".to_string());
-    base.env_set.insert(
-        "FIRMA_RUN_BWRAP_ROOTFS_MODE".to_string(),
-        "readonly".to_string(),
-    );
+    // Read-only rootfs is inherited from generic_profile.
     base.env_set.insert(
         "FIRMA_RUN_BWRAP_MASK_HOME_PATHS".to_string(),
         crate::backend::DEFAULT_SENSITIVE_HOME_SUFFIXES.join(","),

@@ -1,7 +1,9 @@
-# Copilot managed seccomp baseline. Identical to generic-local-command-v1
-# except it does NOT deny the filesystem delete action class: Copilot's SQLite
-# session store (~/.copilot/*.db) needs unlink + rename for journal cleanup and
-# atomic commits, which that deny would block (EPERM → "disk I/O error").
+# Copilot managed seccomp baseline. Like the generic baseline, it does not deny
+# the filesystem delete action class: Copilot's SQLite session store
+# (~/.copilot/*.db) needs unlink + rename for journal cleanup and atomic
+# commits, which such a deny would block (EPERM → "disk I/O error"). Deletes are
+# scoped to the workspace and runtime home structurally by the read-only rootfs
+# mount, not seccomp.
 policy_id = "copilot-local-command"
 policy_version = "v1"
 default_action = "allow"

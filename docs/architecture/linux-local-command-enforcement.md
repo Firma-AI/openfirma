@@ -69,6 +69,15 @@ These layers are optional and environment-specific. Static seccomp remains the d
 
 Unsupported actions are rejected with explicit validation errors.
 
+`filesystem.delete` is still a supported mapping, but the shipped managed
+baselines no longer deny it. Seccomp cannot encode path scopes, so denying the
+delete syscalls blocks deletes everywhere — including inside the workspace, which
+breaks tools like Cargo. Workspace-scoped delete is instead enforced
+structurally by the bwrap backend: a read-only rootfs with a read-write
+workspace (and runtime home), so deletes outside the workspace fail on the
+read-only mount. Operators can still opt back into the syscall-level deny with a
+custom policy via `FIRMA_MANAGED_POLICY`.
+
 ### Current syscall mapping
 
 1. `system.execute` -> `execve`, `execveat`
