@@ -35,6 +35,10 @@ test:
 build:
   cargo build --all-features --all-targets
 
+macos-vz-runner-dev:
+  cargo build -p firma-vz-runner
+  ./scripts/macos-vz/sign-vz-runner-dev.sh
+
 e2e:
   cargo nextest run -p firma --test e2e --run-ignored all
 
