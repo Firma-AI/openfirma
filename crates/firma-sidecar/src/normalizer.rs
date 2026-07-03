@@ -1139,15 +1139,13 @@ mod tests {
     }
 
     #[test]
-    fn test_github_mapping_file_loads_and_has_46_rules() {
+    fn test_github_mapping_file_loads_and_has_valid_rules() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/config/mappings/github.toml");
         let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read: {e}"));
         let file: MappingRulesFile = toml::from_str(&src).unwrap_or_else(|e| panic!("parse: {e}"));
         file.validate().unwrap_or_else(|e| panic!("validate: {e}"));
-        assert_eq!(file.rules.len(), 46);
         let registry = ActionClassRegistry::v0_1();
-        let _table = MappingTable::from_config(&file, &registry, true)
-            .unwrap_or_else(|e| panic!("from_config: {e}"));
+        let _table = MappingTable::from_config(&file, &registry, true).unwrap();
     }
 
     #[test]

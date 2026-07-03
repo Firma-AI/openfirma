@@ -5,24 +5,31 @@ expression: self
 FirmaAuditTrail(
     {
         AuditEvent {
+            action: "code.read",
+            resource: "api.github.com/repos/openai/plugins",
+            decision: Allow,
+            deny_reason: "",
+            dispatch_status: 200,
+        },
+        AuditEvent {
+            action: "code.read",
+            resource: "api.github.com/repos/openai/plugins/git/ref/heads/main",
+            decision: Allow,
+            deny_reason: "",
+            dispatch_status: 200,
+        },
+        AuditEvent {
+            action: "code.write",
+            resource: "github.com/",
+            decision: Allow,
+            deny_reason: "",
+            dispatch_status: 200,
+        },
+        AuditEvent {
             action: "communication.external.send",
             resource: "127.0.0.1:<mock-port>/paste",
             decision: Deny,
             deny_reason: "policy denied: policy denied action 'communication.external.send' on resource '127.0.0.1:<mock-port>/paste'",
-            dispatch_status: 0,
-        },
-        AuditEvent {
-            action: "network.connect",
-            resource: "github.com/",
-            decision: Deny,
-            deny_reason: "token invalid: no capability token covers action 'code.write' on resource 'github.com/'",
-            dispatch_status: 0,
-        },
-        AuditEvent {
-            action: "raw.http.GET",
-            resource: "api.github.com/repos/openai/plugins",
-            decision: Deny,
-            deny_reason: "token invalid: no capability token covers action 'code.read' on resource 'api.github.com/repos/openai/plugins'",
             dispatch_status: 0,
         },
     },

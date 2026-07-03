@@ -11,6 +11,20 @@
 # inner GET/POST/… rules never match — they are only reachable when MITM is
 # enabled and the sidecar decrypts each inner request.
 
+# --- CONNECT tunnels (non-MITM) ---------------------------------------------
+# Plain CONNECT: bare host, default port stripped by the normalizer.
+[[rules]]
+method = "CONNECT"
+host = "api.github.com"
+action_class = "code.review.read"
+
+# Git HTTPS transport (clone/fetch/push) — cannot be classified further at
+# CONNECT level; code.write covers both read and write git directions.
+[[rules]]
+method = "CONNECT"
+host = "github.com"
+action_class = "code.write"
+
 # --- code.read (8) ----------------------------------------------------------
 [[rules]]
 method = "GET"
