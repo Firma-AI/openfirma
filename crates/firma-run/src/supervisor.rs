@@ -10,77 +10,75 @@ use nix::unistd::Pid;
 
 /// Wait for the child while forwarding terminal signals to the sandbox.
 ///
-/// Event-driven, no polling: a dedicated thread blocks in [`Child::wait`], while
-/// the main thread blocks on a `signal_hook` iterator that forwards SIGWINCH
-/// (TUI resize) and termination signals (SIGINT/SIGTERM) into the sandboxed
-/// process group. When the child exits, the waiter closes the signal handle,
-/// which unblocks the iterator so this function returns the child's exit code.
+/// Event-driven, no polling: SIGINT, SIGTERM, SIGWINCH, and SIGCHLD are blocked
+/// on this thread and consumed synchronously with `sigwait(3)`. SIGCHLD wakes
+/// the loop to reap the child; SIGWINCH (TUI resize) and termination signals
+/// (SIGINT/SIGTERM) are forwarded into the sandboxed process group.
 ///
 /// A second termination signal escalates to SIGKILL; the first forwards the
 /// received signal so an interactive TUI can shut down cleanly.
 ///
+/// The child is reaped with a non-blocking `try_wait` at the top of every
+/// iteration. Because SIGCHLD is blocked before that first check, a child that
+/// exits at any point leaves SIGCHLD pending, so the following `sigwait` never
+/// blocks past the exit — no missed-wakeup race.
+///
+/// Relies on these signals being effectively blocked process-wide; `firma run`
+/// waits from a single-threaded context, so no other thread competes for them.
+///
 /// # Errors
 ///
-/// Returns an error when signal handlers cannot be installed or the child wait
+/// Returns an error when the signal mask cannot be installed or the child wait
 /// operation fails.
 #[cfg(unix)]
 pub fn wait_with_signal_forwarding(
     mut child: Child,
     backend: BackendKind,
 ) -> Result<i32, RunError> {
-    use signal_hook::consts::{SIGINT, SIGTERM, SIGWINCH};
-    use signal_hook::iterator::Signals;
+    use nix::sys::signal::{SigSet, SigmaskHow};
 
     let child_pid = child.id();
 
-    let mut signals = match Signals::new([SIGINT, SIGTERM, SIGWINCH]) {
-        Ok(signals) => signals,
-        Err(error) => {
-            // The child is already running; reap it so we do not leak a zombie
-            // when we bail out before the waiter thread takes ownership.
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(RunError::Wait(format!(
-                "failed to install signal handlers: {error}"
-            )));
-        }
-    };
-    let handle = signals.handle();
+    let mut wait_set: SigSet = SigSet::empty();
+    wait_set.add(Signal::SIGINT);
+    wait_set.add(Signal::SIGTERM);
+    wait_set.add(Signal::SIGWINCH);
+    wait_set.add(Signal::SIGCHLD);
 
-    // Block in wait() off the main thread. Closing the signal handle when the
-    // child exits breaks the iterator below so the main thread returns.
-    let waiter = std::thread::spawn(move || {
-        let status = child.wait();
-        handle.close();
-        status
-    });
+    // Block the handled signals so they queue for sigwait instead of running
+    // their default dispositions; keep the previous mask to restore on return.
+    let previous_mask = wait_set
+        .thread_swap_mask(SigmaskHow::SIG_BLOCK)
+        .map_err(|error| RunError::Wait(format!("failed to block signals: {error}")))?;
 
     let mut termination_requested = false;
-    for signal in &mut signals {
-        match signal {
-            SIGWINCH => forward_signal(child_pid, backend, Signal::SIGWINCH),
-            SIGINT | SIGTERM => {
-                let sig = if termination_requested {
+    let result = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(exit_code(status)),
+            Ok(None) => {}
+            Err(error) => break Err(RunError::Wait(error.to_string())),
+        }
+
+        match wait_set.wait() {
+            Ok(Signal::SIGWINCH) => forward_signal(child_pid, backend, Signal::SIGWINCH),
+            Ok(sig @ (Signal::SIGINT | Signal::SIGTERM)) => {
+                let forwarded = if termination_requested {
                     Signal::SIGKILL
                 } else {
                     termination_requested = true;
-                    if signal == SIGINT {
-                        Signal::SIGINT
-                    } else {
-                        Signal::SIGTERM
-                    }
+                    sig
                 };
-                forward_signal(child_pid, backend, sig);
+                forward_signal(child_pid, backend, forwarded);
             }
-            _ => {}
+            // SIGCHLD (or any other blocked signal) just loops back to the
+            // try_wait above, which is where the child is actually reaped.
+            Ok(_) => {}
+            Err(error) => break Err(RunError::Wait(format!("sigwait failed: {error}"))),
         }
-    }
+    };
 
-    match waiter.join() {
-        Ok(Ok(status)) => Ok(exit_code(status)),
-        Ok(Err(error)) => Err(RunError::Wait(error.to_string())),
-        Err(_) => Err(RunError::Wait("child wait thread panicked".to_string())),
-    }
+    let _ = previous_mask.thread_set_mask();
+    result
 }
 
 /// Map an exit status to a process exit code.
@@ -159,6 +157,11 @@ pub fn wait_with_signal_forwarding(
 /// non-bwrap backends (vz, wsl2) where no session boundary exists.
 #[cfg(unix)]
 fn forward_signal(child_pid: u32, backend: BackendKind, signal: Signal) {
+    // `backend` only selects the bwrap process-group path on Linux; elsewhere
+    // every backend uses the direct fallback below.
+    #[cfg(not(target_os = "linux"))]
+    let _ = backend;
+
     // bwrap uses --new-session (setsid()), creating a new session where
     // PGID == sandbox child PID. Read the child from /proc and send to the
     // whole process group so every sandboxed process gets the signal.
