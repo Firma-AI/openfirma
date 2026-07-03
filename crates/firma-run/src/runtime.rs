@@ -272,7 +272,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         };
 
         let child = backend.start_agent(handle_ref, &launch)?;
-        wait_with_signal_forwarding(child)
+        wait_with_signal_forwarding(child, backend.kind())
     })();
 
     let teardown_result = handle
