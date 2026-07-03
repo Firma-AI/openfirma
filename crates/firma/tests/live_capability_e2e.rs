@@ -319,7 +319,10 @@ fn live_mint_writes_seed_and_admits_stage1() {
     assert_eq!(claims.session_id.to_string(), "live-session");
     assert_eq!(
         claims.action_set,
-        vec![firma_run::capability::issue::DEFAULT_REQUESTED_ACTIONS[0].to_string()]
+        firma_run::capability::issue::DEFAULT_REQUESTED_ACTIONS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect::<Vec<_>>()
     );
 }
 
