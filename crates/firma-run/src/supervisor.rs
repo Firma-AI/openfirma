@@ -206,11 +206,33 @@ fn parse_first_pid(content: &str) -> Option<u32> {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use std::process::Command;
+    use std::thread;
+    use std::time::Duration;
+
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+
     use crate::backend::BackendKind;
     use crate::supervisor::wait_with_signal_forwarding;
 
     #[cfg(target_os = "linux")]
-    use crate::supervisor::parse_first_pid;
+    use crate::supervisor::{forward_signal, parse_first_pid, sandbox_child_pid};
+
+    /// Send `signal` to this test process after `delay`.
+    ///
+    /// Each test runs in its own process under nextest, so signals raised here
+    /// are caught by the forwarder installed in `wait_with_signal_forwarding`
+    /// and never leak into other tests.
+    fn raise_self_after(delay: Duration, signal: Signal) {
+        let Ok(pid) = i32::try_from(std::process::id()) else {
+            return;
+        };
+        thread::spawn(move || {
+            thread::sleep(delay);
+            let _ = kill(Pid::from_raw(pid), signal);
+        });
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
@@ -259,5 +281,75 @@ mod tests {
             .expect("spawn sh");
         let code = wait_with_signal_forwarding(child, BackendKind::Vz).expect("wait succeeds");
         assert_eq!(code, 143);
+    }
+
+    #[test]
+    fn forwards_sigwinch_without_disturbing_exit() {
+        // SIGWINCH (default disposition: ignore) must be relayed by the
+        // forwarder thread while the child runs, and must not affect the
+        // reported exit code once the child finishes on its own.
+        let child = Command::new("sh")
+            .args(["-c", "sleep 0.5; exit 0"])
+            .spawn()
+            .expect("spawn sh");
+        raise_self_after(Duration::from_millis(150), Signal::SIGWINCH);
+        let code = wait_with_signal_forwarding(child, BackendKind::Vz).expect("wait succeeds");
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn first_sigterm_forwarded_terminates_child() {
+        // A child with default SIGTERM disposition dies on the first forwarded
+        // signal, reported as 128 + 15 = 143.
+        let child = Command::new("sh")
+            .args(["-c", "sleep 5"])
+            .spawn()
+            .expect("spawn sh");
+        raise_self_after(Duration::from_millis(150), Signal::SIGTERM);
+        let code = wait_with_signal_forwarding(child, BackendKind::Vz).expect("wait succeeds");
+        assert_eq!(code, 143);
+    }
+
+    #[test]
+    fn second_termination_escalates_to_sigkill() {
+        // The child ignores SIGTERM, so the first forwarded signal has no
+        // effect. The second termination signal escalates to SIGKILL (9),
+        // reported as 128 + 9 = 137.
+        let child = Command::new("sh")
+            .args(["-c", "trap '' TERM; sleep 5"])
+            .spawn()
+            .expect("spawn sh");
+        raise_self_after(Duration::from_millis(200), Signal::SIGTERM);
+        raise_self_after(Duration::from_millis(700), Signal::SIGTERM);
+        let code = wait_with_signal_forwarding(child, BackendKind::Vz).expect("wait succeeds");
+        assert_eq!(code, 137);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sandbox_child_pid_reads_proc_children() {
+        // A shell that keeps a backgrounded child alive exposes that child in
+        // its /proc children file; a shell with no children yields None.
+        let mut with_child = Command::new("sh")
+            .args(["-c", "sleep 5 & echo ready; wait"])
+            .spawn()
+            .expect("spawn sh");
+        // Give the shell time to fork the backgrounded `sleep`.
+        thread::sleep(Duration::from_millis(200));
+        let discovered = sandbox_child_pid(with_child.id());
+        // Exercise the bwrap process-group forwarding path; the resolved group
+        // may not exist as a leader, so the send is best-effort.
+        forward_signal(with_child.id(), BackendKind::Bwrap, Signal::SIGWINCH);
+        let _ = with_child.kill();
+        let _ = with_child.wait();
+        // The children file requires CONFIG_PROC_CHILDREN, which is not
+        // universal, so tolerate None; any discovered PID must be valid.
+        if let Some(pid) = discovered {
+            assert!(pid > 0);
+            // Reap the backgrounded `sleep` so it is not orphaned past the test.
+            if let Ok(raw) = i32::try_from(pid) {
+                let _ = kill(Pid::from_raw(raw), Signal::SIGKILL);
+            }
+        }
     }
 }
