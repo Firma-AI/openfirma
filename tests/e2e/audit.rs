@@ -65,9 +65,12 @@ impl FirmaAuditTrail {
         let name = format!("{}_{}", ctx.agent.kind.as_ref(), scenario_name);
         let mock_port = ctx.mock_server.address().port().to_string();
         let mock_port_filter = regex::escape(&mock_port);
+        let tcp_port = ctx.raw_tcp.address().port().to_string();
+        let tcp_port_filter = regex::escape(&tcp_port);
         insta::with_settings!({
             filters => vec![
                 (mock_port_filter.as_str(), "<mock-port>"),
+                (tcp_port_filter.as_str(), "<tcp-port>"),
             ],
         }, {
             insta::assert_debug_snapshot!(name, self);

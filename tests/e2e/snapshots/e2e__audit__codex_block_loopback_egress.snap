@@ -1,0 +1,29 @@
+---
+source: crates/firma/../../tests/e2e/audit.rs
+expression: self
+---
+FirmaAuditTrail(
+    {
+        AuditEvent {
+            action: "network.connect",
+            resource: "github.com/",
+            decision: Deny,
+            deny_reason: "token invalid: no capability token covers action 'code.write' on resource 'github.com/'",
+            dispatch_status: 0,
+        },
+        AuditEvent {
+            action: "network.loopback",
+            resource: "tcp://127.0.0.1:<tcp-port>",
+            decision: Deny,
+            deny_reason: "loopback blocked",
+            dispatch_status: 0,
+        },
+        AuditEvent {
+            action: "raw.http.GET",
+            resource: "api.github.com/repos/openai/plugins",
+            decision: Deny,
+            deny_reason: "token invalid: no capability token covers action 'code.read' on resource 'api.github.com/repos/openai/plugins'",
+            dispatch_status: 0,
+        },
+    },
+)
