@@ -1284,4 +1284,109 @@ mod tests {
 
         let _ = std::fs::remove_dir(&dir);
     }
+
+    // ── installer error paths (no filter installed) ─────────────────────────
+
+    #[test]
+    fn install_and_exec_rejects_empty_argv() {
+        let err = install_and_exec(Path::new("/definitely/missing.sock"), &[])
+            .expect_err("empty argv must error");
+        assert!(matches!(err, RunError::Internal(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn install_and_exec_errors_on_unreachable_supervisor() {
+        // Fails at the AF_UNIX connect, before any seccomp filter is installed.
+        let missing =
+            std::env::temp_dir().join(format!("firma-missing-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&missing);
+        let argv = vec!["/bin/true".to_string()];
+        let err = install_and_exec(&missing, &argv).expect_err("unreachable socket must error");
+        assert!(matches!(err, RunError::Internal(_)), "got {err:?}");
+    }
+
+    // ── notify ioctl wrappers reject a non-notify fd ────────────────────────
+
+    #[test]
+    fn notif_ioctls_error_on_non_notify_fd() {
+        // A plain socket fd is not a seccomp notify fd; the ioctls must fail
+        // rather than silently succeed.
+        let (a, _b) = UnixStream::pair().expect("socketpair");
+        let fd = a.as_raw_fd();
+        let mut req: libc::seccomp_notif = unsafe { std::mem::zeroed() };
+        assert!(notif_recv(fd, &mut req).is_err());
+        let resp = libc::seccomp_notif_resp {
+            id: 0,
+            val: 0,
+            error: 0,
+            flags: 0,
+        };
+        assert!(notif_send(fd, &resp).is_err());
+        assert!(!notif_id_is_valid(fd, 0));
+    }
+
+    // ── real seccomp round-trip ─────────────────────────────────────────────
+    //
+    // Installs a live connect-notify filter and drives an allow and a block
+    // through the full supervisor path (install -> fd hand-off -> notify loop ->
+    // classify -> respond). nextest runs each test in its own process, so the
+    // permanent filter cannot leak into other tests. The filter is installed on
+    // this thread only (no TSYNC), so the supervisor thread stays unfiltered.
+
+    #[test]
+    fn guard_blocks_and_allows_real_connects() {
+        use std::net::{TcpListener, TcpStream};
+
+        // Real loopback listeners: one on a sanctioned port, one not.
+        let allowed = TcpListener::bind("127.0.0.1:0").expect("bind allowed");
+        let allowed_port = allowed.local_addr().expect("addr").port();
+        let blocked = TcpListener::bind("127.0.0.1:0").expect("bind blocked");
+        let blocked_port = blocked.local_addr().expect("addr").port();
+
+        let dir = std::env::temp_dir().join(format!("firma-egress-e2e-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let socket_path = dir.join("guard.sock");
+
+        let handle = start(SupervisorConfig {
+            socket_path: socket_path.clone(),
+            allow_ports: vec![allowed_port],
+            report: None,
+        })
+        .expect("start guard");
+
+        // Mimic the in-sandbox installer: connect to the supervisor *before*
+        // installing the filter (that AF_UNIX connect must not be trapped), then
+        // install and hand over the listener fd.
+        let stream = UnixStream::connect(&socket_path).expect("connect supervisor");
+        let Ok(listener_fd) = install_connect_notifier() else {
+            // Environment without unprivileged user-notify: skip rather than hang.
+            eprintln!("skipping guard round-trip: seccomp user-notify unavailable");
+            return;
+        };
+        send_listener_fd(&stream, listener_fd.as_raw_fd()).expect("send fd");
+        drop(listener_fd); // supervisor holds its own copy
+        drop(stream);
+
+        // From here this thread's connect(2) is trapped and serviced by the
+        // supervisor thread. Bound each connect so a servicing failure times out
+        // instead of hanging the test forever.
+        let allow_addr = SocketAddr::from(([127, 0, 0, 1], allowed_port));
+        let block_addr = SocketAddr::from(([127, 0, 0, 1], blocked_port));
+
+        let allowed_res = TcpStream::connect_timeout(&allow_addr, Duration::from_secs(5));
+        assert!(
+            allowed_res.is_ok(),
+            "sanctioned port must connect (allow-continue): {allowed_res:?}"
+        );
+
+        let blocked_res = TcpStream::connect_timeout(&block_addr, Duration::from_secs(5));
+        match blocked_res {
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {}
+            other => panic!("unsanctioned loopback must be blocked with EACCES, got {other:?}"),
+        }
+
+        drop(handle);
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_dir(&dir);
+    }
 }
