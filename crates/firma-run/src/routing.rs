@@ -1539,6 +1539,93 @@ mod non_structural_env_tests {
 
         drop(runtime);
     }
+
+    // ── EnvOverrides pure builders ──────────────────────────────────────────
+
+    #[test]
+    fn env_overrides_bridge_sets_all_six_proxy_vars() {
+        let addr: SocketAddr = "127.0.0.1:18080".parse().expect("addr");
+        let env = EnvOverrides::default().with_bridge_address(addr);
+        for key in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ] {
+            assert_eq!(
+                env.get(key).map(String::as_str),
+                Some("http://127.0.0.1:18080"),
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn env_overrides_structural_proxy_env_sets_runtime_vars() {
+        let env = EnvOverrides::default().structural_proxy_env(
+            "127.0.0.1:18080",
+            "127.0.0.1:53",
+            std::path::Path::new("/run/firma/adapter.sock"),
+            std::path::Path::new("/usr/bin/firma"),
+        );
+        assert_eq!(
+            env.get("HTTP_PROXY").map(String::as_str),
+            Some("http://127.0.0.1:18080")
+        );
+        assert_eq!(
+            env.get("FIRMA_RUN_PROXY_LISTEN_ADDR").map(String::as_str),
+            Some("127.0.0.1:18080")
+        );
+        assert_eq!(
+            env.get("FIRMA_RUN_DNS_STUB_LISTEN_ADDR")
+                .map(String::as_str),
+            Some("127.0.0.1:53")
+        );
+        assert_eq!(
+            env.get("FIRMA_RUN_PROXY_BRIDGE_UPSTREAM_UDS")
+                .map(String::as_str),
+            Some("/run/firma/adapter.sock")
+        );
+        assert_eq!(
+            env.get("FIRMA_RUN_SELF_EXE").map(String::as_str),
+            Some("/usr/bin/firma")
+        );
+    }
+
+    #[test]
+    fn env_overrides_dns_stub_address_is_optional() {
+        let absent = EnvOverrides::default().with_dns_stub_address(None);
+        assert!(!absent.contains_key("FIRMA_DNS_STUB_ADDR"));
+
+        let addr: SocketAddr = "127.0.0.1:5354".parse().expect("addr");
+        let present = EnvOverrides::default().with_dns_stub_address(Some(addr));
+        assert_eq!(
+            present.get("FIRMA_DNS_STUB_ADDR").map(String::as_str),
+            Some("127.0.0.1:5354")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn env_overrides_with_egress_sock_sets_var() {
+        let env =
+            EnvOverrides::default().with_egress_sock(std::path::Path::new("/run/firma/guard.sock"));
+        assert_eq!(
+            env.get("FIRMA_RUN_EGRESS_GUARD_SOCK").map(String::as_str),
+            Some("/run/firma/guard.sock")
+        );
+    }
+
+    #[test]
+    fn env_overrides_from_map_derefs_to_inner() {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("K".to_string(), "V".to_string());
+        let env = EnvOverrides::from(map);
+        assert_eq!(env.get("K").map(String::as_str), Some("V"));
+        assert_eq!(env.len(), 1);
+    }
 }
 
 #[cfg(test)]
