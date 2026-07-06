@@ -1076,4 +1076,212 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_dir(&dir);
     }
+
+    // ── is_loopback / classify edges ────────────────────────────────────────
+
+    #[test]
+    fn ipv4_mapped_non_loopback_allowed() {
+        // ::ffff:93.184.216.34 maps a public v4 -> not loopback -> allowed.
+        let addr: SocketAddr = "[::ffff:93.184.216.34]:443".parse().unwrap();
+        assert_eq!(classify(addr, &allow()), Verdict::Allow);
+    }
+
+    #[test]
+    fn unspecified_addresses_allowed() {
+        let v4: SocketAddr = "0.0.0.0:9000".parse().unwrap();
+        let v6: SocketAddr = "[::]:9000".parse().unwrap();
+        assert_eq!(classify(v4, &allow()), Verdict::Allow);
+        assert_eq!(classify(v6, &allow()), Verdict::Allow);
+    }
+
+    #[test]
+    fn loopback_to_dns_port_passes() {
+        let addr: SocketAddr = "127.0.0.1:53".parse().unwrap();
+        assert_eq!(classify(addr, &allow()), Verdict::Allow);
+    }
+
+    #[test]
+    fn empty_allow_list_blocks_all_loopback() {
+        let addr: SocketAddr = "127.0.0.1:18080".parse().unwrap();
+        assert_eq!(classify(addr, &[]), Verdict::Block);
+    }
+
+    #[test]
+    fn external_on_unsanctioned_port_allowed() {
+        // The guard governs only loopback; a public IP on any port is allowed.
+        let addr: SocketAddr = "93.184.216.34:9000".parse().unwrap();
+        assert_eq!(classify(addr, &allow()), Verdict::Allow);
+    }
+
+    // ── parse_sockaddr boundaries ───────────────────────────────────────────
+
+    #[test]
+    fn parse_ipv4_len_boundary() {
+        let full = v4_sockaddr([127, 0, 0, 1], 80);
+        assert!(parse_sockaddr(&full[..8]).is_some());
+        assert!(parse_sockaddr(&full[..7]).is_none());
+    }
+
+    #[test]
+    fn parse_ipv6_len_boundary() {
+        let addr = v6_sockaddr(Ipv6Addr::LOCALHOST, 53);
+        assert!(parse_sockaddr(&addr[..24]).is_some());
+        assert!(parse_sockaddr(&addr[..23]).is_none());
+    }
+
+    #[test]
+    fn parse_empty_is_none() {
+        assert!(parse_sockaddr(&[]).is_none());
+    }
+
+    #[test]
+    fn parse_ipv4_port_is_big_endian() {
+        let mut bytes = v4_sockaddr([127, 0, 0, 1], 0);
+        bytes[2] = 0x12;
+        bytes[3] = 0x34;
+        let addr = parse_sockaddr(&bytes).expect("parse");
+        assert_eq!(addr.port(), 0x1234);
+    }
+
+    #[test]
+    fn parse_ipv4_mapped_loopback_then_classify_blocks() {
+        // An AF_INET6 sockaddr carrying ::ffff:127.0.0.1 parses as V6 and
+        // classifies as loopback, so an unsanctioned port is blocked.
+        let mapped = Ipv4Addr::LOCALHOST.to_ipv6_mapped();
+        let bytes = v6_sockaddr(mapped, 6379);
+        let addr = parse_sockaddr(&bytes).expect("parse");
+        assert!(addr.is_ipv6());
+        assert_eq!(classify(addr, &allow()), Verdict::Block);
+    }
+
+    // ── classify_notification: ipv6, AF_UNIX, sanctioned DNS ────────────────
+
+    fn v6_sockaddr(ip: Ipv6Addr, port: u16) -> Vec<u8> {
+        let mut bytes = vec![0_u8; 28];
+        bytes[0..2].copy_from_slice(&AF_INET6.to_ne_bytes());
+        bytes[2..4].copy_from_slice(&port.to_be_bytes());
+        // sockaddr_in6: family(2) port(2) flowinfo(4) addr(16)
+        bytes[8..24].copy_from_slice(&ip.octets());
+        bytes
+    }
+
+    #[test]
+    fn classify_notification_blocks_ipv6_loopback() {
+        let addr = v6_sockaddr(Ipv6Addr::LOCALHOST, 6379);
+        let req = notif_pointing_at(&addr);
+        match classify_notification(&req, &allow()) {
+            NotifOutcome::Block(Some(got)) => assert_eq!(got, "[::1]:6379".parse().unwrap()),
+            NotifOutcome::Allow | NotifOutcome::Block(None) => {
+                panic!("expected Block for ipv6 loopback");
+            }
+        }
+    }
+
+    #[test]
+    fn classify_notification_allows_af_unix() {
+        // AF_UNIX (1) is not an IP family; parse yields None -> Allow, so the
+        // loopback guard never governs unix-domain connects.
+        let mut buf = vec![0_u8; 16];
+        buf[0..2].copy_from_slice(&1_u16.to_ne_bytes());
+        let req = notif_pointing_at(&buf);
+        assert!(matches!(
+            classify_notification(&req, &allow()),
+            NotifOutcome::Allow
+        ));
+    }
+
+    #[test]
+    fn classify_notification_allows_sanctioned_dns_port() {
+        let addr = v4_sockaddr([127, 0, 0, 1], DNS);
+        let req = notif_pointing_at(&addr);
+        assert!(matches!(
+            classify_notification(&req, &allow()),
+            NotifOutcome::Allow
+        ));
+    }
+
+    // ── BPF routing ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn bpf_program_routes_arch_and_nr() {
+        let p = CONNECT_NOTIFY_PROG;
+        // Load arch, then on a foreign arch jump-false past both nr checks to the
+        // final allow (jf = 3 -> index 5).
+        assert_eq!(p[0].k, SECCOMP_DATA_ARCH_OFFSET);
+        assert_eq!(p[1].k, NATIVE_AUDIT_ARCH);
+        assert_eq!(p[1].jf, 3);
+        // Load nr, then on any non-connect syscall jump-false to allow (jf = 1).
+        assert_eq!(p[2].k, SECCOMP_DATA_NR_OFFSET);
+        assert_eq!(p[3].jf, 1);
+    }
+
+    // ── SCM_RIGHTS fd transfer ──────────────────────────────────────────────
+
+    #[test]
+    fn listener_fd_roundtrip_transfers_open_file() {
+        use std::io::{Read as _, Write as _};
+
+        let dir = std::env::temp_dir().join(format!("firma-fd-xfer-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("marker");
+        {
+            let mut f = std::fs::File::create(&path).expect("create");
+            f.write_all(b"firma-fd-marker").expect("write");
+        }
+        let orig = std::fs::File::open(&path).expect("open");
+
+        let (a, b) = UnixStream::pair().expect("socketpair");
+        send_listener_fd(&a, orig.as_raw_fd()).expect("send fd");
+        let received = recv_listener_fd(&b).expect("recv fd");
+
+        // The received fd is the same open file description; reading it yields the
+        // bytes written through the original path.
+        let mut f = std::fs::File::from(received);
+        let mut got = String::new();
+        f.read_to_string(&mut got).expect("read via received fd");
+        assert_eq!(got, "firma-fd-marker");
+
+        drop(orig);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn recv_listener_fd_without_scm_rights_errors() {
+        let (a, b) = UnixStream::pair().expect("socketpair");
+        // Send a plain byte with no SCM_RIGHTS control message.
+        let payload = [0_u8; 1];
+        let iov = [IoSlice::new(&payload)];
+        let cmsgs: &[ControlMessage] = &[];
+        sendmsg::<()>(a.as_raw_fd(), &iov, cmsgs, MsgFlags::empty(), None).expect("sendmsg");
+        let err = recv_listener_fd(&b).expect_err("expected error when no fd is sent");
+        assert!(
+            err.to_string().contains("no fd received"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // ── supervisor lifecycle ────────────────────────────────────────────────
+
+    #[test]
+    fn start_binds_socket_and_drop_removes_it() {
+        let dir = std::env::temp_dir().join(format!("firma-egress-start-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let socket_path = dir.join("guard.sock");
+
+        let handle = start(SupervisorConfig {
+            socket_path: socket_path.clone(),
+            allow_ports: allow(),
+            report: None,
+        })
+        .expect("start guard");
+
+        assert_eq!(handle.socket_path(), socket_path);
+        assert!(socket_path.exists(), "control socket should be bound");
+
+        drop(handle); // signals stop, joins the supervisor thread, removes socket
+        assert!(!socket_path.exists(), "socket removed on drop");
+
+        let _ = std::fs::remove_dir(&dir);
+    }
 }
