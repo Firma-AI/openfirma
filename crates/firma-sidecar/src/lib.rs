@@ -44,4 +44,6 @@ pub mod interceptor;
 pub mod local_exec;
 pub mod normalizer;
 pub mod pipeline;
+#[cfg(unix)]
+pub mod run_audit;
 pub mod startup;

@@ -128,6 +128,13 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         exit.clone(),
     )?;
 
+    // Out-of-band ingest for the `firma run` audit channel (e.g. loopback
+    // connections the egress guard blocks at the sandbox boundary). Bound only
+    // when `firma run` provisions a control socket; absent in plain daemon
+    // mode. Clone the sender before it is moved into the RequestHandler below.
+    #[cfg(unix)]
+    let run_audit_handle = spawn_run_audit_listener(&audit_payload_tx, &exit);
+
     let pipeline_runtime = startup::build_pipeline_runtime(&config)?;
     let authority_handle =
         startup::spawn_authority_client(&config, &pipeline_runtime, exit.clone())?;
@@ -176,6 +183,12 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
             let _ = handle.await;
         }
     };
+    let run_audit_task = async {
+        #[cfg(unix)]
+        if let Some(handle) = run_audit_handle {
+            let _ = handle.await;
+        }
+    };
     let _ = tokio::join!(
         audit_sink,
         health_server,
@@ -183,11 +196,41 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
         interceptor.handle,
         shutdown_handler,
         authority_stream_tasks,
-        local_exec_task
+        local_exec_task,
+        run_audit_task,
     );
     debug!("firma sidecar exiting");
 
     Ok(ExitCode::SUCCESS)
+}
+
+/// Spawns the `firma run` audit-channel listener when `firma run` provisions a
+/// control socket via `FIRMA_RUN_AUDIT_SOCK`. Returns `None` in plain daemon
+/// mode (no socket configured) or when binding fails — in the latter case the
+/// Sidecar still serves traffic, but out-of-band reports (e.g. loopback blocks)
+/// go unaudited, so the failure is logged loudly.
+#[cfg(unix)]
+fn spawn_run_audit_listener(
+    audit_payload_tx: &tokio::sync::mpsc::Sender<firma_sidecar::audit::AuditPayload>,
+    exit: &CancellationToken,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let socket = std::env::var("FIRMA_RUN_AUDIT_SOCK")
+        .ok()
+        .filter(|value| !value.trim().is_empty())?;
+    match firma_sidecar::run_audit::spawn_listener(
+        std::path::PathBuf::from(socket),
+        audit_payload_tx.clone(),
+        exit.clone(),
+    ) {
+        Ok(handle) => Some(handle),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "failed to start run-audit listener; out-of-band firma run reports will not be audited"
+            );
+            None
+        }
+    }
 }
 
 async fn wait_for_streams_ready(runtime: &startup::PipelineRuntime, cancel: CancellationToken) {
