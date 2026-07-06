@@ -39,18 +39,7 @@ impl HostDnsStubHandle {
     /// Returns [`RunError::Spawn`] if the listeners cannot be bound or threads
     /// cannot be spawned.
     pub fn start() -> Result<Self, RunError> {
-        let udp = UdpSocket::bind("127.0.0.1:0").map_err(|error| {
-            RunError::Spawn(format!("failed to bind host DNS stub UDP: {error}"))
-        })?;
-        let listen_addr = udp.local_addr().map_err(|error| {
-            RunError::Spawn(format!("failed to read host DNS stub listen addr: {error}"))
-        })?;
-
-        let tcp = TcpListener::bind(listen_addr).map_err(|error| {
-            RunError::Spawn(format!(
-                "failed to bind host DNS stub TCP on {listen_addr}: {error}"
-            ))
-        })?;
+        let (udp, tcp, listen_addr) = bind_stub_pair()?;
 
         udp.set_nonblocking(true).map_err(|error| {
             RunError::Spawn(format!("failed to set DNS stub UDP non-blocking: {error}"))
@@ -117,6 +106,42 @@ impl Drop for HostDnsStubHandle {
             let _ = task.join();
         }
     }
+}
+
+/// Binds a UDP and TCP loopback listener on the *same* ephemeral port.
+///
+/// A UDP ephemeral port is not guaranteed to be TCP-bindable: on Windows the
+/// kernel can hand out a UDP dynamic port that falls in a TCP excluded/reserved
+/// range (Hyper-V/WSL), so binding TCP to it fails with `WSAEACCES`
+/// (`os error 10013`). Retry with fresh ports until both bind on the same one.
+fn bind_stub_pair() -> Result<(UdpSocket, TcpListener, SocketAddr), RunError> {
+    const MAX_ATTEMPTS: u32 = 20;
+    let mut last_error = String::new();
+    for _ in 0..MAX_ATTEMPTS {
+        let udp = match UdpSocket::bind("127.0.0.1:0") {
+            Ok(socket) => socket,
+            Err(error) => {
+                last_error = format!("UDP bind: {error}");
+                continue;
+            }
+        };
+        let listen_addr = match udp.local_addr() {
+            Ok(addr) => addr,
+            Err(error) => {
+                last_error = format!("read listen addr: {error}");
+                continue;
+            }
+        };
+        match TcpListener::bind(listen_addr) {
+            // Drop `udp` on failure so the port is freed before the next attempt.
+            Ok(tcp) => return Ok((udp, tcp, listen_addr)),
+            Err(error) => last_error = format!("TCP bind on {listen_addr}: {error}"),
+        }
+    }
+    Err(RunError::Spawn(format!(
+        "failed to bind host DNS stub UDP+TCP on a shared loopback port after \
+         {MAX_ATTEMPTS} attempts: {last_error}"
+    )))
 }
 
 fn run_stub_udp_nonblocking(socket: &UdpSocket, stop_rx: &mpsc::Receiver<()>) {
