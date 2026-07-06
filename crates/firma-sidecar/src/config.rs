@@ -50,8 +50,12 @@ use serde::Deserialize;
 /// been DENY are logged as ALLOW with a `monitor_mode: <reason>` annotation
 /// so operators can audit traffic before tightening policy.
 ///
-/// **Never deploy `monitor` to production.** The sidecar emits a startup
-/// warning when this mode is active.
+/// **Never deploy `monitor` to production.** Monitor mode is gated behind
+/// the `FIRMA_ALLOW_MONITOR_MODE=1` environment variable: setting
+/// `mode = "monitor"` without that opt-in downgrades to `enforce` at startup
+/// with an error log, so a dev config left on `monitor` cannot accidentally
+/// bypass enforcement in production. When honored, the sidecar emits a
+/// startup warning.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SidecarMode {

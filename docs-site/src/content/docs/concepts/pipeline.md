@@ -338,6 +338,13 @@ and `DEFER` are all overridden to `PASSTHROUGH` so the call goes through,
 with the original reason preserved in the audit record prefixed with
 `monitor_mode:`.
 
+Monitor mode is gated behind the `FIRMA_ALLOW_MONITOR_MODE=1` environment
+variable. A config that sets `mode = "monitor"` without that opt-in downgrades
+to `enforce` at startup with an error log, so a dev config left on `monitor`
+cannot accidentally bypass enforcement in production. `firma run --monitor`
+sets the env var on the autostarted sidecar automatically, so the CLI flag
+keeps honoring observe-only mode without a separate opt-in.
+
 ## The Mental Model
 
 The pipeline is easiest to remember as a sequence of increasingly meaningful representations:

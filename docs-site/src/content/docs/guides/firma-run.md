@@ -362,7 +362,7 @@ This prints the resolved profile as JSON: which backend, which env vars are inje
 | `--capability-file <path>`                  | Pre-staged capability seed for this run.                                                                                                                                                   |
 | `--identity-mode <sandbox-user\|host-user>` | Choose whether the sandboxed process runs as the host user or a remapped sandbox user.                                                                                                     |
 | `--print-effective-config`                  | Print resolved config and exit. No agent launched.                                                                                                                                         |
-| `--monitor`                                 | Run in observe-only mode for this invocation. Every call is allowed through; `firma monitor` shows the original deny reason prefixed with `monitor_mode:`. Never use in production.        |
+| `--monitor`                                 | Run in observe-only mode for this invocation. Every call is allowed through; `firma monitor` shows the original deny reason prefixed with `monitor_mode:`. This flag is the explicit opt-in: it sets `FIRMA_ALLOW_MONITOR_MODE=1` on the autostarted sidecar. A config that sets `mode = "monitor"` without that env var downgrades to `enforce` at startup. Never use in production. |
 
 ## What does and does not pass through
 

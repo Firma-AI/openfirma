@@ -60,6 +60,32 @@ fn load_mapping_rules(config: &config::SidecarConfig) -> anyhow::Result<config::
     Ok(config::MappingRulesFile { rules: all_rules })
 }
 
+/// Name of the environment variable that must be set to `"1"` to honor a
+/// configured `monitor` mode. Prevents an accidental enforcement bypass when
+/// `mode = "monitor"` is left set in a production config.
+const MONITOR_MODE_ENV: &str = "FIRMA_ALLOW_MONITOR_MODE";
+
+/// Resolve the effective enforcement mode, gating `monitor` behind an
+/// explicit env-var opt-in.
+///
+/// Monitor mode is a silent enforcement bypass (every DENY → ALLOW). Requiring
+/// `FIRMA_ALLOW_MONITOR_MODE=1` ensures a dev config that leaves
+/// `mode = "monitor"` set cannot accidentally disable enforcement in
+/// production. Returns [`config::SidecarMode::Enforce`] when monitor mode is
+/// requested without the opt-in; otherwise returns the configured mode
+/// unchanged.
+#[must_use]
+fn resolve_effective_mode(
+    configured: &config::SidecarMode,
+    monitor_env_value: Option<&str>,
+) -> config::SidecarMode {
+    if *configured == config::SidecarMode::Monitor && monitor_env_value != Some("1") {
+        config::SidecarMode::Enforce
+    } else {
+        configured.clone()
+    }
+}
+
 /// Build the enforcement pipeline plus stream-client shared state.
 ///
 /// # Errors
@@ -135,10 +161,18 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
     let session_state_store: Arc<dyn crate::enforcement::SessionStateStore> =
         Arc::new(crate::enforcement::LruSessionStateStore::with_default_capacity());
 
-    if config.mode == config::SidecarMode::Monitor {
+    let monitor_env_value = std::env::var(MONITOR_MODE_ENV).ok();
+    let effective_mode = resolve_effective_mode(&config.mode, monitor_env_value.as_deref());
+    if effective_mode == config::SidecarMode::Monitor {
         tracing::warn!(
-            "MONITOR MODE ACTIVE — enforcement is observing only; \
-             all calls are allowed through. Never use in production."
+            "MONITOR MODE ACTIVE — enforcement is observing only; all calls \
+             are allowed through. Never use in production."
+        );
+    } else if config.mode == config::SidecarMode::Monitor {
+        tracing::error!(
+            "monitor mode requested via config but {MONITOR_MODE_ENV} is not set \
+             to '1'; downgrading to enforce mode for safety. Set \
+             {MONITOR_MODE_ENV}=1 to honor monitor mode."
         );
     }
 
@@ -150,7 +184,7 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
         session_state_store,
     })
     .with_readiness(readiness_view)
-    .with_mode(config.mode.clone());
+    .with_mode(effective_mode);
     tracing::debug!("enforcement pipeline initialized");
 
     Ok(PipelineRuntime {
@@ -160,4 +194,55 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
         readiness,
         mapping_rules_loaded,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::SidecarMode;
+
+    #[test]
+    fn enforce_mode_is_unchanged_without_env_opt_in() {
+        assert_eq!(
+            resolve_effective_mode(&SidecarMode::Enforce, None),
+            SidecarMode::Enforce
+        );
+    }
+
+    #[test]
+    fn monitor_mode_downgrades_without_env_opt_in() {
+        assert_eq!(
+            resolve_effective_mode(&SidecarMode::Monitor, None),
+            SidecarMode::Enforce
+        );
+    }
+
+    #[test]
+    fn monitor_mode_downgrades_with_wrong_env_value() {
+        assert_eq!(
+            resolve_effective_mode(&SidecarMode::Monitor, Some("0")),
+            SidecarMode::Enforce
+        );
+        assert_eq!(
+            resolve_effective_mode(&SidecarMode::Monitor, Some("true")),
+            SidecarMode::Enforce
+        );
+        assert_eq!(
+            resolve_effective_mode(&SidecarMode::Monitor, Some("")),
+            SidecarMode::Enforce
+        );
+    }
+
+    #[test]
+    fn monitor_mode_honored_only_with_explicit_opt_in() {
+        assert_eq!(
+            resolve_effective_mode(&SidecarMode::Monitor, Some("1")),
+            SidecarMode::Monitor
+        );
+        // Enforce mode is never upgraded to monitor regardless of the env var.
+        assert_eq!(
+            resolve_effective_mode(&SidecarMode::Enforce, Some("1")),
+            SidecarMode::Enforce
+        );
+    }
 }
