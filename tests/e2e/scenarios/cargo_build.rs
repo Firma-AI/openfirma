@@ -74,11 +74,15 @@ impl EnforcementScenario for CargoBuild {
         )
     }
 
-    fn assert_baseline(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
+    fn assert_baseline(
+        &self,
+        ctx: &ScenarioSetup,
+        output: &PhaseOutput,
+    ) -> Result<(), anyhow::Error> {
         if !output.agent.success {
             anyhow::bail!("agent failed");
         }
-        Ok(())
+        Self::assert_build_artifacts(ctx)
     }
 
     fn assert_enforcement(
