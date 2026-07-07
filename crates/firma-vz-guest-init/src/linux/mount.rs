@@ -1,0 +1,209 @@
+use std::ffi::CString;
+use std::fs::{self, File};
+use std::io;
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
+
+use super::contract::Contract;
+use super::error::{InitError, InitResult};
+use super::log;
+
+/// Guest root where the host runner's virtiofs shares are mounted.
+pub const SHARE_ROOT: &str = "/firma-shares";
+const MODULE_DIR: &str = "/lib/modules/firma-vz";
+const REQUIRED_MODULES: &[&str] = &[
+    "virtio.ko",
+    "virtio_ring.ko",
+    "virtio_pci_legacy_dev.ko",
+    "virtio_pci_modern_dev.ko",
+    "virtio_pci.ko",
+    "virtio_mmio.ko",
+    "virtio_blk.ko",
+    "virtio_console.ko",
+    "fuse.ko",
+    "virtiofs.ko",
+];
+
+/// Creates a guest directory from a static path string.
+pub fn create_dir(path: &str) -> InitResult<()> {
+    fs::create_dir_all(path).map_err(|error| InitError::CreateDir {
+        path: PathBuf::from(path),
+        source: error,
+    })
+}
+
+/// Creates a guest directory from a path value.
+pub fn create_dir_path(path: &Path) -> InitResult<()> {
+    fs::create_dir_all(path).map_err(|error| InitError::CreateDir {
+        path: path.to_path_buf(),
+        source: error,
+    })
+}
+
+/// Mounts an early pseudo filesystem such as devtmpfs, proc, or sysfs.
+pub fn mount_pseudo(
+    source: &'static str,
+    target: &'static str,
+    file_system: &'static str,
+) -> InitResult<()> {
+    mount(source, target, file_system, 0).map_err(|error| InitError::MountPseudo {
+        file_system,
+        target,
+        source: error,
+    })
+}
+
+/// Mounts the runner-provided virtiofs share at the guest share root.
+pub fn mount_virtiofs(tag: &str, target: &'static str) -> InitResult<()> {
+    mount(tag, target, "virtiofs", libc::MS_NOSUID | libc::MS_NODEV).map_err(|error| {
+        InitError::MountVirtiofs {
+            tag: tag.to_string(),
+            target,
+            source: error,
+        }
+    })
+}
+
+/// Bind-mounts each contract share into its requested guest target.
+pub fn mount_contract_paths(contract: &Contract) -> InitResult<()> {
+    for (index, mount) in contract.mounts().iter().enumerate() {
+        let source = Path::new(SHARE_ROOT).join(format!("mount{index}"));
+        if !source.is_dir() {
+            return Err(InitError::MissingShareSource { path: source });
+        }
+        bind_mount(&source, &mount.target, mount.read_only)?;
+        log(&format!(
+            "mounted {} at {} read_only={}",
+            source.display(),
+            mount.target.display(),
+            mount.read_only
+        ));
+    }
+    Ok(())
+}
+
+/// Performs a bind mount and optionally remounts it read-only.
+fn bind_mount(source: &Path, target: &Path, read_only: bool) -> InitResult<()> {
+    create_dir_path(target)?;
+    mount_path(source, target, None, libc::MS_BIND | libc::MS_REC).map_err(|error| {
+        InitError::BindMount {
+            source: source.to_path_buf(),
+            target: target.to_path_buf(),
+            error,
+        }
+    })?;
+    if read_only {
+        mount_path(
+            source,
+            target,
+            None,
+            libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV,
+        )
+        .map_err(|error| InitError::RemountReadOnly {
+            source: source.to_path_buf(),
+            target: target.to_path_buf(),
+            error,
+        })?;
+    }
+    Ok(())
+}
+
+/// Mounts string-backed paths with a string filesystem type.
+fn mount(source: &str, target: &str, file_system: &str, flags: libc::c_ulong) -> io::Result<()> {
+    let source = c_string(source)?;
+    let target = c_string(target)?;
+    let file_system = c_string(file_system)?;
+    mount_raw(&source, &target, Some(&file_system), flags)
+}
+
+/// Mounts path-backed sources and targets.
+fn mount_path(
+    source: &Path,
+    target: &Path,
+    file_system: Option<&str>,
+    flags: libc::c_ulong,
+) -> io::Result<()> {
+    let source = path_c_string(source)?;
+    let target = path_c_string(target)?;
+    let file_system = file_system.map(c_string).transpose()?;
+    mount_raw(&source, &target, file_system.as_ref(), flags)
+}
+
+/// Calls the Linux `mount(2)` syscall.
+fn mount_raw(
+    source: &CString,
+    target: &CString,
+    file_system: Option<&CString>,
+    flags: libc::c_ulong,
+) -> io::Result<()> {
+    let result = unsafe {
+        libc::mount(
+            source.as_ptr().cast(),
+            target.as_ptr().cast(),
+            file_system.map_or(std::ptr::null(), |value| value.as_ptr().cast()),
+            flags,
+            std::ptr::null(),
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// Converts a string into a NUL-free C string for syscalls.
+fn c_string(value: &str) -> io::Result<CString> {
+    CString::new(value).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
+}
+
+/// Converts a UTF-8 path into a NUL-free C string for syscalls.
+fn path_c_string(value: &Path) -> io::Result<CString> {
+    let value = value
+        .to_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path is not UTF-8"))?;
+    c_string(value)
+}
+
+/// Loads bundled virtio modules when the guest image does not build them in.
+pub fn load_required_modules() -> InitResult<()> {
+    let module_dir = Path::new(MODULE_DIR);
+    if !module_dir.is_dir() {
+        log("no guest module bundle found; assuming required drivers are built in");
+        return Ok(());
+    }
+
+    for module in REQUIRED_MODULES {
+        let path = module_dir.join(module);
+        if path.is_file() {
+            load_module(&path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Loads one kernel module with `finit_module(2)`.
+fn load_module(path: &Path) -> InitResult<()> {
+    let file = File::open(path).map_err(|error| InitError::OpenModule {
+        path: path.to_path_buf(),
+        source: error,
+    })?;
+    let params = c_string("").map_err(|error| InitError::ModuleParams { source: error })?;
+    let result =
+        unsafe { libc::syscall(libc::SYS_finit_module, file.as_raw_fd(), params.as_ptr(), 0) };
+    if result == 0 {
+        log(&format!("loaded module {}", path.display()));
+        Ok(())
+    } else {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::EEXIST) {
+            log(&format!("module already loaded {}", path.display()));
+            Ok(())
+        } else {
+            Err(InitError::LoadModule {
+                path: path.to_path_buf(),
+                source: error,
+            })
+        }
+    }
+}

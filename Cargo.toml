@@ -12,6 +12,7 @@ members = [
   "crates/firma-runtime-state",
   "crates/firma-sidecar",
   "crates/firma-stack",
+  "crates/firma-vz-guest-init",
   "crates/firma-vz-runner",
 ]
 resolver = "3"
