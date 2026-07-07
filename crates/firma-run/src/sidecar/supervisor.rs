@@ -140,7 +140,7 @@ impl SidecarSupervisor {
     pub fn spawn(req: SpawnRequest<'_>) -> Result<Self, RunError> {
         use firma_runtime_state::ChildExt as _;
 
-        std::fs::create_dir_all(&req.marker_dir).map_err(|error| {
+        firma_runtime_state::fs::create_private_dir_all(&req.marker_dir).map_err(|error| {
             RunError::Internal(format!("mkdir {}: {error}", req.marker_dir.display()))
         })?;
 
@@ -151,6 +151,10 @@ impl SidecarSupervisor {
         let log_path = req.marker_dir.join("sidecar.log");
         let pid_path = req.marker_dir.join("sidecar.pid");
         let metadata_path = req.marker_dir.join("metadata.toml");
+        #[cfg(unix)]
+        let audit_sock_path = firma_sidecar::run_audit::socket_path_in(&req.marker_dir);
+        #[cfg(not(unix))]
+        let audit_sock_path = req.marker_dir.join("run-audit.sock");
 
         // Pre-clean any leftover socket file from a crashed run.
         let _ = std::fs::remove_file(&sock_path);
@@ -190,6 +194,11 @@ impl SidecarSupervisor {
                 // Per-run identity stamped on every audit ExecutionEvent
                 // (FIR-185). Matches the marker directory name.
                 .env("FIRMA_RUN_SANDBOX_ID", req.sandbox_id)
+                // Control socket for the `firma run` audit channel: out-of-band
+                // reports (e.g. loopback blocks) the Sidecar turns into signed
+                // audit events. Derived via `socket_path_in` so the guard and
+                // the Sidecar agree on the filename.
+                .env("FIRMA_RUN_AUDIT_SOCK", &audit_sock_path)
                 .env("NO_COLOR", "1")
                 .env("CLICOLOR", "0");
             // The CLI `--monitor` flag is an explicit opt-in. Forward it to

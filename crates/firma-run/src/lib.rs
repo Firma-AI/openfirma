@@ -8,6 +8,8 @@ pub mod backend;
 pub mod capability;
 pub mod config;
 pub mod dns_stub;
+#[cfg(target_os = "linux")]
+pub mod egress_guard;
 pub mod error;
 pub mod identity;
 pub mod mediator;
