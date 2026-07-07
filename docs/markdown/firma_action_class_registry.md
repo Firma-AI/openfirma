@@ -120,6 +120,31 @@ for the actual send verbs; settings that change deliverability boundaries
 | `communication.external.delete` | Communication | High     | Permanently delete messages or threads          |
 | `communication.external.filter` | Communication | Critical | Create / delete server-side mail filters        |
 
+### Out-of-band audit classes (not policy-evaluated)
+
+Some enforcement happens _outside_ the Sidecar's request pipeline and so never
+flows through an `ExecutionEnvelope`. These actions are **audit-only**: they are
+not part of `ActionClassRegistry::v0_1()`, never appear in
+`intent.action_class`, and are never evaluated by Cedar. They exist purely so an
+out-of-band block is attributable in `firma monitor`.
+
+| Action class       | Domain  | Risk | Notes                                                                                                                                                           |
+| ------------------ | ------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `network.loopback` | Network | High | A wrapped agent's direct loopback connection blocked at the sandbox boundary by the `firma run` egress guard. Emitted as a DENY with reason `loopback blocked`. |
+
+The egress guard blocks loopback `connect(2)`s that bypass `HTTP_PROXY` (direct
+sockets to `127.0.0.0/8` or `::1`) before they can reach a local admin port,
+daemon, or MCP server, then reports the attempt to the Sidecar, which signs and
+records it. The proxy bridge and DNS stub are exempt so Firma's own loopback
+traffic is unaffected.
+
+`network.loopback` is the first message kind of the **`firma run` audit
+channel** (`firma_core::RunAuditEvent::LoopbackBlocked`): a generic out-of-band
+path for `firma run` to report enforcement facts to the Sidecar over a control
+socket, which the Sidecar maps to fixed audit semantics and signs. Future
+message kinds (other seccomp blocks, blocked tool launches, command-governance
+denials) add their own audit-only action classes here.
+
 Reserved for a future minor revision (MUST NOT appear in v0.1 policies):
 `memory.read`, `memory.write`, `browser.navigate`.
 

@@ -122,6 +122,13 @@ pub enum DenyReason {
     /// Sidecar process. Enforces single-agent tenancy (V1 ADR §2).
     #[error("tenant mismatch")]
     TenantMismatch,
+    /// Agent attempted a direct connection to a loopback address that is not a
+    /// sanctioned Firma endpoint. Blocked at the sandbox boundary before it
+    /// could reach a local admin port, daemon, or MCP server. The connection
+    /// never traverses the proxy, so it is reported out-of-band by the
+    /// `firma run` egress guard rather than the enforcement hot path.
+    #[error("loopback blocked")]
+    LoopbackBlocked,
     /// AARM R4 `STEP_UP`: the call is blocked pending human approval or
     /// stronger authentication before it may proceed. The agent should
     /// request approval and retry with the resulting approval credential.
@@ -453,6 +460,7 @@ mod tests {
             ),
             (DenyReason::UnclassifiedIntent, "unclassified intent"),
             (DenyReason::TenantMismatch, "tenant mismatch"),
+            (DenyReason::LoopbackBlocked, "loopback blocked"),
             (DenyReason::StepUpRequired, "step up required"),
             (DenyReason::Deferred, "deferred"),
         ];
@@ -757,10 +765,11 @@ mod tests {
                 DenyReason::ConnectorInvalidRequest => r#""ConnectorInvalidRequest""#,
                 DenyReason::UnclassifiedIntent => r#""UnclassifiedIntent""#,
                 DenyReason::TenantMismatch => r#""TenantMismatch""#,
+                DenyReason::LoopbackBlocked => r#""LoopbackBlocked""#,
                 DenyReason::StepUpRequired => r#""StepUpRequired""#,
                 DenyReason::Deferred => r#""Deferred""#,
             };
-            let parsed: DenyReason = serde_json::from_str(json).unwrap_or_else(|e| panic!("{e}"));
+            let parsed: DenyReason = serde_json::from_str(json).unwrap();
             assert_eq!(parsed, reason);
         }
     }
