@@ -37,7 +37,7 @@
 //! `process_vm_readv(2)` can return fewer bytes than requested (e.g. a sockaddr
 //! straddling a page boundary with the second page unmapped), which would leave
 //! the buffer tail zero-filled and misclassify a loopback destination as
-//! `0.0.0.0`. [`read_remote_mem`] rejects any short read, so the caller blocks
+//! `0.0.0.0`. `read_remote_mem` rejects any short read, so the caller blocks
 //! rather than allowing on a partial read.
 //!
 //! Linux-only: seccomp and `process_vm_readv(2)` are Linux primitives.
