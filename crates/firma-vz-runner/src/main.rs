@@ -5,6 +5,8 @@ use anyhow::Result;
 use clap::Parser;
 
 mod contract;
+#[cfg(any(target_os = "macos", test))]
+mod guest;
 mod runner;
 mod vm;
 

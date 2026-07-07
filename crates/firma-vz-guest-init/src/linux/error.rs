@@ -1,5 +1,6 @@
 use std::fmt;
 use std::io;
+use std::net::AddrParseError;
 use std::path::PathBuf;
 
 /// Typed failures raised while preparing or running the VZ guest init payload.
@@ -56,8 +57,34 @@ pub enum InitError {
     RelativeCommandCwd { path: PathBuf },
     /// The contract environment contains a host-only secret key.
     SecretEnvKey { key: &'static str },
+    /// The contract requested PTY mode before guest PTY execution is supported.
+    UnsupportedTerminalPty,
+    /// The contract requested interactive mode before guest terminal handling is supported.
+    UnsupportedTerminalInteractive,
+    /// The contract provided a PTY VSOCK port while PTY mode was disabled.
+    TerminalPtyPortWithoutPty { field: &'static str },
+    /// The contract provided an empty terminal type.
+    EmptyTerminalTerm,
+    /// The contract provided a zero terminal dimension.
+    ZeroTerminalDimension { field: &'static str },
     /// A contract mount target is not absolute.
     RelativeMountTarget { path: PathBuf },
+    /// A network socket address could not be parsed.
+    InvalidNetworkSocketAddr {
+        field: &'static str,
+        value: String,
+        source: AddrParseError,
+    },
+    /// A network socket address was not loopback.
+    NonLoopbackNetworkSocketAddr { field: &'static str, value: String },
+    /// A required network port was zero.
+    ZeroNetworkPort { field: &'static str },
+    /// The contract allowed direct guest network devices.
+    DirectNetworkDevicesAllowed,
+    /// The network attribution header map contained an empty key.
+    EmptyAttributionHeaderName,
+    /// The network attribution header map contained an empty value.
+    EmptyAttributionHeaderValue { name: String },
     /// The indexed virtiofs share for a contract mount is missing.
     MissingShareSource { path: PathBuf },
     /// The guest payload process could not be spawned.
@@ -65,6 +92,16 @@ pub enum InitError {
         executable: String,
         source: io::Error,
     },
+    /// Guest stdin captured by the host runner could not be opened.
+    OpenGuestStdin { path: PathBuf, source: io::Error },
+    /// The contract path has no parent for command output streams.
+    CommandStdioPathWithoutParent { path: PathBuf },
+    /// A command stdout/stderr replay file could not be created.
+    CreateCommandStdioFile { path: PathBuf, source: io::Error },
+    /// A command stdout/stderr replay file could not be inspected.
+    StatCommandStdioFile { path: PathBuf, source: io::Error },
+    /// A command stdout/stderr replay file could not be made owner-only.
+    SetCommandStdioFilePermissions { path: PathBuf, source: io::Error },
     /// The guest payload exited without an exit status or signal.
     CommandMissingStatus,
     /// The contract path has no parent directory for the result file.
@@ -179,6 +216,19 @@ impl fmt::Display for InitError {
             Self::SecretEnvKey { key } => {
                 write!(formatter, "command.env contains secret key {key}")
             }
+            Self::UnsupportedTerminalPty => {
+                formatter.write_str("terminal.pty is not supported by this guest init yet")
+            }
+            Self::UnsupportedTerminalInteractive => {
+                formatter.write_str("terminal.interactive is not supported by this guest init yet")
+            }
+            Self::TerminalPtyPortWithoutPty { field } => {
+                write!(formatter, "{field} requires terminal.pty=true")
+            }
+            Self::EmptyTerminalTerm => formatter.write_str("terminal.term must not be empty"),
+            Self::ZeroTerminalDimension { field } => {
+                write!(formatter, "{field} must be greater than zero")
+            }
             Self::RelativeMountTarget { path } => {
                 write!(
                     formatter,
@@ -186,12 +236,59 @@ impl fmt::Display for InitError {
                     path.display()
                 )
             }
+            Self::InvalidNetworkSocketAddr {
+                field,
+                value,
+                source,
+            } => write!(
+                formatter,
+                "{field} must be a socket address, got {value}: {source}"
+            ),
+            Self::NonLoopbackNetworkSocketAddr { field, value } => {
+                write!(formatter, "{field} must be loopback, got {value}")
+            }
+            Self::ZeroNetworkPort { field } => {
+                write!(formatter, "{field} port must be greater than zero")
+            }
+            Self::DirectNetworkDevicesAllowed => {
+                formatter.write_str("network.direct_network_devices_allowed must be false")
+            }
+            Self::EmptyAttributionHeaderName => {
+                formatter.write_str("network.attribution_headers contains an empty header name")
+            }
+            Self::EmptyAttributionHeaderValue { name } => write!(
+                formatter,
+                "network.attribution_headers[{name}] must not be empty"
+            ),
             Self::MissingShareSource { path } => {
                 write!(formatter, "missing VZ share source {}", path.display())
             }
             Self::SpawnCommand { executable, source } => {
                 write!(formatter, "spawn command {executable}: {source}")
             }
+            Self::OpenGuestStdin { path, source } => {
+                write!(formatter, "open guest stdin {}: {source}", path.display())
+            }
+            Self::CommandStdioPathWithoutParent { path } => write!(
+                formatter,
+                "contract path {} has no parent for command stdio file",
+                path.display()
+            ),
+            Self::CreateCommandStdioFile { path, source } => write!(
+                formatter,
+                "create command stdio file {}: {source}",
+                path.display()
+            ),
+            Self::StatCommandStdioFile { path, source } => write!(
+                formatter,
+                "stat command stdio file {}: {source}",
+                path.display()
+            ),
+            Self::SetCommandStdioFilePermissions { path, source } => write!(
+                formatter,
+                "set command stdio file permissions {}: {source}",
+                path.display()
+            ),
             Self::CommandMissingStatus => {
                 formatter.write_str("command ended without exit code or signal")
             }
@@ -258,6 +355,10 @@ impl std::error::Error for InitError {
             | Self::ContractNotVisible { source, .. }
             | Self::ReadContract { source, .. }
             | Self::SpawnCommand { source, .. }
+            | Self::OpenGuestStdin { source, .. }
+            | Self::CreateCommandStdioFile { source, .. }
+            | Self::StatCommandStdioFile { source, .. }
+            | Self::SetCommandStdioFilePermissions { source, .. }
             | Self::WriteGuestResultTemp { source, .. }
             | Self::StatGuestResultTemp { source, .. }
             | Self::SetGuestResultTempPermissions { source, .. }
@@ -265,6 +366,7 @@ impl std::error::Error for InitError {
             | Self::OpenModule { source, .. }
             | Self::ModuleParams { source }
             | Self::LoadModule { source, .. } => Some(source),
+            Self::InvalidNetworkSocketAddr { source, .. } => Some(source),
             Self::BindMount { error, .. } | Self::RemountReadOnly { error, .. } => Some(error),
             Self::ParseContract { source, .. } | Self::SerializeGuestResult { source, .. } => {
                 Some(source)
@@ -276,8 +378,19 @@ impl std::error::Error for InitError {
             | Self::EmptyExecutable
             | Self::RelativeCommandCwd { .. }
             | Self::SecretEnvKey { .. }
+            | Self::UnsupportedTerminalPty
+            | Self::UnsupportedTerminalInteractive
+            | Self::TerminalPtyPortWithoutPty { .. }
+            | Self::EmptyTerminalTerm
+            | Self::ZeroTerminalDimension { .. }
             | Self::RelativeMountTarget { .. }
+            | Self::NonLoopbackNetworkSocketAddr { .. }
+            | Self::ZeroNetworkPort { .. }
+            | Self::DirectNetworkDevicesAllowed
+            | Self::EmptyAttributionHeaderName
+            | Self::EmptyAttributionHeaderValue { .. }
             | Self::MissingShareSource { .. }
+            | Self::CommandStdioPathWithoutParent { .. }
             | Self::CommandMissingStatus
             | Self::ResultPathWithoutParent { .. } => None,
         }

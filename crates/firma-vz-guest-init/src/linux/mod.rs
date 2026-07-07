@@ -15,13 +15,15 @@ use std::time::Duration;
 
 use boot::{BootContract, BootNetworkMode, parse_boot_contract};
 use command::execute_contract;
-use contract::accept_contract;
+use contract::{Contract, accept_contract};
 use error::InitResult;
 use mount::{
     SHARE_ROOT, create_dir, load_required_modules, mount_contract_paths, mount_pseudo,
     mount_virtiofs,
 };
-use result::{write_result, write_setup_error};
+use result::{
+    GuestHeartbeatPhase, write_boot_heartbeat, write_heartbeat, write_result, write_setup_error,
+};
 
 /// Runs the guest init lifecycle and powers the VM off after completion.
 pub fn main() -> ! {
@@ -37,6 +39,7 @@ fn run() -> InitResult<()> {
     prepare_guest_root()?;
     let boot = parse_boot_contract()?;
     prepare_runtime_share(&boot)?;
+    write_boot_heartbeat(&boot.launch_contract, GuestHeartbeatPhase::RuntimeMounted)?;
 
     let result = run_contract(&boot);
     if let Err(error) = &result {
@@ -74,10 +77,40 @@ fn prepare_runtime_share(boot: &BootContract) -> InitResult<()> {
 /// Accepts the launch contract, exposes requested mounts, and records the result.
 fn run_contract(boot: &BootContract) -> InitResult<()> {
     let contract = accept_contract(&boot.launch_contract)?;
+    log_accepted_contract(&contract);
+    write_heartbeat(
+        &boot.launch_contract,
+        &contract,
+        GuestHeartbeatPhase::ContractReady,
+    )?;
     mount_contract_paths(&contract)?;
-    let result = execute_contract(&contract);
+    write_heartbeat(
+        &boot.launch_contract,
+        &contract,
+        GuestHeartbeatPhase::MountsReady,
+    )?;
+    let result = execute_contract(&boot.launch_contract, &contract);
     write_result(&boot.launch_contract, &result)?;
     Ok(())
+}
+
+/// Logs the accepted launch boundary after raw contract validation has completed.
+fn log_accepted_contract(contract: &Contract) {
+    let network = contract.network();
+    log(&format!(
+        "accepted launch contract terminal={} interactive={} pty={} network={:?} dns={:?} \
+         guest_proxy={} guest_dns={} sidecar_port={} sidecar_host={} attribution_headers={}",
+        contract.terminal().mode(),
+        contract.terminal().interactive(),
+        contract.terminal().pty(),
+        network.mode(),
+        network.dns_mode(),
+        network.guest_http_proxy_addr(),
+        network.guest_dns_stub_addr(),
+        network.vsock_sidecar_port(),
+        network.sidecar_host_addr(),
+        network.attribution_headers().len()
+    ));
 }
 
 /// Writes an init diagnostic to the guest console when available.
