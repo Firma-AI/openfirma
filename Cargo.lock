@@ -1563,6 +1563,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "firma-vz-guest-init"
+version = "0.1.2"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "firma-vz-runner"
 version = "0.1.2"
 dependencies = [

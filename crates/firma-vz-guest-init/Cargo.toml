@@ -1,0 +1,31 @@
+[package]
+name = "firma-vz-guest-init"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Minimal Linux initramfs entrypoint for OpenFirma macOS VZ guests"
+
+[[bin]]
+name = "firma-vz-guest-init"
+path = "src/main.rs"
+
+[dependencies]
+libc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+missing_const_for_fn = "allow"
+
+[lints.rust]
+unsafe_code = "allow"

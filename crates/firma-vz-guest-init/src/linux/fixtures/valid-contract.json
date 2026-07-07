@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "command": {
+    "executable": "/bin/true",
+    "args": [],
+    "cwd": "/workspace",
+    "env": {}
+  },
+  "mounts": [
+    {
+      "target": "/workspace",
+      "read_only": false
+    }
+  ]
+}

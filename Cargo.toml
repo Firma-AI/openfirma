@@ -12,6 +12,7 @@ members = [
   "crates/firma-runtime-state",
   "crates/firma-sidecar",
   "crates/firma-stack",
+  "crates/firma-vz-guest-init",
   "crates/firma-vz-runner",
 ]
 resolver = "3"
@@ -70,6 +71,7 @@ http-body-util = "0.1"
 hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 insta = { version = "1", features = ["filters", "json", "redactions"] }
+libc = "0.2"
 lru = "0.17"
 miette = { version = "7", features = ["fancy-no-backtrace"] }
 nix = { version = "0.31", features = ["fs", "process", "signal", "socket", "user"] }
