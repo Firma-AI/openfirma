@@ -229,7 +229,7 @@ impl ConstraintEnforcer {
         }
 
         // Step 4: Build context
-        let context = self.build_context(envelope, claims, signals);
+        let context = self.build_context(envelope, claims, signals)?;
 
         // Step 5: Evaluate policies (verdict carries AARM R4 remediation)
         let resource_display = envelope.intent.resource_display();
@@ -318,7 +318,7 @@ impl ConstraintEnforcer {
         }
 
         // Step 4: Build context from immutable request + validated claims.
-        let context = self.build_context(envelope, claims, signals);
+        let context = self.build_context(envelope, claims, signals)?;
         let policy = Arc::clone(&self.policy);
         let principal = claims.agent_id.clone();
         let action = envelope.intent.action_class.clone();
@@ -448,19 +448,38 @@ impl ConstraintEnforcer {
     /// not in the context — they are passed to Cedar as principal/action/
     /// resource entity UIDs.
     #[expect(clippy::unused_self, reason = "reserved for future stateful hooks")]
+    #[expect(
+        clippy::result_large_err,
+        reason = "the error variant is the fail-closed enforcement decision"
+    )]
     fn build_context(
         &self,
         envelope: &NormalizedEnvelope,
         claims: &CapabilityClaims,
         signals: &RuntimeSignals,
-    ) -> serde_json::Value {
+    ) -> Result<serde_json::Value, EnforcementDecision> {
         let session_duration_s = (envelope.timestamp - claims.issued_at).num_seconds().max(0);
         let timestamp_ms = envelope.timestamp.timestamp_millis();
-        let params = serde_json::to_string(&envelope.intent.params).unwrap_or_else(|_| "{}".into());
+        // Fail closed: if the intent params cannot be serialized into the
+        // Cedar context, do not silently substitute an empty `params`
+        // object — a policy conditioned on `params` could then allow a
+        // request it should have blocked. Surface the serialization failure
+        // as a fail-closed DENY instead.
+        let params = serde_json::to_string(&envelope.intent.params).map_err(|err| {
+            EnforcementDecision::Deny {
+                reason: DenyReason::FailClosed,
+                stage: EnforcementStage::ConstraintEnforcement(
+                    ConstraintEnforcementStage::PolicyEvaluation,
+                ),
+                detail: format!("failed to serialize intent params; failing closed: {err}"),
+                envelope: Some(envelope.clone()),
+                identity: None,
+            }
+        })?;
         // Payment-context fields are declared in the canonical schema but
         // sourced by future tasks. V1 supplies fixed placeholders so the
         // schema-strict `Context::from_json_value` accepts the record.
-        serde_json::json!({
+        Ok(serde_json::json!({
             "session_id": claims.session_id,
             "timestamp_ms": timestamp_ms,
             "params": params,
@@ -474,7 +493,7 @@ impl ConstraintEnforcer {
             "transfers_last_10m": 0i64,
             "same_payee_count_30m": 0i64,
             "session_transfer_count": 0i64,
-        })
+        }))
     }
 }
 
@@ -768,7 +787,9 @@ mod tests {
             risk_score: 3.0,
         };
 
-        let context = evaluator.build_context(&envelope, &claims, &signals);
+        let context = evaluator
+            .build_context(&envelope, &claims, &signals)
+            .expect("build_context must succeed for valid envelopes");
 
         // The canonical schema declares 13 EnforcementContext fields (7
         // commonly-tuned + 6 payment/transport placeholders); the 7
@@ -800,7 +821,9 @@ mod tests {
             budget_consumed: 0.0,
             risk_score: 0.0,
         };
-        let context = evaluator.build_context(&envelope, &claims, &signals);
+        let context = evaluator
+            .build_context(&envelope, &claims, &signals)
+            .expect("build_context must succeed for valid envelopes");
         assert_eq!(context["budget_remaining"], serde_json::json!(i64::MAX));
     }
 
@@ -816,7 +839,9 @@ mod tests {
             budget_consumed: 0.0,
             risk_score: 0.0,
         };
-        let context = evaluator.build_context(&envelope, &claims, &signals);
+        let context = evaluator
+            .build_context(&envelope, &claims, &signals)
+            .expect("build_context must succeed for valid envelopes");
         assert_eq!(context["session_duration_s"], serde_json::json!(0));
     }
 

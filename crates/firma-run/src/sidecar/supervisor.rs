@@ -184,8 +184,8 @@ impl SidecarSupervisor {
                 monitor_mode: req.monitor_mode,
             })?;
 
-            let mut child = std::process::Command::new(&req.firma_exe)
-                .args(["sidecar", "--config"])
+            let mut cmd = std::process::Command::new(&req.firma_exe);
+            cmd.args(["sidecar", "--config"])
                 .arg(&cfg_path)
                 .env_remove("FIRMA_LOG_FILE")
                 // Avoid cross-run collisions when multiple autostarted sidecars
@@ -200,7 +200,16 @@ impl SidecarSupervisor {
                 // the Sidecar agree on the filename.
                 .env("FIRMA_RUN_AUDIT_SOCK", &audit_sock_path)
                 .env("NO_COLOR", "1")
-                .env("CLICOLOR", "0")
+                .env("CLICOLOR", "0");
+            // The CLI `--monitor` flag is an explicit opt-in. Forward it to
+            // the sidecar as the env-var opt-in that monitor mode now
+            // requires, so `firma run --monitor` keeps honoring observe-only
+            // mode while a stray `mode = "monitor"` in a hand-written config
+            // still downgrades to enforce at startup.
+            if req.monitor_mode {
+                cmd.env("FIRMA_ALLOW_MONITOR_MODE", "1");
+            }
+            let mut child = cmd
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::piped())
