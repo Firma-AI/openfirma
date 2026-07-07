@@ -33,6 +33,13 @@
 //! agent's own loopback, never a host service. This is defense in depth layered
 //! on the network-namespace boundary, not a standalone hard guarantee.
 //!
+//! A related short-read hazard on the read path is also handled fail-closed:
+//! `process_vm_readv(2)` can return fewer bytes than requested (e.g. a sockaddr
+//! straddling a page boundary with the second page unmapped), which would leave
+//! the buffer tail zero-filled and misclassify a loopback destination as
+//! `0.0.0.0`. [`read_remote_mem`] rejects any short read, so the caller blocks
+//! rather than allowing on a partial read.
+//!
 //! Linux-only: seccomp and `process_vm_readv(2)` are Linux primitives.
 
 #![cfg(target_os = "linux")]
@@ -197,9 +204,9 @@ pub(crate) fn parse_sockaddr(bytes: &[u8]) -> Option<SocketAddr> {
 ///
 /// `len` is capped at [`MAX_SOCKADDR_LEN`] *before* allocation so an
 /// agent-controlled `addrlen` cannot force a large allocation. It can fail
-/// (process gone, permission denied under an aggressive ptrace scope); callers
-/// fail closed for unreadable non-null sockaddrs because the agent controls its
-/// own memory permissions.
+/// (process gone, permission denied under an aggressive ptrace scope, or a short
+/// read that does not cover all `len` bytes); callers fail closed for unreadable
+/// non-null sockaddrs because the agent controls its own memory permissions.
 fn read_remote_mem(pid: u32, addr: u64, len: usize) -> io::Result<Vec<u8>> {
     let len = len.min(MAX_SOCKADDR_LEN);
     let mut buf = vec![0_u8; len];
@@ -207,8 +214,15 @@ fn read_remote_mem(pid: u32, addr: u64, len: usize) -> io::Result<Vec<u8>> {
     let base = usize::try_from(addr).map_err(|_| io::Error::other("address out of range"))?;
     let mut local_iov = [IoSliceMut::new(&mut buf)];
     let remote_iov = [nix::sys::uio::RemoteIoVec { base, len }];
-    nix::sys::uio::process_vm_readv(Pid::from_raw(pid), &mut local_iov, &remote_iov)
+    let n = nix::sys::uio::process_vm_readv(Pid::from_raw(pid), &mut local_iov, &remote_iov)
         .map_err(io::Error::from)?;
+    // process_vm_readv may return a short count (e.g. sockaddr straddling a page
+    // boundary with the second page unmapped). A partial read would leave the
+    // tail zero-filled, misclassifying a loopback sockaddr as 0.0.0.0. Fail
+    // closed: the caller treats an error as an unreadable sockaddr and blocks.
+    if n != len {
+        return Err(io::Error::other("short process_vm_readv"));
+    }
     Ok(buf)
 }
 
