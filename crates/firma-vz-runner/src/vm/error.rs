@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+use crate::contract::ContractValidationError;
+
 pub type VmPlanResult<T> = std::result::Result<T, VmPlanError>;
 
 #[derive(Debug, Error)]
@@ -31,4 +33,9 @@ pub enum VmPlanError {
     },
     #[error("virtiofs mount source must be an existing directory: {path}")]
     MountSourceNotDirectory { path: PathBuf },
+    #[error("read VZ Sidecar host endpoint from launch contract: {source}")]
+    SidecarHostAddr {
+        #[source]
+        source: ContractValidationError,
+    },
 }
