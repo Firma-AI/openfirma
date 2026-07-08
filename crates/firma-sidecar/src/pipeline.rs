@@ -30,6 +30,7 @@ use crate::authority_client::readiness::ReadinessView;
 use crate::config::SidecarMode;
 use crate::credential::{CredentialInjectionError, CredentialInjector};
 use crate::enforcement::SessionStateStore;
+use crate::enforcement::session_state::Outcome;
 pub use crate::enforcement::capability_map::CapabilityMap;
 pub use crate::enforcement::capability_validation::CapabilityValidator;
 pub use crate::enforcement::constraint_enforcement::{
@@ -214,6 +215,14 @@ impl EnforcementPipeline {
             Err(deny) => return deny,
         };
 
+        // Capture the verified session id and the canonical action/resource
+        // now, before `normalized`/`capability.claims` are moved into the
+        // decision, so every Stage-2+ return path can record the outcome
+        // into the session's prior-action history (AARM R2 G3).
+        let verified_sid = capability.claims.session_id.clone();
+        let action_class = normalized.intent.action_class.clone();
+        let resource = normalized.intent.resource_display();
+
         // Constraint enforcement: scope check + Cedar policy evaluation.
         //
         // Record this admitted call. Session-scoped; first call is 1.
@@ -247,6 +256,12 @@ impl EnforcementPipeline {
                 // identity is known. Attach it so the audit record is
                 // attributable and `firma monitor --agent <id>` keeps the
                 // deny (FIR-208).
+                self.session_state_store.record_outcome(
+                    &verified_sid,
+                    &action_class,
+                    &resource,
+                    Outcome::Deny,
+                );
                 return deny.with_identity(DenyIdentity::from_claims(&capability.claims));
             }
         };
@@ -259,6 +274,12 @@ impl EnforcementPipeline {
         let modifications = match verdict {
             PolicyVerdict::StepUp { challenge } => {
                 let identity = DenyIdentity::from_claims(&capability.claims);
+                self.session_state_store.record_outcome(
+                    &verified_sid,
+                    &action_class,
+                    &resource,
+                    Outcome::StepUp,
+                );
                 return EnforcementDecision::StepUp {
                     claims: Some(capability.claims),
                     envelope: Some(normalized),
@@ -269,6 +290,12 @@ impl EnforcementPipeline {
             }
             PolicyVerdict::Defer { backoff } => {
                 let identity = DenyIdentity::from_claims(&capability.claims);
+                self.session_state_store.record_outcome(
+                    &verified_sid,
+                    &action_class,
+                    &resource,
+                    Outcome::Defer,
+                );
                 let retry_after_ms = u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX);
                 return EnforcementDecision::Defer {
                     claims: Some(capability.claims),
@@ -279,6 +306,12 @@ impl EnforcementPipeline {
             }
             PolicyVerdict::Deny => {
                 let identity = DenyIdentity::from_claims(&capability.claims);
+                self.session_state_store.record_outcome(
+                    &verified_sid,
+                    &action_class,
+                    &resource,
+                    Outcome::Deny,
+                );
                 return EnforcementDecision::Deny {
                     reason: DenyReason::PolicyDenied,
                     stage: EnforcementStage::ConstraintEnforcement(
@@ -340,6 +373,12 @@ impl EnforcementPipeline {
                 connector_id,
                 reason,
             }) => {
+                self.session_state_store.record_outcome(
+                    &verified_sid,
+                    &action_class,
+                    &resource,
+                    Outcome::Abort,
+                );
                 return EnforcementDecision::Abort {
                     reason: AbortReason::CredentialInjectionFailed,
                     detail: format!("connector {connector_id}: {reason}"),
@@ -347,6 +386,18 @@ impl EnforcementPipeline {
                 };
             }
         };
+
+        // Record the outcome of an admitted call (Allow/Modify) into the
+        // session's prior-action history so later decisions observe it
+        // (AARM R2 G3). Done after the verdict resolves and credentials are
+        // injected, so the current decision is not influenced by itself.
+        let outcome = if modifications.is_some() {
+            Outcome::Modify
+        } else {
+            Outcome::Allow
+        };
+        self.session_state_store
+            .record_outcome(&verified_sid, &action_class, &resource, outcome);
 
         match modifications {
             Some(modifications) => EnforcementDecision::Modify {

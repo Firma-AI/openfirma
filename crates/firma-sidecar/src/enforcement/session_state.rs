@@ -24,14 +24,49 @@ use firma_core::SessionId;
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
 
+/// Categorical outcome of an evaluated action, recorded into a session's
+/// prior-action history so later decisions can observe what the agent has
+/// already done (AARM R2 G3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Outcome {
+    /// Request authorized and dispatched.
+    Allow,
+    /// Request authorized with a modification applied before dispatch.
+    Modify,
+    /// Request denied by policy or scope check.
+    Deny,
+    /// Request blocked pending human approval / stronger auth.
+    StepUp,
+    /// Request deferred pending additional context or budget.
+    Defer,
+    /// Request was authorized then aborted (e.g. credential injection failed).
+    Abort,
+}
+
+/// One entry in the bounded prior-action history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionOutcome {
+    /// Canonical action class of the evaluated action.
+    pub action_class: String,
+    /// Resource display string (`host` + `path`) of the evaluated action.
+    pub resource: String,
+    /// Categorical decision outcome.
+    pub outcome: Outcome,
+}
+
+/// Maximum number of prior-action outcomes retained per session. Bounded
+/// to keep the hot path deterministic and memory growth capped (AARM R2 G3).
+pub(crate) const HISTORY_CAP: usize = 8;
+
 /// Runtime signals sourced from the session store and passed into
 /// Stage 2 for Cedar context construction.
 ///
 /// Built by the pipeline on every admitted request, used by
 /// `ConstraintEnforcer::build_context()` and then reused to populate
 /// the outgoing `ExecutionMetadata` so audit and enforcement see the
-/// same numbers.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+/// same numbers. Carries the bounded prior-action history so policies
+/// can reason about what the session has already attempted.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct RuntimeSignals {
     /// Number of calls observed in the current session, including this
     /// one. First call in a session is 1.
@@ -41,6 +76,12 @@ pub struct RuntimeSignals {
     /// Static or pre-computed numeric risk attribute. V1 placeholder
     /// = 0.0.
     pub risk_score: f64,
+    /// Cumulative number of denied actions in this session (AARM R2 G3).
+    pub deny_count: u64,
+    /// Bounded prior-action history (most recent first appended); the
+    /// Cedar context derives `prior_action_classes` and `last_resource`
+    /// from it.
+    pub history: Vec<ActionOutcome>,
 }
 
 impl RuntimeSignals {
@@ -98,8 +139,21 @@ pub trait SessionStateStore: Send + Sync {
     fn record_action(&self, session_id: &SessionId) -> u64;
 
     /// Read the current signals for `session_id`. Returns defaults
-    /// (all zeros) if the session is unknown.
+    /// (all zeros, empty history) if the session is unknown.
     fn signals(&self, session_id: &SessionId) -> RuntimeSignals;
+
+    /// Record the outcome of the just-evaluated action into the
+    /// session's bounded prior-action history (AARM R2 G3). Called
+    /// after the decision is known so subsequent calls see prior
+    /// action classes, resources, and deny outcomes. Does NOT affect
+    /// the current decision (no feedback), preserving determinism.
+    fn record_outcome(
+        &self,
+        session_id: &SessionId,
+        action_class: &str,
+        resource: &str,
+        outcome: Outcome,
+    );
 }
 
 /// Default capacity — 8192 active sessions per sidecar process. Tuned
@@ -112,21 +166,48 @@ pub struct LruSessionStateStore {
     inner: Mutex<LruCache<SessionId, SessionRecord>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SessionRecord {
     pub(crate) action_count: u64,
     pub(crate) budget_consumed: f64,
     pub(crate) risk_score: f64,
+    pub(crate) deny_count: u64,
+    pub(crate) history: Vec<ActionOutcome>,
 }
 
 impl SessionRecord {
+    /// Fresh record with all-zero scalars and empty history. Non-`const`
+    /// because `history` heap-allocates.
     #[must_use]
-    pub(crate) const fn zero() -> Self {
+    pub(crate) fn fresh() -> Self {
         Self {
             action_count: 0,
             budget_consumed: 0.0,
             risk_score: 0.0,
+            deny_count: 0,
+            history: Vec::new(),
         }
+    }
+
+    /// Append an outcome to the bounded history, evicting the oldest
+    /// entry when the cap is exceeded (FIFO ring).
+    pub(crate) fn push_outcome(
+        &mut self,
+        action_class: String,
+        resource: String,
+        outcome: Outcome,
+    ) {
+        if matches!(outcome, Outcome::Deny) {
+            self.deny_count = self.deny_count.saturating_add(1);
+        }
+        if self.history.len() >= HISTORY_CAP {
+            self.history.remove(0);
+        }
+        self.history.push(ActionOutcome {
+            action_class,
+            resource,
+            outcome,
+        });
     }
 }
 
@@ -160,31 +241,40 @@ impl SessionStateStore for LruSessionStateStore {
             // still fail-closed if policies require higher counts.
             return 1;
         };
-        let record = guard.get_or_insert_mut(session_id.clone(), SessionRecord::zero);
+        let record = guard.get_or_insert_mut(session_id.clone(), SessionRecord::fresh);
         record.action_count = record.action_count.saturating_add(1);
         record.action_count
     }
 
     fn signals(&self, session_id: &SessionId) -> RuntimeSignals {
         let Ok(guard) = self.inner.lock() else {
-            return RuntimeSignals {
-                action_count: 0,
-                budget_consumed: 0.0,
-                risk_score: 0.0,
-            };
+            return RuntimeSignals::default();
         };
-        guard.peek(session_id).map_or(
-            RuntimeSignals {
-                action_count: 0,
-                budget_consumed: 0.0,
-                risk_score: 0.0,
-            },
-            |r| RuntimeSignals {
+        guard
+            .peek(session_id)
+            .map_or_else(RuntimeSignals::default, |r| RuntimeSignals {
                 action_count: r.action_count,
                 budget_consumed: r.budget_consumed,
                 risk_score: r.risk_score,
-            },
-        )
+                deny_count: r.deny_count,
+                history: r.history.clone(),
+            })
+    }
+
+    fn record_outcome(
+        &self,
+        session_id: &SessionId,
+        action_class: &str,
+        resource: &str,
+        outcome: Outcome,
+    ) {
+        let Ok(mut guard) = self.inner.lock() else {
+            // Mutex poisoned — best-effort: skip recording. The in-memory
+            // state is unavailable, consistent with the other methods.
+            return;
+        };
+        let record = guard.get_or_insert_mut(session_id.clone(), SessionRecord::fresh);
+        record.push_outcome(action_class.to_string(), resource.to_string(), outcome);
     }
 }
 
@@ -248,6 +338,7 @@ mod tests {
             action_count: 0,
             budget_consumed: 0.0,
             risk_score: 0.0,
+            ..RuntimeSignals::default()
         };
         assert_eq!(signals.budget_remaining_long(None), i64::MAX);
     }
@@ -258,6 +349,7 @@ mod tests {
             action_count: 0,
             budget_consumed: 12.75,
             risk_score: 0.0,
+            ..RuntimeSignals::default()
         };
         assert_eq!(signals.budget_remaining_long(Some(100.0)), 87);
     }
@@ -268,6 +360,7 @@ mod tests {
             action_count: 0,
             budget_consumed: 150.0,
             risk_score: 0.0,
+            ..RuntimeSignals::default()
         };
         assert_eq!(signals.budget_remaining_long(Some(100.0)), -50);
     }
@@ -278,6 +371,7 @@ mod tests {
             action_count: 0,
             budget_consumed: 0.0,
             risk_score: 0.0,
+            ..RuntimeSignals::default()
         };
         assert_eq!(signals.budget_remaining_long(Some(f64::NAN)), i64::MIN);
     }
@@ -288,6 +382,7 @@ mod tests {
             action_count: 0,
             budget_consumed: f64::NAN,
             risk_score: 0.0,
+            ..RuntimeSignals::default()
         };
         assert_eq!(signals.budget_remaining_long(Some(100.0)), i64::MIN);
     }
@@ -298,6 +393,7 @@ mod tests {
             action_count: 0,
             budget_consumed: 0.0,
             risk_score: f64::NAN,
+            ..RuntimeSignals::default()
         };
         assert_eq!(signals.risk_score_long(), i64::MAX);
     }
@@ -306,5 +402,74 @@ mod tests {
     fn lru_session_state_store_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<LruSessionStateStore>();
+    }
+
+    // -- Prior-action history (AARM R2 G3) ----------------------------------
+
+    #[test]
+    fn record_outcome_appends_to_history() {
+        let store = LruSessionStateStore::new(16);
+        store.record_action(&sid("sess_a"));
+        store.record_outcome(&sid("sess_a"), "communication.external.send", "api.example.com/", Outcome::Allow);
+        store.record_outcome(&sid("sess_a"), "filesystem.delete", "host/x", Outcome::Deny);
+        let signals = store.signals(&sid("sess_a"));
+        assert_eq!(signals.history.len(), 2);
+        assert_eq!(signals.history[0].action_class, "communication.external.send");
+        assert_eq!(signals.history[0].outcome, Outcome::Allow);
+        assert_eq!(signals.history[1].outcome, Outcome::Deny);
+        assert_eq!(signals.deny_count, 1);
+    }
+
+    #[test]
+    fn deny_count_accumulates_only_denials() {
+        let store = LruSessionStateStore::new(16);
+        store.record_action(&sid("sess_a"));
+        store.record_outcome(&sid("sess_a"), "a", "r", Outcome::Allow);
+        store.record_outcome(&sid("sess_a"), "b", "r", Outcome::Deny);
+        store.record_outcome(&sid("sess_a"), "c", "r", Outcome::StepUp);
+        store.record_outcome(&sid("sess_a"), "d", "r", Outcome::Deny);
+        let signals = store.signals(&sid("sess_a"));
+        assert_eq!(signals.deny_count, 2);
+    }
+
+    #[test]
+    fn history_is_bounded_to_cap() {
+        let store = LruSessionStateStore::new(16);
+        store.record_action(&sid("sess_a"));
+        // Push more than HISTORY_CAP entries; the oldest must be evicted.
+        for i in 0..(HISTORY_CAP + 3) {
+            let class = format!("action{i}");
+            store.record_outcome(&sid("sess_a"), &class, "r", Outcome::Allow);
+        }
+        let signals = store.signals(&sid("sess_a"));
+        assert_eq!(signals.history.len(), HISTORY_CAP);
+        // First three (action0..action2) evicted; action3 is now the head.
+        assert_eq!(signals.history[0].action_class, "action3");
+        assert_eq!(
+            signals.history[HISTORY_CAP - 1].action_class,
+            format!("action{}", HISTORY_CAP + 2)
+        );
+    }
+
+    #[test]
+    fn record_outcome_isolates_sessions() {
+        let store = LruSessionStateStore::new(16);
+        store.record_action(&sid("sess_a"));
+        store.record_action(&sid("sess_b"));
+        store.record_outcome(&sid("sess_a"), "a", "r", Outcome::Deny);
+        let a = store.signals(&sid("sess_a"));
+        let b = store.signals(&sid("sess_b"));
+        assert_eq!(a.deny_count, 1);
+        assert_eq!(a.history.len(), 1);
+        assert_eq!(b.deny_count, 0);
+        assert!(b.history.is_empty());
+    }
+
+    #[test]
+    fn unknown_session_signals_have_empty_history() {
+        let store = LruSessionStateStore::new(16);
+        let signals = store.signals(&sid("never_seen"));
+        assert_eq!(signals.deny_count, 0);
+        assert!(signals.history.is_empty());
     }
 }

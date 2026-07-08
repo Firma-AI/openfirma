@@ -41,7 +41,7 @@ use firma_core::SessionId;
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
 
-use super::session_state::{RuntimeSignals, SessionRecord, SessionStateStore};
+use super::session_state::{Outcome, RuntimeSignals, SessionRecord, SessionStateStore};
 
 /// Append-only JSONL-backed session state store.
 pub struct PersistentSessionStateStore {
@@ -53,13 +53,19 @@ struct Inner {
     file: File,
 }
 
-/// One serialized record in the replay log.
+/// One serialized record in the replay log. Carries the full record
+/// snapshot so the last entry per session reconstructs the entire state
+/// (counters + prior-action history).
 #[derive(Debug, Serialize, Deserialize)]
 struct LogEntry {
     sid: String,
     action_count: u64,
     budget_consumed: f64,
     risk_score: f64,
+    #[serde(default)]
+    deny_count: u64,
+    #[serde(default)]
+    history: Vec<super::session_state::ActionOutcome>,
 }
 
 impl PersistentSessionStateStore {
@@ -106,7 +112,7 @@ impl SessionStateStore for PersistentSessionStateStore {
         };
         let record = guard
             .cache
-            .get_or_insert_mut(session_id.clone(), SessionRecord::zero);
+            .get_or_insert_mut(session_id.clone(), SessionRecord::fresh);
         record.action_count = record.action_count.saturating_add(1);
         let count = record.action_count;
         let entry = LogEntry {
@@ -114,6 +120,8 @@ impl SessionStateStore for PersistentSessionStateStore {
             action_count: record.action_count,
             budget_consumed: record.budget_consumed,
             risk_score: record.risk_score,
+            deny_count: record.deny_count,
+            history: record.history.clone(),
         };
         // Append to the log; an IO failure does NOT undo the in-memory
         // update — the cache remains authoritative for this process. The
@@ -139,8 +147,43 @@ impl SessionStateStore for PersistentSessionStateStore {
                 action_count: r.action_count,
                 budget_consumed: r.budget_consumed,
                 risk_score: r.risk_score,
+                deny_count: r.deny_count,
+                history: r.history.clone(),
             },
         )
+    }
+
+    fn record_outcome(
+        &self,
+        session_id: &SessionId,
+        action_class: &str,
+        resource: &str,
+        outcome: Outcome,
+    ) {
+        let Ok(mut guard) = self.inner.lock() else {
+            // Mutex poisoned — best-effort skip, mirroring the LRU backend.
+            return;
+        };
+        let record = guard
+            .cache
+            .get_or_insert_mut(session_id.clone(), SessionRecord::fresh);
+        record.push_outcome(action_class.to_string(), resource.to_string(), outcome);
+        let entry = LogEntry {
+            sid: session_id.to_string(),
+            action_count: record.action_count,
+            budget_consumed: record.budget_consumed,
+            risk_score: record.risk_score,
+            deny_count: record.deny_count,
+            history: record.history.clone(),
+        };
+        match serde_json::to_string(&entry) {
+            Ok(line) => {
+                if let Err(err) = writeln!(guard.file, "{line}") {
+                    tracing::warn!(?err, "session-state append failed; in-memory state retained");
+                }
+            }
+            Err(err) => tracing::warn!(?err, "session-state serialize failed; in-memory state retained"),
+        }
     }
 }
 
@@ -180,6 +223,8 @@ fn replay(path: &Path, cap: NonZeroUsize) -> std::io::Result<LruCache<SessionId,
             action_count: entry.action_count,
             budget_consumed: entry.budget_consumed,
             risk_score: entry.risk_score,
+            deny_count: entry.deny_count,
+            history: entry.history,
         });
     }
     let mut cache = LruCache::new(cap);
@@ -308,5 +353,26 @@ mod tests {
     fn is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<PersistentSessionStateStore>();
+    }
+
+    #[test]
+    fn outcome_history_survives_restart() {
+        use crate::enforcement::session_state::{Outcome, HISTORY_CAP};
+        let path = tmpfile();
+        {
+            let store = PersistentSessionStateStore::open(&path, 16).expect("open");
+            store.record_action(&sid("sess_a"));
+            store.record_outcome(&sid("sess_a"), "communication.external.send", "h/x", Outcome::Allow);
+            store.record_outcome(&sid("sess_a"), "filesystem.delete", "h/y", Outcome::Deny);
+        }
+        // Reopen: history + deny_count must be restored from the log.
+        let store = PersistentSessionStateStore::open(&path, 16).expect("reopen");
+        let signals = store.signals(&sid("sess_a"));
+        assert_eq!(signals.deny_count, 1);
+        assert_eq!(signals.history.len(), 2);
+        assert_eq!(signals.history[0].action_class, "communication.external.send");
+        assert_eq!(signals.history[1].outcome, Outcome::Deny);
+        let _ = (HISTORY_CAP,); // keep the cap symbol referenced
+        let _ = std::fs::remove_file(&path);
     }
 }
