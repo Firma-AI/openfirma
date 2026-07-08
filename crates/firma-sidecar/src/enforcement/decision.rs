@@ -1,14 +1,19 @@
 //! Enforcement decision types.
 //!
 //! Every `enforce()` call produces exactly one [`EnforcementDecision`]:
-//! ALLOW, DENY, ABORT, or PASSTHROUGH. ALLOW carries the verified claims and normalized envelope
-//! for downstream use (credential injection, connector dispatch, audit).
-//! DENY carries a structured reason, the originating stage, and a detail
-//! message for audit and agent error reporting.
+//! the AARM R4 five-decision set — `ALLOW`, `DENY`, `MODIFY`, `STEP_UP`,
+//! `DEFER` — plus `ABORT` (post-ALLOW local failure) and `PASSTHROUGH`
+//! (non-protected traffic). `ALLOW` carries the verified claims, immutable
+//! envelope, and injected credentials for downstream use (connector
+//! dispatch, audit). `DENY` carries a structured reason, the originating
+//! stage, and a detail message for audit and agent error reporting.
+//! `MODIFY`, `STEP_UP`, and `DEFER` are sourced from the `@modify("…")` /
+//! `@step_up("…")` / `@defer("…")` Cedar policy annotations and lifted
+//! into the corresponding variants.
 //!
-//! ABORT may be produced by the pipeline only for post-ALLOW local failures
-//! such as credential injection. Authority-pushed ABORT remains out of scope
-//! for V1.
+//! `ABORT` may be produced by the pipeline only for post-ALLOW local
+//! failures such as credential injection. Authority-pushed `ABORT` remains
+//! out of scope for V1.
 
 use firma_core::{
     AbortReason, CapabilityClaims, DenyReason, ExecutionEnvelope, InjectedCredentials,
