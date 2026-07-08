@@ -140,7 +140,7 @@ impl SidecarSupervisor {
     pub fn spawn(req: SpawnRequest<'_>) -> Result<Self, RunError> {
         use firma_runtime_state::ChildExt as _;
 
-        std::fs::create_dir_all(&req.marker_dir).map_err(|error| {
+        firma_runtime_state::fs::create_private_dir_all(&req.marker_dir).map_err(|error| {
             RunError::Internal(format!("mkdir {}: {error}", req.marker_dir.display()))
         })?;
 
@@ -151,6 +151,10 @@ impl SidecarSupervisor {
         let log_path = req.marker_dir.join("sidecar.log");
         let pid_path = req.marker_dir.join("sidecar.pid");
         let metadata_path = req.marker_dir.join("metadata.toml");
+        #[cfg(unix)]
+        let audit_sock_path = firma_sidecar::run_audit::socket_path_in(&req.marker_dir);
+        #[cfg(not(unix))]
+        let audit_sock_path = req.marker_dir.join("run-audit.sock");
 
         // Pre-clean any leftover socket file from a crashed run.
         let _ = std::fs::remove_file(&sock_path);
@@ -180,8 +184,8 @@ impl SidecarSupervisor {
                 monitor_mode: req.monitor_mode,
             })?;
 
-            let mut child = std::process::Command::new(&req.firma_exe)
-                .args(["sidecar", "--config"])
+            let mut cmd = std::process::Command::new(&req.firma_exe);
+            cmd.args(["sidecar", "--config"])
                 .arg(&cfg_path)
                 .env_remove("FIRMA_LOG_FILE")
                 // Avoid cross-run collisions when multiple autostarted sidecars
@@ -190,8 +194,22 @@ impl SidecarSupervisor {
                 // Per-run identity stamped on every audit ExecutionEvent
                 // (FIR-185). Matches the marker directory name.
                 .env("FIRMA_RUN_SANDBOX_ID", req.sandbox_id)
+                // Control socket for the `firma run` audit channel: out-of-band
+                // reports (e.g. loopback blocks) the Sidecar turns into signed
+                // audit events. Derived via `socket_path_in` so the guard and
+                // the Sidecar agree on the filename.
+                .env("FIRMA_RUN_AUDIT_SOCK", &audit_sock_path)
                 .env("NO_COLOR", "1")
-                .env("CLICOLOR", "0")
+                .env("CLICOLOR", "0");
+            // The CLI `--monitor` flag is an explicit opt-in. Forward it to
+            // the sidecar as the env-var opt-in that monitor mode now
+            // requires, so `firma run --monitor` keeps honoring observe-only
+            // mode while a stray `mode = "monitor"` in a hand-written config
+            // still downgrades to enforce at startup.
+            if req.monitor_mode {
+                cmd.env("FIRMA_ALLOW_MONITOR_MODE", "1");
+            }
+            let mut child = cmd
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::piped())

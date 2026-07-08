@@ -443,15 +443,27 @@ impl RequestHandler {
     ) -> HandledResponse {
         let mut dispatch_envelope = envelope;
         hydrate_dispatch_http_fields(&mut dispatch_envelope, request);
-        modifications
-            .apply(&mut dispatch_envelope)
-            .unwrap_or_else(|err| {
-                tracing::error!(
-                    error = %err,
-                    "modification failed to apply; the policy targets HTTP headers \
-                     but the action is not HTTP — failing closed"
-                );
-            });
+        // Fail closed: a modification that cannot be applied (e.g. a
+        // `redact_header` policy targeting a non-HTTP action) must not
+        // fall through to dispatch. Forwarding the unmodified request
+        // would leak the header the policy asked to strip, so block
+        // instead and override the audit to record the dispatch-level
+        // denial rather than the pipeline's pre-dispatch MODIFY outcome.
+        if let Err(err) = modifications.apply(&mut dispatch_envelope) {
+            tracing::error!(
+                error = %err,
+                "modification failed to apply; the policy targets HTTP headers \
+                 but the action is not HTTP — failing closed"
+            );
+            let detail = "modification could not be applied; failing closed".to_string();
+            audit_payload.decision = Decision::Deny;
+            audit_payload.deny_reason = format!("{}: {detail}", DenyReason::FailClosed);
+            return HandledResponse::Deny {
+                reason: DenyReason::FailClosed,
+                detail,
+                context: denial_context_from_params(&dispatch_envelope.intent.params),
+            };
+        }
         let (response, outcome) = self.dispatch(dispatch_envelope, credentials).await;
         outcome.enrich(audit_payload);
         response
@@ -1257,6 +1269,103 @@ pub(crate) mod tests {
             payload.deny_reason
         );
         assert_eq!(payload.dispatch_status, 0);
+    }
+
+    #[tokio::test]
+    async fn dispatch_modify_fails_closed_when_target_is_not_http() {
+        use firma_core::{ModificationSpec, ToolUseParams};
+        // The V1 normalizer only ever produces HTTP params, but a future
+        // non-HTTP transport could route a MODIFY decision to
+        // `dispatch_modify` with ToolUse params. The policy asked for a
+        // header redaction that can't apply to a tool call; forwarding the
+        // unmodified request would leak the header the policy said to
+        // strip, so the handler must fail closed instead of dispatching.
+        let (tx, _rx) = tokio::sync::mpsc::channel(10);
+        let handler = RequestHandler::new(
+            test_pipeline(vec![allow_rule()], true, true),
+            test_connector_registry(),
+            tx,
+        );
+
+        let mut audit_payload = AuditPayload {
+            session_id: "sess_modify".to_string(),
+            token_id: "tok".to_string(),
+            agent_id: "agent".to_string(),
+            action: "tool.generic".to_string(),
+            resource: "my_tool".to_string(),
+            decision: Decision::Modify,
+            deny_reason: "redacted_header:x-sensitive".to_string(),
+            enforcement_latency_us: 0,
+            context_hash: String::new(),
+            bundle_version: "test-v1".to_string(),
+            dispatch_status: 0,
+            dispatch_latency_us: 0,
+            response_size: 0,
+        };
+
+        let envelope = ExecutionEnvelope::new(
+            ExecutionIntent {
+                action_class: "tool.generic".to_string(),
+                resource: ExecutionIntent::resource_map_from("my_tool"),
+                params: ActionParams::ToolUse(ToolUseParams {
+                    tool_name: "my_tool".to_string(),
+                    input: HashMap::new(),
+                }),
+                raw_transport: "mcp".to_string(),
+                raw_action_ref: "my_tool".to_string(),
+            },
+            "v4.public.test_token".to_string(),
+            ExecutionMetadata {
+                session_id: "sess_modify".parse().expect("literal session id"),
+                agent_id: "agent".parse().expect("literal agent id"),
+                timestamp: Utc::now(),
+                trace_id: None,
+                budget_consumed: 0.0,
+                risk_score: None,
+            },
+            None,
+        );
+
+        let modifications =
+            ModificationSpec::parse("redact_header:x-sensitive").expect("valid redact_header spec");
+        let request = raw_request("127.0.0.1:9".to_string(), "POST");
+
+        let response = handler
+            .dispatch_modify(
+                envelope,
+                &request,
+                InjectedCredentials::empty(),
+                modifications,
+                &mut audit_payload,
+            )
+            .await;
+
+        match response {
+            HandledResponse::Deny {
+                reason,
+                detail,
+                context,
+            } => {
+                assert_eq!(reason, DenyReason::FailClosed);
+                assert!(
+                    detail.contains("modification could not be applied"),
+                    "detail should explain the fail-closed reason, got: {detail}"
+                );
+                assert_eq!(context, DenialContext::Tool);
+            }
+            other => panic!("expected fail-closed Deny, got {other:?}"),
+        }
+
+        // The audit must reflect the dispatch-level denial, not the
+        // pipeline's pre-dispatch MODIFY outcome, and the connector must
+        // never have been called (dispatch_status stays zero).
+        assert_eq!(audit_payload.decision, Decision::Deny);
+        assert!(
+            audit_payload.deny_reason.contains("fail closed"),
+            "audit deny_reason should carry the fail-closed marker, got: {}",
+            audit_payload.deny_reason
+        );
+        assert_eq!(audit_payload.dispatch_status, 0);
     }
 
     #[tokio::test]

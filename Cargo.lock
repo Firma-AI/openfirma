@@ -1451,6 +1451,7 @@ dependencies = [
  "firma-sidecar",
  "fs-err",
  "hex",
+ "libc",
  "nix 0.31.3",
  "p256",
  "pretty_assertions",
@@ -1560,6 +1561,16 @@ dependencies = [
  "toml",
  "tracing",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "firma-vz-guest-init"
+version = "0.1.2"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

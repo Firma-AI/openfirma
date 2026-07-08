@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -7,6 +8,7 @@ use wiremock::{Mock, MockServer};
 
 use crate::agent::{Agent, AgentKind};
 use crate::policy::PolicyBuilder;
+use crate::tcp_proxy::RawTcpProxy;
 use crate::{config, firma_bin};
 
 // ── ScenarioSetup ─────────────────────────────────────────────────────────────
@@ -21,6 +23,12 @@ pub struct ScenarioSetup {
     /// the runner mounts them between the baseline and enforcement phases.
     pub mock_server: Arc<MockServer>,
     pub mocks: Vec<Mock>,
+
+    /// Counting TCP proxy fronting `mock_server`. Egress scenarios point the
+    /// agent at `raw_tcp.address()` and assert on the accepted-connection count —
+    /// a real "socket reached us" signal that raw (non-HTTP) sockets produce and
+    /// wiremock alone cannot record.
+    pub raw_tcp: Arc<crate::tcp_proxy::RawTcpProxy>,
 
     pub(crate) config_dir: PathBuf,
     pub(crate) state_dir: PathBuf,
@@ -115,6 +123,20 @@ impl ScenarioSetup {
             "git init failed: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+        Ok(())
+    }
+
+    /// Rebind the raw-TCP proxy on `ip` (still forwarding to `mock_server`).
+    ///
+    /// Loopback (the default) exercises the seccomp loopback guard; a routable
+    /// host IP exercises the network-namespace egress boundary. Call from
+    /// `setup` before the phases run.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a listener cannot bind on `ip`.
+    pub fn set_raw_tcp_bind_ip(&mut self, ip: IpAddr) -> Result<(), anyhow::Error> {
+        self.raw_tcp = Arc::new(RawTcpProxy::start_on(ip, *self.mock_server.address())?);
         Ok(())
     }
 

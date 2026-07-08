@@ -35,8 +35,11 @@ uuid.workspace = true
 wait-timeout.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-nix = { workspace = true, features = ["process", "signal", "socket"] }
+nix = { workspace = true, features = ["process", "signal", "socket", "uio"] }
 signal-hook.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
 
 [dev-dependencies]
 fs-err.workspace = true

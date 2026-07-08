@@ -122,6 +122,22 @@ pub struct ProxyBridgeArgs {
     pub upstream_uds: PathBuf,
 }
 
+/// Internal helper args for the egress-guarded agent runner process.
+///
+/// Runs inside the sandbox: installs the seccomp loopback filter, hands the
+/// listener fd to the host supervisor at `--supervisor-socket`, then execs the
+/// wrapped command.
+#[derive(Debug, Args)]
+pub struct EgressGuardedRunArgs {
+    /// Host supervisor control socket that receives the seccomp listener fd.
+    #[arg(long)]
+    pub supervisor_socket: PathBuf,
+
+    /// Wrapped command and args (pass after `--`).
+    #[arg(last = true, required = true, num_args = 1.., allow_hyphen_values = true)]
+    pub command: Vec<String>,
+}
+
 /// Internal helper args for DNS stub process.
 #[derive(Debug, Clone, Copy, Args)]
 pub struct DnsStubArgs {
