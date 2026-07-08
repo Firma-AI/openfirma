@@ -7,14 +7,14 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
-use super::boot::{BootNetworkMode, boot_contract_from_cmdline};
+use super::boot::{BootContract, BootNetworkMode, boot_contract_from_cmdline};
 use super::command::{CommandOutcome, execute_contract};
 use super::contract::{
     CommandContract, Contract, DnsMode, LaunchContract, MountContract, NetworkContract,
     NetworkMode, TerminalContract, accept_contract, read_contract, validate_contract,
 };
 use super::error::{InitError, InitResult};
-use super::mount::{load_required_modules, mount_contract_paths};
+use super::mount::{SHARE_ROOT, load_required_modules, mount_contract_paths};
 use super::result::{
     GuestHeartbeatPhase, guest_result_from_command_result, write_boot_heartbeat, write_heartbeat,
     write_result, write_setup_error,
@@ -38,11 +38,24 @@ fn boot_contract_accepts_none_network_mode() -> TestResult {
 }
 
 #[test]
+fn boot_contract_accepts_vsock_sidecar_network_mode() -> TestResult {
+    let boot = boot_contract_from_cmdline(
+        "firma.virtiofs_tag=firma-runtime \
+         firma.launch_contract=/firma-shares/runtime/vz-guest-launch.json \
+         firma.network=vsock_sidecar",
+    )?;
+
+    assert_eq!(boot.network, BootNetworkMode::VsockSidecar);
+
+    Ok(())
+}
+
+#[test]
 fn boot_contract_rejects_missing_virtiofs_tag() -> TestResult {
     let error = expect_init_error(
         boot_contract_from_cmdline(
             "firma.launch_contract=/firma-shares/runtime/vz-guest-launch.json \
-             firma.network=none",
+             firma.network=vsock_sidecar",
         ),
         "boot contract should require firma.virtiofs_tag",
     )?;
@@ -62,7 +75,7 @@ fn boot_contract_rejects_missing_launch_contract() -> TestResult {
     let error = expect_init_error(
         boot_contract_from_cmdline(
             "firma.virtiofs_tag=firma-runtime \
-             firma.network=none",
+             firma.network=vsock_sidecar",
         ),
         "boot contract should require firma.launch_contract",
     )?;
@@ -105,7 +118,7 @@ fn boot_contract_rejects_unsupported_network_mode() -> TestResult {
              firma.launch_contract=/firma-shares/runtime/vz-guest-launch.json \
              firma.network=nat",
         ),
-        "boot contract should reject non-none network modes",
+        "boot contract should reject unsupported network modes",
     )?;
 
     assert!(matches!(
@@ -242,6 +255,7 @@ fn contract_rejects_unsupported_interactive_terminal() -> TestResult {
     )?;
 
     assert!(matches!(error, InitError::UnsupportedTerminalInteractive));
+
     Ok(())
 }
 
@@ -261,6 +275,7 @@ fn contract_rejects_pty_port_without_pty_mode() -> TestResult {
             field: "terminal.pty_vsock_port",
         }
     ));
+
     Ok(())
 }
 
@@ -280,6 +295,7 @@ fn contract_rejects_pty_control_port_without_pty_mode() -> TestResult {
             field: "terminal.pty_control_vsock_port",
         }
     ));
+
     Ok(())
 }
 
@@ -294,6 +310,7 @@ fn contract_rejects_empty_terminal_type() -> TestResult {
     )?;
 
     assert!(matches!(error, InitError::EmptyTerminalTerm));
+
     Ok(())
 }
 
@@ -328,6 +345,7 @@ fn contract_rejects_zero_terminal_dimensions() -> TestResult {
             field: "terminal.cols",
         }
     ));
+
     Ok(())
 }
 
@@ -348,6 +366,7 @@ fn contract_rejects_non_loopback_guest_proxy_addr() -> TestResult {
             value,
         } if value == "10.0.0.2:18080"
     ));
+
     Ok(())
 }
 
@@ -369,6 +388,7 @@ fn contract_rejects_invalid_guest_dns_addr() -> TestResult {
             ..
         } if value == "localhost:1053"
     ));
+
     Ok(())
 }
 
@@ -417,6 +437,7 @@ fn contract_rejects_direct_network_devices() -> TestResult {
     )?;
 
     assert!(matches!(error, InitError::DirectNetworkDevicesAllowed));
+
     Ok(())
 }
 
@@ -450,6 +471,7 @@ fn contract_rejects_empty_attribution_headers() -> TestResult {
         error,
         InitError::EmptyAttributionHeaderValue { name } if name == "x-firma-sandbox-id"
     ));
+
     Ok(())
 }
 
@@ -465,6 +487,7 @@ fn read_contract_parses_valid_contract_json() -> TestResult {
     assert!(!contract.terminal.interactive);
     assert_eq!(contract.mounts.len(), 1);
     assert_eq!(contract.network.vsock_sidecar_port, 18080);
+
     Ok(())
 }
 
@@ -613,6 +636,90 @@ fn accept_contract_rejects_semantically_invalid_contract() -> TestResult {
         error,
         InitError::RelativeCommandCwd { path } if path.as_path() == Path::new("workspace")
     ));
+    Ok(())
+}
+
+#[test]
+fn prepare_runtime_share_accepts_supported_boot_network_modes() -> TestResult {
+    if Path::new("/lib/modules/firma-vz").is_dir() {
+        return Ok(());
+    }
+
+    for network in [BootNetworkMode::None, BootNetworkMode::VsockSidecar] {
+        let boot = BootContract {
+            virtiofs_tag: format!("{network:?}\0invalid"),
+            launch_contract: PathBuf::from("/firma-shares/runtime/vz-guest-launch.json"),
+            network,
+        };
+
+        let error = expect_init_error(
+            super::prepare_runtime_share(&boot),
+            "invalid virtiofs tags should fail after accepting the boot network mode",
+        )?;
+
+        assert!(matches!(
+            error,
+            InitError::MountVirtiofs { tag, target, .. }
+                if tag == boot.virtiofs_tag && target == SHARE_ROOT
+        ));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn accepted_contract_log_message_describes_launch_boundary() -> TestResult {
+    let contract: Contract = valid_launch_contract().try_into()?;
+
+    assert_eq!(
+        super::accepted_contract_log_message(&contract),
+        "accepted launch contract terminal=noninteractive interactive=false pty=false \
+         network=VsockSidecar dns=ConfinedStub guest_proxy=127.0.0.1:18080 \
+         guest_dns=127.0.0.1:1053 sidecar_port=18080 sidecar_host=127.0.0.1:19080 \
+         attribution_headers=1"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn run_contract_writes_contract_ready_heartbeat_before_mount_failure() -> TestResult {
+    if Path::new("/firma-shares/mount0").is_dir() {
+        return Ok(());
+    }
+
+    let temp = tempfile::tempdir()?;
+    let contract_path = write_contract_json(temp.path(), &valid_contract_json()?)?;
+    let boot = BootContract {
+        virtiofs_tag: "firma-runtime".to_string(),
+        launch_contract: contract_path.clone(),
+        network: BootNetworkMode::VsockSidecar,
+    };
+
+    let error = expect_init_error(
+        super::run_contract(&boot),
+        "missing indexed share should fail after accepting the launch contract",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::MissingShareSource { path } if path == Path::new("/firma-shares/mount0")
+    ));
+
+    let heartbeat_path = temp.path().join("guest-heartbeat.json");
+    let heartbeat_json: serde_json::Value = serde_json::from_slice(&fs::read(&heartbeat_path)?)?;
+    assert_eq!(
+        heartbeat_json,
+        json!({
+            "version": 1,
+            "phase": "contract_ready",
+            "contract_path": contract_path,
+            "executable": "/bin/true",
+            "cwd": "/workspace",
+            "mounts": 1,
+        })
+    );
+
     Ok(())
 }
 
@@ -942,7 +1049,7 @@ fn init_error_display_and_sources_are_stable() -> TestResult {
         &InitError::UnsupportedNetworkMode {
             mode: "nat".to_string(),
         },
-        "unexpected firma.network=nat; current lifecycle guest expects none",
+        "unexpected firma.network=nat; current lifecycle guest expects none or vsock_sidecar",
         false,
     );
     assert_error_display(

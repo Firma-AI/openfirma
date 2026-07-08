@@ -180,7 +180,7 @@ impl fmt::Display for InitError {
             }
             Self::UnsupportedNetworkMode { mode } => write!(
                 formatter,
-                "unexpected firma.network={mode}; current lifecycle guest expects none"
+                "unexpected firma.network={mode}; current lifecycle guest expects none or vsock_sidecar"
             ),
             Self::ContractNotVisible { path, source } => {
                 write!(

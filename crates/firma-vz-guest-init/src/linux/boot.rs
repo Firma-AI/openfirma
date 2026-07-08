@@ -21,6 +21,8 @@ pub struct BootContract {
 pub enum BootNetworkMode {
     /// No guest network device is attached.
     None,
+    /// Guest networking must use the runner-owned VSOCK sidecar path.
+    VsockSidecar,
 }
 
 /// Reads `/proc/cmdline` and converts Firma boot arguments into a boot contract.
@@ -66,6 +68,7 @@ impl BootNetworkMode {
     fn from_kernel_arg(mode: &str) -> InitResult<Self> {
         match mode {
             "none" => Ok(Self::None),
+            "vsock_sidecar" => Ok(Self::VsockSidecar),
             mode => Err(InitError::UnsupportedNetworkMode {
                 mode: mode.to_string(),
             }),
