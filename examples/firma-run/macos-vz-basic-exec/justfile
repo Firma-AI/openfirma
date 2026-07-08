@@ -1,0 +1,67 @@
+set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
+
+repo_root := justfile_directory() + "/../../.."
+
+default: run
+
+run:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{ repo_root }}"
+  repo_root="$(pwd -P)"
+
+  case "$(uname -m)" in
+    arm64 | aarch64)
+      artifact_arch="aarch64"
+      ;;
+    x86_64)
+      artifact_arch="x86_64"
+      ;;
+    *)
+      echo "unsupported macOS host architecture: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+
+  vz_artifacts="${FIRMA_VZ_BASIC_EXEC_ARTIFACTS:-target/firma-vz-guest/$artifact_arch}"
+  kernel="${FIRMA_VZ_BASIC_EXEC_KERNEL:-target/firma-vz-guest/kata/vmlinux-6.18.15-186}"
+  initrd="${FIRMA_VZ_BASIC_EXEC_INITRD:-$vz_artifacts/initrd.img}"
+  rootfs="${FIRMA_VZ_BASIC_EXEC_ROOTFS:-$vz_artifacts/rootfs.img}"
+  runner="${FIRMA_VZ_BASIC_EXEC_RUNNER:-target/macos-vz-runner-dev/firma-vz-runner}"
+  firma="${FIRMA_VZ_BASIC_EXEC_FIRMA:-target/debug/firma}"
+
+  abs_path() {
+    case "$1" in
+      /*) printf '%s\n' "$1" ;;
+      *) printf '%s\n' "$repo_root/$1" ;;
+    esac
+  }
+
+  kernel="$(abs_path "$kernel")"
+  initrd="$(abs_path "$initrd")"
+  rootfs="$(abs_path "$rootfs")"
+  runner="$(abs_path "$runner")"
+  firma="$(abs_path "$firma")"
+
+  if [ ! -f "$kernel" ]; then
+    just macos-vz-kata-kernel
+  fi
+  if [ ! -f "$kernel" ]; then
+    echo "Kata vmlinux does not exist: $kernel" >&2
+    echo "set FIRMA_VZ_BASIC_EXEC_KERNEL to an existing Kata vmlinux to override the default" >&2
+    exit 1
+  fi
+
+  just macos-vz-runner-dev
+  cargo build -p firma
+
+  if [ ! -f "$initrd" ] || [ ! -f "$rootfs" ] || [ ! -f "$kernel" ]; then
+    FIRMA_VZ_GUEST_KERNEL="$kernel" just macos-vz-guest-artifacts
+  fi
+
+  FIRMA_RUN_VZ_GUEST=1 \
+    FIRMA_RUN_VZ_GUEST_RUNNER="$runner" \
+    FIRMA_RUN_VZ_GUEST_KERNEL="$kernel" \
+    FIRMA_RUN_VZ_GUEST_INITRD="$initrd" \
+    FIRMA_RUN_VZ_GUEST_ROOTFS="$rootfs" \
+    "$firma" run --profile generic -- /bin/sh -lc 'echo hello-from-vz; uname -a' < /dev/null

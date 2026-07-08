@@ -1,0 +1,77 @@
+# macOS VZ Basic Exec
+
+Experimental end-to-end `firma run` path for the macOS Apple
+Virtualization.framework backend.
+
+This example is expected to evolve while the VZ guest backend is under active
+development. Its job right now is to provide a repeatable sample that proves the
+current development state: the host can build guest artifacts, boot the guest,
+execute a basic command and recover the command result.
+
+This example proves the current no-network guest loop:
+
+1. build and ad-hoc sign `firma-vz-runner`;
+2. build local guest artifacts;
+3. boot the Linux guest;
+4. run a noninteractive shell command;
+5. return the guest command result through runtime files.
+
+## Run
+
+```bash
+just macos-vz-basic-exec
+```
+
+The recipe downloads the pinned Kata static archive when the default kernel is
+missing, extracts `vmlinux-6.18.15-186`, builds the guest artifacts from it, and
+passes absolute artifact paths to `firma run`.
+
+The command executed inside the guest is:
+
+```bash
+/bin/sh -lc 'echo hello-from-vz; uname -a'
+```
+
+The recipe redirects host stdin from `/dev/null` so the launch contract stays
+noninteractive. This revision does not include the guest PTY bridge yet.
+
+## Kata Kernel
+
+The default kernel is written to:
+
+```text
+target/firma-vz-guest/kata/vmlinux-6.18.15-186
+```
+
+You can fetch it explicitly:
+
+```bash
+just macos-vz-kata-kernel
+```
+
+Override it only when testing another known-good Kata vmlinux:
+
+```bash
+FIRMA_VZ_BASIC_EXEC_KERNEL=/path/to/kata-vmlinux \
+  just macos-vz-basic-exec
+```
+
+## Overrides
+
+Use an existing artifact directory:
+
+```bash
+FIRMA_VZ_BASIC_EXEC_ARTIFACTS=target/firma-vz-guest/aarch64 \
+  just macos-vz-basic-exec
+```
+
+Relative override paths are resolved from the repository root before they are
+passed to `firma run`.
+
+The artifact directory must contain:
+
+```text
+vmlinuz
+initrd.img
+rootfs.img
+```

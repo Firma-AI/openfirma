@@ -82,9 +82,11 @@ FIRMA_RUN_VZ_STRUCTURAL_NETWORK=1 firma run --profile generic -- curl https://ex
 
 # Under development: build, ad-hoc sign and launch a local Virtualization.framework runner.
 just macos-vz-runner-dev
+just macos-vz-kata-kernel
+KATA_KERNEL="$PWD/target/firma-vz-guest/kata/vmlinux-6.18.15-186"
 FIRMA_RUN_VZ_GUEST=1 \
-FIRMA_RUN_VZ_GUEST_RUNNER=target/macos-vz-runner-dev/firma-vz-runner \
-FIRMA_RUN_VZ_GUEST_KERNEL=/var/lib/firma/vz/vmlinuz \
+FIRMA_RUN_VZ_GUEST_RUNNER="$PWD/target/macos-vz-runner-dev/firma-vz-runner" \
+FIRMA_RUN_VZ_GUEST_KERNEL=$KATA_KERNEL \
 FIRMA_RUN_VZ_GUEST_INITRD=/var/lib/firma/vz/initrd.img \
 FIRMA_RUN_VZ_GUEST_ROOTFS=/var/lib/firma/vz/rootfs.img \
 firma run --profile generic -- curl https://example.com

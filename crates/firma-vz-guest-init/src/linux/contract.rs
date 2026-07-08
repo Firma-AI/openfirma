@@ -17,6 +17,18 @@ const SECRET_ENV_KEYS: &[&str] = &["FIRMA_CAPABILITY_TOKEN"];
 pub struct LaunchContract {
     /// Contract schema version.
     pub version: u32,
+    /// Host sandbox id carried for diagnostics and host-side correlation.
+    #[serde(default)]
+    pub sandbox_id: Option<String>,
+    /// Host runtime directory. Guest init uses the mounted guest path instead.
+    #[serde(default)]
+    pub runtime_dir: Option<PathBuf>,
+    /// Host runner binary used to launch the VM.
+    #[serde(default)]
+    pub runner: Option<RunnerContract>,
+    /// Host-provided guest artifact paths.
+    #[serde(default)]
+    pub guest: Option<GuestContract>,
     /// Command payload to run inside the guest.
     pub command: CommandContract,
     /// Terminal mode requested by the host runner.
@@ -25,6 +37,39 @@ pub struct LaunchContract {
     pub mounts: Vec<MountContract>,
     /// Guest-side network envelope requested by the host runner.
     pub network: NetworkContract,
+    /// Required host invariants recorded in the launch contract.
+    #[serde(default)]
+    pub invariants: Vec<InvariantContract>,
+}
+
+/// Host runner metadata carried by the launch contract.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerContract {
+    /// Host path to the runner binary that launched the VM.
+    pub path: PathBuf,
+}
+
+/// Host guest artifact metadata carried by the launch contract.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuestContract {
+    /// Host path to the Linux kernel image.
+    pub kernel: PathBuf,
+    /// Host path to the initrd image.
+    pub initrd: PathBuf,
+    /// Host path to the rootfs image.
+    pub rootfs: PathBuf,
+}
+
+/// Host invariant metadata carried by the launch contract.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InvariantContract {
+    /// Invariant name.
+    pub name: String,
+    /// Invariant enforcement mode.
+    pub mode: String,
 }
 
 /// Launch contract that has passed guest-side validation.
@@ -118,6 +163,9 @@ pub struct CommandContract {
     pub cwd: PathBuf,
     /// Complete guest process environment.
     pub env: BTreeMap<String, String>,
+    /// Host identity mode recorded by firma-run.
+    #[serde(default)]
+    pub identity_mode: Option<String>,
 }
 
 /// Terminal mode requested by the launch contract.
@@ -144,6 +192,9 @@ pub struct TerminalContract {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MountContract {
+    /// Host source path for the corresponding indexed virtiofs share.
+    #[serde(default)]
+    pub source: Option<PathBuf>,
     /// Guest path where the indexed virtiofs share should be bind-mounted.
     pub target: PathBuf,
     /// Whether the bind mount should be remounted read-only.
@@ -283,6 +334,8 @@ pub fn validate_contract(contract: &LaunchContract) -> InitResult<()> {
 
 /// Validates top-level contract fields before accepting substructures.
 fn validate_contract_header(contract: &LaunchContract) -> InitResult<()> {
+    observe_host_launch_metadata(contract);
+
     if contract.version != 1 {
         return Err(InitError::InvalidContractVersion {
             version: contract.version,
@@ -314,6 +367,32 @@ fn validate_contract_header(contract: &LaunchContract) -> InitResult<()> {
     }
 
     Ok(())
+}
+
+/// Marks host-owned launch metadata as intentionally parsed but not executed.
+fn observe_host_launch_metadata(contract: &LaunchContract) {
+    let _ = (
+        &contract.sandbox_id,
+        &contract.runtime_dir,
+        &contract.invariants,
+        &contract.command.identity_mode,
+    );
+
+    if let Some(runner) = &contract.runner {
+        let _ = &runner.path;
+    }
+
+    if let Some(guest) = &contract.guest {
+        let _ = (&guest.kernel, &guest.initrd, &guest.rootfs);
+    }
+
+    for invariant in &contract.invariants {
+        let _ = (&invariant.name, &invariant.mode);
+    }
+
+    for mount in &contract.mounts {
+        let _ = &mount.source;
+    }
 }
 
 /// Accepts terminal metadata into the executable guest shape.

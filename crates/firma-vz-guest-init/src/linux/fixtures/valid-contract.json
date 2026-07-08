@@ -1,10 +1,21 @@
 {
   "version": 1,
+  "sandbox_id": "sandbox-test",
+  "runtime_dir": "/runtime",
+  "runner": {
+    "path": "/firma-vz-runner"
+  },
+  "guest": {
+    "kernel": "/vmlinuz",
+    "initrd": "/initrd.img",
+    "rootfs": "/rootfs.img"
+  },
   "command": {
     "executable": "/bin/true",
     "args": [],
     "cwd": "/workspace",
-    "env": {}
+    "env": {},
+    "identity_mode": "sandbox_user"
   },
   "terminal": {
     "interactive": false,
@@ -17,6 +28,7 @@
   },
   "mounts": [
     {
+      "source": "/workspace",
       "target": "/workspace",
       "read_only": false
     }
@@ -32,5 +44,11 @@
     "attribution_headers": {
       "x-firma-sandbox-id": "sandbox-test"
     }
-  }
+  },
+  "invariants": [
+    {
+      "name": "preserve_stdio_signals_exit",
+      "mode": "required"
+    }
+  ]
 }

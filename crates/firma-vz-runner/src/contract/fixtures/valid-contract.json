@@ -15,8 +15,7 @@
     "args": ["--version"],
     "cwd": "${ROOT}",
     "env": {},
-    "identity_mode": "host_user",
-    "seccomp_filter_path": "${ROOT}/seccomp.bpf"
+    "identity_mode": "host_user"
   },
   "terminal": {
     "interactive": false,

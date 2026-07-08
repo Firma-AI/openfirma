@@ -89,7 +89,7 @@ pub fn vm_plan_fixture(rootfs_size: u64) -> Result<(tempfile::TempDir, VmPlan)> 
 }
 
 pub fn write_artifacts(root: &Path, rootfs_size: u64) -> Result<()> {
-    for artifact in ["firma-vz-runner", "vmlinuz", "initrd.img", "seccomp.bpf"] {
+    for artifact in ["firma-vz-runner", "vmlinuz", "initrd.img"] {
         touch(root.join(artifact), 1)?;
     }
     touch(root.join("rootfs.img"), rootfs_size)?;

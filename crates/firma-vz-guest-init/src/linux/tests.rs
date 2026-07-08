@@ -10,11 +10,15 @@ use serde_json::json;
 use super::boot::{BootContract, BootNetworkMode, boot_contract_from_cmdline};
 use super::command::{CommandOutcome, execute_contract};
 use super::contract::{
-    CommandContract, Contract, DnsMode, LaunchContract, MountContract, NetworkContract,
-    NetworkMode, TerminalContract, accept_contract, read_contract, validate_contract,
+    CommandContract, Contract, DnsMode, GuestContract, InvariantContract, LaunchContract,
+    MountContract, NetworkContract, NetworkMode, RunnerContract, TerminalContract, accept_contract,
+    read_contract, validate_contract,
 };
 use super::error::{InitError, InitResult};
-use super::mount::{SHARE_ROOT, load_required_modules, mount_contract_paths};
+use super::mount::{
+    ModuleLoad, ModuleLoaderState, SHARE_ROOT, create_dir_path, load_module, load_required_modules,
+    mount_contract_paths, mount_pseudo, mount_virtiofs, probe_module_bundle,
+};
 use super::result::{
     GuestHeartbeatPhase, guest_result_from_command_result, write_boot_heartbeat, write_heartbeat,
     write_result, write_setup_error,
@@ -896,12 +900,235 @@ fn write_setup_error_ignores_unmounted_runtime_share() -> TestResult {
 }
 
 #[test]
-fn load_required_modules_accepts_images_with_builtin_drivers() -> TestResult {
+fn load_required_modules_accepts_images_with_builtin_drivers() {
     if Path::new("/lib/modules/firma-vz").is_dir() {
-        return Ok(());
+        return;
     }
 
-    load_required_modules()?;
+    load_required_modules();
+}
+
+#[test]
+fn create_dir_path_creates_nested_guest_directory() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let path = temp.path().join("guest").join("tmp");
+
+    create_dir_path(&path)?;
+
+    assert!(path.is_dir());
+
+    Ok(())
+}
+
+#[test]
+fn mount_pseudo_rejects_nul_source_before_syscall() -> TestResult {
+    let error = expect_init_error(
+        mount_pseudo("proc\0bad", "/proc", "proc"),
+        "nul mount source should fail before mount syscall",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::MountPseudo {
+            file_system,
+            target,
+            source,
+        } if file_system == "proc"
+            && target == "/proc"
+            && source.kind() == io::ErrorKind::InvalidInput
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn mount_pseudo_reports_syscall_failure() -> TestResult {
+    let error = expect_init_error(
+        mount_pseudo("firma-vz-test", "/tmp", "firma-vz-no-such-fs"),
+        "unsupported filesystem should fail in mount syscall",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::MountPseudo {
+            file_system,
+            target,
+            source: _,
+        } if file_system == "firma-vz-no-such-fs" && target == "/tmp"
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn mount_virtiofs_rejects_nul_tag_before_syscall() -> TestResult {
+    let error = expect_init_error(
+        mount_virtiofs("firma\0runtime", SHARE_ROOT),
+        "nul virtiofs tag should fail before mount syscall",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::MountVirtiofs {
+            tag,
+            target,
+            source,
+        } if tag == "firma\0runtime"
+            && target == SHARE_ROOT
+            && source.kind() == io::ErrorKind::InvalidInput
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn load_module_reports_missing_module_file() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let missing = temp.path().join("missing.ko");
+
+    let error = expect_init_error(
+        load_module(&missing),
+        "missing module path should fail before finit_module",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::OpenModule { path, source }
+            if path == missing && source.kind() == io::ErrorKind::NotFound
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn load_module_reports_kernel_loader_failure_for_regular_file() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let module = temp.path().join("not-a-module.ko");
+    fs::write(&module, b"not a kernel module")?;
+
+    let error = expect_init_error(
+        load_module(&module),
+        "regular file should reach finit_module and fail as a module",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::LoadModule { path, source: _ } if path == module
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn module_probe_reports_missing_bundle_without_loading() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let module_dir = temp.path().join("missing");
+
+    let summary = probe_module_bundle(&module_dir, &["virtio.ko"], |_| {
+        Err(InitError::LoadModule {
+            path: PathBuf::from("/should-not-load"),
+            source: io::Error::other("loader should not run"),
+        })
+    });
+
+    assert_eq!(summary.state, ModuleLoaderState::NoBundle);
+    assert_eq!(summary.attempted, 0);
+    assert_eq!(summary.loaded, 0);
+    assert_eq!(summary.already_loaded, 0);
+    assert!(summary.failures.is_empty());
+
+    Ok(())
+}
+
+#[test]
+fn module_probe_counts_loaded_modules_and_skips_missing_files() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let first = temp.path().join("virtio.ko");
+    let second = temp.path().join("virtiofs.ko");
+    fs::write(&first, b"virtio")?;
+    fs::write(&second, b"virtiofs")?;
+
+    let mut loaded_paths = Vec::new();
+    let summary = probe_module_bundle(
+        temp.path(),
+        &["missing.ko", "virtio.ko", "virtiofs.ko"],
+        |path| {
+            loaded_paths.push(path.to_path_buf());
+            Ok(ModuleLoad::Loaded)
+        },
+    );
+
+    assert_eq!(summary.state, ModuleLoaderState::Available);
+    assert_eq!(summary.attempted, 2);
+    assert_eq!(summary.loaded, 2);
+    assert_eq!(summary.already_loaded, 0);
+    assert!(summary.failures.is_empty());
+    assert_eq!(loaded_paths, vec![first, second]);
+
+    Ok(())
+}
+
+#[test]
+fn module_probe_stops_when_kernel_does_not_support_module_loading() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let first = temp.path().join("virtio.ko");
+    let second = temp.path().join("virtiofs.ko");
+    fs::write(&first, b"virtio")?;
+    fs::write(second, b"virtiofs")?;
+
+    let summary = probe_module_bundle(temp.path(), &["virtio.ko", "virtiofs.ko"], |path| {
+        Err(InitError::LoadModule {
+            path: path.to_path_buf(),
+            source: io::Error::from_raw_os_error(libc::ENOSYS),
+        })
+    });
+
+    assert_eq!(
+        summary.state,
+        ModuleLoaderState::UnsupportedByKernel { module: first }
+    );
+    assert_eq!(summary.attempted, 1);
+    assert_eq!(summary.loaded, 0);
+    assert_eq!(summary.already_loaded, 0);
+    assert!(summary.failures.is_empty());
+
+    Ok(())
+}
+
+#[test]
+fn module_probe_records_optional_failures_and_continues() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let first = temp.path().join("virtio.ko");
+    let second = temp.path().join("virtiofs.ko");
+    fs::write(&first, b"virtio")?;
+    fs::write(&second, b"virtiofs")?;
+
+    let summary = probe_module_bundle(temp.path(), &["virtio.ko", "virtiofs.ko"], |path| {
+        if path == first {
+            Err(InitError::LoadModule {
+                path: path.to_path_buf(),
+                source: io::Error::from_raw_os_error(libc::EPERM),
+            })
+        } else {
+            Ok(ModuleLoad::AlreadyLoaded)
+        }
+    });
+
+    assert_eq!(summary.state, ModuleLoaderState::Available);
+    assert_eq!(summary.attempted, 2);
+    assert_eq!(summary.loaded, 0);
+    assert_eq!(summary.already_loaded, 1);
+    assert_eq!(summary.failures.len(), 1);
+    assert_eq!(summary.failures[0].path, first);
+    assert!(
+        summary.failures[0]
+            .error
+            .to_ascii_lowercase()
+            .contains("operation not permitted"),
+        "unexpected failure text: {}",
+        summary.failures[0].error
+    );
+
     Ok(())
 }
 
@@ -1334,11 +1561,22 @@ fn write_contract_json(
 fn valid_launch_contract() -> LaunchContract {
     LaunchContract {
         version: 1,
+        sandbox_id: Some("sandbox-test".to_string()),
+        runtime_dir: Some(PathBuf::from("/runtime")),
+        runner: Some(RunnerContract {
+            path: PathBuf::from("/firma-vz-runner"),
+        }),
+        guest: Some(GuestContract {
+            kernel: PathBuf::from("/vmlinuz"),
+            initrd: PathBuf::from("/initrd.img"),
+            rootfs: PathBuf::from("/rootfs.img"),
+        }),
         command: CommandContract {
             executable: "/bin/true".to_string(),
             args: Vec::new(),
             cwd: PathBuf::from("/workspace"),
             env: BTreeMap::new(),
+            identity_mode: Some("sandbox_user".to_string()),
         },
         terminal: TerminalContract {
             interactive: false,
@@ -1350,6 +1588,7 @@ fn valid_launch_contract() -> LaunchContract {
             cols: None,
         },
         mounts: vec![MountContract {
+            source: Some(PathBuf::from("/workspace")),
             target: PathBuf::from("/workspace"),
             read_only: false,
         }],
@@ -1366,6 +1605,10 @@ fn valid_launch_contract() -> LaunchContract {
                 "sandbox-test".to_string(),
             )]),
         },
+        invariants: vec![InvariantContract {
+            name: "preserve_stdio_signals_exit".to_string(),
+            mode: "required".to_string(),
+        }],
     }
 }
 
