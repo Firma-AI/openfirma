@@ -38,6 +38,15 @@ fn generic_profile() -> ProfilePatch {
         "FIRMA_RUN_BWRAP_ROOTFS_MODE".to_string(),
         "readonly".to_string(),
     );
+    // Tmpfs-overlay sensitive home subpaths (ssh/aws/kube/gnupg/... credentials).
+    // With filesystem.delete no longer denied at the seccomp layer and real $HOME
+    // rebound read-write, this overlay is what keeps the agent from reading,
+    // overwriting, or deleting host credentials. Applied for every agent so the
+    // posture is uniform; inherited by codex, claude-code, and copilot.
+    env_set.insert(
+        "FIRMA_RUN_BWRAP_MASK_HOME_PATHS".to_string(),
+        crate::backend::DEFAULT_SENSITIVE_HOME_SUFFIXES.join(","),
+    );
     // On macOS (vz) and WSL2 backends, structural network-namespace confinement is
     // unavailable; enforcement is proxy-based. Clear NO_PROXY so host env cannot
     // accidentally route traffic around the HTTP proxy Sidecar.
@@ -136,11 +145,7 @@ fn claude_code_profile() -> ProfilePatch {
     let mut base = generic_profile();
     base.env_set
         .insert("FIRMA_RUN_PROFILE".to_string(), "claude-code".to_string());
-    // Read-only rootfs is inherited from generic_profile.
-    base.env_set.insert(
-        "FIRMA_RUN_BWRAP_MASK_HOME_PATHS".to_string(),
-        crate::backend::DEFAULT_SENSITIVE_HOME_SUFFIXES.join(","),
-    );
+    // Read-only rootfs and sensitive-home masking are inherited from generic_profile.
     base.env_passthrough.extend([
         "ANTHROPIC_API_KEY".to_string(),
         "ANTHROPIC_AUTH_TOKEN".to_string(),
@@ -164,8 +169,9 @@ fn copilot_profile() -> ProfilePatch {
         "GH_COPILOT_TOKEN".to_string(),
     ]);
     // Copilot reaches real (non-MITM'd) GitHub hosts, so the sandbox CA store
-    // must contain the system roots in addition to firma-ca. The copilot managed
-    // seccomp baseline (config.rs) permits filesystem.delete for SQLite.
+    // must contain the system roots in addition to firma-ca. Copilot's SQLite
+    // session store relies on filesystem.delete, which the managed seccomp
+    // baseline permits (scoped structurally by the read-only rootfs mount).
     base.ca_trust_mode = Some(CaTrustMode::AppendSystemRoots);
     base.use_http_proxy_sidecar = true;
     base

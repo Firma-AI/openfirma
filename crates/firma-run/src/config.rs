@@ -945,15 +945,18 @@ fn parse_managed_runtime_mode(value: &str) -> Result<SeccompRuntimeMode, RunErro
 /// override is set via env var or profile config.
 const MANAGED_SECCOMP_POLICY: &str = include_str!("../seccomp/generic-local-command-v1.toml");
 
-/// Copilot managed seccomp baseline. Permits `filesystem.delete` (`SQLite`
-/// session store) while keeping `credential.write` denied. Selected for the
-/// copilot profile.
+/// Copilot managed seccomp baseline. Same deny set as the generic baseline
+/// (`credential.write` denied, `filesystem.delete` not denied — scoped
+/// structurally by the read-only rootfs mount); carries a distinct `policy_id`
+/// for audit clarity. Selected for the copilot profile.
 const COPILOT_SECCOMP_POLICY: &str = include_str!("../seccomp/copilot-local-command-v1.toml");
 const COPILOT_MANAGED_POLICY_FILE: &str = "copilot-local-command-v1.toml";
 
 /// Returns the embedded managed seccomp policy content and on-disk filename
-/// for `profile_id`. Copilot gets a baseline that permits `filesystem.delete`
-/// (`SQLite` session store); every other profile gets the strict generic baseline.
+/// for `profile_id`. Copilot gets a baseline with its own `policy_id`; every
+/// other profile gets the generic baseline. Both permit `filesystem.delete`
+/// (scoped structurally by the read-only rootfs mount) and deny
+/// `credential.write`.
 fn managed_policy_for_profile(profile_id: &str) -> (&'static str, &'static str) {
     if matches!(
         AgentProfile::from_name(profile_id),
