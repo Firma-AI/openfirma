@@ -23,6 +23,7 @@ use std::sync::Mutex;
 use firma_core::SessionId;
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Categorical outcome of an evaluated action, recorded into a session's
 /// prior-action history so later decisions can observe what the agent has
@@ -82,6 +83,11 @@ pub struct RuntimeSignals {
     /// Cedar context derives `prior_action_classes` and `last_resource`
     /// from it.
     pub history: Vec<ActionOutcome>,
+    /// Most recent provenance chain anchor from the prior admitted
+    /// action (AARM R2 G2). `None` when no prior action has been admitted
+    /// yet. Read BEFORE `advance_provenance` to capture the parent action
+    /// id for the current envelope.
+    pub last_provenance: Option<String>,
 }
 
 impl RuntimeSignals {
@@ -154,6 +160,45 @@ pub trait SessionStateStore: Send + Sync {
         resource: &str,
         outcome: Outcome,
     );
+
+    /// Advance the session's tamper-evident provenance chain (AARM R2 G2)
+    /// and return the new anchor. The new value is
+    /// `hex(SHA256(prev || context_hash || action_class || resource))`,
+    /// where `prev` is the session's previous provenance (empty for the
+    /// first admitted action). Stored as the session's `last_provenance`
+    /// so the next admitted action chains to it. Called on the admitted
+    /// (Allow/Modify) path only; denied/deferred actions do not extend
+    /// the provenance chain. Returns an empty string if the store is
+    /// unavailable (graceful degradation — provenance is attestational,
+    /// not policy-binding).
+    fn advance_provenance(
+        &self,
+        session_id: &SessionId,
+        context_hash: &str,
+        action_class: &str,
+        resource: &str,
+    ) -> String;
+}
+
+/// Compute the next provenance anchor from the previous one and the
+/// current action's binding fields. Deterministic and side-effect-free;
+/// callers persist the result as the session's `last_provenance`.
+#[must_use]
+pub(crate) fn next_provenance(
+    prev: Option<&str>,
+    context_hash: &str,
+    action_class: &str,
+    resource: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(prev.unwrap_or("").as_bytes());
+    hasher.update(b"\n");
+    hasher.update(context_hash.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(action_class.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(resource.as_bytes());
+    hex::encode(hasher.finalize())
 }
 
 /// Default capacity — 8192 active sessions per sidecar process. Tuned
@@ -173,6 +218,11 @@ pub(crate) struct SessionRecord {
     pub(crate) risk_score: f64,
     pub(crate) deny_count: u64,
     pub(crate) history: Vec<ActionOutcome>,
+    /// Anchor of the most recent admitted action's provenance chain
+    /// (AARM R2 G2). `None` until the first Allow/Modify. Forwarded to
+    /// the next admitted action so the chain links prior calls.
+    #[serde(default)]
+    pub(crate) last_provenance: Option<String>,
 }
 
 impl SessionRecord {
@@ -186,6 +236,7 @@ impl SessionRecord {
             risk_score: 0.0,
             deny_count: 0,
             history: Vec::new(),
+            last_provenance: None,
         }
     }
 
@@ -258,6 +309,7 @@ impl SessionStateStore for LruSessionStateStore {
                 risk_score: r.risk_score,
                 deny_count: r.deny_count,
                 history: r.history.clone(),
+                last_provenance: r.last_provenance.clone(),
             })
     }
 
@@ -275,6 +327,28 @@ impl SessionStateStore for LruSessionStateStore {
         };
         let record = guard.get_or_insert_mut(session_id.clone(), SessionRecord::fresh);
         record.push_outcome(action_class.to_string(), resource.to_string(), outcome);
+    }
+
+    fn advance_provenance(
+        &self,
+        session_id: &SessionId,
+        context_hash: &str,
+        action_class: &str,
+        resource: &str,
+    ) -> String {
+        let Ok(mut guard) = self.inner.lock() else {
+            // Mutex poisoned — return empty (attestational, not policy-binding).
+            return String::new();
+        };
+        let record = guard.get_or_insert_mut(session_id.clone(), SessionRecord::fresh);
+        let new = next_provenance(
+            record.last_provenance.as_deref(),
+            context_hash,
+            action_class,
+            resource,
+        );
+        record.last_provenance = Some(new.clone());
+        new
     }
 }
 

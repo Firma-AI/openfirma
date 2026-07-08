@@ -21,9 +21,11 @@ pub struct ExecutionEnvelope {
     pub capability: String,
     /// Session and runtime metadata for correlation and audit.
     pub metadata: ExecutionMetadata,
-    /// Schema-reserved provenance field. V1 does not populate this.
-    /// Intended for anchoring the envelope to the session's prior calls
-    /// in future versions (causal chain, replay, attestation).
+    /// Tamper-evident provenance chain anchor (AARM R2 G2). Populated by
+    /// the sidecar for admitted (Allow/Modify) actions as
+    /// `hex(SHA256(prev || context_hash || action || resource))`, chaining
+    /// this action to the session's prior admitted calls. `None` for
+    /// denied/deferred actions which carry no envelope.
     pub provenance: Option<String>,
 }
 
@@ -253,6 +255,14 @@ pub struct ExecutionMetadata {
     /// Static or pre-computed risk attribute. Defaults to None.
     /// Schema-reserved; populated when risk scoring is implemented.
     pub risk_score: Option<f64>,
+    /// Server-derived conversation thread identity (AARM R2 G2). Groups
+    /// admitted actions within a session into a causal thread. Derived
+    /// by the sidecar from the session — one thread per session in V1.
+    pub thread_id: Option<String>,
+    /// Server-derived parent action identity (AARM R2 G2). The provenance
+    /// anchor of the prior admitted action in this thread, linking the
+    /// causal chain. `None` for the first admitted action.
+    pub parent_action_id: Option<String>,
 }
 
 /// Flattened attribute set consumed by policy evaluation (Stage 2).
@@ -343,6 +353,8 @@ mod tests {
                 trace_id: Some("golden-trace".to_string()),
                 budget_consumed: 0.0,
                 risk_score: None,
+                thread_id: None,
+                parent_action_id: None,
             },
             provenance: None,
         };

@@ -67,6 +67,9 @@ impl From<&RunAuditMessage> for AuditPayload {
             dispatch_status: 0,
             dispatch_latency_us: 0,
             response_size: 0,
+            provenance: String::new(),
+            thread_id: String::new(),
+            parent_action_id: String::new(),
         }
     }
 }

@@ -144,6 +144,9 @@ mod tests {
             dispatch_latency_us: 0,
             response_size: 0,
             sandbox_id: String::new(),
+            provenance: String::new(),
+            thread_id: String::new(),
+            parent_action_id: String::new(),
             signature: vec![0xDE, 0xAD],
         }
     }

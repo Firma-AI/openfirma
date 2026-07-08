@@ -74,6 +74,20 @@ message ExecutionEvent {
   // SidecarSupervisor. Empty when the sidecar was not autostarted
   // by `firma run` (e.g. daemon mode). Covered by `signature`.
   string sandbox_id = 17;
+  // Tamper-evident provenance chain anchor (AARM R2 G2) for admitted
+  // (Allow/Modify) actions: `hex(SHA256(prev || context_hash || action ||
+  // resource))`, chaining this action to the session's prior admitted calls.
+  // Empty for pre-dispatch outcomes (Deny/StepUp/Defer/Abort) which carry
+  // no envelope. Covered by `signature`.
+  string provenance = 18;
+  // Server-derived conversation thread identity (AARM R2 G2) for admitted
+  // actions. Groups this action with others in the same causal thread.
+  // Empty for pre-dispatch outcomes. Covered by `signature`.
+  string thread_id = 19;
+  // Server-derived parent action identity (AARM R2 G2): the provenance
+  // anchor of the prior admitted action in this thread. Empty for the
+  // first admitted action or pre-dispatch outcomes. Covered by `signature`.
+  string parent_action_id = 20;
 }
 
 // StreamEventsResponse is returned when the client half-closes the stream.

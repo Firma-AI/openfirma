@@ -100,6 +100,9 @@ impl EventBuilder {
             dispatch_latency_us: payload.dispatch_latency_us,
             response_size: payload.response_size,
             sandbox_id: self.sandbox_id.clone(),
+            provenance: payload.provenance,
+            thread_id: payload.thread_id,
+            parent_action_id: payload.parent_action_id,
             signature: Vec::new(),
         };
 
@@ -160,6 +163,12 @@ fn signing_payload(event: &ExecutionEvent) -> Vec<u8> {
     hasher.update(event.response_size.to_string().as_bytes());
     hasher.update(b"\n");
     hasher.update(event.sandbox_id.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(event.provenance.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(event.thread_id.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(event.parent_action_id.as_bytes());
     hasher.finalize().to_vec()
 }
 
@@ -243,8 +252,10 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
                 timestamp: Utc::now(),
                 trace_id: None,
                 budget_consumed: 0.0,
-                risk_score: None,
-            },
+risk_score: None,
+            thread_id: None,
+            parent_action_id: None,
+        },
             None,
         )
     }
@@ -513,6 +524,9 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             dispatch_status: 0,
             dispatch_latency_us: 0,
             response_size: 0,
+            provenance: String::new(),
+            thread_id: String::new(),
+            parent_action_id: String::new(),
         };
         let payload2 = payload1.clone();
 

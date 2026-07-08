@@ -66,6 +66,8 @@ struct LogEntry {
     deny_count: u64,
     #[serde(default)]
     history: Vec<super::session_state::ActionOutcome>,
+    #[serde(default)]
+    last_provenance: Option<String>,
 }
 
 impl PersistentSessionStateStore {
@@ -122,6 +124,7 @@ impl SessionStateStore for PersistentSessionStateStore {
             risk_score: record.risk_score,
             deny_count: record.deny_count,
             history: record.history.clone(),
+            last_provenance: record.last_provenance.clone(),
         };
         // Append to the log; an IO failure does NOT undo the in-memory
         // update — the cache remains authoritative for this process. The
@@ -149,6 +152,7 @@ impl SessionStateStore for PersistentSessionStateStore {
                 risk_score: r.risk_score,
                 deny_count: r.deny_count,
                 history: r.history.clone(),
+                last_provenance: r.last_provenance.clone(),
             },
         )
     }
@@ -175,6 +179,7 @@ impl SessionStateStore for PersistentSessionStateStore {
             risk_score: record.risk_score,
             deny_count: record.deny_count,
             history: record.history.clone(),
+            last_provenance: record.last_provenance.clone(),
         };
         match serde_json::to_string(&entry) {
             Ok(line) => {
@@ -184,6 +189,46 @@ impl SessionStateStore for PersistentSessionStateStore {
             }
             Err(err) => tracing::warn!(?err, "session-state serialize failed; in-memory state retained"),
         }
+    }
+
+    fn advance_provenance(
+        &self,
+        session_id: &SessionId,
+        context_hash: &str,
+        action_class: &str,
+        resource: &str,
+    ) -> String {
+        let Ok(mut guard) = self.inner.lock() else {
+            return String::new();
+        };
+        let record = guard
+            .cache
+            .get_or_insert_mut(session_id.clone(), SessionRecord::fresh);
+        let new = super::session_state::next_provenance(
+            record.last_provenance.as_deref(),
+            context_hash,
+            action_class,
+            resource,
+        );
+        record.last_provenance = Some(new.clone());
+        let entry = LogEntry {
+            sid: session_id.to_string(),
+            action_count: record.action_count,
+            budget_consumed: record.budget_consumed,
+            risk_score: record.risk_score,
+            deny_count: record.deny_count,
+            history: record.history.clone(),
+            last_provenance: record.last_provenance.clone(),
+        };
+        match serde_json::to_string(&entry) {
+            Ok(line) => {
+                if let Err(err) = writeln!(guard.file, "{line}") {
+                    tracing::warn!(?err, "session-state append failed; in-memory state retained");
+                }
+            }
+            Err(err) => tracing::warn!(?err, "session-state serialize failed; in-memory state retained"),
+        }
+        new
     }
 }
 
@@ -225,6 +270,7 @@ fn replay(path: &Path, cap: NonZeroUsize) -> std::io::Result<LruCache<SessionId,
             risk_score: entry.risk_score,
             deny_count: entry.deny_count,
             history: entry.history,
+            last_provenance: entry.last_provenance,
         });
     }
     let mut cache = LruCache::new(cap);

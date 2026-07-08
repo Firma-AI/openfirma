@@ -182,8 +182,11 @@ ExecutionEnvelope::new(
         } else {
             Some(signals.risk_score)
         },
+        // AARM R2 G2: server-derived causal context
+        thread_id: Some(derive_thread_id(&session_id)),
+        parent_action_id: signals.last_provenance.clone(),
     },
-    None, // provenance — reserved, V1 does not populate
+    provenance, // AARM R2 G2: hash-chain anchor
 )
 ```
 

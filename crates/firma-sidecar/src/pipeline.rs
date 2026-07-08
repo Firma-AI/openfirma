@@ -336,6 +336,29 @@ impl EnforcementPipeline {
         // where an attacker sets a victim's session_id in the header to
         // manipulate audit logs and metadata.
         let session_id_typed = capability.claims.session_id.clone();
+        // AARM R2 G2: capture the parent action id (the prior admitted
+        // action's provenance anchor) BEFORE advancing the chain, so the
+        // current envelope links to its predecessor.
+        let parent_action_id = signals.last_provenance.clone();
+        // AARM R2 G2: derive a stable thread id from the session id.
+        // V1 maps one session → one thread; a future version may split
+        // sessions into multiple threads based on intent metadata.
+        let thread_id = derive_thread_id(&session_id_typed);
+        // Advance the session's tamper-evident provenance chain and anchor
+        // this admitted action to the session's prior calls. The chain links
+        // only admitted (Allow/Modify) actions; denied/deferred actions are
+        // recorded in the G3 prior-action history instead.
+        let provenance = self.session_state_store.advance_provenance(
+            &verified_sid,
+            &capability.claims.context_hash,
+            &action_class,
+            &resource,
+        );
+        let provenance = if provenance.is_empty() {
+            None
+        } else {
+            Some(provenance)
+        };
         let envelope = ExecutionEnvelope::new(
             normalized.intent,
             capability.raw_token,
@@ -350,8 +373,10 @@ impl EnforcementPipeline {
                 } else {
                     Some(signals.risk_score)
                 },
+                thread_id: Some(thread_id),
+                parent_action_id,
             },
-            None,
+            provenance,
         );
 
         // Credential injection: fetch credentials for the outbound
@@ -499,6 +524,9 @@ pub fn audit_payload_from_decision(
         dispatch_status: 0,
         dispatch_latency_us: 0,
         response_size: 0,
+        provenance: fields.provenance,
+        thread_id: fields.thread_id,
+        parent_action_id: fields.parent_action_id,
     }
 }
 
@@ -511,6 +539,9 @@ struct AuditDecisionFields {
     deny_reason: String,
     context_hash: String,
     bundle_version: String,
+    provenance: String,
+    thread_id: String,
+    parent_action_id: String,
 }
 
 #[expect(
@@ -534,6 +565,19 @@ fn audit_decision_fields(
             deny_reason: String::new(),
             context_hash: claims.context_hash.clone(),
             bundle_version: bundle_version.unwrap_or("").to_string(),
+            provenance: envelope.provenance().unwrap_or("").to_string(),
+            thread_id: envelope
+                .metadata()
+                .thread_id
+                .as_deref()
+                .unwrap_or("")
+                .to_string(),
+            parent_action_id: envelope
+                .metadata()
+                .parent_action_id
+                .as_deref()
+                .unwrap_or("")
+                .to_string(),
         },
         EnforcementDecision::Deny {
             reason,
@@ -571,6 +615,9 @@ fn audit_decision_fields(
                 deny_reason: sanitize_audit_reason(&format!("{reason}: {detail}")),
                 context_hash,
                 bundle_version: String::new(),
+                provenance: String::new(),
+                thread_id: String::new(),
+                parent_action_id: String::new(),
             }
         }
         EnforcementDecision::Abort {
@@ -588,6 +635,9 @@ fn audit_decision_fields(
                 deny_reason: sanitize_audit_reason(&format!("{}: {detail}", reason.code())),
                 context_hash,
                 bundle_version: String::new(),
+                provenance: String::new(),
+                thread_id: String::new(),
+                parent_action_id: String::new(),
             }
         }
         EnforcementDecision::Passthrough { .. } => AuditDecisionFields {
@@ -599,6 +649,9 @@ fn audit_decision_fields(
             deny_reason: String::new(),
             context_hash: String::new(),
             bundle_version: String::new(),
+            provenance: String::new(),
+                thread_id: String::new(),
+                parent_action_id: String::new(),
         },
         EnforcementDecision::Modify {
             claims,
@@ -617,6 +670,19 @@ fn audit_decision_fields(
             deny_reason: sanitize_audit_reason(&modifications.to_string()),
             context_hash: claims.context_hash.clone(),
             bundle_version: bundle_version.unwrap_or("").to_string(),
+            provenance: envelope.provenance().unwrap_or("").to_string(),
+            thread_id: envelope
+                .metadata()
+                .thread_id
+                .as_deref()
+                .unwrap_or("")
+                .to_string(),
+            parent_action_id: envelope
+                .metadata()
+                .parent_action_id
+                .as_deref()
+                .unwrap_or("")
+                .to_string(),
         },
         EnforcementDecision::StepUp {
             claims,
@@ -640,6 +706,9 @@ fn audit_decision_fields(
                 )),
                 context_hash,
                 bundle_version: String::new(),
+                provenance: String::new(),
+                thread_id: String::new(),
+                parent_action_id: String::new(),
             }
         }
         EnforcementDecision::Defer {
@@ -663,6 +732,9 @@ fn audit_decision_fields(
                 )),
                 context_hash,
                 bundle_version: String::new(),
+                provenance: String::new(),
+                thread_id: String::new(),
+                parent_action_id: String::new(),
             }
         }
     }
@@ -805,6 +877,21 @@ fn raw_request_resource_display(request: &RawRequest) -> String {
 /// before the first `/`, or the entire string if no `/` is present.
 fn extract_host(resource: &str) -> &str {
     resource.split('/').next().unwrap_or(resource)
+}
+
+/// Derive a stable thread id from the session id (AARM R2 G2).
+///
+/// V1 maps one session to one thread; the thread id is a deterministic
+/// hex hash of the session id so it is stable across restarts and
+/// independent of the session-state backend. A future version may split
+/// sessions into multiple threads based on intent metadata.
+#[must_use]
+fn derive_thread_id(session_id: &firma_core::SessionId) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"firma:thread:");
+    hasher.update(session_id.as_ref().as_bytes());
+    hex::encode(hasher.finalize())
 }
 
 #[cfg(test)]
@@ -1468,8 +1555,13 @@ mod tests {
             assert!((envelope.metadata().budget_consumed - 0.0).abs() < f64::EPSILON);
             assert!(envelope.metadata().risk_score.is_none());
 
-            // Verify provenance is None (V1 placeholder)
-            assert!(envelope.provenance().is_none());
+            // AARM R2 G2: provenance is populated for admitted (Allow) calls as a
+            // tamper-evident chain anchor (hex SHA256 of prev || context_hash ||
+            // action || resource). First call in the session chains from empty.
+            let provenance = envelope
+                .provenance()
+                .expect("admitted call must carry a provenance chain anchor");
+            assert!(!provenance.is_empty(), "provenance must be a non-empty hex hash");
 
             // Verify capability token is populated
             assert!(!envelope.capability().is_empty());
@@ -2252,6 +2344,8 @@ mod tests {
                 trace_id: None,
                 budget_consumed: 0.0,
                 risk_score: None,
+                thread_id: None,
+                parent_action_id: None,
             },
             None,
         )

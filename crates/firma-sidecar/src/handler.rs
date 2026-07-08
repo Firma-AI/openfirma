@@ -646,6 +646,9 @@ impl RequestHandler {
             dispatch_status: 0,
             dispatch_latency_us: 0,
             response_size: 0,
+            provenance: String::new(),
+            thread_id: String::new(),
+            parent_action_id: String::new(),
         };
         if let Err(err) = self.audit_sink_sender.send(payload).await {
             tracing::error!("failed to send audit event: {err}");
@@ -682,6 +685,9 @@ impl RequestHandler {
             dispatch_status: 0,
             dispatch_latency_us: 0,
             response_size: 0,
+            provenance: String::new(),
+            thread_id: String::new(),
+            parent_action_id: String::new(),
         };
         if let Err(err) = self.audit_sink_sender.send(payload).await {
             tracing::error!("failed to send audit event: {err}");
@@ -828,6 +834,8 @@ fn passthrough_envelope(request: &RawRequest, session_id: &str) -> ExecutionEnve
             trace_id: None,
             budget_consumed: 0.0,
             risk_score: None,
+            thread_id: None,
+            parent_action_id: None,
         },
         None,
     )
@@ -1301,6 +1309,9 @@ pub(crate) mod tests {
             dispatch_status: 0,
             dispatch_latency_us: 0,
             response_size: 0,
+            provenance: String::new(),
+            thread_id: String::new(),
+            parent_action_id: String::new(),
         };
 
         let envelope = ExecutionEnvelope::new(
@@ -1322,6 +1333,8 @@ pub(crate) mod tests {
                 trace_id: None,
                 budget_consumed: 0.0,
                 risk_score: None,
+                thread_id: None,
+                parent_action_id: None,
             },
             None,
         );
@@ -1779,6 +1792,9 @@ pub(crate) mod tests {
             dispatch_status: 0,
             dispatch_latency_us: 0,
             response_size: 0,
+            provenance: String::new(),
+            thread_id: String::new(),
+            parent_action_id: String::new(),
         };
 
         handler

@@ -884,6 +884,7 @@ mod tests {
                     outcome: Outcome::Deny,
                 },
             ],
+            ..RuntimeSignals::default()
         };
         let context = evaluator
             .build_context(&envelope, &claims, &signals)
