@@ -83,6 +83,14 @@ impl SandboxBackend for Wsl2Backend {
         _handle: &SandboxHandle,
         policy: &NetworkPolicy,
     ) -> Result<EnforcementProof, RunError> {
+        // Loopback egress guard note: the seccomp connect-notify guard
+        // (`crate::egress_guard`) is not wired for WSL2. Its host-side
+        // supervisor is Linux-only and the WSL2 launch crosses the
+        // Windows→guest boundary, so the guard would have to run inside the
+        // guest with its own supervisor — a separate effort. WSL2 stays
+        // proxy-only for now; loopback is not blocked here. The guard env
+        // (`FIRMA_RUN_EGRESS_GUARD_SOCK`) is only set on the bwrap structural
+        // path, so this backend is never silently half-wired.
         Ok(EnforcementProof {
             backend: BackendKind::Wsl2,
             structural: false,
