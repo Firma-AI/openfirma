@@ -221,7 +221,9 @@ pub enum EnforcementDecision {
         detail: String,
         identity: Option<DenyIdentity>,
     },
-    Passthrough { detail: String },
+    Passthrough {
+        detail: String,
+    },
     Modify {
         claims: CapabilityClaims,
         envelope: Box<ExecutionEnvelope>,

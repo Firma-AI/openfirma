@@ -484,11 +484,19 @@ mod tests {
     fn record_outcome_appends_to_history() {
         let store = LruSessionStateStore::new(16);
         store.record_action(&sid("sess_a"));
-        store.record_outcome(&sid("sess_a"), "communication.external.send", "api.example.com/", Outcome::Allow);
+        store.record_outcome(
+            &sid("sess_a"),
+            "communication.external.send",
+            "api.example.com/",
+            Outcome::Allow,
+        );
         store.record_outcome(&sid("sess_a"), "filesystem.delete", "host/x", Outcome::Deny);
         let signals = store.signals(&sid("sess_a"));
         assert_eq!(signals.history.len(), 2);
-        assert_eq!(signals.history[0].action_class, "communication.external.send");
+        assert_eq!(
+            signals.history[0].action_class,
+            "communication.external.send"
+        );
         assert_eq!(signals.history[0].outcome, Outcome::Allow);
         assert_eq!(signals.history[1].outcome, Outcome::Deny);
         assert_eq!(signals.deny_count, 1);

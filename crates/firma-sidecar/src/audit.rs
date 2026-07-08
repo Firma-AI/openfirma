@@ -158,7 +158,7 @@ pub struct AuditPayload {
     /// Connector dispatch latency in microseconds. Zero when the call
     /// never dispatched.
     pub dispatch_latency_us: i64,
-/// Target response body size in bytes. Zero when the call never
+    /// Target response body size in bytes. Zero when the call never
     /// dispatched or the target returned no body.
     pub response_size: i64,
     /// Tamper-evident provenance chain anchor (AARM R2 G2) for admitted

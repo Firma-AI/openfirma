@@ -49,9 +49,7 @@ impl EnforcementConfig {
             }
         }
         if self.constraint_enforcement.session_state_capacity == 0 {
-            return Err(
-                "constraint_enforcement.session_state_capacity must be at least 1".into(),
-            );
+            return Err("constraint_enforcement.session_state_capacity must be at least 1".into());
         }
         Ok(())
     }

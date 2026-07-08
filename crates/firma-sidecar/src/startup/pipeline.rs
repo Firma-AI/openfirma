@@ -80,9 +80,9 @@ fn build_session_state_store(
     match ce.session_state_backend {
         SessionStateBackend::Lru => {
             tracing::debug!(capacity, "session-state backend: lru (in-memory)");
-            Ok(Arc::new(
-                crate::enforcement::LruSessionStateStore::new(capacity),
-            ))
+            Ok(Arc::new(crate::enforcement::LruSessionStateStore::new(
+                capacity,
+            )))
         }
         SessionStateBackend::Persistent => {
             let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
@@ -201,7 +201,8 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
     let (readiness, readiness_view) = ReadinessFlag::new(initial_readiness);
     let readiness = Arc::new(readiness);
 
-    let session_state_store: Arc<dyn crate::enforcement::SessionStateStore> = build_session_state_store(config)?;
+    let session_state_store: Arc<dyn crate::enforcement::SessionStateStore> =
+        build_session_state_store(config)?;
 
     let monitor_env_value = std::env::var(MONITOR_MODE_ENV).ok();
     let effective_mode = resolve_effective_mode(&config.mode, monitor_env_value.as_deref());

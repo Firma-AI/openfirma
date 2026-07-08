@@ -30,7 +30,6 @@ use crate::authority_client::readiness::ReadinessView;
 use crate::config::SidecarMode;
 use crate::credential::{CredentialInjectionError, CredentialInjector};
 use crate::enforcement::SessionStateStore;
-use crate::enforcement::session_state::Outcome;
 pub use crate::enforcement::capability_map::CapabilityMap;
 pub use crate::enforcement::capability_validation::CapabilityValidator;
 pub use crate::enforcement::constraint_enforcement::{
@@ -39,6 +38,7 @@ pub use crate::enforcement::constraint_enforcement::{
 pub use crate::enforcement::decision::EnforcementDecision;
 use crate::enforcement::decision::{ConstraintEnforcementStage, DenyIdentity, EnforcementStage};
 pub use crate::enforcement::registry::ActionClassRegistry;
+use crate::enforcement::session_state::Outcome;
 use crate::normalizer::NormalizedEnvelope;
 pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
 
@@ -650,8 +650,8 @@ fn audit_decision_fields(
             context_hash: String::new(),
             bundle_version: String::new(),
             provenance: String::new(),
-                thread_id: String::new(),
-                parent_action_id: String::new(),
+            thread_id: String::new(),
+            parent_action_id: String::new(),
         },
         EnforcementDecision::Modify {
             claims,
@@ -1561,7 +1561,10 @@ mod tests {
             let provenance = envelope
                 .provenance()
                 .expect("admitted call must carry a provenance chain anchor");
-            assert!(!provenance.is_empty(), "provenance must be a non-empty hex hash");
+            assert!(
+                !provenance.is_empty(),
+                "provenance must be a non-empty hex hash"
+            );
 
             // Verify capability token is populated
             assert!(!envelope.capability().is_empty());

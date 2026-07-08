@@ -132,10 +132,16 @@ impl SessionStateStore for PersistentSessionStateStore {
         match serde_json::to_string(&entry) {
             Ok(line) => {
                 if let Err(err) = writeln!(guard.file, "{line}") {
-                    tracing::warn!(?err, "session-state append failed; in-memory state retained");
+                    tracing::warn!(
+                        ?err,
+                        "session-state append failed; in-memory state retained"
+                    );
                 }
             }
-            Err(err) => tracing::warn!(?err, "session-state serialize failed; in-memory state retained"),
+            Err(err) => tracing::warn!(
+                ?err,
+                "session-state serialize failed; in-memory state retained"
+            ),
         }
         count
     }
@@ -144,17 +150,17 @@ impl SessionStateStore for PersistentSessionStateStore {
         let Ok(guard) = self.inner.lock() else {
             return RuntimeSignals::default();
         };
-        guard.cache.peek(session_id).map_or_else(
-            RuntimeSignals::default,
-            |r| RuntimeSignals {
+        guard
+            .cache
+            .peek(session_id)
+            .map_or_else(RuntimeSignals::default, |r| RuntimeSignals {
                 action_count: r.action_count,
                 budget_consumed: r.budget_consumed,
                 risk_score: r.risk_score,
                 deny_count: r.deny_count,
                 history: r.history.clone(),
                 last_provenance: r.last_provenance.clone(),
-            },
-        )
+            })
     }
 
     fn record_outcome(
@@ -184,10 +190,16 @@ impl SessionStateStore for PersistentSessionStateStore {
         match serde_json::to_string(&entry) {
             Ok(line) => {
                 if let Err(err) = writeln!(guard.file, "{line}") {
-                    tracing::warn!(?err, "session-state append failed; in-memory state retained");
+                    tracing::warn!(
+                        ?err,
+                        "session-state append failed; in-memory state retained"
+                    );
                 }
             }
-            Err(err) => tracing::warn!(?err, "session-state serialize failed; in-memory state retained"),
+            Err(err) => tracing::warn!(
+                ?err,
+                "session-state serialize failed; in-memory state retained"
+            ),
         }
     }
 
@@ -223,10 +235,16 @@ impl SessionStateStore for PersistentSessionStateStore {
         match serde_json::to_string(&entry) {
             Ok(line) => {
                 if let Err(err) = writeln!(guard.file, "{line}") {
-                    tracing::warn!(?err, "session-state append failed; in-memory state retained");
+                    tracing::warn!(
+                        ?err,
+                        "session-state append failed; in-memory state retained"
+                    );
                 }
             }
-            Err(err) => tracing::warn!(?err, "session-state serialize failed; in-memory state retained"),
+            Err(err) => tracing::warn!(
+                ?err,
+                "session-state serialize failed; in-memory state retained"
+            ),
         }
         new
     }
@@ -264,14 +282,17 @@ fn replay(path: &Path, cap: NonZeroUsize) -> std::io::Result<LruCache<SessionId,
                 continue;
             }
         };
-        latest.insert(entry.sid, SessionRecord {
-            action_count: entry.action_count,
-            budget_consumed: entry.budget_consumed,
-            risk_score: entry.risk_score,
-            deny_count: entry.deny_count,
-            history: entry.history,
-            last_provenance: entry.last_provenance,
-        });
+        latest.insert(
+            entry.sid,
+            SessionRecord {
+                action_count: entry.action_count,
+                budget_consumed: entry.budget_consumed,
+                risk_score: entry.risk_score,
+                deny_count: entry.deny_count,
+                history: entry.history,
+                last_provenance: entry.last_provenance,
+            },
+        );
     }
     let mut cache = LruCache::new(cap);
     for (sid, record) in latest {
@@ -403,12 +424,17 @@ mod tests {
 
     #[test]
     fn outcome_history_survives_restart() {
-        use crate::enforcement::session_state::{Outcome, HISTORY_CAP};
+        use crate::enforcement::session_state::{HISTORY_CAP, Outcome};
         let path = tmpfile();
         {
             let store = PersistentSessionStateStore::open(&path, 16).expect("open");
             store.record_action(&sid("sess_a"));
-            store.record_outcome(&sid("sess_a"), "communication.external.send", "h/x", Outcome::Allow);
+            store.record_outcome(
+                &sid("sess_a"),
+                "communication.external.send",
+                "h/x",
+                Outcome::Allow,
+            );
             store.record_outcome(&sid("sess_a"), "filesystem.delete", "h/y", Outcome::Deny);
         }
         // Reopen: history + deny_count must be restored from the log.
@@ -416,7 +442,10 @@ mod tests {
         let signals = store.signals(&sid("sess_a"));
         assert_eq!(signals.deny_count, 1);
         assert_eq!(signals.history.len(), 2);
-        assert_eq!(signals.history[0].action_class, "communication.external.send");
+        assert_eq!(
+            signals.history[0].action_class,
+            "communication.external.send"
+        );
         assert_eq!(signals.history[1].outcome, Outcome::Deny);
         let _ = (HISTORY_CAP,); // keep the cap symbol referenced
         let _ = std::fs::remove_file(&path);
