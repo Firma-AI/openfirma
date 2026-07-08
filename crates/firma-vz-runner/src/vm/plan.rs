@@ -1,10 +1,11 @@
+use std::net::SocketAddr;
 use std::path::{Component, Path, PathBuf};
 
-use crate::contract::Contract;
+use crate::contract::{Contract, NetworkMode};
 use crate::vm::{VmPlanError, VmPlanResult};
 
 pub const FIRMA_VIRTIOFS_TAG: &str = "firma";
-const GUEST_RUNTIME_ROOT: &str = "/runtime";
+const GUEST_SHARE_ROOT: &str = "/firma-shares";
 const VZ_BLOCK_DEVICE_SECTOR_SIZE_BYTES: u64 = 512;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +24,8 @@ pub struct VmPlan {
     pub term: Option<String>,
     pub rows: Option<u16>,
     pub cols: Option<u16>,
+    pub socket_devices: Vec<SocketDevicePlan>,
+    pub network_mode: VmNetworkMode,
 }
 
 impl VmPlan {
@@ -64,7 +67,7 @@ impl VmPlan {
         let mut directory_shares = vec![DirectorySharePlan {
             name: "runtime".to_string(),
             source: contract.runtime_dir().to_path_buf(),
-            read_only: true,
+            read_only: false,
         }];
 
         for (index, mount) in contract.mounts().iter().enumerate() {
@@ -81,6 +84,10 @@ impl VmPlan {
         }
 
         let guest_contract_path = guest_runtime_path(contract_relative_path);
+        let network_mode = match contract.network_mode() {
+            NetworkMode::VsockSidecar => VmNetworkMode::VsockSidecar,
+        };
+
         Ok(Self {
             version: contract.version(),
             sandbox_id: contract.sandbox_id().to_string(),
@@ -88,7 +95,7 @@ impl VmPlan {
             kernel: contract.guest().kernel().to_path_buf(),
             initrd: contract.guest().initrd().to_path_buf(),
             rootfs: contract.guest().rootfs().to_path_buf(),
-            kernel_command_line: kernel_command_line(&guest_contract_path),
+            kernel_command_line: kernel_command_line(&guest_contract_path, network_mode),
             directory_shares,
             network_devices: Vec::new(),
             interactive: contract.terminal().interactive(),
@@ -96,6 +103,14 @@ impl VmPlan {
             term: contract.terminal().term().map(str::to_string),
             rows: contract.terminal().rows(),
             cols: contract.terminal().cols(),
+            socket_devices: vec![SocketDevicePlan {
+                kind: SocketDeviceKind::VirtioVsockSidecar,
+                sidecar_port: contract.vsock_sidecar_port(),
+                sidecar_host_addr: contract
+                    .sidecar_host_addr()
+                    .map_err(|source| VmPlanError::SidecarHostAddr { source })?,
+            }],
+            network_mode,
         })
     }
 }
@@ -110,17 +125,46 @@ pub struct DirectorySharePlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetworkDevicePlan {}
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SocketDevicePlan {
+    pub kind: SocketDeviceKind,
+    pub sidecar_port: u32,
+    pub sidecar_host_addr: SocketAddr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketDeviceKind {
+    VirtioVsockSidecar,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VmNetworkMode {
+    VsockSidecar,
+}
+
+impl VmNetworkMode {
+    pub const fn as_kernel_arg(self) -> &'static str {
+        match self {
+            Self::VsockSidecar => "vsock_sidecar",
+        }
+    }
+}
+
 /// Builds the Linux boot arguments that point guest init at the launch contract.
-fn kernel_command_line(guest_contract_path: &str) -> String {
+fn kernel_command_line(guest_contract_path: &str, network_mode: VmNetworkMode) -> String {
+    let network = network_mode.as_kernel_arg();
+
     format!(
-        "console=hvc0 root=/dev/vda rw firma.virtiofs_tag={FIRMA_VIRTIOFS_TAG} \
-         firma.launch_contract={guest_contract_path} firma.network=none"
+        "console=hvc0 earlyprintk=hvc0 ignore_loglevel loglevel=8 printk.time=1 \
+         rdinit=/firma-init init=/firma-init panic=1 \
+         firma.virtiofs_tag={FIRMA_VIRTIOFS_TAG} \
+         firma.launch_contract={guest_contract_path} firma.network={network}"
     )
 }
 
 /// Converts a host-relative runtime path into the Linux guest path.
 fn guest_runtime_path(host_relative_path: &Path) -> String {
-    let mut guest_path = String::from(GUEST_RUNTIME_ROOT);
+    let mut guest_path = format!("{GUEST_SHARE_ROOT}/runtime");
 
     for component in host_relative_path.components() {
         if let Component::Normal(segment) = component {

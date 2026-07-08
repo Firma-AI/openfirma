@@ -6,7 +6,7 @@ use crate::test_utils::{
 };
 
 use super::VmPlanError;
-use super::plan::{FIRMA_VIRTIOFS_TAG, VmPlan};
+use super::plan::{FIRMA_VIRTIOFS_TAG, SocketDeviceKind, VmNetworkMode, VmPlan};
 
 #[test]
 fn vm_plan_exposes_contract_and_mounts_without_network_devices() -> Result<()> {
@@ -19,6 +19,17 @@ fn vm_plan_exposes_contract_and_mounts_without_network_devices() -> Result<()> {
     let plan = VmPlan::from_contract(&contract)?;
 
     assert_eq!(plan.network_devices.len(), 0);
+    assert_eq!(plan.socket_devices.len(), 1);
+    assert_eq!(
+        plan.socket_devices[0].kind,
+        SocketDeviceKind::VirtioVsockSidecar
+    );
+    assert_eq!(plan.socket_devices[0].sidecar_port, 18080);
+    assert_eq!(
+        plan.socket_devices[0].sidecar_host_addr,
+        "127.0.0.1:19080".parse()?
+    );
+    assert_eq!(plan.network_mode, VmNetworkMode::VsockSidecar);
     assert!(plan.runtime_dir.ends_with("runtime"));
     assert!(plan.kernel.ends_with("vmlinuz"));
     assert!(plan.initrd.ends_with("initrd.img"));
@@ -30,7 +41,7 @@ fn vm_plan_exposes_contract_and_mounts_without_network_devices() -> Result<()> {
     assert_eq!(plan.cols, None);
     assert_eq!(plan.directory_shares.len(), 2);
     assert_eq!(plan.directory_shares[0].name, "runtime");
-    assert!(plan.directory_shares[0].read_only);
+    assert!(!plan.directory_shares[0].read_only);
     assert_eq!(plan.directory_shares[1].name, "mount0");
     assert!(!plan.directory_shares[1].read_only);
     assert!(
@@ -39,9 +50,12 @@ fn vm_plan_exposes_contract_and_mounts_without_network_devices() -> Result<()> {
     );
     assert!(
         plan.kernel_command_line
-            .contains("firma.launch_contract=/runtime/vz-guest/vz-guest-launch.json")
+            .contains("firma.launch_contract=/firma-shares/runtime/vz-guest/vz-guest-launch.json")
     );
-    assert!(plan.kernel_command_line.contains("firma.network=none"));
+    assert!(
+        plan.kernel_command_line
+            .contains("firma.network=vsock_sidecar")
+    );
 
     Ok(())
 }

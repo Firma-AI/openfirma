@@ -308,6 +308,26 @@ impl Contract {
     pub const fn terminal(&self) -> &Terminal {
         &self.document.terminal
     }
+
+    /// Returns the guest network mode accepted by contract validation.
+    pub const fn network_mode(&self) -> NetworkMode {
+        self.document.network.mode
+    }
+
+    /// Returns the guest VSOCK port reserved for Sidecar traffic.
+    pub const fn vsock_sidecar_port(&self) -> u32 {
+        self.document.network.vsock_sidecar_port
+    }
+
+    /// Returns the host Sidecar endpoint reached by the runner bridge.
+    pub fn sidecar_host_addr(
+        &self,
+    ) -> std::result::Result<std::net::SocketAddr, ContractValidationError> {
+        require_loopback_socket_addr(
+            "network.sidecar_host_addr",
+            &self.document.network.sidecar_host_addr,
+        )
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -475,9 +495,9 @@ struct Network {
     attribution_headers: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum NetworkMode {
+pub enum NetworkMode {
     VsockSidecar,
 }
 
