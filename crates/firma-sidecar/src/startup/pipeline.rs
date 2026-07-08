@@ -60,6 +60,49 @@ fn load_mapping_rules(config: &config::SidecarConfig) -> anyhow::Result<config::
     Ok(config::MappingRulesFile { rules: all_rules })
 }
 
+/// Build the session-state store from the configured backend and capacity.
+///
+/// `lru` (default) selects the in-memory [`LruSessionStateStore`].
+/// `persistent` selects the file-backed
+/// [`PersistentSessionStateStore`] so per-session context survives
+/// eviction and process restart (AARM R2 G4).
+///
+/// # Errors
+///
+/// Returns an error when the persistent backend is selected but its log
+/// file cannot be created or opened at the resolved path.
+fn build_session_state_store(
+    config: &config::SidecarConfig,
+) -> anyhow::Result<Arc<dyn crate::enforcement::SessionStateStore>> {
+    use crate::config::SessionStateBackend;
+    let ce = &config.enforcement.constraint_enforcement;
+    let capacity = ce.session_state_capacity;
+    match ce.session_state_backend {
+        SessionStateBackend::Lru => {
+            tracing::debug!(capacity, "session-state backend: lru (in-memory)");
+            Ok(Arc::new(
+                crate::enforcement::LruSessionStateStore::new(capacity),
+            ))
+        }
+        SessionStateBackend::Persistent => {
+            let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
+            let path = match &ce.session_state_path {
+                Some(p) if !p.trim().is_empty() => std::path::PathBuf::from(p),
+                _ => crate::enforcement::PersistentSessionStateStore::default_path(&runtime_dir),
+            };
+            tracing::debug!(capacity, ?path, "session-state backend: persistent");
+            let store = crate::enforcement::PersistentSessionStateStore::open(&path, capacity)
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to open persistent session-state log at {}: {e}",
+                        path.display()
+                    )
+                })?;
+            Ok(Arc::new(store))
+        }
+    }
+}
+
 /// Name of the environment variable that must be set to `"1"` to honor a
 /// configured `monitor` mode. Prevents an accidental enforcement bypass when
 /// `mode = "monitor"` is left set in a production config.
@@ -158,8 +201,7 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
     let (readiness, readiness_view) = ReadinessFlag::new(initial_readiness);
     let readiness = Arc::new(readiness);
 
-    let session_state_store: Arc<dyn crate::enforcement::SessionStateStore> =
-        Arc::new(crate::enforcement::LruSessionStateStore::with_default_capacity());
+    let session_state_store: Arc<dyn crate::enforcement::SessionStateStore> = build_session_state_store(config)?;
 
     let monitor_env_value = std::env::var(MONITOR_MODE_ENV).ok();
     let effective_mode = resolve_effective_mode(&config.mode, monitor_env_value.as_deref());

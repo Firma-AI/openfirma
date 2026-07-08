@@ -48,6 +48,11 @@ impl EnforcementConfig {
                 return Err(format!("mapping.rules_paths[{i}] must not be empty"));
             }
         }
+        if self.constraint_enforcement.session_state_capacity == 0 {
+            return Err(
+                "constraint_enforcement.session_state_capacity must be at least 1".into(),
+            );
+        }
         Ok(())
     }
 
@@ -114,6 +119,25 @@ pub struct ConstraintEnforcementConfig {
     /// Any timeout must fail closed with `DenyReason::EnforcementTimeout`.
     #[serde(default = "default_stage2_timeout_ms")]
     pub enforcement_timeout_ms: u64,
+    /// Maximum number of active sessions tracked in the session-state
+    /// cache. Default: 8192. Raising this reduces LRU eviction of
+    /// long-lived sessions, preserving per-session context (AARM R2 G4).
+    /// Minimum: 1.
+    #[serde(default = "default_session_state_capacity")]
+    pub session_state_capacity: usize,
+    /// Session-state storage backend.
+    /// `lru` (default): in-memory LRU cache; state is lost on eviction
+    /// and process restart.
+    /// `persistent`: mirrors session state to a local JSONL file under
+    /// the runtime directory so it survives eviction and process
+    /// restart (AARM R2 G4). Use for long-lived sessions.
+    #[serde(default)]
+    pub session_state_backend: SessionStateBackend,
+    /// Optional path for the persistent session-state JSONL file. Only
+    /// used when `session_state_backend = "persistent"`. When unset,
+    /// defaults to `<runtime_dir>/session-state.jsonl`.
+    #[serde(default)]
+    pub session_state_path: Option<String>,
 }
 
 impl Default for ConstraintEnforcementConfig {
@@ -121,8 +145,22 @@ impl Default for ConstraintEnforcementConfig {
         Self {
             bundle_ttl_seconds: default_bundle_ttl(),
             enforcement_timeout_ms: default_stage2_timeout_ms(),
+            session_state_capacity: default_session_state_capacity(),
+            session_state_backend: SessionStateBackend::default(),
+            session_state_path: None,
         }
     }
+}
+
+/// Session-state storage backend selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionStateBackend {
+    /// In-memory LRU cache (default). State lost on eviction / restart.
+    #[default]
+    Lru,
+    /// File-backed JSONL store; state survives eviction and restart.
+    Persistent,
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +296,10 @@ const fn default_bundle_ttl() -> u64 {
 
 const fn default_stage2_timeout_ms() -> u64 {
     50
+}
+
+const fn default_session_state_capacity() -> usize {
+    8192
 }
 
 // ---------------------------------------------------------------------------
@@ -478,5 +520,55 @@ mod tests {
             err.contains("rules_path"),
             "error should mention rules_path: {err}"
         );
+    }
+
+    // -- SessionStateBackend / capacity (AARM R2 G4) -----------------------
+
+    #[test]
+    fn session_state_defaults_to_lru_and_8192() {
+        let ce = ConstraintEnforcementConfig::default();
+        assert_eq!(ce.session_state_capacity, 8192);
+        assert_eq!(ce.session_state_backend, SessionStateBackend::Lru);
+        assert!(ce.session_state_path.is_none());
+    }
+
+    #[test]
+    fn session_state_backend_parses_persistent_lowercase() {
+        let cfg: ConstraintEnforcementConfig = toml::from_str(
+            r#"
+            session_state_capacity = 4096
+            session_state_backend = "persistent"
+            session_state_path = "/var/lib/firma/sessions.jsonl"
+            "#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(cfg.session_state_capacity, 4096);
+        assert_eq!(cfg.session_state_backend, SessionStateBackend::Persistent);
+        assert_eq!(
+            cfg.session_state_path.as_deref(),
+            Some("/var/lib/firma/sessions.jsonl")
+        );
+    }
+
+    #[test]
+    fn session_state_zero_capacity_rejected() {
+        let mut cfg = EnforcementConfig::default();
+        cfg.constraint_enforcement.session_state_capacity = 0;
+        let err = cfg.validate().unwrap_err();
+        assert!(
+            err.contains("session_state_capacity"),
+            "error should mention session_state_capacity: {err}"
+        );
+    }
+
+    #[test]
+    fn session_state_unknown_backend_rejected() {
+        let result: Result<ConstraintEnforcementConfig, _> = toml::from_str(
+            r#"
+            session_state_backend = "redis"
+            "#,
+        );
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("redis"));
     }
 }

@@ -3,19 +3,26 @@
 //! V1 stores three signals per `SessionId`: action count (monotonic
 //! counter incremented on every admitted request), `budget_consumed`
 //! (cumulative, placeholder 0.0 in V1), `risk_score` (placeholder 0.0 in
-//! V1). Storage is in-memory with LRU eviction — V1 runs single-process.
+//! V1). Storage is in-memory with LRU eviction by default; a
+//! file-backed persistent backend is available via
+//! [`crate::enforcement::session_state_persistent::PersistentSessionStateStore`]
+//! (selected by `constraint_enforcement.session_state_backend = "persistent"`).
 //!
-//! Eviction resets an evicted session's counters on next access. Since
-//! Cedar policies in V1 are monotone (`action_count > N` denies as count
-//! grows), eviction can only move a denying session back toward allowing
-//! — acceptable for V1 scope. Document when this is upgraded to a
-//! persistent or cluster-shared store.
+//! The default in-memory store (`LruSessionStateStore`) evicts the
+//! least-recently-used session when capacity is exceeded, resetting an
+//! evicted session's counters on next access. Since Cedar policies in V1
+//! are monotone (`action_count > N` denies as count grows), eviction can
+//! only move a denying session back toward allowing — acceptable for V1
+//! scope. The capacity is configurable via
+//! `constraint_enforcement.session_state_capacity`; the persistent backend
+//! preserves state across eviction and restart.
 
 use std::num::NonZeroUsize;
 use std::sync::Mutex;
 
 use firma_core::SessionId;
 use lru::LruCache;
+use serde::{Deserialize, Serialize};
 
 /// Runtime signals sourced from the session store and passed into
 /// Stage 2 for Cedar context construction.
@@ -24,7 +31,7 @@ use lru::LruCache;
 /// `ConstraintEnforcer::build_context()` and then reused to populate
 /// the outgoing `ExecutionMetadata` so audit and enforcement see the
 /// same numbers.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct RuntimeSignals {
     /// Number of calls observed in the current session, including this
     /// one. First call in a session is 1.
@@ -96,7 +103,8 @@ pub trait SessionStateStore: Send + Sync {
 }
 
 /// Default capacity — 8192 active sessions per sidecar process. Tuned
-/// for V1 single-process deployments; make configurable if needed.
+/// for V1 single-process deployments; overridable via
+/// `constraint_enforcement.session_state_capacity` in `firma.toml`.
 const DEFAULT_CAPACITY: usize = 8192;
 
 /// In-memory LRU-capped `SessionStateStore` for V1. Single-process only.
@@ -104,15 +112,16 @@ pub struct LruSessionStateStore {
     inner: Mutex<LruCache<SessionId, SessionRecord>>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct SessionRecord {
-    action_count: u64,
-    budget_consumed: f64,
-    risk_score: f64,
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub(crate) struct SessionRecord {
+    pub(crate) action_count: u64,
+    pub(crate) budget_consumed: f64,
+    pub(crate) risk_score: f64,
 }
 
 impl SessionRecord {
-    const fn zero() -> Self {
+    #[must_use]
+    pub(crate) const fn zero() -> Self {
         Self {
             action_count: 0,
             budget_consumed: 0.0,

@@ -32,4 +32,6 @@ pub mod error;
 pub mod registry;
 pub mod revocation;
 pub mod session_state;
+pub mod session_state_persistent;
 pub use session_state::{LruSessionStateStore, SessionStateStore};
+pub use session_state_persistent::PersistentSessionStateStore;
