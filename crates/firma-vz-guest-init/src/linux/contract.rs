@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::net::{AddrParseError, SocketAddr};
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -17,25 +19,42 @@ pub struct LaunchContract {
     pub version: u32,
     /// Command payload to run inside the guest.
     pub command: CommandContract,
+    /// Terminal mode requested by the host runner.
+    pub terminal: TerminalContract,
     /// Guest mount targets requested by the host runner.
     pub mounts: Vec<MountContract>,
+    /// Guest-side network envelope requested by the host runner.
+    pub network: NetworkContract,
 }
 
 /// Launch contract that has passed guest-side validation.
 #[derive(Debug)]
 pub struct Contract {
-    contract: LaunchContract,
+    command: CommandContract,
+    terminal: Terminal,
+    mounts: Vec<MountContract>,
+    network: Network,
 }
 
 impl Contract {
     /// Returns the accepted command payload.
     pub fn command(&self) -> &CommandContract {
-        &self.contract.command
+        &self.command
     }
 
     /// Returns the accepted mount targets.
     pub fn mounts(&self) -> &[MountContract] {
-        &self.contract.mounts
+        &self.mounts
+    }
+
+    /// Returns the accepted guest network envelope.
+    pub fn network(&self) -> &Network {
+        &self.network
+    }
+
+    /// Returns the accepted terminal mode.
+    pub fn terminal(&self) -> Terminal {
+        self.terminal
     }
 }
 
@@ -45,7 +64,45 @@ impl TryFrom<LaunchContract> for Contract {
     /// Accepts a parsed launch contract after guest-side validation.
     fn try_from(contract: LaunchContract) -> Result<Self, Self::Error> {
         validate_contract(&contract)?;
-        Ok(Self { contract })
+        let terminal = accept_terminal_contract(&contract.terminal)?;
+        let network = accept_network_contract(&contract.network)?;
+
+        Ok(Self {
+            command: contract.command,
+            terminal,
+            mounts: contract.mounts,
+            network,
+        })
+    }
+}
+
+/// Terminal mode accepted for this guest init stage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Terminal {
+    /// Noninteractive command execution without a guest PTY bridge.
+    NonInteractive,
+}
+
+impl Terminal {
+    /// Returns the stable terminal mode label used in guest diagnostics.
+    pub const fn mode(self) -> &'static str {
+        match self {
+            Self::NonInteractive => "noninteractive",
+        }
+    }
+
+    /// Returns whether the accepted command requires interactive terminal handling.
+    pub const fn interactive(self) -> bool {
+        match self {
+            Self::NonInteractive => false,
+        }
+    }
+
+    /// Returns whether the accepted command requires a guest PTY bridge.
+    pub const fn pty(self) -> bool {
+        match self {
+            Self::NonInteractive => false,
+        }
     }
 }
 
@@ -63,6 +120,26 @@ pub struct CommandContract {
     pub env: BTreeMap<String, String>,
 }
 
+/// Terminal mode requested by the launch contract.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalContract {
+    /// Whether the launched command is expected to be interactive.
+    pub interactive: bool,
+    /// Whether the command should run behind a guest PTY bridge.
+    pub pty: bool,
+    /// Optional host VSOCK port used for the command PTY data stream.
+    pub pty_vsock_port: Option<u32>,
+    /// Optional host VSOCK port used for command PTY control messages.
+    pub pty_control_vsock_port: Option<u32>,
+    /// Optional terminal type exported to the guest command.
+    pub term: Option<String>,
+    /// Optional terminal row count.
+    pub rows: Option<u16>,
+    /// Optional terminal column count.
+    pub cols: Option<u16>,
+}
+
 /// Mount target requested by the launch contract.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,6 +148,93 @@ pub struct MountContract {
     pub target: PathBuf,
     /// Whether the bind mount should be remounted read-only.
     pub read_only: bool,
+}
+
+/// Guest network envelope from the launch contract.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkContract {
+    /// Network mode the guest init understands.
+    pub mode: NetworkMode,
+    /// Guest-local HTTP proxy socket address.
+    pub guest_http_proxy_addr: String,
+    /// Guest-local DNS stub socket address.
+    pub guest_dns_stub_addr: String,
+    /// Guest VSOCK port used to reach the host Sidecar bridge.
+    pub vsock_sidecar_port: u32,
+    /// Host-side Sidecar socket address reached by the runner bridge.
+    pub sidecar_host_addr: String,
+    /// Whether direct guest network devices are allowed.
+    pub direct_network_devices_allowed: bool,
+    /// DNS confinement mode the guest init understands.
+    pub dns_mode: DnsMode,
+    /// Attribution headers the guest proxy should add when absent.
+    pub attribution_headers: BTreeMap<String, String>,
+}
+
+/// Guest network envelope accepted for this init stage.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Network {
+    mode: NetworkMode,
+    guest_http_proxy_addr: SocketAddr,
+    guest_dns_stub_addr: SocketAddr,
+    vsock_sidecar_port: NonZeroU32,
+    sidecar_host_addr: SocketAddr,
+    dns_mode: DnsMode,
+    attribution_headers: BTreeMap<String, String>,
+}
+
+impl Network {
+    /// Returns the accepted guest network mode.
+    pub const fn mode(&self) -> NetworkMode {
+        self.mode
+    }
+
+    /// Returns the accepted guest DNS mode.
+    pub const fn dns_mode(&self) -> DnsMode {
+        self.dns_mode
+    }
+
+    /// Returns the guest-local HTTP proxy socket address.
+    pub const fn guest_http_proxy_addr(&self) -> SocketAddr {
+        self.guest_http_proxy_addr
+    }
+
+    /// Returns the guest-local DNS stub socket address.
+    pub const fn guest_dns_stub_addr(&self) -> SocketAddr {
+        self.guest_dns_stub_addr
+    }
+
+    /// Returns the VSOCK port used to reach the host Sidecar bridge.
+    pub const fn vsock_sidecar_port(&self) -> NonZeroU32 {
+        self.vsock_sidecar_port
+    }
+
+    /// Returns the host-side Sidecar address consumed by the host VSOCK bridge.
+    pub const fn sidecar_host_addr(&self) -> SocketAddr {
+        self.sidecar_host_addr
+    }
+
+    /// Returns the attribution headers accepted for guest proxy injection.
+    pub fn attribution_headers(&self) -> &BTreeMap<String, String> {
+        &self.attribution_headers
+    }
+}
+
+/// Network mode supported by the current guest init.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkMode {
+    /// Guest egress is expected to flow through a VSOCK Sidecar bridge.
+    VsockSidecar,
+}
+
+/// DNS mode supported by the current guest init.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DnsMode {
+    /// Guest DNS is expected to use a confined local stub.
+    ConfinedStub,
 }
 
 /// Reads and parses a launch contract without accepting it for execution.
@@ -110,6 +274,15 @@ pub fn accept_contract(contract_path: &Path) -> InitResult<Contract> {
 
 /// Validates contract schema semantics before guest execution can start.
 pub fn validate_contract(contract: &LaunchContract) -> InitResult<()> {
+    validate_contract_header(contract)?;
+    let _terminal = accept_terminal_contract(&contract.terminal)?;
+    let _network = accept_network_contract(&contract.network)?;
+
+    Ok(())
+}
+
+/// Validates top-level contract fields before accepting substructures.
+fn validate_contract_header(contract: &LaunchContract) -> InitResult<()> {
     if contract.version != 1 {
         return Err(InitError::InvalidContractVersion {
             version: contract.version,
@@ -141,4 +314,123 @@ pub fn validate_contract(contract: &LaunchContract) -> InitResult<()> {
     }
 
     Ok(())
+}
+
+/// Accepts terminal metadata into the executable guest shape.
+fn accept_terminal_contract(terminal: &TerminalContract) -> InitResult<Terminal> {
+    if terminal.pty {
+        return Err(InitError::UnsupportedTerminalPty);
+    }
+
+    if terminal.interactive {
+        return Err(InitError::UnsupportedTerminalInteractive);
+    }
+
+    if terminal.pty_vsock_port.is_some() {
+        return Err(InitError::TerminalPtyPortWithoutPty {
+            field: "terminal.pty_vsock_port",
+        });
+    }
+
+    if terminal.pty_control_vsock_port.is_some() {
+        return Err(InitError::TerminalPtyPortWithoutPty {
+            field: "terminal.pty_control_vsock_port",
+        });
+    }
+
+    if let Some(term) = &terminal.term
+        && term.trim().is_empty()
+    {
+        return Err(InitError::EmptyTerminalTerm);
+    }
+
+    if terminal.rows.is_some_and(|rows| rows == 0) {
+        return Err(InitError::ZeroTerminalDimension {
+            field: "terminal.rows",
+        });
+    }
+
+    if terminal.cols.is_some_and(|cols| cols == 0) {
+        return Err(InitError::ZeroTerminalDimension {
+            field: "terminal.cols",
+        });
+    }
+
+    Ok(Terminal::NonInteractive)
+}
+
+/// Accepts the guest network envelope into parsed addresses and ports.
+fn accept_network_contract(network: &NetworkContract) -> InitResult<Network> {
+    match network.mode {
+        NetworkMode::VsockSidecar => {}
+    }
+
+    match network.dns_mode {
+        DnsMode::ConfinedStub => {}
+    }
+
+    let guest_http_proxy_addr = require_loopback_socket_addr(
+        "network.guest_http_proxy_addr",
+        &network.guest_http_proxy_addr,
+    )?;
+
+    let guest_dns_stub_addr =
+        require_loopback_socket_addr("network.guest_dns_stub_addr", &network.guest_dns_stub_addr)?;
+    let sidecar_host_addr =
+        require_loopback_socket_addr("network.sidecar_host_addr", &network.sidecar_host_addr)?;
+
+    let vsock_sidecar_port =
+        NonZeroU32::new(network.vsock_sidecar_port).ok_or(InitError::ZeroNetworkPort {
+            field: "network.vsock_sidecar_port",
+        })?;
+
+    if network.direct_network_devices_allowed {
+        return Err(InitError::DirectNetworkDevicesAllowed);
+    }
+
+    for (name, value) in &network.attribution_headers {
+        if name.trim().is_empty() {
+            return Err(InitError::EmptyAttributionHeaderName);
+        }
+
+        if value.trim().is_empty() {
+            return Err(InitError::EmptyAttributionHeaderValue { name: name.clone() });
+        }
+    }
+
+    Ok(Network {
+        mode: network.mode,
+        guest_http_proxy_addr,
+        guest_dns_stub_addr,
+        vsock_sidecar_port,
+        sidecar_host_addr,
+        dns_mode: network.dns_mode,
+        attribution_headers: network.attribution_headers.clone(),
+    })
+}
+
+/// Parses and requires a loopback socket address.
+fn require_loopback_socket_addr(field: &'static str, value: &str) -> InitResult<SocketAddr> {
+    let addr = value
+        .parse::<SocketAddr>()
+        .map_err(
+            |source: AddrParseError| InitError::InvalidNetworkSocketAddr {
+                field,
+                value: value.to_string(),
+                source,
+            },
+        )?;
+
+    if !addr.ip().is_loopback() {
+        return Err(InitError::NonLoopbackNetworkSocketAddr {
+            field,
+            value: value.to_string(),
+        });
+    }
+
+    if addr.port() == 0 {
+        return Err(InitError::ZeroNetworkPort { field });
+    }
+
+    Ok(addr)
 }

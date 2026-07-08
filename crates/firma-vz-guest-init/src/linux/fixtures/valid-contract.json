@@ -6,10 +6,31 @@
     "cwd": "/workspace",
     "env": {}
   },
+  "terminal": {
+    "interactive": false,
+    "pty": false,
+    "pty_vsock_port": null,
+    "pty_control_vsock_port": null,
+    "term": null,
+    "rows": null,
+    "cols": null
+  },
   "mounts": [
     {
       "target": "/workspace",
       "read_only": false
     }
-  ]
+  ],
+  "network": {
+    "mode": "vsock_sidecar",
+    "guest_http_proxy_addr": "127.0.0.1:18080",
+    "guest_dns_stub_addr": "127.0.0.1:1053",
+    "vsock_sidecar_port": 18080,
+    "sidecar_host_addr": "127.0.0.1:19080",
+    "direct_network_devices_allowed": false,
+    "dns_mode": "confined_stub",
+    "attribution_headers": {
+      "x-firma-sandbox-id": "sandbox-test"
+    }
+  }
 }

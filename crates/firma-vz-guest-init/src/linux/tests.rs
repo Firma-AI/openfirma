@@ -10,12 +10,15 @@ use serde_json::json;
 use super::boot::{BootNetworkMode, boot_contract_from_cmdline};
 use super::command::{CommandOutcome, execute_contract};
 use super::contract::{
-    CommandContract, Contract, LaunchContract, MountContract, accept_contract, read_contract,
-    validate_contract,
+    CommandContract, Contract, DnsMode, LaunchContract, MountContract, NetworkContract,
+    NetworkMode, TerminalContract, accept_contract, read_contract, validate_contract,
 };
 use super::error::{InitError, InitResult};
 use super::mount::{load_required_modules, mount_contract_paths};
-use super::result::{guest_result_from_command_result, write_result, write_setup_error};
+use super::result::{
+    GuestHeartbeatPhase, guest_result_from_command_result, write_boot_heartbeat, write_heartbeat,
+    write_result, write_setup_error,
+};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -214,6 +217,243 @@ fn contract_rejects_secret_env_key() -> TestResult {
 }
 
 #[test]
+fn contract_rejects_unsupported_terminal_pty() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.terminal.interactive = true;
+    contract.terminal.pty = true;
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject PTY before the guest PTY runtime exists",
+    )?;
+
+    assert!(matches!(error, InitError::UnsupportedTerminalPty));
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_unsupported_interactive_terminal() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.terminal.interactive = true;
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject interactive terminal mode before PTY support exists",
+    )?;
+
+    assert!(matches!(error, InitError::UnsupportedTerminalInteractive));
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_pty_port_without_pty_mode() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.terminal.pty_vsock_port = Some(20000);
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject PTY port without PTY mode",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::TerminalPtyPortWithoutPty {
+            field: "terminal.pty_vsock_port",
+        }
+    ));
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_pty_control_port_without_pty_mode() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.terminal.pty_control_vsock_port = Some(20001);
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject PTY control port without PTY mode",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::TerminalPtyPortWithoutPty {
+            field: "terminal.pty_control_vsock_port",
+        }
+    ));
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_empty_terminal_type() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.terminal.term = Some(" ".to_string());
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject empty terminal types",
+    )?;
+
+    assert!(matches!(error, InitError::EmptyTerminalTerm));
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_zero_terminal_dimensions() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.terminal.rows = Some(0);
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject zero terminal rows",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::ZeroTerminalDimension {
+            field: "terminal.rows",
+        }
+    ));
+
+    let mut contract = valid_launch_contract();
+    contract.terminal.cols = Some(0);
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject zero terminal columns",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::ZeroTerminalDimension {
+            field: "terminal.cols",
+        }
+    ));
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_non_loopback_guest_proxy_addr() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.network.guest_http_proxy_addr = "10.0.0.2:18080".to_string();
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject non-loopback guest proxy addresses",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::NonLoopbackNetworkSocketAddr {
+            field: "network.guest_http_proxy_addr",
+            value,
+        } if value == "10.0.0.2:18080"
+    ));
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_invalid_guest_dns_addr() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.network.guest_dns_stub_addr = "localhost:1053".to_string();
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should require numeric loopback socket addresses",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::InvalidNetworkSocketAddr {
+            field: "network.guest_dns_stub_addr",
+            value,
+            ..
+        } if value == "localhost:1053"
+    ));
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_zero_network_ports() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.network.vsock_sidecar_port = 0;
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject a zero VSOCK sidecar port",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::ZeroNetworkPort {
+            field: "network.vsock_sidecar_port",
+        }
+    ));
+
+    let mut contract = valid_launch_contract();
+    contract.network.sidecar_host_addr = "127.0.0.1:0".to_string();
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject zero host sidecar ports",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::ZeroNetworkPort {
+            field: "network.sidecar_host_addr",
+        }
+    ));
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_direct_network_devices() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.network.direct_network_devices_allowed = true;
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject direct network devices",
+    )?;
+
+    assert!(matches!(error, InitError::DirectNetworkDevicesAllowed));
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_empty_attribution_headers() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract
+        .network
+        .attribution_headers
+        .insert(" ".to_string(), "sandbox-test".to_string());
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject empty attribution header names",
+    )?;
+
+    assert!(matches!(error, InitError::EmptyAttributionHeaderName));
+
+    let mut contract = valid_launch_contract();
+    contract
+        .network
+        .attribution_headers
+        .insert("x-firma-sandbox-id".to_string(), " ".to_string());
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject empty attribution header values",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::EmptyAttributionHeaderValue { name } if name == "x-firma-sandbox-id"
+    ));
+    Ok(())
+}
+
+#[test]
 fn read_contract_parses_valid_contract_json() -> TestResult {
     let temp = tempfile::tempdir()?;
     let contract_path = write_contract_json(temp.path(), &valid_contract_json()?)?;
@@ -222,7 +462,9 @@ fn read_contract_parses_valid_contract_json() -> TestResult {
 
     assert_eq!(contract.version, 1);
     assert_eq!(contract.command.executable, "/bin/true");
+    assert!(!contract.terminal.interactive);
     assert_eq!(contract.mounts.len(), 1);
+    assert_eq!(contract.network.vsock_sidecar_port, 18080);
     Ok(())
 }
 
@@ -325,7 +567,33 @@ fn accept_contract_returns_validated_contract() -> TestResult {
     let contract = accept_contract(&contract_path)?;
 
     assert_eq!(contract.command().executable, "/bin/true");
+    assert_eq!(contract.terminal().mode(), "noninteractive");
+    assert!(!contract.terminal().interactive());
+    assert!(!contract.terminal().pty());
     assert_eq!(contract.mounts().len(), 1);
+    assert_eq!(contract.network().mode(), NetworkMode::VsockSidecar);
+    assert_eq!(contract.network().dns_mode(), DnsMode::ConfinedStub);
+    assert_eq!(
+        contract.network().guest_http_proxy_addr(),
+        "127.0.0.1:18080".parse()?
+    );
+    assert_eq!(
+        contract.network().guest_dns_stub_addr(),
+        "127.0.0.1:1053".parse()?
+    );
+    assert_eq!(contract.network().vsock_sidecar_port().get(), 18080);
+    assert_eq!(
+        contract.network().sidecar_host_addr(),
+        "127.0.0.1:19080".parse()?
+    );
+    assert_eq!(
+        contract
+            .network()
+            .attribution_headers()
+            .get("x-firma-sandbox-id")
+            .map(String::as_str),
+        Some("sandbox-test")
+    );
     Ok(())
 }
 
@@ -351,23 +619,36 @@ fn accept_contract_rejects_semantically_invalid_contract() -> TestResult {
 #[test]
 fn execute_contract_returns_exit_code_and_creates_cwd() -> TestResult {
     let temp = tempfile::tempdir()?;
+    let contract_path = temp.path().join("vz-guest-launch.json");
     let cwd = temp.path().join("created-cwd");
     let mut launch = valid_launch_contract();
     launch.command.executable = "/bin/sh".to_string();
-    launch.command.args = vec!["-c".to_string(), "exit 7".to_string()];
+    launch.command.args = vec![
+        "-c".to_string(),
+        "printf stdout-message; printf stderr-message >&2; exit 7".to_string(),
+    ];
     launch.command.cwd = cwd.clone();
     let contract: Contract = launch.try_into()?;
 
-    let outcome = execute_contract(&contract)?;
+    let outcome = execute_contract(&contract_path, &contract)?;
 
     assert!(matches!(outcome, CommandOutcome::Exited(7)));
     assert!(cwd.is_dir());
+    assert_eq!(
+        fs::read_to_string(temp.path().join("guest-stdout.log"))?,
+        "stdout-message"
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join("guest-stderr.log"))?,
+        "stderr-message"
+    );
     Ok(())
 }
 
 #[test]
 fn execute_contract_reports_spawn_errors() -> TestResult {
     let temp = tempfile::tempdir()?;
+    let contract_path = temp.path().join("vz-guest-launch.json");
     let missing = temp.path().join("missing-command");
     let mut launch = valid_launch_contract();
     launch.command.executable = missing.display().to_string();
@@ -375,7 +656,7 @@ fn execute_contract_reports_spawn_errors() -> TestResult {
     let contract: Contract = launch.try_into()?;
 
     let error = expect_init_error(
-        execute_contract(&contract),
+        execute_contract(&contract_path, &contract),
         "missing executable should return spawn error",
     )?;
 
@@ -383,6 +664,26 @@ fn execute_contract_reports_spawn_errors() -> TestResult {
         error,
         InitError::SpawnCommand { executable, .. } if executable == missing.display().to_string()
     ));
+    Ok(())
+}
+
+#[test]
+fn execute_contract_uses_captured_guest_stdin() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let contract_path = temp.path().join("vz-guest-launch.json");
+    fs::write(temp.path().join("guest-stdin.bin"), b"captured-input")?;
+    let mut launch = valid_launch_contract();
+    launch.command.executable = "/bin/cat".to_string();
+    launch.command.cwd = temp.path().to_path_buf();
+    let contract: Contract = launch.try_into()?;
+
+    let outcome = execute_contract(&contract_path, &contract)?;
+
+    assert!(matches!(outcome, CommandOutcome::Exited(0)));
+    assert_eq!(
+        fs::read_to_string(temp.path().join("guest-stdout.log"))?,
+        "captured-input"
+    );
     Ok(())
 }
 
@@ -422,6 +723,57 @@ fn write_result_rejects_contract_path_without_parent() -> TestResult {
     )?;
 
     assert!(matches!(error, InitError::ResultPathWithoutParent { path } if path == Path::new("/")));
+    Ok(())
+}
+
+#[test]
+fn write_boot_heartbeat_writes_owner_only_guest_heartbeat() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let contract_path = temp.path().join("vz-guest-launch.json");
+
+    write_boot_heartbeat(&contract_path, GuestHeartbeatPhase::RuntimeMounted)?;
+
+    let heartbeat_path = temp.path().join("guest-heartbeat.json");
+    let heartbeat_json: serde_json::Value = serde_json::from_slice(&fs::read(&heartbeat_path)?)?;
+    assert_eq!(
+        heartbeat_json,
+        json!({
+            "version": 1,
+            "phase": "runtime_mounted",
+            "contract_path": contract_path,
+            "executable": null,
+            "cwd": null,
+            "mounts": null,
+        })
+    );
+    assert_eq!(
+        fs::metadata(&heartbeat_path)?.permissions().mode() & 0o777,
+        0o600
+    );
+    Ok(())
+}
+
+#[test]
+fn write_heartbeat_records_accepted_contract_context() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let contract_path = temp.path().join("vz-guest-launch.json");
+    let contract: Contract = valid_launch_contract().try_into()?;
+
+    write_heartbeat(&contract_path, &contract, GuestHeartbeatPhase::MountsReady)?;
+
+    let heartbeat_path = temp.path().join("guest-heartbeat.json");
+    let heartbeat_json: serde_json::Value = serde_json::from_slice(&fs::read(&heartbeat_path)?)?;
+    assert_eq!(
+        heartbeat_json,
+        json!({
+            "version": 1,
+            "phase": "mounts_ready",
+            "contract_path": contract_path,
+            "executable": "/bin/true",
+            "cwd": "/workspace",
+            "mounts": 1,
+        })
+    );
     Ok(())
 }
 
@@ -649,10 +1001,80 @@ fn init_error_display_and_sources_are_stable() -> TestResult {
         false,
     );
     assert_error_display(
+        &InitError::UnsupportedTerminalPty,
+        "terminal.pty is not supported by this guest init yet",
+        false,
+    );
+    assert_error_display(
+        &InitError::UnsupportedTerminalInteractive,
+        "terminal.interactive is not supported by this guest init yet",
+        false,
+    );
+    assert_error_display(
+        &InitError::TerminalPtyPortWithoutPty {
+            field: "terminal.pty_vsock_port",
+        },
+        "terminal.pty_vsock_port requires terminal.pty=true",
+        false,
+    );
+    assert_error_display(
+        &InitError::EmptyTerminalTerm,
+        "terminal.term must not be empty",
+        false,
+    );
+    assert_error_display(
+        &InitError::ZeroTerminalDimension {
+            field: "terminal.rows",
+        },
+        "terminal.rows must be greater than zero",
+        false,
+    );
+    assert_error_display(
         &InitError::RelativeMountTarget {
             path: PathBuf::from("workspace"),
         },
         "mount.target must be absolute: workspace",
+        false,
+    );
+    assert_error_display(
+        &InitError::InvalidNetworkSocketAddr {
+            field: "network.guest_dns_stub_addr",
+            value: "localhost:1053".to_string(),
+            source: invalid_socket_addr_error()?,
+        },
+        "network.guest_dns_stub_addr must be a socket address, got localhost:1053:",
+        true,
+    );
+    assert_error_display(
+        &InitError::NonLoopbackNetworkSocketAddr {
+            field: "network.guest_http_proxy_addr",
+            value: "10.0.0.2:18080".to_string(),
+        },
+        "network.guest_http_proxy_addr must be loopback, got 10.0.0.2:18080",
+        false,
+    );
+    assert_error_display(
+        &InitError::ZeroNetworkPort {
+            field: "network.vsock_sidecar_port",
+        },
+        "network.vsock_sidecar_port port must be greater than zero",
+        false,
+    );
+    assert_error_display(
+        &InitError::DirectNetworkDevicesAllowed,
+        "network.direct_network_devices_allowed must be false",
+        false,
+    );
+    assert_error_display(
+        &InitError::EmptyAttributionHeaderName,
+        "network.attribution_headers contains an empty header name",
+        false,
+    );
+    assert_error_display(
+        &InitError::EmptyAttributionHeaderValue {
+            name: "x-firma-sandbox-id".to_string(),
+        },
+        "network.attribution_headers[x-firma-sandbox-id] must not be empty",
         false,
     );
     assert_error_display(
@@ -668,6 +1090,45 @@ fn init_error_display_and_sources_are_stable() -> TestResult {
             source: io::Error::new(io::ErrorKind::NotFound, "no such file or directory"),
         },
         "spawn command codex: no such file or directory",
+        true,
+    );
+    assert_error_display(
+        &InitError::OpenGuestStdin {
+            path: PathBuf::from("/guest-stdin.bin"),
+            source: io::Error::new(io::ErrorKind::PermissionDenied, "permission denied"),
+        },
+        "open guest stdin /guest-stdin.bin: permission denied",
+        true,
+    );
+    assert_error_display(
+        &InitError::CommandStdioPathWithoutParent {
+            path: PathBuf::from("/"),
+        },
+        "contract path / has no parent for command stdio file",
+        false,
+    );
+    assert_error_display(
+        &InitError::CreateCommandStdioFile {
+            path: PathBuf::from("/guest-stdout.log"),
+            source: io::Error::new(io::ErrorKind::ReadOnlyFilesystem, "read-only file system"),
+        },
+        "create command stdio file /guest-stdout.log: read-only file system",
+        true,
+    );
+    assert_error_display(
+        &InitError::StatCommandStdioFile {
+            path: PathBuf::from("/guest-stdout.log"),
+            source: io::Error::new(io::ErrorKind::NotFound, "no such file or directory"),
+        },
+        "stat command stdio file /guest-stdout.log: no such file or directory",
+        true,
+    );
+    assert_error_display(
+        &InitError::SetCommandStdioFilePermissions {
+            path: PathBuf::from("/guest-stdout.log"),
+            source: io::Error::new(io::ErrorKind::PermissionDenied, "operation not permitted"),
+        },
+        "set command stdio file permissions /guest-stdout.log: operation not permitted",
         true,
     );
     assert_error_display(
@@ -772,10 +1233,32 @@ fn valid_launch_contract() -> LaunchContract {
             cwd: PathBuf::from("/workspace"),
             env: BTreeMap::new(),
         },
+        terminal: TerminalContract {
+            interactive: false,
+            pty: false,
+            pty_vsock_port: None,
+            pty_control_vsock_port: None,
+            term: None,
+            rows: None,
+            cols: None,
+        },
         mounts: vec![MountContract {
             target: PathBuf::from("/workspace"),
             read_only: false,
         }],
+        network: NetworkContract {
+            mode: NetworkMode::VsockSidecar,
+            guest_http_proxy_addr: "127.0.0.1:18080".to_string(),
+            guest_dns_stub_addr: "127.0.0.1:1053".to_string(),
+            vsock_sidecar_port: 18080,
+            sidecar_host_addr: "127.0.0.1:19080".to_string(),
+            direct_network_devices_allowed: false,
+            dns_mode: DnsMode::ConfinedStub,
+            attribution_headers: BTreeMap::from([(
+                "x-firma-sandbox-id".to_string(),
+                "sandbox-test".to_string(),
+            )]),
+        },
     }
 }
 
@@ -806,6 +1289,14 @@ fn assert_error_display(error: &InitError, expected: &str, has_source: bool) {
 fn malformed_json_error() -> Result<serde_json::Error, Box<dyn Error>> {
     let Err(error) = serde_json::from_str::<serde_json::Value>("{") else {
         return Err(io::Error::other("malformed JSON fixture unexpectedly parsed").into());
+    };
+
+    Ok(error)
+}
+
+fn invalid_socket_addr_error() -> Result<std::net::AddrParseError, Box<dyn Error>> {
+    let Err(error) = "localhost:1053".parse::<std::net::SocketAddr>() else {
+        return Err(io::Error::other("invalid socket address fixture unexpectedly parsed").into());
     };
 
     Ok(error)
