@@ -67,7 +67,7 @@ fn prepare_guest_root() -> InitResult<()> {
 /// Loads guest drivers and mounts the runner-provided runtime share.
 fn prepare_runtime_share(boot: &BootContract) -> InitResult<()> {
     match boot.network {
-        BootNetworkMode::None => {}
+        BootNetworkMode::None | BootNetworkMode::VsockSidecar => {}
     }
 
     load_required_modules()?;
@@ -96,8 +96,13 @@ fn run_contract(boot: &BootContract) -> InitResult<()> {
 
 /// Logs the accepted launch boundary after raw contract validation has completed.
 fn log_accepted_contract(contract: &Contract) {
+    log(&accepted_contract_log_message(contract));
+}
+
+/// Formats the accepted launch boundary after raw contract validation has completed.
+fn accepted_contract_log_message(contract: &Contract) -> String {
     let network = contract.network();
-    log(&format!(
+    format!(
         "accepted launch contract terminal={} interactive={} pty={} network={:?} dns={:?} \
          guest_proxy={} guest_dns={} sidecar_port={} sidecar_host={} attribution_headers={}",
         contract.terminal().mode(),
@@ -110,7 +115,7 @@ fn log_accepted_contract(contract: &Contract) {
         network.vsock_sidecar_port(),
         network.sidecar_host_addr(),
         network.attribution_headers().len()
-    ));
+    )
 }
 
 /// Writes an init diagnostic to the guest console when available.
