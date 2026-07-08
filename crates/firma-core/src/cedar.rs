@@ -151,14 +151,13 @@ mod tests {
     #[test]
     fn validate_policies_rejects_unknown_action() {
         let (schema, _) = Schema::from_cedarschema_str(FIRMA_SCHEMA).unwrap();
-        let set: PolicySet =
-            "forbid(principal, action == Firma::Action::\"payment.payout\", resource);"
-                .parse()
-                .unwrap();
+        let set: PolicySet = "forbid(principal, action == Firma::Action::\"foo.bar\", resource);"
+            .parse()
+            .unwrap();
         let errs = validate_policies(&set, &schema).expect_err("unknown action must fail");
         assert!(!errs.is_empty());
         assert!(
-            errs.iter().any(|e| e.contains("payment.payout")),
+            errs.iter().any(|e| e.contains("foo.bar")),
             "error should name the unknown action; got: {errs:?}"
         );
     }

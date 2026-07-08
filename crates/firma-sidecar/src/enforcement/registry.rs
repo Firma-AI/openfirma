@@ -510,4 +510,35 @@ mod tests {
         let def = registry.get("code.write");
         assert_eq!(def.map(|d| d.risk_level), Some(RiskLevel::High));
     }
+
+    #[test]
+    fn test_registry_is_aligned_with_core_schema() {
+        let registry = ActionClassRegistry::v0_1();
+        let (schema, _warnings) =
+            cedar_policy::Schema::from_cedarschema_str(firma_core::cedar::FIRMA_SCHEMA).unwrap();
+        for action in schema.actions() {
+            assert!(
+                registry.get(action.id().as_ref()).is_some(),
+                "Missing {action}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_core_schema_is_aligned_with_registry() {
+        let registry = ActionClassRegistry::v0_1();
+        let (schema, _warnings) =
+            cedar_policy::Schema::from_cedarschema_str(firma_core::cedar::FIRMA_SCHEMA).unwrap();
+        let action_entities = schema.action_entities().unwrap();
+        for action in registry.classes.values() {
+            let entity_id = cedar_policy::EntityUid::try_from(firma_core::FirmaEntityUid::Action(
+                action.name.to_owned(),
+            ))
+            .unwrap();
+            assert!(
+                action_entities.get(&entity_id).is_some(),
+                "Missing {entity_id}"
+            );
+        }
+    }
 }

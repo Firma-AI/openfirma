@@ -361,11 +361,11 @@ mod tests {
 
     #[test]
     fn load_schema_invalid_policy_fails() {
-        // Parses fine, but `payment.payout` is not in the Firma schema, so strict
+        // Parses fine, but `foo.bar` is not in the Firma schema, so strict
         // validation rejects it. Authority load must fail closed.
         let dir = setup_policy_dir(&[(
             "bad.cedar",
-            "forbid(principal, action == Firma::Action::\"payment.payout\", resource);",
+            "forbid(principal, action == Firma::Action::\"foo.bar\", resource);",
         )]);
         let store = CedarPolicyStore::load(dir.path(), None, 30);
         assert!(store.is_err());
@@ -421,7 +421,7 @@ mod tests {
     #[tokio::test]
     async fn reload_schema_invalid_keeps_previous_bundle() {
         // Start from a valid bundle, then introduce a schema-invalid policy
-        // (`payment.payout` is not in the Firma schema). reload must fail closed
+        // (`foo.bar` is not in the Firma schema). reload must fail closed
         // and keep the previously loaded bundle.
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap();
@@ -429,7 +429,7 @@ mod tests {
 
         fs::write(
             dir.path().join("bad.cedar"),
-            "forbid(principal, action == Firma::Action::\"payment.payout\", resource);",
+            "forbid(principal, action == Firma::Action::\"foo.bar\", resource);",
         )
         .unwrap();
 
