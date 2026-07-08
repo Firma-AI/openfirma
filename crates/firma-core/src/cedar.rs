@@ -22,8 +22,11 @@
 //! out of the entity binding.  [`AgentId`] additionally enforces
 //! `[a-zA-Z0-9_-]{1,128}` at construction time as a second defence layer.
 
+use std::{fmt, path::PathBuf};
+
 use cedar_policy::{
-    EntityId, EntityTypeName, EntityUid, PolicySet, Schema, ValidationMode, Validator,
+    EntityId, EntityTypeName, EntityUid, PolicySet, Schema, SourceLocation, ValidationMode,
+    Validator,
 };
 
 use crate::agent::AgentId;
@@ -36,6 +39,80 @@ use crate::agent::AgentId;
 /// explicit `schema_path` in the Authority config.
 // M-CANONICAL-DOCS: public constant with module-level docs above.
 pub const FIRMA_SCHEMA: &str = include_str!("../firma.cedarschema");
+
+#[derive(Debug)]
+struct PolicyFile {
+    path: PathBuf,
+    content: String,
+}
+
+#[derive(Debug, Default)]
+pub struct PolicyFiles(Vec<PolicyFile>);
+
+impl PolicyFiles {
+    pub fn push(&mut self, path: PathBuf, content: String) {
+        self.0.push(PolicyFile { path, content });
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    #[must_use]
+    pub fn concat(&self) -> String {
+        self.0
+            .iter()
+            .enumerate()
+            .flat_map(|(index, file)| {
+                "\n".chars()
+                    .take(usize::from(index > 0))
+                    .chain(file.content.chars())
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug)]
+struct PolicyError<'a> {
+    files: Option<&'a PolicyFiles>,
+    location: &'a SourceLocation<'a>,
+}
+
+impl fmt::Display for PolicyError<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let (Some(files), Some(range_start)) = (self.files, self.location.range_start()) {
+            let mut cur_index = 0;
+            for file in &files.0 {
+                if range_start >= cur_index && range_start <= cur_index + file.content.len() {
+                    let (line, col) = file.content.bytes().take(range_start - cur_index).fold(
+                        (1, 1),
+                        |(line, col), char| {
+                            if char == b'\n' {
+                                (line + 1, 1)
+                            } else {
+                                (line, col + 1)
+                            }
+                        },
+                    );
+
+                    write!(
+                        f,
+                        "policy `{}` on {}:{}:{}",
+                        self.location.policy_id(),
+                        file.path.display(),
+                        line,
+                        col
+                    )?;
+                    return Ok(());
+                }
+                cur_index += file.content.len() + 1;
+            }
+        }
+
+        self.location.fmt(f)
+    }
+}
 
 /// Strictly validate a parsed Cedar policy set against a schema.
 ///
@@ -51,14 +128,28 @@ pub const FIRMA_SCHEMA: &str = include_str!("../firma.cedarschema");
 /// Returns `Err(messages)` with one entry per validation error when the policy
 /// set does not strictly type-check against `schema`. Validation warnings are
 /// not treated as errors.
-pub fn validate_policies(policies: &PolicySet, schema: &Schema) -> Result<(), Vec<String>> {
+pub fn validate_policies(
+    policies: &PolicySet,
+    schema: &Schema,
+    policy_files: Option<&PolicyFiles>,
+) -> Result<(), Vec<String>> {
     let result = Validator::new(schema.clone()).validate(policies, ValidationMode::Strict);
     if result.validation_passed() {
         return Ok(());
     }
     let messages: Vec<String> = result
         .validation_errors()
-        .map(ToString::to_string)
+        .map(|err| {
+            // override default error message to gain file:row:column format
+            format!(
+                "validation error on {}: {}",
+                PolicyError {
+                    files: policy_files,
+                    location: err.location()
+                },
+                err.error_kind()
+            )
+        })
         .collect();
     Err(messages)
 }
@@ -145,7 +236,7 @@ mod tests {
             "permit(principal, action == Firma::Action::\"filesystem.read\", resource);"
                 .parse()
                 .unwrap();
-        assert!(validate_policies(&set, &schema).is_ok());
+        assert!(validate_policies(&set, &schema, None).is_ok());
     }
 
     #[test]
@@ -154,7 +245,7 @@ mod tests {
         let set: PolicySet = "forbid(principal, action == Firma::Action::\"foo.bar\", resource);"
             .parse()
             .unwrap();
-        let errs = validate_policies(&set, &schema).expect_err("unknown action must fail");
+        let errs = validate_policies(&set, &schema, None).expect_err("unknown action must fail");
         assert!(!errs.is_empty());
         assert!(
             errs.iter().any(|e| e.contains("foo.bar")),
@@ -165,6 +256,42 @@ mod tests {
     #[test]
     fn validate_policies_accepts_empty_set() {
         let (schema, _) = Schema::from_cedarschema_str(FIRMA_SCHEMA).unwrap();
-        assert!(validate_policies(&PolicySet::new(), &schema).is_ok());
+        assert!(validate_policies(&PolicySet::new(), &schema, None).is_ok());
+    }
+
+    #[test]
+    fn test_error_location() {
+        let policy1 = r#"// multibyte utf8 chars ßßß
+forbid (
+    principal,
+    action,
+    resource
+) when {
+    resource.id like "169.254.169.254*"
+};
+"#;
+        let policy2 = r#"// multibyte utf8 chars ßßß
+forbid (
+    principal,
+    action,
+    resource
+) when {
+    resource.whatever like "169.254.169.254*"
+};
+"#;
+        let mut files = PolicyFiles::default();
+        files.push(PathBuf::from("/my/file1.cedar"), policy1.to_owned());
+        files.push(PathBuf::from("/my/file2.cedar"), policy2.to_owned());
+
+        let (schema, _) = Schema::from_cedarschema_str(FIRMA_SCHEMA).unwrap();
+        let policies = files.concat().parse::<PolicySet>().unwrap();
+
+        let errors = validate_policies(&policies, &schema, Some(&files)).unwrap_err();
+        assert_eq!(
+            &errors,
+            &[
+                "validation error on policy `policy1` on /my/file2.cedar:7:5: attribute `whatever` for entity type Firma::Resource not found"
+            ]
+        );
     }
 }
