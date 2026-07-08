@@ -30,19 +30,17 @@ fn generic_profile() -> ProfilePatch {
         "false".to_string(),
     );
     // Read-only rootfs with a read-write workspace (and runtime home) is the
-    // structural boundary that scopes filesystem deletes to the workspace. The
-    // managed seccomp baseline no longer denies filesystem.delete (seccomp
-    // cannot encode path scopes), so this mount posture is what keeps deletes
-    // outside the workspace from succeeding. Inherited by codex and claude-code.
+    // structural boundary that scopes filesystem deletes to the workspace.
+    // Seccomp cannot encode path scopes, so this mount posture is what keeps
+    // deletes outside the workspace from succeeding.
     env_set.insert(
         "FIRMA_RUN_BWRAP_ROOTFS_MODE".to_string(),
         "readonly".to_string(),
     );
     // Tmpfs-overlay sensitive home subpaths (ssh/aws/kube/gnupg/... credentials).
-    // With filesystem.delete no longer denied at the seccomp layer and real $HOME
-    // rebound read-write, this overlay is what keeps the agent from reading,
-    // overwriting, or deleting host credentials. Applied for every agent so the
-    // posture is uniform; inherited by codex, claude-code, and copilot.
+    // Real $HOME is rebound read-write, so this overlay is what keeps the agent
+    // from reading, overwriting, or deleting host credentials. Applied for every
+    // agent so the posture is uniform.
     env_set.insert(
         "FIRMA_RUN_BWRAP_MASK_HOME_PATHS".to_string(),
         crate::backend::DEFAULT_SENSITIVE_HOME_SUFFIXES.join(","),
