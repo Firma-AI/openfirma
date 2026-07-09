@@ -13,9 +13,8 @@ use crate::{CONFIG_DIR_NAME, CONFIG_ENV_NAME, CONFIG_FILE_NAME, FirmaConfig};
 /// `firma` command that's about to execute.
 ///
 /// Refer to [`ConfigResolver::resolve_config`] for more details.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ConfigResolver {
-    #[cfg(feature = "test-utils")]
     walk_ceiling: Option<PathBuf>,
 }
 
@@ -84,15 +83,9 @@ impl ConfigResolver {
     ///
     /// # Implementation details
     ///
-    /// This method is used in end-to-end tests.
-    /// Each test spawns a dedicated process with its current directory
-    /// set to a freshly-created temporary directory.
-    /// We use that temporary directory as the ceiling for our search
-    /// to reduce the risk of test flakiness: e.g. there might be a
-    /// valid Firma configuration file above the temporary directory
-    /// folder, and we don't want tests to pick it up.
+    /// Callers can use this to prevent discovery from escaping an explicit
+    /// workspace root.
     #[must_use]
-    #[cfg(feature = "test-utils")]
     pub fn walk_up_to(mut self, ceiling: impl Into<PathBuf>) -> Self {
         self.walk_ceiling = Some(ceiling.into());
         self
@@ -149,7 +142,6 @@ impl ConfigResolver {
             path: PathBuf::default(),
             reason: e.into(),
         })?;
-        #[cfg(feature = "test-utils")]
         let walk_ceiling = {
             let walk_ceiling = self.walk_ceiling.as_deref();
             if walk_ceiling.is_some_and(|ceiling| !cwd.starts_with(ceiling)) {
@@ -182,7 +174,6 @@ impl ConfigResolver {
                     });
                 }
             }
-            #[cfg(feature = "test-utils")]
             if walk_ceiling.is_some_and(|ceiling| dir == ceiling) {
                 break;
             }

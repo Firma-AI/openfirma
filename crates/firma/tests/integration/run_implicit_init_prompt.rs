@@ -22,16 +22,20 @@ fn firma_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_firma"))
 }
 
+fn isolated_firma_command(cwd: &std::path::Path) -> Command {
+    let mut command = Command::new(firma_bin());
+    command.current_dir(cwd).env_remove("FIRMA_CONFIG");
+    command
+}
+
 /// Run `firma run codex` in `cwd` with stdin redirected from /dev/null
 /// (Unix) or NUL (Windows) so the prompt sees a non-TTY.
 fn run_non_tty(cwd: &std::path::Path) -> std::process::Output {
-    Command::new(firma_bin())
-        .current_dir(cwd)
+    isolated_firma_command(cwd)
         .args(["run", "codex"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env_remove("FIRMA_CONFIG")
         .output()
         .expect("spawn firma run")
 }
@@ -66,13 +70,11 @@ fn no_autostart_without_firma_toml_errors_with_hint() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let cwd = tmp.path();
 
-    let out = Command::new(firma_bin())
-        .current_dir(cwd)
+    let out = isolated_firma_command(cwd)
         .args(["run", "--no-autostart", "codex"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env_remove("FIRMA_CONFIG")
         .output()
         .expect("spawn firma run");
 
@@ -100,13 +102,11 @@ fn copilot_command_auto_selects_profile_without_flag() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let cwd = tmp.path();
 
-    let out = Command::new(firma_bin())
-        .current_dir(cwd)
+    let out = isolated_firma_command(cwd)
         .args(["run", "--no-autostart", "copilot"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env_remove("FIRMA_CONFIG")
         .output()
         .expect("spawn firma run");
 
@@ -131,15 +131,13 @@ fn explicit_missing_run_config_does_not_scaffold() {
     let cwd = tmp.path();
     let missing = cwd.join("missing-run.toml");
 
-    let out = Command::new(firma_bin())
-        .current_dir(cwd)
+    let out = isolated_firma_command(cwd)
         .args(["run", "--config"])
         .arg(&missing)
         .arg("codex")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env_remove("FIRMA_CONFIG")
         .output()
         .expect("spawn firma run");
 
@@ -155,8 +153,7 @@ fn remote_authority_does_not_implicit_scaffold_without_trust_material() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let cwd = tmp.path();
 
-    let out = Command::new(firma_bin())
-        .current_dir(cwd)
+    let out = isolated_firma_command(cwd)
         .args([
             "run",
             "--authority",
@@ -166,7 +163,6 @@ fn remote_authority_does_not_implicit_scaffold_without_trust_material() {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env_remove("FIRMA_CONFIG")
         .output()
         .expect("spawn firma run");
 

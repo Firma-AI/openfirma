@@ -24,7 +24,7 @@ pub fn list() -> ExitCode {
         println!("  {:<28}  {}", p.file_name(), p.description());
     }
     println!("\nMappings  (--mapping, repeatable):\n");
-    for m in Mapping::value_variants() {
+    for m in Mapping::CONFIG_CHOICES {
         println!("  {:<28}  {}", m.as_str(), m.description());
     }
     println!();

@@ -160,25 +160,41 @@ impl Posture {
 pub enum Mapping {
     /// Anthropic Claude API (api.anthropic.com).
     Anthropic,
-    /// `OpenAI` API (`api.openai.com`).
-    Openai,
+    /// crates.io Rust package registry.
+    Cargo,
+    /// GitHub Copilot CLI hosts — CONNECT-only, github hosts MITM-bypassed.
+    Copilot,
     /// GitHub REST API — requires MITM for per-endpoint classification.
     Github,
     /// Gmail REST API — requires MITM for per-endpoint classification.
     Gmail,
     /// npm registry (registry.npmjs.org).
     Npm,
+    /// `OpenAI` API (`api.openai.com`).
+    Openai,
     /// `PyPI` (`pypi.org`, `files.pythonhosted.org`).
     Pypi,
-    /// crates.io Rust package registry.
-    Cargo,
     /// Stripe REST API (`api.stripe.com`).
     Stripe,
-    /// GitHub Copilot CLI hosts — CONNECT-only, github hosts MITM-bypassed.
-    Copilot,
+    /// Visual Studio Code core, marketplace, account, and embedded agent hosts.
+    Vscode,
 }
 
 impl Mapping {
+    /// Stable display order for `firma config` mapping choices.
+    pub const CONFIG_CHOICES: &'static [Self] = &[
+        Self::Anthropic,
+        Self::Cargo,
+        Self::Copilot,
+        Self::Github,
+        Self::Gmail,
+        Self::Npm,
+        Self::Openai,
+        Self::Pypi,
+        Self::Stripe,
+        Self::Vscode,
+    ];
+
     /// Mapping name used as the file stem (`mappings/{name}.toml`).
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -191,6 +207,7 @@ impl Mapping {
             Self::Cargo => "cargo",
             Self::Stripe => "stripe",
             Self::Copilot => "copilot",
+            Self::Vscode => "vscode",
         }
     }
 
@@ -212,6 +229,9 @@ impl Mapping {
                 "api.stripe.com — Stripe REST API (MITM optional — check SDK cert pinning first)"
             }
             Self::Copilot => "GitHub Copilot CLI hosts (CONNECT only; github MITM-bypassed)",
+            Self::Vscode => {
+                "Visual Studio Code hosts (CONNECT only; core services, marketplace, accounts, GitHub)"
+            }
         }
     }
 
@@ -245,6 +265,7 @@ impl Mapping {
             Self::Cargo => include_str!("../../templates/mappings/cargo.toml"),
             Self::Stripe => include_str!("../../templates/mappings/stripe.toml"),
             Self::Copilot => include_str!("../../templates/mappings/copilot.toml"),
+            Self::Vscode => include_str!("../../templates/mappings/vscode.toml"),
         }
     }
 }
