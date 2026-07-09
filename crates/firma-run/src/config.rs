@@ -878,9 +878,12 @@ fn derive_sidecar_local_exec_endpoint(
 
 /// Decides whether the managed default seccomp policy applies to a given
 /// profile/backend pair. Every recognized agent profile shares the same managed
-/// baseline on the bwrap backend, so all agents enforce `filesystem.delete` and
-/// `credential.write` identically (FIR-274 parity requirement). The OS gate
-/// (`target_os = "linux"`) is applied separately by the caller.
+/// baseline on the bwrap backend, so all agents enforce `credential.write`
+/// identically (FIR-274 parity requirement). `filesystem.delete` is not part of
+/// the seccomp baseline: seccomp cannot encode path scopes, so workspace-scoped
+/// delete is enforced structurally by the read-only rootfs plus read-write
+/// workspace mount instead. The OS gate (`target_os = "linux"`) is applied
+/// separately by the caller.
 fn managed_seccomp_applies(profile_id: &str, backend: BackendKind) -> bool {
     backend == BackendKind::Bwrap && AgentProfile::from_name(profile_id).is_some()
 }
@@ -942,15 +945,18 @@ fn parse_managed_runtime_mode(value: &str) -> Result<SeccompRuntimeMode, RunErro
 /// override is set via env var or profile config.
 const MANAGED_SECCOMP_POLICY: &str = include_str!("../seccomp/generic-local-command-v1.toml");
 
-/// Copilot managed seccomp baseline. Permits `filesystem.delete` (`SQLite`
-/// session store) while keeping `credential.write` denied. Selected for the
-/// copilot profile.
+/// Copilot managed seccomp baseline. Same deny set as the generic baseline
+/// (`credential.write` denied, `filesystem.delete` not denied — scoped
+/// structurally by the read-only rootfs mount); carries a distinct `policy_id`
+/// for audit clarity. Selected for the copilot profile.
 const COPILOT_SECCOMP_POLICY: &str = include_str!("../seccomp/copilot-local-command-v1.toml");
 const COPILOT_MANAGED_POLICY_FILE: &str = "copilot-local-command-v1.toml";
 
 /// Returns the embedded managed seccomp policy content and on-disk filename
-/// for `profile_id`. Copilot gets a baseline that permits `filesystem.delete`
-/// (`SQLite` session store); every other profile gets the strict generic baseline.
+/// for `profile_id`. Copilot gets a baseline with its own `policy_id`; every
+/// other profile gets the generic baseline. Both permit `filesystem.delete`
+/// (scoped structurally by the read-only rootfs mount) and deny
+/// `credential.write`.
 fn managed_policy_for_profile(profile_id: &str) -> (&'static str, &'static str) {
     if matches!(
         AgentProfile::from_name(profile_id),
@@ -1146,8 +1152,9 @@ mod tests {
     #[test]
     fn managed_seccomp_applies_to_all_recognized_bwrap_profiles() {
         // FIR-274: codex and claude-code must get the same managed seccomp
-        // baseline as generic, so every agent enforces filesystem.delete and
-        // credential.write identically under bwrap.
+        // baseline as generic, so every agent enforces credential.write
+        // identically under bwrap. filesystem.delete is scoped structurally by
+        // the read-only rootfs mount, not seccomp.
         for profile in ["generic", "codex", "claude-code"] {
             assert!(
                 super::managed_seccomp_applies(profile, BackendKind::Bwrap),
@@ -1157,11 +1164,23 @@ mod tests {
     }
 
     #[test]
-    fn copilot_managed_policy_drops_filesystem_delete() {
-        let (content, filename) = super::managed_policy_for_profile("copilot");
-        assert_eq!(filename, "copilot-local-command-v1.toml");
-        assert!(content.contains("credential.write"));
-        assert!(!content.contains("filesystem.delete"));
+    fn managed_baselines_do_not_deny_filesystem_delete() {
+        // Neither the copilot nor the generic seccomp baseline denies
+        // filesystem.delete. Both still deny credential.write. Workspace-scoped
+        // delete is enforced structurally by the read-only rootfs mount.
+        for profile in ["copilot", "generic"] {
+            let (content, _) = super::managed_policy_for_profile(profile);
+            assert!(
+                content.contains("credential.write"),
+                "profile '{profile}' baseline must still deny credential.write"
+            );
+            assert!(
+                !content.contains("filesystem.delete"),
+                "profile '{profile}' baseline must not deny filesystem.delete"
+            );
+        }
+        let (_, copilot_filename) = super::managed_policy_for_profile("copilot");
+        assert_eq!(copilot_filename, "copilot-local-command-v1.toml");
         let (_, generic_filename) = super::managed_policy_for_profile("generic");
         assert_eq!(generic_filename, "generic-local-command-v1.toml");
     }

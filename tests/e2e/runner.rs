@@ -95,13 +95,15 @@ pub async fn run_scenario(
         tcp_connections: ctx.raw_tcp.connection_count(),
     };
 
-    scenario.assert_baseline(&baseline_phase).with_context(|| {
-        format!(
-            "baseline FAILED\nstdout: {}\nstderr: {}",
-            baseline_phase.agent.stdout.trim(),
-            baseline_phase.agent.stderr.trim(),
-        )
-    })?;
+    scenario
+        .assert_baseline(&ctx, &baseline_phase)
+        .with_context(|| {
+            format!(
+                "baseline FAILED\nstdout: {}\nstderr: {}",
+                baseline_phase.agent.stdout.trim(),
+                baseline_phase.agent.stderr.trim(),
+            )
+        })?;
 
     // Clear baseline captures; mount enforcement mocks built during setup.
     mock_server.reset().await;

@@ -1,6 +1,7 @@
 mod allow_http_call;
 mod block_loopback_egress;
 mod block_raw_tcp_egress;
+mod cargo_build;
 mod deny_forbidden_http_resource;
 mod deny_http_call;
 mod deny_unclassified_intent;
@@ -11,6 +12,7 @@ mod simple_prompt;
 pub use allow_http_call::AllowHttpCall;
 pub use block_loopback_egress::BlockLoopbackEgress;
 pub use block_raw_tcp_egress::BlockRawTcpEgress;
+pub use cargo_build::CargoBuild;
 pub use deny_forbidden_http_resource::DenyForbiddenHttpResource;
 pub use deny_http_call::DenyHttpCall;
 pub use deny_unclassified_intent::DenyUnclassifiedIntent;

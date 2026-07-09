@@ -107,13 +107,27 @@ watch_bridge_and_parent() {
 watch_bridge_and_parent &
 watchdog_pid="$!"
 
+# Capture the launcher-only values before stripping the environment below.
+self_exe="${FIRMA_RUN_SELF_EXE}"
+egress_guard_sock="${FIRMA_RUN_EGRESS_GUARD_SOCK:-}"
+
+# Strip every FIRMA_RUN_* control variable before launching the agent. The agent
+# and anything it spawns must NOT inherit this sandbox's identity or runtime
+# paths: a nested `firma run` that inherited FIRMA_RUN_SANDBOX_ID (+ resolved its
+# tempdir to /tmp) would derive this live session's runtime dir — bind-mounted
+# rw into the sandbox.
+for _firma_var in $(env | grep '^FIRMA_RUN_' | cut -d= -f1 || true); do
+  unset "$_firma_var"
+done
+unset _firma_var
+
 # Run wrapped command in the foreground so interactive CLIs keep terminal semantics.
 # When the loopback egress guard is wired, launch the agent through the
 # guarded runner: it installs the seccomp connect filter, hands the listener fd
 # to the host supervisor, then execs the agent (which inherits the filter).
-if [ -n "${FIRMA_RUN_EGRESS_GUARD_SOCK:-}" ]; then
-  "${FIRMA_RUN_SELF_EXE}" __egress-guarded-run \
-    --supervisor-socket "${FIRMA_RUN_EGRESS_GUARD_SOCK}" -- "$@"
+if [ -n "$egress_guard_sock" ]; then
+  "$self_exe" __egress-guarded-run \
+    --supervisor-socket "$egress_guard_sock" -- "$@"
   status=$?
 else
   "$@"

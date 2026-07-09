@@ -36,7 +36,11 @@ pub trait EnforcementScenario: Send + Sync {
     /// Natural-language prompt sent to the agent.
     fn prompt(&self, ctx: &ScenarioSetup) -> String;
 
-    fn assert_baseline(&self, output: &PhaseOutput) -> Result<(), anyhow::Error>;
+    fn assert_baseline(
+        &self,
+        ctx: &ScenarioSetup,
+        output: &PhaseOutput,
+    ) -> Result<(), anyhow::Error>;
 
     fn assert_enforcement(
         &self,

@@ -103,5 +103,6 @@ scenario_tests! {
         block_loopback_egress        => scenarios::BlockLoopbackEgress,
         fs_read_deny                 => scenarios::FsReadDeny::default(),
         fs_delete_deny               => scenarios::FsDeleteDeny::default(),
+        cargo_build                  => scenarios::CargoBuild,
     )
 }

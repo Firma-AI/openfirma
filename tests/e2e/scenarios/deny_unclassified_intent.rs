@@ -32,7 +32,11 @@ impl EnforcementScenario for DenyUnclassifiedIntent {
         )
     }
 
-    fn assert_baseline(&self, output: &PhaseOutput) -> Result<(), anyhow::Error> {
+    fn assert_baseline(
+        &self,
+        _ctx: &ScenarioSetup,
+        output: &PhaseOutput,
+    ) -> Result<(), anyhow::Error> {
         if !output.agent.success {
             anyhow::bail!("agent failed");
         }
