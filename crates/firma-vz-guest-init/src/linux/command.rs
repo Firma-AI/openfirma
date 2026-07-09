@@ -9,6 +9,7 @@ use super::contract::Contract;
 use super::error::{InitError, InitResult};
 use super::log;
 use super::mount::create_dir_path;
+use super::network::CommandNetworkEnv;
 
 const GUEST_STDIN_FILE: &str = "guest-stdin.bin";
 const GUEST_STDOUT_FILE: &str = "guest-stdout.log";
@@ -24,12 +25,20 @@ pub enum CommandOutcome {
 }
 
 /// Runs the accepted launch contract command.
-pub fn execute_contract(contract_path: &Path, contract: &Contract) -> InitResult<CommandOutcome> {
-    run_command(contract_path, contract)
+pub fn execute_contract(
+    contract_path: &Path,
+    contract: &Contract,
+    command_env: &CommandNetworkEnv,
+) -> InitResult<CommandOutcome> {
+    run_command(contract_path, contract, command_env)
 }
 
 /// Spawns the payload with the contract-provided cwd, argv, and environment.
-fn run_command(contract_path: &Path, contract: &Contract) -> InitResult<CommandOutcome> {
+fn run_command(
+    contract_path: &Path,
+    contract: &Contract,
+    command_env: &CommandNetworkEnv,
+) -> InitResult<CommandOutcome> {
     let command = contract.command();
     create_dir_path(&command.cwd)?;
     let stdin = command_stdin(contract_path)?;
@@ -47,7 +56,7 @@ fn run_command(contract_path: &Path, contract: &Contract) -> InitResult<CommandO
         .args(&command.args)
         .current_dir(&command.cwd)
         .env_clear()
-        .envs(&command.env)
+        .envs(command_env.as_map())
         .stdin(stdin)
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
