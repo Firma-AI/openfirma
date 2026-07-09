@@ -1738,17 +1738,16 @@ mod tests {
                 .cedar_content()
                 .parse()
                 .unwrap_or_else(|e| panic!("{posture:?} parse: {e}"));
-            firma_core::validate_policies(&set, &schema).unwrap_or_else(|errs| {
-                panic!("{posture:?} schema validation: {}", errs.join("; "))
-            });
+            firma_core::validate_policies(&set, &schema, None)
+                .unwrap_or_else(|err| panic!("{posture:?} schema validation: {err}"));
         }
 
         // The issuance template ships alongside every posture.
         let issuance: PolicySet = TPL_CEDAR_ISSUANCE
             .parse()
             .unwrap_or_else(|e| panic!("issuance parse: {e}"));
-        firma_core::validate_policies(&issuance, &schema)
-            .unwrap_or_else(|errs| panic!("issuance schema validation: {}", errs.join("; ")));
+        firma_core::validate_policies(&issuance, &schema, None)
+            .unwrap_or_else(|err| panic!("issuance schema validation: {err}"));
     }
 
     #[test]

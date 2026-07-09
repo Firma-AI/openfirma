@@ -27,7 +27,9 @@
 //   raw_transport      : String  - "http" or "https"; set by the normalizer
 namespace Firma {
     entity Agent;
-    entity Resource;
+    entity Resource {
+        id: String
+    };
 
     // Shared context shape for all canonical enforcement actions.
     // Must match the JSON object produced by ConstraintEnforcer::build_context().
@@ -220,6 +222,110 @@ namespace Firma {
     };
 
     action "repo.admin" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    // Stripe coverage additions.
+    action "payment.read" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "payment.cancel" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "payment.refund" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "payment.payout" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "payment.dispute" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "payment.subscription" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "payment.method.setup" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "payment.method.manage" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "payment.catalog.write" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "payment.tax" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "customer.read" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "customer.write" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    // Gmail coverage additions.
+    action "communication.external.read" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "communication.external.draft" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "communication.external.manage" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "communication.external.delete" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
+
+    action "communication.external.filter" appliesTo {
         principal: [Agent],
         resource: [Resource],
         context: EnforcementContext

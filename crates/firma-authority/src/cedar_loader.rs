@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result, bail};
 use cedar_policy::{PolicySet, Schema};
+use firma_core::cedar::PolicyFiles;
 use sha2::{Digest, Sha256};
 use tokio::sync::{RwLock, watch};
 use tokio::task::JoinHandle;
@@ -57,16 +58,12 @@ impl CedarPolicyStore {
         schema_path: Option<PathBuf>,
         bundle_ttl_seconds: u32,
     ) -> Result<Self> {
-        let (policies_src, policy_set) = read_policies(policy_dir)?;
+        let (policies, policy_set) = read_policies(policy_dir)?;
         let (schema_src, schema) = read_schema(schema_path.as_deref())?;
 
-        if let Err(errors) = firma_core::validate_policies(&policy_set, &schema) {
-            bail!(
-                "policy bundle failed schema validation:\n{}",
-                errors.join("\n")
-            );
-        }
+        firma_core::validate_policies(&policy_set, &schema, Some(&policies))?;
 
+        let policies_src = policies.concat();
         let version = compute_version_hash(&policies_src, &schema_src);
         let bundle = PolicyBundle::new(
             version,
@@ -99,16 +96,12 @@ impl CedarPolicyStore {
     /// acquisition. If the new policy set is invalid, keeps the previous set
     /// (FR-2). No-ops if the version hash has not changed.
     async fn reload(&self) -> Result<()> {
-        let (policies_src, new_policy_set) = read_policies(&self.policy_dir)?;
+        let (policies, new_policy_set) = read_policies(&self.policy_dir)?;
         let (schema_src, new_schema) = read_schema(self.schema_path.as_deref())?;
 
-        if let Err(errors) = firma_core::validate_policies(&new_policy_set, &new_schema) {
-            bail!(
-                "policy bundle failed schema validation:\n{}",
-                errors.join("\n")
-            );
-        }
+        firma_core::validate_policies(&new_policy_set, &new_schema, Some(&policies))?;
 
+        let policies_src = policies.concat();
         let new_version = compute_version_hash(&policies_src, &schema_src);
 
         let new_bundle = {
@@ -257,12 +250,12 @@ impl Deref for CedarPolicyStoreWatcher {
 }
 
 /// Read all `.cedar` files from a directory and concatenate their contents.
-fn read_policies(policy_dir: &Path) -> Result<(String, PolicySet)> {
+fn read_policies(policy_dir: &Path) -> Result<(PolicyFiles, PolicySet)> {
     if !policy_dir.is_dir() {
         bail!("policy directory does not exist: {}", policy_dir.display());
     }
 
-    let mut policies = String::new();
+    let mut policies = PolicyFiles::default();
     let mut entries: Vec<_> = std::fs::read_dir(policy_dir)
         .with_context(|| format!("cannot read policy directory {}", policy_dir.display()))?
         .filter_map(Result::ok)
@@ -276,10 +269,8 @@ fn read_policies(policy_dir: &Path) -> Result<(String, PolicySet)> {
         if path.extension().is_some_and(|ext| ext == "cedar") {
             let content = std::fs::read_to_string(&path)
                 .with_context(|| format!("cannot read {}", path.display()))?;
-            if !policies.is_empty() {
-                policies.push('\n');
-            }
-            policies.push_str(&content);
+
+            policies.push(path, content);
         }
     }
 
@@ -287,6 +278,7 @@ fn read_policies(policy_dir: &Path) -> Result<(String, PolicySet)> {
         PolicySet::new()
     } else {
         policies
+            .concat()
             .parse::<PolicySet>()
             .map_err(anyhow::Error::from)
             .context("cedar policy parse error")?
@@ -361,11 +353,11 @@ mod tests {
 
     #[test]
     fn load_schema_invalid_policy_fails() {
-        // Parses fine, but `payment.payout` is not in the Firma schema, so strict
+        // Parses fine, but `foo.bar` is not in the Firma schema, so strict
         // validation rejects it. Authority load must fail closed.
         let dir = setup_policy_dir(&[(
             "bad.cedar",
-            "forbid(principal, action == Firma::Action::\"payment.payout\", resource);",
+            "forbid(principal, action == Firma::Action::\"foo.bar\", resource);",
         )]);
         let store = CedarPolicyStore::load(dir.path(), None, 30);
         assert!(store.is_err());
@@ -421,7 +413,7 @@ mod tests {
     #[tokio::test]
     async fn reload_schema_invalid_keeps_previous_bundle() {
         // Start from a valid bundle, then introduce a schema-invalid policy
-        // (`payment.payout` is not in the Firma schema). reload must fail closed
+        // (`foo.bar` is not in the Firma schema). reload must fail closed
         // and keep the previously loaded bundle.
         let dir = setup_policy_dir(&[("basic.cedar", "permit(principal, action, resource);")]);
         let store = CedarPolicyStore::load(dir.path(), None, 30).unwrap();
@@ -429,7 +421,7 @@ mod tests {
 
         fs::write(
             dir.path().join("bad.cedar"),
-            "forbid(principal, action == Firma::Action::\"payment.payout\", resource);",
+            "forbid(principal, action == Firma::Action::\"foo.bar\", resource);",
         )
         .unwrap();
 

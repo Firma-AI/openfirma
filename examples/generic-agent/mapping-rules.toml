@@ -30,11 +30,6 @@ action_class = "communication.external.send"
 
 [[rules]]
 method = "CONNECT"
-host = "api.github.com"
-action_class = "code.review.read"
-
-[[rules]]
-method = "CONNECT"
 host = "gmail.googleapis.com"
 action_class = "communication.external.send"
 
