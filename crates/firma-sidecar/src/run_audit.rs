@@ -295,4 +295,66 @@ mod tests {
         exit.cancel();
         let _ = handle.await;
     }
+
+    #[tokio::test]
+    async fn closed_audit_channel_drops_valid_message_without_panic() {
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        let line = serde_json::to_string(&loopback_msg("127.0.0.1", 9999))
+            .expect("serialize run-audit message");
+
+        ingest_line(&line, &tx).await;
+    }
+
+    #[tokio::test]
+    async fn blank_lines_are_ignored_before_valid_messages() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket = socket_path_in(dir.path());
+        let (tx, mut rx) = mpsc::channel(4);
+        let exit = CancellationToken::new();
+        let handle =
+            spawn_listener(socket.clone(), tx, exit.clone()).expect("listener should bind");
+
+        let mut client = UnixStream::connect(&socket).await.expect("connect");
+        let line = serde_json::to_string(&loopback_msg("127.0.0.1", 5432)).expect("serialize");
+        client.write_all(b"\n  \n").await.expect("write blanks");
+        client
+            .write_all(line.as_bytes())
+            .await
+            .expect("write event");
+        client.write_all(b"\n").await.expect("write newline");
+        client.flush().await.expect("flush");
+
+        let payload = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("payload within timeout")
+            .expect("payload present");
+        assert_eq!(payload.resource, "tcp://127.0.0.1:5432");
+        assert!(rx.try_recv().is_err(), "blank lines must not emit payloads");
+
+        exit.cancel();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn stale_socket_file_is_replaced_and_cleaned_up() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket = socket_path_in(dir.path());
+        let stale = UnixListener::bind(&socket).expect("bind stale socket");
+        drop(stale);
+        assert!(socket.exists(), "dropped Unix listener leaves stale path");
+
+        let (tx, _rx) = mpsc::channel(4);
+        let exit = CancellationToken::new();
+        let handle =
+            spawn_listener(socket.clone(), tx, exit.clone()).expect("listener should rebind");
+        assert!(socket.exists(), "listener should bind the requested socket");
+
+        exit.cancel();
+        let _ = handle.await;
+        assert!(
+            !socket.exists(),
+            "listener cleanup should remove the per-run socket path"
+        );
+    }
 }
