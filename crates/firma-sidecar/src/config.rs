@@ -25,7 +25,9 @@ pub use self::authority::AuthorityConfig;
 pub use self::capability_seed::{CapabilitySeedConfig, SeedFile};
 pub use self::connector::ConnectorConfig;
 
-pub use self::enforcement::{EnforcementConfig, MappingRuleConfig, MappingRulesFile};
+pub use self::enforcement::{
+    EnforcementConfig, MappingRuleConfig, MappingRulesFile, SessionStateBackend,
+};
 pub use self::revocation::RevocationConfig;
 pub use self::tenancy::{TenancyConfig, TenancyMode};
 pub use crate::authority_credentials::SidecarCredentialsConfig;
@@ -1562,6 +1564,28 @@ signing_key_path = "/etc/firma/audit.pem"
         assert_eq!(
             config.enforcement.constraint_enforcement.bundle_ttl_seconds,
             60
+        );
+        // New AARM R2 G4 session-state fields default when unset.
+        assert_eq!(
+            config
+                .enforcement
+                .constraint_enforcement
+                .session_state_capacity,
+            8192
+        );
+        assert_eq!(
+            config
+                .enforcement
+                .constraint_enforcement
+                .session_state_backend,
+            SessionStateBackend::Lru
+        );
+        assert!(
+            config
+                .enforcement
+                .constraint_enforcement
+                .session_state_path
+                .is_none()
         );
         assert_eq!(config.revocation.capacity, 500_000);
         assert!((config.revocation.fpr - 0.001).abs() < f64::EPSILON);

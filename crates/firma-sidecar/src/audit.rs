@@ -161,6 +161,13 @@ pub struct AuditPayload {
     /// Target response body size in bytes. Zero when the call never
     /// dispatched or the target returned no body.
     pub response_size: i64,
+    /// Tamper-evident provenance chain anchor (AARM R2 G2) for admitted
+    /// (Allow/Modify) actions; empty for pre-dispatch outcomes.
+    pub provenance: String,
+    /// Server-derived conversation thread identity (AARM R2 G2).
+    pub thread_id: String,
+    /// Server-derived parent action identity (AARM R2 G2).
+    pub parent_action_id: String,
 }
 
 /// Domain-level audit event produced by the enforcement pipeline.
@@ -208,6 +215,13 @@ pub struct ExecutionEvent {
     /// invocation. Matches the marker directory name written by the
     /// `SidecarSupervisor`. Empty when the sidecar is not autostarted.
     pub sandbox_id: String,
+    /// Tamper-evident provenance chain anchor (AARM R2 G2) for admitted
+    /// (Allow/Modify) actions. Empty for pre-dispatch outcomes.
+    pub provenance: String,
+    /// Server-derived conversation thread identity (AARM R2 G2).
+    pub thread_id: String,
+    /// Server-derived parent action identity (AARM R2 G2).
+    pub parent_action_id: String,
     /// ECDSA signature (DER-encoded) over all preceding fields.
     ///
     /// Serialized in JSON as a standard base64 string so it round-trips
@@ -280,6 +294,9 @@ impl From<ExecutionEvent> for firma_protobuf::v1::ExecutionEvent {
             dispatch_latency_us: value.dispatch_latency_us,
             response_size: value.response_size,
             sandbox_id: value.sandbox_id,
+            provenance: value.provenance,
+            thread_id: value.thread_id,
+            parent_action_id: value.parent_action_id,
         }
     }
 }
@@ -308,6 +325,9 @@ mod tests {
             dispatch_latency_us: 7,
             response_size: 1024,
             sandbox_id: "sbx_1".to_string(),
+            provenance: String::new(),
+            thread_id: String::new(),
+            parent_action_id: String::new(),
             signature,
         }
     }

@@ -44,6 +44,9 @@ A single line of the JSONL log decodes to something like:
   "dispatch_latency_us": 0,
   "response_size": 0,
   "sandbox_id": "",
+  "provenance": "a1b2c3...",
+  "thread_id": "d4e5f6...",
+  "parent_action_id": "7a8b9c...",
   "signature": "MEUCIQ=="
 }
 ```
@@ -56,6 +59,9 @@ Field-by-field:
 - **`decision`** — numeric outcome (`1` = ALLOW, `2` = DENY). For DENYs, `deny_reason` is a lowercase string (often `"{reason}: {detail}"`, e.g. `"policy denied: …"`). The troubleshooting headings below use PascalCase labels for readability.
 - **`dispatch_status`, `dispatch_latency_us`, `response_size`** — connector result fields. They are zero when the call never dispatched.
 - **`sandbox_id`** — set for `firma run` sidecars; empty for externally started Sidecars.
+- **`provenance`** — tamper-evident chain anchor (AARM R2 G2): `hex(SHA256(prev || context_hash || action || resource))`. Empty for pre-dispatch outcomes (Deny/StepUp/Defer/Abort).
+- **`thread_id`** — server-derived conversation thread identity (AARM R2 G2). Groups admitted actions within a session into a causal thread. Empty for pre-dispatch outcomes.
+- **`parent_action_id`** — provenance anchor of the prior admitted action in this thread (AARM R2 G2). Empty for the first admitted action or pre-dispatch outcomes.
 - **`signature`** — DER-encoded ECDSA P-256 signature, serialized as a standard (padded) base64 string. The compact opaque value round-trips through structured JSON log pipelines (such as Cloud Logging) without byte loss, so `sink = "stdout"` is reliable for production on Cloud Run.
 
 ## Tail the log
@@ -126,6 +132,7 @@ with open("/tmp/firma-standalone/logs/audit.jsonl") as f:
             "resource", "decision", "deny_reason", "enforcement_latency_us",
             "context_hash", "bundle_version", "timestamp", "dispatch_status",
             "dispatch_latency_us", "response_size", "sandbox_id",
+            "provenance", "thread_id", "parent_action_id",
         ]
         def field_value(field):
             if field == "timestamp":

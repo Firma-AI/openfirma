@@ -100,6 +100,12 @@ message ExecutionMetadata {
   // this is a numeric value injected by the agent runtime (or defaulting to 0)
   // and checked against a configured threshold in Cedar.
   optional double risk_score = 6;
+  // Server-derived conversation thread identity (AARM R2 G2). Groups
+  // admitted actions within a session into a causal thread.
+  optional string thread_id = 7;
+  // Server-derived parent action identity (AARM R2 G2). The provenance
+  // anchor of the prior admitted action in this thread.
+  optional string parent_action_id = 8;
 }
 
 // ExecutionEnvelope is the core protocol unit of the Firma system.

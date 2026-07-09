@@ -170,14 +170,23 @@ ExecutionEnvelope::new(
     normalized.intent,
     capability.raw_token,
     ExecutionMetadata {
-        session_id: session_id.to_string(),
+        // session_id is sourced from the VERIFIED token claims, not the
+        // caller-supplied header, to prevent session spoofing.
+        session_id: capability.claims.session_id.clone(),
         agent_id: capability.claims.agent_id.clone(),
         timestamp: normalized.timestamp,
         trace_id: None,
-        budget_consumed: 0.0,
-        risk_score: None,
+        budget_consumed: signals.budget_consumed,
+        risk_score: if signals.risk_score == 0.0 {
+            None
+        } else {
+            Some(signals.risk_score)
+        },
+        // AARM R2 G2: server-derived causal context
+        thread_id: Some(derive_thread_id(&session_id)),
+        parent_action_id: signals.last_provenance.clone(),
     },
-    None,
+    provenance, // AARM R2 G2: hash-chain anchor
 )
 ```
 
@@ -186,23 +195,61 @@ private and exposed through shared-reference getters.
 
 ## Decision Type
 
+The pipeline produces exactly one `EnforcementDecision` per evaluated request.
+The AARM R4 five-decision set (`ALLOW`, `DENY`, `MODIFY`, `STEP_UP`, `DEFER`)
+is required for conformance; `ABORT` is a post-ALLOW local-failure variant and
+`PASSTHROUGH` covers non-protected traffic (serialized on the wire as `ALLOW`
+with an empty `token_id`). See `crates/firma-sidecar/src/enforcement/decision.rs`
+and `crates/firma-protobuf/proto/firma/v1/types.proto` (`EnforcementDecision`).
+
 ```rust
 pub enum EnforcementDecision {
     Allow {
         claims: CapabilityClaims,
         envelope: Box<ExecutionEnvelope>,
+        credentials: InjectedCredentials,
     },
     Deny {
         reason: DenyReason,
         stage: EnforcementStage,
         detail: String,
         envelope: Option<NormalizedEnvelope>,
+        identity: Option<DenyIdentity>,
+    },
+    Abort {
+        reason: AbortReason,
+        detail: String,
+        identity: Option<DenyIdentity>,
     },
     Passthrough {
         detail: String,
     },
+    Modify {
+        claims: CapabilityClaims,
+        envelope: Box<ExecutionEnvelope>,
+        modifications: ModificationSpec,
+        credentials: InjectedCredentials,
+    },
+    StepUp {
+        claims: Option<CapabilityClaims>,
+        envelope: Option<NormalizedEnvelope>,
+        challenge: String,
+        retry_after_ms: u64,
+        identity: Option<DenyIdentity>,
+    },
+    Defer {
+        claims: Option<CapabilityClaims>,
+        envelope: Option<NormalizedEnvelope>,
+        retry_after_ms: u64,
+        identity: Option<DenyIdentity>,
+    },
 }
 ```
+
+`MODIFY`, `STEP_UP`, and `DEFER` are sourced from `@modify("…")`, `@step_up("…")`,
+and `@defer("…")` Cedar policy annotations on `forbid` policies; the engine
+lifts them into `PolicyVerdict` (`constraint_enforcement.rs`) and the pipeline
+projects them onto these `EnforcementDecision` variants.
 
 ## Data Flow Summary
 

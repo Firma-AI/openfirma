@@ -39,7 +39,7 @@ use firma_core::token::matches_resource_scope;
 use firma_core::{AgentId, CapabilityClaims, DenyReason, ModificationSpec, StepUpSpec};
 
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
-use crate::enforcement::session_state::RuntimeSignals;
+use crate::enforcement::session::RuntimeSignals;
 use crate::normalizer::NormalizedEnvelope;
 
 /// The verdict a policy engine returns for one evaluated action.
@@ -479,6 +479,28 @@ impl ConstraintEnforcer {
         // Payment-context fields are declared in the canonical schema but
         // sourced by future tasks. V1 supplies fixed placeholders so the
         // schema-strict `Context::from_json_value` accepts the record.
+        //
+        // Prior-action context (AARM R2 G3): surface the bounded session
+        // history so policies can reason about what the agent has already
+        // attempted. `prior_action_classes` preserves first-seen order and
+        // deduplicates within the bounded window; `last_resource` is empty
+        // when no prior action has been recorded.
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let prior_action_classes: Vec<String> = signals
+            .history
+            .iter()
+            .filter_map(|o| {
+                if seen.insert(o.action_class.as_str()) {
+                    Some(o.action_class.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let last_resource = signals
+            .history
+            .last()
+            .map_or_else(String::new, |o| o.resource.clone());
         Ok(serde_json::json!({
             "session_id": claims.session_id,
             "timestamp_ms": timestamp_ms,
@@ -493,6 +515,9 @@ impl ConstraintEnforcer {
             "transfers_last_10m": 0i64,
             "same_payee_count_30m": 0i64,
             "session_transfer_count": 0i64,
+            "deny_count": i64::try_from(signals.deny_count).unwrap_or(i64::MAX),
+            "prior_action_classes": prior_action_classes,
+            "last_resource": last_resource,
         }))
     }
 }
@@ -500,7 +525,7 @@ impl ConstraintEnforcer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::enforcement::session_state::RuntimeSignals;
+    use crate::enforcement::session::{ActionOutcome, Outcome, RuntimeSignals};
     use chrono::Utc;
     use firma_core::*;
     use std::collections::HashMap;
@@ -672,6 +697,7 @@ mod tests {
             action_count: 1,
             budget_consumed: 0.0,
             risk_score: 0.0,
+            ..RuntimeSignals::default()
         }
     }
 
@@ -785,22 +811,26 @@ mod tests {
             action_count: 7,
             budget_consumed: 12.75,
             risk_score: 3.0,
+            ..RuntimeSignals::default()
         };
 
         let context = evaluator
             .build_context(&envelope, &claims, &signals)
             .expect("build_context must succeed for valid envelopes");
 
-        // The canonical schema declares 13 EnforcementContext fields (7
-        // commonly-tuned + 6 payment/transport placeholders); the 7
-        // commonly-tuned ones are asserted here:
+        // The canonical schema declares the `EnforcementContext` fields;
+        // the commonly-tuned and prior-action ones are asserted here:
         assert_eq!(context["session_id"], "sess_001");
         assert!(context["timestamp_ms"].is_i64());
         assert!(context["params"].is_string());
-        assert_eq!(context["risk_score"], serde_json::json!(3));
-        assert_eq!(context["budget_remaining"], serde_json::json!(87));
-        assert_eq!(context["session_duration_s"], serde_json::json!(42));
-        assert_eq!(context["action_count"], serde_json::json!(7));
+        assert_eq!(context["risk_score"], 3);
+        assert_eq!(context["budget_remaining"], 87);
+        assert_eq!(context["session_duration_s"], 42);
+        assert_eq!(context["action_count"], 7);
+        // Prior-action context (AARM R2 G3) — fresh session defaults.
+        assert_eq!(context["deny_count"], 0);
+        assert_eq!(context["prior_action_classes"], serde_json::json!([]));
+        assert_eq!(context["last_resource"], "");
 
         // Schema does not declare action_class / resource / agent_id /
         // timestamp — they are passed as Cedar principal/action/resource
@@ -820,11 +850,52 @@ mod tests {
             action_count: 1,
             budget_consumed: 0.0,
             risk_score: 0.0,
+            ..RuntimeSignals::default()
         };
         let context = evaluator
             .build_context(&envelope, &claims, &signals)
             .expect("build_context must succeed for valid envelopes");
         assert_eq!(context["budget_remaining"], serde_json::json!(i64::MAX));
+    }
+
+    #[test]
+    fn test_build_context_surfaces_prior_action_history() {
+        // AARM R2 G3: the Cedar context must surface prior action classes,
+        // deny count, and the most recent resource so policies can reason
+        // about what the session has already attempted.
+        let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
+        let envelope = test_envelope("filesystem.delete");
+        let claims = test_claims(vec!["filesystem.delete"]);
+        let signals = RuntimeSignals {
+            action_count: 4,
+            budget_consumed: 0.0,
+            risk_score: 0.0,
+            deny_count: 2,
+            history: vec![
+                ActionOutcome {
+                    action_class: "communication.external.send".to_string(),
+                    resource: "api.example.com/v1".to_string(),
+                    outcome: Outcome::Allow,
+                },
+                ActionOutcome {
+                    action_class: "payment.transfer".to_string(),
+                    resource: "api.pay.com/x".to_string(),
+                    outcome: Outcome::Deny,
+                },
+            ],
+            ..RuntimeSignals::default()
+        };
+        let context = evaluator
+            .build_context(&envelope, &claims, &signals)
+            .expect("build_context must succeed for valid envelopes");
+        assert_eq!(context["deny_count"], serde_json::json!(2));
+        // Deduped, first-seen order:
+        assert_eq!(
+            context["prior_action_classes"],
+            serde_json::json!(["communication.external.send", "payment.transfer"])
+        );
+        // Most recent prior action's resource:
+        assert_eq!(context["last_resource"], serde_json::json!("api.pay.com/x"));
     }
 
     #[test]
@@ -838,6 +909,7 @@ mod tests {
             action_count: 1,
             budget_consumed: 0.0,
             risk_score: 0.0,
+            ..RuntimeSignals::default()
         };
         let context = evaluator
             .build_context(&envelope, &claims, &signals)

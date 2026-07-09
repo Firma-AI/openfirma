@@ -53,6 +53,15 @@ clock_skew_tolerance_seconds = 0
 [sidecar.constraint_enforcement]
 bundle_ttl_seconds = 30
 enforcement_timeout_ms = 50
+# Session-state cache capacity (AARM R2 G4). Raise to reduce LRU eviction
+# of long-lived sessions. Default: 8192.
+# session_state_capacity = 8192
+# "lru" (default) keeps state in memory only; "persistent" mirrors to a
+# local JSONL file so state survives eviction and process restart.
+# session_state_backend = "lru"
+# Optional explicit path for the persistent log (defaults to
+# <runtime_dir>/session-state.jsonl when backend = "persistent").
+# session_state_path = "/var/lib/firma/session-state.jsonl"
 
 [sidecar.connector]
 default_timeout_ms = 120000

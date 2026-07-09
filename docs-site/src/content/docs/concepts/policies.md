@@ -49,16 +49,21 @@ The schema is shared between Authority and Sidecar — `examples/demo/policies/s
 
 When Stage 2 evaluates a runtime policy, it builds a Cedar context with exactly these fields (see `crates/firma-sidecar/src/enforcement/constraint_enforcement.rs` and `schema.cedarschema`):
 
-| Field                | Type   | Meaning                                                |
-| -------------------- | ------ | ------------------------------------------------------ |
-| `session_id`         | String | Session this call belongs to                           |
-| `timestamp_ms`       | Long   | Wall clock at evaluation, Unix epoch milliseconds      |
-| `params`             | String | JSON-serialized `intent.params` (the request body)     |
-| `risk_score`         | Long   | Static or pre-computed; V1 always emits `0`            |
-| `budget_remaining`   | Long   | Remaining budget from the capability ceiling           |
-| `session_duration_s` | Long   | Seconds since `claims.issued_at`                       |
-| `action_count`       | Long   | Monotonic per-session counter, 1-based                 |
-| `raw_transport`      | String | `"http"` or `"https"`                                  |
+| Field                  | Type        | Meaning                                                          |
+| ---------------------- | ----------- | ---------------------------------------------------------------- |
+| `session_id`           | String      | Session this call belongs to                                      |
+| `timestamp_ms`         | Long        | Wall clock at evaluation, Unix epoch milliseconds                 |
+| `params`               | String      | JSON-serialized `intent.params` (the request body)               |
+| `risk_score`           | Long        | Static or pre-computed; V1 always emits `0`                      |
+| `budget_remaining`     | Long        | Remaining budget from the capability ceiling                      |
+| `session_duration_s`   | Long        | Seconds since `claims.issued_at`                                 |
+| `action_count`         | Long        | Monotonic per-session counter, 1-based                          |
+| `raw_transport`        | String      | `"http"` or `"https"`                                            |
+| `deny_count`           | Long        | Cumulative denied actions in this session (AARM R2)             |
+| `prior_action_classes` | Set<String> | Bounded recent action classes, deduped, first-seen order (AARM R2) |
+| `last_resource`        | String      | Resource of the most recent prior action (`""` if none) (AARM R2) |
+
+`action_count`, `deny_count`, `prior_action_classes`, and `last_resource` are the per-session prior-action context: the policy layer sees what the agent has already attempted in the same session, including denied calls, so it can detect repetition, escalation after denials, or action sequences. The history is bounded (a small ring buffer) so the hot path stays deterministic and memory growth is capped.
 
 These are the only signals available to a runtime policy. There is intentionally no live agent telemetry, no upstream response data, no LLM signal. That keeps Stage 2 deterministic and under its 200 µs budget.
 

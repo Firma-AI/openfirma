@@ -322,6 +322,37 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// Build a valid `EnforcementContext` JSON matching the canonical schema.
+    /// Centralized so all context-validation tests share one source of truth
+    /// and stay in sync when fields are added.
+    #[must_use]
+    fn valid_context_json(
+        session_id: &str,
+        timestamp_ms: i64,
+        budget_remaining: i64,
+        session_duration_s: i64,
+        action_count: i64,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "session_id": session_id,
+            "timestamp_ms": timestamp_ms,
+            "params": "{}",
+            "risk_score": 0i64,
+            "budget_remaining": budget_remaining,
+            "session_duration_s": session_duration_s,
+            "action_count": action_count,
+            "raw_transport": "https",
+            "deny_count": 0i64,
+            "prior_action_classes": [],
+            "last_resource": "",
+            "transfer_amount": 0i64,
+            "daily_cumulative_amount": 0i64,
+            "transfers_last_10m": 0i64,
+            "same_payee_count_30m": 0i64,
+            "session_transfer_count": 0i64,
+        })
+    }
+
     fn setup_policy_dir(policies: &[(&str, &str)]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("create the temp dir failed");
         for (name, content) in policies {
@@ -554,21 +585,7 @@ mod tests {
         let action_uid: EntityUid = "Firma::Action::\"communication.external.send\""
             .parse()
             .unwrap_or_else(|e| panic!("action parse: {e}"));
-        let context_json = serde_json::json!({
-            "session_id": "sess_test",
-            "timestamp_ms": 0i64,
-            "params": "{}",
-            "risk_score": 0i64,
-            "budget_remaining": 1000i64,
-            "session_duration_s": 42i64,
-            "action_count": 3i64,
-            "raw_transport": "https",
-            "transfer_amount": 0i64,
-            "daily_cumulative_amount": 0i64,
-            "transfers_last_10m": 0i64,
-            "same_payee_count_30m": 0i64,
-            "session_transfer_count": 0i64,
-        });
+        let context_json = valid_context_json("sess_test", 0, 1000, 42, 3);
         Context::from_json_value(context_json, Some((&schema, &action_uid)))
             .unwrap_or_else(|e| panic!("context validation failed: {e}"));
     }
@@ -603,21 +620,7 @@ mod tests {
         let policy_set = "permit(principal, action, resource);"
             .parse::<PolicySet>()
             .unwrap_or_else(|e| panic!("policy parse failed: {e}"));
-        let context_json = serde_json::json!({
-            "session_id": "sess_test",
-            "timestamp_ms": 0i64,
-            "params": "{}",
-            "risk_score": 0i64,
-            "budget_remaining": i64::MAX,
-            "session_duration_s": 0i64,
-            "action_count": 0i64,
-            "raw_transport": "https",
-            "transfer_amount": 0i64,
-            "daily_cumulative_amount": 0i64,
-            "transfers_last_10m": 0i64,
-            "same_payee_count_30m": 0i64,
-            "session_transfer_count": 0i64,
-        });
+        let context_json = valid_context_json("sess_test", 0, i64::MAX, 0, 0);
 
         for action in ACTIONS {
             let principal: EntityUid = "Firma::Agent::\"agent_test\""

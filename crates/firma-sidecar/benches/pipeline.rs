@@ -16,7 +16,7 @@ use firma_sidecar::enforcement::capability_validation::CapabilityValidator;
 use firma_sidecar::enforcement::cedar_evaluator::CedarPolicyEvaluator;
 use firma_sidecar::enforcement::constraint_enforcement::ConstraintEnforcer;
 use firma_sidecar::enforcement::registry::ActionClassRegistry;
-use firma_sidecar::enforcement::session_state::LruSessionStateStore;
+use firma_sidecar::enforcement::session::LruSessionStateStore;
 use firma_sidecar::normalizer::{IntentNormalizer, MappingTable, RawRequest};
 use firma_sidecar::pipeline::{EnforcementPipeline, PipelineArgs};
 use tokio::runtime::Runtime;

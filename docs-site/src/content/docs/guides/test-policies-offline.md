@@ -139,7 +139,7 @@ error: decision mismatch: expected DENY, got ALLOW
 ## Context defaults and overrides
 
 This is the most important behavior to understand. The canonical schema
-declares **13 required `EnforcementContext` attributes**. You almost never set
+declares **16 required `EnforcementContext` attributes**. You almost never set
 all of them — `firma policy test` supplies every one by default, mirroring the
 Sidecar's `build_context` on the hot path, so a fixture verdict equals the
 enforcement verdict for an equivalent plain request.

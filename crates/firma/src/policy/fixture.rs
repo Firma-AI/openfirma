@@ -14,7 +14,7 @@
 //! attributes, keeping fixture evaluation identical to the hot path.
 //!
 //! The defaults built by [`default_context`] mirror the Sidecar hot path
-//! (`ConstraintEnforcer::build_context`) exactly: all thirteen required
+//! (`ConstraintEnforcer::build_context`) exactly: all sixteen required
 //! `EnforcementContext` attributes are supplied, so a `firma policy test`
 //! verdict equals the enforcement verdict for the equivalent plain request.
 //! The six payment fields plus `raw_transport` default to the same fixed
@@ -157,7 +157,7 @@ impl Fixture {
 
 /// Build the canonical default Cedar context object.
 ///
-/// The canonical Firma schema declares **thirteen required**
+/// The canonical Firma schema declares **sixteen required**
 /// `EnforcementContext` attributes. This default mirrors the Sidecar hot path
 /// (`ConstraintEnforcer::build_context` in
 /// `firma-sidecar/src/enforcement/constraint_enforcement.rs`, ~L375-389) so a
@@ -211,6 +211,16 @@ pub fn default_context() -> serde_json::Map<String, serde_json::Value> {
         "session_transfer_count".into(),
         serde_json::Value::from(0_i64),
     );
+    // Three prior-action context fields (AARM R2 G3): mirror the sidecar
+    // hot path which surfaces the bounded session history. Defaults reflect
+    // a fresh session: no prior denials, no prior action classes, no last
+    // resource.
+    ctx.insert("deny_count".into(), serde_json::Value::from(0_i64));
+    ctx.insert(
+        "prior_action_classes".into(),
+        serde_json::Value::Array(Vec::new()),
+    );
+    ctx.insert("last_resource".into(), serde_json::Value::from(""));
     ctx
 }
 
@@ -373,7 +383,7 @@ path = "p/"
             obj.get("action_count"),
             Some(&serde_json::Value::from(1_i64))
         );
-        // All thirteen schema-required attributes present, mirroring the
+        // All sixteen schema-required attributes present, mirroring the
         // sidecar `build_context` defaults.
         assert_eq!(
             obj.get("raw_transport"),
@@ -399,11 +409,11 @@ path = "p/"
             obj.get("session_transfer_count"),
             Some(&serde_json::Value::from(0_i64))
         );
-        assert_eq!(obj.len(), 13);
+        assert_eq!(obj.len(), 16);
     }
 
     #[test]
-    fn default_context_has_thirteen_required_attributes() {
+    fn default_context_has_sixteen_required_attributes() {
         let ctx = default_context();
         for key in [
             "session_id",
@@ -414,6 +424,9 @@ path = "p/"
             "session_duration_s",
             "action_count",
             "raw_transport",
+            "deny_count",
+            "prior_action_classes",
+            "last_resource",
             "transfer_amount",
             "daily_cumulative_amount",
             "transfers_last_10m",
@@ -422,7 +435,7 @@ path = "p/"
         ] {
             assert!(ctx.contains_key(key), "missing required attribute {key}");
         }
-        assert_eq!(ctx.len(), 13);
+        assert_eq!(ctx.len(), 16);
     }
 
     #[test]
@@ -443,12 +456,12 @@ path = "p/"
         over.insert("transfer_amount".to_string(), toml::Value::Integer(500));
         let ctx = merged_context(&over);
         let obj = ctx.as_object().unwrap();
-        // A mirrored payment default is overridable; count stays at 13.
+        // A mirrored payment default is overridable; count stays at 16.
         assert_eq!(
             obj.get("transfer_amount"),
             Some(&serde_json::Value::from(500_i64))
         );
-        assert_eq!(obj.len(), 13);
+        assert_eq!(obj.len(), 16);
     }
 
     #[test]
@@ -463,6 +476,6 @@ path = "p/"
             obj.get("not_in_schema"),
             Some(&serde_json::Value::from(7_i64))
         );
-        assert_eq!(obj.len(), 14);
+        assert_eq!(obj.len(), 17);
     }
 }

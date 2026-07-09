@@ -580,6 +580,8 @@ mod tests {
                 trace_id: None,
                 budget_consumed: 0.0,
                 risk_score: None,
+                thread_id: None,
+                parent_action_id: None,
             },
             None,
         );
@@ -628,6 +630,8 @@ mod tests {
                 trace_id: None,
                 budget_consumed: 0.0,
                 risk_score: None,
+                thread_id: None,
+                parent_action_id: None,
             },
             None,
         );
