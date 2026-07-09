@@ -1,13 +1,8 @@
 use std::fmt;
-use std::fs::{File, OpenOptions};
-use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::{IntoRawFd, OwnedFd};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::mpsc;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use block2::RcBlock;
@@ -18,20 +13,21 @@ use objc2_foundation::{
     NSString, NSUInteger, NSURL,
 };
 use objc2_virtualization::{
-    VZDiskImageCachingMode, VZDiskImageStorageDeviceAttachment, VZDiskImageSynchronizationMode,
-    VZEntropyDeviceConfiguration, VZFileHandleSerialPortAttachment, VZGenericPlatformConfiguration,
-    VZLinuxBootLoader, VZMultipleDirectoryShare, VZSerialPortConfiguration, VZSharedDirectory,
-    VZStorageDeviceConfiguration, VZVirtioBlockDeviceConfiguration,
-    VZVirtioConsoleDeviceSerialPortConfiguration, VZVirtioEntropyDeviceConfiguration,
+    VZConsoleDeviceConfiguration, VZDiskImageCachingMode, VZDiskImageStorageDeviceAttachment,
+    VZDiskImageSynchronizationMode, VZEntropyDeviceConfiguration, VZFileHandleSerialPortAttachment,
+    VZGenericMachineIdentifier, VZGenericPlatformConfiguration, VZLinuxBootLoader,
+    VZMultipleDirectoryShare, VZSharedDirectory, VZStorageDeviceConfiguration,
+    VZVirtioBlockDeviceConfiguration, VZVirtioConsoleDeviceConfiguration,
+    VZVirtioConsolePortConfiguration, VZVirtioEntropyDeviceConfiguration,
     VZVirtioFileSystemDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
     VZVirtualMachineState,
 };
 
-use super::{RunnerError, RunnerResult};
-use crate::guest::{
-    GUEST_HEARTBEAT_FILE, GUEST_RESULT_FILE, GUEST_STDERR_FILE, GUEST_STDIN_FILE,
-    GUEST_STDOUT_FILE, GuestResult,
+use super::console::{
+    capture_piped_stdin, create_pipe, create_serial_log, read_guest_exit_code, replay_guest_stdio,
+    spawn_stdio_forwarders,
 };
+use super::{RunnerError, RunnerResult};
 use crate::vm::{FIRMA_VIRTIOFS_TAG, VmPlan};
 
 const START_TIMEOUT_SECS: u64 = 60;
@@ -169,11 +165,14 @@ pub fn run(plan: &VmPlan) -> RunnerResult<ExitCode> {
     let (vm_reads_from, host_writes_to_vm) = create_pipe()?;
     let (host_reads_from_vm, vm_writes_to) = create_pipe()?;
     let serial_log = create_serial_log(plan)?;
-    spawn_stdio_forwarders(host_reads_from_vm, host_writes_to_vm, serial_log);
+    let stdio_forwarders =
+        spawn_stdio_forwarders(host_reads_from_vm, host_writes_to_vm, serial_log);
 
     let interrupt_rx = install_interrupt_handler()?;
     let vz = Vz::from_plan(plan, vm_reads_from, vm_writes_to)?;
     run_virtual_machine(&vz, &interrupt_rx)?;
+    drop(vz);
+    stdio_forwarders.wait_for_serial_drain();
     replay_guest_stdio(plan)?;
 
     read_guest_exit_code(plan)
@@ -210,6 +209,9 @@ fn create_vm_configuration(
 
         let config = VZVirtualMachineConfiguration::new();
         let platform = VZGenericPlatformConfiguration::new();
+        let machine_identifier =
+            VZGenericMachineIdentifier::init(VZGenericMachineIdentifier::alloc());
+        platform.setMachineIdentifier(&machine_identifier);
         config.setPlatform(&platform);
 
         let boot_loader = create_linux_boot_loader(plan)?;
@@ -220,7 +222,7 @@ fn create_vm_configuration(
         configure_entropy(&config);
         configure_rootfs_storage(&config, &plan.rootfs)?;
         configure_directory_shares(&config, plan)?;
-        configure_serial_stdio(&config, vm_reads_from, vm_writes_to);
+        configure_console_stdio(&config, vm_reads_from, vm_writes_to);
 
         config
             .validateWithError()
@@ -371,8 +373,8 @@ fn configure_directory_shares(
     Ok(())
 }
 
-/// Connects the VZ serial device to host-owned file descriptors.
-fn configure_serial_stdio(
+/// Connects the VZ virtio console device to host-owned file descriptors.
+fn configure_console_stdio(
     config: &VZVirtualMachineConfiguration,
     vm_reads_from: OwnedFd,
     vm_writes_to: OwnedFd,
@@ -399,16 +401,26 @@ fn configure_serial_stdio(
         )
     };
 
-    let serial_port = unsafe { VZVirtioConsoleDeviceSerialPortConfiguration::new() };
+    let console_port = unsafe { VZVirtioConsolePortConfiguration::new() };
     unsafe {
-        serial_port.setAttachment(Some(&serial_attachment));
+        console_port.setAttachment(Some(&serial_attachment));
+        console_port.setName(Some(&NSString::from_str("openfirma-console")));
+        console_port.setIsConsole(true);
     }
 
-    let serial_ports: Retained<NSArray<VZSerialPortConfiguration>> =
-        NSArray::from_retained_slice(&[Retained::into_super(serial_port)]);
+    let console_device = unsafe { VZVirtioConsoleDeviceConfiguration::new() };
 
     unsafe {
-        config.setSerialPorts(&serial_ports);
+        let ports = console_device.ports();
+        ports.setMaximumPortCount(1);
+        ports.setObject_atIndexedSubscript(Some(&console_port), 0);
+    }
+
+    let console_devices: Retained<NSArray<VZConsoleDeviceConfiguration>> =
+        NSArray::from_retained_slice(&[Retained::into_super(console_device)]);
+
+    unsafe {
+        config.setConsoleDevices(&console_devices);
     }
 }
 
@@ -570,219 +582,6 @@ fn wait_for_operation(
     })
 }
 
-/// Starts host threads that bridge stdin/stdout and serial diagnostics.
-fn spawn_stdio_forwarders(
-    host_reads_from_vm: OwnedFd,
-    host_writes_to_vm: OwnedFd,
-    serial_log: File,
-) {
-    thread::spawn(move || {
-        let mut stdin = io::stdin().lock();
-        let mut writer = File::from(host_writes_to_vm);
-        if let Err(error) = io::copy(&mut stdin, &mut writer) {
-            eprintln!("firma-vz-runner: stdin forwarding failed: {error}");
-        }
-    });
-
-    thread::spawn(move || {
-        let mut reader = File::from(host_reads_from_vm);
-        let mut stdout = io::stdout().lock();
-        let mut serial_log = serial_log;
-        let mut buffer = [0_u8; 8192];
-
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(read) => {
-                    if let Err(error) = stdout.write_all(&buffer[..read]) {
-                        eprintln!("firma-vz-runner: stdout forwarding failed: {error}");
-                        break;
-                    }
-                    if let Err(error) = serial_log.write_all(&buffer[..read]) {
-                        eprintln!("firma-vz-runner: serial log write failed: {error}");
-                        break;
-                    }
-                }
-                Err(error) => {
-                    eprintln!("firma-vz-runner: serial forwarding failed: {error}");
-                    break;
-                }
-            }
-        }
-
-        let _ = stdout.flush();
-        let _ = serial_log.flush();
-    });
-}
-
-/// Creates the paired descriptors used for serial data flow.
-fn create_pipe() -> RunnerResult<(OwnedFd, OwnedFd)> {
-    let (read_stream, write_stream) =
-        UnixStream::pair().map_err(|source| RunnerError::HostOperation {
-            action: "create VM stdio socket pair",
-            source,
-        })?;
-
-    Ok((read_stream.into(), write_stream.into()))
-}
-
-/// Creates the private serial log file under the runtime directory.
-fn create_serial_log(plan: &VmPlan) -> RunnerResult<File> {
-    let log_path = plan.runtime_dir.join("vz-guest").join("serial.log");
-    if let Some(parent) = log_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| RunnerError::HostIo {
-            action: "create serial log directory",
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
-
-    let log = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&log_path)
-        .map_err(|source| RunnerError::HostIo {
-            action: "create serial log",
-            path: log_path.clone(),
-            source,
-        })?;
-    let mut permissions = log
-        .metadata()
-        .map_err(|source| RunnerError::HostIo {
-            action: "stat serial log",
-            path: log_path.clone(),
-            source,
-        })?
-        .permissions();
-    permissions.set_mode(0o600);
-    log.set_permissions(permissions)
-        .map_err(|source| RunnerError::HostIo {
-            action: "set serial log permissions",
-            path: log_path.clone(),
-            source,
-        })?;
-
-    eprintln!("firma-vz-runner: serial log {}", log_path.display());
-
-    Ok(log)
-}
-
-/// Captures piped host stdin into the runtime file consumed by guest init.
-fn capture_piped_stdin(plan: &VmPlan) -> RunnerResult<()> {
-    if io::stdin().is_terminal() {
-        return Ok(());
-    }
-
-    let mut input = Vec::new();
-    io::stdin()
-        .lock()
-        .read_to_end(&mut input)
-        .map_err(|source| RunnerError::HostOperation {
-            action: "read piped stdin for VZ guest command",
-            source,
-        })?;
-    if input.is_empty() {
-        return Ok(());
-    }
-
-    let stdin_path = guest_file_path(plan, GUEST_STDIN_FILE);
-    std::fs::write(&stdin_path, input).map_err(|source| RunnerError::HostIo {
-        action: "write guest stdin",
-        path: stdin_path.clone(),
-        source,
-    })?;
-
-    let mut permissions = std::fs::metadata(&stdin_path)
-        .map_err(|source| RunnerError::HostIo {
-            action: "stat guest stdin",
-            path: stdin_path.clone(),
-            source,
-        })?
-        .permissions();
-    permissions.set_mode(0o600);
-
-    std::fs::set_permissions(&stdin_path, permissions).map_err(|source| RunnerError::HostIo {
-        action: "set guest stdin permissions",
-        path: stdin_path.clone(),
-        source,
-    })?;
-
-    eprintln!(
-        "firma-vz-runner: captured piped stdin {}",
-        stdin_path.display()
-    );
-
-    Ok(())
-}
-
-/// Replays guest command stdout and stderr files to the host streams.
-fn replay_guest_stdio(plan: &VmPlan) -> RunnerResult<()> {
-    replay_guest_stream(plan, GUEST_STDOUT_FILE, io::stdout().lock())?;
-    replay_guest_stream(plan, GUEST_STDERR_FILE, io::stderr().lock())?;
-    Ok(())
-}
-
-/// Replays one guest stream file if it exists.
-fn replay_guest_stream(plan: &VmPlan, file_name: &str, mut output: impl Write) -> RunnerResult<()> {
-    let path = guest_file_path(plan, file_name);
-    match File::open(&path) {
-        Ok(mut file) => {
-            io::copy(&mut file, &mut output).map_err(|source| RunnerError::HostIo {
-                action: "replay guest stream",
-                path: path.clone(),
-                source,
-            })?;
-            output.flush().map_err(|source| RunnerError::HostIo {
-                action: "flush replayed guest stream",
-                path: path.clone(),
-                source,
-            })?;
-            Ok(())
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(RunnerError::HostIo {
-            action: "open guest stream",
-            path,
-            source,
-        }),
-    }
-}
-
-/// Builds the host path for one guest-produced runtime file.
-fn guest_file_path(plan: &VmPlan, file_name: &str) -> std::path::PathBuf {
-    plan.runtime_dir.join("vz-guest").join(file_name)
-}
-
-/// Reads the guest result file and converts it into the runner exit code.
-fn read_guest_exit_code(plan: &VmPlan) -> RunnerResult<ExitCode> {
-    let guest_dir = plan.runtime_dir.join("vz-guest");
-    let result_path = guest_dir.join(GUEST_RESULT_FILE);
-    let result = GuestResult::read(&result_path)
-        .inspect_err(|_| {
-            let heartbeat_path = guest_dir.join(GUEST_HEARTBEAT_FILE);
-            if let Ok(heartbeat) = std::fs::read_to_string(&heartbeat_path) {
-                eprintln!(
-                    "firma-vz-runner: latest guest heartbeat {}:\n{}",
-                    heartbeat_path.display(),
-                    heartbeat.trim()
-                );
-            }
-        })
-        .map_err(|error| RunnerError::OperationFailed {
-            operation: "read guest result",
-            reason: format!("{error:#}"),
-        })?;
-    let exit_code = result
-        .to_exit_code()
-        .map_err(|error| RunnerError::OperationFailed {
-            operation: "decode guest result",
-            reason: format!("{error:#}"),
-        })?;
-    eprintln!("firma-vz-runner: guest result {}", result_path.display());
-    Ok(exit_code)
-}
-
 /// Installs the host Ctrl-C handler used to interrupt the running VM.
 fn install_interrupt_handler() -> RunnerResult<mpsc::Receiver<()>> {
     let (tx, rx) = mpsc::channel();
@@ -938,46 +737,8 @@ mod tests {
 
         assert_eq!(unsafe { vz.config.storageDevices().count() }, 1);
         assert_eq!(unsafe { vz.config.directorySharingDevices().count() }, 1);
-        assert_eq!(unsafe { vz.config.serialPorts().count() }, 1);
+        assert_eq!(unsafe { vz.config.consoleDevices().count() }, 1);
 
-        Ok(())
-    }
-
-    #[test]
-    fn guest_result_file_drives_runner_exit_code() -> Result<()> {
-        let (_temp, plan) = vm_plan_fixture(VZ_TEST_ROOTFS_SIZE_BYTES)?;
-        let result_path = guest_file_path(&plan, GUEST_RESULT_FILE);
-        std::fs::write(
-            &result_path,
-            r#"{"version":1,"status":"exited","exit_code":42,"signal":null,"error":null}"#,
-        )?;
-
-        let exit_code = read_guest_exit_code(&plan)?;
-
-        assert_eq!(exit_code, ExitCode::from(42));
-        Ok(())
-    }
-
-    #[test]
-    fn replay_guest_stream_copies_runtime_file_to_host_output() -> Result<()> {
-        let (_temp, plan) = vm_plan_fixture(VZ_TEST_ROOTFS_SIZE_BYTES)?;
-        std::fs::write(guest_file_path(&plan, GUEST_STDOUT_FILE), b"guest stdout")?;
-        let mut output = Vec::new();
-
-        replay_guest_stream(&plan, GUEST_STDOUT_FILE, &mut output)?;
-
-        assert_eq!(output, b"guest stdout");
-        Ok(())
-    }
-
-    #[test]
-    fn replay_guest_stream_ignores_missing_files() -> Result<()> {
-        let (_temp, plan) = vm_plan_fixture(VZ_TEST_ROOTFS_SIZE_BYTES)?;
-        let mut output = Vec::new();
-
-        replay_guest_stream(&plan, GUEST_STDOUT_FILE, &mut output)?;
-
-        assert!(output.is_empty());
         Ok(())
     }
 }

@@ -318,7 +318,6 @@ fn validates_contract_with_mocked_file_checks() -> Result<()> {
             temp.path().join("vmlinuz"),
             temp.path().join("initrd.img"),
             temp.path().join("rootfs.img"),
-            temp.path().join("seccomp.bpf"),
         ]
     );
     Ok(())

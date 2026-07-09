@@ -35,9 +35,19 @@ test:
 build:
   cargo build --all-features --all-targets
 
+macos-vz-guest-artifacts:
+  if [ -z "${FIRMA_VZ_GUEST_KERNEL:-}" ]; then ./scripts/macos-vz/fetch-kata-kernel.sh; fi
+  ./scripts/macos-vz/build-guest-artifacts.sh
+
+macos-vz-kata-kernel:
+  ./scripts/macos-vz/fetch-kata-kernel.sh
+
 macos-vz-runner-dev:
   cargo build -p firma-vz-runner
   ./scripts/macos-vz/sign-vz-runner-dev.sh
+
+macos-vz-basic-exec:
+  just --justfile examples/firma-run/macos-vz-basic-exec/justfile run
 
 e2e:
   cargo nextest run -p firma --test e2e --run-ignored all

@@ -103,7 +103,7 @@ impl ContractDocument {
         self.validate_version()?;
         self.validate_runtime(&limits)?;
         self.validate_guest(&limits, &mut is_file)?;
-        self.validate_command(&limits, &mut is_file)?;
+        self.validate_command(&limits)?;
         self.validate_terminal()?;
         self.validate_mounts(&limits)?;
         self.validate_network(&limits)?;
@@ -142,11 +142,7 @@ impl ContractDocument {
     }
 
     /// Validates command shape, argv/env bounds, and secret exclusion.
-    fn validate_command(
-        &self,
-        limits: &ContractValidationLimits,
-        is_file: &mut impl FnMut(&Path) -> bool,
-    ) -> ValidationResult<()> {
+    fn validate_command(&self, limits: &ContractValidationLimits) -> ValidationResult<()> {
         require_non_empty("command.executable", &self.command.executable)?;
         require_len_at_most(
             "command.executable",
@@ -161,15 +157,6 @@ impl ContractDocument {
             }
             require_len_at_most("command.args", arg.len(), limits.command_arg_len)?;
         }
-        if let Some(seccomp_filter_path) = &self.command.seccomp_filter_path {
-            require_file(
-                "command.seccomp_filter_path",
-                seccomp_filter_path,
-                limits.path_len,
-                is_file,
-            )?;
-        }
-
         require_count_at_most("command.env", self.command.env.len(), limits.env_vars)?;
         for (key, value) in &self.command.env {
             require_non_empty("command.env key", key)?;
@@ -366,7 +353,6 @@ struct Command {
     cwd: PathBuf,
     env: BTreeMap<String, String>,
     identity_mode: IdentityMode,
-    seccomp_filter_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,6 +1,9 @@
 mod error;
 
 #[cfg(target_os = "macos")]
+mod console;
+
+#[cfg(target_os = "macos")]
 mod vz;
 
 use error::{RunnerError, RunnerResult};

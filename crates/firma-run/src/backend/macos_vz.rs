@@ -386,7 +386,6 @@ impl VzGuestLaunchContract {
                 cwd: launch.cwd.clone(),
                 env: vz_guest_contract_env(&launch.env),
                 identity_mode: launch.identity_mode,
-                seccomp_filter_path: launch.seccomp_filter_path.clone(),
             },
             terminal: VzGuestTerminalContract::from_launch(launch),
             mounts: handle.mounts.clone(),
@@ -421,7 +420,6 @@ struct VzGuestCommandContract {
     cwd: PathBuf,
     env: BTreeMap<String, String>,
     identity_mode: crate::config::SandboxIdentityMode,
-    seccomp_filter_path: Option<PathBuf>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -1026,14 +1024,7 @@ mod tests {
         );
         assert_eq!(
             json_keys(&json["command"]),
-            key_set(&[
-                "args",
-                "cwd",
-                "env",
-                "executable",
-                "identity_mode",
-                "seccomp_filter_path",
-            ])
+            key_set(&["args", "cwd", "env", "executable", "identity_mode",])
         );
         assert_eq!(
             json_keys(&json["terminal"]),

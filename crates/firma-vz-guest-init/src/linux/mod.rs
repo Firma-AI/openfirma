@@ -70,7 +70,8 @@ fn prepare_runtime_share(boot: &BootContract) -> InitResult<()> {
         BootNetworkMode::None | BootNetworkMode::VsockSidecar => {}
     }
 
-    load_required_modules()?;
+    load_required_modules();
+    log("required module pass completed");
     mount_virtiofs(&boot.virtiofs_tag, SHARE_ROOT)
 }
 

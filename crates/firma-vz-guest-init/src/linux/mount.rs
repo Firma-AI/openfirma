@@ -165,25 +165,162 @@ fn path_c_string(value: &Path) -> io::Result<CString> {
     c_string(value)
 }
 
-/// Loads bundled virtio modules when the guest image does not build them in.
-pub fn load_required_modules() -> InitResult<()> {
-    let module_dir = Path::new(MODULE_DIR);
+/// Probes bundled virtio modules when the guest image does not build them in.
+pub fn load_required_modules() {
+    let summary = probe_module_bundle(Path::new(MODULE_DIR), REQUIRED_MODULES, load_module);
+    log_module_probe_summary(&summary);
+}
+
+/// Probes a module bundle and returns the observed loader state.
+pub fn probe_module_bundle(
+    module_dir: &Path,
+    modules: &[&str],
+    mut load: impl FnMut(&Path) -> InitResult<ModuleLoad>,
+) -> ModuleProbeSummary {
     if !module_dir.is_dir() {
-        log("no guest module bundle found; assuming required drivers are built in");
-        return Ok(());
+        return ModuleProbeSummary::no_bundle();
     }
 
-    for module in REQUIRED_MODULES {
+    let mut summary = ModuleProbeSummary::available();
+    for module in modules {
         let path = module_dir.join(module);
-        if path.is_file() {
-            load_module(&path)?;
+        if !path.is_file() {
+            continue;
+        }
+
+        if !summary.record(&path, load(&path)) {
+            break;
         }
     }
-    Ok(())
+
+    summary
+}
+
+/// Logs the module probe result after probing has completed.
+fn log_module_probe_summary(summary: &ModuleProbeSummary) {
+    match &summary.state {
+        ModuleLoaderState::NoBundle => {
+            log("no guest module bundle found; assuming required drivers are built in");
+        }
+        ModuleLoaderState::UnsupportedByKernel { module } => {
+            log(&format!(
+                "kernel does not implement module loading while probing {}; assuming required drivers are built in",
+                module.display()
+            ));
+        }
+        ModuleLoaderState::Available => {
+            for failure in &summary.failures {
+                log(&format!(
+                    "optional module probe failed for {}: {}; continuing until a required device or filesystem is unavailable",
+                    failure.path.display(),
+                    failure.error
+                ));
+            }
+            log(&format!(
+                "module probe completed attempted={} loaded={} already_loaded={} failed={}",
+                summary.attempted,
+                summary.loaded,
+                summary.already_loaded,
+                summary.failures.len()
+            ));
+        }
+    }
+}
+
+/// Result of probing the bundled guest modules.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ModuleProbeSummary {
+    /// Whether module loading was available, unavailable, or unnecessary.
+    pub state: ModuleLoaderState,
+    /// Number of module files passed to the loader.
+    pub attempted: usize,
+    /// Number of modules loaded successfully.
+    pub loaded: usize,
+    /// Number of modules the kernel reported as already loaded.
+    pub already_loaded: usize,
+    /// Non-fatal module loading failures.
+    pub failures: Vec<ModuleProbeFailure>,
+}
+
+impl ModuleProbeSummary {
+    /// Creates a summary for images that do not carry a module bundle.
+    const fn no_bundle() -> Self {
+        Self {
+            state: ModuleLoaderState::NoBundle,
+            attempted: 0,
+            loaded: 0,
+            already_loaded: 0,
+            failures: Vec::new(),
+        }
+    }
+
+    /// Creates a summary for images where module loading can be attempted.
+    const fn available() -> Self {
+        Self {
+            state: ModuleLoaderState::Available,
+            attempted: 0,
+            loaded: 0,
+            already_loaded: 0,
+            failures: Vec::new(),
+        }
+    }
+
+    /// Records one module load attempt and returns whether probing should continue.
+    fn record(&mut self, path: &Path, result: InitResult<ModuleLoad>) -> bool {
+        self.attempted += 1;
+        match result {
+            Ok(ModuleLoad::Loaded) => {
+                self.loaded += 1;
+                true
+            }
+            Ok(ModuleLoad::AlreadyLoaded) => {
+                self.already_loaded += 1;
+                true
+            }
+            Err(InitError::LoadModule { source, .. })
+                if source.raw_os_error() == Some(libc::ENOSYS) =>
+            {
+                self.state = ModuleLoaderState::UnsupportedByKernel {
+                    module: path.to_path_buf(),
+                };
+                false
+            }
+            Err(error) => {
+                self.failures.push(ModuleProbeFailure {
+                    path: path.to_path_buf(),
+                    error: error.to_string(),
+                });
+                true
+            }
+        }
+    }
+}
+
+/// Kernel module loading support observed during probing.
+#[derive(Debug, Eq, PartialEq)]
+pub enum ModuleLoaderState {
+    /// No module bundle was present in the guest image.
+    NoBundle,
+    /// Module loading can be attempted.
+    Available,
+    /// The kernel does not implement the module loading syscall.
+    UnsupportedByKernel {
+        /// Module path that proved module loading is unsupported.
+        module: PathBuf,
+    },
+}
+
+/// Non-fatal failure observed while probing one bundled module.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ModuleProbeFailure {
+    /// Module path that failed to load.
+    pub path: PathBuf,
+    /// Stable display form of the typed init error.
+    pub error: String,
 }
 
 /// Loads one kernel module with `finit_module(2)`.
-fn load_module(path: &Path) -> InitResult<()> {
+pub fn load_module(path: &Path) -> InitResult<ModuleLoad> {
     let file = File::open(path).map_err(|error| InitError::OpenModule {
         path: path.to_path_buf(),
         source: error,
@@ -193,12 +330,12 @@ fn load_module(path: &Path) -> InitResult<()> {
         unsafe { libc::syscall(libc::SYS_finit_module, file.as_raw_fd(), params.as_ptr(), 0) };
     if result == 0 {
         log(&format!("loaded module {}", path.display()));
-        Ok(())
+        Ok(ModuleLoad::Loaded)
     } else {
         let error = io::Error::last_os_error();
         if error.raw_os_error() == Some(libc::EEXIST) {
             log(&format!("module already loaded {}", path.display()));
-            Ok(())
+            Ok(ModuleLoad::AlreadyLoaded)
         } else {
             Err(InitError::LoadModule {
                 path: path.to_path_buf(),
@@ -206,4 +343,12 @@ fn load_module(path: &Path) -> InitResult<()> {
             })
         }
     }
+}
+
+/// Result of probing one bundled kernel module.
+pub enum ModuleLoad {
+    /// The module was loaded by this probe.
+    Loaded,
+    /// The kernel reported that the module was already loaded.
+    AlreadyLoaded,
 }
