@@ -22,11 +22,11 @@
 //! out of the entity binding.  [`AgentId`] additionally enforces
 //! `[a-zA-Z0-9_-]{1,128}` at construction time as a second defence layer.
 
-use std::{fmt, path::PathBuf};
+use std::{fmt, path::PathBuf, sync::Arc};
 
 use cedar_policy::{
-    EntityId, EntityTypeName, EntityUid, PolicySet, Schema, SourceLocation, ValidationMode,
-    Validator,
+    EntityId, EntityTypeName, EntityUid, PolicySet, Schema, SourceLocation, ValidationErrorKind,
+    ValidationMode, Validator,
 };
 
 use crate::agent::AgentId;
@@ -40,18 +40,21 @@ use crate::agent::AgentId;
 // M-CANONICAL-DOCS: public constant with module-level docs above.
 pub const FIRMA_SCHEMA: &str = include_str!("../firma.cedarschema");
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct PolicyFile {
     path: PathBuf,
-    content: String,
+    content: Arc<str>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct PolicyFiles(Vec<PolicyFile>);
 
 impl PolicyFiles {
     pub fn push(&mut self, path: PathBuf, content: String) {
-        self.0.push(PolicyFile { path, content });
+        self.0.push(PolicyFile {
+            path,
+            content: content.into(),
+        });
     }
 
     #[must_use]
@@ -73,15 +76,16 @@ impl PolicyFiles {
     }
 }
 
-#[derive(Debug)]
-struct PolicyError<'a> {
-    files: Option<&'a PolicyFiles>,
-    location: &'a SourceLocation<'a>,
+#[derive(Debug, thiserror::Error)]
+struct PolicyError {
+    files: Option<PolicyFiles>,
+    location: SourceLocation<'static>,
+    error_kind: ValidationErrorKind,
 }
 
-impl fmt::Display for PolicyError<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let (Some(files), Some(range_start)) = (self.files, self.location.range_start()) {
+impl PolicyError {
+    fn fmt_location(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let (Some(files), Some(range_start)) = (&self.files, self.location.range_start()) {
             let mut cur_index = 0;
             for file in &files.0 {
                 if range_start >= cur_index && range_start <= cur_index + file.content.len() {
@@ -110,7 +114,31 @@ impl fmt::Display for PolicyError<'_> {
             }
         }
 
-        self.location.fmt(f)
+        fmt::Display::fmt(&self.location, f)
+    }
+}
+
+impl fmt::Display for PolicyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // equivalent to write!("validation error on {}: {}", self.location, self.error_kind)
+        f.write_str("validation error on ")?;
+        self.fmt_location(f)?;
+        f.write_str(": ")?;
+        self.error_kind.fmt(f)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub struct ValidationError(Vec<PolicyError>);
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("policy bundle failed schema validation:")?;
+        for error in &self.0 {
+            f.write_str("\n")?;
+            error.fmt(f)?;
+        }
+        Ok(())
     }
 }
 
@@ -132,26 +160,24 @@ pub fn validate_policies(
     policies: &PolicySet,
     schema: &Schema,
     policy_files: Option<&PolicyFiles>,
-) -> Result<(), Vec<String>> {
+) -> Result<(), ValidationError> {
     let result = Validator::new(schema.clone()).validate(policies, ValidationMode::Strict);
     if result.validation_passed() {
         return Ok(());
     }
-    let messages: Vec<String> = result
-        .validation_errors()
-        .map(|err| {
-            // override default error message to gain file:row:column format
-            format!(
-                "validation error on {}: {}",
+    Err(ValidationError(
+        result
+            .validation_errors()
+            .map(|err| {
+                // override default error message to gain file:row:column format
                 PolicyError {
-                    files: policy_files,
-                    location: err.location()
-                },
-                err.error_kind()
-            )
-        })
-        .collect();
-    Err(messages)
+                    files: policy_files.cloned(),
+                    location: err.location().clone(),
+                    error_kind: err.error_kind().clone(),
+                }
+            })
+            .collect(),
+    ))
 }
 
 /// A typed Cedar entity UID in the `Firma` namespace.
@@ -246,9 +272,9 @@ mod tests {
             .parse()
             .unwrap();
         let errs = validate_policies(&set, &schema, None).expect_err("unknown action must fail");
-        assert!(!errs.is_empty());
+        assert!(!errs.0.is_empty());
         assert!(
-            errs.iter().any(|e| e.contains("foo.bar")),
+            errs.0.iter().any(|e| e.to_string().contains("foo.bar")),
             "error should name the unknown action; got: {errs:?}"
         );
     }
@@ -288,7 +314,7 @@ forbid (
 
         let errors = validate_policies(&policies, &schema, Some(&files)).unwrap_err();
         assert_eq!(
-            &errors,
+            &errors.0.iter().map(ToString::to_string).collect::<Vec<_>>(),
             &[
                 "validation error on policy `policy1` on /my/file2.cedar:7:5: attribute `whatever` for entity type Firma::Resource not found"
             ]

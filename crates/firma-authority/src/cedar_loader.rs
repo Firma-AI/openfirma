@@ -61,12 +61,7 @@ impl CedarPolicyStore {
         let (policies, policy_set) = read_policies(policy_dir)?;
         let (schema_src, schema) = read_schema(schema_path.as_deref())?;
 
-        if let Err(errors) = firma_core::validate_policies(&policy_set, &schema, Some(&policies)) {
-            bail!(
-                "policy bundle failed schema validation:\n{}",
-                errors.join("\n")
-            );
-        }
+        firma_core::validate_policies(&policy_set, &schema, Some(&policies))?;
 
         let policies_src = policies.concat();
         let version = compute_version_hash(&policies_src, &schema_src);
@@ -104,14 +99,7 @@ impl CedarPolicyStore {
         let (policies, new_policy_set) = read_policies(&self.policy_dir)?;
         let (schema_src, new_schema) = read_schema(self.schema_path.as_deref())?;
 
-        if let Err(errors) =
-            firma_core::validate_policies(&new_policy_set, &new_schema, Some(&policies))
-        {
-            bail!(
-                "policy bundle failed schema validation:\n{}",
-                errors.join("\n")
-            );
-        }
+        firma_core::validate_policies(&new_policy_set, &new_schema, Some(&policies))?;
 
         let policies_src = policies.concat();
         let new_version = compute_version_hash(&policies_src, &schema_src);
