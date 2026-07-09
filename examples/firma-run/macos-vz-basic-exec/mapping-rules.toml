@@ -1,0 +1,10 @@
+[[rules]]
+method = "CONNECT"
+host = "api.github.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "GET"
+host = "api.github.com"
+path = "/rate_limit"
+action_class = "communication.external.send"

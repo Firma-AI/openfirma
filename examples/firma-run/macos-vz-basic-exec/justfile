@@ -27,8 +27,12 @@ run:
   kernel="${FIRMA_VZ_BASIC_EXEC_KERNEL:-target/firma-vz-guest/kata/vmlinux-6.18.15-186}"
   initrd="${FIRMA_VZ_BASIC_EXEC_INITRD:-$vz_artifacts/initrd.img}"
   rootfs="${FIRMA_VZ_BASIC_EXEC_ROOTFS:-$vz_artifacts/rootfs.img}"
+  manifest="${FIRMA_VZ_BASIC_EXEC_MANIFEST:-$vz_artifacts/manifest.txt}"
   runner="${FIRMA_VZ_BASIC_EXEC_RUNNER:-target/macos-vz-runner-dev/firma-vz-runner}"
   firma="${FIRMA_VZ_BASIC_EXEC_FIRMA:-target/debug/firma}"
+  config="${FIRMA_VZ_BASIC_EXEC_CONFIG:-examples/firma-run/macos-vz-basic-exec/firma.toml}"
+  default_guest_command='curl -sS --max-time 20 -o /tmp/curl.out https://api.github.com/rate_limit && head -c 200 /tmp/curl.out'
+  guest_command="${FIRMA_VZ_BASIC_EXEC_COMMAND:-$default_guest_command}"
 
   abs_path() {
     case "$1" in
@@ -37,11 +41,14 @@ run:
     esac
   }
 
+  vz_artifacts="$(abs_path "$vz_artifacts")"
   kernel="$(abs_path "$kernel")"
   initrd="$(abs_path "$initrd")"
   rootfs="$(abs_path "$rootfs")"
+  manifest="$(abs_path "$manifest")"
   runner="$(abs_path "$runner")"
   firma="$(abs_path "$firma")"
+  config="$(abs_path "$config")"
 
   if [ ! -f "$kernel" ]; then
     just macos-vz-kata-kernel
@@ -55,8 +62,20 @@ run:
   just macos-vz-runner-dev
   cargo build -p firma
 
+  needs_artifacts=0
   if [ ! -f "$initrd" ] || [ ! -f "$rootfs" ] || [ ! -f "$kernel" ]; then
-    FIRMA_VZ_GUEST_KERNEL="$kernel" just macos-vz-guest-artifacts
+    needs_artifacts=1
+  fi
+  if [ ! -f "$manifest" ] || ! grep -q '/usr/bin/curl' "$manifest"; then
+    needs_artifacts=1
+  fi
+  if [ "$needs_artifacts" -eq 1 ]; then
+    if [ -n "${FIRMA_VZ_BASIC_EXEC_INITRD:-}" ] || [ -n "${FIRMA_VZ_BASIC_EXEC_ROOTFS:-}" ]; then
+      echo "custom initrd/rootfs paths are missing curl-capable artifacts" >&2
+      echo "unset custom artifact overrides or rebuild them before running this example" >&2
+      exit 1
+    fi
+    FIRMA_VZ_GUEST_KERNEL="$kernel" ./scripts/macos-vz/build-guest-artifacts.sh "$vz_artifacts"
   fi
 
   FIRMA_RUN_VZ_GUEST=1 \
@@ -64,4 +83,4 @@ run:
     FIRMA_RUN_VZ_GUEST_KERNEL="$kernel" \
     FIRMA_RUN_VZ_GUEST_INITRD="$initrd" \
     FIRMA_RUN_VZ_GUEST_ROOTFS="$rootfs" \
-    "$firma" run --profile generic -- /bin/sh -lc 'echo hello-from-vz; uname -a' < /dev/null
+    "$firma" run --config "$config" --profile generic -- /bin/sh -lc "$guest_command" < /dev/null
