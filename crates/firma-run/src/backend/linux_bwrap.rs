@@ -596,6 +596,35 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
+    fn create_bwrap_runtime_dir_creates_private_sandbox_dir() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let sandbox_id =
+            crate::identity::SandboxId::from(format!("coverage-{}", uuid::Uuid::now_v7()));
+
+        let runtime_dir =
+            super::create_bwrap_runtime_dir(&sandbox_id).expect("create bwrap runtime dir");
+
+        assert!(runtime_dir.is_dir(), "runtime dir should exist");
+        assert_eq!(
+            runtime_dir.file_name(),
+            Some(std::ffi::OsStr::new(&sandbox_id.to_string()))
+        );
+        let mode = std::fs::metadata(&runtime_dir)
+            .expect("runtime dir metadata")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "runtime dir should not be group/world accessible"
+        );
+
+        std::fs::remove_dir_all(&runtime_dir).expect("cleanup runtime dir");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
     fn mask_sensitive_paths_adds_expected_mounts() {
         let mut cmd = std::process::Command::new("bwrap");
         let temp = tempfile::tempdir().expect("tempdir");

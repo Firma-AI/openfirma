@@ -11,7 +11,9 @@
 use std::io::Cursor;
 use std::sync::mpsc;
 
-use firma_run::authority::supervisor::testing::{ScrapeResult, run_scraper};
+use firma_run::authority::supervisor::testing::{
+    ScrapeResult, run_scraper, run_scraper_with_mirror,
+};
 
 #[test]
 fn ready_signalled_with_listen_addr_capture() {
@@ -46,4 +48,29 @@ fn eof_before_ready_signals_eof() {
         .join()
         .expect("scraper thread");
     assert!(matches!(rx.try_recv().unwrap(), ScrapeResult::Eof));
+}
+
+#[test]
+fn scraper_can_mirror_child_logs_to_parent_output() {
+    let stderr = b"\
+2026-05-14T12:00:00Z  INFO firma_authority: listening addr=\"[::1]:50051\"\n\
+2026-05-14T12:00:00Z  INFO firma_authority: authority ready\n\
+";
+    let (tx, rx) = mpsc::sync_channel(1);
+    let mut log_sink = Vec::<u8>::new();
+    let mut mirror_sink = Vec::<u8>::new();
+
+    run_scraper_with_mirror(
+        Cursor::new(stderr.to_vec()),
+        &mut log_sink,
+        &mut mirror_sink,
+        true,
+        tx,
+    );
+
+    assert!(matches!(rx.recv().expect("result"), ScrapeResult::Ready(_)));
+    assert_eq!(
+        String::from_utf8(log_sink).expect("log utf8"),
+        String::from_utf8(mirror_sink).expect("mirror utf8")
+    );
 }
