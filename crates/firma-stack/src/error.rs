@@ -43,7 +43,7 @@ pub enum StackError {
 
     /// Creating or securing the state directory failed.
     #[error(transparent)]
-    StateDir(firma_runtime_state::fs::CreatePrivateDirError),
+    StateDir(firma_fs::CreatePrivateDirError),
 
     /// Reading or writing shared runtime state failed.
     #[error(transparent)]

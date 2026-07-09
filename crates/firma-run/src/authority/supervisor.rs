@@ -117,7 +117,7 @@ impl AuthoritySupervisor {
             }
         })?;
 
-        firma_runtime_state::fs::create_private_dir_all(&req.marker_dir)
+        firma_fs::create_private_dir_all(&req.marker_dir)
             .map_err(|e| RunError::Internal(e.to_string()))?;
 
         let authority_toml = req.marker_dir.join("authority.toml");
@@ -399,8 +399,7 @@ fn ensure_authority_key(key_path: &std::path::Path) -> Result<(), RunError> {
         return Ok(());
     }
     if let Some(parent) = key_path.parent() {
-        firma_runtime_state::fs::create_private_dir_all(parent)
-            .map_err(|e| RunError::Internal(e.to_string()))?;
+        firma_fs::create_private_dir_all(parent).map_err(|e| RunError::Internal(e.to_string()))?;
     }
     firma_authority::write_keypair(key_path).map_err(|e| {
         RunError::Internal(format!(
@@ -445,10 +444,8 @@ fn ephemeral_authority_config(
     let key_path = keys_dir.join("authority.key");
     let revocation_file = req.marker_dir.join("revocations.txt");
 
-    firma_runtime_state::fs::create_private_dir_all(&policy_dir)
-        .map_err(|e| RunError::Internal(e.to_string()))?;
-    firma_runtime_state::fs::create_private_dir_all(&keys_dir)
-        .map_err(|e| RunError::Internal(e.to_string()))?;
+    firma_fs::create_private_dir_all(&policy_dir).map_err(|e| RunError::Internal(e.to_string()))?;
+    firma_fs::create_private_dir_all(&keys_dir).map_err(|e| RunError::Internal(e.to_string()))?;
 
     let cedar_text = if req.profile_name == firma_authority::DEFAULT_PROFILE {
         AUTOSTART_LOCAL_DEVELOPER_POLICY

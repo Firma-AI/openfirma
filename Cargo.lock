@@ -1264,6 +1264,7 @@ dependencies = [
  "firma-authority",
  "firma-config-loader",
  "firma-core",
+ "firma-fs",
  "firma-run",
  "firma-runtime-state",
  "firma-sidecar",
@@ -1403,6 +1404,7 @@ dependencies = [
  "clap",
  "crossterm 0.28.1",
  "firma-config-loader",
+ "firma-fs",
  "firma-runtime-state",
  "firma-stack",
  "ratatui",
@@ -1412,6 +1414,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tui-markdown",
+]
+
+[[package]]
+name = "firma-fs"
+version = "0.1.2"
+dependencies = [
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1446,6 +1456,7 @@ dependencies = [
  "firma-authority",
  "firma-config-loader",
  "firma-core",
+ "firma-fs",
  "firma-protobuf",
  "firma-runtime-state",
  "firma-sidecar",
@@ -1499,6 +1510,7 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "firma-core",
+ "firma-fs",
  "firma-grpc-interceptor-proto",
  "firma-protobuf",
  "firma-runtime-state",
@@ -1552,6 +1564,7 @@ version = "0.1.2"
 dependencies = [
  "ctrlc",
  "firma-config-loader",
+ "firma-fs",
  "firma-runtime-state",
  "nix 0.31.3",
  "serde",

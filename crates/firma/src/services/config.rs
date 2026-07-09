@@ -11,9 +11,9 @@ use clap::ValueEnum as _;
 use dialoguer::theme::ColorfulTheme;
 
 use crate::args::config::{InitArgs, Mapping, Mode, Posture};
-use crate::fs::create_private_dir_all;
 use doc::DocInputs;
 use firma_config_loader::{AgentProfile, CONFIG_DIR_NAME, CONFIG_FILE_NAME};
+use firma_fs::create_private_dir_all;
 
 struct AuthorityInputs {
     /// gRPC listen address (agent-local + authority modes).
@@ -135,9 +135,9 @@ pub fn run(args: &InitArgs) -> Result<ExitCode> {
 fn write_revocations(state_dir: &Path, force: bool) -> Result<()> {
     let path = state_dir.join("revocations.txt");
     if force {
-        Ok(crate::fs::write_file(&path, b"", 0o600)?)
+        Ok(firma_fs::write_file(&path, b"", 0o600)?)
     } else {
-        Ok(crate::fs::write_new_file(&path, b"", 0o600).or_else(|e| {
+        Ok(firma_fs::write_new_file(&path, b"", 0o600).or_else(|e| {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
                 Ok(())
             } else {

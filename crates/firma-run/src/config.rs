@@ -974,11 +974,11 @@ fn ensure_managed_policy_path(profile_id: &str) -> PathBuf {
 fn write_managed_policy_to_dir(dir: &std::path::Path, profile_id: &str) -> PathBuf {
     let (content, filename) = managed_policy_for_profile(profile_id);
     let path = dir.join(filename);
-    if let Err(error) = firma_runtime_state::fs::create_private_dir_all(dir) {
+    if let Err(error) = firma_fs::create_private_dir_all(dir) {
         tracing::warn!(%error, "failed to create seccomp policy dir; falling back to unextracted path");
         return path;
     }
-    match firma_runtime_state::fs::write_private_file(&path, content.as_bytes()) {
+    match firma_fs::write_private_file(&path, content.as_bytes()) {
         Ok(()) => {
             tracing::debug!(path = %path.display(), "wrote managed seccomp policy");
         }

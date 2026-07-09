@@ -468,24 +468,20 @@ fn command_available(binary: &str) -> bool {
 
 fn create_bwrap_runtime_dir(sandbox_id: &crate::identity::SandboxId) -> Result<PathBuf, RunError> {
     let runtime_root = std::env::temp_dir().join("firma-run");
-    firma_runtime_state::fs::create_private_dir_all(&runtime_root).map_err(|error| {
-        RunError::Backend {
-            backend: BackendKind::Bwrap.to_string(),
-            reason: format!(
-                "failed to create runtime root {}: {error}",
-                runtime_root.display()
-            ),
-        }
+    firma_fs::create_private_dir_all(&runtime_root).map_err(|error| RunError::Backend {
+        backend: BackendKind::Bwrap.to_string(),
+        reason: format!(
+            "failed to create runtime root {}: {error}",
+            runtime_root.display()
+        ),
     })?;
     let runtime_dir = runtime_root.join(sandbox_id);
-    firma_runtime_state::fs::create_private_dir_all(&runtime_dir).map_err(|error| {
-        RunError::Backend {
-            backend: BackendKind::Bwrap.to_string(),
-            reason: format!(
-                "failed to create runtime dir {}: {error}",
-                runtime_dir.display()
-            ),
-        }
+    firma_fs::create_private_dir_all(&runtime_dir).map_err(|error| RunError::Backend {
+        backend: BackendKind::Bwrap.to_string(),
+        reason: format!(
+            "failed to create runtime dir {}: {error}",
+            runtime_dir.display()
+        ),
     })?;
     Ok(runtime_dir)
 }
