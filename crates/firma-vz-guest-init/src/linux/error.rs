@@ -1,6 +1,6 @@
 use std::fmt;
 use std::io;
-use std::net::AddrParseError;
+use std::net::{AddrParseError, SocketAddr};
 use std::path::PathBuf;
 
 /// Typed failures raised while preparing or running the VZ guest init payload.
@@ -85,6 +85,48 @@ pub enum InitError {
     EmptyAttributionHeaderName,
     /// The network attribution header map contained an empty value.
     EmptyAttributionHeaderValue { name: String },
+    /// The loopback control socket could not be opened.
+    LoopbackControlOpen { source: io::Error },
+    /// The loopback interface flags could not be read.
+    LoopbackReadFlags { source: io::Error },
+    /// The loopback interface could not be enabled.
+    LoopbackEnable { source: io::Error },
+    /// The guest HTTP proxy listener could not bind.
+    ProxyBind { addr: SocketAddr, source: io::Error },
+    /// The guest HTTP proxy listener thread could not start.
+    ProxyThreadSpawn { source: io::Error },
+    /// The guest proxy client stream could not enable `TCP_NODELAY`.
+    ProxyClientNoDelay { source: io::Error },
+    /// The guest proxy client stream could not be cloned.
+    ProxyClientClone { source: io::Error },
+    /// The guest proxy could not connect to the host VSOCK sidecar port.
+    VsockConnect { source: io::Error },
+    /// The guest VSOCK sidecar stream could not be cloned.
+    ProxyVsockClone { source: io::Error },
+    /// The guest proxy response copy failed.
+    ProxyCopyResponse { source: io::Error },
+    /// The guest proxy request copy failed.
+    ProxyCopyRequest { source: io::Error },
+    /// The UDP DNS refusal listener could not bind.
+    DnsUdpBind { addr: SocketAddr, source: io::Error },
+    /// The TCP DNS refusal listener could not bind.
+    DnsTcpBind { addr: SocketAddr, source: io::Error },
+    /// The UDP DNS refusal listener thread could not start.
+    DnsUdpThreadSpawn { addr: SocketAddr, source: io::Error },
+    /// The TCP DNS refusal listener thread could not start.
+    DnsTcpThreadSpawn { addr: SocketAddr, source: io::Error },
+    /// A TCP DNS query length could not be read.
+    DnsTcpReadLength { source: io::Error },
+    /// A TCP DNS query body could not be read.
+    DnsTcpReadBody { source: io::Error },
+    /// A TCP DNS response length could not be written.
+    DnsTcpWriteLength { source: io::Error },
+    /// A TCP DNS response body could not be written.
+    DnsTcpWriteBody { source: io::Error },
+    /// Guest resolver configuration could not be written.
+    ResolvConfWrite { source: io::Error },
+    /// A guest network setup value was invalid.
+    GuestNetworkSetup { detail: String },
     /// The indexed virtiofs share for a contract mount is missing.
     MissingShareSource { path: PathBuf },
     /// The guest payload process could not be spawned.
@@ -260,6 +302,88 @@ impl fmt::Display for InitError {
                 formatter,
                 "network.attribution_headers[{name}] must not be empty"
             ),
+            Self::LoopbackControlOpen { source } => {
+                write!(formatter, "open loopback control socket: {source}")
+            }
+            Self::LoopbackReadFlags { source } => {
+                write!(formatter, "read loopback interface flags: {source}")
+            }
+            Self::LoopbackEnable { source } => {
+                write!(formatter, "bring loopback interface up: {source}")
+            }
+            Self::ProxyBind { addr, source } => {
+                write!(
+                    formatter,
+                    "bind guest HTTP proxy for VSOCK sidecar bridge {addr}: {source}"
+                )
+            }
+            Self::ProxyThreadSpawn { source } => {
+                write!(formatter, "start guest HTTP proxy thread: {source}")
+            }
+            Self::ProxyClientNoDelay { source } => {
+                write!(formatter, "set guest proxy client TCP_NODELAY: {source}")
+            }
+            Self::ProxyClientClone { source } => {
+                write!(formatter, "clone guest proxy client stream: {source}")
+            }
+            Self::VsockConnect { source } => {
+                write!(formatter, "connect host VSOCK sidecar port: {source}")
+            }
+            Self::ProxyVsockClone { source } => {
+                write!(formatter, "clone guest VSOCK sidecar stream: {source}")
+            }
+            Self::ProxyCopyResponse { source } => {
+                write!(
+                    formatter,
+                    "copy VSOCK sidecar response to guest proxy client: {source}"
+                )
+            }
+            Self::ProxyCopyRequest { source } => {
+                write!(
+                    formatter,
+                    "copy guest proxy request to VSOCK sidecar: {source}"
+                )
+            }
+            Self::DnsUdpBind { addr, source } => {
+                write!(
+                    formatter,
+                    "bind guest UDP DNS refusal stub {addr}: {source}"
+                )
+            }
+            Self::DnsTcpBind { addr, source } => {
+                write!(
+                    formatter,
+                    "bind guest TCP DNS refusal stub {addr}: {source}"
+                )
+            }
+            Self::DnsUdpThreadSpawn { addr, source } => {
+                write!(
+                    formatter,
+                    "start guest UDP DNS refusal stub {addr}: {source}"
+                )
+            }
+            Self::DnsTcpThreadSpawn { addr, source } => {
+                write!(
+                    formatter,
+                    "start guest TCP DNS refusal stub {addr}: {source}"
+                )
+            }
+            Self::DnsTcpReadLength { source } => {
+                write!(formatter, "read TCP DNS query length: {source}")
+            }
+            Self::DnsTcpReadBody { source } => {
+                write!(formatter, "read TCP DNS query body: {source}")
+            }
+            Self::DnsTcpWriteLength { source } => {
+                write!(formatter, "write TCP DNS response length: {source}")
+            }
+            Self::DnsTcpWriteBody { source } => {
+                write!(formatter, "write TCP DNS response body: {source}")
+            }
+            Self::ResolvConfWrite { source } => {
+                write!(formatter, "write /etc/resolv.conf: {source}")
+            }
+            Self::GuestNetworkSetup { detail } => formatter.write_str(detail),
             Self::MissingShareSource { path } => {
                 write!(formatter, "missing VZ share source {}", path.display())
             }
@@ -352,6 +476,26 @@ impl std::error::Error for InitError {
             | Self::ReadKernelCmdline { source }
             | Self::MountPseudo { source, .. }
             | Self::MountVirtiofs { source, .. }
+            | Self::LoopbackControlOpen { source }
+            | Self::LoopbackReadFlags { source }
+            | Self::LoopbackEnable { source }
+            | Self::ProxyBind { source, .. }
+            | Self::ProxyThreadSpawn { source }
+            | Self::ProxyClientNoDelay { source }
+            | Self::ProxyClientClone { source }
+            | Self::VsockConnect { source }
+            | Self::ProxyVsockClone { source }
+            | Self::ProxyCopyResponse { source }
+            | Self::ProxyCopyRequest { source }
+            | Self::DnsUdpBind { source, .. }
+            | Self::DnsTcpBind { source, .. }
+            | Self::DnsUdpThreadSpawn { source, .. }
+            | Self::DnsTcpThreadSpawn { source, .. }
+            | Self::DnsTcpReadLength { source }
+            | Self::DnsTcpReadBody { source }
+            | Self::DnsTcpWriteLength { source }
+            | Self::DnsTcpWriteBody { source }
+            | Self::ResolvConfWrite { source }
             | Self::ContractNotVisible { source, .. }
             | Self::ReadContract { source, .. }
             | Self::SpawnCommand { source, .. }
@@ -389,6 +533,7 @@ impl std::error::Error for InitError {
             | Self::DirectNetworkDevicesAllowed
             | Self::EmptyAttributionHeaderName
             | Self::EmptyAttributionHeaderValue { .. }
+            | Self::GuestNetworkSetup { .. }
             | Self::MissingShareSource { .. }
             | Self::CommandStdioPathWithoutParent { .. }
             | Self::CommandMissingStatus

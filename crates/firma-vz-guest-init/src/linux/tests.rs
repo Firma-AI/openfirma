@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
 use std::io;
+use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -19,6 +20,7 @@ use super::mount::{
     ModuleLoad, ModuleLoaderState, SHARE_ROOT, create_dir_path, load_module, load_required_modules,
     mount_contract_paths, mount_pseudo, mount_virtiofs, probe_module_bundle,
 };
+use super::network::NetworkServicesPlan;
 use super::result::{
     GuestHeartbeatPhase, guest_result_from_command_result, write_boot_heartbeat, write_heartbeat,
     write_result, write_setup_error,
@@ -687,6 +689,34 @@ fn accepted_contract_log_message_describes_launch_boundary() -> TestResult {
 }
 
 #[test]
+fn record_setup_error_on_failure_ignores_unmounted_runtime_share() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let contract_path = temp.path().join("vz-guest-launch.json");
+    fs::write(&contract_path, b"{}")?;
+    let result: InitResult<()> = Err(InitError::EmptyExecutable);
+
+    super::record_setup_error_on_failure(&contract_path, &result);
+
+    assert!(!temp.path().join("guest-result.json").exists());
+
+    Ok(())
+}
+
+#[test]
+fn record_setup_error_on_success_leaves_runtime_clean() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let contract_path = temp.path().join("vz-guest-launch.json");
+    fs::write(&contract_path, b"{}")?;
+    let result: InitResult<()> = Ok(());
+
+    super::record_setup_error_on_failure(&contract_path, &result);
+
+    assert!(!temp.path().join("guest-result.json").exists());
+
+    Ok(())
+}
+
+#[test]
 fn run_contract_writes_contract_ready_heartbeat_before_mount_failure() -> TestResult {
     if Path::new("/firma-shares/mount0").is_dir() {
         return Ok(());
@@ -740,8 +770,9 @@ fn execute_contract_returns_exit_code_and_creates_cwd() -> TestResult {
     ];
     launch.command.cwd = cwd.clone();
     let contract: Contract = launch.try_into()?;
+    let network_services = network_services_for(&contract)?;
 
-    let outcome = execute_contract(&contract_path, &contract)?;
+    let outcome = execute_contract(&contract_path, &contract, network_services.command_env())?;
 
     assert!(matches!(outcome, CommandOutcome::Exited(7)));
     assert!(cwd.is_dir());
@@ -765,9 +796,10 @@ fn execute_contract_reports_spawn_errors() -> TestResult {
     launch.command.executable = missing.display().to_string();
     launch.command.cwd = temp.path().to_path_buf();
     let contract: Contract = launch.try_into()?;
+    let network_services = network_services_for(&contract)?;
 
     let error = expect_init_error(
-        execute_contract(&contract_path, &contract),
+        execute_contract(&contract_path, &contract, network_services.command_env()),
         "missing executable should return spawn error",
     )?;
 
@@ -787,8 +819,9 @@ fn execute_contract_uses_captured_guest_stdin() -> TestResult {
     launch.command.executable = "/bin/cat".to_string();
     launch.command.cwd = temp.path().to_path_buf();
     let contract: Contract = launch.try_into()?;
+    let network_services = network_services_for(&contract)?;
 
-    let outcome = execute_contract(&contract_path, &contract)?;
+    let outcome = execute_contract(&contract_path, &contract, network_services.command_env())?;
 
     assert!(matches!(outcome, CommandOutcome::Exited(0)));
     assert_eq!(
@@ -1411,6 +1444,160 @@ fn init_error_display_and_sources_are_stable() -> TestResult {
         "network.attribution_headers[x-firma-sandbox-id] must not be empty",
         false,
     );
+    let guest_proxy_addr: SocketAddr = "127.0.0.1:18080".parse()?;
+    let guest_dns_addr: SocketAddr = "127.0.0.1:1053".parse()?;
+    assert_error_display(
+        &InitError::LoopbackControlOpen {
+            source: io::Error::new(io::ErrorKind::PermissionDenied, "operation not permitted"),
+        },
+        "open loopback control socket: operation not permitted",
+        true,
+    );
+    assert_error_display(
+        &InitError::LoopbackReadFlags {
+            source: io::Error::new(io::ErrorKind::PermissionDenied, "operation not permitted"),
+        },
+        "read loopback interface flags: operation not permitted",
+        true,
+    );
+    assert_error_display(
+        &InitError::LoopbackEnable {
+            source: io::Error::new(io::ErrorKind::PermissionDenied, "operation not permitted"),
+        },
+        "bring loopback interface up: operation not permitted",
+        true,
+    );
+    assert_error_display(
+        &InitError::ProxyBind {
+            addr: guest_proxy_addr,
+            source: io::Error::new(io::ErrorKind::AddrInUse, "address already in use"),
+        },
+        "bind guest HTTP proxy for VSOCK sidecar bridge 127.0.0.1:18080: address already in use",
+        true,
+    );
+    assert_error_display(
+        &InitError::ProxyThreadSpawn {
+            source: io::Error::other("thread limit reached"),
+        },
+        "start guest HTTP proxy thread: thread limit reached",
+        true,
+    );
+    assert_error_display(
+        &InitError::ProxyClientNoDelay {
+            source: io::Error::new(io::ErrorKind::NotConnected, "socket is not connected"),
+        },
+        "set guest proxy client TCP_NODELAY: socket is not connected",
+        true,
+    );
+    assert_error_display(
+        &InitError::ProxyClientClone {
+            source: io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"),
+        },
+        "clone guest proxy client stream: broken pipe",
+        true,
+    );
+    assert_error_display(
+        &InitError::VsockConnect {
+            source: io::Error::new(io::ErrorKind::ConnectionRefused, "connection refused"),
+        },
+        "connect host VSOCK sidecar port: connection refused",
+        true,
+    );
+    assert_error_display(
+        &InitError::ProxyVsockClone {
+            source: io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"),
+        },
+        "clone guest VSOCK sidecar stream: broken pipe",
+        true,
+    );
+    assert_error_display(
+        &InitError::ProxyCopyResponse {
+            source: io::Error::new(io::ErrorKind::ConnectionReset, "connection reset by peer"),
+        },
+        "copy VSOCK sidecar response to guest proxy client: connection reset by peer",
+        true,
+    );
+    assert_error_display(
+        &InitError::ProxyCopyRequest {
+            source: io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"),
+        },
+        "copy guest proxy request to VSOCK sidecar: broken pipe",
+        true,
+    );
+    assert_error_display(
+        &InitError::DnsUdpBind {
+            addr: guest_dns_addr,
+            source: io::Error::new(io::ErrorKind::AddrInUse, "address already in use"),
+        },
+        "bind guest UDP DNS refusal stub 127.0.0.1:1053: address already in use",
+        true,
+    );
+    assert_error_display(
+        &InitError::DnsTcpBind {
+            addr: guest_dns_addr,
+            source: io::Error::new(io::ErrorKind::AddrInUse, "address already in use"),
+        },
+        "bind guest TCP DNS refusal stub 127.0.0.1:1053: address already in use",
+        true,
+    );
+    assert_error_display(
+        &InitError::DnsUdpThreadSpawn {
+            addr: guest_dns_addr,
+            source: io::Error::other("thread limit reached"),
+        },
+        "start guest UDP DNS refusal stub 127.0.0.1:1053: thread limit reached",
+        true,
+    );
+    assert_error_display(
+        &InitError::DnsTcpThreadSpawn {
+            addr: guest_dns_addr,
+            source: io::Error::other("thread limit reached"),
+        },
+        "start guest TCP DNS refusal stub 127.0.0.1:1053: thread limit reached",
+        true,
+    );
+    assert_error_display(
+        &InitError::DnsTcpReadLength {
+            source: io::Error::new(io::ErrorKind::ConnectionReset, "connection reset by peer"),
+        },
+        "read TCP DNS query length: connection reset by peer",
+        true,
+    );
+    assert_error_display(
+        &InitError::DnsTcpReadBody {
+            source: io::Error::new(io::ErrorKind::UnexpectedEof, "early eof"),
+        },
+        "read TCP DNS query body: early eof",
+        true,
+    );
+    assert_error_display(
+        &InitError::DnsTcpWriteLength {
+            source: io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"),
+        },
+        "write TCP DNS response length: broken pipe",
+        true,
+    );
+    assert_error_display(
+        &InitError::DnsTcpWriteBody {
+            source: io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"),
+        },
+        "write TCP DNS response body: broken pipe",
+        true,
+    );
+    assert_error_display(
+        &InitError::ResolvConfWrite {
+            source: io::Error::new(io::ErrorKind::PermissionDenied, "read-only file system"),
+        },
+        "write /etc/resolv.conf: read-only file system",
+        true,
+    );
+    assert_error_display(
+        &InitError::GuestNetworkSetup {
+            detail: "interface name too long: firma-loopback".to_string(),
+        },
+        "interface name too long: firma-loopback",
+        false,
+    );
     assert_error_display(
         &InitError::MissingShareSource {
             path: PathBuf::from("/firma-shares/mount0"),
@@ -1610,6 +1797,10 @@ fn valid_launch_contract() -> LaunchContract {
             mode: "required".to_string(),
         }],
     }
+}
+
+fn network_services_for(contract: &Contract) -> Result<NetworkServicesPlan, Box<dyn Error>> {
+    Ok(NetworkServicesPlan::try_from(contract)?)
 }
 
 fn expect_init_error<T>(

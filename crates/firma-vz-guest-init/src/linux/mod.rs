@@ -3,6 +3,7 @@ mod command;
 mod contract;
 mod error;
 mod mount;
+mod network;
 mod result;
 
 #[cfg(test)]
@@ -10,6 +11,7 @@ mod tests;
 
 use std::fs::File;
 use std::io::{self, Write};
+use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
@@ -21,6 +23,7 @@ use mount::{
     SHARE_ROOT, create_dir, load_required_modules, mount_contract_paths, mount_pseudo,
     mount_virtiofs,
 };
+use network::{NetworkServicesPlan, start_guest_network_services};
 use result::{
     GuestHeartbeatPhase, write_boot_heartbeat, write_heartbeat, write_result, write_setup_error,
 };
@@ -42,11 +45,16 @@ fn run() -> InitResult<()> {
     write_boot_heartbeat(&boot.launch_contract, GuestHeartbeatPhase::RuntimeMounted)?;
 
     let result = run_contract(&boot);
-    if let Err(error) = &result {
-        let _ = write_setup_error(&boot.launch_contract, error);
-    }
+    record_setup_error_on_failure(&boot.launch_contract, &result);
 
     result
+}
+
+/// Records a setup-error result when contract execution fails before completion.
+fn record_setup_error_on_failure(contract_path: &Path, result: &InitResult<()>) {
+    if let Err(error) = result {
+        let _ = write_setup_error(contract_path, error);
+    }
 }
 
 /// Mounts the pseudo filesystems required before reading boot state.
@@ -78,6 +86,7 @@ fn prepare_runtime_share(boot: &BootContract) -> InitResult<()> {
 /// Accepts the launch contract, exposes requested mounts, and records the result.
 fn run_contract(boot: &BootContract) -> InitResult<()> {
     let contract = accept_contract(&boot.launch_contract)?;
+    let network_services = NetworkServicesPlan::try_from(&contract)?;
     log_accepted_contract(&contract);
     write_heartbeat(
         &boot.launch_contract,
@@ -90,7 +99,12 @@ fn run_contract(boot: &BootContract) -> InitResult<()> {
         &contract,
         GuestHeartbeatPhase::MountsReady,
     )?;
-    let result = execute_contract(&boot.launch_contract, &contract);
+    let _network_services = start_guest_network_services(&network_services)?;
+    let result = execute_contract(
+        &boot.launch_contract,
+        &contract,
+        network_services.command_env(),
+    );
     write_result(&boot.launch_contract, &result)?;
     Ok(())
 }
