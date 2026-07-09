@@ -72,7 +72,26 @@ curl --proxy http://127.0.0.1:8080 \
 
 The Sidecar attached `Authorization: Bearer sk-...` after Stage 2 allowed the call.
 
-## Step 3: Configure with `vault` mode
+## Step 3: Inject a GitHub token for HTTPS git
+
+GitHub smart HTTP expects a Basic auth header for git clone, fetch, and push. Use `transform = "github_pat_basic"` to render a token as:
+
+```text
+Authorization: Basic base64("x-access-token:<token>")
+```
+
+```toml
+[sidecar.credentials.github_git]
+target_host    = "github.com"
+mode           = "basic"
+header         = "Authorization"
+value_from_env = "GITHUB_TOKEN"
+transform      = "github_pat_basic"
+```
+
+Keep this scoped to `target_host = "github.com"`. Credential matching is exact, so this git credential is not applied to `api.github.com`. Git credential injection also requires HTTPS MITM for `github.com`; if the Sidecar only sees a CONNECT tunnel, it cannot attach the header to the inner request.
+
+## Step 4: Configure with `vault` mode
 
 For production, env vars on the Sidecar host are still secrets-on-disk that an attacker with shell could read. `vault` mode reads the secret from a local file that Vault Agent renders and refreshes.
 
@@ -85,13 +104,15 @@ prefix      = "Bearer "
 secret_path = "/run/secrets/openai-api-key"
 ```
 
+`transform = "github_pat_basic"` is also supported in `vault` mode. Do not combine `prefix` and `transform` on the same credential entry.
+
 Configure Vault Agent separately to render the secret value into `/run/secrets/openai-api-key` with permissions readable only by the Sidecar process.
 
 The Sidecar reads the file per call. If the file is missing or unreadable when a request comes in, the Sidecar returns `CREDENTIAL_INJECTION_FAILED` and aborts the already-allowed call — fail-closed by design. The agent receives a `504` with `"aborted": true`; the capability token remains active.
 
 For the development workflow, `basic` is simpler. For production, `vault` is the answer. Don't mix them in a single deployment unless you have a clear reason.
 
-## Step 4: Verify injection
+## Step 5: Verify injection
 
 The audit event records the allowed dispatch, but not whether a credential was injected and never the credential value:
 
@@ -134,6 +155,8 @@ If you genuinely need different credentials per *call* (e.g. multi-tenant agent 
 **`OPENAI_API_KEY` not set; injection silently disabled.** Wrong — it's not silent. The Sidecar fails startup with an error pointing at the missing env var. Fail-closed at startup is the right shape.
 
 **MITM is off for the host.** The Sidecar can't modify a request it never decrypted. Add the host to `intercept_hosts` (see [Enable HTTPS MITM](../https-mitm/)).
+
+**GitHub PAT attached to API calls.** Scope git credentials to `github.com`, not `api.github.com`. GitHub REST API credentials should use their own credential entry and policy.
 
 **Vault Agent stopped refreshing the file.** The Sidecar reports `CREDENTIAL_INJECTION_FAILED` for that host until the rendered file is present and readable again.
 

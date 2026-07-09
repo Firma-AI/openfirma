@@ -452,11 +452,18 @@ namespace Firma {
         risk_score: Long,
         budget_remaining: Long,
         session_duration_s: Long,
-        action_count: Long
+        action_count: Long,
+        git_provider?: String,
+        git_owner?: String,
+        git_repo?: String,
+        git_ref?: String,
+        git_ref_type?: String,
+        git_operation?: String
     };
     entity Agent;
     entity Resource;
     action \"communication.external.send\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
+    action \"code.write\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
 }";
 
     fn schema_bundle(policy_src: &[u8]) -> PolicyBundle {
@@ -741,6 +748,53 @@ namespace Firma {
             )
             .unwrap();
         assert!(allow);
+    }
+
+    #[test]
+    fn schema_git_context_attributes_used_in_policy() {
+        let src = br#"
+            permit (
+                principal == Firma::Agent::"agent_test",
+                action == Firma::Action::"code.write",
+                resource
+            ) when {
+                context.git_provider == "github" &&
+                context.git_owner == "firma-ai" &&
+                context.git_repo == "openfirma" &&
+                context.git_ref == "refs/heads/fir-413" &&
+                context.git_operation == "write"
+            };
+        "#;
+        let bundle = schema_bundle(src);
+        let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
+        let mut context = full_context();
+        context["git_provider"] = json!("github");
+        context["git_owner"] = json!("firma-ai");
+        context["git_repo"] = json!("openfirma");
+        context["git_ref"] = json!("refs/heads/fir-413");
+        context["git_ref_type"] = json!("branch");
+        context["git_operation"] = json!("write");
+
+        let allow = evaluator
+            .evaluate(
+                &agent("agent_test"),
+                "code.write",
+                "github.com/firma-ai/openfirma.git/git-receive-pack",
+                context.clone(),
+            )
+            .unwrap();
+        assert!(allow);
+
+        context["git_ref"] = json!("refs/heads/main");
+        let deny = evaluator
+            .evaluate(
+                &agent("agent_test"),
+                "code.write",
+                "github.com/firma-ai/openfirma.git/git-receive-pack",
+                context,
+            )
+            .unwrap();
+        assert!(!deny);
     }
 
     #[test]

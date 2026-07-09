@@ -9,10 +9,10 @@ Policies are Cedar rules that turn a normalized OpenFirma action into an `ALLOW`
 
 OpenFirma has two distinct sets of Cedar policies:
 
-| Surface          | Run by    | When                                 | Decides                                                         |
-| ---------------- | --------- | ------------------------------------ | --------------------------------------------------------------- |
-| **Issuance**     | Authority | Pre-flight, when minting a token     | "Should this agent ever be allowed to attempt this class?"      |
-| **Runtime**      | Sidecar   | On every outbound call, in Stage 2   | "Given current conditions, is this specific call OK right now?" |
+| Surface      | Run by    | When                               | Decides                                                         |
+| ------------ | --------- | ---------------------------------- | --------------------------------------------------------------- |
+| **Issuance** | Authority | Pre-flight, when minting a token   | "Should this agent ever be allowed to attempt this class?"      |
+| **Runtime**  | Sidecar   | On every outbound call, in Stage 2 | "Given current conditions, is this specific call OK right now?" |
 
 The split matters because the two surfaces answer fundamentally different questions:
 
@@ -47,7 +47,7 @@ The schema is shared between Authority and Sidecar — `examples/demo/policies/s
 
 ## The runtime context
 
-When Stage 2 evaluates a runtime policy, it builds a Cedar context with exactly these fields (see `crates/firma-sidecar/src/enforcement/constraint_enforcement.rs` and `schema.cedarschema`):
+When Stage 2 evaluates a runtime policy, it builds a Cedar context with these required fields (see `crates/firma-sidecar/src/enforcement/constraint_enforcement.rs` and `schema.cedarschema`):
 
 | Field                  | Type        | Meaning                                                          |
 | ---------------------- | ----------- | ---------------------------------------------------------------- |
@@ -64,6 +64,19 @@ When Stage 2 evaluates a runtime policy, it builds a Cedar context with exactly 
 | `last_resource`        | String      | Resource of the most recent prior action (`""` if none) (AARM R2) |
 
 `action_count`, `deny_count`, `prior_action_classes`, and `last_resource` are the per-session prior-action context: the policy layer sees what the agent has already attempted in the same session, including denied calls, so it can detect repetition, escalation after denials, or action sequences. The history is bounded (a small ring buffer) so the hot path stays deterministic and memory growth is capped.
+
+For GitHub git and REST ref operations, the normalizer may also add optional context fields:
+
+| Field           | Type   | Meaning                                        |
+| --------------- | ------ | ---------------------------------------------- |
+| `git_provider`  | String | Git provider, currently `"github"`             |
+| `git_owner`     | String | Repository owner or organization               |
+| `git_repo`      | String | Repository name                                |
+| `git_ref`       | String | Full ref, such as `refs/heads/main`            |
+| `git_ref_type`  | String | Coarse ref kind: `branch`, `tag`, or `ref`     |
+| `git_operation` | String | Coarse operation: `read`, `write`, or `delete` |
+
+`git push` is classified by the smart-HTTP `git-receive-pack` rule on `github.com`. That rule only works when HTTPS MITM is enabled for `github.com`; CONNECT-only mode remains a coarse tunnel and cannot enforce branch/ref conditions.
 
 These are the only signals available to a runtime policy. There is intentionally no live agent telemetry, no upstream response data, no LLM signal. That keeps Stage 2 deterministic and under its 200 µs budget.
 

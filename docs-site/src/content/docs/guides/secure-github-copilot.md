@@ -32,6 +32,8 @@ This selects the `copilot` mapping (CONNECT classification for the Copilot and G
 
 The generated `firma.toml` keeps MITM enabled (the bypass list alone keeps `[sidecar.interceptor.https_mitm].enabled = true`) and lists `mappings/copilot.toml` under `rules_paths`.
 
+This profile is intentionally CONNECT-only for `github.com` and `api.github.com`. If you want native GitHub git enforcement for another coding agent, remove `github.com` from `https_mitm.bypass_hosts`, add it to `https_mitm.intercept_hosts`, and use the GitHub mapping instead of the Copilot bypass mapping. Without MITM, the Sidecar cannot see `POST /{owner}/{repo}/git-receive-pack` or `POST /{owner}/{repo}.git/git-receive-pack`, so it cannot classify `git push`, enforce branch/ref policy, or inject a git credential.
+
 ## Step 2: Run Copilot
 
 ```bash

@@ -22,6 +22,7 @@
 mod mapping;
 
 use std::collections::{BTreeMap, HashMap};
+use std::str;
 
 use chrono::{DateTime, Utc};
 use firma_core::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
@@ -257,6 +258,14 @@ impl IntentNormalizer {
                 if let Some(provider) = provider_for_host(&normalized_host) {
                     resource.insert("provider".to_string(), provider.to_string());
                 }
+                let action_class = enrich_github_git_metadata(
+                    request,
+                    &normalized_host,
+                    &normalized_path,
+                    &query_params,
+                    &mut resource,
+                    &rule.action_class,
+                )?;
 
                 let Ok(http_method) = HttpMethod::try_from(&request.method) else {
                     let detail = format!(
@@ -269,7 +278,7 @@ impl IntentNormalizer {
 
                 let envelope = NormalizedEnvelope {
                     intent: ExecutionIntent {
-                        action_class: rule.action_class.clone(),
+                        action_class,
                         resource,
                         params: ActionParams::Http(HttpParams {
                             method: http_method,
@@ -299,6 +308,314 @@ impl IntentNormalizer {
             }
         }
     }
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "normalization helpers return the same domain decision type as normalize"
+)]
+fn enrich_github_git_metadata(
+    request: &RawRequest,
+    normalized_host: &str,
+    normalized_path: &str,
+    query_params: &HashMap<String, String>,
+    resource: &mut BTreeMap<String, String>,
+    action_class: &str,
+) -> Result<String, EnforcementDecision> {
+    if normalized_host == "github.com" {
+        return enrich_github_smart_http_metadata(request, normalized_path, resource, action_class);
+    }
+    if normalized_host == "api.github.com" {
+        return enrich_github_rest_ref_metadata(
+            request,
+            normalized_path,
+            query_params,
+            resource,
+            action_class,
+        );
+    }
+    Ok(action_class.to_string())
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "normalization helpers return the same domain decision type as normalize"
+)]
+fn enrich_github_smart_http_metadata(
+    request: &RawRequest,
+    normalized_path: &str,
+    resource: &mut BTreeMap<String, String>,
+    action_class: &str,
+) -> Result<String, EnforcementDecision> {
+    let Some(repo) = parse_github_git_repo(normalized_path) else {
+        return Ok(action_class.to_string());
+    };
+
+    insert_github_repo_metadata(resource, &repo);
+
+    if normalized_path.ends_with("/info/refs") {
+        resource.insert("git_operation".to_string(), "read".to_string());
+        return Ok(action_class.to_string());
+    }
+    if normalized_path.ends_with("/git-upload-pack") {
+        resource.insert("git_operation".to_string(), "read".to_string());
+        return Ok(action_class.to_string());
+    }
+    if normalized_path.ends_with("/git-receive-pack") {
+        let body = request.body.as_deref().ok_or_else(|| {
+            git_normalization_deny(
+                request,
+                "malformed git-receive-pack request: missing request body",
+            )
+        })?;
+        let update = parse_receive_pack_update(body)
+            .map_err(|detail| git_normalization_deny(request, &detail))?;
+        resource.insert("git_ref".to_string(), update.git_ref.clone());
+        resource.insert(
+            "git_ref_type".to_string(),
+            git_ref_type(&update.git_ref).to_string(),
+        );
+        resource.insert("git_operation".to_string(), update.operation.to_string());
+        if update.operation == "delete" {
+            return Ok("code.destructive".to_string());
+        }
+    }
+
+    Ok(action_class.to_string())
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "normalization helpers return the same domain decision type as normalize"
+)]
+fn enrich_github_rest_ref_metadata(
+    request: &RawRequest,
+    normalized_path: &str,
+    query_params: &HashMap<String, String>,
+    resource: &mut BTreeMap<String, String>,
+    action_class: &str,
+) -> Result<String, EnforcementDecision> {
+    let Some(rest_ref) = parse_github_rest_ref(normalized_path, request.body.as_deref())
+        .map_err(|detail| git_normalization_deny(request, &detail))?
+    else {
+        return Ok(action_class.to_string());
+    };
+
+    insert_github_repo_metadata(resource, &rest_ref.repo);
+    if let Some(git_ref) = rest_ref.git_ref {
+        resource.insert(
+            "git_ref_type".to_string(),
+            git_ref_type(&git_ref).to_string(),
+        );
+        resource.insert("git_ref".to_string(), git_ref);
+    }
+
+    let operation = git_operation_for_rest_method(&request.method, action_class);
+    resource.insert("git_operation".to_string(), operation.to_string());
+    if let Some(service) = query_params.get("service")
+        && service == "git-receive-pack"
+    {
+        resource.insert("git_operation".to_string(), "read".to_string());
+    }
+
+    Ok(action_class.to_string())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GithubRepo {
+    owner: String,
+    repo: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GithubRestRef {
+    repo: GithubRepo,
+    git_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReceivePackUpdate {
+    git_ref: String,
+    operation: &'static str,
+}
+
+fn parse_github_git_repo(path: &str) -> Option<GithubRepo> {
+    let mut segments = path.trim_start_matches('/').split('/');
+    let owner = segments.next()?;
+    let repo_segment = segments.next()?;
+    if owner.is_empty() {
+        return None;
+    }
+    let repo = repo_segment.strip_suffix(".git").unwrap_or(repo_segment);
+    if repo.is_empty() {
+        return None;
+    }
+    Some(GithubRepo {
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+    })
+}
+
+fn parse_github_rest_ref(path: &str, body: Option<&[u8]>) -> Result<Option<GithubRestRef>, String> {
+    let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    if segments.len() < 5
+        || segments.first() != Some(&"repos")
+        || segments.get(3) != Some(&"git")
+        || segments.get(4) != Some(&"refs")
+    {
+        return Ok(None);
+    }
+    let owner = segments
+        .get(1)
+        .copied()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "malformed GitHub git refs request: missing owner".to_string())?;
+    let repo = segments
+        .get(2)
+        .copied()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "malformed GitHub git refs request: missing repo".to_string())?;
+    let suffix = segments.get(5..).unwrap_or_default();
+    let git_ref = if suffix.is_empty() {
+        parse_ref_from_json_body(body)?
+    } else {
+        Some(format!("refs/{}", suffix.join("/")))
+    };
+
+    Ok(Some(GithubRestRef {
+        repo: GithubRepo {
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+        },
+        git_ref,
+    }))
+}
+
+fn parse_ref_from_json_body(body: Option<&[u8]>) -> Result<Option<String>, String> {
+    let Some(body) = body else {
+        return Ok(None);
+    };
+    if body.is_empty() {
+        return Ok(None);
+    }
+    let json: serde_json::Value = serde_json::from_slice(body).map_err(|err| {
+        format!("malformed GitHub git refs request: request body is not JSON: {err}")
+    })?;
+    Ok(json
+        .get("ref")
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string))
+}
+
+fn parse_receive_pack_update(body: &[u8]) -> Result<ReceivePackUpdate, String> {
+    let mut pos = 0usize;
+    let mut selected: Option<ReceivePackUpdate> = None;
+    while pos < body.len() {
+        if body.len().saturating_sub(pos) < 4 {
+            return Err("malformed git-receive-pack request: truncated pkt-line".to_string());
+        }
+        let len_hex = str::from_utf8(&body[pos..pos + 4])
+            .map_err(|_| "malformed git-receive-pack request: non-UTF-8 pkt-line length")?;
+        let len = usize::from_str_radix(len_hex, 16)
+            .map_err(|_| "malformed git-receive-pack request: invalid pkt-line length")?;
+        pos += 4;
+        if len == 0 {
+            break;
+        }
+        if len < 4 {
+            return Err("malformed git-receive-pack request: invalid pkt-line length".to_string());
+        }
+        let payload_len = len - 4;
+        if body.len().saturating_sub(pos) < payload_len {
+            return Err(
+                "malformed git-receive-pack request: truncated pkt-line payload".to_string(),
+            );
+        }
+        let payload = &body[pos..pos + payload_len];
+        pos += payload_len;
+        let update = parse_receive_pack_command(payload)?;
+        if selected.replace(update).is_some() {
+            return Err(
+                "unsupported git-receive-pack request: multiple ref update commands".to_string(),
+            );
+        }
+    }
+
+    selected.ok_or_else(|| "malformed git-receive-pack request: no ref update commands".to_string())
+}
+
+fn parse_receive_pack_command(payload: &[u8]) -> Result<ReceivePackUpdate, String> {
+    let line = str::from_utf8(payload)
+        .map_err(|_| "malformed git-receive-pack request: command is not UTF-8")?
+        .trim_end_matches('\n');
+    let command = line.split_once('\0').map_or(line, |(command, _)| command);
+    let mut fields = command.split_whitespace();
+    let old_id = fields
+        .next()
+        .ok_or_else(|| "malformed git-receive-pack request: missing old object id".to_string())?;
+    let new_id = fields
+        .next()
+        .ok_or_else(|| "malformed git-receive-pack request: missing new object id".to_string())?;
+    let git_ref = fields
+        .next()
+        .ok_or_else(|| "malformed git-receive-pack request: missing ref name".to_string())?;
+    if !is_git_object_id(old_id) || !is_git_object_id(new_id) {
+        return Err("malformed git-receive-pack request: invalid object id".to_string());
+    }
+    if !git_ref.starts_with("refs/") {
+        return Err("malformed git-receive-pack request: invalid ref name".to_string());
+    }
+    let operation = if is_zero_object_id(new_id) {
+        "delete"
+    } else {
+        "write"
+    };
+    Ok(ReceivePackUpdate {
+        git_ref: git_ref.to_string(),
+        operation,
+    })
+}
+
+fn is_git_object_id(value: &str) -> bool {
+    matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_zero_object_id(value: &str) -> bool {
+    is_git_object_id(value) && value.bytes().all(|byte| byte == b'0')
+}
+
+fn insert_github_repo_metadata(resource: &mut BTreeMap<String, String>, repo: &GithubRepo) {
+    resource.insert("git_provider".to_string(), "github".to_string());
+    resource.insert("git_owner".to_string(), repo.owner.clone());
+    resource.insert("git_repo".to_string(), repo.repo.clone());
+}
+
+fn git_ref_type(git_ref: &str) -> &'static str {
+    if git_ref.starts_with("refs/heads/") {
+        "branch"
+    } else if git_ref.starts_with("refs/tags/") {
+        "tag"
+    } else {
+        "ref"
+    }
+}
+
+fn git_operation_for_rest_method(method: &Method, action_class: &str) -> &'static str {
+    if method == &Method::DELETE || action_class == "code.destructive" {
+        "delete"
+    } else if method == &Method::GET {
+        "read"
+    } else {
+        "write"
+    }
+}
+
+fn git_normalization_deny(request: &RawRequest, detail: &str) -> EnforcementDecision {
+    let detail = format!(
+        "{detail}: {} {} (host: {})",
+        request.method, request.path, request.host
+    );
+    EnforcementError::NormalizationFailed { detail }.into_deny(EnforcementStage::Normalization)
 }
 
 fn sanitize_headers(headers: &HashMap<HeaderName, String>) -> HashMap<HeaderName, String> {
@@ -497,6 +814,25 @@ mod tests {
             body: None,
             is_https: true,
         }
+    }
+
+    fn make_request_with_body(method: Method, host: &str, path: &str, body: Vec<u8>) -> RawRequest {
+        RawRequest {
+            method,
+            host: host.to_string(),
+            path: path.to_string(),
+            headers: HashMap::new(),
+            body: Some(body),
+            is_https: true,
+        }
+    }
+
+    fn receive_pack_body(old_id: &str, new_id: &str, git_ref: &str) -> Vec<u8> {
+        let command = format!("{old_id} {new_id} {git_ref}\0report-status\n");
+        let len = command.len() + 4;
+        let mut body = format!("{len:04x}{command}").into_bytes();
+        body.extend_from_slice(b"0000");
+        body
     }
 
     #[test]
@@ -1203,6 +1539,227 @@ mod tests {
             ))
             .unwrap_or_else(|_| panic!("ok"));
         assert_eq!(env.intent.action_class, "code.write");
+    }
+
+    #[test]
+    fn test_github_git_receive_pack_is_code_write() {
+        let normalizer = github_normalizer();
+        let env = normalizer
+            .normalize(&make_request_with_body(
+                Method::POST,
+                "github.com",
+                "/owner/repo.git/git-receive-pack",
+                receive_pack_body(
+                    "1111111111111111111111111111111111111111",
+                    "2222222222222222222222222222222222222222",
+                    "refs/heads/fir-413",
+                ),
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "code.write");
+        assert_eq!(
+            env.intent.resource.get("git_owner").map(String::as_str),
+            Some("owner")
+        );
+        assert_eq!(
+            env.intent.resource.get("git_repo").map(String::as_str),
+            Some("repo")
+        );
+        assert_eq!(
+            env.intent.resource.get("git_ref").map(String::as_str),
+            Some("refs/heads/fir-413")
+        );
+        assert_eq!(
+            env.intent.resource.get("git_operation").map(String::as_str),
+            Some("write")
+        );
+    }
+
+    #[test]
+    fn test_github_git_upload_pack_is_code_read() {
+        let normalizer = github_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                Method::POST,
+                "github.com",
+                "/owner/repo.git/git-upload-pack",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "code.read");
+        assert_eq!(
+            env.intent.resource.get("git_operation").map(String::as_str),
+            Some("read")
+        );
+    }
+
+    #[test]
+    fn test_github_git_upload_pack_without_git_suffix_is_code_read() {
+        let normalizer = github_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                Method::POST,
+                "github.com",
+                "/owner/repo/git-upload-pack",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "code.read");
+        assert_eq!(
+            env.intent.resource.get("git_owner").map(String::as_str),
+            Some("owner")
+        );
+        assert_eq!(
+            env.intent.resource.get("git_repo").map(String::as_str),
+            Some("repo")
+        );
+        assert_eq!(
+            env.intent.resource.get("git_operation").map(String::as_str),
+            Some("read")
+        );
+    }
+
+    #[test]
+    fn test_github_git_info_refs_receive_pack_maps_to_code_read() {
+        let normalizer = github_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                Method::GET,
+                "github.com",
+                "/owner/repo.git/info/refs?service=git-receive-pack",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "code.read");
+        assert_eq!(
+            env.intent.resource.get("git_operation").map(String::as_str),
+            Some("read")
+        );
+    }
+
+    #[test]
+    fn test_github_git_info_refs_without_git_suffix_maps_to_code_read() {
+        let normalizer = github_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                Method::GET,
+                "github.com",
+                "/owner/repo/info/refs?service=git-upload-pack",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "code.read");
+        assert_eq!(
+            env.intent.resource.get("git_repo").map(String::as_str),
+            Some("repo")
+        );
+        assert_eq!(
+            env.intent.resource.get("git_operation").map(String::as_str),
+            Some("read")
+        );
+    }
+
+    #[test]
+    fn test_github_git_receive_pack_delete_is_code_destructive() {
+        let normalizer = github_normalizer();
+        let env = normalizer
+            .normalize(&make_request_with_body(
+                Method::POST,
+                "github.com",
+                "/owner/repo.git/git-receive-pack",
+                receive_pack_body(
+                    "1111111111111111111111111111111111111111",
+                    "0000000000000000000000000000000000000000",
+                    "refs/heads/old-branch",
+                ),
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "code.destructive");
+        assert_eq!(
+            env.intent.resource.get("git_operation").map(String::as_str),
+            Some("delete")
+        );
+        assert_eq!(
+            env.intent.resource.get("git_ref_type").map(String::as_str),
+            Some("branch")
+        );
+    }
+
+    #[test]
+    fn test_github_git_receive_pack_without_git_suffix_is_code_write() {
+        let normalizer = github_normalizer();
+        let env = normalizer
+            .normalize(&make_request_with_body(
+                Method::POST,
+                "github.com",
+                "/owner/repo/git-receive-pack",
+                receive_pack_body(
+                    "1111111111111111111111111111111111111111",
+                    "2222222222222222222222222222222222222222",
+                    "refs/heads/fir-413",
+                ),
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "code.write");
+        assert_eq!(
+            env.intent.resource.get("git_repo").map(String::as_str),
+            Some("repo")
+        );
+        assert_eq!(
+            env.intent.resource.get("git_ref").map(String::as_str),
+            Some("refs/heads/fir-413")
+        );
+    }
+
+    #[test]
+    fn test_github_git_receive_pack_malformed_fails_closed() {
+        let normalizer = github_normalizer();
+        let result = normalizer.normalize(&make_request_with_body(
+            Method::POST,
+            "github.com",
+            "/owner/repo.git/git-receive-pack",
+            b"not-a-pkt-line".to_vec(),
+        ));
+        let decision = result.unwrap_err();
+        assert!(decision.is_deny());
+        assert_eq!(
+            decision.deny_reason(),
+            Some(firma_core::DenyReason::UnclassifiedIntent)
+        );
+    }
+
+    #[test]
+    fn test_github_rest_ref_path_metadata() {
+        let normalizer = github_normalizer();
+        let env = normalizer
+            .normalize(&make_request(
+                Method::PATCH,
+                "api.github.com",
+                "/repos/owner/repo/git/refs/heads/fir-413",
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(
+            env.intent.resource.get("git_ref").map(String::as_str),
+            Some("refs/heads/fir-413")
+        );
+        assert_eq!(
+            env.intent.resource.get("git_operation").map(String::as_str),
+            Some("write")
+        );
+    }
+
+    #[test]
+    fn test_github_rest_ref_create_body_metadata() {
+        let normalizer = github_normalizer();
+        let env = normalizer
+            .normalize(&make_request_with_body(
+                Method::POST,
+                "api.github.com",
+                "/repos/owner/repo/git/refs",
+                br#"{"ref":"refs/heads/fir-413","sha":"abc"}"#.to_vec(),
+            ))
+            .unwrap_or_else(|_| panic!("ok"));
+        assert_eq!(env.intent.action_class, "code.write");
+        assert_eq!(
+            env.intent.resource.get("git_ref").map(String::as_str),
+            Some("refs/heads/fir-413")
+        );
     }
 
     #[test]

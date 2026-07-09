@@ -187,6 +187,22 @@ A few patterns you'll write over and over:
 
 **Use context for graduated controls.** `risk_score`, `budget_remaining`, `action_count`, `session_duration_s` are all in the runtime context. Gate permits with `when { context.field … }` for "permitted up to a point" rules.
 
+**Use Git context for repo and branch scope.** GitHub HTTPS git traffic is classified by the smart-HTTP rules on `github.com`. A `git push` hits `POST /{owner}/{repo}/git-receive-pack` or `POST /{owner}/{repo}.git/git-receive-pack`, which maps to `code.write`; a delete push is promoted to `code.destructive`. These rules require HTTPS MITM for `github.com` because CONNECT-only mode only sees the tunnel.
+
+```cedar
+permit (
+    principal == Firma::Agent::"coding-agent",
+    action == Firma::Action::"code.write",
+    resource
+) when {
+    context.git_provider == "github" &&
+    context.git_owner == "firma-ai" &&
+    context.git_repo == "openfirma" &&
+    context.git_ref == "refs/heads/fir-413" &&
+    context.git_operation == "write"
+};
+```
+
 **Action sets for category controls.** `action in [Firma::Action::"filesystem.write", Firma::Action::"filesystem.delete"]` is more readable and harder to drift than two separate rules.
 
 ## What's next

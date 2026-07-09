@@ -1,4 +1,4 @@
-# GitHub REST API mapping — CONNECT tunnel + 46 rules → 12 action classes.
+# GitHub REST + smart HTTP mapping — 54 rules → 12 action classes.
 # Source of truth: docs/markdown/github_connector.md.
 #
 # MITM required for REST rules (configured via intercept_hosts in firma.toml).
@@ -16,6 +16,45 @@ action_class = "code.review.read"
 [[rules]]
 method = "CONNECT"
 host = "github.com"
+action_class = "code.write"
+
+# ── Git smart HTTP rules (post-MITM only) ───────────────────────────────────
+# These rules require HTTPS MITM for github.com. CONNECT-only mode cannot see
+# the inner request path and remains at the coarse code.write tunnel fallback.
+[[rules]]
+method = "GET"
+host = "github.com"
+path = "/*/*.git/info/refs"
+action_class = "code.read"
+
+[[rules]]
+method = "GET"
+host = "github.com"
+path = "/*/*/info/refs"
+action_class = "code.read"
+
+[[rules]]
+method = "POST"
+host = "github.com"
+path = "/*/*.git/git-upload-pack"
+action_class = "code.read"
+
+[[rules]]
+method = "POST"
+host = "github.com"
+path = "/*/*/git-upload-pack"
+action_class = "code.read"
+
+[[rules]]
+method = "POST"
+host = "github.com"
+path = "/*/*.git/git-receive-pack"
+action_class = "code.write"
+
+[[rules]]
+method = "POST"
+host = "github.com"
+path = "/*/*/git-receive-pack"
 action_class = "code.write"
 
 # ── REST rules (bare host — post-MITM only) ───────────────────────────────────

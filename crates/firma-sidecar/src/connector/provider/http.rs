@@ -143,7 +143,15 @@ impl GenericHttpConnector {
         } else {
             "http"
         };
-        let url = format!("{scheme}://{}", intent.resource_display());
+        let resource_display = intent.resource_display();
+        let outbound_resource = if http.query.is_empty() {
+            resource_display.as_str()
+        } else {
+            resource_display
+                .split_once('?')
+                .map_or(resource_display.as_str(), |(resource, _)| resource)
+        };
+        let url = format!("{scheme}://{outbound_resource}");
         let mut builder = self.client.request(method, url);
 
         if !http.query.is_empty() {

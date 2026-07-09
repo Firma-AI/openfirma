@@ -129,7 +129,7 @@ firma policy test     .firma/policies/fixture.toml      # run allow/deny fixture
 | ----------- | -------------------------------------------- |
 | `anthropic` | `api.anthropic.com`                          |
 | `openai`    | `api.openai.com`                             |
-| `github`    | 44 GitHub REST endpoints → 12 action classes |
+| `github`    | GitHub REST + smart HTTP → 12 action classes |
 | `gmail`     | 41 Gmail REST endpoints → 7 action classes   |
 | `stripe`    | 88 Stripe REST endpoints → 14 action classes |
 | `npm`       | `registry.npmjs.org`                         |

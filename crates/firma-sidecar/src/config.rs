@@ -621,6 +621,16 @@ pub enum CredentialMode {
     Vault,
 }
 
+/// Optional transformation applied to resolved credential material before
+/// injection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialTransform {
+    /// Render a GitHub PAT as the Basic auth value accepted by Git smart HTTP:
+    /// `Basic base64("x-access-token:<token>")`.
+    GithubPatBasic,
+}
+
 /// Credential injection entry for a single external target.
 ///
 /// Each entry selects a mode (`basic` or `vault`) and provides the
@@ -639,6 +649,9 @@ pub struct CredentialConfig {
     /// (e.g. `"Bearer "`).
     #[serde(default)]
     pub prefix: Option<String>,
+    /// Optional transform applied to the resolved secret before injection.
+    #[serde(default)]
+    pub transform: Option<CredentialTransform>,
     // -- basic mode fields --
     /// Environment variable whose value is injected (basic mode).
     #[serde(default)]
@@ -654,6 +667,12 @@ impl CredentialConfig {
     fn validate(&self) -> Result<(), String> {
         if self.target_host.trim().is_empty() {
             return Err("target_host must not be empty".into());
+        }
+        if self.header.as_str().trim().is_empty() {
+            return Err("header must not be empty".into());
+        }
+        if self.transform.is_some() && self.prefix.is_some() {
+            return Err("prefix cannot be combined with transform".into());
         }
         match self.mode {
             CredentialMode::Basic => {
@@ -1077,6 +1096,7 @@ mod tests {
                 header: HeaderName::from_static("authorization"),
                 value_from_env: Some("KEY".to_string()),
                 prefix: None,
+                transform: None,
                 secret_path: None,
             },
         );
@@ -1102,6 +1122,7 @@ mod tests {
                 header: HeaderName::from_static("authorization"),
                 value_from_env: None,
                 prefix: None,
+                transform: None,
                 secret_path: None,
             },
         );
@@ -1117,6 +1138,32 @@ mod tests {
     }
 
     #[test]
+    fn test_sidecar_config_credential_transform_rejects_prefix() {
+        let mut creds = HashMap::new();
+        creds.insert(
+            "github".to_string(),
+            CredentialConfig {
+                mode: CredentialMode::Basic,
+                target_host: "github.com".to_string(),
+                header: HeaderName::from_static("authorization"),
+                value_from_env: Some("GITHUB_TOKEN".to_string()),
+                prefix: Some("Bearer ".to_string()),
+                transform: Some(CredentialTransform::GithubPatBasic),
+                secret_path: None,
+            },
+        );
+        let config = SidecarConfig {
+            credentials: creds,
+            ..SidecarConfig::default()
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.contains("prefix cannot be combined with transform"),
+            "error should mention prefix/transform conflict: {err}"
+        );
+    }
+
+    #[test]
     fn test_sidecar_config_invalid_credential_vault_missing_path() {
         let mut creds = HashMap::new();
         creds.insert(
@@ -1127,6 +1174,7 @@ mod tests {
                 header: HeaderName::from_static("authorization"),
                 value_from_env: None,
                 prefix: None,
+                transform: None,
                 secret_path: None,
             },
         );

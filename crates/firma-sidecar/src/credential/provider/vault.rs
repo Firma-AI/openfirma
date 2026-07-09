@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use firma_core::{ExecutionEnvelope, InjectedCredentials};
 use firma_http::HeaderName;
 
+use crate::credential::provider::{CredentialValueTransform, render_secret_value};
 use crate::credential::{CredentialInjectionError, CredentialInjector};
 
 /// Descriptor for a single credential file rendered by Vault Agent.
@@ -25,6 +26,8 @@ pub struct VaultSecretEntry {
     /// Optional prefix prepended to the raw file content
     /// (e.g. `"Bearer "` to produce `Authorization: Bearer <token>`).
     pub value_prefix: Option<String>,
+    /// Optional transform applied to the raw file content before injection.
+    pub value_transform: Option<CredentialValueTransform>,
     /// Path to the file containing the secret value, rendered by
     /// Vault Agent.
     pub secret_path: PathBuf,
@@ -107,10 +110,8 @@ impl CredentialInjector for VaultCredentialInjector {
                     ),
                 }
             })?;
-            let value = match &entry.value_prefix {
-                Some(prefix) => format!("{prefix}{raw}"),
-                None => raw,
-            };
+            let value =
+                render_secret_value(&raw, entry.value_prefix.as_deref(), entry.value_transform);
             headers.insert(entry.header_name.clone(), value);
         }
 
@@ -175,6 +176,7 @@ mod tests {
             vec![VaultSecretEntry {
                 header_name: HeaderName::from_static("authorization"),
                 value_prefix: Some("Bearer ".to_string()),
+                value_transform: None,
                 secret_path: PathBuf::from("/tmp/fake"),
             }],
         );
@@ -192,6 +194,7 @@ mod tests {
             vec![VaultSecretEntry {
                 header_name: HeaderName::from_static("authorization"),
                 value_prefix: Some("Bearer ".to_string()),
+                value_transform: None,
                 secret_path,
             }],
         )]));
@@ -219,6 +222,7 @@ mod tests {
             vec![VaultSecretEntry {
                 header_name: HeaderName::from_static("x-api-key"),
                 value_prefix: None,
+                value_transform: None,
                 secret_path,
             }],
         )]));
@@ -248,11 +252,13 @@ mod tests {
                 VaultSecretEntry {
                     header_name: HeaderName::from_static("authorization"),
                     value_prefix: Some("Bearer ".to_string()),
+                    value_transform: None,
                     secret_path: token_path,
                 },
                 VaultSecretEntry {
                     header_name: HeaderName::from_static("x-api-key"),
                     value_prefix: None,
+                    value_transform: None,
                     secret_path: key_path,
                 },
             ],
@@ -297,6 +303,7 @@ mod tests {
             vec![VaultSecretEntry {
                 header_name: HeaderName::from_static("authorization"),
                 value_prefix: None,
+                value_transform: None,
                 secret_path: PathBuf::from("/nonexistent/path/secret"),
             }],
         )]));
@@ -323,6 +330,7 @@ mod tests {
         let entry = VaultSecretEntry {
             header_name: HeaderName::from_static("authorization"),
             value_prefix: Some("Bearer ".to_string()),
+            value_transform: None,
             secret_path: PathBuf::from("/tmp/secret"),
         };
         let debug = format!("{entry:?}");

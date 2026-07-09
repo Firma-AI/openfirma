@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use firma_http::HeaderName;
 
-use crate::config;
+use crate::config::{self, CredentialTransform};
 use crate::credential;
 
 /// Builds a [`CredentialInjector`](credential::CredentialInjector)
@@ -52,10 +52,11 @@ pub fn build_credential_injector<S: std::hash::BuildHasher>(
                     ));
                 }
 
-                let value = match &entry.prefix {
-                    Some(prefix) => format!("{prefix}{raw_value}"),
-                    None => raw_value,
-                };
+                let value = credential::provider::render_secret_value(
+                    &raw_value,
+                    entry.prefix.as_deref(),
+                    map_transform(entry.transform),
+                );
 
                 basic_map
                     .entry(entry.target_host.clone())
@@ -81,6 +82,7 @@ pub fn build_credential_injector<S: std::hash::BuildHasher>(
                     .push(credential::provider::VaultSecretEntry {
                         header_name: entry.header.clone(),
                         value_prefix: entry.prefix.clone(),
+                        value_transform: map_transform(entry.transform),
                         secret_path,
                     });
 
@@ -116,5 +118,16 @@ pub fn build_credential_injector<S: std::hash::BuildHasher>(
             // given the is_empty check above, but handle defensively.
             Ok(Box::new(credential::NullCredentialInjector))
         }
+    }
+}
+
+const fn map_transform(
+    transform: Option<CredentialTransform>,
+) -> Option<credential::provider::CredentialValueTransform> {
+    match transform {
+        Some(CredentialTransform::GithubPatBasic) => {
+            Some(credential::provider::CredentialValueTransform::GithubPatBasic)
+        }
+        None => None,
     }
 }

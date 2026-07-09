@@ -15,11 +15,11 @@ Before you write a single rule, decide which canonical classes the destination's
 
 A useful exercise: list the destination's most common endpoints and what each one *does*, then assign the closest class. For a hypothetical `acme-saas.com` with three endpoints:
 
-| Endpoint                              | What it does                       | Class                            |
-| ------------------------------------- | ---------------------------------- | -------------------------------- |
-| `GET /api/v1/users/<id>`              | Read a user record                 | `credential.read`                |
-| `POST /api/v1/users/<id>/notify`      | Send a notification to the user    | `communication.external.send`    |
-| `POST /api/v1/transfers`              | Move money between accounts        | `payment.transfer`               |
+| Endpoint                         | What it does                    | Class                         |
+| -------------------------------- | ------------------------------- | ----------------------------- |
+| `GET /api/v1/users/<id>`         | Read a user record              | `credential.read`             |
+| `POST /api/v1/users/<id>/notify` | Send a notification to the user | `communication.external.send` |
+| `POST /api/v1/transfers`         | Move money between accounts     | `payment.transfer`            |
 
 Three principles to keep in mind:
 
@@ -124,7 +124,7 @@ The shipped demo uses `false` so the demo can focus on its specific routes. Your
 
 The repo includes three large vendor files under `crates/firma-sidecar/config/mappings/`:
 
-- `github.toml` — 44 GitHub REST endpoints → 12 classes.
+- `github.toml` — GitHub REST + smart HTTP → 12 classes.
 - `stripe.toml` — 88 Stripe REST endpoints → 14 classes.
 - `gmail.toml` — 41 Gmail REST endpoints → 7 classes.
 
