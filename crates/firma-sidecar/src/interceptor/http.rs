@@ -239,7 +239,11 @@ impl HttpInterceptor {
         loop {
             tokio::select! {
                 accepted = listener.accept() => {
-                    if let Ok((stream, _)) = accepted {
+                    if let Ok((stream, peer_addr)) = accepted {
+                        tracing::debug!(
+                            peer_addr = %peer_addr,
+                            "http proxy accepted client connection"
+                        );
                         let handler = Arc::clone(&handler);
                         let mitm_runtime = mitm_runtime.clone();
                         let max_request_body_bytes = self.max_request_body_bytes;
@@ -345,6 +349,13 @@ async fn handle_request(
         .get("x-firma-session-id")
         .cloned()
         .unwrap_or_default();
+    tracing::debug!(
+        method = %raw.method,
+        host = %raw.host,
+        path = %path_without_query(&raw.path),
+        session_id = %session_id,
+        "HTTP request received by sidecar"
+    );
 
     let response = match handler.handle(raw, &session_id).await {
         HandledResponse::Ok(response) | HandledResponse::Passthrough(response) => {
@@ -456,6 +467,12 @@ async fn handle_connect_request(
         .cloned()
         .unwrap_or_default();
     let target_info = connect_target_info(&host_with_default_port(req, true));
+    tracing::debug!(
+        host = %target_info.host,
+        port = target_info.port,
+        session_id = %session_id,
+        "CONNECT request received by sidecar"
+    );
     let mitm_candidate = mitm_runtime
         .as_ref()
         .filter(|runtime| runtime.should_intercept_host(&target_info.host))
@@ -1701,6 +1718,10 @@ fn resource_label_from_host(host: &str) -> String {
     } else {
         format!("{host}/")
     }
+}
+
+fn path_without_query(path: &str) -> &str {
+    path.split_once('?').map_or(path, |(path, _)| path)
 }
 
 /// Best-effort extraction of the `x-firma-session-id` header for audit
