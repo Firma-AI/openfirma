@@ -65,6 +65,7 @@ nix = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+firma-config-loader = { workspace = true }
 fs-err = { workspace = true }
 guppy = "0.17"
 http-body-util = { workspace = true }
@@ -84,9 +85,13 @@ wiremock = { workspace = true }
 nix = { workspace = true }
 
 [[test]]
+name = "architecture"
+path = "../../tests/architecture/main.rs"
+
+[[test]]
 name = "e2e"
 path = "../../tests/e2e/main.rs"
 
 [[test]]
-name = "architecture"
-path = "../../tests/architecture/main.rs"
+name = "vscode"
+path = "../../tests/vscode/main.rs"

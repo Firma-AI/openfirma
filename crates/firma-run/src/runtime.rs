@@ -1423,14 +1423,8 @@ mod tests {
         assert!(script.contains("--user-data-dir"));
         assert!(script.contains("--extensions-dir"));
         assert!(script.contains(&real_code.display().to_string()));
-        assert_eq!(
-            env.get("FIRMA_RUN_VSCODE_USER_DATA_DIR"),
-            Some(&state_dir.join("user-data").display().to_string())
-        );
-        assert_eq!(
-            env.get("FIRMA_RUN_VSCODE_EXTENSIONS_DIR"),
-            Some(&state_dir.join("extensions").display().to_string())
-        );
+        assert!(!env.contains_key("FIRMA_RUN_VSCODE_USER_DATA_DIR"));
+        assert!(!env.contains_key("FIRMA_RUN_VSCODE_EXTENSIONS_DIR"));
         let settings_path = state_dir
             .join("user-data")
             .join("User")
@@ -1484,8 +1478,6 @@ mod tests {
             "#!/bin/sh\n\
              set -eu\n\
              {\n\
-             printf 'USER_DATA=%s\\n' \"$FIRMA_RUN_VSCODE_USER_DATA_DIR\"\n\
-             printf 'EXTENSIONS=%s\\n' \"$FIRMA_RUN_VSCODE_EXTENSIONS_DIR\"\n\
              i=0\n\
              for arg in \"$@\"; do\n\
              printf 'ARG_%s=%s\\n' \"$i\" \"$arg\"\n\
@@ -1535,8 +1527,6 @@ mod tests {
         let extensions_dir = state_dir.join("extensions").display().to_string();
         let record = fs::read_to_string(&record_path).unwrap_or_else(|e| panic!("{e}"));
         let expected = [
-            format!("USER_DATA={user_data_dir}"),
-            format!("EXTENSIONS={extensions_dir}"),
             "ARG_0=--no-sandbox".to_string(),
             "ARG_1=--wait".to_string(),
             "ARG_2=--new-window".to_string(),

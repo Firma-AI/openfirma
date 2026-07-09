@@ -64,7 +64,7 @@ pub(super) fn prepare_vscode_shim(
         ))
     })?;
 
-    let script = vscode_shim_script(&real_code);
+    let script = vscode_shim_script(&real_code, &user_data_dir, &extensions_dir);
     std::fs::write(&shim_path, script).map_err(|error| {
         RunError::Internal(format!(
             "write VS Code shim {}: {error}",
@@ -75,14 +75,6 @@ pub(super) fn prepare_vscode_shim(
     set_executable_permissions(&shim_path)?;
     seed_vscode_user_settings(&user_data_dir)?;
 
-    env.insert(
-        "FIRMA_RUN_VSCODE_USER_DATA_DIR".to_string(),
-        user_data_dir.display().to_string(),
-    );
-    env.insert(
-        "FIRMA_RUN_VSCODE_EXTENSIONS_DIR".to_string(),
-        extensions_dir.display().to_string(),
-    );
     env.insert(
         "TMPDIR".to_string(),
         desktop_runtime_dir.display().to_string(),
@@ -457,29 +449,31 @@ pub(super) fn vscode_shim_path(shim_dir: &Path) -> PathBuf {
 }
 
 #[cfg(windows)]
-fn vscode_shim_script(real_code: &Path) -> String {
+fn vscode_shim_script(real_code: &Path, user_data_dir: &Path, extensions_dir: &Path) -> String {
     let quoted_real_code = batch_quote(&real_code.display().to_string());
+    let quoted_user_data_dir = batch_quote(&user_data_dir.display().to_string());
+    let quoted_extensions_dir = batch_quote(&extensions_dir.display().to_string());
     format!(
         "@echo off\r\n\
          setlocal\r\n\
-         if \"%FIRMA_RUN_VSCODE_USER_DATA_DIR%\"==\"\" exit /b 2\r\n\
-         if \"%FIRMA_RUN_VSCODE_EXTENSIONS_DIR%\"==\"\" exit /b 2\r\n\
          call {quoted_real_code} --no-sandbox --wait --new-window \
-         --user-data-dir \"%FIRMA_RUN_VSCODE_USER_DATA_DIR%\" \
-         --extensions-dir \"%FIRMA_RUN_VSCODE_EXTENSIONS_DIR%\" %*\r\n\
+         --user-data-dir {quoted_user_data_dir} \
+         --extensions-dir {quoted_extensions_dir} %*\r\n\
          exit /b %ERRORLEVEL%\r\n"
     )
 }
 
 #[cfg(not(windows))]
-fn vscode_shim_script(real_code: &Path) -> String {
+fn vscode_shim_script(real_code: &Path, user_data_dir: &Path, extensions_dir: &Path) -> String {
     let quoted_real_code = shell_single_quote(&real_code.display().to_string());
+    let quoted_user_data_dir = shell_single_quote(&user_data_dir.display().to_string());
+    let quoted_extensions_dir = shell_single_quote(&extensions_dir.display().to_string());
     format!(
         "#!/bin/sh\n\
          set -eu\n\
          exec {quoted_real_code} --no-sandbox --wait --new-window \
-         --user-data-dir \"${{FIRMA_RUN_VSCODE_USER_DATA_DIR:?}}\" \
-         --extensions-dir \"${{FIRMA_RUN_VSCODE_EXTENSIONS_DIR:?}}\" \"$@\"\n"
+         --user-data-dir {quoted_user_data_dir} \
+         --extensions-dir {quoted_extensions_dir} \"$@\"\n"
     )
 }
 
