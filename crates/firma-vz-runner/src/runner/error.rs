@@ -1,4 +1,5 @@
 use std::io;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use thiserror::Error;
@@ -43,6 +44,34 @@ pub enum RunnerError {
 
     #[error("configure {step}: {reason}")]
     ConfigurationStep { step: &'static str, reason: String },
+
+    #[error("VZ VM plan must use vsock_sidecar network mode")]
+    InvalidVsockNetworkMode,
+
+    #[error("VZ VM plan must request exactly one VSOCK socket device, got {count}")]
+    InvalidSocketDeviceCount { count: usize },
+
+    #[error("VZ VM plan must request a Virtio VSOCK sidecar device")]
+    InvalidSocketDeviceKind,
+
+    #[error("VZ VM plan VSOCK sidecar port must be non-zero")]
+    ZeroSidecarPort,
+
+    #[error("connect VSOCK bridge upstream {addr}: {source}")]
+    SidecarUpstreamConnect {
+        addr: SocketAddr,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("VZ runtime exposed no socket device for Sidecar bridge")]
+    MissingRuntimeSocketDevice,
+
+    #[error("VZ runtime exposed {count} socket device(s), expected 1")]
+    UnexpectedRuntimeSocketDevice { count: usize },
+
+    #[error("VZ runtime socket device is not a VZVirtioSocketDevice")]
+    UnexpectedRuntimeSocketDeviceKind,
 
     #[error("validate VZ VM configuration: {reason}")]
     ConfigurationValidation { reason: String },
