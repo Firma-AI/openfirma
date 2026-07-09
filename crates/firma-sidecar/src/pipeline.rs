@@ -38,7 +38,7 @@ pub use crate::enforcement::constraint_enforcement::{
 pub use crate::enforcement::decision::EnforcementDecision;
 use crate::enforcement::decision::{ConstraintEnforcementStage, DenyIdentity, EnforcementStage};
 pub use crate::enforcement::registry::ActionClassRegistry;
-use crate::enforcement::session_state::Outcome;
+use crate::enforcement::session::Outcome;
 use crate::normalizer::NormalizedEnvelope;
 pub use crate::normalizer::{IntentNormalizer, MappingTable, RawRequest};
 
@@ -266,6 +266,26 @@ impl EnforcementPipeline {
             }
         };
 
+        // Record the policy verdict's outcome into the session's prior-action
+        // history (AARM R2 G3) in a single call, before dispatching the
+        // verdict match. This records the *policy* outcome; a post-enforcement
+        // failure (credential injection ABORT) does not override it — the
+        // audit event captures ABORT separately, and the session history
+        // reflects what the policy layer decided.
+        let policy_outcome = match &verdict {
+            PolicyVerdict::Allow => Outcome::Allow,
+            PolicyVerdict::Modify { .. } => Outcome::Modify,
+            PolicyVerdict::Deny => Outcome::Deny,
+            PolicyVerdict::StepUp { .. } => Outcome::StepUp,
+            PolicyVerdict::Defer { .. } => Outcome::Defer,
+        };
+        self.session_state_store.record_outcome(
+            &verified_sid,
+            &action_class,
+            &resource,
+            policy_outcome,
+        );
+
         // AARM R4 remediation outcomes that do NOT dispatch return the
         // normalized envelope + verified claims for audit, with the
         // verified identity attached. `PolicyVerdict::Deny` is converted to
@@ -274,12 +294,6 @@ impl EnforcementPipeline {
         let modifications = match verdict {
             PolicyVerdict::StepUp { challenge } => {
                 let identity = DenyIdentity::from_claims(&capability.claims);
-                self.session_state_store.record_outcome(
-                    &verified_sid,
-                    &action_class,
-                    &resource,
-                    Outcome::StepUp,
-                );
                 return EnforcementDecision::StepUp {
                     claims: Some(capability.claims),
                     envelope: Some(normalized),
@@ -290,12 +304,6 @@ impl EnforcementPipeline {
             }
             PolicyVerdict::Defer { backoff } => {
                 let identity = DenyIdentity::from_claims(&capability.claims);
-                self.session_state_store.record_outcome(
-                    &verified_sid,
-                    &action_class,
-                    &resource,
-                    Outcome::Defer,
-                );
                 let retry_after_ms = u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX);
                 return EnforcementDecision::Defer {
                     claims: Some(capability.claims),
@@ -306,12 +314,6 @@ impl EnforcementPipeline {
             }
             PolicyVerdict::Deny => {
                 let identity = DenyIdentity::from_claims(&capability.claims);
-                self.session_state_store.record_outcome(
-                    &verified_sid,
-                    &action_class,
-                    &resource,
-                    Outcome::Deny,
-                );
                 return EnforcementDecision::Deny {
                     reason: DenyReason::PolicyDenied,
                     stage: EnforcementStage::ConstraintEnforcement(
@@ -398,12 +400,10 @@ impl EnforcementPipeline {
                 connector_id,
                 reason,
             }) => {
-                self.session_state_store.record_outcome(
-                    &verified_sid,
-                    &action_class,
-                    &resource,
-                    Outcome::Abort,
-                );
+                // The policy outcome (Allow/Modify) was already recorded
+                // above; the credential-injection ABORT is a post-
+                // enforcement operational failure captured in the audit
+                // event, not in the session prior-action history.
                 return EnforcementDecision::Abort {
                     reason: AbortReason::CredentialInjectionFailed,
                     detail: format!("connector {connector_id}: {reason}"),
@@ -412,17 +412,8 @@ impl EnforcementPipeline {
             }
         };
 
-        // Record the outcome of an admitted call (Allow/Modify) into the
-        // session's prior-action history so later decisions observe it
-        // (AARM R2 G3). Done after the verdict resolves and credentials are
-        // injected, so the current decision is not influenced by itself.
-        let outcome = if modifications.is_some() {
-            Outcome::Modify
-        } else {
-            Outcome::Allow
-        };
-        self.session_state_store
-            .record_outcome(&verified_sid, &action_class, &resource, outcome);
+        // The policy outcome (Allow/Modify) was already recorded into the
+        // session prior-action history before the verdict match above.
 
         match modifications {
             Some(modifications) => EnforcementDecision::Modify {
@@ -2199,7 +2190,7 @@ mod tests {
 
     #[tokio::test]
     async fn pipeline_builds_runtime_signals_and_populates_metadata() {
-        use crate::enforcement::session_state::{LruSessionStateStore, SessionStateStore};
+        use crate::enforcement::session::{LruSessionStateStore, SessionStateStore};
         use std::sync::Arc;
 
         let store: Arc<dyn SessionStateStore> = Arc::new(LruSessionStateStore::new(16));
@@ -2230,7 +2221,7 @@ mod tests {
 
     #[tokio::test]
     async fn pipeline_stage1_deny_does_not_increment_action_count() {
-        use crate::enforcement::session_state::{LruSessionStateStore, SessionStateStore};
+        use crate::enforcement::session::{LruSessionStateStore, SessionStateStore};
         use std::sync::Arc;
 
         let store: Arc<dyn SessionStateStore> = Arc::new(LruSessionStateStore::new(16));

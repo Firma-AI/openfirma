@@ -39,7 +39,7 @@ use firma_core::token::matches_resource_scope;
 use firma_core::{AgentId, CapabilityClaims, DenyReason, ModificationSpec, StepUpSpec};
 
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
-use crate::enforcement::session_state::RuntimeSignals;
+use crate::enforcement::session::RuntimeSignals;
 use crate::normalizer::NormalizedEnvelope;
 
 /// The verdict a policy engine returns for one evaluated action.
@@ -525,7 +525,7 @@ impl ConstraintEnforcer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::enforcement::session_state::{ActionOutcome, Outcome, RuntimeSignals};
+    use crate::enforcement::session::{ActionOutcome, Outcome, RuntimeSignals};
     use chrono::Utc;
     use firma_core::*;
     use std::collections::HashMap;
@@ -818,20 +818,19 @@ mod tests {
             .build_context(&envelope, &claims, &signals)
             .expect("build_context must succeed for valid envelopes");
 
-        // The canonical schema declares 16 EnforcementContext fields (7
-        // commonly-tuned + 3 prior-action + 6 payment/transport placeholders);
-        // the 7 commonly-tuned and 3 prior-action ones are asserted here:
+        // The canonical schema declares the `EnforcementContext` fields;
+        // the commonly-tuned and prior-action ones are asserted here:
         assert_eq!(context["session_id"], "sess_001");
         assert!(context["timestamp_ms"].is_i64());
         assert!(context["params"].is_string());
-        assert_eq!(context["risk_score"], serde_json::json!(3));
-        assert_eq!(context["budget_remaining"], serde_json::json!(87));
-        assert_eq!(context["session_duration_s"], serde_json::json!(42));
-        assert_eq!(context["action_count"], serde_json::json!(7));
+        assert_eq!(context["risk_score"], 3);
+        assert_eq!(context["budget_remaining"], 87);
+        assert_eq!(context["session_duration_s"], 42);
+        assert_eq!(context["action_count"], 7);
         // Prior-action context (AARM R2 G3) — fresh session defaults.
-        assert_eq!(context["deny_count"], serde_json::json!(0));
+        assert_eq!(context["deny_count"], 0);
         assert_eq!(context["prior_action_classes"], serde_json::json!([]));
-        assert_eq!(context["last_resource"], serde_json::json!(""));
+        assert_eq!(context["last_resource"], "");
 
         // Schema does not declare action_class / resource / agent_id /
         // timestamp — they are passed as Cedar principal/action/resource

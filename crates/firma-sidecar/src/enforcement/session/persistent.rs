@@ -41,7 +41,7 @@ use firma_core::SessionId;
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
 
-use super::session_state::{Outcome, RuntimeSignals, SessionRecord, SessionStateStore};
+use super::state::{Outcome, RuntimeSignals, SessionRecord, SessionStateStore};
 
 /// Append-only JSONL-backed session state store.
 pub struct PersistentSessionStateStore {
@@ -65,7 +65,7 @@ struct LogEntry {
     #[serde(default)]
     deny_count: u64,
     #[serde(default)]
-    history: Vec<super::session_state::ActionOutcome>,
+    history: Vec<super::state::ActionOutcome>,
     #[serde(default)]
     last_provenance: Option<String>,
 }
@@ -114,7 +114,7 @@ impl SessionStateStore for PersistentSessionStateStore {
         };
         let record = guard
             .cache
-            .get_or_insert_mut(session_id.clone(), SessionRecord::fresh);
+            .get_or_insert_mut(session_id.clone(), SessionRecord::default);
         record.action_count = record.action_count.saturating_add(1);
         let count = record.action_count;
         let entry = LogEntry {
@@ -176,7 +176,7 @@ impl SessionStateStore for PersistentSessionStateStore {
         };
         let record = guard
             .cache
-            .get_or_insert_mut(session_id.clone(), SessionRecord::fresh);
+            .get_or_insert_mut(session_id.clone(), SessionRecord::default);
         record.push_outcome(action_class.to_string(), resource.to_string(), outcome);
         let entry = LogEntry {
             sid: session_id.to_string(),
@@ -215,8 +215,8 @@ impl SessionStateStore for PersistentSessionStateStore {
         };
         let record = guard
             .cache
-            .get_or_insert_mut(session_id.clone(), SessionRecord::fresh);
-        let new = super::session_state::next_provenance(
+            .get_or_insert_mut(session_id.clone(), SessionRecord::default);
+        let new = super::state::next_provenance(
             record.last_provenance.as_deref(),
             context_hash,
             action_class,
@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn outcome_history_survives_restart() {
-        use crate::enforcement::session_state::{HISTORY_CAP, Outcome};
+        use crate::enforcement::session::state::{HISTORY_CAP, Outcome};
         let path = tmpfile();
         {
             let store = PersistentSessionStateStore::open(&path, 16).expect("open");

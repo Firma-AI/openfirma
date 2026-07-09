@@ -22,6 +22,7 @@
 //!   (fail-closed boundary).
 //! - [`registry`] — Canonical Action Class Registry v0.1 (15 action classes).
 //! - [`revocation`] — Bloom filter + LRU revocation cache.
+//! - [`session`] — Per-session runtime state store (LRU + persistent backend).
 
 pub mod capability_map;
 pub mod capability_validation;
@@ -31,7 +32,5 @@ pub mod decision;
 pub mod error;
 pub mod registry;
 pub mod revocation;
-pub mod session_state;
-pub mod session_state_persistent;
-pub use session_state::{LruSessionStateStore, SessionStateStore};
-pub use session_state_persistent::PersistentSessionStateStore;
+pub mod session;
+pub use session::{LruSessionStateStore, PersistentSessionStateStore, SessionStateStore};

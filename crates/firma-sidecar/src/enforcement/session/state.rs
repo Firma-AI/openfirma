@@ -5,7 +5,7 @@
 //! (cumulative, placeholder 0.0 in V1), `risk_score` (placeholder 0.0 in
 //! V1). Storage is in-memory with LRU eviction by default; a
 //! file-backed persistent backend is available via
-//! [`crate::enforcement::session_state_persistent::PersistentSessionStateStore`]
+//! [`crate::enforcement::session::PersistentSessionStateStore`]
 //! (selected by `constraint_enforcement.session_state_backend = "persistent"`).
 //!
 //! The default in-memory store (`LruSessionStateStore`) evicts the
@@ -211,7 +211,7 @@ pub struct LruSessionStateStore {
     inner: Mutex<LruCache<SessionId, SessionRecord>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub(crate) struct SessionRecord {
     pub(crate) action_count: u64,
     pub(crate) budget_consumed: f64,
@@ -226,20 +226,6 @@ pub(crate) struct SessionRecord {
 }
 
 impl SessionRecord {
-    /// Fresh record with all-zero scalars and empty history. Non-`const`
-    /// because `history` heap-allocates.
-    #[must_use]
-    pub(crate) fn fresh() -> Self {
-        Self {
-            action_count: 0,
-            budget_consumed: 0.0,
-            risk_score: 0.0,
-            deny_count: 0,
-            history: Vec::new(),
-            last_provenance: None,
-        }
-    }
-
     /// Append an outcome to the bounded history, evicting the oldest
     /// entry when the cap is exceeded (FIFO ring).
     pub(crate) fn push_outcome(
@@ -292,7 +278,7 @@ impl SessionStateStore for LruSessionStateStore {
             // still fail-closed if policies require higher counts.
             return 1;
         };
-        let record = guard.get_or_insert_mut(session_id.clone(), SessionRecord::fresh);
+        let record = guard.get_or_insert_mut(session_id.clone(), SessionRecord::default);
         record.action_count = record.action_count.saturating_add(1);
         record.action_count
     }
@@ -325,7 +311,7 @@ impl SessionStateStore for LruSessionStateStore {
             // state is unavailable, consistent with the other methods.
             return;
         };
-        let record = guard.get_or_insert_mut(session_id.clone(), SessionRecord::fresh);
+        let record = guard.get_or_insert_mut(session_id.clone(), SessionRecord::default);
         record.push_outcome(action_class.to_string(), resource.to_string(), outcome);
     }
 
@@ -340,7 +326,7 @@ impl SessionStateStore for LruSessionStateStore {
             // Mutex poisoned — return empty (attestational, not policy-binding).
             return String::new();
         };
-        let record = guard.get_or_insert_mut(session_id.clone(), SessionRecord::fresh);
+        let record = guard.get_or_insert_mut(session_id.clone(), SessionRecord::default);
         let new = next_provenance(
             record.last_provenance.as_deref(),
             context_hash,
