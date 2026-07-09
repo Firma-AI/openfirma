@@ -55,6 +55,12 @@ jobs:
       - name: Run demo CI driver
         run: timeout 90 just demo-ci
 
+      - name: Run Git demo CI driver
+        env:
+          FIRMA_GIT_DEMO_GITHUB_TOKEN: ${{ secrets.FIRMA_GIT_DEMO_GITHUB_TOKEN }}
+          FIRMA_GIT_DEMO_REPO: ${{ vars.FIRMA_GIT_DEMO_REPO }}
+        run: timeout 180 just git-demo-ci
+
       - name: Assert audit ALLOW + DENY events
         run: |
           set -euo pipefail

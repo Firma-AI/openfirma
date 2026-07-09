@@ -94,5 +94,8 @@ demo-repl:
 demo-ci:
   ./examples/demo/run.sh ci
 
+git-demo-ci:
+  ./examples/firma-git-demo/run.sh ci
+
 managed-seccomp-compat-check:
   ./scripts/seccomp/check-managed-compatibility.sh

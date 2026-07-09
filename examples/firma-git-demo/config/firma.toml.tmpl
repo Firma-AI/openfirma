@@ -1,0 +1,72 @@
+[authority]
+listen_addr = "{{AUTHORITY_ADDR}}"
+policy_dir = "policies/"
+issuance_policy_dir = "issuance-policies/"
+revocation_file = "revocations.txt"
+key_file = "firma-authority.key"
+tls_cert_path = "authority.crt"
+tls_key_path = "authority.key"
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 30
+log_level = "info"
+
+[sidecar.interceptor]
+mode = "http_proxy"
+listen_addr = "{{SIDECAR_PROXY_ADDR}}"
+drain_timeout_secs = 30
+
+[sidecar.interceptor.https_mitm]
+intercept_hosts = ["github.com"]
+
+[sidecar.policy]
+dir = "policies"
+
+[sidecar.ca]
+dir = "{{STATE_DIR}}/firma-ca"
+
+[sidecar.log]
+level = "info"
+
+[sidecar.mapping]
+rules_path = "{{ROOT}}/crates/firma-sidecar/config/mappings/github.toml"
+default_protected = true
+
+[sidecar.capability_validation]
+clock_skew_tolerance_seconds = 5
+
+[sidecar.constraint_enforcement]
+bundle_ttl_seconds = 60
+enforcement_timeout_ms = 50
+
+[sidecar.revocation]
+capacity = 100000
+fpr = 0.001
+lru_capacity = 10000
+
+[sidecar.connector]
+default_timeout_ms = 30000
+
+[[sidecar.connector.hosts]]
+host = "github.com"
+rps = 30
+burst = 10
+timeout_ms = 30000
+
+[sidecar.authority]
+url = "https://{{AUTHORITY_ADDR}}"
+public_key_path = "firma-authority.pub"
+ca_cert_path = "authority-ca.crt"
+
+[sidecar.capability_seed]
+paths = ["capability-git-demo.toml"]
+
+[sidecar.audit]
+sink = "stdout"
+signing_key_path = "audit.key"
+
+[sidecar.credentials.github_git]
+target_host = "github.com"
+mode = "basic"
+header = "Authorization"
+value_from_env = "FIRMA_GIT_DEMO_GITHUB_TOKEN"
+transform = "github_pat_basic"
