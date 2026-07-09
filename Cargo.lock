@@ -1540,6 +1540,7 @@ dependencies = [
  "firma-config-loader",
  "firma-core",
  "firma-fs",
+ "firma-http",
  "firma-protobuf",
  "firma-runtime-state",
  "firma-sidecar",

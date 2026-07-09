@@ -121,6 +121,174 @@ path = \"/*\"
 action_class = \"communication.external.send\"
 ";
 
+const VSCODE_MINIMAL_MAPPING_RULES_TOML: &str = "\
+# Visual Studio Code zero-config mapping — CONNECT-level classification for
+# core services, marketplace, account sync, and GitHub account flows.
+
+[[rules]]
+method = \"CONNECT\"
+host = \"update.code.visualstudio.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"code.visualstudio.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.code.visualstudio.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"vscode.dev\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.vscode.dev\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"az764295.vo.msecnd.net\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"vscodeexperiments.azureedge.net\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"default.exp-tas.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"marketplace.visualstudio.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.gallerycdn.vsassets.io\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.gallery.vsassets.io\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.vscode-unpkg.net\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.vscode-cdn.net\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"vscode-sync.trafficmanager.net\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.vscode-sync.trafficmanager.net\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"login.microsoftonline.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"login.live.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.microsoft.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.msauth.net\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.msftauth.net\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"github.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.github.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"api.github.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"uploads.github.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.githubusercontent.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.ghe.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"accounts.google.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.gstatic.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.googleusercontent.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"appleid.apple.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"idmsa.apple.com\"
+action_class = \"communication.external.send\"
+
+[[rules]]
+method = \"CONNECT\"
+host = \"*.cdn-apple.com\"
+action_class = \"communication.external.send\"
+";
+
+const VSCODE_GITHUB_MITM_BYPASS_HOSTS: &[&str] =
+    &["github.com", "api.github.com", "uploads.github.com"];
+
 /// Inputs for [`synthesize`].
 #[doc(hidden)]
 #[derive(Debug, Clone)]
@@ -245,9 +413,52 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
         override_sidecar_mode(&mut value, "monitor")?;
     }
     ensure_audit_signing_key(&mut value, req.out_path)?;
-    ensure_mapping_rules(&mut value, req.out_path)?;
+    // GitHub is strict-MITM by default, which skips CONNECT enforcement. The
+    // VS Code profile classifies its GitHub account traffic at CONNECT level.
+    ensure_vscode_github_mitm_bypass(&mut value, req.agent_id)?;
+    ensure_mapping_rules(&mut value, req.out_path, req.agent_id)?;
     write_atomic(req.out_path, &value)?;
     Ok(source)
+}
+
+fn ensure_vscode_github_mitm_bypass(
+    value: &mut toml::Value,
+    agent_id: &str,
+) -> Result<(), RunError> {
+    if !is_vscode_agent(agent_id) {
+        return Ok(());
+    }
+
+    let sidecar = sidecar_table_mut(value)?;
+    let interceptor = sidecar
+        .entry("interceptor".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[sidecar.interceptor] is not a table".into()))?;
+    let mitm = interceptor
+        .entry("https_mitm".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| {
+            RunError::Internal("[sidecar.interceptor.https_mitm] is not a table".into())
+        })?;
+    let bypass_hosts = mitm
+        .entry("bypass_hosts".to_string())
+        .or_insert_with(|| toml::Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| {
+            RunError::Internal("interceptor.https_mitm.bypass_hosts is not an array".into())
+        })?;
+
+    for host in VSCODE_GITHUB_MITM_BYPASS_HOSTS {
+        if !bypass_hosts
+            .iter()
+            .any(|configured| configured.as_str() == Some(host))
+        {
+            bypass_hosts.push(toml::Value::String((*host).to_string()));
+        }
+    }
+    Ok(())
 }
 
 fn select_template(req: &SynthesizeRequest<'_>) -> TemplateSource {
@@ -644,7 +855,11 @@ fn generate_ephemeral_audit_key_pem() -> Result<String, RunError> {
         .map_err(|error| RunError::Internal(format!("encode audit signing key pem: {error}")))
 }
 
-fn ensure_mapping_rules(value: &mut toml::Value, out_path: &Path) -> Result<(), RunError> {
+fn ensure_mapping_rules(
+    value: &mut toml::Value,
+    out_path: &Path,
+    agent_id: &str,
+) -> Result<(), RunError> {
     let sidecar = sidecar_table_mut(value)?;
     let mapping = sidecar
         .entry("mapping".to_string())
@@ -660,9 +875,9 @@ fn ensure_mapping_rules(value: &mut toml::Value, out_path: &Path) -> Result<(), 
     })?;
     let rules_path = parent.join("mapping-rules.toml");
     if !rules_path.exists() {
-        std::fs::write(&rules_path, MINIMAL_MAPPING_RULES_TOML).map_err(|error| {
-            RunError::Internal(format!("write {}: {error}", rules_path.display()))
-        })?;
+        std::fs::write(&rules_path, minimal_mapping_rules_for_agent(agent_id)).map_err(
+            |error| RunError::Internal(format!("write {}: {error}", rules_path.display())),
+        )?;
     }
 
     let has_rules_path = mapping
@@ -680,6 +895,19 @@ fn ensure_mapping_rules(value: &mut toml::Value, out_path: &Path) -> Result<(), 
         mapping.insert("default_protected".to_string(), toml::Value::Boolean(true));
     }
     Ok(())
+}
+
+fn minimal_mapping_rules_for_agent(agent_id: &str) -> &'static str {
+    if is_vscode_agent(agent_id) {
+        VSCODE_MINIMAL_MAPPING_RULES_TOML
+    } else {
+        MINIMAL_MAPPING_RULES_TOML
+    }
+}
+
+fn is_vscode_agent(agent_id: &str) -> bool {
+    firma_config_loader::AgentProfile::from_name(agent_id)
+        .is_some_and(|profile| profile == firma_config_loader::AgentProfile::Vscode)
 }
 
 /// Append the per-session capability seed file to `[capability_seed].paths`
@@ -777,7 +1005,10 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
-    use super::{configure_capability_seed, normalize_to_sectioned_sidecar};
+    use super::{
+        SynthesizeRequest, TemplateSource, configure_capability_seed,
+        normalize_to_sectioned_sidecar, synthesize,
+    };
 
     #[test]
     fn capability_seed_path_is_injected_and_no_preflight() {
@@ -797,5 +1028,41 @@ mod tests {
                 .any(|p| p.as_str() == Some("/run/firma/capabilities/sb.toml"))
         );
         assert!(sidecar.get("preflight").is_none());
+    }
+
+    #[test]
+    fn vscode_minimal_synthesis_writes_marketplace_mapping_rules() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
+        let cfg_path = tmp.path().join("sidecar.toml");
+        let source = synthesize(SynthesizeRequest {
+            agent_id: "vscode",
+            session_id: "sess_001",
+            explicit_template: None,
+            env_template: None,
+            cwd_template: None,
+            socket_path: &tmp.path().join("sidecar.sock"),
+            listen_addr: Some(
+                "127.0.0.1:18080"
+                    .parse()
+                    .unwrap_or_else(|error| panic!("{error}")),
+            ),
+            out_path: &cfg_path,
+            authority_url: None,
+            authority_ca_cert: None,
+            authority_pub_key: None,
+            authority_credentials: None,
+            capability_seed_path: None,
+            audit_fallback_path: None,
+            monitor_mode: false,
+        })
+        .unwrap_or_else(|error| panic!("{error}"));
+
+        assert_eq!(source, TemplateSource::Minimal);
+        let rules_path = tmp.path().join("mapping-rules.toml");
+        let rules = std::fs::read_to_string(&rules_path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", rules_path.display()));
+        assert!(rules.contains("marketplace.visualstudio.com"));
+        assert!(rules.contains("vscode-sync.trafficmanager.net"));
+        assert!(!rules.contains("api.openai.com"));
     }
 }
