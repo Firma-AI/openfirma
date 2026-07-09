@@ -39,6 +39,11 @@ Workspace lints are strict and enforced in CI:
 Do not use `.unwrap()`, `.expect()`, `panic!()`, or `unsafe`. Prefer
 `Result<T, E>` with `thiserror` for error handling.
 
+## Rust Tests
+
+Before adding or moving Rust tests, load and follow the
+[`rust-tests-guidelines`](.claude/skills/rust-tests-guidelines/SKILL.md) skill.
+
 ## Supported Platforms
 
 OpenFirma supports only Unix and Windows targets. When implementing
