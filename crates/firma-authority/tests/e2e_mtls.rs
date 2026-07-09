@@ -8,6 +8,7 @@
 #![allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 
 use std::io::Write as _;
+use std::net::{IpAddr, SocketAddr};
 
 use firma_authority::{AuthorityConfig, AuthorityTlsConfig, Server};
 use firma_protobuf::v1::WatchPolicyBundleRequest;
@@ -19,6 +20,7 @@ use rcgen::{
 };
 use tempfile::TempDir;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
 
 // ---------------------------------------------------------------------------
@@ -50,7 +52,10 @@ fn generate_mtls_certs() -> MtlsCerts {
 
     // Server cert
     let server_key = KeyPair::generate().unwrap();
-    let server_params = CertificateParams::new(vec!["localhost".to_string()]).unwrap();
+    let mut server_params = CertificateParams::new(vec!["localhost".to_string()]).unwrap();
+    server_params
+        .subject_alt_names
+        .push(SanType::IpAddress(IpAddr::from([127, 0, 0, 1])));
     let server_cert = server_params
         .signed_by(&server_key, &server_ca_cert, &server_ca_key)
         .unwrap();
@@ -123,6 +128,7 @@ struct MtlsTestServer {
     port: u16,
     _temp_dir: TempDir,
     shutdown_tx: oneshot::Sender<()>,
+    server_handle: JoinHandle<()>,
 }
 
 impl MtlsTestServer {
@@ -197,27 +203,49 @@ impl MtlsTestServer {
             .expect("failed to create mTLS server");
         let port = server.port();
 
-        tokio::spawn(async move {
+        let server_handle = tokio::spawn(async move {
             server.run().await.expect("server failed");
         });
 
-        // Brief delay for the server to become ready.
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        wait_for_tcp_listen(SocketAddr::from(([127, 0, 0, 1], port))).await;
 
         Self {
             port,
             _temp_dir: temp_dir,
             shutdown_tx,
+            server_handle,
         }
     }
 
-    fn stop(self) {
+    async fn stop(self) {
         let _ = self.shutdown_tx.send(());
+        let mut server_handle = self.server_handle;
+        if tokio::time::timeout(tokio::time::Duration::from_secs(1), &mut server_handle)
+            .await
+            .is_err()
+        {
+            server_handle.abort();
+            let _ = server_handle.await;
+        }
     }
 
     fn url(&self) -> String {
-        format!("https://localhost:{}", self.port)
+        format!("https://127.0.0.1:{}", self.port)
     }
+}
+
+async fn wait_for_tcp_listen(addr: SocketAddr) {
+    let start = std::time::Instant::now();
+    let deadline = tokio::time::Duration::from_secs(2);
+
+    while start.elapsed() < deadline {
+        match tokio::net::TcpStream::connect(addr).await {
+            Ok(_) => return,
+            Err(_) => tokio::time::sleep(tokio::time::Duration::from_millis(10)).await,
+        }
+    }
+
+    panic!("mTLS test server did not start listening on {addr} within {deadline:?}");
 }
 
 /// Build a gRPC channel with mTLS client identity to the test server.
@@ -301,7 +329,7 @@ async fn mtls_allow_listed_client_receives_policy_bundle() {
         "expected a policy bundle update from allow-listed client"
     );
 
-    server.stop();
+    server.stop().await;
 }
 
 /// A Sidecar whose client cert CN/SAN is NOT in the allow-list is rejected
@@ -344,6 +372,8 @@ async fn mtls_non_allow_listed_client_rejected_at_handshake() {
         result.is_some(),
         "non-allow-listed client must be rejected; got Ok (should have failed)"
     );
+
+    server.stop().await;
 }
 
 /// A Sidecar that presents NO client certificate is rejected at the TLS
@@ -374,7 +404,7 @@ async fn mtls_missing_client_cert_rejected_at_handshake() {
         "client without cert must be rejected; got Ok (should have failed)"
     );
 
-    server.stop();
+    server.stop().await;
 }
 
 /// With a CN-based identity (no SAN), the CN is matched against the allow-list.
@@ -414,7 +444,7 @@ async fn mtls_cn_identity_matched_when_no_san() {
         "CN-matched allow-listed client should connect; got: {stream_result:?}"
     );
 
-    server.stop();
+    server.stop().await;
 }
 
 /// A valid client cert signed by the WRONG CA is rejected (chain validation
@@ -471,5 +501,5 @@ async fn mtls_wrong_client_ca_rejected_at_handshake() {
         "cert signed by rogue CA must be rejected; got Ok (should have failed)"
     );
 
-    server.stop();
+    server.stop().await;
 }
