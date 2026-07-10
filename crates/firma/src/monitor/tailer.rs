@@ -54,7 +54,7 @@ fn tail_inner(
     follow: bool,
     tx: Sender<Line>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    mut ready: Option<Sender<()>>,
+    ready: Option<Sender<()>>,
 ) {
     use std::sync::atomic::Ordering;
 
@@ -84,7 +84,7 @@ fn tail_inner(
             trace!(?source, "seeking to EOF");
             let _ = reader.seek(SeekFrom::End(0));
         }
-        if let Some(ready_tx) = ready.take() {
+        if let Some(ready_tx) = ready.as_ref() {
             let _ = ready_tx.send(());
         }
 
@@ -230,5 +230,50 @@ mod tests {
 
         let lines: Vec<String> = rx.iter().map(|l| l.raw).collect();
         assert_eq!(lines, vec!["first".to_string(), "second".to_string()]);
+    }
+
+    #[test]
+    fn follows_lines_after_rotation() {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("audit.jsonl");
+        let rotated = dir.path().join("audit.1.jsonl");
+        std::fs::write(&path, "").expect("seed");
+        let (tx, rx) = channel::<Line>();
+        let (ready_tx, ready_rx) = channel::<()>();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = Arc::clone(&stop);
+        let path_thread = path.clone();
+        let handle = std::thread::spawn(move || {
+            tail_inner(
+                path_thread,
+                Source::Audit,
+                None,
+                true,
+                tx,
+                stop_thread,
+                Some(ready_tx),
+            );
+        });
+
+        ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("initial ready");
+        std::fs::rename(&path, &rotated).expect("rotate");
+        std::fs::write(&path, "").expect("recreate");
+        ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("reopen ready");
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open replacement");
+        writeln!(file, "after-rotate").expect("write replacement");
+
+        let got = rx.recv_timeout(Duration::from_secs(2)).expect("line");
+        assert_eq!(got.raw, "after-rotate");
+
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        handle.join().ok();
     }
 }
