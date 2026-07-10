@@ -1,0 +1,168 @@
+# Visual Studio Code mapping — CONNECT-level classification for VS Code core
+# services, marketplace, account sync, and common embedded agent extensions.
+# This mapping intentionally avoids HTTPS MITM in v1.
+
+# VS Code core update, docs, web, and experiments.
+[[rules]]
+method = "CONNECT"
+host = "update.code.visualstudio.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "code.visualstudio.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.code.visualstudio.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "vscode.dev"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.vscode.dev"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "az764295.vo.msecnd.net"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "vscodeexperiments.azureedge.net"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "default.exp-tas.com"
+action_class = "communication.external.send"
+
+# Marketplace, gallery, and web extension assets.
+[[rules]]
+method = "CONNECT"
+host = "marketplace.visualstudio.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.gallerycdn.vsassets.io"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.gallery.vsassets.io"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.vscode-unpkg.net"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.vscode-cdn.net"
+action_class = "communication.external.send"
+
+# Settings Sync and Microsoft account flows.
+[[rules]]
+method = "CONNECT"
+host = "vscode-sync.trafficmanager.net"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.vscode-sync.trafficmanager.net"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "login.microsoftonline.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "login.live.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.microsoft.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.msauth.net"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.msftauth.net"
+action_class = "communication.external.send"
+
+# GitHub account and repository flows.
+[[rules]]
+method = "CONNECT"
+host = "github.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.github.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "api.github.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "uploads.github.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.githubusercontent.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.ghe.com"
+action_class = "communication.external.send"
+
+# GitHub social sign-in providers.
+[[rules]]
+method = "CONNECT"
+host = "accounts.google.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.gstatic.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.googleusercontent.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "appleid.apple.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "idmsa.apple.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.cdn-apple.com"
+action_class = "communication.external.send"

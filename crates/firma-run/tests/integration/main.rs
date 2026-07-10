@@ -5,6 +5,7 @@ mod authority_autostart_ready_scrape;
 mod authority_autostart_reuse;
 mod authority_autostart_timeout;
 mod authority_bootstrap_prompt;
+mod profile_alias;
 mod sidecar_autostart_env_sandbox_id;
 mod sidecar_autostart_kill_on_drop;
 mod sidecar_autostart_monitor_env;

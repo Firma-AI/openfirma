@@ -909,7 +909,7 @@ fn prompt_mappings_with_default(
     theme: &ColorfulTheme,
     default: Option<&[Mapping]>,
 ) -> Result<Vec<Mapping>> {
-    let variants = Mapping::value_variants();
+    let variants = Mapping::CONFIG_CHOICES;
     let items: Vec<String> = variants
         .iter()
         .map(|m| format!("{:<12}  {}", m.as_str(), m.description()))
@@ -967,7 +967,7 @@ fn collect_profile(
 }
 
 fn prompt_profile_with_default(theme: &ColorfulTheme, default: AgentProfile) -> Result<String> {
-    let variants = AgentProfile::value_variants();
+    let variants = config_profile_choices();
     let items: Vec<String> = variants
         .iter()
         .map(|p| format!("{:<16}  {}", p.as_str(), p.description()))
@@ -989,10 +989,21 @@ fn prompt_profile_with_default(theme: &ColorfulTheme, default: AgentProfile) -> 
     Ok(chosen)
 }
 
+fn config_profile_choices() -> &'static [AgentProfile] {
+    &[
+        AgentProfile::ClaudeCode,
+        AgentProfile::Codex,
+        AgentProfile::Copilot,
+        AgentProfile::Generic,
+        AgentProfile::Vscode,
+    ]
+}
+
 fn profile_default_mappings(profile: &str) -> Vec<Mapping> {
     match profile {
         "codex" => vec![Mapping::Openai, Mapping::Github],
         "copilot" => vec![Mapping::Copilot],
+        "vscode" => vec![Mapping::Vscode],
         _ => vec![Mapping::Anthropic],
     }
 }
@@ -1258,6 +1269,7 @@ fn provider_to_mappings(provider: &str) -> Vec<Mapping> {
     match provider {
         "openai" => vec![Mapping::Openai],
         "github" => vec![Mapping::Copilot],
+        "vscode" => vec![Mapping::Vscode],
         _ => vec![Mapping::Anthropic],
     }
 }
@@ -1270,6 +1282,7 @@ fn provider_to_profile(provider: &str) -> String {
             AgentProfile::ClaudeCode.as_str().to_string()
         }
         p if AgentProfile::Copilot.provider() == p => AgentProfile::Copilot.as_str().to_string(),
+        p if AgentProfile::Vscode.provider() == p => AgentProfile::Vscode.as_str().to_string(),
         _ => AgentProfile::Generic.as_str().to_string(),
     }
 }
@@ -1309,6 +1322,25 @@ mod tests {
                 .map(Mapping::as_str)
                 .collect::<Vec<_>>(),
             vec!["openai", "github"]
+        );
+    }
+
+    #[test]
+    fn vscode_profile_scaffolds_vscode_mapping() {
+        assert_eq!(
+            super::profile_default_mappings("vscode")
+                .iter()
+                .map(Mapping::as_str)
+                .collect::<Vec<_>>(),
+            vec!["vscode"]
+        );
+        assert_eq!(super::provider_to_profile("vscode"), "vscode");
+        assert_eq!(
+            super::provider_to_mappings("vscode")
+                .iter()
+                .map(Mapping::as_str)
+                .collect::<Vec<_>>(),
+            vec!["vscode"]
         );
     }
 
@@ -1390,6 +1422,7 @@ mod tests {
             Mapping::Pypi,
             Mapping::Cargo,
             Mapping::Stripe,
+            Mapping::Vscode,
         ];
         make_files(&Posture::Dev, &all_mappings, &[]);
     }
@@ -1632,6 +1665,29 @@ mod tests {
                 .any(|r| r.host == "api.stripe.com" && r.path.is_some()),
             "REST rules missing from stripe mapping"
         );
+    }
+
+    #[test]
+    fn vscode_mapping_has_core_connect_rules_without_embedded_agent_hosts() {
+        let rules = parse_rules(Mapping::Vscode.static_content()).rules;
+        assert!(
+            rules.iter().all(|rule| rule.path.is_none()),
+            "vscode mapping must stay CONNECT-level in v1"
+        );
+        for agent_host in [
+            "api.githubcopilot.com",
+            "api.individual.githubcopilot.com",
+            "*.openai.com",
+            "chatgpt.com",
+            "*.anthropic.com",
+            "*.claude.com",
+            "*.claude.ai",
+        ] {
+            assert!(
+                rules.iter().all(|rule| rule.host != agent_host),
+                "agent host {agent_host} should be selected through its own mapping"
+            );
+        }
     }
 
     #[test]

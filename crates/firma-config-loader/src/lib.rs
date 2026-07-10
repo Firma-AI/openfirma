@@ -3,6 +3,12 @@
 //! Resolves a single `firma.toml` from a fixed precedence list and
 //! reports which directory won so callers can re-base unset resource
 //! paths. Fail-closed: no silent fallback to an empty config.
+//!
+//! # Feature flags
+//!
+//! | name   | description                      | default |
+//! |--------|----------------------------------|---------|
+//! | `clap` | Enable command-line value enums. |         |
 
 mod profile;
 mod resolver;

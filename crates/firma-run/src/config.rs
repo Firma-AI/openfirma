@@ -498,10 +498,14 @@ impl ProfilePatch {
     reason = "sequential profile resolution (patch merge + endpoint/selection + network + capability) reads more clearly inline"
 )]
 pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
-    let mut patch = built_in_profile(&args.profile)?;
+    let profile_id = AgentProfile::from_name(&args.profile).map_or_else(
+        || args.profile.clone(),
+        |profile| profile.as_str().to_string(),
+    );
+    let mut patch = built_in_profile(&profile_id)?;
 
     if let Some(path) = &args.config {
-        let file_patch = read_config(path, &args.profile)?;
+        let file_patch = read_config(path, &profile_id)?;
         patch = patch.merge(file_patch);
     }
 
@@ -593,9 +597,9 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     let seccomp_policy = patch
         .seccomp_policy
         .map(seccomp_policy_from_patch)
-        .or(default_managed_seccomp_policy(&args.profile, backend)?);
+        .or(default_managed_seccomp_policy(&profile_id, backend)?);
     let resolved = ResolvedProfile {
-        id: args.profile.clone(),
+        id: profile_id,
         backend,
         sidecar_endpoint,
         sidecar_selection,
@@ -952,19 +956,20 @@ const MANAGED_SECCOMP_POLICY: &str = include_str!("../seccomp/generic-local-comm
 const COPILOT_SECCOMP_POLICY: &str = include_str!("../seccomp/copilot-local-command-v1.toml");
 const COPILOT_MANAGED_POLICY_FILE: &str = "copilot-local-command-v1.toml";
 
+/// VS Code managed seccomp baseline. Permits atomic extension manifest writes.
+const VSCODE_SECCOMP_POLICY: &str = include_str!("../seccomp/vscode-local-command-v1.toml");
+const VSCODE_MANAGED_POLICY_FILE: &str = "vscode-local-command-v1.toml";
+
 /// Returns the embedded managed seccomp policy content and on-disk filename
 /// for `profile_id`. Copilot gets a baseline with its own `policy_id`; every
 /// other profile gets the generic baseline. Both permit `filesystem.delete`
 /// (scoped structurally by the read-only rootfs mount) and deny
 /// `credential.write`.
 fn managed_policy_for_profile(profile_id: &str) -> (&'static str, &'static str) {
-    if matches!(
-        AgentProfile::from_name(profile_id),
-        Some(AgentProfile::Copilot)
-    ) {
-        (COPILOT_SECCOMP_POLICY, COPILOT_MANAGED_POLICY_FILE)
-    } else {
-        (MANAGED_SECCOMP_POLICY, DEFAULT_MANAGED_POLICY_FILE)
+    match AgentProfile::from_name(profile_id) {
+        Some(AgentProfile::Copilot) => (COPILOT_SECCOMP_POLICY, COPILOT_MANAGED_POLICY_FILE),
+        Some(AgentProfile::Vscode) => (VSCODE_SECCOMP_POLICY, VSCODE_MANAGED_POLICY_FILE),
+        _ => (MANAGED_SECCOMP_POLICY, DEFAULT_MANAGED_POLICY_FILE),
     }
 }
 
@@ -1151,11 +1156,7 @@ mod tests {
 
     #[test]
     fn managed_seccomp_applies_to_all_recognized_bwrap_profiles() {
-        // FIR-274: codex and claude-code must get the same managed seccomp
-        // baseline as generic, so every agent enforces credential.write
-        // identically under bwrap. filesystem.delete is scoped structurally by
-        // the read-only rootfs mount, not seccomp.
-        for profile in ["generic", "codex", "claude-code"] {
+        for profile in ["generic", "codex", "claude-code", "copilot", "vscode"] {
             assert!(
                 super::managed_seccomp_applies(profile, BackendKind::Bwrap),
                 "managed seccomp must apply to profile '{profile}' on bwrap"
@@ -1183,6 +1184,21 @@ mod tests {
         assert_eq!(copilot_filename, "copilot-local-command-v1.toml");
         let (_, generic_filename) = super::managed_policy_for_profile("generic");
         assert_eq!(generic_filename, "generic-local-command-v1.toml");
+    }
+
+    #[test]
+    fn vscode_managed_policy_drops_filesystem_delete() {
+        let (content, filename) = super::managed_policy_for_profile("vscode");
+        assert_eq!(filename, "vscode-local-command-v1.toml");
+        assert!(content.contains("credential.write"));
+        assert!(!content.contains("filesystem.delete"));
+    }
+
+    #[test]
+    fn unknown_profile_uses_generic_managed_policy() {
+        let (content, filename) = super::managed_policy_for_profile("unknown-agent");
+        assert_eq!(filename, "generic-local-command-v1.toml");
+        assert_eq!(content, super::MANAGED_SECCOMP_POLICY);
     }
 
     #[test]
@@ -1319,6 +1335,21 @@ approval_policy = "never"
             super::CaTrustMode::AppendSystemRoots
         );
         assert!(resolved.env_passthrough.contains("GITHUB_TOKEN"));
+    }
+
+    #[test]
+    fn resolves_vscode_profile() {
+        let resolved = resolve_profile(&args("vscode")).unwrap();
+        assert_eq!(resolved.id, "vscode");
+        assert_eq!(
+            resolved.ca_trust_mode,
+            super::CaTrustMode::AppendSystemRoots
+        );
+        assert!(resolved.use_http_proxy_sidecar);
+        assert_eq!(
+            resolved.env_set.get("FIRMA_RUN_VSCODE_SHIM"),
+            Some(&"true".to_string())
+        );
     }
 
     #[test]
@@ -1527,6 +1558,29 @@ runtime_mode = "precompiled_only"
         let resolved = resolve_profile(&run_args).unwrap();
         let seccomp = resolved.seccomp_policy.unwrap();
         assert_eq!(seccomp.runtime_mode, SeccompRuntimeMode::PrecompiledOnly);
+    }
+
+    #[test]
+    fn managed_runtime_mode_parser_accepts_case_and_rejects_unknown_values() {
+        assert_eq!(
+            super::parse_managed_runtime_mode(" PRECOMPILED_ONLY ")
+                .unwrap_or_else(|error| panic!("{error}")),
+            SeccompRuntimeMode::PrecompiledOnly
+        );
+        assert_eq!(
+            super::parse_managed_runtime_mode("compile_on_launch")
+                .unwrap_or_else(|error| panic!("{error}")),
+            SeccompRuntimeMode::CompileOnLaunch
+        );
+
+        let error = super::parse_managed_runtime_mode("eager")
+            .expect_err("unknown runtime mode must fail validation");
+        assert!(
+            error
+                .to_string()
+                .contains("compile_on_launch' or 'precompiled_only"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -1840,5 +1894,36 @@ timeout_ms = 700
             super::MANAGED_SECCOMP_POLICY,
             "stale policy not overwritten by embedded version"
         );
+    }
+
+    #[test]
+    fn read_configured_profile_returns_run_profile_field() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &config_path,
+            r#"
+[run]
+profile = "vscode"
+"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        let profile =
+            super::read_configured_profile(&config_path).unwrap_or_else(|error| panic!("{error}"));
+
+        assert_eq!(profile.as_deref(), Some("vscode"));
+    }
+
+    #[test]
+    fn read_configured_profile_returns_none_when_field_is_absent() {
+        let tmpdir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+        fs::write(&config_path, "[run]\n").unwrap_or_else(|e| panic!("{e}"));
+
+        let profile =
+            super::read_configured_profile(&config_path).unwrap_or_else(|error| panic!("{error}"));
+
+        assert_eq!(profile, None);
     }
 }

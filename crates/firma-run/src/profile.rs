@@ -16,8 +16,9 @@ pub(crate) fn built_in_profile(profile: &str) -> Result<ProfilePatch, RunError> 
         Some(AgentProfile::Codex) => Ok(codex_profile()),
         Some(AgentProfile::ClaudeCode) => Ok(claude_code_profile()),
         Some(AgentProfile::Copilot) => Ok(copilot_profile()),
+        Some(AgentProfile::Vscode) => Ok(vscode_profile()),
         None => Err(RunError::ConfigValidation(format!(
-            "unknown profile '{profile}'; supported profiles: generic, codex, claude-code, copilot"
+            "unknown profile '{profile}'; supported profiles: generic, codex, claude-code, copilot, vscode"
         ))),
     }
 }
@@ -175,6 +176,30 @@ fn copilot_profile() -> ProfilePatch {
     base
 }
 
+fn vscode_profile() -> ProfilePatch {
+    let mut base = generic_profile();
+    base.env_set
+        .insert("FIRMA_RUN_PROFILE".to_string(), "vscode".to_string());
+    base.env_set
+        .insert("FIRMA_RUN_VSCODE_SHIM".to_string(), "true".to_string());
+    base.env_passthrough.extend([
+        "DISPLAY".to_string(),
+        "WAYLAND_DISPLAY".to_string(),
+        "XAUTHORITY".to_string(),
+        "XDG_RUNTIME_DIR".to_string(),
+    ]);
+    if std::path::Path::new("/tmp/.X11-unix").exists() {
+        base.mounts.push(MountPatch {
+            source: PathBuf::from("/tmp/.X11-unix"),
+            target: PathBuf::from("/tmp/.X11-unix"),
+            read_only: false,
+        });
+    }
+    base.ca_trust_mode = Some(CaTrustMode::AppendSystemRoots);
+    base.use_http_proxy_sidecar = true;
+    base
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +212,33 @@ mod tests {
         assert_eq!(
             patch.env_set.get("FIRMA_RUN_PROFILE"),
             Some(&"copilot".to_string())
+        );
+    }
+
+    #[test]
+    fn vscode_profile_sets_append_ca_and_profile_env() {
+        let patch = built_in_profile("vscode").unwrap();
+        assert_eq!(patch.ca_trust_mode, Some(CaTrustMode::AppendSystemRoots));
+        assert!(patch.use_http_proxy_sidecar);
+        assert_eq!(
+            patch.env_set.get("FIRMA_RUN_PROFILE"),
+            Some(&"vscode".to_string())
+        );
+        assert_eq!(
+            patch.env_set.get("FIRMA_RUN_VSCODE_SHIM"),
+            Some(&"true".to_string())
+        );
+        assert!(patch.env_passthrough.contains(&"DISPLAY".to_string()));
+        assert!(
+            patch
+                .env_passthrough
+                .contains(&"WAYLAND_DISPLAY".to_string())
+        );
+        assert!(patch.env_passthrough.contains(&"XAUTHORITY".to_string()));
+        assert!(
+            patch
+                .env_passthrough
+                .contains(&"XDG_RUNTIME_DIR".to_string())
         );
     }
 
