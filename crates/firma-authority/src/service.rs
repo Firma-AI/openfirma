@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::{Stream, StreamExt};
-use tonic::{Request as TonicRequest, Response, Status};
+use tonic::{Code, Request as TonicRequest, Response, Status};
 use x509_parser::prelude::*;
 
 use crate::cedar_loader::{CedarPolicyStore, CedarPolicyStoreWatcher};
@@ -213,13 +213,17 @@ impl AuthorityService for AuthorityServiceImpl {
         let client_identity = peer_identity_from_request(&request);
         let req = request.into_inner();
 
-        let since = req.since.map_or_else(
-            || Utc::now() - Duration::days(365),
-            |ts| {
-                chrono::DateTime::from_timestamp(ts.seconds, ts.nanos.try_into().unwrap_or(0))
-                    .unwrap_or_else(Utc::now)
-            },
-        );
+        let since = match req.since {
+            Some(ts) => ts
+                .nanos
+                .try_into()
+                .ok()
+                .and_then(|nanos| chrono::DateTime::from_timestamp(ts.seconds, nanos))
+                .ok_or_else(|| {
+                    Status::new(Code::InvalidArgument, "invalid timestamp for `since`")
+                })?,
+            None => Utc::now() - Duration::days(365),
+        };
 
         tracing::info!(
             ?since,

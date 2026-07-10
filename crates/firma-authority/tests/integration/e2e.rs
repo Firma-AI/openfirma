@@ -8,6 +8,7 @@ use firma_protobuf::v1::{
 };
 use pasetors::keys::{AsymmetricKeyPair, Generate};
 use pasetors::version4::V4;
+use prost_types::Timestamp;
 use tempfile::TempDir;
 use tokio::sync::oneshot;
 
@@ -220,4 +221,27 @@ async fn watch_revocations_streams_new_events() {
     assert_eq!(event.token_id, token_id.to_string());
 
     server.stop();
+}
+
+#[tokio::test]
+async fn watch_revocations_fails_on_invalid_timestamp() {
+    let server = TestServer::start().await;
+
+    let mut client = AuthorityServiceClient::connect(server.addr.clone())
+        .await
+        .expect("failed to connect");
+
+    let error = client
+        .watch_revocations(WatchRevocationsRequest {
+            since: Some(Timestamp {
+                seconds: 1_783_676_609,
+                nanos: -123,
+            }),
+            credentials: None,
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert_eq!(error.message(), "invalid timestamp for `since`");
 }
