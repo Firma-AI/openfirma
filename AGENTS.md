@@ -74,6 +74,7 @@ history, use the repository skills instead of improvising:
 - [`commit-guidelines`](.skills/commit-guidelines/SKILL.md) for dirty-worktree
   inspection, atomic checkpoint commits/changesets, and reviewed-history
   preservation
+- [`open-pr`](.skills/open-pr/SKILL.md) for opening GitHub pull requests
 - [`split-jj-changeset`](.skills/split-jj-changeset/SKILL.md) for splitting
   mixed Jujutsu changesets
 - [`verify`](.skills/verify/SKILL.md) for per-revision and final verification
