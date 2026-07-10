@@ -246,6 +246,7 @@ fn configure_vscode_wayland_socket(
     )
 }
 
+#[cfg(unix)]
 fn configure_vscode_wayland_socket_with_host_runtime_dir(
     desktop_runtime_dir: &Path,
     env: &BTreeMap<String, String>,
@@ -297,6 +298,7 @@ fn configure_vscode_dbus_socket(
     configure_vscode_dbus_socket_with_address(desktop_runtime_dir, env, address.as_deref())
 }
 
+#[cfg(unix)]
 fn configure_vscode_dbus_socket_with_address(
     desktop_runtime_dir: &Path,
     env: &mut BTreeMap<String, String>,
