@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -256,11 +257,10 @@ fn configure_vscode_wayland_socket_with_host_runtime_dir(
         tracing::debug!("VS Code Wayland socket not configured because WAYLAND_DISPLAY is unset");
         return Ok(());
     };
-    let display_path = Path::new(&wayland_display);
-    if display_path.is_absolute() {
+    if !is_safe_wayland_display_name(&wayland_display) {
         tracing::debug!(
             wayland_display = %wayland_display,
-            "VS Code Wayland socket not configured because WAYLAND_DISPLAY is already absolute"
+            "VS Code Wayland socket not configured because WAYLAND_DISPLAY is not a socket filename"
         );
         return Ok(());
     }
@@ -273,7 +273,19 @@ fn configure_vscode_wayland_socket_with_host_runtime_dir(
     };
     let source = PathBuf::from(host_runtime_dir).join(&wayland_display);
     if source.exists() {
+        let desktop_runtime_dir = desktop_runtime_dir.canonicalize().map_err(|error| {
+            RunError::Internal(format!(
+                "canonicalize VS Code desktop runtime dir {}: {error}",
+                desktop_runtime_dir.display()
+            ))
+        })?;
         let target = desktop_runtime_dir.join(&wayland_display);
+        if !target.starts_with(&desktop_runtime_dir) {
+            return Err(RunError::Internal(format!(
+                "VS Code Wayland socket target escapes desktop runtime dir: {}",
+                target.display()
+            )));
+        }
         replace_symlink(&source, &target)?;
         tracing::debug!(
             source = %source.display(),
@@ -287,6 +299,13 @@ fn configure_vscode_wayland_socket_with_host_runtime_dir(
         );
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn is_safe_wayland_display_name(wayland_display: &str) -> bool {
+    let mut components = Path::new(wayland_display).components();
+    matches!(components.next(), Some(Component::Normal(component)) if component == OsStr::new(wayland_display))
+        && components.next().is_none()
 }
 
 #[cfg(unix)]

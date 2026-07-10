@@ -310,6 +310,26 @@ fn wayland_configuration_ignores_absolute_display_path() -> Result<(), Box<dyn s
 
 #[cfg(unix)]
 #[test]
+fn wayland_configuration_rejects_parent_directory_display() -> Result<(), Box<dyn std::error::Error>>
+{
+    let tmpdir = tempfile::tempdir()?;
+    let host_runtime_dir = tmpdir.path().join("nested").join("host-runtime");
+    let desktop_runtime_dir = tmpdir.path().join("desktop-runtime");
+    let escaped_target = tmpdir.path().join("wayland-0");
+    fs::create_dir_all(&host_runtime_dir)?;
+    fs::create_dir(&desktop_runtime_dir)?;
+    fs::write(tmpdir.path().join("nested").join("wayland-0"), "socket")?;
+    let env = BTreeMap::from([("WAYLAND_DISPLAY".to_string(), "../wayland-0".to_string())]);
+
+    testing::configure_wayland_socket(&desktop_runtime_dir, &env, Some(&host_runtime_dir))?;
+
+    assert!(!escaped_target.exists());
+    assert!(fs::read_dir(desktop_runtime_dir)?.next().is_none());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn wayland_configuration_ignores_missing_display_name() -> Result<(), Box<dyn std::error::Error>> {
     let tmpdir = tempfile::tempdir()?;
     let desktop_runtime_dir = tmpdir.path().join("desktop-runtime");
