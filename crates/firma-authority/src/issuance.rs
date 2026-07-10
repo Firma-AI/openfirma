@@ -59,11 +59,10 @@ pub async fn issue_capability(
     max_ttl_seconds: i32,
     req: &IssuanceRequest<'_>,
 ) -> Result<IssuanceResult, IssuanceError> {
-    let policy_set = policy_store.policy_set().await;
-    let schema = policy_store.schema().await;
+    let snapshot = policy_store.snapshot().await;
     let decision = evaluate_cedar_policy(
-        &policy_set,
-        &schema,
+        &snapshot.policy_set,
+        &snapshot.schema,
         req.agent_id,
         req.session_id,
         req.requested_actions,
