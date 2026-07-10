@@ -59,13 +59,6 @@ fn generate_audit_key_pem() -> String {
     }
 }
 
-fn pick_free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    port
-}
-
 fn firma_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_firma"))
 }
@@ -98,14 +91,16 @@ action_class = "communication.external.send"
     let audit_key = tmp.path().join("audit.key");
     std::fs::write(&audit_key, generate_audit_key_pem()).unwrap();
 
-    let interceptor_port = pick_free_port();
-    let health_port = pick_free_port();
-    // Authority URL points at a closed loopback port: tonic keeps
-    // retrying without ever connecting, so neither stream flips
-    // readiness — the only way the sidecar emits `ready` is via the
-    // gate this test is meant to verify.
-    let authority_port = pick_free_port();
-    let authority_url = format!("http://127.0.0.1:{authority_port}");
+    // Let the sidecar bind its own ephemeral ports. Pre-selecting a
+    // "free" port here is racy once the listener is dropped.
+    let interceptor_listen_addr = "127.0.0.1:0";
+    let health_bind_addr = "127.0.0.1:0";
+    // Keep a non-gRPC TCP listener bound for the whole test so the
+    // Authority endpoint cannot be stolen by another concurrent test.
+    // The sidecar can connect at TCP level, but the streams never
+    // hydrate, so readiness must remain withheld.
+    let authority_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let authority_url = format!("http://{}", authority_listener.local_addr().unwrap());
 
     let sidecar_toml = tmp.path().join(CONFIG_FILE_NAME);
     std::fs::write(
@@ -114,7 +109,7 @@ action_class = "communication.external.send"
             r#"
 [sidecar.interceptor]
 mode = "http_proxy"
-listen_addr = "127.0.0.1:{interceptor_port}"
+listen_addr = "{interceptor_listen_addr}"
 drain_timeout_secs = 30
 
 [sidecar.policy]
@@ -144,6 +139,7 @@ signing_key_path = '{audit_key}'
             ca = ca_dir.display(),
             mapping = mapping.display(),
             audit_key = audit_key.display(),
+            interceptor_listen_addr = interceptor_listen_addr,
         ),
     )
     .unwrap();
@@ -155,7 +151,7 @@ signing_key_path = '{audit_key}'
     let mut child = Command::new(firma_bin())
         .args(["sidecar", "--config"])
         .arg(&sidecar_toml)
-        .args(["--health-bind-addr", &format!("127.0.0.1:{health_port}")])
+        .args(["--health-bind-addr", health_bind_addr])
         .env("NO_COLOR", "1")
         .stdout(stdout_file)
         .stderr(stderr_file)
@@ -187,10 +183,11 @@ signing_key_path = '{audit_key}'
             .lines()
             .map_while(Result::ok)
             .collect();
+        let status = child.try_wait().unwrap();
         let _ = child.kill();
         let _ = child.wait();
         panic!(
-            "pre-ready contract incomplete; matched {seen_idx} of {}; stderr:\n{}",
+            "pre-ready contract incomplete; matched {seen_idx} of {}; child_status={status:?}; stderr:\n{}",
             PRE_READY_PREFIXES.len(),
             lines.join("\n"),
         );
@@ -205,7 +202,7 @@ signing_key_path = '{audit_key}'
         .collect();
     let ready_visible = lines.iter().any(|line| {
         let trimmed = line.trim_end();
-        trimmed.ends_with(": ready") || trimmed == "ready"
+        trimmed.contains("sidecar ready")
     });
 
     let _ = child.kill();
