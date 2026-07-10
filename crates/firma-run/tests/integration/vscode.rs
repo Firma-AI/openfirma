@@ -110,7 +110,8 @@ fn prepare_shim_reports_shim_write_conflict() -> Result<(), Box<dyn std::error::
     let tmpdir = tempfile::tempdir()?;
     let host_bin = host_bin_with_code(&tmpdir)?;
     let runtime_dir = tmpdir.path().join("runtime");
-    fs::create_dir_all(runtime_dir.join("bin").join("code"))?;
+    let shim_name = if cfg!(windows) { "code.cmd" } else { "code" };
+    fs::create_dir_all(runtime_dir.join("bin").join(shim_name))?;
 
     let error = testing::prepare_vscode_shim(
         &runtime_dir,
@@ -194,18 +195,16 @@ fn private_directory_is_created() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn prepend_path_uses_host_path_when_execution_path_is_absent() {
     let shim_dir = Path::new("/tmp/firma-shim");
+    let host_path = Path::new("/usr/local/bin");
     let mut env = BTreeMap::new();
 
-    testing::prepend_path(
-        &mut env,
-        shim_dir,
-        Some(Path::new("/usr/local/bin").as_os_str()),
-    );
+    testing::prepend_path(&mut env, shim_dir, Some(host_path.as_os_str()));
+    let expected_path = std::env::join_paths([shim_dir, host_path])
+        .expect("test paths must be valid PATH entries")
+        .to_string_lossy()
+        .into_owned();
 
-    assert_eq!(
-        env.get("PATH"),
-        Some(&"/tmp/firma-shim:/usr/local/bin".to_string())
-    );
+    assert_eq!(env.get("PATH"), Some(&expected_path));
 }
 
 #[cfg(not(windows))]
