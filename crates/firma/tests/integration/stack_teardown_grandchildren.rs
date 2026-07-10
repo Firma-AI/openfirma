@@ -1,4 +1,4 @@
-//! Regression: stack stop reaps a Unix process group.
+//! Regression: stack stop kills a Unix process group, including grandchildren.
 
 #[cfg(unix)]
 #[test]
@@ -30,6 +30,15 @@ fn unix_pgrp_kills_grandchild() {
         .expect("parse");
 
     let _ = firma_stack::stop(state_dir, Duration::from_secs(5)).expect("stop");
-    let alive = nix::sys::signal::kill(nix::unistd::Pid::from_raw(grandchild_pid), None).is_ok();
-    assert!(!alive, "grandchild pid {grandchild_pid} still alive");
+
+    // A killed non-child process can remain briefly visible as a zombie until
+    // its parent or the OS reaps it, so wait for the pid to fully disappear.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match nix::sys::signal::kill(nix::unistd::Pid::from_raw(grandchild_pid), None) {
+            Err(nix::errno::Errno::ESRCH) => break,
+            _ if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            _ => panic!("grandchild pid {grandchild_pid} still present"),
+        }
+    }
 }

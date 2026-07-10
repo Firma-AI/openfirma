@@ -19,8 +19,9 @@ impl UserProcessId {
     #[must_use]
     pub fn is_alive(self) -> bool {
         let pid = self.as_nix_pid();
-        // If the process is our child and has exited, reap the zombie here.
-        // Otherwise `kill(pid, 0)` still reports a zombie as present.
+        // If the process is our direct child and has exited, reap the zombie
+        // here. Otherwise we cannot `waitpid` it, and `kill(pid, 0)` still
+        // reports a zombie as present.
         match nix::sys::wait::waitpid(pid, Some(nix::sys::wait::WaitPidFlag::WNOHANG)) {
             Ok(
                 nix::sys::wait::WaitStatus::Exited(_, _)
