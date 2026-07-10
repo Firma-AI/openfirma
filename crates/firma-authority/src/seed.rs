@@ -8,6 +8,7 @@
 //! when adding fields.
 
 use anyhow::{Context as _, Result};
+use firma_core::CapabilityClaims;
 use serde::Serialize;
 
 use crate::IssuanceResult;
@@ -30,17 +31,34 @@ pub struct SeedFile {
 impl SeedFile {
     #[must_use]
     pub fn from_issuance(out: &IssuanceResult) -> Self {
+        // deconstruct so we can get an error if `CapabilityClaims` changes
+        let IssuanceResult {
+            raw_token,
+            claims:
+                CapabilityClaims {
+                    token_id,
+                    agent_id,
+                    session_id,
+                    action_set,
+                    resource_scope,
+                    issued_at,
+                    expiry,
+                    context_hash,
+                    budget_ceiling,
+                },
+        } = out;
+
         Self {
-            raw_token: out.raw_token.clone(),
-            token_id: out.claims.token_id.to_string(),
-            agent_id: out.claims.agent_id.to_string(),
-            session_id: out.claims.session_id.to_string(),
-            action_set: out.claims.action_set.clone(),
-            resource_scope: out.claims.resource_scope.clone(),
-            issued_at: out.claims.issued_at.to_rfc3339(),
-            expiry: out.claims.expiry.to_rfc3339(),
-            context_hash: out.claims.context_hash.clone(),
-            budget_ceiling: out.claims.budget_ceiling,
+            raw_token: raw_token.clone(),
+            token_id: token_id.to_string(),
+            agent_id: agent_id.to_string(),
+            session_id: session_id.to_string(),
+            action_set: action_set.clone(),
+            resource_scope: resource_scope.clone(),
+            issued_at: issued_at.to_rfc3339(),
+            expiry: expiry.to_rfc3339(),
+            context_hash: context_hash.clone(),
+            budget_ceiling: *budget_ceiling,
         }
     }
 
