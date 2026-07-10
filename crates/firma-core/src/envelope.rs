@@ -4,6 +4,7 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::HeaderName;
 use crate::agent::AgentId;
 use crate::session::SessionId;
 use crate::token::TokenId;
@@ -201,7 +202,7 @@ pub struct HttpParams {
     /// HTTP method.
     pub method: HttpMethod,
     /// HTTP headers — allowlisted keys only.
-    pub headers: HashMap<String, String>,
+    pub headers: HashMap<HeaderName, String>,
     /// Request body as raw bytes (empty for GET/DELETE).
     pub body: Option<Vec<u8>>,
     /// Query parameters.
@@ -334,7 +335,7 @@ mod tests {
                 params: ActionParams::Http(HttpParams {
                     method: HttpMethod::GET,
                     headers: HashMap::from([(
-                        "Authorization".to_string(),
+                        HeaderName::from_static("authorization"),
                         "Bearer tok".to_string(),
                     )]),
                     body: None,

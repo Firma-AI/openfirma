@@ -15,6 +15,8 @@
 
 use std::collections::HashMap;
 
+use crate::HeaderName;
+
 /// Read-only bundle of headers injected into an outbound request after
 /// enforcement passes.
 ///
@@ -26,12 +28,12 @@ use std::collections::HashMap;
 ///
 /// ```
 /// use std::collections::HashMap;
-/// use firma_core::InjectedCredentials;
+/// use firma_core::{HeaderName, InjectedCredentials};
 ///
 /// let mut creds = InjectedCredentials::empty();
-/// creds.insert("Authorization".to_string(), "Bearer tok".to_string());
+/// creds.insert(HeaderName::from_static("authorization"), "Bearer tok".to_string());
 /// assert_eq!(
-///     creds.get("Authorization").map(String::as_str),
+///     creds.get(&HeaderName::from_static("authorization")).map(String::as_str),
 ///     Some("Bearer tok"),
 /// );
 /// ```
@@ -39,13 +41,13 @@ use std::collections::HashMap;
 /// [`ExecutionEnvelope`]: crate::ExecutionEnvelope
 #[derive(Debug, Clone)]
 pub struct InjectedCredentials {
-    headers: HashMap<String, String>,
+    headers: HashMap<HeaderName, String>,
 }
 
 impl InjectedCredentials {
     /// Creates a new [`InjectedCredentials`] from a header map.
     #[must_use]
-    pub fn new(headers: HashMap<String, String>) -> Self {
+    pub fn new(headers: HashMap<HeaderName, String>) -> Self {
         Self { headers }
     }
 
@@ -59,24 +61,24 @@ impl InjectedCredentials {
 
     /// Returns a reference to the injected headers.
     #[must_use]
-    pub fn headers(&self) -> &HashMap<String, String> {
+    pub fn headers(&self) -> &HashMap<HeaderName, String> {
         &self.headers
     }
 
     /// Consumes `self` and returns the inner header map.
     #[must_use]
-    pub fn into_headers(self) -> HashMap<String, String> {
+    pub fn into_headers(self) -> HashMap<HeaderName, String> {
         self.headers
     }
 
     /// Returns the value for a single header key, if present.
     #[must_use]
-    pub fn get(&self, key: &str) -> Option<&String> {
+    pub fn get(&self, key: &HeaderName) -> Option<&String> {
         self.headers.get(key)
     }
 
     /// Inserts a header key-value pair, replacing any existing value.
-    pub fn insert(&mut self, key: String, value: String) {
+    pub fn insert(&mut self, key: HeaderName, value: String) {
         self.headers.insert(key, value);
     }
 
@@ -87,8 +89,8 @@ impl InjectedCredentials {
     }
 }
 
-impl From<HashMap<String, String>> for InjectedCredentials {
-    fn from(headers: HashMap<String, String>) -> Self {
+impl From<HashMap<HeaderName, String>> for InjectedCredentials {
+    fn from(headers: HashMap<HeaderName, String>) -> Self {
         Self { headers }
     }
 }
@@ -99,7 +101,10 @@ mod tests {
 
     #[test]
     fn test_injected_credentials_new() {
-        let headers = HashMap::from([("Authorization".to_string(), "Bearer tok".to_string())]);
+        let headers = HashMap::from([(
+            HeaderName::from_static("authorization"),
+            "Bearer tok".to_string(),
+        )]);
         let creds = InjectedCredentials::new(headers.clone());
         assert_eq!(creds.headers(), &headers);
         assert!(!creds.is_empty());
@@ -114,7 +119,7 @@ mod tests {
 
     #[test]
     fn test_injected_credentials_from_hashmap() {
-        let headers = HashMap::from([("X-Api-Key".to_string(), "key123".to_string())]);
+        let headers = HashMap::from([(HeaderName::from_static("x-api-key"), "key123".to_string())]);
         let creds = InjectedCredentials::from(headers.clone());
         assert_eq!(creds.headers(), &headers);
     }
@@ -122,27 +127,37 @@ mod tests {
     #[test]
     fn test_injected_credentials_get() {
         let creds = InjectedCredentials::new(HashMap::from([(
-            "Authorization".to_string(),
+            HeaderName::from_static("authorization"),
             "Bearer tok".to_string(),
         )]));
         assert_eq!(
-            creds.get("Authorization").map(String::as_str),
+            creds
+                .get(&HeaderName::from_static("authorization"))
+                .map(String::as_str),
             Some("Bearer tok"),
         );
-        assert!(creds.get("Missing").is_none());
+        assert!(creds.get(&HeaderName::from_static("missing")).is_none());
     }
 
     #[test]
     fn test_injected_credentials_insert() {
         let mut creds = InjectedCredentials::empty();
-        creds.insert("X-Key".to_string(), "val".to_string());
-        assert_eq!(creds.get("X-Key").map(String::as_str), Some("val"));
+        creds.insert(HeaderName::from_static("x-key"), "val".to_string());
+        assert_eq!(
+            creds
+                .get(&HeaderName::from_static("x-key"))
+                .map(String::as_str),
+            Some("val")
+        );
         assert!(!creds.is_empty());
     }
 
     #[test]
     fn test_injected_credentials_into_headers() {
-        let headers = HashMap::from([("Authorization".to_string(), "Bearer tok".to_string())]);
+        let headers = HashMap::from([(
+            HeaderName::from_static("authorization"),
+            "Bearer tok".to_string(),
+        )]);
         let creds = InjectedCredentials::new(headers.clone());
         assert_eq!(creds.into_headers(), headers);
     }

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use firma_core::{ExecutionEnvelope, InjectedCredentials};
+use firma_core::{ExecutionEnvelope, HeaderName, InjectedCredentials};
 
 use crate::credential::{CredentialInjectionError, CredentialInjector};
 
@@ -20,7 +20,7 @@ use crate::credential::{CredentialInjectionError, CredentialInjector};
 #[derive(Debug, Clone)]
 pub struct VaultSecretEntry {
     /// HTTP header name to inject (e.g. `Authorization`).
-    pub header_name: String,
+    pub header_name: HeaderName,
     /// Optional prefix prepended to the raw file content
     /// (e.g. `"Bearer "` to produce `Authorization: Bearer <token>`).
     pub value_prefix: Option<String>,
@@ -172,7 +172,7 @@ mod tests {
         injector.insert(
             "stripe".to_string(),
             vec![VaultSecretEntry {
-                header_name: "Authorization".to_string(),
+                header_name: HeaderName::from_static("authorization"),
                 value_prefix: Some("Bearer ".to_string()),
                 secret_path: PathBuf::from("/tmp/fake"),
             }],
@@ -189,7 +189,7 @@ mod tests {
         let injector = VaultCredentialInjector::new(HashMap::from([(
             "stripe".to_string(),
             vec![VaultSecretEntry {
-                header_name: "Authorization".to_string(),
+                header_name: HeaderName::from_static("authorization"),
                 value_prefix: Some("Bearer ".to_string()),
                 secret_path,
             }],
@@ -201,7 +201,9 @@ mod tests {
             .await
             .expect("should read secret");
         assert_eq!(
-            creds.get("Authorization").map(String::as_str),
+            creds
+                .get(&HeaderName::from_static("authorization"))
+                .map(String::as_str),
             Some("Bearer sk_live_abc123")
         );
     }
@@ -214,7 +216,7 @@ mod tests {
         let injector = VaultCredentialInjector::new(HashMap::from([(
             "svc".to_string(),
             vec![VaultSecretEntry {
-                header_name: "X-Api-Key".to_string(),
+                header_name: HeaderName::from_static("x-api-key"),
                 value_prefix: None,
                 secret_path,
             }],
@@ -225,7 +227,12 @@ mod tests {
             .inject(&envelope, "svc", "https://svc.example.com")
             .await
             .expect("should read secret");
-        assert_eq!(creds.get("X-Api-Key").map(String::as_str), Some("key123"));
+        assert_eq!(
+            creds
+                .get(&HeaderName::from_static("x-api-key"))
+                .map(String::as_str),
+            Some("key123")
+        );
     }
 
     #[tokio::test]
@@ -238,12 +245,12 @@ mod tests {
             "multi".to_string(),
             vec![
                 VaultSecretEntry {
-                    header_name: "Authorization".to_string(),
+                    header_name: HeaderName::from_static("authorization"),
                     value_prefix: Some("Bearer ".to_string()),
                     secret_path: token_path,
                 },
                 VaultSecretEntry {
-                    header_name: "X-Api-Key".to_string(),
+                    header_name: HeaderName::from_static("x-api-key"),
                     value_prefix: None,
                     secret_path: key_path,
                 },
@@ -256,10 +263,17 @@ mod tests {
             .await
             .expect("should read both secrets");
         assert_eq!(
-            creds.get("Authorization").map(String::as_str),
+            creds
+                .get(&HeaderName::from_static("authorization"))
+                .map(String::as_str),
             Some("Bearer tok_abc")
         );
-        assert_eq!(creds.get("X-Api-Key").map(String::as_str), Some("key_xyz"));
+        assert_eq!(
+            creds
+                .get(&HeaderName::from_static("x-api-key"))
+                .map(String::as_str),
+            Some("key_xyz")
+        );
     }
 
     #[tokio::test]
@@ -280,7 +294,7 @@ mod tests {
         let injector = VaultCredentialInjector::new(HashMap::from([(
             "broken".to_string(),
             vec![VaultSecretEntry {
-                header_name: "Authorization".to_string(),
+                header_name: HeaderName::from_static("authorization"),
                 value_prefix: None,
                 secret_path: PathBuf::from("/nonexistent/path/secret"),
             }],
@@ -306,7 +320,7 @@ mod tests {
     #[test]
     fn test_vault_secret_entry_debug() {
         let entry = VaultSecretEntry {
-            header_name: "Authorization".to_string(),
+            header_name: HeaderName::from_static("authorization"),
             value_prefix: Some("Bearer ".to_string()),
             secret_path: PathBuf::from("/tmp/secret"),
         };

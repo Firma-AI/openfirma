@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use firma_core::{ExecutionEnvelope, InjectedCredentials};
+use firma_core::{ExecutionEnvelope, HeaderName, InjectedCredentials};
 
 use crate::credential::{CredentialInjectionError, CredentialInjector};
 
@@ -17,14 +17,14 @@ use crate::credential::{CredentialInjectionError, CredentialInjector};
 #[derive(Debug, Clone)]
 pub struct BasicCredentialInjector {
     /// `connector_id` to headers map.
-    credentials: HashMap<String, HashMap<String, String>>,
+    credentials: HashMap<String, HashMap<HeaderName, String>>,
 }
 
 impl BasicCredentialInjector {
     /// Creates a new `BasicCredentialInjector` from a pre-built map
     /// of connector IDs to header sets.
     #[must_use]
-    pub fn new(credentials: HashMap<String, HashMap<String, String>>) -> Self {
+    pub fn new(credentials: HashMap<String, HashMap<HeaderName, String>>) -> Self {
         Self { credentials }
     }
 
@@ -38,7 +38,7 @@ impl BasicCredentialInjector {
 
     /// Registers headers for a connector ID, replacing any previous
     /// entry.
-    pub fn insert(&mut self, connector_id: String, headers: HashMap<String, String>) {
+    pub fn insert(&mut self, connector_id: String, headers: HashMap<HeaderName, String>) {
         self.credentials.insert(connector_id, headers);
     }
 
@@ -118,7 +118,10 @@ mod tests {
         let mut injector = BasicCredentialInjector::empty();
         injector.insert(
             "stripe".to_string(),
-            HashMap::from([("Authorization".to_string(), "Bearer sk_test".to_string())]),
+            HashMap::from([(
+                HeaderName::from_static("authorization"),
+                "Bearer sk_test".to_string(),
+            )]),
         );
         assert_eq!(injector.len(), 1);
         assert!(!injector.is_empty());
@@ -129,11 +132,17 @@ mod tests {
         let mut creds = HashMap::new();
         creds.insert(
             "stripe".to_string(),
-            HashMap::from([("Authorization".to_string(), "Bearer sk_test".to_string())]),
+            HashMap::from([(
+                HeaderName::from_static("authorization"),
+                "Bearer sk_test".to_string(),
+            )]),
         );
         creds.insert(
             "openai".to_string(),
-            HashMap::from([("Authorization".to_string(), "Bearer sk_ai".to_string())]),
+            HashMap::from([(
+                HeaderName::from_static("authorization"),
+                "Bearer sk_ai".to_string(),
+            )]),
         );
         let injector = BasicCredentialInjector::new(creds);
         assert_eq!(injector.len(), 2);
@@ -143,7 +152,10 @@ mod tests {
     async fn test_basic_injector_known_connector() {
         let injector = BasicCredentialInjector::new(HashMap::from([(
             "stripe".to_string(),
-            HashMap::from([("Authorization".to_string(), "Bearer sk_test".to_string())]),
+            HashMap::from([(
+                HeaderName::from_static("authorization"),
+                "Bearer sk_test".to_string(),
+            )]),
         )]));
 
         let envelope = sample_envelope();
@@ -152,7 +164,9 @@ mod tests {
             .await;
         let creds = result.expect("known connector should succeed");
         assert_eq!(
-            creds.get("Authorization").map(String::as_str),
+            creds
+                .get(&HeaderName::from_static("authorization"))
+                .map(String::as_str),
             Some("Bearer sk_test")
         );
     }
@@ -173,8 +187,11 @@ mod tests {
     #[tokio::test]
     async fn test_basic_injector_multiple_headers() {
         let headers = HashMap::from([
-            ("Authorization".to_string(), "Bearer tok".to_string()),
-            ("X-Custom".to_string(), "val".to_string()),
+            (
+                HeaderName::from_static("authorization"),
+                "Bearer tok".to_string(),
+            ),
+            (HeaderName::from_static("x-custom"), "val".to_string()),
         ]);
         let injector = BasicCredentialInjector::new(HashMap::from([("svc".to_string(), headers)]));
 
@@ -184,10 +201,17 @@ mod tests {
             .await
             .expect("known connector should succeed");
         assert_eq!(
-            creds.get("Authorization").map(String::as_str),
+            creds
+                .get(&HeaderName::from_static("authorization"))
+                .map(String::as_str),
             Some("Bearer tok")
         );
-        assert_eq!(creds.get("X-Custom").map(String::as_str), Some("val"));
+        assert_eq!(
+            creds
+                .get(&HeaderName::from_static("x-custom"))
+                .map(String::as_str),
+            Some("val")
+        );
     }
 
     #[test]

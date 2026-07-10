@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use arbitrary::Arbitrary;
+use firma_core::HeaderName;
 use firma_sidecar::{
     config::{MappingRuleConfig, MappingRulesFile},
     enforcement::registry::ActionClassRegistry,
@@ -47,7 +48,7 @@ struct FuzzRequest {
     method: String,
     host: String,
     path: String,
-    headers: HashMap<String, String>,
+    headers: HashMap<HeaderName, String>,
     body: Option<Vec<u8>>,
     is_https: bool,
 }

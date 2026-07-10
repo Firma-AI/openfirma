@@ -407,8 +407,8 @@ mod tests {
     use std::sync::{Arc, Mutex, MutexGuard};
 
     use firma_core::{
-        ActionParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod,
-        HttpParams, InjectedCredentials,
+        ActionParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HeaderName,
+        HttpMethod, HttpParams, InjectedCredentials,
     };
     use tracing_subscriber::fmt::MakeWriter;
     use wiremock::matchers::{header, method, path};
@@ -649,7 +649,7 @@ mod tests {
         let connector = GenericHttpConnector::default_for_unconfigured()
             .expect("connector build should succeed");
         let creds = InjectedCredentials::new(HashMap::from([(
-            "Authorization".to_string(),
+            HeaderName::from_static("authorization"),
             "Bearer secret".to_string(),
         )]));
         let view = view_for(get_intent(&format!("{}/secure", server.address())), creds);
@@ -974,7 +974,7 @@ mod tests {
             let connector = GenericHttpConnector::default_for_unconfigured()
                 .expect("connector build should succeed");
             let creds = InjectedCredentials::new(HashMap::from([(
-                "Authorization".to_string(),
+                HeaderName::from_static("authorization"),
                 secret_value.to_string(),
             )]));
             let view = view_for(get_intent(&format!("{}/secret", server.address())), creds);

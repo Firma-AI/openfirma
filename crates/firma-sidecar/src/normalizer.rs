@@ -24,7 +24,7 @@ mod mapping;
 use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
-use firma_core::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
+use firma_core::{ActionParams, ExecutionIntent, HeaderName, HttpMethod, HttpParams};
 use unicode_normalization::UnicodeNormalization;
 
 /// Hosts whose traffic earns the `provider = "github"` resource tag.
@@ -125,7 +125,7 @@ pub struct RawRequest {
     ///
     /// May contain sensitive headers at this stage; the normalizer filters
     /// them before building the [`NormalizedEnvelope`].
-    pub headers: HashMap<String, String>,
+    pub headers: HashMap<HeaderName, String>,
     /// Optional request body as raw bytes.
     ///
     /// Used by the normalizer to extract `parameters` for the intent
@@ -300,10 +300,10 @@ impl IntentNormalizer {
     }
 }
 
-fn sanitize_headers(headers: &HashMap<String, String>) -> HashMap<String, String> {
+fn sanitize_headers(headers: &HashMap<HeaderName, String>) -> HashMap<HeaderName, String> {
     headers
         .iter()
-        .filter(|(k, _)| !SENSITIVE_HEADERS.contains(&k.to_lowercase().as_str()))
+        .filter(|(k, _)| !SENSITIVE_HEADERS.contains(&k.as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }
@@ -696,10 +696,16 @@ mod tests {
     fn test_normalize_strips_sensitive_headers() {
         let normalizer = test_normalizer();
         let mut headers = HashMap::new();
-        headers.insert("Authorization".to_string(), "Bearer secret".to_string());
-        headers.insert("X-Api-Key".to_string(), "sk-123".to_string());
-        headers.insert("Content-Type".to_string(), "application/json".to_string());
-        headers.insert("Cookie".to_string(), "session=abc".to_string());
+        headers.insert(
+            HeaderName::from_static("authorization"),
+            "Bearer secret".to_string(),
+        );
+        headers.insert(HeaderName::from_static("x-api-key"), "sk-123".to_string());
+        headers.insert(
+            HeaderName::from_static("content-type"),
+            "application/json".to_string(),
+        );
+        headers.insert(HeaderName::from_static("cookie"), "session=abc".to_string());
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -716,11 +722,14 @@ mod tests {
                 !params
                     .headers
                     .keys()
-                    .any(|k| SENSITIVE_HEADERS.contains(&k.to_lowercase().as_str())),
+                    .any(|k| SENSITIVE_HEADERS.contains(&k.as_str())),
                 "sensitive headers leaked into envelope"
             );
             assert_eq!(
-                params.headers.get("Content-Type").unwrap(),
+                params
+                    .headers
+                    .get(&HeaderName::from_static("content-type"))
+                    .unwrap(),
                 "application/json"
             );
         } else {
@@ -806,8 +815,14 @@ mod tests {
     fn test_normalize_strips_set_cookie_header() {
         let normalizer = test_normalizer();
         let mut headers = HashMap::new();
-        headers.insert("Set-Cookie".to_string(), "session=abc".to_string());
-        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        headers.insert(
+            HeaderName::from_static("set-cookie"),
+            "session=abc".to_string(),
+        );
+        headers.insert(
+            HeaderName::from_static("content-type"),
+            "application/json".to_string(),
+        );
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -823,10 +838,16 @@ mod tests {
             .unwrap_or_else(|_| panic!("expected Ok"));
         if let ActionParams::Http(ref params) = envelope.intent.params {
             assert!(
-                !params.headers.contains_key("Set-Cookie"),
+                !params
+                    .headers
+                    .contains_key(&HeaderName::from_static("set-cookie")),
                 "set-cookie header must be stripped"
             );
-            assert!(params.headers.contains_key("Content-Type"));
+            assert!(
+                params
+                    .headers
+                    .contains_key(&HeaderName::from_static("content-type"))
+            );
         } else {
             panic!("expected Http params");
         }
@@ -837,10 +858,13 @@ mod tests {
         let normalizer = test_normalizer();
         let mut headers = HashMap::new();
         headers.insert(
-            "Proxy-Authorization".to_string(),
+            HeaderName::from_static("proxy-authorization"),
             "Basic abc123".to_string(),
         );
-        headers.insert("Accept".to_string(), "application/json".to_string());
+        headers.insert(
+            HeaderName::from_static("accept"),
+            "application/json".to_string(),
+        );
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -856,10 +880,16 @@ mod tests {
             .unwrap_or_else(|_| panic!("expected Ok"));
         if let ActionParams::Http(ref params) = envelope.intent.params {
             assert!(
-                !params.headers.contains_key("Proxy-Authorization"),
+                !params
+                    .headers
+                    .contains_key(&HeaderName::from_static("proxy-authorization")),
                 "proxy-authorization header must be stripped"
             );
-            assert!(params.headers.contains_key("Accept"));
+            assert!(
+                params
+                    .headers
+                    .contains_key(&HeaderName::from_static("accept"))
+            );
         } else {
             panic!("expected Http params");
         }

@@ -6,7 +6,12 @@ license.workspace = true
 repository.workspace = true
 description = "Shared types, capability tokens, Cedar wrapper, and error types for Firma OSS"
 
+[features]
+default = []
+fuzz = ["dep:arbitrary"]
+
 [dependencies]
+arbitrary = { workspace = true, optional = true }
 async-trait = { workspace = true }
 cedar-policy = { workspace = true }
 chrono = { workspace = true }

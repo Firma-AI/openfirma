@@ -64,7 +64,9 @@ impl CredentialInjector for NullCredentialInjector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use firma_core::{ActionParams, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams};
+    use firma_core::{
+        ActionParams, ExecutionIntent, ExecutionMetadata, HeaderName, HttpMethod, HttpParams,
+    };
     use std::collections::HashMap;
 
     fn sample_envelope() -> ExecutionEnvelope {
@@ -138,7 +140,7 @@ mod tests {
         ) -> Result<InjectedCredentials, CredentialInjectionError> {
             if connector_id == "known" {
                 Ok(InjectedCredentials::new(HashMap::from([(
-                    "X-Api-Key".to_string(),
+                    HeaderName::from_static("x-api-key"),
                     "secret".to_string(),
                 )])))
             } else {
@@ -157,7 +159,12 @@ mod tests {
             .inject(&envelope, "known", "https://api.example.com")
             .await;
         let creds = result.expect("should succeed for known connector");
-        assert_eq!(creds.get("X-Api-Key").map(String::as_str), Some("secret"));
+        assert_eq!(
+            creds
+                .get(&HeaderName::from_static("x-api-key"))
+                .map(String::as_str),
+            Some("secret")
+        );
     }
 
     #[tokio::test]

@@ -8,6 +8,8 @@
 
 use std::collections::HashMap;
 
+use firma_core::HeaderName;
+
 use crate::config;
 use crate::credential;
 
@@ -31,7 +33,7 @@ pub fn build_credential_injector<S: std::hash::BuildHasher>(
         return Ok(Box::new(credential::NullCredentialInjector));
     }
 
-    let mut basic_map: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut basic_map: HashMap<String, HashMap<HeaderName, String>> = HashMap::new();
     let mut vault_map: HashMap<String, Vec<credential::provider::VaultSecretEntry>> =
         HashMap::new();
 

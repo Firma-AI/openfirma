@@ -43,6 +43,7 @@ codegen-units = 1
 
 [workspace.dependencies]
 anyhow = "1"
+arbitrary = "1"
 arc-swap = "1"
 async-stream = "0.3"
 async-trait = "0.1"

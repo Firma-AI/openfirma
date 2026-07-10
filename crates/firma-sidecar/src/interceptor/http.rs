@@ -14,14 +14,13 @@
 //! - Transparent TCP tunneling (default, no MITM).
 //! - Optional TLS MITM interception for configured hosts.
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use firma_core::{AbortReason, DenyReason};
+use firma_core::{AbortReason, DenyReason, HeaderName};
 use http_body::Body as _;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
@@ -342,7 +341,7 @@ async fn handle_request(
         };
     let session_id = raw
         .headers
-        .get("x-firma-session-id")
+        .get(&HeaderName::from_static("x-firma-session-id"))
         .cloned()
         .unwrap_or_default();
 
@@ -452,7 +451,7 @@ async fn handle_connect_request(
     };
     let session_id = raw
         .headers
-        .get("x-firma-session-id")
+        .get(&HeaderName::from_static("x-firma-session-id"))
         .cloned()
         .unwrap_or_default();
     let target_info = connect_target_info(&host_with_default_port(req, true));
@@ -1127,7 +1126,7 @@ async fn handle_mitm_https_request(
 
     let session_id = raw
         .headers
-        .get("x-firma-session-id")
+        .get(&HeaderName::from_static("x-firma-session-id"))
         .cloned()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| connect_session_id.to_string());
@@ -1188,7 +1187,7 @@ async fn handle_mitm_websocket_upgrade_request(
     };
     let session_id = raw
         .headers
-        .get("x-firma-session-id")
+        .get(&HeaderName::from_static("x-firma-session-id"))
         .cloned()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| connect_session_id.to_string());
@@ -1423,7 +1422,7 @@ fn build_upstream_handshake_request(
         out.extend_from_slice(b"\r\n");
     }
     for (k, v) in credentials.headers() {
-        out.extend_from_slice(k.as_bytes());
+        out.extend_from_slice(k.as_str().as_bytes());
         out.extend_from_slice(b": ");
         out.extend_from_slice(v.as_bytes());
         out.extend_from_slice(b"\r\n");
@@ -1550,10 +1549,10 @@ fn build_raw_https_request_head(
     }
 
     let path = extract_path(req.uri().to_string().as_bytes());
-    let headers: HashMap<String, String> = req
+    let headers = req
         .headers()
         .iter()
-        .filter_map(|(k, v)| Some((k.to_string(), v.to_str().ok()?.to_string())))
+        .filter_map(|(k, v)| Some((HeaderName::from(k), v.to_str().ok()?.to_string())))
         .collect();
 
     Ok(RawRequest {
@@ -1637,10 +1636,10 @@ fn build_raw_request_head(req: &Request<Incoming>, is_connect: bool) -> Result<R
     } else {
         extract_path(req.uri().to_string().as_bytes())
     };
-    let headers: HashMap<String, String> = req
+    let headers = req
         .headers()
         .iter()
-        .filter_map(|(k, v)| Some((k.to_string(), v.to_str().ok()?.to_string())))
+        .filter_map(|(k, v)| Some((HeaderName::from(k), v.to_str().ok()?.to_string())))
         .collect();
     let is_https = is_connect
         || req

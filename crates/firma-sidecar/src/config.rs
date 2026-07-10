@@ -37,6 +37,7 @@ use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
+use firma_core::HeaderName;
 use hyper::Uri;
 use serde::Deserialize;
 
@@ -633,7 +634,7 @@ pub struct CredentialConfig {
     /// Host that this credential applies to.
     pub target_host: String,
     /// HTTP header name to inject (e.g. `Authorization`).
-    pub header: String,
+    pub header: HeaderName,
     /// Optional prefix prepended to the resolved value
     /// (e.g. `"Bearer "`).
     #[serde(default)]
@@ -653,9 +654,6 @@ impl CredentialConfig {
     fn validate(&self) -> Result<(), String> {
         if self.target_host.trim().is_empty() {
             return Err("target_host must not be empty".into());
-        }
-        if self.header.trim().is_empty() {
-            return Err("header must not be empty".into());
         }
         match self.mode {
             CredentialMode::Basic => {
@@ -1074,7 +1072,7 @@ mod tests {
             CredentialConfig {
                 mode: CredentialMode::Basic,
                 target_host: String::new(),
-                header: "Authorization".to_string(),
+                header: HeaderName::from_static("authorization"),
                 value_from_env: Some("KEY".to_string()),
                 prefix: None,
                 secret_path: None,
@@ -1099,7 +1097,7 @@ mod tests {
             CredentialConfig {
                 mode: CredentialMode::Basic,
                 target_host: "api.example.com".to_string(),
-                header: "Authorization".to_string(),
+                header: HeaderName::from_static("authorization"),
                 value_from_env: None,
                 prefix: None,
                 secret_path: None,
@@ -1124,7 +1122,7 @@ mod tests {
             CredentialConfig {
                 mode: CredentialMode::Vault,
                 target_host: "api.example.com".to_string(),
-                header: "Authorization".to_string(),
+                header: HeaderName::from_static("authorization"),
                 value_from_env: None,
                 prefix: None,
                 secret_path: None,
