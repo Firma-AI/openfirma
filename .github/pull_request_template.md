@@ -19,14 +19,17 @@ Link the issue, decision doc, or discussion instead of repeating background.
 
 -
 
-## Extra Verification
+## Manual / Extra Verification
 
 <!--
-Only keep this section if automated tests included in this PR are not enough to
-fully cover the change or provide enough assurance.
+Delete this section unless you did validation beyond the repo's standard
+automated checks.
 
-If something needed manual validation or could not be exercised in CI, note it
-here with exact steps, screenshots, logs, or environment details as needed.
+Do not list `just ...`, `cargo test`, linters, formatters, or CI jobs here.
+Use this section only for manual testing, environment-specific validation, or
+coverage gaps that automated checks could not exercise.
+
+Include exact steps, screenshots, logs, or environment details when relevant.
 -->
 
 ## Risks / Notes
