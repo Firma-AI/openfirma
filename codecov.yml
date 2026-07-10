@@ -1,0 +1,7 @@
+comment: false
+
+coverage:
+  status:
+    patch:
+      default:
+        only_pulls: true
