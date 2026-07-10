@@ -290,14 +290,18 @@ impl RevocationStore {
         drop(entries);
         lines.sort_unstable();
         let content: String = lines.concat();
-        tokio::fs::write(&self.revocation_file, content)
-            .await
-            .with_context(|| {
-                format!(
-                    "cannot compact revocation file {}",
-                    self.revocation_file.display()
-                )
-            })?;
+        let compact_revocation_future = async {
+            let mut file = tokio::fs::File::create(&self.revocation_file).await?;
+            file.write_all(content.as_ref()).await?;
+            file.sync_all().await?;
+            Ok::<_, anyhow::Error>(())
+        };
+        compact_revocation_future.await.with_context(|| {
+            format!(
+                "cannot compact revocation file {}",
+                self.revocation_file.display()
+            )
+        })?;
         tracing::info!(path = %self.revocation_file.display(), "revocation file compacted");
         Ok(())
     }
