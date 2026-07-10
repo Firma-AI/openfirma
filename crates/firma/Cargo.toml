@@ -58,6 +58,7 @@ windows-sys = { workspace = true }
 
 [dev-dependencies]
 fs-err = { workspace = true }
+guppy = "0.17"
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
@@ -77,3 +78,7 @@ nix = { workspace = true }
 [[test]]
 name = "e2e"
 path = "../../tests/e2e/main.rs"
+
+[[test]]
+name = "architecture"
+path = "../../tests/architecture/main.rs"
