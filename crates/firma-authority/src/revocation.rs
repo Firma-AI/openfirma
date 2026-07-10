@@ -36,15 +36,21 @@ pub struct RevocationEntry {
 /// so they can be safely ignored and removed via [`RevocationStore::compact_file`].
 #[derive(Clone)]
 pub struct RevocationStore {
-    /// Revoked token IDs mapped to their revocation entries.
-    entries: Arc<RwLock<HashMap<TokenId, RevocationEntry>>>,
-    /// Ordered log for replay (FR-6: replay events after `since`).
-    log: Arc<RwLock<Vec<RevocationEntry>>>,
+    /// Internal state
+    state: Arc<RwLock<RevocationState>>,
     /// Path to the revocation file.
     revocation_file: PathBuf,
     /// Maximum token TTL issued by this Authority. Entries older than this
     /// are expired and can be trimmed from the file.
     token_ttl: Duration,
+}
+
+#[derive(Default)]
+struct RevocationState {
+    /// Revoked token IDs mapped to their revocation entries.
+    entries: HashMap<TokenId, RevocationEntry>,
+    /// Ordered log for replay (FR-6: replay events after `since`).
+    log: Vec<RevocationEntry>,
 }
 
 impl RevocationStore {
@@ -58,8 +64,7 @@ impl RevocationStore {
     /// Returns an error if the file exists but cannot be read.
     pub fn try_new(revocation_file: &Path, token_ttl: Duration) -> Result<Self> {
         let store = Self {
-            entries: Arc::new(RwLock::new(HashMap::new())),
-            log: Arc::new(RwLock::new(Vec::new())),
+            state: Arc::default(),
             revocation_file: revocation_file.to_path_buf(),
             token_ttl,
         };
@@ -120,8 +125,7 @@ impl RevocationStore {
     /// Load revocations from file content. Skips expired entries.
     /// Returns the number of new entries added.
     fn load_from_content(&self, content: &str) -> usize {
-        let mut entries = self.entries.blocking_write();
-        let mut log = self.log.blocking_write();
+        let mut state = self.state.blocking_write();
         let now = Utc::now();
         let mut count = 0;
 
@@ -142,16 +146,15 @@ impl RevocationStore {
                 continue;
             }
 
-            if entries.contains_key(&entry.token_id) {
+            if state.entries.contains_key(&entry.token_id) {
                 continue;
             }
-            entries.insert(entry.token_id, entry.clone());
-            log.push(entry);
+            state.entries.insert(entry.token_id, entry.clone());
+            state.log.push(entry);
             count += 1;
         }
 
-        drop(entries);
-        drop(log);
+        drop(state);
         count
     }
 
@@ -167,7 +170,7 @@ impl RevocationStore {
     ///
     /// Returns an error if the revocation file cannot be opened or written to.
     pub async fn revoke(&self, token_id: TokenId, reason: &str) -> Result<()> {
-        if self.entries.read().await.contains_key(&token_id) {
+        if self.state.read().await.entries.contains_key(&token_id) {
             tracing::debug!(%token_id, "duplicate revocation ignored");
             return Ok(());
         }
@@ -196,14 +199,15 @@ impl RevocationStore {
 
     /// Check if a token has been revoked.
     pub async fn is_revoked(&self, token_id: TokenId) -> bool {
-        self.entries.read().await.contains_key(&token_id)
+        self.state.read().await.entries.contains_key(&token_id)
     }
 
     /// Get all revocation events after the given timestamp (for stream replay).
     pub async fn events_since(&self, since: DateTime<Utc>) -> Vec<RevocationEntry> {
-        self.log
+        self.state
             .read()
             .await
+            .log
             .iter()
             .filter(|e| e.timestamp > since)
             .cloned()
@@ -230,8 +234,7 @@ impl RevocationStore {
 
         let now = Utc::now();
         let mut new_entries = Vec::new();
-        let mut entries = self.entries.write().await;
-        let mut log = self.log.write().await;
+        let mut state = self.state.write().await;
 
         for line in content.lines() {
             let Some(entry) = Self::parse_line(line, now) else {
@@ -246,16 +249,15 @@ impl RevocationStore {
                 continue;
             }
 
-            if entries.contains_key(&entry.token_id) {
+            if state.entries.contains_key(&entry.token_id) {
                 continue;
             }
-            entries.insert(entry.token_id, entry.clone());
-            log.push(entry.clone());
+            state.entries.insert(entry.token_id, entry.clone());
+            state.log.push(entry.clone());
             new_entries.push(entry);
         }
 
-        drop(entries);
-        drop(log);
+        drop(state);
         Ok(new_entries)
     }
 
@@ -274,20 +276,22 @@ impl RevocationStore {
     /// Returns an error if the file cannot be written.
     pub async fn compact_file(&self) -> Result<()> {
         let now = Utc::now();
-        let entries = self.entries.read().await;
-        let mut lines: Vec<String> = entries
-            .values()
-            .filter(|e| !self.is_expired(e, now))
-            .map(|e| {
-                format!(
-                    "{}\t{}\t{}\n",
-                    e.token_id,
-                    e.timestamp.to_rfc3339(),
-                    e.reason
-                )
-            })
-            .collect();
-        drop(entries);
+        let mut lines = {
+            let state = self.state.read().await;
+            state
+                .entries
+                .values()
+                .filter(|e| !self.is_expired(e, now))
+                .map(|e| {
+                    format!(
+                        "{}\t{}\t{}\n",
+                        e.token_id,
+                        e.timestamp.to_rfc3339(),
+                        e.reason
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
         lines.sort_unstable();
         let content: String = lines.concat();
         let compact_revocation_future = async {
@@ -455,8 +459,9 @@ mod tests {
         std::fs::write(&file, format!("{id1}\n{id2}\n")).unwrap();
 
         let s = store(&file);
-        assert!(s.entries.blocking_read().contains_key(&id1));
-        assert!(s.entries.blocking_read().contains_key(&id2));
+        let entries = &s.state.blocking_read().entries;
+        assert!(entries.contains_key(&id1));
+        assert!(entries.contains_key(&id2));
     }
 
     #[test]
@@ -469,7 +474,7 @@ mod tests {
 
         let s = store(&file);
         let reason = {
-            let entries = s.entries.blocking_read();
+            let entries = &s.state.blocking_read().entries;
             entries.get(&id).unwrap().reason.clone()
         };
         assert_eq!(reason, "explicit reason");
@@ -483,7 +488,9 @@ mod tests {
         let id2 = TokenId::new();
         std::fs::write(&file, format!("{id1}\n\n  \n{id2}\n")).unwrap();
 
-        assert_eq!(store(&file).entries.blocking_read().len(), 2);
+        let s = store(&file);
+        let entries = &s.state.blocking_read().entries;
+        assert_eq!(entries.len(), 2);
     }
 
     #[test]
@@ -495,10 +502,9 @@ mod tests {
         let old_ts = (Utc::now() - Duration::hours(2)).to_rfc3339();
         std::fs::write(&file, format!("{id}\t{old_ts}\told revocation\n")).unwrap();
 
-        assert!(
-            store(&file).entries.blocking_read().is_empty(),
-            "expired entry must not load"
-        );
+        let s = store(&file);
+        let entries = &s.state.blocking_read().entries;
+        assert!(entries.is_empty(), "expired entry must not load");
     }
 
     #[test]
@@ -510,7 +516,9 @@ mod tests {
         let recent_ts = (Utc::now() - Duration::minutes(30)).to_rfc3339();
         std::fs::write(&file, format!("{id}\t{recent_ts}\trecent reason\n")).unwrap();
 
-        assert!(store(&file).entries.blocking_read().contains_key(&id));
+        let s = store(&file);
+        let entries = &s.state.blocking_read().entries;
+        assert!(entries.contains_key(&id));
     }
 
     /// `revoke()` writes to file; the watcher updates memory and broadcasts.
@@ -535,7 +543,8 @@ mod tests {
             .unwrap();
 
         s.revoke(id, "test again").await.unwrap();
-        assert_eq!(s.entries.read().await.len(), 1);
+        let entries = &s.state.read().await.entries;
+        assert_eq!(entries.len(), 1);
     }
 
     #[tokio::test]
