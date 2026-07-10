@@ -32,10 +32,6 @@ pub struct Line {
     pub raw: String,
 }
 
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "tailers run in spawned threads and intentionally own these handles"
-)]
 pub fn tail(
     path: PathBuf,
     source: Source,
@@ -43,6 +39,22 @@ pub fn tail(
     follow: bool,
     tx: Sender<Line>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    tail_inner(path, source, backfill_since, follow, tx, stop, None);
+}
+
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tailers run in spawned threads and intentionally own these handles"
+)]
+fn tail_inner(
+    path: PathBuf,
+    source: Source,
+    backfill_since: Option<SystemTime>,
+    follow: bool,
+    tx: Sender<Line>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    mut ready: Option<Sender<()>>,
 ) {
     use std::sync::atomic::Ordering;
 
@@ -60,7 +72,7 @@ pub fn tail(
             std::thread::sleep(Duration::from_millis(200));
             continue;
         };
-        let initial_id = file_id(&path);
+        let initial_id = initial_file_id(&path, &file);
         let mut reader = BufReader::new(file);
         // Seek to EOF only when following without a backfill window: that mode
         // shows new events as they arrive. A one-shot read (`--no-follow`) must
@@ -72,6 +84,9 @@ pub fn tail(
             trace!(?source, "seeking to EOF");
             let _ = reader.seek(SeekFrom::End(0));
         }
+        if let Some(ready_tx) = ready.take() {
+            let _ = ready_tx.send(());
+        }
 
         let mut buffer = String::new();
         loop {
@@ -81,7 +96,7 @@ pub fn tail(
             buffer.clear();
             match reader.read_line(&mut buffer) {
                 Ok(0) => {
-                    if file_id(&path) != initial_id {
+                    if !path_still_matches_file(&path, initial_id.as_ref()) {
                         debug!(?source, "file rotated; reopening");
                         break;
                     }
@@ -127,16 +142,32 @@ fn parse_leading_timestamp(line: &str) -> Option<SystemTime> {
 }
 
 #[cfg(unix)]
-fn file_id(path: &Path) -> Option<(u64, u64)> {
+fn initial_file_id(path: &Path, _file: &File) -> Option<(u64, u64)> {
     use std::os::unix::fs::MetadataExt;
+
     let metadata = std::fs::metadata(path).ok()?;
     Some((metadata.dev(), metadata.ino()))
 }
 
 #[cfg(windows)]
-fn file_id(path: &Path) -> Option<u64> {
-    let metadata = std::fs::metadata(path).ok()?;
-    Some(metadata.len())
+fn initial_file_id(_path: &Path, file: &File) -> Option<same_file::Handle> {
+    same_file::Handle::from_file(file.try_clone().ok()?).ok()
+}
+
+#[cfg(unix)]
+fn path_still_matches_file(path: &Path, initial_id: Option<&(u64, u64)>) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let current_id = std::fs::metadata(path)
+        .ok()
+        .map(|metadata| (metadata.dev(), metadata.ino()));
+    current_id.as_ref() == initial_id
+}
+
+#[cfg(windows)]
+fn path_still_matches_file(path: &Path, initial_id: Option<&same_file::Handle>) -> bool {
+    let current_id = same_file::Handle::from_path(path).ok();
+    current_id.as_ref() == initial_id
 }
 
 #[cfg(test)]
@@ -154,14 +185,25 @@ mod tests {
         let path = dir.path().join("audit.jsonl");
         std::fs::write(&path, "").expect("seed");
         let (tx, rx) = channel::<Line>();
+        let (ready_tx, ready_rx) = channel::<()>();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
         let path_thread = path.clone();
         let handle = std::thread::spawn(move || {
-            tail(path_thread, Source::Audit, None, true, tx, stop_thread);
+            tail_inner(
+                path_thread,
+                Source::Audit,
+                None,
+                true,
+                tx,
+                stop_thread,
+                Some(ready_tx),
+            );
         });
 
-        std::thread::sleep(Duration::from_millis(200));
+        ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("ready");
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .open(&path)

@@ -54,6 +54,7 @@ x509-parser = { workspace = true }
 nix = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
+same-file = "1"
 windows-sys = { workspace = true }
 
 [dev-dependencies]
