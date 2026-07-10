@@ -14,12 +14,9 @@ allow = [
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
   "MIT",
-  "MIT-0",
-  "MPL-2.0",
   "BSD-2-Clause",
   "BSD-3-Clause",
   "BSD-1-Clause",
-  "0BSD",
   "ISC",
   "Zlib",
   "Unlicense",
@@ -38,12 +35,9 @@ exceptions = [{ allow = ["LGPL-2.1-or-later"], crate = "r-efi" }]
 # Banned crates
 # ---------------------------------------------------------------------------
 [bans]
-# Warn on duplicate versions; deny on known-bad crates.
-multiple-versions = "warn"
-# workspace-internal crates use `{ workspace = true }` which cargo-deny treats
-# as a wildcard. `allow-wildcard-paths` does not help here because the crates
-# are publishable, so keep this at `warn` to surface third-party wildcards
-# without failing on internal paths.
+# Ignore duplicate versions; deny on known-bad crates.
+multiple-versions = "allow"
+# Keep wildcard deps visible so third-party `*` requirements still stand out.
 wildcards = "warn"
 deny = [
   # openssl: prefer rustls everywhere; openssl adds C build complexity and

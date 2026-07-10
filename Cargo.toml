@@ -58,16 +58,16 @@ dirs = "6"
 dispatch2 = "0.3"
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
 elliptic-curve = { version = "0.13", features = ["pem"] }
-firma-authority = { path = "crates/firma-authority" }
-firma-config-loader = { path = "crates/firma-config-loader" }
-firma-core = { path = "crates/firma-core" }
-firma-fs = { path = "crates/firma-fs" }
-firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto" }
-firma-protobuf = { path = "crates/firma-protobuf" }
-firma-run = { path = "crates/firma-run" }
-firma-runtime-state = { path = "crates/firma-runtime-state" }
-firma-sidecar = { path = "crates/firma-sidecar" }
-firma-stack = { path = "crates/firma-stack" }
+firma-authority = { path = "crates/firma-authority", version = "0.1.2" }
+firma-config-loader = { path = "crates/firma-config-loader", version = "0.1.2" }
+firma-core = { path = "crates/firma-core", version = "0.1.2" }
+firma-fs = { path = "crates/firma-fs", version = "0.1.2" }
+firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto", version = "0.1.2" }
+firma-protobuf = { path = "crates/firma-protobuf", version = "0.2.0" }
+firma-run = { path = "crates/firma-run", version = "0.1.2" }
+firma-runtime-state = { path = "crates/firma-runtime-state", version = "0.1.2" }
+firma-sidecar = { path = "crates/firma-sidecar", version = "0.1.2" }
+firma-stack = { path = "crates/firma-stack", version = "0.1.2" }
 fs-err = "3.3"
 governor = "0.10"
 hex = "0.4"
