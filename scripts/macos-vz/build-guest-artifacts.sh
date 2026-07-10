@@ -18,6 +18,7 @@ Environment:
   FIRMA_VZ_GUEST_KERNEL       Path to a known-good Kata vmlinux.
   FIRMA_VZ_BUSYBOX_STATIC     Use an existing static busybox binary.
   FIRMA_VZ_BUSYBOX_STATIC_APK Use an existing busybox-static APK.
+  FIRMA_VZ_GUEST_TOOL_APK_DIR Use existing curl/openssl dependency APKs from this directory.
   FIRMA_VZ_ROOTFS_SIZE        Rootfs image size in bytes. Default: 67108864.
   RUST_TARGET                 Override the Linux musl target for the guest init.
   RUSTUP_TOOLCHAIN            Optional Rust toolchain passed through to cargo.
@@ -41,6 +42,7 @@ rustc_bin="${RUSTC:-rustc}"
 rootfs_size="${FIRMA_VZ_ROOTFS_SIZE:-67108864}"
 default_guest_kernel="$repo_root/target/firma-vz-guest/kata/vmlinux-6.18.15-186"
 guest_kernel="${FIRMA_VZ_GUEST_KERNEL:-$default_guest_kernel}"
+alpine_release="v3.20"
 
 case "${RUST_TARGET:-$host_arch}" in
   arm64 | aarch64 | aarch64-unknown-linux-musl)
@@ -61,12 +63,14 @@ case "${RUST_TARGET:-$host_arch}" in
     ;;
 esac
 
+guest_tool_lock="$repo_root/scripts/macos-vz/apk-lock/alpine-$alpine_release-$alpine_arch.lock"
 out_dir="${1:-"$repo_root/target/firma-vz-guest/$alpine_arch"}"
 work_dir="$out_dir/.work"
 initramfs_dir="$work_dir/initramfs"
 download_dir="$work_dir/downloads"
 guest_module_dir="$initramfs_dir/lib/modules/firma-vz"
 boot_args="console=hvc0 earlyprintk=hvc0 ignore_loglevel loglevel=8 printk.time=1 rdinit=/firma-init init=/firma-init panic=1 firma.virtiofs_tag=firma firma.launch_contract=/firma-shares/runtime/vz-guest/vz-guest-launch.json firma.network=vsock_sidecar"
+guest_tool_manifest_entries=()
 
 if [ -z "$guest_kernel" ]; then
   echo "FIRMA_VZ_GUEST_KERNEL must point to the known-good Kata vmlinux" >&2
@@ -116,6 +120,64 @@ extract_kernel_module() {
   fi
   tar -xOf "$kernel_apk" "$module_member" | gzip -dc > "$module_output"
   chmod 0644 "$module_output"
+}
+
+install_guest_tool_package() {
+  package_filename="$1"
+  expected_sha256="$2"
+  package_url="https://dl-cdn.alpinelinux.org/alpine/$alpine_release/main/$alpine_arch/$package_filename"
+  package_path="$download_dir/$package_filename"
+
+  if [ -n "${FIRMA_VZ_GUEST_TOOL_APK_DIR:-}" ]; then
+    package_path="$FIRMA_VZ_GUEST_TOOL_APK_DIR/$package_filename"
+    if [ ! -f "$package_path" ]; then
+      echo "guest tool APK is missing: $package_path" >&2
+      exit 1
+    fi
+  else
+    require_tool curl
+    curl -fsSL "$package_url" -o "$package_path"
+  fi
+
+  actual_sha256="$(sha256_file "$package_path")"
+
+  if [ "$actual_sha256" != "$expected_sha256" ]; then
+    echo "guest tool APK checksum mismatch for $package_filename" >&2
+    echo "expected: $expected_sha256" >&2
+    echo "actual:   $actual_sha256" >&2
+    exit 1
+  fi
+
+  (
+    cd "$initramfs_dir"
+    tar -xf "$package_path"
+  )
+
+  guest_tool_manifest_entries+=("$package_filename:$actual_sha256")
+
+}
+
+install_guest_tool_packages() {
+  if [ ! -f "$guest_tool_lock" ]; then
+    echo "guest tool APK lock file does not exist: $guest_tool_lock" >&2
+    exit 1
+  fi
+
+  while read -r package_filename expected_sha256 extra; do
+    case "${package_filename:-}" in
+      "" | \#*)
+        continue
+        ;;
+    esac
+
+    if [ -z "${expected_sha256:-}" ] || [ -n "${extra:-}" ]; then
+      echo "invalid guest tool APK lock entry in $guest_tool_lock: $package_filename ${expected_sha256:-} ${extra:-}" >&2
+      exit 1
+    fi
+
+    install_guest_tool_package "$package_filename" "$expected_sha256"
+
+  done < "$guest_tool_lock"
 }
 
 require_tool "$cargo_bin"
@@ -231,6 +293,12 @@ rm -rf "$initramfs_dir"
 mkdir -p "$initramfs_dir/dev" "$initramfs_dir/proc" "$initramfs_dir/sys" \
   "$initramfs_dir/tmp" "$initramfs_dir/firma-shares" "$initramfs_dir/bin" \
   "$initramfs_dir/usr/bin" "$guest_module_dir"
+
+install_guest_tool_packages
+rm -f "$initramfs_dir"/.SIGN.RSA.* "$initramfs_dir/.PKGINFO" \
+  "$initramfs_dir/.post-install" "$initramfs_dir/.post-upgrade" \
+  "$initramfs_dir/.pre-install" "$initramfs_dir/.pre-upgrade"
+
 cp "$guest_init" "$initramfs_dir/firma-init"
 cp "$guest_init" "$initramfs_dir/init"
 cp "$busybox_static_binary" "$initramfs_dir/bin/busybox"
@@ -244,6 +312,7 @@ busybox_links=(
   bin/env
   bin/false
   bin/grep
+  bin/head
   bin/ls
   bin/mkdir
   bin/mount
@@ -330,7 +399,8 @@ module_bundle=$module_bundle
 busybox_static_source=$busybox_static_source
 busybox_static_package_sha256=$busybox_static_package_sha256
 busybox_static_sha256=$(sha256_file "$initramfs_dir/bin/busybox")
-shell_tools=/bin/sh,/bin/bash,/bin/cat,/bin/printf,/bin/ls,/bin/mkdir,/bin/rm,/bin/grep,/bin/wget,/usr/bin/env,/usr/bin/which
+guest_tool_packages=$(IFS=,; echo "${guest_tool_manifest_entries[*]}")
+shell_tools=/bin/sh,/bin/bash,/bin/cat,/bin/printf,/bin/ls,/bin/mkdir,/bin/rm,/bin/grep,/bin/head,/bin/wget,/usr/bin/env,/usr/bin/which,/usr/bin/curl,/usr/bin/openssl
 rust_target=$rust_target
 rootfs_size=$rootfs_size
 boot_args=$boot_args
