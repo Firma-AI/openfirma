@@ -17,7 +17,6 @@
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::net::TcpListener;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -39,13 +38,6 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 3wlh7RZmOnI0E3wNCaMKd3B7Sd/fXknJ0WmI6BsrvfidxQEAYvsndbvx
 -----END PRIVATE KEY-----
 ";
-
-fn pick_free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    port
-}
 
 fn firma_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_firma"))
@@ -80,8 +72,8 @@ action_class = "communication.external.send"
     let audit_key = tmp.path().join("audit.key");
     std::fs::write(&audit_key, TEST_AUDIT_KEY_PEM).unwrap();
 
-    let interceptor_port = pick_free_port();
-    let health_port = pick_free_port();
+    let interceptor_listen_addr = "127.0.0.1:0";
+    let health_bind_addr = "127.0.0.1:0";
     let sidecar_toml = tmp.path().join(CONFIG_FILE_NAME);
     std::fs::write(
         &sidecar_toml,
@@ -93,7 +85,7 @@ action_class = "communication.external.send"
             r#"
 [sidecar.interceptor]
 mode = "http_proxy"
-listen_addr = "127.0.0.1:{interceptor_port}"
+listen_addr = "{interceptor_listen_addr}"
 drain_timeout_secs = 30
 
 [sidecar.policy]
@@ -120,6 +112,7 @@ signing_key_path = '{audit_key}'
             ca = ca_dir.display(),
             mapping = mapping.display(),
             audit_key = audit_key.display(),
+            interceptor_listen_addr = interceptor_listen_addr,
         ),
     )
     .unwrap();
@@ -131,7 +124,7 @@ signing_key_path = '{audit_key}'
     let mut child = Command::new(firma_bin())
         .args(["sidecar", "--config"])
         .arg(&sidecar_toml)
-        .args(["--health-bind-addr", &format!("127.0.0.1:{health_port}")])
+        .args(["--health-bind-addr", health_bind_addr])
         .stdout(stdout_file)
         .stderr(stderr_file)
         .spawn()
@@ -145,7 +138,7 @@ signing_key_path = '{audit_key}'
             continue;
         };
         lines = BufReader::new(file).lines().map_while(Result::ok).collect();
-        if lines.iter().any(|l| l.contains("ready")) {
+        if lines.iter().any(|l| l.contains("sidecar ready")) {
             break;
         }
     }
