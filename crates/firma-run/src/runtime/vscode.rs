@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
-use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -304,7 +303,7 @@ fn configure_vscode_wayland_socket_with_host_runtime_dir(
 #[cfg(unix)]
 fn is_safe_wayland_display_name(wayland_display: &str) -> bool {
     let mut components = Path::new(wayland_display).components();
-    matches!(components.next(), Some(Component::Normal(component)) if component == OsStr::new(wayland_display))
+    matches!(components.next(), Some(std::path::Component::Normal(component)) if component == OsStr::new(wayland_display))
         && components.next().is_none()
 }
 
