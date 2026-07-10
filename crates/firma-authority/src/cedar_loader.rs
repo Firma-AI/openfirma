@@ -20,9 +20,10 @@ use firma_core::policy::PolicyBundle;
 pub(crate) const DEFAULT_SCHEMA: &str = firma_core::cedar::FIRMA_SCHEMA;
 
 /// All mutable policy state kept under a single lock for atomic swaps.
-struct PolicyState {
-    policy_set: Arc<PolicySet>,
-    schema: Arc<Schema>,
+#[derive(Clone)]
+pub struct PolicyState {
+    pub policy_set: Arc<PolicySet>,
+    pub schema: Arc<Schema>,
 }
 
 /// Thread-safe Cedar policy store with hot-reload support.
@@ -130,14 +131,9 @@ impl CedarPolicyStore {
         Ok(())
     }
 
-    /// Get a snapshot of the current policy set for evaluation.
-    pub async fn policy_set(&self) -> Arc<PolicySet> {
-        self.state.read().await.policy_set.clone()
-    }
-
-    /// Get the current schema snapshot for evaluation.
-    pub async fn schema(&self) -> Arc<Schema> {
-        self.state.read().await.schema.clone()
+    /// Get a snapshot of the current policy set and schema for evaluation.
+    pub async fn snapshot(&self) -> PolicyState {
+        self.state.read().await.clone()
     }
 
     /// Get the current policy bundle for distribution to sidecars.
