@@ -238,6 +238,19 @@ fn configure_vscode_wayland_socket(
     desktop_runtime_dir: &Path,
     env: &BTreeMap<String, String>,
 ) -> Result<(), RunError> {
+    let host_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
+    configure_vscode_wayland_socket_with_host_runtime_dir(
+        desktop_runtime_dir,
+        env,
+        host_runtime_dir.as_deref(),
+    )
+}
+
+fn configure_vscode_wayland_socket_with_host_runtime_dir(
+    desktop_runtime_dir: &Path,
+    env: &BTreeMap<String, String>,
+    host_runtime_dir: Option<&OsStr>,
+) -> Result<(), RunError> {
     let Some(wayland_display) = env.get("WAYLAND_DISPLAY").cloned() else {
         tracing::debug!("VS Code Wayland socket not configured because WAYLAND_DISPLAY is unset");
         return Ok(());
@@ -250,7 +263,7 @@ fn configure_vscode_wayland_socket(
         );
         return Ok(());
     }
-    let Some(host_runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") else {
+    let Some(host_runtime_dir) = host_runtime_dir else {
         tracing::debug!(
             wayland_display = %wayland_display,
             "VS Code Wayland socket not configured because host XDG_RUNTIME_DIR is unset"
@@ -280,7 +293,16 @@ fn configure_vscode_dbus_socket(
     desktop_runtime_dir: &Path,
     env: &mut BTreeMap<String, String>,
 ) -> Result<(), RunError> {
-    let Some(address) = std::env::var("DBUS_SESSION_BUS_ADDRESS").ok() else {
+    let address = std::env::var("DBUS_SESSION_BUS_ADDRESS").ok();
+    configure_vscode_dbus_socket_with_address(desktop_runtime_dir, env, address.as_deref())
+}
+
+fn configure_vscode_dbus_socket_with_address(
+    desktop_runtime_dir: &Path,
+    env: &mut BTreeMap<String, String>,
+    address: Option<&str>,
+) -> Result<(), RunError> {
+    let Some(address) = address else {
         tracing::debug!(
             "VS Code D-Bus socket not configured because DBUS_SESSION_BUS_ADDRESS is unset"
         );
@@ -476,4 +498,145 @@ fn set_executable_permissions(path: &Path) -> Result<(), RunError> {
     permissions.set_mode(0o700);
     std::fs::set_permissions(path, permissions)
         .map_err(|error| RunError::Internal(format!("chmod {}: {error}", path.display())))
+}
+
+/// Exposes VS Code runtime behavior to integration tests.
+#[doc(hidden)]
+pub mod testing {
+    use std::collections::BTreeMap;
+    use std::ffi::OsStr;
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    use crate::error::RunError;
+
+    /// Prepares the VS Code shim and returns its executable and arguments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the shim, its isolated state, or the host executable cannot be prepared.
+    pub fn prepare_vscode_shim(
+        runtime_dir: &Path,
+        state_dir: &Path,
+        executable: &str,
+        args: Vec<String>,
+        env: &mut BTreeMap<String, String>,
+        host_path: Option<&Path>,
+    ) -> Result<(PathBuf, Vec<String>), RunError> {
+        let prepared = super::prepare_vscode_shim(
+            runtime_dir,
+            state_dir,
+            executable,
+            args,
+            env,
+            host_path.map(Path::as_os_str),
+        )?;
+        Ok((prepared.executable, prepared.args))
+    }
+
+    /// Resolves an executable using an optional explicit host search path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the executable cannot be found as a regular file.
+    pub fn resolve_host_executable(
+        executable: &str,
+        host_path: Option<&Path>,
+    ) -> Result<PathBuf, RunError> {
+        super::resolve_host_executable(executable, host_path.map(Path::as_os_str))
+    }
+
+    /// Resolves the directory used for isolated VS Code state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the resulting path cannot be made absolute.
+    pub fn resolve_state_dir(
+        config_path: Option<&Path>,
+        runtime_dir: &Path,
+    ) -> Result<PathBuf, RunError> {
+        super::resolve_vscode_state_dir(config_path, runtime_dir)
+    }
+
+    /// Rejects command-line arguments that would conflict with managed VS Code state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the arguments override managed state or window behavior.
+    pub fn reject_conflicting_args(args: &[String]) -> Result<(), RunError> {
+        super::reject_vscode_conflicting_args(args)
+    }
+
+    /// Identifies command names recognized as VS Code launchers.
+    #[must_use]
+    pub fn is_vscode_code_launcher(name: &str) -> bool {
+        super::is_vscode_code_launcher(name)
+    }
+
+    /// Creates a private directory using the runtime's production permissions policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the directory cannot be created or its permissions cannot be set.
+    pub fn create_private_dir(path: &Path, label: &str) -> Result<(), RunError> {
+        super::create_private_dir(path, label)
+    }
+
+    /// Prepends a shim directory to the execution path.
+    pub fn prepend_path(
+        env: &mut BTreeMap<String, String>,
+        shim_dir: &Path,
+        host_path: Option<&OsStr>,
+    ) {
+        super::prepend_path(env, shim_dir, host_path);
+    }
+
+    /// Escapes a path for inclusion in the POSIX shell shim.
+    #[cfg(not(windows))]
+    #[must_use]
+    pub fn shell_single_quote(value: &str) -> String {
+        super::shell_single_quote(value)
+    }
+
+    /// Links a Unix desktop socket into the isolated runtime directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an existing link cannot be replaced or the new link cannot be created.
+    #[cfg(unix)]
+    pub fn replace_symlink(source: &Path, target: &Path) -> Result<(), RunError> {
+        super::replace_symlink(source, target)
+    }
+
+    /// Configures a Wayland socket with an explicit host runtime directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an available host socket cannot be linked into the runtime directory.
+    #[cfg(unix)]
+    pub fn configure_wayland_socket(
+        desktop_runtime_dir: &Path,
+        env: &BTreeMap<String, String>,
+        host_runtime_dir: Option<&Path>,
+    ) -> Result<(), RunError> {
+        super::configure_vscode_wayland_socket_with_host_runtime_dir(
+            desktop_runtime_dir,
+            env,
+            host_runtime_dir.map(Path::as_os_str),
+        )
+    }
+
+    /// Configures a D-Bus socket with an explicit bus address.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an available host socket cannot be linked into the runtime directory.
+    #[cfg(unix)]
+    pub fn configure_dbus_socket(
+        desktop_runtime_dir: &Path,
+        env: &mut BTreeMap<String, String>,
+        address: Option<&str>,
+    ) -> Result<(), RunError> {
+        super::configure_vscode_dbus_socket_with_address(desktop_runtime_dir, env, address)
+    }
 }

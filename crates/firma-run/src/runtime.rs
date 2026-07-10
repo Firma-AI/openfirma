@@ -18,7 +18,8 @@ use crate::seccomp::resolve_effective_seccomp;
 use crate::sidecar::supervisor::DEFAULT_STARTUP_TIMEOUT_SECS;
 use crate::supervisor::wait_with_signal_forwarding;
 
-mod vscode;
+#[doc(hidden)]
+pub mod vscode;
 
 /// Lib-level input for [`execute_run`]. The CLI layer (in the `firma`
 /// host crate) builds this from its `clap`-derived args struct.
