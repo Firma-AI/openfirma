@@ -129,8 +129,8 @@ impl SandboxBackend for Wsl2Backend {
                 reason: "cannot start WSL2 backend agent on non-Windows/non-WSL host".to_string(),
             }),
             Wsl2HostMode::Windows => {
-                let wsl_cwd = windows_path_to_wsl(&launch.cwd)?;
-                let mut command = build_windows_wsl_command(launch, wsl_cwd);
+                let mut command =
+                    build_windows_command(launch, || windows_path_to_wsl(&launch.cwd))?;
 
                 command.spawn().map_err(|error| {
                     RunError::Spawn(format!(
@@ -191,6 +191,32 @@ fn build_wsl_linux_command(launch: &LaunchSpec) -> Command {
     command.args(&launch.args);
     command.envs(&launch.env);
     command
+}
+
+fn build_windows_command<F>(launch: &LaunchSpec, wsl_cwd: F) -> Result<Command, RunError>
+where
+    F: FnOnce() -> Result<String, RunError>,
+{
+    if is_windows_cmd_script(&launch.executable) {
+        return Ok(build_windows_host_command(launch));
+    }
+
+    wsl_cwd().map(|wsl_cwd| build_windows_wsl_command(launch, wsl_cwd))
+}
+
+fn build_windows_host_command(launch: &LaunchSpec) -> Command {
+    let mut command = Command::new(&launch.executable);
+    command.current_dir(&launch.cwd);
+    command.args(&launch.args);
+    command.envs(&launch.env);
+    command
+}
+
+fn is_windows_cmd_script(executable: &str) -> bool {
+    std::path::Path::new(executable)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("cmd"))
 }
 
 fn build_windows_wsl_command(launch: &LaunchSpec, wsl_cwd: String) -> Command {
@@ -302,9 +328,10 @@ mod tests {
     }
 
     #[test]
-    fn build_windows_wsl_command_includes_env_and_exec() {
+    fn windows_command_dispatches_wsl_agents_and_host_cmd_shims() {
         let launch = sample_launch();
-        let cmd = build_windows_wsl_command(&launch, "/mnt/c/work".to_string());
+        let cmd = build_windows_command(&launch, || Ok("/mnt/c/work".to_string()))
+            .unwrap_or_else(|error| panic!("build WSL command: {error}"));
         assert_eq!(cmd.get_program().to_string_lossy(), "wsl.exe");
         let args = cmd
             .get_args()
@@ -319,5 +346,39 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "FIRMA_TEST=1"));
         assert!(args.contains(&"/bin/echo".to_string()));
         assert!(args.ends_with(&["hello".to_string(), "world".to_string()]));
+
+        let launch = LaunchSpec {
+            executable: r"C:\Users\alice\AppData\Local\Temp\firma-run\bin\code.cmd".to_string(),
+            cwd: std::path::PathBuf::from(r"C:\workspace"),
+            env: BTreeMap::from([(
+                "FIRMA_RUN_VSCODE_USER_DATA_DIR".to_string(),
+                r"C:\Users\alice\.firma\vscode\user-data".to_string(),
+            )]),
+            ..launch
+        };
+
+        let cmd = build_windows_command(&launch, || {
+            Err(RunError::Internal(
+                "Windows command scripts must not require WSL cwd conversion".to_string(),
+            ))
+        })
+        .unwrap_or_else(|error| panic!("build host command: {error}"));
+        assert_eq!(
+            cmd.get_program().to_string_lossy(),
+            r"C:\Users\alice\AppData\Local\Temp\firma-run\bin\code.cmd"
+        );
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(args, vec!["hello".to_string(), "world".to_string()]);
+        assert_eq!(
+            cmd.get_current_dir(),
+            Some(std::path::Path::new(r"C:\workspace"))
+        );
+        assert!(cmd.get_envs().any(|(key, value)| {
+            key == "FIRMA_RUN_VSCODE_USER_DATA_DIR"
+                && value.is_some_and(|value| value == r"C:\Users\alice\.firma\vscode\user-data")
+        }));
     }
 }
