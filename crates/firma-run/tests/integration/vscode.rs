@@ -157,6 +157,19 @@ fn executable_resolution_rejects_missing_explicit_path() {
 }
 
 #[test]
+fn executable_resolution_accepts_existing_explicit_path() -> Result<(), Box<dyn std::error::Error>>
+{
+    let tmpdir = tempfile::tempdir()?;
+    let executable = tmpdir.path().join("code");
+    fs::write(&executable, "#!/bin/sh\nexit 0\n")?;
+
+    let resolved = testing::resolve_host_executable(&executable.display().to_string(), None)?;
+
+    assert_eq!(resolved, executable);
+    Ok(())
+}
+
+#[test]
 fn recognizes_supported_code_launcher_names() {
     assert!(testing::is_vscode_code_launcher("code"));
     assert!(testing::is_vscode_code_launcher("CODE.CMD"));
@@ -205,6 +218,16 @@ fn prepend_path_uses_host_path_when_execution_path_is_absent() {
         .into_owned();
 
     assert_eq!(env.get("PATH"), Some(&expected_path));
+}
+
+#[test]
+fn prepend_path_uses_only_shim_directory_without_existing_path() {
+    let shim_dir = Path::new("/tmp/firma-shim");
+    let mut env = BTreeMap::new();
+
+    testing::prepend_path(&mut env, shim_dir, None);
+
+    assert_eq!(env.get("PATH"), Some(&shim_dir.display().to_string()));
 }
 
 #[cfg(not(windows))]
@@ -300,6 +323,37 @@ fn wayland_configuration_ignores_missing_display_name() -> Result<(), Box<dyn st
 
 #[cfg(unix)]
 #[test]
+fn wayland_configuration_ignores_relative_display_without_host_runtime_dir()
+-> Result<(), Box<dyn std::error::Error>> {
+    let tmpdir = tempfile::tempdir()?;
+    let desktop_runtime_dir = tmpdir.path().join("desktop-runtime");
+    fs::create_dir(&desktop_runtime_dir)?;
+    let env = BTreeMap::from([("WAYLAND_DISPLAY".to_string(), "wayland-0".to_string())]);
+
+    testing::configure_wayland_socket(&desktop_runtime_dir, &env, None)?;
+
+    assert!(fs::read_dir(desktop_runtime_dir)?.next().is_none());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn wayland_configuration_ignores_missing_host_socket() -> Result<(), Box<dyn std::error::Error>> {
+    let tmpdir = tempfile::tempdir()?;
+    let host_runtime_dir = tmpdir.path().join("host-runtime");
+    let desktop_runtime_dir = tmpdir.path().join("desktop-runtime");
+    fs::create_dir(&host_runtime_dir)?;
+    fs::create_dir(&desktop_runtime_dir)?;
+    let env = BTreeMap::from([("WAYLAND_DISPLAY".to_string(), "wayland-0".to_string())]);
+
+    testing::configure_wayland_socket(&desktop_runtime_dir, &env, Some(&host_runtime_dir))?;
+
+    assert!(fs::read_dir(desktop_runtime_dir)?.next().is_none());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn dbus_configuration_links_unix_socket_and_rewrites_address()
 -> Result<(), Box<dyn std::error::Error>> {
     let tmpdir = tempfile::tempdir()?;
@@ -345,6 +399,23 @@ fn dbus_configuration_ignores_absent_address() -> Result<(), Box<dyn std::error:
     let mut env = BTreeMap::new();
 
     testing::configure_dbus_socket(&desktop_runtime_dir, &mut env, None)?;
+
+    assert!(env.is_empty());
+    assert!(fs::read_dir(desktop_runtime_dir)?.next().is_none());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn dbus_configuration_ignores_missing_host_socket() -> Result<(), Box<dyn std::error::Error>> {
+    let tmpdir = tempfile::tempdir()?;
+    let desktop_runtime_dir = tmpdir.path().join("desktop-runtime");
+    fs::create_dir(&desktop_runtime_dir)?;
+    let missing_socket = tmpdir.path().join("missing-bus");
+    let mut env = BTreeMap::new();
+    let address = format!("unix:path={}", missing_socket.display());
+
+    testing::configure_dbus_socket(&desktop_runtime_dir, &mut env, Some(&address))?;
 
     assert!(env.is_empty());
     assert!(fs::read_dir(desktop_runtime_dir)?.next().is_none());
