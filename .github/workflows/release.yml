@@ -26,27 +26,21 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-latest
-            use_cross: false
             archive_ext: tar.gz
           - target: aarch64-unknown-linux-musl
-            runner: ubuntu-latest
-            use_cross: true
+            runner: ubuntu-24.04-arm
             archive_ext: tar.gz
           - target: x86_64-apple-darwin
             runner: macos-latest
-            use_cross: false
             archive_ext: tar.gz
           - target: aarch64-apple-darwin
             runner: macos-latest
-            use_cross: false
             archive_ext: tar.gz
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
-            use_cross: false
             archive_ext: zip
           - target: aarch64-pc-windows-msvc
             runner: windows-latest
-            use_cross: false
             archive_ext: zip
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -79,31 +73,11 @@ jobs:
           version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Export PROTOC for cross volume mount
-        if: matrix.use_cross == true
-        shell: bash
-        run: |
-          PROTOC_BIN=$(command -v protoc)
-          PROTOC_INCLUDE=$(dirname "$(dirname "$PROTOC_BIN")")/include
-          echo "PROTOC=$PROTOC_BIN" >> "$GITHUB_ENV"
-          echo "PROTOC_INCLUDE=$PROTOC_INCLUDE" >> "$GITHUB_ENV"
-
-      - name: Install musl-tools (linux musl x86_64)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+      - name: Install musl-tools (linux musl)
+        if: endsWith(matrix.target, '-unknown-linux-musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - name: Install cross (linux musl aarch64)
-        if: matrix.use_cross == true
-        uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419 # v2.82.7
-        with:
-          tool: cross@${{ env.CROSS_VERSION }}
-
-      - name: Build with cross
-        if: matrix.use_cross == true
-        run: cross build --release --target ${{ matrix.target }} --bin firma
-
       - name: Build with cargo
-        if: matrix.use_cross == false
         run: cargo build --release --target ${{ matrix.target }} --bin firma
 
       - name: Package (unix)
