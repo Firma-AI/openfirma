@@ -37,6 +37,10 @@ allow_attributes = "warn"
 [workspace.lints.rust]
 unsafe_code = "warn"
 
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
 [workspace.dependencies]
 anyhow = "1"
 arc-swap = "1"
