@@ -1,0 +1,10 @@
+package=@openai/codex
+version=0.133.0-linux-x64
+url=https://registry.npmjs.org/@openai/codex/-/codex-0.133.0-linux-x64.tgz
+sha256=298519feb7655b4bc0ffb17f15378d9e6365fb65c30f23ab00ab1e99eee3191d
+vendor_dir=package/vendor/x86_64-unknown-linux-musl
+install_dir=/opt/openfirma/codex
+executable=bin/codex
+executable=codex-path/rg
+executable=codex-resources/bwrap
+symlink=bin/codex:/usr/bin/codex

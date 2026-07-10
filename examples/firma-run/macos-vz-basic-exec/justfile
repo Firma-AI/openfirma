@@ -66,7 +66,7 @@ run:
   if [ ! -f "$initrd" ] || [ ! -f "$rootfs" ] || [ ! -f "$kernel" ]; then
     needs_artifacts=1
   fi
-  if [ ! -f "$manifest" ] || ! grep -q '/usr/bin/curl' "$manifest"; then
+  if [ ! -f "$manifest" ] || ! grep -q '/usr/bin/curl' "$manifest" || ! grep -q '/usr/bin/rg' "$manifest"; then
     needs_artifacts=1
   fi
   if [ "$needs_artifacts" -eq 1 ]; then
