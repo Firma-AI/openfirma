@@ -1,7 +1,7 @@
 //! FIR-183: the sidecar must hold the seven-line ready contract's final
 //! `ready` log line until the Authority streams (policy bundle +
 //! revocations) have hydrated. Boots the sidecar against an Authority
-//! URL with no responsive listener and asserts that
+//! URL whose TCP endpoint never completes gRPC stream setup and asserts that
 //!
 //! 1. lines 1-6 of the contract appear (config / mapping / policy bundle /
 //!    authority stream / connector / interceptor), and
@@ -97,8 +97,8 @@ action_class = "communication.external.send"
     let health_bind_addr = "127.0.0.1:0";
     // Keep a non-gRPC TCP listener bound for the whole test so the
     // Authority endpoint cannot be stolen by another concurrent test.
-    // The sidecar can connect at TCP level, but the streams never
-    // hydrate, so readiness must remain withheld.
+    // The sidecar can reach the TCP endpoint, but the gRPC streams
+    // never hydrate, so readiness must remain withheld.
     let authority_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let authority_url = format!("http://{}", authority_listener.local_addr().unwrap());
 
@@ -194,7 +194,7 @@ signing_key_path = '{audit_key}'
     }
 
     // Observe a quiet window: `ready` must not appear while the
-    // Authority remains unreachable.
+    // Authority streams never hydrate.
     std::thread::sleep(Duration::from_secs(2));
     let lines: Vec<String> = BufReader::new(File::open(&stderr_log).unwrap())
         .lines()
