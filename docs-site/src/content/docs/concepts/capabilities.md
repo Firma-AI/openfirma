@@ -95,7 +95,6 @@ Tuning knobs:
 
 | Setting | Where | Default | Effect |
 | ------- | ----- | ------- | ------ |
-| `capability.refresh_enabled` | `firma run` profile | `true` | Turn the background re-minter on/off. |
 | `capability.refresh_ratio`   | `firma run` profile | `0.60`  | Fraction of remaining lifetime before renewing. |
 | `capability.grace_seconds`   | `firma run` profile | `30`    | Renew no later than this many seconds before expiry. |
 | `capability_seed.hot_reload` | sidecar config      | `true`  | Watch the seed file and hot-swap the map on change. |
