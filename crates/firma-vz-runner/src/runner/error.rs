@@ -96,6 +96,9 @@ pub enum RunnerError {
     #[error("command PTY connection registry is poisoned")]
     CommandPtyConnectionRegistryPoisoned,
 
+    #[error("command PTY control connection registry is poisoned")]
+    CommandPtyControlConnectionRegistryPoisoned,
+
     #[error("connect VSOCK bridge upstream {addr}: {source}")]
     SidecarUpstreamConnect {
         addr: SocketAddr,

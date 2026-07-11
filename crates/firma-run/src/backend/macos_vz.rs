@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::IsTerminal;
+use std::num::NonZeroU16;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -366,6 +367,23 @@ impl VzGuestLaunchContract {
         launch: &LaunchSpec,
         inputs: VzGuestLaunchInputs,
     ) -> Result<Self, RunError> {
+        Self::from_launch_with_terminal_snapshot(
+            handle,
+            launch,
+            inputs,
+            TerminalSnapshot::from_host(),
+        )
+    }
+
+    fn from_launch_with_terminal_snapshot(
+        handle: &SandboxHandle,
+        launch: &LaunchSpec,
+        inputs: VzGuestLaunchInputs,
+        terminal_snapshot: TerminalSnapshot,
+    ) -> Result<Self, RunError> {
+        let terminal =
+            VzGuestTerminalContract::from_launch_with_terminal_snapshot(launch, terminal_snapshot);
+
         Ok(Self {
             version: VZ_GUEST_LAUNCH_CONTRACT_VERSION,
             sandbox_id: handle.identity.sandbox_id.to_string(),
@@ -385,7 +403,7 @@ impl VzGuestLaunchContract {
                 env: vz_guest_contract_env(&launch.env),
                 identity_mode: launch.identity_mode,
             },
-            terminal: VzGuestTerminalContract::from_launch(launch),
+            terminal,
             mounts: handle.mounts.clone(),
             network: VzGuestNetworkContract::from_launch(
                 launch,
@@ -432,35 +450,132 @@ struct VzGuestTerminalContract {
     cols: Option<u16>,
 }
 
-impl VzGuestTerminalContract {
-    /// Captures host terminal shape only when a launch explicitly requests PTY.
-    fn from_launch(launch: &LaunchSpec) -> Self {
-        let host_interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-        let pty = host_interactive && command_requests_guest_pty(launch);
-        let (rows, cols) = if pty { terminal_size() } else { (None, None) };
+struct TerminalSnapshot {
+    interactive: bool,
+    term: Option<String>,
+    size: Option<TerminalSize>,
+}
 
+impl TerminalSnapshot {
+    fn from_host() -> Self {
         Self {
-            interactive: pty,
-            pty,
-            pty_vsock_port: pty.then_some(VZ_GUEST_COMMAND_PTY_VSOCK_PORT),
-            pty_control_vsock_port: pty.then_some(VZ_GUEST_COMMAND_PTY_CONTROL_VSOCK_PORT),
-            term: pty.then(terminal_type).flatten(),
-            rows,
-            cols,
+            interactive: std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
+            term: terminal_type(),
+            size: TerminalSize::from_host(),
+        }
+    }
+}
+
+impl VzGuestTerminalContract {
+    fn from_launch_with_terminal_snapshot(
+        launch: &LaunchSpec,
+        terminal_snapshot: TerminalSnapshot,
+    ) -> Self {
+        Self::from_selection(GuestTerminalSelection::from_launch(
+            launch,
+            terminal_snapshot,
+        ))
+    }
+
+    fn from_selection(selection: GuestTerminalSelection) -> Self {
+        match selection {
+            GuestTerminalSelection::NonInteractive => Self {
+                interactive: false,
+                pty: false,
+                pty_vsock_port: None,
+                pty_control_vsock_port: None,
+                term: None,
+                rows: None,
+                cols: None,
+            },
+            GuestTerminalSelection::Pty(request) => {
+                let (rows, cols) = request.size.map_or((None, None), |size| {
+                    (Some(size.rows.get()), Some(size.cols.get()))
+                });
+
+                Self {
+                    interactive: true,
+                    pty: true,
+                    pty_vsock_port: Some(request.data_port),
+                    pty_control_vsock_port: Some(request.control_port),
+                    term: request.term,
+                    rows,
+                    cols,
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GuestTerminalSelection {
+    NonInteractive,
+    Pty(GuestPtyRequest),
+}
+
+impl GuestTerminalSelection {
+    /// Selects whether this launch should ask the guest runner for PTY mode.
+    fn from_launch(launch: &LaunchSpec, terminal_snapshot: TerminalSnapshot) -> Self {
+        if !terminal_snapshot.interactive {
+            return Self::NonInteractive;
+        }
+
+        let requests_guest_pty = command_requests_guest_pty(launch);
+        if requests_guest_pty {
+            Self::Pty(GuestPtyRequest {
+                data_port: VZ_GUEST_COMMAND_PTY_VSOCK_PORT,
+                control_port: VZ_GUEST_COMMAND_PTY_CONTROL_VSOCK_PORT,
+                term: terminal_snapshot.term,
+                size: terminal_snapshot.size,
+            })
+        } else {
+            Self::NonInteractive
         }
     }
 }
 
 /// Returns whether this launch should ask the guest runner for PTY mode.
 ///
-/// PTY contract parsing lands before the host and guest PTY runtime.
-/// we keep automatic PTY requests disabled until the data/control VSOCK channels are
-/// available, otherwise normal codex launches would serialize contracts that
-/// this stack cannot execute yet.
+/// This profile gate is temporary. It exists only for the very first
+/// interactive TUI path while the VZ PTY transport is still being brought up
+/// incrementally. A later launch policy should replace this inference with an
+/// explicit user-facing contract.
 fn command_requests_guest_pty(launch: &LaunchSpec) -> bool {
-    let _ = launch;
+    launch
+        .env
+        .get("FIRMA_RUN_PROFILE")
+        .is_some_and(|profile| profile == "codex")
+        && Path::new(&launch.executable)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "codex")
+}
 
-    false
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GuestPtyRequest {
+    data_port: u32,
+    control_port: u32,
+    term: Option<String>,
+    size: Option<TerminalSize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TerminalSize {
+    rows: NonZeroU16,
+    cols: NonZeroU16,
+}
+
+impl TerminalSize {
+    fn from_host() -> Option<Self> {
+        Self::from_parts(terminal_dimension("LINES"), terminal_dimension("COLUMNS"))
+    }
+
+    const fn from_parts(rows: Option<NonZeroU16>, cols: Option<NonZeroU16>) -> Option<Self> {
+        match (rows, cols) {
+            (Some(rows), Some(cols)) => Some(Self { rows, cols }),
+            _ => None,
+        }
+    }
 }
 
 /// Reads the host terminal type to carry into the launch contract.
@@ -471,17 +586,12 @@ fn terminal_type() -> Option<String> {
         .filter(|term| !term.is_empty())
 }
 
-/// Reads the host terminal dimensions from the conventional env vars.
-fn terminal_size() -> (Option<u16>, Option<u16>) {
-    (terminal_dimension("LINES"), terminal_dimension("COLUMNS"))
-}
-
 /// Parses one non-zero terminal dimension from the host environment.
-fn terminal_dimension(key: &str) -> Option<u16> {
+fn terminal_dimension(key: &str) -> Option<NonZeroU16> {
     std::env::var(key)
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
-        .filter(|value| *value != 0)
+        .and_then(NonZeroU16::new)
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -880,6 +990,7 @@ mod tests {
     use std::collections::BTreeMap;
     #[cfg(unix)]
     use std::collections::BTreeSet;
+    use std::num::NonZeroU16;
     #[cfg(unix)]
     use std::path::Path;
     use std::path::PathBuf;
@@ -889,14 +1000,16 @@ mod tests {
     use crate::error::RunError;
     use crate::identity::RunIdentity;
 
+    use super::{
+        GuestPtyRequest, GuestTerminalSelection, TerminalSize, TerminalSnapshot,
+        VZ_GUEST_COMMAND_PTY_CONTROL_VSOCK_PORT, VZ_GUEST_COMMAND_PTY_VSOCK_PORT,
+        VzGuestLaunchContract, VzGuestLaunchInputs, VzGuestTerminalContract, VzStructuralMode,
+        build_sandbox_profile, loopback_port_from, vz_structural_mode_from_flags,
+    };
     #[cfg(unix)]
     use super::{
         VZ_GUEST_CONTRACT_DIR, VZ_GUEST_CONTRACT_FILE, VZ_GUEST_INITRD_ENV, VZ_GUEST_KERNEL_ENV,
         VZ_GUEST_ROOTFS_ENV, VZ_GUEST_RUNNER_ENV, start_vz_guest_runner_with_inputs,
-    };
-    use super::{
-        VzGuestLaunchContract, VzGuestLaunchInputs, VzStructuralMode, build_sandbox_profile,
-        command_requests_guest_pty, loopback_port_from, vz_structural_mode_from_flags,
     };
 
     fn test_launch(profile_name: &str) -> LaunchSpec {
@@ -933,6 +1046,14 @@ mod tests {
         }
     }
 
+    fn test_terminal_snapshot(interactive: bool) -> TerminalSnapshot {
+        TerminalSnapshot {
+            interactive,
+            term: Some("xterm-256color".to_string()),
+            size: TerminalSize::from_parts(NonZeroU16::new(40), NonZeroU16::new(120)),
+        }
+    }
+
     fn test_contract(handle: &SandboxHandle) -> VzGuestLaunchContract {
         let mut launch = test_launch("claude-code");
         launch.env.insert(
@@ -958,22 +1079,86 @@ mod tests {
     }
 
     #[test]
-    fn codex_profile_does_not_request_guest_pty_before_runtime_lands() {
+    fn guest_pty_selection_requires_matching_profile_and_executable() {
         let mut codex = test_launch("codex");
         codex.executable = "codex".to_string();
-        assert!(!command_requests_guest_pty(&codex));
+        assert_eq!(
+            GuestTerminalSelection::from_launch(&codex, test_terminal_snapshot(true)),
+            GuestTerminalSelection::Pty(GuestPtyRequest {
+                data_port: VZ_GUEST_COMMAND_PTY_VSOCK_PORT,
+                control_port: VZ_GUEST_COMMAND_PTY_CONTROL_VSOCK_PORT,
+                term: Some("xterm-256color".to_string()),
+                size: TerminalSize::from_parts(NonZeroU16::new(40), NonZeroU16::new(120)),
+            })
+        );
+
+        let mut codex_path = test_launch("codex");
+        codex_path.executable = "/usr/bin/codex".to_string();
+        assert!(matches!(
+            GuestTerminalSelection::from_launch(&codex_path, test_terminal_snapshot(true)),
+            GuestTerminalSelection::Pty(_)
+        ));
 
         let mut codex_version = test_launch("codex");
         codex_version.executable = "/usr/bin/true".to_string();
-        assert!(!command_requests_guest_pty(&codex_version));
+        assert_eq!(
+            GuestTerminalSelection::from_launch(&codex_version, test_terminal_snapshot(true)),
+            GuestTerminalSelection::NonInteractive
+        );
 
         let mut generic_codex = test_launch("generic");
         generic_codex.executable = "codex".to_string();
-        assert!(!command_requests_guest_pty(&generic_codex));
+        assert_eq!(
+            GuestTerminalSelection::from_launch(&generic_codex, test_terminal_snapshot(true)),
+            GuestTerminalSelection::NonInteractive
+        );
     }
 
     #[test]
-    fn codex_vz_launch_contract_stays_noninteractive_before_pty_runtime_lands() {
+    fn generic_launch_stays_noninteractive_with_host_terminal() {
+        let generic = test_launch("generic");
+        let terminal_snapshot = test_terminal_snapshot(true);
+
+        let terminal = VzGuestTerminalContract::from_launch_with_terminal_snapshot(
+            &generic,
+            terminal_snapshot,
+        );
+
+        assert!(!terminal.interactive);
+        assert!(!terminal.pty);
+        assert_eq!(terminal.pty_vsock_port, None);
+        assert_eq!(terminal.pty_control_vsock_port, None);
+        assert_eq!(terminal.term, None);
+        assert_eq!(terminal.rows, None);
+        assert_eq!(terminal.cols, None);
+    }
+
+    #[test]
+    fn guest_pty_contract_captures_host_terminal_metadata() {
+        let mut codex = test_launch("codex");
+        codex.executable = "codex".to_string();
+        let terminal_snapshot = test_terminal_snapshot(true);
+
+        let terminal =
+            VzGuestTerminalContract::from_launch_with_terminal_snapshot(&codex, terminal_snapshot);
+
+        assert!(terminal.interactive);
+        assert!(terminal.pty);
+        assert_eq!(
+            terminal.pty_vsock_port,
+            Some(VZ_GUEST_COMMAND_PTY_VSOCK_PORT)
+        );
+        assert_eq!(
+            terminal.pty_control_vsock_port,
+            Some(VZ_GUEST_COMMAND_PTY_CONTROL_VSOCK_PORT)
+        );
+        assert_eq!(terminal.term.as_deref(), Some("xterm-256color"));
+        assert_eq!(terminal.rows, Some(40));
+        assert_eq!(terminal.cols, Some(120));
+    }
+
+    #[test]
+    fn guest_pty_launch_stays_noninteractive_without_host_terminal() {
         let identity = RunIdentity::new("codex");
         let handle = SandboxHandle {
             backend: BackendKind::Vz,
@@ -988,8 +1173,9 @@ mod tests {
 
         let mut launch = test_launch("codex");
         launch.executable = "codex".to_string();
+        let terminal_snapshot = test_terminal_snapshot(false);
 
-        let contract = VzGuestLaunchContract::from_launch(
+        let contract = VzGuestLaunchContract::from_launch_with_terminal_snapshot(
             &handle,
             &launch,
             VzGuestLaunchInputs {
@@ -998,6 +1184,7 @@ mod tests {
                 initrd: PathBuf::from("/var/lib/firma/vz/initrd.img"),
                 rootfs: PathBuf::from("/var/lib/firma/vz/rootfs.img"),
             },
+            terminal_snapshot,
         )
         .expect("guest contract should build from prepared launch");
 

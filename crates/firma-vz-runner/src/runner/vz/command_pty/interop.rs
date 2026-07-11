@@ -5,6 +5,7 @@ use objc2_virtualization::{
     VZVirtioSocketListenerDelegate,
 };
 
+use super::control::{CommandPtyControlBridgeConfig, CommandPtyControlConnections};
 use super::data::{CommandPtyBridgeConfig, CommandPtyConnections};
 
 /// Objective-C ivars retained by the command PTY data listener delegate.
@@ -22,6 +23,34 @@ define_class!(
     unsafe impl NSObjectProtocol for CommandPtyBridgeDelegate {}
 
     unsafe impl VZVirtioSocketListenerDelegate for CommandPtyBridgeDelegate {
+        #[unsafe(method(listener:shouldAcceptNewConnection:fromSocketDevice:))]
+        #[allow(non_snake_case)]
+        unsafe fn listener_shouldAcceptNewConnection_fromSocketDevice(
+            &self,
+            _listener: &VZVirtioSocketListener,
+            connection: &VZVirtioSocketConnection,
+            _socket_device: &VZVirtioSocketDevice,
+        ) -> bool {
+            self.accept_connection(connection)
+        }
+    }
+);
+
+/// Objective-C ivars retained by the command PTY control listener delegate.
+#[derive(Debug)]
+pub struct CommandPtyControlBridgeDelegateIvars {
+    pub config: CommandPtyControlBridgeConfig,
+    pub connections: CommandPtyControlConnections,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[ivars = CommandPtyControlBridgeDelegateIvars]
+    pub struct CommandPtyControlBridgeDelegate;
+
+    unsafe impl NSObjectProtocol for CommandPtyControlBridgeDelegate {}
+
+    unsafe impl VZVirtioSocketListenerDelegate for CommandPtyControlBridgeDelegate {
         #[unsafe(method(listener:shouldAcceptNewConnection:fromSocketDevice:))]
         #[allow(non_snake_case)]
         unsafe fn listener_shouldAcceptNewConnection_fromSocketDevice(
