@@ -816,7 +816,13 @@ fn execute_contract_uses_captured_guest_stdin() -> TestResult {
     let contract_path = temp.path().join("vz-guest-launch.json");
     fs::write(temp.path().join("guest-stdin.bin"), b"captured-input")?;
     let mut launch = valid_launch_contract();
-    launch.command.executable = "/bin/cat".to_string();
+    // The guest command runs with a sanitized env (no PATH), so pass `cat`'s
+    // absolute path; it lives in the nix store on NixOS, not at `/bin/cat`.
+    let cat = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("cat"))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| PathBuf::from("/bin/cat"));
+    launch.command.executable = cat.display().to_string();
     launch.command.cwd = temp.path().to_path_buf();
     let contract: Contract = launch.try_into()?;
     let network_services = network_services_for(&contract)?;

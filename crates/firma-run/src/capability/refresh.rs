@@ -64,6 +64,7 @@ impl CapabilityRefresher {
     ) -> Result<Self, RunError> {
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
+        let grace = Duration::from_secs(grace_seconds);
         let handle = thread::Builder::new()
             .name("firma-run-capability-refresh".to_string())
             .spawn(move || {
@@ -72,7 +73,7 @@ impl CapabilityRefresher {
                     &out_path,
                     initial_expiry,
                     refresh_ratio,
-                    grace_seconds,
+                    grace,
                     &stop_rx,
                 );
             })
@@ -96,33 +97,6 @@ impl Drop for CapabilityRefresher {
     }
 }
 
-/// Duration to wait before the next refresh attempt.
-///
-/// Renews at `refresh_ratio` of the remaining lifetime, but never later than
-/// `grace_seconds` before expiry. Returns [`Duration::ZERO`] when the token is
-/// already within the grace window (refresh immediately).
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "millisecond and second counts fit f64 exactly for realistic token lifetimes"
-)]
-fn compute_wait(
-    expiry: DateTime<Utc>,
-    now: DateTime<Utc>,
-    refresh_ratio: f64,
-    grace_seconds: u64,
-) -> Duration {
-    let remaining_secs = (expiry - now).num_milliseconds().max(0) as f64 / 1000.0;
-    let mut wait = remaining_secs * refresh_ratio;
-    let latest = remaining_secs - grace_seconds as f64;
-    if wait > latest {
-        wait = latest;
-    }
-    if wait <= 0.0 || !wait.is_finite() {
-        return Duration::ZERO;
-    }
-    Duration::from_secs_f64(wait)
-}
-
 /// Refresh loop body. Returns when a stop signal is received (or the sender is
 /// dropped). Runs on the background thread.
 fn run_refresh_loop(
@@ -130,15 +104,14 @@ fn run_refresh_loop(
     out_path: &Path,
     mut expiry: DateTime<Utc>,
     refresh_ratio: f64,
-    grace_seconds: u64,
+    grace: Duration,
     stop_rx: &mpsc::Receiver<()>,
 ) {
     let mut backoff = BACKOFF_INITIAL;
     loop {
         // Floor the scheduled wait so a successful re-mint can never spin the
         // loop with zero delay (see `MIN_REFRESH_INTERVAL`).
-        let wait = compute_wait(expiry, Utc::now(), refresh_ratio, grace_seconds)
-            .max(MIN_REFRESH_INTERVAL);
+        let wait = compute_wait(expiry, Utc::now(), refresh_ratio, grace).max(MIN_REFRESH_INTERVAL);
         match stop_rx.recv_timeout(wait) {
             Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => {}
@@ -173,18 +146,35 @@ fn run_refresh_loop(
     }
 }
 
+/// Duration to wait before the next refresh attempt.
+///
+/// Renews at `refresh_ratio` of the remaining lifetime, but never later than
+/// `grace_seconds` before expiry. Returns [`Duration::ZERO`] when the token is
+/// already within the grace window (refresh immediately).
+fn compute_wait(
+    expiry: DateTime<Utc>,
+    now: DateTime<Utc>,
+    refresh_ratio: f64,
+    grace: Duration,
+) -> Duration {
+    let remaining = (expiry - now).to_std().unwrap_or(Duration::ZERO);
+    let latest = remaining.saturating_sub(grace);
+    let wait = remaining.mul_f64(refresh_ratio);
+    wait.min(latest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn t(secs: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp(secs, 0).unwrap_or_else(Utc::now)
+        DateTime::from_timestamp(secs, 0).unwrap()
     }
 
     #[test]
     fn wait_is_ratio_of_remaining_lifetime() {
         // 100s remaining, ratio 0.6, grace 30 → refresh at 60s.
-        let wait = compute_wait(t(100), t(0), 0.60, 30);
+        let wait = compute_wait(t(100), t(0), 0.60, Duration::from_secs(30));
         assert_eq!(wait, Duration::from_mins(1));
     }
 
@@ -192,20 +182,20 @@ mod tests {
     fn wait_capped_by_grace_window() {
         // 100s remaining, ratio 0.95 would refresh at 95s (only 5s before
         // expiry); grace 30 pulls it back to 70s.
-        let wait = compute_wait(t(100), t(0), 0.95, 30);
+        let wait = compute_wait(t(100), t(0), 0.95, Duration::from_secs(30));
         assert_eq!(wait, Duration::from_secs(70));
     }
 
     #[test]
     fn wait_zero_inside_grace_window() {
         // Only 10s remaining, grace 30 → refresh immediately.
-        let wait = compute_wait(t(10), t(0), 0.60, 30);
+        let wait = compute_wait(t(10), t(0), 0.60, Duration::from_secs(30));
         assert_eq!(wait, Duration::ZERO);
     }
 
     #[test]
     fn wait_zero_when_already_expired() {
-        let wait = compute_wait(t(0), t(100), 0.60, 30);
+        let wait = compute_wait(t(0), t(100), 0.60, Duration::from_secs(30));
         assert_eq!(wait, Duration::ZERO);
     }
 }
