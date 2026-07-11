@@ -1028,7 +1028,7 @@ pub(crate) mod tests {
             normalizer: IntentNormalizer::new(table),
             capability_validator: CapabilityValidator::new(
                 CapabilityMap::new(entries),
-                Box::new(MockVerifier { claims }),
+                Arc::new(MockVerifier { claims }),
                 std::sync::Arc::new(NoRevocations),
                 Duration::from_secs(0),
                 TenancyMode::SingleAgent,
@@ -1058,7 +1058,7 @@ pub(crate) mod tests {
                     raw_token: "v4.public.test_token".to_string(),
                     claims: claims.clone(),
                 }]),
-                Box::new(MockVerifier { claims }),
+                Arc::new(MockVerifier { claims }),
                 std::sync::Arc::new(NoRevocations),
                 Duration::from_secs(0),
                 TenancyMode::SingleAgent,

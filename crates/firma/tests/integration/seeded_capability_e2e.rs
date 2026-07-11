@@ -109,6 +109,7 @@ fn issued_token_seeds_capability_map_and_admits_stage1() {
     // the raw PASETO token before adding it to the map.
     let seed = CapabilitySeedConfig {
         paths: vec![seed_path],
+        hot_reload: true,
     };
     // Pass a separate capabilities_dir so the seed path is treated as an
     // operator seed (outside the runtime capabilities directory).

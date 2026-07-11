@@ -1,4 +1,4 @@
-//! [`ConnectorRegistry`] construction from the `[connector]` config.
+//! Build the connector [`ConnectorRegistry`] from `[connector]` config.
 //!
 //! The registry default is built from `default_timeout_ms` (30s uses
 //! the [`GenericHttpConnector::default_for_unconfigured`] shortcut);

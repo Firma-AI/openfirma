@@ -259,7 +259,7 @@ mod tests {
                 raw_token: "v4.public.test_token".to_string(),
                 claims: claims.clone(),
             }]),
-            Box::new(MockVerifier { claims }),
+            Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
             TenancyMode::SingleAgent,
@@ -331,7 +331,7 @@ mod tests {
         let normalizer = IntentNormalizer::new(table);
         let capability_validator = CapabilityValidator::new(
             CapabilityMap::new(vec![]),
-            Box::new(MockVerifier { claims }),
+            Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
             TenancyMode::SingleAgent,
@@ -388,7 +388,7 @@ mod tests {
                 raw_token: "v4.public.test_token".to_string(),
                 claims: claims.clone(),
             }]),
-            Box::new(MockVerifier { claims }),
+            Arc::new(MockVerifier { claims }),
             std::sync::Arc::new(NoRevocations),
             Duration::from_secs(0),
             TenancyMode::SingleAgent,

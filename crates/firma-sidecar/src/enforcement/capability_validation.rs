@@ -27,8 +27,11 @@
 //! - **Revoked token reuse** — bloom filter + LRU cache check rejects tokens
 //!   that have been explicitly invalidated.
 
+use std::ops::Deref;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+
+use arc_swap::ArcSwap;
 
 #[cfg(test)]
 use firma_core::TokenId;
@@ -53,6 +56,35 @@ pub struct ValidatedCapability {
     pub claims: CapabilityClaims,
 }
 
+pub struct CapabilityMapHandle(Arc<ArcSwap<CapabilityMap>>);
+
+impl CapabilityMapHandle {
+    #[must_use]
+    pub fn new(map: CapabilityMap) -> Self {
+        Self(Arc::new(ArcSwap::from_pointee(map)))
+    }
+}
+
+impl From<CapabilityMap> for CapabilityMapHandle {
+    fn from(map: CapabilityMap) -> Self {
+        Self::new(map)
+    }
+}
+
+impl Clone for CapabilityMapHandle {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl Deref for CapabilityMapHandle {
+    type Target = Arc<ArcSwap<CapabilityMap>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// Stage 1: Capability Validation.
 ///
 /// Selects the best-matching capability token and validates it:
@@ -63,9 +95,13 @@ pub struct ValidatedCapability {
 /// Target: < 1ms p95.
 pub struct CapabilityValidator {
     clock_skew_tolerance: Duration,
-    capability_map: CapabilityMap,
+    /// Hot-swappable capability map. Rebuilt from the seed file(s) by the
+    /// background reload task when `firma run` re-mints the per-session token,
+    /// so a long session never fails closed on an expired-but-renewable token.
+    /// Reads are lock-free atomic loads on the hot path.
+    capability_map: CapabilityMapHandle,
     revocation: Arc<dyn RevocationStore + Send + Sync>,
-    verifier: Box<dyn TokenVerifier + Send + Sync>,
+    verifier: Arc<dyn TokenVerifier + Send + Sync>,
     tenancy_mode: TenancyMode,
     first_agent_id: OnceLock<AgentId>,
 }
@@ -75,15 +111,15 @@ impl CapabilityValidator {
     /// and implementations of [`TokenVerifier`] and [`RevocationStore`].
     #[must_use]
     pub fn new(
-        capability_map: CapabilityMap,
-        verifier: Box<dyn TokenVerifier + Send + Sync>,
+        capability_map: impl Into<CapabilityMapHandle>,
+        verifier: Arc<dyn TokenVerifier + Send + Sync>,
         revocation: Arc<dyn RevocationStore + Send + Sync>,
         clock_skew_tolerance: Duration,
         tenancy_mode: TenancyMode,
     ) -> Self {
         Self {
             clock_skew_tolerance,
-            capability_map,
+            capability_map: capability_map.into(),
             revocation,
             verifier,
             tenancy_mode,
@@ -113,13 +149,14 @@ impl CapabilityValidator {
         envelope: &NormalizedEnvelope,
         session_id: &str,
     ) -> Result<ValidatedCapability, EnforcementDecision> {
-        // Step 1: Select capability token from map (ADR-002)
+        // Step 1: Select capability token from map (ADR-002).
+        // Load the current snapshot; the guard is held for the rest of the
+        // function so `entry` borrows a stable map even if a reload swaps in a
+        // new one concurrently.
         let resource_display = envelope.intent.resource_display();
-        let entry = self.capability_map.select(
-            session_id,
-            &envelope.intent.action_class,
-            &resource_display,
-        )?;
+        let capability_map = self.capability_map.load();
+        let entry =
+            capability_map.select(session_id, &envelope.intent.action_class, &resource_display)?;
 
         // Step 2: Validate selected token
         let claims = self.validate(&entry.raw_token)?;
@@ -300,7 +337,7 @@ mod tests {
     fn make_validator() -> CapabilityValidator {
         CapabilityValidator::new(
             test_capability_map(),
-            Box::new(MockVerifier {
+            Arc::new(MockVerifier {
                 claims: valid_claims(),
             }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
@@ -321,7 +358,7 @@ mod tests {
     fn test_invalid_signature_denied() {
         let validator = CapabilityValidator::new(
             test_capability_map(),
-            Box::new(FailingVerifier),
+            Arc::new(FailingVerifier),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
             TenancyMode::SingleAgent,
@@ -337,10 +374,47 @@ mod tests {
     }
 
     #[test]
+    fn capability_handle_swap_is_visible_to_selection() {
+        // Start with an empty map: no token can be selected. Keep a clone of the
+        // shared handle so we can swap the map the way the reload task does.
+        let handle = CapabilityMapHandle::new(CapabilityMap::new(vec![]));
+        let validator = CapabilityValidator::new(
+            handle.clone(),
+            Arc::new(MockVerifier {
+                claims: valid_claims(),
+            }),
+            Arc::new(MockRevocationStore { revoked: vec![] }),
+            Duration::from_secs(0),
+            TenancyMode::SingleAgent,
+        );
+        assert!(
+            validator
+                .capability_map
+                .load()
+                .select("sess_001", "communication.external.send", "wttr.in")
+                .is_err(),
+            "empty map must deny selection"
+        );
+
+        // A background reload stores a populated map through the shared handle.
+        handle.store(Arc::new(test_capability_map()));
+
+        // The validator's hot path observes the swapped-in map immediately.
+        assert!(
+            validator
+                .capability_map
+                .load()
+                .select("sess_001", "communication.external.send", "wttr.in")
+                .is_ok(),
+            "swapped-in map must be visible to the validator"
+        );
+    }
+
+    #[test]
     fn test_revoked_token_denied() {
         let validator = CapabilityValidator::new(
             test_capability_map(),
-            Box::new(MockVerifier {
+            Arc::new(MockVerifier {
                 claims: valid_claims(),
             }),
             Arc::new(MockRevocationStore {
@@ -366,7 +440,7 @@ mod tests {
 
         let validator = CapabilityValidator::new(
             test_capability_map(),
-            Box::new(MockVerifier { claims }),
+            Arc::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
             TenancyMode::SingleAgent,
@@ -394,7 +468,7 @@ mod tests {
 
         let validator = CapabilityValidator::new(
             test_capability_map(),
-            Box::new(MalformedVerifier),
+            Arc::new(MalformedVerifier),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
             TenancyMode::SingleAgent,
@@ -415,7 +489,7 @@ mod tests {
 
         let validator = CapabilityValidator::new(
             test_capability_map(),
-            Box::new(MockVerifier { claims }),
+            Arc::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(5),
             TenancyMode::SingleAgent,
@@ -449,7 +523,7 @@ mod tests {
 
         let validator = CapabilityValidator::new(
             test_capability_map(),
-            Box::new(MockVerifier { claims }),
+            Arc::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
             TenancyMode::SingleAgent,
@@ -486,7 +560,7 @@ mod tests {
 
         let validator = CapabilityValidator::new(
             test_capability_map(),
-            Box::new(MockVerifier { claims }),
+            Arc::new(MockVerifier { claims }),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
             TenancyMode::SingleAgent,
@@ -508,8 +582,7 @@ mod tests {
 
     #[test]
     fn test_every_validation_error_is_deny() {
-        let error_verifiers: Vec<Box<dyn TokenVerifier + Send + Sync>> =
-            vec![Box::new(FailingVerifier)];
+        let error_verifiers = vec![Arc::new(FailingVerifier)];
 
         for verifier in error_verifiers {
             let validator = CapabilityValidator::new(
@@ -536,7 +609,7 @@ mod tests {
 
         let validator = CapabilityValidator::new(
             test_capability_map(),
-            Box::new(verifier.clone()),
+            Arc::new(verifier.clone()),
             Arc::new(MockRevocationStore { revoked: vec![] }),
             Duration::from_secs(0),
             TenancyMode::SingleAgent,

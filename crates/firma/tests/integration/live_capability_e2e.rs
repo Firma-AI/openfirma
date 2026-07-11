@@ -295,6 +295,7 @@ fn live_mint_writes_seed_and_admits_stage1() {
         build_token_verifier(Some(authority.pub_key_path.as_path())).expect("verifier must build");
     let seed_cfg = CapabilitySeedConfig {
         paths: vec![seed_path],
+        hot_reload: true,
     };
     // A separate capabilities_dir keeps the seed path classified as an operator
     // seed for loading purposes (the live path under FIRMA_STATE_DIR would

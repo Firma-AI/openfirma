@@ -6,11 +6,12 @@
 
 use std::sync::Arc;
 
-use firma_core::RevocationStore;
+use firma_core::{RevocationStore, TokenVerifier};
 
 use crate::authority_client::readiness::{ReadinessFlag, ReadinessState};
 use crate::authority_client::swappable_policy::SwappablePolicyEvaluation;
 use crate::config;
+use crate::enforcement::capability_validation::CapabilityMapHandle;
 use crate::enforcement::revocation::BloomLruRevocationStore;
 use crate::pipeline;
 use crate::startup::capability::{build_token_verifier, load_capability_map};
@@ -26,6 +27,12 @@ pub struct PipelineRuntime {
     pub swappable_policy: Arc<SwappablePolicyEvaluation>,
     /// Writable readiness flag for Authority tasks.
     pub readiness: Arc<ReadinessFlag>,
+    /// Hot-swappable Stage 1 capability map, shared with the background
+    /// seed-file reload task so a re-minted token is picked up without restart.
+    pub capability_handle: CapabilityMapHandle,
+    /// Stage 1 token verifier, shared with the seed-reload task so re-minted
+    /// tokens are re-verified with the same verifier the hot path uses.
+    pub token_verifier: Arc<dyn TokenVerifier + Send + Sync>,
     /// Total mapping rule count loaded across primary + extra files.
     /// Surfaced for the standalone-startup log contract (line 2).
     pub mapping_rules_loaded: usize,
@@ -159,7 +166,8 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
     let revocation_store_dyn: Arc<dyn RevocationStore + Send + Sync> = revocation_store;
 
     tracing::debug!("Stage 1 using configured capability seed and authority public key");
-    let token_verifier = build_token_verifier(config.authority.public_key_path.as_deref())?;
+    let token_verifier: Arc<dyn TokenVerifier + Send + Sync> =
+        build_token_verifier(config.authority.public_key_path.as_deref())?.into();
     let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
     let capabilities_dir = firma_runtime_state::runtime_paths::capabilities_dir_from(&runtime_dir);
     let capability_map = load_capability_map(
@@ -168,9 +176,11 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
         &capabilities_dir,
     )?;
 
+    // Shared handle: the reload task swaps in a fresh map on seed-file changes.
+    let capability_handle = CapabilityMapHandle::new(capability_map);
     let capability_validator = pipeline::CapabilityValidator::new(
-        capability_map,
-        token_verifier,
+        capability_handle.clone(),
+        Arc::clone(&token_verifier),
         Arc::clone(&revocation_store_dyn),
         std::time::Duration::from_secs(
             config
@@ -235,6 +245,8 @@ pub fn build_pipeline_runtime(config: &config::SidecarConfig) -> anyhow::Result<
         revocation_store: revocation_store_dyn,
         swappable_policy,
         readiness,
+        capability_handle,
+        token_verifier,
         mapping_rules_loaded,
     })
 }
