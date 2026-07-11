@@ -1352,6 +1352,7 @@ dependencies = [
  "rand 0.9.4",
  "rcgen",
  "regex",
+ "same-file",
  "serde",
  "serde_json",
  "serde_repr",

@@ -2,7 +2,7 @@
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::time::{Duration, SystemTime};
 
@@ -32,10 +32,6 @@ pub struct Line {
     pub raw: String,
 }
 
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "tailers run in spawned threads and intentionally own these handles"
-)]
 pub fn tail(
     path: PathBuf,
     source: Source,
@@ -43,6 +39,29 @@ pub fn tail(
     follow: bool,
     tx: Sender<Line>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    tail_inner(path, source, backfill_since, follow, tx, stop, None);
+}
+
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tailers run in spawned threads and intentionally own these handles"
+)]
+/// Implementation shared by production tailers and deterministic follow-mode
+/// tests.
+///
+/// The optional `tail_positioned` channel is test-only coordination: we notify
+/// after each successful open and initial seek, including reopens after
+/// rotation, so tests can append only once the tailer is definitely watching
+/// the intended file.
+fn tail_inner(
+    path: PathBuf,
+    source: Source,
+    backfill_since: Option<SystemTime>,
+    follow: bool,
+    tx: Sender<Line>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    tail_positioned: Option<Sender<()>>,
 ) {
     use std::sync::atomic::Ordering;
 
@@ -60,7 +79,13 @@ pub fn tail(
             std::thread::sleep(Duration::from_millis(200));
             continue;
         };
-        let initial_id = file_id(&path);
+        // Snapshot the file we actually opened. The EOF loop compares the
+        // current path target against this handle to distinguish "nothing new
+        // yet" from "the path now points at a different file".
+        let initial_id = file
+            .try_clone()
+            .ok()
+            .and_then(|f| same_file::Handle::from_file(f).ok());
         let mut reader = BufReader::new(file);
         // Seek to EOF only when following without a backfill window: that mode
         // shows new events as they arrive. A one-shot read (`--no-follow`) must
@@ -72,6 +97,12 @@ pub fn tail(
             trace!(?source, "seeking to EOF");
             let _ = reader.seek(SeekFrom::End(0));
         }
+        // Tests wait on this signal instead of racing the tailer thread with a
+        // fixed sleep. Reopens reuse the same hook so rotation tests can wait
+        // for the replacement file to be actively tailed.
+        if let Some(tail_positioned_tx) = tail_positioned.as_ref() {
+            let _ = tail_positioned_tx.send(());
+        }
 
         let mut buffer = String::new();
         loop {
@@ -81,7 +112,12 @@ pub fn tail(
             buffer.clear();
             match reader.read_line(&mut buffer) {
                 Ok(0) => {
-                    if file_id(&path) != initial_id {
+                    let current_id = same_file::Handle::from_path(&path).ok();
+                    let file_has_changed = current_id.as_ref() == initial_id.as_ref();
+                    if !file_has_changed {
+                        // The path was replaced or renamed underneath us. Break
+                        // to the outer loop so we reopen and apply the normal
+                        // initial seek rules to the replacement file.
                         debug!(?source, "file rotated; reopening");
                         break;
                     }
@@ -126,19 +162,6 @@ fn parse_leading_timestamp(line: &str) -> Option<SystemTime> {
     Some(SystemTime::from(dt))
 }
 
-#[cfg(unix)]
-fn file_id(path: &Path) -> Option<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt;
-    let metadata = std::fs::metadata(path).ok()?;
-    Some((metadata.dev(), metadata.ino()))
-}
-
-#[cfg(windows)]
-fn file_id(path: &Path) -> Option<u64> {
-    let metadata = std::fs::metadata(path).ok()?;
-    Some(metadata.len())
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Write;
@@ -154,14 +177,28 @@ mod tests {
         let path = dir.path().join("audit.jsonl");
         std::fs::write(&path, "").expect("seed");
         let (tx, rx) = channel::<Line>();
+        let (tail_positioned_tx, tail_positioned_rx) = channel::<()>();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
         let path_thread = path.clone();
         let handle = std::thread::spawn(move || {
-            tail(path_thread, Source::Audit, None, true, tx, stop_thread);
+            tail_inner(
+                path_thread,
+                Source::Audit,
+                None,
+                true,
+                tx,
+                stop_thread,
+                Some(tail_positioned_tx),
+            );
         });
 
-        std::thread::sleep(Duration::from_millis(200));
+        // Wait until the tailer has opened the file and performed its initial
+        // seek-to-EOF, otherwise a fast append can happen before follow mode is
+        // actually watching for new data.
+        tail_positioned_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("tail positioned");
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .open(&path)
@@ -188,5 +225,53 @@ mod tests {
 
         let lines: Vec<String> = rx.iter().map(|l| l.raw).collect();
         assert_eq!(lines, vec!["first".to_string(), "second".to_string()]);
+    }
+
+    #[test]
+    fn follows_lines_after_rotation() {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("audit.jsonl");
+        let rotated = dir.path().join("audit.1.jsonl");
+        std::fs::write(&path, "").expect("seed");
+        let (tx, rx) = channel::<Line>();
+        let (tail_positioned_tx, tail_positioned_rx) = channel::<()>();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = Arc::clone(&stop);
+        let path_thread = path.clone();
+        let handle = std::thread::spawn(move || {
+            tail_inner(
+                path_thread,
+                Source::Audit,
+                None,
+                true,
+                tx,
+                stop_thread,
+                Some(tail_positioned_tx),
+            );
+        });
+
+        // First signal: initial open/seek on the original file.
+        tail_positioned_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("initial tail positioned");
+        std::fs::rename(&path, &rotated).expect("rotate");
+        std::fs::write(&path, "").expect("recreate");
+        // Second signal: the tailer noticed rotation, reopened, and is now
+        // following the replacement file at the original path.
+        tail_positioned_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("reopen tail positioned");
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open replacement");
+        writeln!(file, "after-rotate").expect("write replacement");
+
+        let got = rx.recv_timeout(Duration::from_secs(2)).expect("line");
+        assert_eq!(got.raw, "after-rotate");
+
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        handle.join().ok();
     }
 }
