@@ -47,6 +47,12 @@ pub fn tail(
     clippy::needless_pass_by_value,
     reason = "tailers run in spawned threads and intentionally own these handles"
 )]
+/// Implementation shared by production tailers and deterministic follow-mode
+/// tests.
+///
+/// The optional `ready` channel is test-only coordination: we notify after each
+/// successful open and initial seek, including reopens after rotation, so tests
+/// can append only once the tailer is definitely watching the intended file.
 fn tail_inner(
     path: PathBuf,
     source: Source,
@@ -72,6 +78,9 @@ fn tail_inner(
             std::thread::sleep(Duration::from_millis(200));
             continue;
         };
+        // Capture identity from the file we actually opened. The EOF loop below
+        // compares the current path target against this snapshot to distinguish
+        // "nothing new yet" from "the path now points at a different file".
         let initial_id = initial_file_id(&path, &file);
         let mut reader = BufReader::new(file);
         // Seek to EOF only when following without a backfill window: that mode
@@ -84,6 +93,9 @@ fn tail_inner(
             trace!(?source, "seeking to EOF");
             let _ = reader.seek(SeekFrom::End(0));
         }
+        // Tests wait on this signal instead of racing the tailer thread with a
+        // fixed sleep. Reopens reuse the same hook so rotation tests can wait
+        // for the replacement file to be actively tailed.
         if let Some(ready_tx) = ready.as_ref() {
             let _ = ready_tx.send(());
         }
@@ -97,6 +109,9 @@ fn tail_inner(
             match reader.read_line(&mut buffer) {
                 Ok(0) => {
                     if !path_still_matches_file(&path, initial_id.as_ref()) {
+                        // The path was replaced or renamed underneath us. Break
+                        // to the outer loop so we reopen and apply the normal
+                        // initial seek rules to the replacement file.
                         debug!(?source, "file rotated; reopening");
                         break;
                     }
@@ -151,6 +166,8 @@ fn initial_file_id(path: &Path, _file: &File) -> Option<(u64, u64)> {
 
 #[cfg(windows)]
 fn initial_file_id(_path: &Path, file: &File) -> Option<same_file::Handle> {
+    // On Windows, metadata like file length changes on append and cannot be
+    // used as a stable identity. Snapshot the opened file handle instead.
     same_file::Handle::from_file(file.try_clone().ok()?).ok()
 }
 
@@ -201,6 +218,9 @@ mod tests {
             );
         });
 
+        // Wait until the tailer has opened the file and performed its initial
+        // seek-to-EOF, otherwise a fast append can happen before follow mode is
+        // actually watching for new data.
         ready_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("ready");
@@ -255,11 +275,14 @@ mod tests {
             );
         });
 
+        // First signal: initial open/seek on the original file.
         ready_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("initial ready");
         std::fs::rename(&path, &rotated).expect("rotate");
         std::fs::write(&path, "").expect("recreate");
+        // Second signal: the tailer noticed rotation, reopened, and is now
+        // following the replacement file at the original path.
         ready_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("reopen ready");
