@@ -103,7 +103,7 @@ pub trait PolicyEvaluation: Send + Sync {
         principal: &AgentId,
         action: &str,
         resource: &str,
-        context: &serde_json::Value,
+        context: serde_json::Value,
     ) -> Result<bool, String>;
 
     /// Evaluate policy and return the full AARM R4 verdict, including
@@ -124,7 +124,7 @@ pub trait PolicyEvaluation: Send + Sync {
         principal: &AgentId,
         action: &str,
         resource: &str,
-        context: &serde_json::Value,
+        context: serde_json::Value,
     ) -> Result<PolicyVerdict, String> {
         if self.evaluate(principal, action, resource, context)? {
             Ok(PolicyVerdict::Allow)
@@ -239,7 +239,7 @@ impl ConstraintEnforcer {
                 &claims.agent_id,
                 &envelope.intent.action_class,
                 &resource_display,
-                &context,
+                context,
             )
             .map_err(|err| EnforcementDecision::Deny {
                 reason: DenyReason::FailClosed,
@@ -324,7 +324,7 @@ impl ConstraintEnforcer {
         let action = envelope.intent.action_class.clone();
         let resource = envelope.intent.resource_display();
         let eval_task = tokio::task::spawn_blocking(move || {
-            policy.evaluate_verdict(&principal, &action, &resource, &context)
+            policy.evaluate_verdict(&principal, &action, &resource, context)
         });
 
         let verdict = tokio::time::timeout(timeout, eval_task)
@@ -537,7 +537,7 @@ mod tests {
             _: &AgentId,
             _: &str,
             _: &str,
-            _: &serde_json::Value,
+            _: serde_json::Value,
         ) -> Result<bool, String> {
             Ok(true)
         }
@@ -556,7 +556,7 @@ mod tests {
             _: &AgentId,
             _: &str,
             _: &str,
-            _: &serde_json::Value,
+            _: serde_json::Value,
         ) -> Result<bool, String> {
             Ok(false)
         }
@@ -575,7 +575,7 @@ mod tests {
             _: &AgentId,
             _: &str,
             _: &str,
-            _: &serde_json::Value,
+            _: serde_json::Value,
         ) -> Result<bool, String> {
             Err("evaluation backend error".to_string())
         }
@@ -594,7 +594,7 @@ mod tests {
             _: &AgentId,
             _: &str,
             _: &str,
-            _: &serde_json::Value,
+            _: serde_json::Value,
         ) -> Result<bool, String> {
             Ok(true)
         }
@@ -613,7 +613,7 @@ mod tests {
             _: &AgentId,
             _: &str,
             _: &str,
-            _: &serde_json::Value,
+            _: serde_json::Value,
         ) -> Result<bool, String> {
             Ok(true)
         }
@@ -635,7 +635,7 @@ mod tests {
             _: &AgentId,
             _: &str,
             _: &str,
-            _: &serde_json::Value,
+            _: serde_json::Value,
         ) -> Result<bool, String> {
             std::thread::sleep(Duration::from_millis(200));
             Ok(true)
@@ -927,7 +927,7 @@ mod tests {
                 _: &AgentId,
                 _: &str,
                 _: &str,
-                _: &serde_json::Value,
+                _: serde_json::Value,
             ) -> Result<bool, String> {
                 Ok(true)
             }

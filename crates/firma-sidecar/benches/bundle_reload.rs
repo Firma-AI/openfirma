@@ -10,7 +10,7 @@
 
 use std::hint::black_box;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use firma_core::AgentId;
 use firma_sidecar::enforcement::cedar_evaluator::CedarPolicyEvaluator;
 use firma_sidecar::enforcement::constraint_enforcement::PolicyEvaluation;
@@ -24,10 +24,15 @@ fn bench_reload(c: &mut Criterion) {
     let ctx = json!({ "budget_remaining": 100, "risk_score": 10 });
 
     c.bench_function("cedar_bundle_reload", |b| {
-        b.iter(|| {
-            let ev = CedarPolicyEvaluator::from_bundle(black_box(&bundle)).expect("bundle parses");
-            let _ = black_box(ev.evaluate(&principal, "bench.action.allow", "resource-1", &ctx));
-        });
+        b.iter_batched(
+            || ctx.clone(),
+            |ctx| {
+                let ev =
+                    CedarPolicyEvaluator::from_bundle(black_box(&bundle)).expect("bundle parses");
+                let _ = black_box(ev.evaluate(&principal, "bench.action.allow", "resource-1", ctx));
+            },
+            BatchSize::SmallInput,
+        );
     });
 }
 
