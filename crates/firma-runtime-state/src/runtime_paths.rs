@@ -107,4 +107,18 @@ mod tests {
         let dir = capabilities_dir_from(std::path::Path::new("/run/firma"));
         assert_eq!(dir, std::path::PathBuf::from("/run/firma/capabilities"));
     }
+
+    #[test]
+    fn capability_seed_path_is_named_toml_under_capabilities_dir() {
+        let path = capability_seed_path("sandbox-123");
+        assert_eq!(
+            path.file_name().and_then(std::ffi::OsStr::to_str),
+            Some("sandbox-123.toml")
+        );
+        let parent = path.parent().expect("seed path has a parent");
+        assert_eq!(
+            parent.file_name().and_then(std::ffi::OsStr::to_str),
+            Some("capabilities")
+        );
+    }
 }
