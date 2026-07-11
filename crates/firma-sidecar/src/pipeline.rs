@@ -1726,8 +1726,14 @@ mod tests {
     async fn test_enforce_sensitive_headers_stripped_in_allow() {
         let pipeline = test_pipeline();
         let mut headers = HashMap::new();
-        headers.insert("Authorization".to_string(), "Bearer secret".to_string());
-        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        headers.insert(
+            HeaderName::from_static("authorization"),
+            "Bearer secret".to_string(),
+        );
+        headers.insert(
+            HeaderName::from_static("content-type"),
+            "application/json".to_string(),
+        );
 
         let request = RawRequest {
             method: "POST".to_string(),
@@ -1745,10 +1751,16 @@ mod tests {
             && let firma_core::ActionParams::Http(ref params) = envelope.intent().params
         {
             assert!(
-                !params.headers.contains_key("Authorization"),
+                !params
+                    .headers
+                    .contains_key(&HeaderName::from_static("authorization")),
                 "authorization header must not leak into envelope"
             );
-            assert!(params.headers.contains_key("Content-Type"));
+            assert!(
+                params
+                    .headers
+                    .contains_key(&HeaderName::from_static("content-type"))
+            );
         }
     }
 
@@ -2032,7 +2044,10 @@ mod tests {
         let injector =
             crate::credential::provider::BasicCredentialInjector::new(HashMap::from([(
                 "api.openai.com".to_string(),
-                HashMap::from([("Authorization".to_string(), "Bearer sk_test".to_string())]),
+                HashMap::from([(
+                    HeaderName::from_static("authorization"),
+                    "Bearer sk_test".to_string(),
+                )]),
             )]));
 
         let pipeline = EnforcementPipeline::new(PipelineArgs {
@@ -2132,7 +2147,7 @@ mod tests {
             crate::credential::provider::VaultCredentialInjector::new(HashMap::from([(
                 "api.openai.com".to_string(),
                 vec![crate::credential::provider::VaultSecretEntry {
-                    header_name: "Authorization".to_string(),
+                    header_name: HeaderName::from_static("authorization"),
                     value_prefix: Some("Bearer ".to_string()),
                     secret_path: std::path::PathBuf::from("/nonexistent/secret"),
                 }],

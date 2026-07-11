@@ -790,9 +790,7 @@ fn apply_modification_to_request(
 ) {
     match modifications {
         firma_core::ModificationSpec::RedactHeader(name) => {
-            request.headers.retain(|k, _| {
-                http::HeaderName::from_bytes(k.as_bytes()).map_or(true, |hn| hn != *name)
-            });
+            request.headers.remove(name);
         }
     }
 }

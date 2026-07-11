@@ -288,9 +288,7 @@ impl ModificationSpec {
         };
         match self {
             Self::RedactHeader(name) => {
-                http.headers.retain(|k, _| {
-                    HeaderName::from_bytes(k.as_bytes()).map_or(true, |hn| hn != *name)
-                });
+                http.headers.remove(name);
             }
         }
         Ok(())
@@ -557,9 +555,15 @@ mod tests {
         };
 
         let mut headers = std::collections::HashMap::new();
-        headers.insert("Authorization".to_string(), "Bearer secret".to_string());
-        headers.insert("X-Trace-Id".to_string(), "abc".to_string());
-        let envelope = ExecutionEnvelope::new(
+        headers.insert(
+            crate::HeaderName::from_static("authorization"),
+            "Bearer secret".to_string(),
+        );
+        headers.insert(
+            crate::HeaderName::from_static("x-trace-id"),
+            "abc".to_string(),
+        );
+        let mut envelope = ExecutionEnvelope::new(
             ExecutionIntent {
                 action_class: "communication.external.send".to_string(),
                 resource: std::collections::BTreeMap::new(),
@@ -587,7 +591,6 @@ mod tests {
         );
 
         // Redact the Authorization header (case-insensitive match).
-        let mut envelope = envelope;
         ModificationSpec::RedactHeader(HeaderName::from_static("authorization"))
             .apply(&mut envelope)
             .unwrap_or_else(|e| panic!("{e}"));
@@ -596,11 +599,14 @@ mod tests {
             panic!("expected Http params");
         };
         assert!(
-            !http.headers.contains_key("Authorization"),
+            !http
+                .headers
+                .contains_key(&HeaderName::from_static("authorization")),
             "Authorization should be stripped"
         );
         assert!(
-            http.headers.contains_key("X-Trace-Id"),
+            http.headers
+                .contains_key(&HeaderName::from_static("x-trace-id")),
             "X-Trace-Id should survive the redaction"
         );
     }

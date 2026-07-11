@@ -11,10 +11,10 @@
 //! logic used by the HTTP proxy mode. This mode avoids TCP port binding,
 //! making it well suited for containerized environments.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use firma_core::HeaderName;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
@@ -144,7 +144,7 @@ async fn handle_request(
 
     let session_id = raw
         .headers
-        .get("x-firma-session-id")
+        .get(&HeaderName::from_static("x-firma-session-id"))
         .cloned()
         .unwrap_or_default();
 
@@ -211,10 +211,10 @@ async fn build_raw_request(req: Request<Incoming>) -> Result<RawRequest, String>
         return Err("MALFORMED_REQUEST: missing host".to_string());
     }
 
-    let headers: HashMap<String, String> = req
+    let headers = req
         .headers()
         .iter()
-        .filter_map(|(k, v)| Some((k.to_string(), v.to_str().ok()?.to_string())))
+        .filter_map(|(k, v)| Some((HeaderName::from(k), v.to_str().ok()?.to_string())))
         .collect();
 
     let body_bytes = req

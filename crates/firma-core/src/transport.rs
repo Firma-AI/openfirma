@@ -96,7 +96,9 @@ impl TransportView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ActionParams, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams};
+    use crate::{
+        ActionParams, ExecutionIntent, ExecutionMetadata, HeaderName, HttpMethod, HttpParams,
+    };
     use std::collections::HashMap;
 
     fn sample_envelope() -> ExecutionEnvelope {
@@ -131,14 +133,16 @@ mod tests {
     #[test]
     fn test_transport_view_construction() {
         let creds = InjectedCredentials::new(HashMap::from([(
-            "Authorization".to_string(),
+            HeaderName::from_static("authorization"),
             "Bearer secret".to_string(),
         )]));
         let view = TransportView::new(sample_envelope(), creds);
 
         assert_eq!(view.envelope().intent().action_class, "filesystem.read");
         assert_eq!(
-            view.credentials().get("Authorization").map(String::as_str),
+            view.credentials()
+                .get(&HeaderName::from_static("authorization"))
+                .map(String::as_str),
             Some("Bearer secret"),
         );
     }
@@ -152,7 +156,7 @@ mod tests {
     #[test]
     fn test_transport_view_clone() {
         let creds = InjectedCredentials::new(HashMap::from([(
-            "X-Api-Key".to_string(),
+            HeaderName::from_static("x-api-key"),
             "key123".to_string(),
         )]));
         let view = TransportView::new(sample_envelope(), creds);

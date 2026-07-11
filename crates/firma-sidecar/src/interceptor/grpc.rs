@@ -11,8 +11,10 @@
 //! `InterceptResponse` with the ALLOW / DENY result.
 
 use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 
+use firma_core::HeaderName;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 
@@ -100,7 +102,15 @@ impl InterceptorHook for GrpcInterceptor {
             method: req.method,
             host: req.host,
             path: req.path,
-            headers: req.headers,
+            headers: req
+                .headers
+                .into_iter()
+                .map(|(k, v)| {
+                    HeaderName::from_str(&k).map(|k| (k, v)).map_err(|err| {
+                        tonic::Status::invalid_argument(format!("Invalid header {k}: {err}"))
+                    })
+                })
+                .collect::<Result<_, _>>()?,
             body: if req.body.is_empty() {
                 None
             } else {
