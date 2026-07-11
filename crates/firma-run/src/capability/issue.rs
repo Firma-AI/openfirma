@@ -72,6 +72,11 @@ pub const DEFAULT_RESOURCE_SCOPE: &str = "*";
 /// short enough to limit token exposure if a seed file is leaked.
 pub const DEFAULT_TTL_SECONDS: i32 = 900;
 
+/// Upper bound on a single `IssueCapability` request once connected. Prevents a
+/// stalled Authority from hanging the mint (and, for the background refresher,
+/// from stalling sandbox teardown while its Drop joins the mint thread).
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Mint a capability and write the seed file. Returns the written path.
 ///
 /// Runs the async RPC inside a scoped current-thread tokio runtime so the
@@ -86,6 +91,21 @@ pub fn mint_and_write(params: &IssueParams, out_path: &Path) -> Result<PathBuf, 
     let seed = mint(params)?;
     write_seed(&seed, out_path)?;
     Ok(out_path.to_path_buf())
+}
+
+/// Mint a capability seed and write it atomically, returning the verified
+/// [`CapabilitySeed`] (so callers can read the fresh `expiry` for scheduling).
+///
+/// # Errors
+///
+/// Same failure modes as [`mint_and_write`].
+pub(crate) fn mint_and_write_seed(
+    params: &IssueParams,
+    out_path: &Path,
+) -> Result<CapabilitySeed, RunError> {
+    let seed = mint(params)?;
+    write_seed(&seed, out_path)?;
+    Ok(seed)
 }
 
 fn mint(params: &IssueParams) -> Result<CapabilitySeed, RunError> {
@@ -127,19 +147,31 @@ fn mint(params: &IssueParams) -> Result<CapabilitySeed, RunError> {
             reason: e.to_string(),
         })?;
         let mut client = AuthorityServiceClient::new(channel);
-        client
-            .issue_capability(IssueCapabilityRequest {
-                agent_id: params.agent_id.clone(),
-                session_id: params.session_id.clone(),
-                requested_actions: params.requested_actions.clone(),
-                resource_scope: params.resource_scope.clone(),
-                requested_ttl_seconds: params.ttl_seconds,
-                credentials: params
-                    .credentials
-                    .as_ref()
-                    .map(ResolvedSidecarCredentials::to_proto),
-            })
+        // Bound the request so a connected-but-stalled Authority cannot hang the
+        // caller indefinitely. This matters for the background refresher, whose
+        // Drop must join the mint thread before the seed-file guard deletes the
+        // file (see `capability::refresh`); an unbounded RPC would stall sandbox
+        // teardown.
+        let rpc = client.issue_capability(IssueCapabilityRequest {
+            agent_id: params.agent_id.clone(),
+            session_id: params.session_id.clone(),
+            requested_actions: params.requested_actions.clone(),
+            resource_scope: params.resource_scope.clone(),
+            requested_ttl_seconds: params.ttl_seconds,
+            credentials: params
+                .credentials
+                .as_ref()
+                .map(ResolvedSidecarCredentials::to_proto),
+        });
+        tokio::time::timeout(REQUEST_TIMEOUT, rpc)
             .await
+            .map_err(|_elapsed| RunError::AuthorityUnreachable {
+                url: params.authority_url.clone(),
+                reason: format!(
+                    "IssueCapability RPC timed out after {}s",
+                    REQUEST_TIMEOUT.as_secs()
+                ),
+            })?
             .map(tonic::Response::into_inner)
             .map_err(|status| RunError::AuthorityUnreachable {
                 url: params.authority_url.clone(),

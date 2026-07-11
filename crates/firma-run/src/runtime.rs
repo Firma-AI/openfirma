@@ -213,9 +213,6 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             &mut prompt,
         )?;
 
-        // When the user supplied their own capability file, `firma run` must
-        // not mint a per-session seed during autostart.
-        let skip_mint = matches!(profile.capability.source, CapabilitySource::File { .. });
         let network_runtime = prepare_network_runtime(
             handle_ref,
             &proof,
@@ -223,7 +220,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             &identity,
             &flags,
             authority,
-            skip_mint,
+            &profile.capability,
         )?;
         let effective_endpoint = network_runtime.sidecar_endpoint().clone();
         let effective_seccomp = resolve_effective_seccomp(&profile)?;
@@ -800,6 +797,7 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
+                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
@@ -859,6 +857,7 @@ mod tests {
                 },
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
+                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
@@ -911,6 +910,7 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
+                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
@@ -978,6 +978,7 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
+                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
@@ -1074,6 +1075,7 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
+                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             use_http_proxy_sidecar: true,
@@ -1142,6 +1144,7 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
+                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
@@ -1186,6 +1189,7 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
+                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             use_http_proxy_sidecar: true,
@@ -1257,6 +1261,7 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
+                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             use_http_proxy_sidecar: true,

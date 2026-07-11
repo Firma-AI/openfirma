@@ -1,5 +1,6 @@
 pub mod guard;
 pub mod issue;
+pub mod refresh;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, mpsc};
@@ -116,6 +117,7 @@ mod tests {
             source: CapabilitySource::Disabled,
             refresh_ratio: 0.60,
             grace_seconds: 30,
+            refresh_enabled: true,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -132,6 +134,7 @@ mod tests {
             source: CapabilitySource::File { path: token_path },
             refresh_ratio: 0.60,
             grace_seconds: 30,
+            refresh_enabled: true,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
