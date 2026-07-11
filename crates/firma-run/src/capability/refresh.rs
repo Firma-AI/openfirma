@@ -8,8 +8,10 @@
 //! [`CapabilityRefresher`] spawns a background thread that re-calls the
 //! Authority's `IssueCapability` RPC — reusing the same session identity and
 //! credentials assembled at startup, so no interactive re-auth occurs — and
-//! atomically rewrites the seed file before expiry. The sidecar picks up the
-//! new token via its own file-watch reload.
+//! atomically rewrites the seed file before expiry. Picking the rewritten seed
+//! up in a *running* sidecar requires the sidecar's own capability-source
+//! reload, which lands separately — it is not part of this crate. Without it the
+//! refreshed token only benefits a sidecar (re)started after the rewrite.
 //!
 //! Fail-closed: if the Authority is unreachable the refresher retries with
 //! capped backoff but never serves a stale token itself. While a refresh is
