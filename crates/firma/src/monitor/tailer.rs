@@ -50,9 +50,10 @@ pub fn tail(
 /// Implementation shared by production tailers and deterministic follow-mode
 /// tests.
 ///
-/// The optional `ready` channel is test-only coordination: we notify after each
-/// successful open and initial seek, including reopens after rotation, so tests
-/// can append only once the tailer is definitely watching the intended file.
+/// The optional `tail_positioned` channel is test-only coordination: we notify
+/// after each successful open and initial seek, including reopens after
+/// rotation, so tests can append only once the tailer is definitely watching
+/// the intended file.
 fn tail_inner(
     path: PathBuf,
     source: Source,
@@ -60,7 +61,7 @@ fn tail_inner(
     follow: bool,
     tx: Sender<Line>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    ready: Option<Sender<()>>,
+    tail_positioned: Option<Sender<()>>,
 ) {
     use std::sync::atomic::Ordering;
 
@@ -96,8 +97,8 @@ fn tail_inner(
         // Tests wait on this signal instead of racing the tailer thread with a
         // fixed sleep. Reopens reuse the same hook so rotation tests can wait
         // for the replacement file to be actively tailed.
-        if let Some(ready_tx) = ready.as_ref() {
-            let _ = ready_tx.send(());
+        if let Some(tail_positioned_tx) = tail_positioned.as_ref() {
+            let _ = tail_positioned_tx.send(());
         }
 
         let mut buffer = String::new();
@@ -202,7 +203,7 @@ mod tests {
         let path = dir.path().join("audit.jsonl");
         std::fs::write(&path, "").expect("seed");
         let (tx, rx) = channel::<Line>();
-        let (ready_tx, ready_rx) = channel::<()>();
+        let (tail_positioned_tx, tail_positioned_rx) = channel::<()>();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
         let path_thread = path.clone();
@@ -214,16 +215,16 @@ mod tests {
                 true,
                 tx,
                 stop_thread,
-                Some(ready_tx),
+                Some(tail_positioned_tx),
             );
         });
 
         // Wait until the tailer has opened the file and performed its initial
         // seek-to-EOF, otherwise a fast append can happen before follow mode is
         // actually watching for new data.
-        ready_rx
+        tail_positioned_rx
             .recv_timeout(Duration::from_secs(2))
-            .expect("ready");
+            .expect("tail positioned");
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .open(&path)
@@ -259,7 +260,7 @@ mod tests {
         let rotated = dir.path().join("audit.1.jsonl");
         std::fs::write(&path, "").expect("seed");
         let (tx, rx) = channel::<Line>();
-        let (ready_tx, ready_rx) = channel::<()>();
+        let (tail_positioned_tx, tail_positioned_rx) = channel::<()>();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
         let path_thread = path.clone();
@@ -271,21 +272,21 @@ mod tests {
                 true,
                 tx,
                 stop_thread,
-                Some(ready_tx),
+                Some(tail_positioned_tx),
             );
         });
 
         // First signal: initial open/seek on the original file.
-        ready_rx
+        tail_positioned_rx
             .recv_timeout(Duration::from_secs(2))
-            .expect("initial ready");
+            .expect("initial tail positioned");
         std::fs::rename(&path, &rotated).expect("rotate");
         std::fs::write(&path, "").expect("recreate");
         // Second signal: the tailer noticed rotation, reopened, and is now
         // following the replacement file at the original path.
-        ready_rx
+        tail_positioned_rx
             .recv_timeout(Duration::from_secs(2))
-            .expect("reopen ready");
+            .expect("reopen tail positioned");
 
         let mut file = std::fs::OpenOptions::new()
             .append(true)
