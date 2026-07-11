@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# NOTE: this script is deliberately transitional. It still orchestrates the host
+# tools needed for the macOS VZ artifact path, but the logic below is no longer
+# just shell glue. lock parsing, checksums, bundle layout, symlinks and
+# manifest entries are validation logic.
+#
+# we should keep new behavior small here. As the guest tool set grows, moving
+# the artifact model into a typed Rust builder would be interesting for community
+# contributions which could work in a direction of a stable and testable contract.
+#
+# bash should remain the compatibility entrypoint, not the artifact model.
+
 usage() {
   cat <<'EOF'
 Build local OpenFirma macOS VZ Linux guest artifacts.
@@ -19,6 +30,8 @@ Environment:
   FIRMA_VZ_BUSYBOX_STATIC     Use an existing static busybox binary.
   FIRMA_VZ_BUSYBOX_STATIC_APK Use an existing busybox-static APK.
   FIRMA_VZ_GUEST_TOOL_APK_DIR Use existing curl/openssl dependency APKs from this directory.
+  FIRMA_VZ_CODEX_TARBALL      Use an existing locked Linux Codex npm tarball.
+  FIRMA_VZ_CODEX_LOCK         Override the Codex tool lock file.
   FIRMA_VZ_ROOTFS_SIZE        Rootfs image size in bytes. Default: 67108864.
   RUST_TARGET                 Override the Linux musl target for the guest init.
   RUSTUP_TOOLCHAIN            Optional Rust toolchain passed through to cargo.
@@ -63,14 +76,26 @@ case "${RUST_TARGET:-$host_arch}" in
     ;;
 esac
 
-guest_tool_lock="$repo_root/scripts/macos-vz/apk-lock/alpine-$alpine_release-$alpine_arch.lock"
+apk_lock_file="$repo_root/scripts/macos-vz/apk-lock/alpine-$alpine_release-$alpine_arch.lock"
+default_codex_tool_bundle_lock_file="$repo_root/scripts/macos-vz/tool-lock/codex-v0.133.0-$alpine_arch.lock"
+tool_bundle_lock_file="${FIRMA_VZ_CODEX_LOCK:-$default_codex_tool_bundle_lock_file}"
 out_dir="${1:-"$repo_root/target/firma-vz-guest/$alpine_arch"}"
 work_dir="$out_dir/.work"
 initramfs_dir="$work_dir/initramfs"
 download_dir="$work_dir/downloads"
 guest_module_dir="$initramfs_dir/lib/modules/firma-vz"
 boot_args="console=hvc0 earlyprintk=hvc0 ignore_loglevel loglevel=8 printk.time=1 rdinit=/firma-init init=/firma-init panic=1 firma.virtiofs_tag=firma firma.launch_contract=/firma-shares/runtime/vz-guest/vz-guest-launch.json firma.network=vsock_sidecar"
-guest_tool_manifest_entries=()
+locked_apk_package_manifest_entries=()
+locked_tool_bundle_manifest_entries=()
+locked_tool_bundle_file_manifest_entries=()
+locked_tool_bundle_package=""
+locked_tool_bundle_version=""
+locked_tool_bundle_url=""
+locked_tool_bundle_sha256=""
+locked_tool_bundle_vendor_dir=""
+locked_tool_bundle_install_dir=""
+locked_tool_bundle_executables=()
+locked_tool_bundle_symlinks=()
 
 if [ -z "$guest_kernel" ]; then
   echo "FIRMA_VZ_GUEST_KERNEL must point to the known-good Kata vmlinux" >&2
@@ -122,16 +147,17 @@ extract_kernel_module() {
   chmod 0644 "$module_output"
 }
 
-install_guest_tool_package() {
+install_locked_apk_package() {
   package_filename="$1"
   expected_sha256="$2"
-  package_url="https://dl-cdn.alpinelinux.org/alpine/$alpine_release/main/$alpine_arch/$package_filename"
+  apk_repository="$3"
+  package_url="https://dl-cdn.alpinelinux.org/alpine/$alpine_release/$apk_repository/$alpine_arch/$package_filename"
   package_path="$download_dir/$package_filename"
 
   if [ -n "${FIRMA_VZ_GUEST_TOOL_APK_DIR:-}" ]; then
     package_path="$FIRMA_VZ_GUEST_TOOL_APK_DIR/$package_filename"
     if [ ! -f "$package_path" ]; then
-      echo "guest tool APK is missing: $package_path" >&2
+      echo "locked APK package is missing: $package_path" >&2
       exit 1
     fi
   else
@@ -142,7 +168,7 @@ install_guest_tool_package() {
   actual_sha256="$(sha256_file "$package_path")"
 
   if [ "$actual_sha256" != "$expected_sha256" ]; then
-    echo "guest tool APK checksum mismatch for $package_filename" >&2
+    echo "locked APK package checksum mismatch for $package_filename" >&2
     echo "expected: $expected_sha256" >&2
     echo "actual:   $actual_sha256" >&2
     exit 1
@@ -153,17 +179,17 @@ install_guest_tool_package() {
     tar -xf "$package_path"
   )
 
-  guest_tool_manifest_entries+=("$package_filename:$actual_sha256")
+  locked_apk_package_manifest_entries+=("$apk_repository/$package_filename:$actual_sha256")
 
 }
 
-install_guest_tool_packages() {
-  if [ ! -f "$guest_tool_lock" ]; then
-    echo "guest tool APK lock file does not exist: $guest_tool_lock" >&2
+install_locked_apk_packages() {
+  if [ ! -f "$apk_lock_file" ]; then
+    echo "locked APK package file does not exist: $apk_lock_file" >&2
     exit 1
   fi
 
-  while read -r package_filename expected_sha256 extra; do
+  while read -r package_filename expected_sha256 apk_repository extra; do
     case "${package_filename:-}" in
       "" | \#*)
         continue
@@ -171,13 +197,219 @@ install_guest_tool_packages() {
     esac
 
     if [ -z "${expected_sha256:-}" ] || [ -n "${extra:-}" ]; then
-      echo "invalid guest tool APK lock entry in $guest_tool_lock: $package_filename ${expected_sha256:-} ${extra:-}" >&2
+      echo "invalid locked APK package entry in $apk_lock_file: $package_filename ${expected_sha256:-} ${apk_repository:-} ${extra:-}" >&2
+      exit 1
+    fi
+    apk_repository="${apk_repository:-main}"
+    case "$apk_repository" in
+      main | community)
+        ;;
+      *)
+        echo "unsupported locked APK repository in $apk_lock_file: $apk_repository" >&2
+        exit 1
+        ;;
+    esac
+
+    install_locked_apk_package "$package_filename" "$expected_sha256" "$apk_repository"
+
+  done < "$apk_lock_file"
+}
+
+reset_locked_tool_bundle_lock() {
+  locked_tool_bundle_package=""
+  locked_tool_bundle_version=""
+  locked_tool_bundle_url=""
+  locked_tool_bundle_sha256=""
+  locked_tool_bundle_vendor_dir=""
+  locked_tool_bundle_install_dir=""
+  locked_tool_bundle_executables=()
+  locked_tool_bundle_symlinks=()
+}
+
+validate_locked_tool_bundle_relative_path() {
+  path="$1"
+  field="$2"
+  tool_lock="$3"
+
+  case "$path" in
+    "" | /* | .. | *../* | ../* | */..)
+      echo "invalid $field in $tool_lock: $path" >&2
+      exit 1
+      ;;
+  esac
+}
+
+load_locked_tool_bundle_lock() {
+  tool_name="$1"
+  tool_lock="$2"
+
+  reset_locked_tool_bundle_lock
+
+  if [ ! -f "$tool_lock" ]; then
+    echo "locked tool bundle file does not exist for $tool_name: $tool_lock" >&2
+    exit 1
+  fi
+
+  while IFS='=' read -r key value extra; do
+    case "${key:-}" in
+      "" | \#*)
+        continue
+        ;;
+    esac
+
+    if [ -z "${value:-}" ] || [ -n "${extra:-}" ]; then
+      echo "invalid locked tool bundle entry in $tool_lock: $key=${value:-}${extra:-}" >&2
       exit 1
     fi
 
-    install_guest_tool_package "$package_filename" "$expected_sha256"
+    case "$key" in
+      package)
+        locked_tool_bundle_package="$value"
+        ;;
+      version)
+        locked_tool_bundle_version="$value"
+        ;;
+      url)
+        locked_tool_bundle_url="$value"
+        ;;
+      sha256)
+        locked_tool_bundle_sha256="$value"
+        ;;
+      vendor_dir)
+        locked_tool_bundle_vendor_dir="$value"
+        ;;
+      install_dir)
+        locked_tool_bundle_install_dir="$value"
+        ;;
+      executable)
+        locked_tool_bundle_executables+=("$value")
+        ;;
+      symlink)
+        locked_tool_bundle_symlinks+=("$value")
+        ;;
+      *)
+        echo "unknown locked tool bundle key in $tool_lock: $key" >&2
+        exit 1
+        ;;
+    esac
+  done < "$tool_lock"
 
-  done < "$guest_tool_lock"
+  for value_name in locked_tool_bundle_package locked_tool_bundle_version locked_tool_bundle_url locked_tool_bundle_sha256 locked_tool_bundle_vendor_dir locked_tool_bundle_install_dir; do
+    if [ -z "${!value_name:-}" ]; then
+      echo "locked tool bundle is missing $value_name: $tool_lock" >&2
+      exit 1
+    fi
+  done
+
+  if [ "${#locked_tool_bundle_executables[@]}" -eq 0 ]; then
+    echo "locked tool bundle is missing executable entries: $tool_lock" >&2
+    exit 1
+  fi
+  if [ "${#locked_tool_bundle_symlinks[@]}" -eq 0 ]; then
+    echo "locked tool bundle is missing symlink entries: $tool_lock" >&2
+    exit 1
+  fi
+
+  validate_locked_tool_bundle_relative_path "$locked_tool_bundle_vendor_dir" vendor_dir "$tool_lock"
+  case "$locked_tool_bundle_install_dir" in
+    /opt/openfirma/*)
+      ;;
+    *)
+      echo "locked tool bundle install_dir must live under /opt/openfirma: $locked_tool_bundle_install_dir" >&2
+      exit 1
+      ;;
+  esac
+  for executable in "${locked_tool_bundle_executables[@]}"; do
+    validate_locked_tool_bundle_relative_path "$executable" executable "$tool_lock"
+  done
+}
+
+install_locked_tool_bundle() {
+  tool_name="$1"
+  tool_lock="$2"
+  package_override="${3:-}"
+
+  load_locked_tool_bundle_lock "$tool_name" "$tool_lock"
+
+  locked_tool_package_path="$download_dir/$(basename "$locked_tool_bundle_url")"
+  if [ -n "$package_override" ]; then
+    locked_tool_package_path="$package_override"
+    if [ ! -f "$locked_tool_package_path" ]; then
+      echo "locked tool bundle tarball is missing for $tool_name: $locked_tool_package_path" >&2
+      exit 1
+    fi
+  else
+    require_tool curl
+    curl -fsSL "$locked_tool_bundle_url" -o "$locked_tool_package_path"
+  fi
+
+  actual_sha256="$(sha256_file "$locked_tool_package_path")"
+  if [ "$actual_sha256" != "$locked_tool_bundle_sha256" ]; then
+    echo "locked tool bundle tarball checksum mismatch for $locked_tool_bundle_url" >&2
+    echo "expected: $locked_tool_bundle_sha256" >&2
+    echo "actual:   $actual_sha256" >&2
+    exit 1
+  fi
+
+  locked_tool_extract_dir="$work_dir/$tool_name-tool"
+  locked_tool_install_dir="$initramfs_dir$locked_tool_bundle_install_dir"
+  rm -rf "$locked_tool_extract_dir" "$locked_tool_install_dir"
+  mkdir -p "$locked_tool_extract_dir" "$locked_tool_install_dir"
+  tar -xzf "$locked_tool_package_path" -C "$locked_tool_extract_dir"
+
+  locked_tool_vendor_source="$locked_tool_extract_dir/$locked_tool_bundle_vendor_dir"
+  if [ ! -d "$locked_tool_vendor_source" ]; then
+    echo "locked tool bundle tarball is missing vendor directory $locked_tool_bundle_vendor_dir" >&2
+    exit 1
+  fi
+  for executable in "${locked_tool_bundle_executables[@]}"; do
+    if [ ! -x "$locked_tool_vendor_source/$executable" ]; then
+      echo "locked tool bundle tarball is missing executable $locked_tool_bundle_vendor_dir/$executable" >&2
+      exit 1
+    fi
+  done
+
+  cp -R "$locked_tool_vendor_source"/. "$locked_tool_install_dir"
+  for executable in "${locked_tool_bundle_executables[@]}"; do
+    chmod 0755 "$locked_tool_install_dir/$executable"
+    locked_tool_bundle_file_manifest_entries+=("$locked_tool_bundle_install_dir/$executable:$(sha256_file "$locked_tool_install_dir/$executable")")
+  done
+
+  for symlink in "${locked_tool_bundle_symlinks[@]}"; do
+    symlink_source="${symlink%%:*}"
+    symlink_target="${symlink#*:}"
+    if [ "$symlink_source" = "$symlink" ] || [ -z "$symlink_source" ] || [ -z "$symlink_target" ]; then
+      echo "invalid locked tool bundle symlink entry in $tool_lock: $symlink" >&2
+      exit 1
+    fi
+    validate_locked_tool_bundle_relative_path "$symlink_source" symlink "$tool_lock"
+    case "$symlink_target" in
+      /usr/bin/* | /bin/*)
+        ;;
+      *)
+        echo "locked tool bundle symlink target must live under /usr/bin or /bin: $symlink_target" >&2
+        exit 1
+        ;;
+    esac
+    if [ ! -x "$locked_tool_install_dir/$symlink_source" ]; then
+      echo "locked tool bundle symlink source is not executable: $symlink_source" >&2
+      exit 1
+    fi
+    mkdir -p "$initramfs_dir${symlink_target%/*}"
+    rm -f "$initramfs_dir$symlink_target"
+    ln -s "$locked_tool_bundle_install_dir/$symlink_source" "$initramfs_dir$symlink_target"
+    locked_tool_bundle_file_manifest_entries+=("$symlink_target:$locked_tool_bundle_install_dir/$symlink_source")
+  done
+
+  locked_tool_bundle_manifest_entries+=("$locked_tool_bundle_package@$locked_tool_bundle_version:$actual_sha256")
+}
+
+install_locked_tool_bundles() {
+  if [ -n "${FIRMA_VZ_CODEX_TARBALL:-}" ]; then
+    install_locked_tool_bundle codex "$tool_bundle_lock_file" "$FIRMA_VZ_CODEX_TARBALL"
+  else
+    install_locked_tool_bundle codex "$tool_bundle_lock_file"
+  fi
 }
 
 require_tool "$cargo_bin"
@@ -294,7 +526,9 @@ mkdir -p "$initramfs_dir/dev" "$initramfs_dir/proc" "$initramfs_dir/sys" \
   "$initramfs_dir/tmp" "$initramfs_dir/firma-shares" "$initramfs_dir/bin" \
   "$initramfs_dir/usr/bin" "$guest_module_dir"
 
-install_guest_tool_packages
+install_locked_apk_packages
+install_locked_tool_bundles
+
 rm -f "$initramfs_dir"/.SIGN.RSA.* "$initramfs_dir/.PKGINFO" \
   "$initramfs_dir/.post-install" "$initramfs_dir/.post-upgrade" \
   "$initramfs_dir/.pre-install" "$initramfs_dir/.pre-upgrade"
@@ -399,8 +633,10 @@ module_bundle=$module_bundle
 busybox_static_source=$busybox_static_source
 busybox_static_package_sha256=$busybox_static_package_sha256
 busybox_static_sha256=$(sha256_file "$initramfs_dir/bin/busybox")
-guest_tool_packages=$(IFS=,; echo "${guest_tool_manifest_entries[*]}")
-shell_tools=/bin/sh,/bin/bash,/bin/cat,/bin/printf,/bin/ls,/bin/mkdir,/bin/rm,/bin/grep,/bin/head,/bin/wget,/usr/bin/env,/usr/bin/which,/usr/bin/curl,/usr/bin/openssl
+locked_apk_packages=$(IFS=,; echo "${locked_apk_package_manifest_entries[*]}")
+locked_tool_bundles=$(IFS=,; echo "${locked_tool_bundle_manifest_entries[*]}")
+locked_tool_bundle_files=$(IFS=,; echo "${locked_tool_bundle_file_manifest_entries[*]}")
+shell_tools=/bin/sh,/bin/bash,/bin/cat,/bin/printf,/bin/ls,/bin/mkdir,/bin/rm,/bin/grep,/bin/head,/bin/wget,/usr/bin/env,/usr/bin/which,/usr/bin/curl,/usr/bin/openssl,/usr/bin/codex,/usr/bin/rg
 rust_target=$rust_target
 rootfs_size=$rootfs_size
 boot_args=$boot_args
