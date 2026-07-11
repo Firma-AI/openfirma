@@ -7,6 +7,7 @@ mod authority_autostart_timeout;
 mod authority_bootstrap_prompt;
 mod capability_issue;
 mod capability_lease;
+mod capability_mint;
 mod capability_refresh;
 mod profile_alias;
 mod sidecar_autostart_env_sandbox_id;

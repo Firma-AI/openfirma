@@ -44,7 +44,13 @@ libc = { workspace = true }
 
 [dev-dependencies]
 chrono.workspace = true
+firma-core.workspace = true
+firma-protobuf.workspace = true
 fs-err.workspace = true
 pasetors = { workspace = true }
 pretty_assertions.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "net", "time", "sync"] }
+tokio-stream = { workspace = true }
+toml = { workspace = true }
+tonic = { workspace = true }

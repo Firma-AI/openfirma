@@ -1,7 +1,7 @@
 //! Failure-path coverage for capability minting
 //! ([`firma_run::capability::issue::mint_and_write`]).
 //!
-//! The success path needs a live Authority (covered by the e2e suites); these
+//! The success path needs a live Authority (covered by `capability_mint`); these
 //! tests drive the local, network-free failure modes `mint()` guards before and
 //! around the `IssueCapability` RPC: an unreadable/invalid Authority public key,
 //! and an unreachable Authority. None must leave a seed file behind.
