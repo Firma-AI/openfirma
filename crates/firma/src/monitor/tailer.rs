@@ -2,7 +2,7 @@
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::time::{Duration, SystemTime};
 
@@ -82,7 +82,10 @@ fn tail_inner(
         // Snapshot the file we actually opened. The EOF loop compares the
         // current path target against this handle to distinguish "nothing new
         // yet" from "the path now points at a different file".
-        let initial_id = initial_file_id(&path, &file);
+        let initial_id = file
+            .try_clone()
+            .ok()
+            .and_then(|f| same_file::Handle::from_file(f).ok());
         let mut reader = BufReader::new(file);
         // Seek to EOF only when following without a backfill window: that mode
         // shows new events as they arrive. A one-shot read (`--no-follow`) must
@@ -109,7 +112,9 @@ fn tail_inner(
             buffer.clear();
             match reader.read_line(&mut buffer) {
                 Ok(0) => {
-                    if !path_still_matches_file(&path, initial_id.as_ref()) {
+                    let current_id = same_file::Handle::from_path(&path).ok();
+                    let file_has_changed = current_id.as_ref() == initial_id.as_ref();
+                    if !file_has_changed {
                         // The path was replaced or renamed underneath us. Break
                         // to the outer loop so we reopen and apply the normal
                         // initial seek rules to the replacement file.
@@ -155,17 +160,6 @@ fn parse_leading_timestamp(line: &str) -> Option<SystemTime> {
     let first = line.split_whitespace().next()?;
     let dt = chrono::DateTime::parse_from_rfc3339(first).ok()?;
     Some(SystemTime::from(dt))
-}
-
-fn initial_file_id(_path: &Path, file: &File) -> Option<same_file::Handle> {
-    // Use the same cross-platform identity check on every platform instead of
-    // mixing raw metadata on Unix and handle snapshots on Windows.
-    same_file::Handle::from_file(file.try_clone().ok()?).ok()
-}
-
-fn path_still_matches_file(path: &Path, initial_id: Option<&same_file::Handle>) -> bool {
-    let current_id = same_file::Handle::from_path(path).ok();
-    current_id.as_ref() == initial_id
 }
 
 #[cfg(test)]
