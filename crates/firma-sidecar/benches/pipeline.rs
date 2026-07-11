@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use criterion::{Criterion, criterion_group, criterion_main};
-use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenId, TokenVerifier};
+use firma_core::{CapabilityClaims, Method, RevocationStore, TokenError, TokenId, TokenVerifier};
 use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile, TenancyMode};
 use firma_sidecar::credential::NullCredentialInjector;
 use firma_sidecar::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
@@ -69,7 +69,7 @@ fn mapping_table() -> MappingTable {
     let registry = ActionClassRegistry::v0_1();
     let rules = MappingRulesFile {
         rules: vec![MappingRuleConfig {
-            method: Some("POST".to_string()),
+            method: Some(Method::POST),
             host: "api.bench.local".to_string(),
             path: Some("/invoke".to_string()),
             action_class: BENCH_ACTION_CLASS.to_string(),
@@ -108,7 +108,7 @@ fn build_pipeline() -> EnforcementPipeline {
 
 fn sample_request() -> RawRequest {
     RawRequest {
-        method: "POST".to_string(),
+        method: Method::POST,
         host: "api.bench.local".to_string(),
         path: "/invoke".to_string(),
         headers: std::collections::HashMap::new(),

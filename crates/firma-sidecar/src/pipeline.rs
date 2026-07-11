@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use firma_core::{
     AbortReason, CapabilityClaims, DenyReason, ExecutionEnvelope, ExecutionMetadata,
-    InjectedCredentials,
+    InjectedCredentials, Method,
 };
 
 use std::sync::Arc;
@@ -797,11 +797,10 @@ fn deny_identity_fields(identity: Option<&DenyIdentity>) -> (String, String, Str
 }
 
 fn raw_request_action_label(request: &RawRequest) -> String {
-    let method = request.method.to_ascii_uppercase();
-    if method == "CONNECT" {
+    if request.method == Method::CONNECT {
         "network.connect".to_string()
     } else {
-        format!("raw.http.{method}")
+        format!("raw.http.{}", request.method)
     }
 }
 
@@ -976,13 +975,13 @@ mod tests {
     fn default_rules() -> Vec<MappingRuleConfig> {
         vec![
             MappingRuleConfig {
-                method: Some("POST".to_string()),
+                method: Some(Method::POST),
                 host: "api.openai.com".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
                 action_class: "communication.external.send".to_string(),
             },
             MappingRuleConfig {
-                method: Some("GET".to_string()),
+                method: Some(Method::GET),
                 host: "*".to_string(),
                 path: None,
                 action_class: "filesystem.read".to_string(),
@@ -1054,13 +1053,13 @@ mod tests {
         })
     }
 
-    fn test_request(method: &str, host_and_path: &str) -> RawRequest {
+    fn test_request(method: Method, host_and_path: &str) -> RawRequest {
         let (host, path) = host_and_path.split_once('/').map_or_else(
             || (host_and_path.to_string(), "/".to_string()),
             |(h, p)| (h.to_string(), format!("/{p}")),
         );
         RawRequest {
-            method: method.to_string(),
+            method,
             host,
             path,
             headers: HashMap::new(),
@@ -1073,7 +1072,7 @@ mod tests {
     async fn test_enforce_happy_path() {
         let pipeline = test_pipeline();
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -1109,7 +1108,7 @@ mod tests {
         );
         let pipeline = test_pipeline().with_readiness(readiness);
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -1135,7 +1134,7 @@ mod tests {
     async fn test_enforce_unclassified_intent() {
         let pipeline = test_pipeline();
         let request = RawRequest {
-            method: "DELETE".to_string(),
+            method: Method::DELETE,
             host: "api.openai.com".to_string(),
             path: "/v1/files/abc".to_string(),
             headers: HashMap::new(),
@@ -1152,7 +1151,7 @@ mod tests {
     async fn test_enforce_not_protected_returns_passthrough() {
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
-            method: Some("POST".to_string()),
+            method: Some(Method::POST),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
             action_class: "communication.external.send".to_string(),
@@ -1182,7 +1181,7 @@ mod tests {
         });
 
         let request = RawRequest {
-            method: "GET".to_string(),
+            method: Method::GET,
             host: "not-protected.example.com".to_string(),
             path: "/any".to_string(),
             headers: HashMap::new(),
@@ -1221,7 +1220,7 @@ mod tests {
         }
 
         let rules = vec![MappingRuleConfig {
-            method: Some("DELETE".to_string()),
+            method: Some(Method::DELETE),
             host: "api.example.com".to_string(),
             path: Some("/data".to_string()),
             action_class: "filesystem.delete".to_string(),
@@ -1257,7 +1256,7 @@ mod tests {
         });
 
         let request = RawRequest {
-            method: "DELETE".to_string(),
+            method: Method::DELETE,
             host: "api.example.com".to_string(),
             path: "/data".to_string(),
             headers: HashMap::new(),
@@ -1322,7 +1321,7 @@ mod tests {
         });
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -1364,7 +1363,7 @@ mod tests {
 
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
-            method: Some("POST".to_string()),
+            method: Some(Method::POST),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
             action_class: "communication.external.send".to_string(),
@@ -1395,7 +1394,7 @@ mod tests {
         });
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -1420,7 +1419,7 @@ mod tests {
     async fn test_enforce_no_capability_token_denies() {
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
-            method: Some("POST".to_string()),
+            method: Some(Method::POST),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
             action_class: "communication.external.send".to_string(),
@@ -1448,7 +1447,7 @@ mod tests {
         });
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -1467,7 +1466,7 @@ mod tests {
     async fn test_enforce_deterministic_same_input_same_output() {
         let pipeline = test_pipeline();
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -1488,7 +1487,7 @@ mod tests {
     async fn test_enforce_deterministic_deny_same_input() {
         let pipeline = test_pipeline();
         let request = RawRequest {
-            method: "DELETE".to_string(),
+            method: Method::DELETE,
             host: "api.openai.com".to_string(),
             path: "/v1/files/abc".to_string(),
             headers: HashMap::new(),
@@ -1509,7 +1508,7 @@ mod tests {
     async fn test_enforce_allow_envelope_fields_complete() {
         let pipeline = test_pipeline();
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -1583,7 +1582,7 @@ mod tests {
 
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
-            method: Some("POST".to_string()),
+            method: Some(Method::POST),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
             action_class: "communication.external.send".to_string(),
@@ -1612,7 +1611,7 @@ mod tests {
         });
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -1631,7 +1630,7 @@ mod tests {
         claims.expiry = Utc::now() - chrono::Duration::hours(1);
 
         let rules = vec![MappingRuleConfig {
-            method: Some("POST".to_string()),
+            method: Some(Method::POST),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
             action_class: "communication.external.send".to_string(),
@@ -1660,7 +1659,7 @@ mod tests {
         });
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -1680,7 +1679,7 @@ mod tests {
         claims.action_set = vec!["communication.external.send".to_string()]; // no filesystem.read
 
         let rules = vec![MappingRuleConfig {
-            method: Some("GET".to_string()),
+            method: Some(Method::GET),
             host: "api.example.com".to_string(),
             path: None,
             action_class: "filesystem.read".to_string(),
@@ -1709,7 +1708,7 @@ mod tests {
         });
 
         let request = RawRequest {
-            method: "GET".to_string(),
+            method: Method::GET,
             host: "api.example.com".to_string(),
             path: "/data".to_string(),
             headers: HashMap::new(),
@@ -1736,7 +1735,7 @@ mod tests {
         );
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers,
@@ -1787,7 +1786,7 @@ mod tests {
 
         let claims = test_claims();
         let rules = vec![MappingRuleConfig {
-            method: Some("POST".to_string()),
+            method: Some(Method::POST),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
             action_class: "communication.external.send".to_string(),
@@ -1819,7 +1818,7 @@ mod tests {
         });
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -1862,7 +1861,7 @@ mod tests {
         });
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -1909,7 +1908,7 @@ mod tests {
         });
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -1931,7 +1930,7 @@ mod tests {
         let claims = test_claims();
 
         let rules = vec![MappingRuleConfig {
-            method: Some("POST".to_string()),
+            method: Some(Method::POST),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
             action_class: "communication.external.send".to_string(),
@@ -1959,7 +1958,7 @@ mod tests {
         });
 
         let request = RawRequest {
-            method: "GET".to_string(),
+            method: Method::GET,
             host: "not-protected.example.com".to_string(),
             path: "/any".to_string(),
             headers: HashMap::new(),
@@ -2004,7 +2003,7 @@ mod tests {
 
         // Unclassified intent — denied at normalization stage
         let request = RawRequest {
-            method: "DELETE".to_string(),
+            method: Method::DELETE,
             host: "api.openai.com".to_string(),
             path: "/v1/files/abc".to_string(),
             headers: HashMap::new(),
@@ -2061,7 +2060,7 @@ mod tests {
         });
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -2108,7 +2107,7 @@ mod tests {
         });
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -2164,7 +2163,7 @@ mod tests {
         });
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -2211,7 +2210,7 @@ mod tests {
         let store: Arc<dyn SessionStateStore> = Arc::new(LruSessionStateStore::new(16));
 
         let pipeline = test_pipeline_with_session_store(Arc::clone(&store));
-        let request = test_request("POST", "api.openai.com/v1/chat/completions");
+        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions");
 
         // First call: action_count should be 1.
         let (decision, _) = pipeline.enforce(&request, "sess_001").await;
@@ -2244,7 +2243,7 @@ mod tests {
         // Pipeline configured so Stage 1 denies (no valid capability for
         // this session).
         let pipeline = test_pipeline_stage1_denies_with_session_store(Arc::clone(&store));
-        let request = test_request("POST", "api.openai.com/v1/chat/completions");
+        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions");
 
         let (decision, _) = pipeline.enforce(&request, "sess_denied").await;
         assert!(matches!(decision, EnforcementDecision::Deny { .. }));
@@ -2262,7 +2261,7 @@ mod tests {
     async fn monitor_mode_converts_deny_to_passthrough() {
         // Unclassified intent would DENY in enforce mode.
         let pipeline = test_pipeline().with_mode(SidecarMode::Monitor);
-        let request = test_request("DELETE", "api.openai.com/v1/files/abc");
+        let request = test_request(Method::DELETE, "api.openai.com/v1/files/abc");
 
         let (decision, payload) = pipeline.enforce(&request, "sess_monitor").await;
 
@@ -2282,7 +2281,7 @@ mod tests {
     async fn monitor_mode_audit_reason_contains_original_deny_reason() {
         let pipeline = test_pipeline().with_mode(SidecarMode::Monitor);
         // Unclassified intent → DenyReason::UnclassifiedIntent in enforce mode.
-        let request = test_request("DELETE", "api.openai.com/v1/files/abc");
+        let request = test_request(Method::DELETE, "api.openai.com/v1/files/abc");
 
         let (_, payload) = pipeline.enforce(&request, "sess_monitor").await;
 
@@ -2297,7 +2296,7 @@ mod tests {
     async fn monitor_mode_allows_normal_allows_unchanged() {
         // Requests that would ALLOW in enforce mode stay ALLOW in monitor mode.
         let pipeline = test_pipeline().with_mode(SidecarMode::Monitor);
-        let request = test_request("POST", "api.openai.com/v1/chat/completions");
+        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions");
 
         let (decision, payload) = pipeline.enforce(&request, "sess_001").await;
 
@@ -2313,7 +2312,7 @@ mod tests {
     async fn enforce_mode_still_denies() {
         // Sanity: enforce mode (default) must still produce DENY.
         let pipeline = test_pipeline();
-        let request = test_request("DELETE", "api.openai.com/v1/files/abc");
+        let request = test_request(Method::DELETE, "api.openai.com/v1/files/abc");
 
         let (decision, payload) = pipeline.enforce(&request, "sess_001").await;
 
@@ -2362,7 +2361,7 @@ mod tests {
 
     #[test]
     fn audit_modify_carries_modify_decision_and_description() {
-        let request = test_request("POST", "api.openai.com/v1/chat/completions");
+        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions");
         let claims = test_claims();
         let modify = EnforcementDecision::Modify {
             claims: claims.clone(),
@@ -2382,7 +2381,7 @@ mod tests {
 
     #[test]
     fn audit_step_up_carries_step_up_decision_and_challenge_reason() {
-        let request = test_request("POST", "api.openai.com/v1/chat/completions");
+        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions");
         let identity = DenyIdentity {
             token_id: "tok".to_string(),
             agent_id: "agent".to_string(),
@@ -2415,7 +2414,7 @@ mod tests {
 
     #[test]
     fn audit_defer_carries_defer_decision_and_retry_reason() {
-        let request = test_request("POST", "api.openai.com/v1/chat/completions");
+        let request = test_request(Method::POST, "api.openai.com/v1/chat/completions");
         let defer = EnforcementDecision::Defer {
             claims: None,
             envelope: None,

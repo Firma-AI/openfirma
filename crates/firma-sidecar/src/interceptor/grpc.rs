@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use firma_core::HeaderName;
+use firma_core::{HeaderName, Method};
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 
@@ -99,7 +99,9 @@ impl InterceptorHook for GrpcInterceptor {
         }
 
         let raw = RawRequest {
-            method: req.method,
+            method: Method(http::Method::from_str(&req.method).map_err(|err| {
+                tonic::Status::invalid_argument(format!("Invalid method {}: {err}", req.method))
+            })?),
             host: req.host,
             path: req.path,
             headers: req
@@ -254,7 +256,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("POST".to_string()),
+                method: Some(Method::POST),
                 host: "*".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -329,7 +331,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("POST".to_string()),
+                method: Some(Method::POST),
                 host: "api.openai.com".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -383,7 +385,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("POST".to_string()),
+                method: Some(Method::POST),
                 host: "*".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
                 action_class: "communication.external.send".to_string(),

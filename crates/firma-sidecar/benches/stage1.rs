@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use criterion::{Criterion, criterion_group, criterion_main};
-use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenId, TokenVerifier};
+use firma_core::{CapabilityClaims, Method, RevocationStore, TokenError, TokenId, TokenVerifier};
 use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile, TenancyMode};
 use firma_sidecar::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
 use firma_sidecar::enforcement::capability_validation::CapabilityValidator;
@@ -52,7 +52,7 @@ fn mapping_table() -> MappingTable {
     let registry = ActionClassRegistry::v0_1();
     let rules = MappingRulesFile {
         rules: vec![MappingRuleConfig {
-            method: Some("POST".to_string()),
+            method: Some(Method::POST),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
             action_class: "communication.external.send".to_string(),
@@ -65,7 +65,7 @@ fn bench_stage1_validate(c: &mut Criterion) {
     let claims = test_claims();
     let normalizer = IntentNormalizer::new(mapping_table());
     let request = RawRequest {
-        method: "POST".to_string(),
+        method: Method::POST,
         host: "api.openai.com".to_string(),
         path: "/v1/chat/completions".to_string(),
         headers: std::collections::HashMap::new(),

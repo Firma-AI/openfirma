@@ -9,7 +9,7 @@ pub mod decision;
 pub mod envelope;
 pub mod policy;
 pub mod run_audit;
-pub mod serde_header_name;
+pub mod serde_utils;
 pub mod session;
 pub mod token;
 pub mod transport;
@@ -29,7 +29,7 @@ pub use envelope::{
 };
 pub use policy::{EvaluationError, PolicyBundle, PolicyBundleStore, PolicyEvaluator};
 pub use run_audit::{RunAuditEvent, RunAuditMessage};
-pub use serde_header_name::HeaderName;
+pub use serde_utils::*;
 pub use session::SessionId;
 pub use token::{
     CapabilityClaims, RevocationStore, TokenError, TokenId, TokenSigner, TokenVerifier,

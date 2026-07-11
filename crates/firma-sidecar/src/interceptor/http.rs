@@ -20,13 +20,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use firma_core::{AbortReason, DenyReason, HeaderName};
+use firma_core::{AbortReason, DenyReason, HeaderName, Method};
 use http_body::Body as _;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Method, Request, Response, StatusCode};
+use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use rustls::ClientConfig;
 use rustls::RootCertStore;
@@ -309,7 +309,7 @@ async fn handle_request(
     connect_relay: ConnectRelayConfig,
     budget: Arc<BodyBudget>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    if req.method() == Method::CONNECT {
+    if req.method() == http::Method::CONNECT {
         return handle_connect_request(
             &mut req,
             handler,
@@ -1085,7 +1085,7 @@ async fn handle_mitm_https_request(
     max_request_body_bytes: usize,
     budget: Arc<BodyBudget>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    if req.method() == Method::CONNECT {
+    if req.method() == http::Method::CONNECT {
         let detail = "MALFORMED_REQUEST: nested CONNECT is not supported";
         handler
             .emit_synthetic_deny(
@@ -1371,7 +1371,7 @@ async fn handle_mitm_websocket_upgrade_request(
 }
 
 fn is_websocket_upgrade_request(req: &Request<Incoming>) -> bool {
-    req.method() == Method::GET
+    req.method() == http::Method::GET
         && header_contains_token(req.headers(), "connection", "upgrade")
         && req
             .headers()
@@ -1534,7 +1534,7 @@ fn build_raw_https_request_head(
     req: &Request<Incoming>,
     target: &ConnectTargetInfo,
 ) -> Result<RawRequest, String> {
-    let method = req.method().to_string();
+    let method = Method(req.method().clone());
     let host_value = req
         .headers()
         .get("host")
@@ -1626,7 +1626,7 @@ async fn read_body_with_limit(
 }
 
 fn build_raw_request_head(req: &Request<Incoming>, is_connect: bool) -> Result<RawRequest, String> {
-    let method = req.method().to_string();
+    let method = Method(req.method().clone());
     let host_with_port = host_with_default_port(req, is_connect);
     if host_with_port.is_empty() {
         return Err("MALFORMED_REQUEST: missing host".to_string());
@@ -1907,7 +1907,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("POST".to_string()),
+                method: Some(Method::POST),
                 host: "*".to_string(),
                 path: Some(path.to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -1945,7 +1945,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("CONNECT".to_string()),
+                method: Some(Method::CONNECT),
                 host: "*".to_string(),
                 path: Some("/".to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -2003,7 +2003,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("POST".to_string()),
+                method: Some(Method::POST),
                 host: "*".to_string(),
                 path: Some(path.to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -2043,7 +2043,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("CONNECT".to_string()),
+                method: Some(Method::CONNECT),
                 host: "*".to_string(),
                 path: Some("/".to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -2084,7 +2084,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("POST".to_string()),
+                method: Some(Method::POST),
                 host: host.to_string(),
                 path: Some("/v1/chat/completions".to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -2119,7 +2119,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("CONNECT".to_string()),
+                method: Some(Method::CONNECT),
                 host: host.to_string(),
                 path: Some("/".to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -2600,7 +2600,7 @@ mod tests {
     async fn test_pipeline_allow_matches_with_port_in_host() {
         let pipeline = test_pipeline_allow("/v1/chat/completions");
         let raw = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "127.0.0.1:9999".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),

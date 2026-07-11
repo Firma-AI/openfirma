@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use arbitrary::Arbitrary;
-use firma_core::HeaderName;
+use firma_core::{HeaderName, Method};
 use firma_sidecar::{
     config::{MappingRuleConfig, MappingRulesFile},
     enforcement::registry::ActionClassRegistry,
@@ -18,13 +18,13 @@ fn static_normalizer() -> &'static IntentNormalizer {
         let registry = ActionClassRegistry::v0_1();
         let rules = vec![
             MappingRuleConfig {
-                method: Some("GET".into()),
+                method: Some(Method::GET),
                 host: "api.github.com".into(),
                 path: Some("/repos/*/*".into()),
                 action_class: "code.read".into(),
             },
             MappingRuleConfig {
-                method: Some("POST".into()),
+                method: Some(Method::POST),
                 host: "api.stripe.com".into(),
                 path: Some("/v1/charges".into()),
                 action_class: "payment.transfer".into(),
@@ -45,7 +45,7 @@ fn static_normalizer() -> &'static IntentNormalizer {
 
 #[derive(Arbitrary, Debug)]
 struct FuzzRequest {
-    method: String,
+    method: Method,
     host: String,
     path: String,
     headers: HashMap<HeaderName, String>,
