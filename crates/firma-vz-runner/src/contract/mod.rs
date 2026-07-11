@@ -107,6 +107,7 @@ impl ContractDocument {
         self.validate_terminal()?;
         self.validate_mounts(&limits)?;
         self.validate_network(&limits)?;
+        self.validate_terminal_network_ports()?;
         validate_invariants(&self.invariants)?;
 
         Ok(Contract { document: self })
@@ -257,6 +258,25 @@ impl ContractDocument {
 
         Ok(())
     }
+
+    /// Validates PTY ports do not reuse the network sidecar VSOCK port.
+    fn validate_terminal_network_ports(&self) -> ValidationResult<()> {
+        if self.terminal.pty_vsock_port == Some(self.network.vsock_sidecar_port) {
+            return Err(ContractValidationError::TerminalPtyPortConflictsWithSidecar);
+        }
+
+        if self.terminal.pty_control_vsock_port == Some(self.network.vsock_sidecar_port) {
+            return Err(ContractValidationError::TerminalPtyControlPortConflictsWithSidecar);
+        }
+
+        if self.terminal.pty_control_vsock_port == self.terminal.pty_vsock_port
+            && self.terminal.pty_control_vsock_port.is_some()
+        {
+            return Err(ContractValidationError::TerminalPtyControlPortConflictsWithDataPort);
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -304,6 +324,16 @@ impl Contract {
     /// Returns the guest VSOCK port reserved for Sidecar traffic.
     pub const fn vsock_sidecar_port(&self) -> u32 {
         self.document.network.vsock_sidecar_port
+    }
+
+    /// Returns the optional command PTY data VSOCK port.
+    pub const fn command_pty_vsock_port(&self) -> Option<u32> {
+        self.document.terminal.pty_vsock_port()
+    }
+
+    /// Returns the optional command PTY control VSOCK port.
+    pub const fn command_pty_control_vsock_port(&self) -> Option<u32> {
+        self.document.terminal.pty_control_vsock_port()
     }
 
     /// Returns the host Sidecar endpoint reached by the runner bridge.
@@ -393,17 +423,27 @@ impl Terminal {
         self.cols
     }
 
-    /// Validates terminal metadata without enabling guest PTY transport.
+    /// Validates terminal metadata and PTY transport port requirements.
     fn validate(&self) -> ValidationResult<()> {
-        if self.pty {
-            return Err(ContractValidationError::UnsupportedTerminalPty);
+        match (self.pty, self.pty_vsock_port) {
+            (true, Some(port)) if port != 0 => {}
+            (true, _) => return Err(ContractValidationError::TerminalPtyRequiresVsockPort),
+            (false, Some(_)) => return Err(ContractValidationError::TerminalPtyPortRequiresPty),
+            (false, None) => {}
         }
 
-        reject_port_without_pty("terminal.pty_vsock_port", self.pty_vsock_port)?;
-        reject_port_without_pty(
-            "terminal.pty_control_vsock_port",
-            self.pty_control_vsock_port,
-        )?;
+        match (self.pty, self.pty_control_vsock_port) {
+            (true, Some(port)) if port != 0 => {}
+            (true, _) => return Err(ContractValidationError::TerminalPtyRequiresControlVsockPort),
+            (false, Some(_)) => {
+                return Err(ContractValidationError::TerminalPtyControlPortRequiresPty);
+            }
+            (false, None) => {}
+        }
+
+        if self.pty && !self.interactive {
+            return Err(ContractValidationError::TerminalPtyRequiresInteractive);
+        }
 
         require_optional_non_empty("terminal.term", self.term.as_deref())?;
         reject_zero_terminal_dimension("terminal.rows", self.rows)?;
@@ -411,15 +451,16 @@ impl Terminal {
 
         Ok(())
     }
-}
 
-/// Rejects a PTY VSOCK port when guest PTY transport is disabled.
-fn reject_port_without_pty(field: &'static str, port: Option<u32>) -> ValidationResult<()> {
-    if port.is_some() {
-        return Err(ContractValidationError::TerminalPtyPortWithoutPty { field });
+    /// Returns the optional guest PTY data VSOCK port.
+    pub const fn pty_vsock_port(&self) -> Option<u32> {
+        self.pty_vsock_port
     }
 
-    Ok(())
+    /// Returns the optional guest PTY control VSOCK port.
+    pub const fn pty_control_vsock_port(&self) -> Option<u32> {
+        self.pty_control_vsock_port
+    }
 }
 
 /// Validates that an optional string is non-empty when present.

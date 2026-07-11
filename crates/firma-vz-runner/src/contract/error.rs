@@ -33,10 +33,22 @@ pub enum ContractValidationError {
     EmptyCommandArgument,
     #[error("command.env must not serialize secret key {key}")]
     SecretEnvSerialized { key: &'static str },
-    #[error("terminal.pty=true is not supported until the VZ PTY bridge is implemented")]
-    UnsupportedTerminalPty,
-    #[error("{field} must be null while terminal.pty=false")]
-    TerminalPtyPortWithoutPty { field: &'static str },
+    #[error("terminal.pty=true requires non-zero terminal.pty_vsock_port")]
+    TerminalPtyRequiresVsockPort,
+    #[error("terminal.pty_vsock_port requires terminal.pty=true")]
+    TerminalPtyPortRequiresPty,
+    #[error("terminal.pty=true requires terminal.interactive=true")]
+    TerminalPtyRequiresInteractive,
+    #[error("terminal.pty_vsock_port must be distinct from network.vsock_sidecar_port")]
+    TerminalPtyPortConflictsWithSidecar,
+    #[error("terminal.pty=true requires non-zero terminal.pty_control_vsock_port")]
+    TerminalPtyRequiresControlVsockPort,
+    #[error("terminal.pty_control_vsock_port requires terminal.pty=true")]
+    TerminalPtyControlPortRequiresPty,
+    #[error("terminal.pty_control_vsock_port must be distinct from network.vsock_sidecar_port")]
+    TerminalPtyControlPortConflictsWithSidecar,
+    #[error("terminal.pty_control_vsock_port must be distinct from terminal.pty_vsock_port")]
+    TerminalPtyControlPortConflictsWithDataPort,
     #[error("{field} must be non-zero when set")]
     ZeroTerminalDimension { field: &'static str },
     #[error("{field} must be a host:port socket address, got {value}")]

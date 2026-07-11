@@ -38,4 +38,8 @@ pub enum VmPlanError {
         #[source]
         source: ContractValidationError,
     },
+    #[error("{field} must be non-zero in the accepted command PTY plan")]
+    InvalidCommandPtyPort { field: &'static str },
+    #[error("accepted command PTY plan requires both data and control ports")]
+    IncompleteCommandPtyPlan,
 }

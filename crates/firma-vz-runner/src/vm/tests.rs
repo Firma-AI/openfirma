@@ -1,8 +1,9 @@
 use anyhow::Result;
+use serde_json::json;
 
 use crate::test_utils::{
     UNALIGNED_ROOTFS_SIZE_BYTES, VALID_ROOTFS_SIZE_BYTES, read_contract_without_custody,
-    write_contract, write_contract_at, write_contract_with_rootfs_size,
+    valid_contract_json, write_contract, write_contract_at, write_contract_with_rootfs_size,
 };
 
 use super::VmPlanError;
@@ -39,6 +40,7 @@ fn vm_plan_exposes_contract_and_mounts_without_network_devices() -> Result<()> {
     assert_eq!(plan.term, None);
     assert_eq!(plan.rows, None);
     assert_eq!(plan.cols, None);
+    assert_eq!(plan.socket_devices[0].command_pty, None);
     assert_eq!(plan.directory_shares.len(), 2);
     assert_eq!(plan.directory_shares[0].name, "runtime");
     assert!(!plan.directory_shares[0].read_only);
@@ -56,6 +58,47 @@ fn vm_plan_exposes_contract_and_mounts_without_network_devices() -> Result<()> {
         plan.kernel_command_line
             .contains("firma.network=vsock_sidecar")
     );
+
+    Ok(())
+}
+
+#[test]
+fn vm_plan_records_command_pty_vsock_listeners_when_requested() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let contract_path = temp
+        .path()
+        .join("runtime")
+        .join("vz-guest")
+        .join("vz-guest-launch.json");
+    let mut json = valid_contract_json(temp.path())?;
+    json["terminal"]["interactive"] = json!(true);
+    json["terminal"]["pty"] = json!(true);
+    json["terminal"]["pty_vsock_port"] = json!(18081);
+    json["terminal"]["pty_control_vsock_port"] = json!(18082);
+    json["terminal"]["term"] = json!("xterm-256color");
+    json["terminal"]["rows"] = json!(40);
+    json["terminal"]["cols"] = json!(120);
+    let contract_dir = contract_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("contract path should have parent"))?;
+    std::fs::create_dir_all(contract_dir)?;
+    std::fs::write(&contract_path, serde_json::to_vec(&json)?)?;
+
+    let contract = read_contract_without_custody(&contract_path)?;
+    let plan = VmPlan::from_contract(&contract)?;
+
+    assert!(plan.interactive);
+    assert!(plan.pty);
+    assert_eq!(plan.term.as_deref(), Some("xterm-256color"));
+    assert_eq!(plan.rows, Some(40));
+    assert_eq!(plan.cols, Some(120));
+    assert_eq!(plan.socket_devices.len(), 1);
+    assert_eq!(plan.socket_devices[0].sidecar_port, 18080);
+    let command_pty = plan.socket_devices[0]
+        .command_pty
+        .ok_or_else(|| anyhow::anyhow!("VM plan should expose command PTY plan"))?;
+    assert_eq!(command_pty.data_port.get(), 18081);
+    assert_eq!(command_pty.control_port.get(), 18082);
 
     Ok(())
 }
