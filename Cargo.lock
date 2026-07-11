@@ -1665,6 +1665,7 @@ dependencies = [
  "firma-config-loader",
  "firma-fs",
  "firma-runtime-state",
+ "firma-sidecar",
  "nix 0.31.3",
  "serde",
  "serial_test",

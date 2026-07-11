@@ -8,9 +8,7 @@ use tracing::{debug, info};
 use crate::config::StackConfig;
 use crate::error::{Result, StackError};
 use crate::platform::{Platform, SystemPlatform};
-use crate::readiness::{
-    read_authority_listen_addr, read_sidecar_listen_addr, wait_for_ca_material, wait_for_tcp,
-};
+use crate::readiness::{read_config, wait_for_ca_material, wait_for_tcp};
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::supervisor::{Children, block_until_exit};
 use firma_runtime_state::{UserProcessId, pidfile};
@@ -85,10 +83,12 @@ pub fn spawn_stack(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
 fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle> {
     let group = SystemPlatform::new_group()?;
     let exe = cfg.firma_bin.as_deref();
+    // Parse the unified firma.toml once; the probes below share it.
+    let config = read_config(&cfg.config_file)?;
     debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning authority");
     let auth = spawn_with_config(&group, state_dir, "authority", &cfg.config_file, exe)?;
     info!(pid = %auth.pid, "authority spawned");
-    let auth_addr = read_authority_listen_addr(&cfg.config_file)?;
+    let auth_addr = config.authority_listen_addr()?;
     std::fs::write(state_dir.join("authority.listen"), format!("{auth_addr}\n"))?;
     debug!(addr = %auth_addr, "waiting for authority TCP listen");
     wait_for_tcp("authority", auth_addr, Duration::from_mins(1))?;
@@ -97,17 +97,25 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
     debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning sidecar");
     let side = spawn_with_config(&group, state_dir, "sidecar", &cfg.config_file, exe)?;
     info!(pid = %side.pid, "sidecar spawned");
-    let side_addr = read_sidecar_listen_addr(&cfg.config_file)?;
+    let sidecar = config.sidecar_config()?;
+    let side_addr = sidecar.interceptor.listen_addr;
     std::fs::write(state_dir.join("sidecar.listen"), format!("{side_addr}\n"))?;
     debug!(addr = %side_addr, "waiting for sidecar TCP listen");
     wait_for_tcp("sidecar", side_addr, Duration::from_mins(1))?;
     info!(addr = %side_addr, "sidecar listening");
-    debug!("waiting for sidecar CA material");
-    wait_for_ca_material(
-        &state_dir.join("generated-firma-ca"),
-        Duration::from_mins(1),
-    )?;
-    debug!("CA material present");
+    // CA material is only written when HTTPS MITM is active. A sidecar with
+    // MITM inactive (e.g. an Anthropic-only scaffold) never produces it, so
+    // gating readiness on it would spuriously time out daemon startup.
+    if sidecar.interceptor.https_mitm.is_active() {
+        debug!("waiting for sidecar CA material");
+        wait_for_ca_material(
+            &state_dir.join("generated-firma-ca"),
+            Duration::from_mins(1),
+        )?;
+        debug!("CA material present");
+    } else {
+        debug!("sidecar HTTPS MITM inactive; skipping CA material readiness probe");
+    }
 
     // The Group goes out of scope at the end of this function. On Unix that
     // is a no-op (children sit in their own pgrp). On Windows, the Drop impl

@@ -17,6 +17,7 @@ mod sandbox_identity;
 mod seeded_capability_e2e;
 mod sidecar_invalid_config;
 mod sidecar_readiness_gate;
+mod sidecar_start_scaffold;
 mod sidecar_startup_contract;
 mod sidecar_status_cli;
 mod sidecar_tampered_seed_e2e;

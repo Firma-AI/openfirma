@@ -14,6 +14,7 @@ ctrlc = { workspace = true }
 firma-config-loader = { workspace = true }
 firma-fs = { workspace = true }
 firma-runtime-state = { workspace = true }
+firma-sidecar = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
