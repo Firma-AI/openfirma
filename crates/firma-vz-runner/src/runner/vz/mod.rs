@@ -1,18 +1,22 @@
+mod command_pty;
 mod config;
 mod lifecycle;
 mod sidecar_bridge;
+mod transport;
 
 use std::process::ExitCode;
 
 use super::console::{
-    capture_piped_stdin, create_pipe, create_serial_log, read_guest_exit_code, replay_guest_stdio,
-    spawn_stdio_forwarders,
+    SerialInputMode, capture_piped_stdin, create_pipe, create_serial_log, read_guest_exit_code,
+    replay_guest_stdio, should_mirror_serial_to_stdout, spawn_stdio_forwarders,
 };
 use super::{RunnerError, RunnerResult};
 use crate::vm::VmPlan;
 
+use command_pty::ensure_host_terminal_available;
 use config::Vz;
 use lifecycle::{install_interrupt_handler, run_virtual_machine};
+use transport::VzTransportPlan;
 
 //  --------------
 // | Architecture |
@@ -102,7 +106,9 @@ use lifecycle::{install_interrupt_handler, run_virtual_machine};
 //
 // Serial is diagnostics only:
 //
-//  kernel/init logs ---> serial ---> stdout + serial.log
+//  kernel/init logs ---> serial ---> serial.log
+//                         |
+//                         +--> stdout for non-PTY runs or explicit debug mirroring
 //
 //  ------------------
 // | Communication flow |
@@ -136,21 +142,40 @@ use lifecycle::{install_interrupt_handler, run_virtual_machine};
 //  firma-run
 pub fn run(plan: &VmPlan) -> RunnerResult<ExitCode> {
     ensure_no_network_devices(plan)?;
-    log_vm_plan(plan);
-    capture_piped_stdin(plan)?;
+    let transport = VzTransportPlan::try_from(plan)?;
+    let command_pty_enabled = transport.command_pty_enabled();
+    log_vm_plan(plan, &transport);
+    if command_pty_enabled {
+        ensure_host_terminal_available()?;
+    } else {
+        capture_piped_stdin(plan)?;
+    }
 
     let (vm_reads_from, host_writes_to_vm) = create_pipe()?;
     let (host_reads_from_vm, vm_writes_to) = create_pipe()?;
     let serial_log = create_serial_log(plan)?;
-    let stdio_forwarders =
-        spawn_stdio_forwarders(host_reads_from_vm, host_writes_to_vm, serial_log);
+    let serial_input_mode = if command_pty_enabled {
+        SerialInputMode::Closed
+    } else {
+        SerialInputMode::ForwardHostStdin
+    };
+
+    let stdio_forwarders = spawn_stdio_forwarders(
+        host_reads_from_vm,
+        host_writes_to_vm,
+        serial_log,
+        serial_input_mode,
+        should_mirror_serial_to_stdout(command_pty_enabled),
+    );
 
     let interrupt_rx = install_interrupt_handler()?;
-    let vz = Vz::from_plan(plan, vm_reads_from, vm_writes_to)?;
+    let vz = Vz::from_plan(plan, transport, vm_reads_from, vm_writes_to)?;
     run_virtual_machine(&vz, &interrupt_rx)?;
     drop(vz);
     stdio_forwarders.wait_for_serial_drain();
-    replay_guest_stdio(plan)?;
+    if !command_pty_enabled {
+        replay_guest_stdio(plan)?;
+    }
 
     read_guest_exit_code(plan)
 }
@@ -167,17 +192,29 @@ fn ensure_no_network_devices(plan: &VmPlan) -> RunnerResult<()> {
 }
 
 /// Emits the launch summary before handing control to Apple VZ.
-fn log_vm_plan(plan: &VmPlan) {
+fn log_vm_plan(plan: &VmPlan, transport: &VzTransportPlan) {
+    let command_pty = transport.command_pty();
+    let command_pty_port = command_pty.map(|command_pty| command_pty.data_port().get());
+    let command_pty_control_port = command_pty.map(|command_pty| command_pty.control_port().get());
     eprintln!(
-        "firma-vz-runner: launching contract_version={} sandbox_id={} kernel={} initrd={} rootfs={} shares={} network_devices=0 socket_devices={} network_mode={}",
+        "firma-vz-runner: launching contract_version={} sandbox_id={} kernel={} initrd={} rootfs={} shares={} network_devices=0 socket_devices={} network_mode={} interactive={} pty={} pty_vsock_port={} pty_control_vsock_port={} term={} rows={} cols={}",
         plan.version(),
         plan.sandbox_id(),
         plan.kernel.display(),
         plan.initrd.display(),
         plan.rootfs.display(),
         plan.directory_shares.len(),
-        plan.socket_devices.len(),
-        plan.network_mode.as_kernel_arg()
+        transport.socket_device_count(),
+        plan.network_mode.as_kernel_arg(),
+        plan.interactive,
+        transport.command_pty_enabled(),
+        command_pty_port.map_or_else(|| "-".to_string(), |port| port.to_string()),
+        command_pty_control_port.map_or_else(|| "-".to_string(), |port| port.to_string()),
+        plan.term.as_deref().unwrap_or("-"),
+        plan.rows
+            .map_or_else(|| "-".to_string(), |rows| rows.to_string()),
+        plan.cols
+            .map_or_else(|| "-".to_string(), |cols| cols.to_string()),
     );
 }
 
