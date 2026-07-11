@@ -60,6 +60,7 @@ x509-parser = { workspace = true }
 xxhash-rust = { workspace = true }
 
 [dev-dependencies]
+chrono = { workspace = true }
 criterion = { workspace = true }
 insta = "1"
 loom = "0.7"
@@ -70,6 +71,8 @@ rcgen = { workspace = true }
 rustls-pemfile = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "time"] }
+tokio-util = { workspace = true }
+toml = { workspace = true }
 wiremock = "0.6"
 
 [lints]
