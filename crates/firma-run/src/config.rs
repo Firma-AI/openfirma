@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Duration;
 
 use firma_config_loader::AgentProfile;
 use serde::{Deserialize, Serialize};
@@ -244,6 +245,12 @@ pub struct CapabilityLeaseConfig {
     /// token. Only affects the autostart-minted path; the user-supplied
     /// `--capability-file` source is never re-minted.
     pub refresh_enabled: bool,
+}
+
+impl CapabilityLeaseConfig {
+    pub fn grace(&self) -> Duration {
+        Duration::from_secs(self.grace_seconds)
+    }
 }
 
 /// Per-executable CLI argument policy injected by `firma run`.

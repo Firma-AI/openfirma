@@ -278,7 +278,6 @@ pub fn prepare_network_runtime(
     #[cfg(not(unix))]
     let _ = proof;
 
-    let skip_mint = matches!(capability_lease.source, CapabilitySource::File { .. });
     // When the user supplied their own capability file, `firma run` must
     // not mint a per-session seed during autostart.
     let mut flags = flags.clone();
@@ -293,13 +292,8 @@ pub fn prepare_network_runtime(
     // synthesized sidecar config can reference it. The guard is moved into the
     // returned `NetworkRuntime` so the seed file is removed on Drop — declared
     // last in the struct so it drops AFTER the sidecar supervisor that reads it.
-    let (capability_guard, capability_refresher) = maybe_mint_capability_seed(
-        identity,
-        &mut flags,
-        &authority,
-        skip_mint,
-        capability_lease,
-    )?;
+    let (capability_guard, capability_refresher) =
+        maybe_mint_capability_seed(identity, &mut flags, &authority, capability_lease)?;
 
     let (effective_endpoint, sidecar_supervisor) =
         resolve_effective_endpoint(handle, sidecar_endpoint, identity, &flags)?;
@@ -551,10 +545,10 @@ fn maybe_mint_capability_seed(
     identity: &RunIdentity,
     flags: &mut AutostartFlags,
     authority: &ResolvedAuthority,
-    skip_mint: bool,
     capability_lease: &CapabilityLeaseConfig,
 ) -> Result<MintedCapability, RunError> {
-    if !(flags.sidecar_autostart && !skip_mint && flags.authority_pub_key.is_some()) {
+    let is_source_file = matches!(capability_lease.source, CapabilitySource::File { .. });
+    if !flags.sidecar_autostart || is_source_file || flags.authority_pub_key.is_none() {
         return Ok((None, None));
     }
     let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
@@ -590,8 +584,7 @@ fn maybe_mint_capability_seed(
             params,
             out_path,
             seed.expiry,
-            capability_lease.refresh_ratio,
-            capability_lease.grace_seconds,
+            capability_lease,
         )?)
     } else {
         None

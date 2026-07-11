@@ -28,6 +28,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 
 use super::issue::{self, IssueParams};
+use crate::config::CapabilityLeaseConfig;
 use crate::error::RunError;
 
 /// Initial retry backoff after a failed re-mint.
@@ -61,12 +62,12 @@ impl CapabilityRefresher {
         params: IssueParams,
         out_path: PathBuf,
         initial_expiry: DateTime<Utc>,
-        refresh_ratio: f64,
-        grace_seconds: u64,
+        capability_lease: &CapabilityLeaseConfig,
     ) -> Result<Self, RunError> {
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
-        let grace = Duration::from_secs(grace_seconds);
+        let refresh_ratio = capability_lease.refresh_ratio;
+        let grace = capability_lease.grace();
         let handle = thread::Builder::new()
             .name("firma-run-capability-refresh".to_string())
             .spawn(move || {
