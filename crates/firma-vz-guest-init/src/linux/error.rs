@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io;
 use std::net::{AddrParseError, SocketAddr};
+use std::num::TryFromIntError;
 use std::path::PathBuf;
 
 /// Typed failures raised while preparing or running the VZ guest init payload.
@@ -8,6 +9,14 @@ use std::path::PathBuf;
 pub enum InitError {
     /// A required guest directory could not be created.
     CreateDir { path: PathBuf, source: io::Error },
+    /// A guest symlink could not be created.
+    CreateSymlink {
+        from: PathBuf,
+        to: PathBuf,
+        source: io::Error,
+    },
+    /// `/dev/ptmx` could not be inspected before PTY setup.
+    StatPtmx { path: PathBuf, source: io::Error },
     /// `/proc/cmdline` could not be read after procfs is mounted.
     ReadKernelCmdline { source: io::Error },
     /// A pseudo filesystem mount failed.
@@ -146,6 +155,49 @@ pub enum InitError {
         executable: String,
         source: io::Error,
     },
+    /// The guest command PTY could not be opened.
+    OpenCommandPty { source: io::Error },
+    /// The guest command PTY slave could not be duplicated.
+    DuplicatePtySlave { source: io::Error },
+    /// The guest command PTY master could not be duplicated for I/O forwarding.
+    DuplicatePtyMaster { source: io::Error },
+    /// The guest command PTY master could not be duplicated for control messages.
+    DuplicatePtyMasterForControl { source: io::Error },
+    /// The guest command PTY data stream could not connect to the host.
+    ConnectCommandPtyData { port: u32, source: io::Error },
+    /// The guest command PTY control stream could not connect to the host.
+    ConnectCommandPtyControl { port: u32, source: io::Error },
+    /// The guest command PTY data stream could not be cloned.
+    CloneCommandPtyDataStream { source: io::Error },
+    /// A guest command PTY control message could not be read.
+    ReadCommandPtyControl { source: io::Error },
+    /// The guest command process id could not be used as a process group id.
+    InvalidChildPgid { pid: u32, source: TryFromIntError },
+    /// The guest PTY payload exited without an exit status or signal.
+    CommandPtyMissingStatus,
+    /// A guest command PTY resize message was invalid.
+    InvalidPtyResizeMessage { message: String },
+    /// A guest command PTY control message was unsupported.
+    UnsupportedPtyControlMessage { message: String },
+    /// A guest command PTY signal message was unsupported.
+    UnsupportedPtySignal { signal: String },
+    /// The guest command PTY could not be resized.
+    ResizeCommandPty { source: io::Error },
+    /// The guest command process group could not be signaled.
+    SignalCommandProcessGroup {
+        signal: libc::c_int,
+        source: io::Error,
+    },
+    /// The guest PTY payload process could not be spawned.
+    SpawnPtyCommand {
+        executable: String,
+        source: io::Error,
+    },
+    /// The guest PTY payload process could not be waited on.
+    WaitPtyCommand {
+        executable: String,
+        source: io::Error,
+    },
     /// Guest stdin captured by the host runner could not be opened.
     OpenGuestStdin { path: PathBuf, source: io::Error },
     /// The contract path has no parent for command output streams.
@@ -192,6 +244,19 @@ impl fmt::Display for InitError {
         match self {
             Self::CreateDir { path, source } => {
                 write!(formatter, "create {}: {source}", path.display())
+            }
+            Self::CreateSymlink { from, to, source } => write!(
+                formatter,
+                "create symlink {} -> {}: {source}",
+                to.display(),
+                from.display()
+            ),
+            Self::StatPtmx { path, source } => {
+                write!(
+                    formatter,
+                    "inspect {} before PTY setup: {source}",
+                    path.display()
+                )
             }
             Self::ReadKernelCmdline { source } => {
                 write!(
@@ -419,6 +484,68 @@ impl fmt::Display for InitError {
             Self::SpawnCommand { executable, source } => {
                 write!(formatter, "spawn command {executable}: {source}")
             }
+            Self::OpenCommandPty { source } => write!(formatter, "open command PTY: {source}"),
+            Self::DuplicatePtySlave { source } => {
+                write!(formatter, "duplicate command PTY slave: {source}")
+            }
+            Self::DuplicatePtyMaster { source } => {
+                write!(formatter, "duplicate command PTY master: {source}")
+            }
+            Self::DuplicatePtyMasterForControl { source } => {
+                write!(
+                    formatter,
+                    "duplicate command PTY master for control: {source}"
+                )
+            }
+            Self::ConnectCommandPtyData { port, source } => {
+                write!(
+                    formatter,
+                    "connect host command PTY VSOCK port {port}: {source}"
+                )
+            }
+            Self::ConnectCommandPtyControl { port, source } => write!(
+                formatter,
+                "connect host command PTY control VSOCK port {port}: {source}"
+            ),
+            Self::CloneCommandPtyDataStream { source } => {
+                write!(formatter, "clone command PTY VSOCK stream: {source}")
+            }
+            Self::ReadCommandPtyControl { source } => {
+                write!(formatter, "read command PTY control message: {source}")
+            }
+            Self::InvalidChildPgid { pid, source } => {
+                write!(formatter, "convert child pid {pid} to pgid: {source}")
+            }
+            Self::CommandPtyMissingStatus => {
+                formatter.write_str("PTY command ended without exit code or signal")
+            }
+            Self::InvalidPtyResizeMessage { message } => {
+                write!(formatter, "invalid command PTY resize message {message:?}")
+            }
+            Self::UnsupportedPtyControlMessage { message } => {
+                write!(
+                    formatter,
+                    "unsupported command PTY control message {message:?}"
+                )
+            }
+            Self::UnsupportedPtySignal { signal } => {
+                write!(formatter, "unsupported command PTY signal {signal:?}")
+            }
+            Self::ResizeCommandPty { source } => {
+                write!(formatter, "resize command PTY: {source}")
+            }
+            Self::SignalCommandProcessGroup { signal, source } => {
+                write!(
+                    formatter,
+                    "signal command process group with signal {signal}: {source}"
+                )
+            }
+            Self::SpawnPtyCommand { executable, source } => {
+                write!(formatter, "spawn PTY command {executable}: {source}")
+            }
+            Self::WaitPtyCommand { executable, source } => {
+                write!(formatter, "wait for PTY command {executable}: {source}")
+            }
             Self::OpenGuestStdin { path, source } => {
                 write!(formatter, "open guest stdin {}: {source}", path.display())
             }
@@ -502,6 +629,8 @@ impl std::error::Error for InitError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::CreateDir { source, .. }
+            | Self::CreateSymlink { source, .. }
+            | Self::StatPtmx { source, .. }
             | Self::ReadKernelCmdline { source }
             | Self::MountPseudo { source, .. }
             | Self::MountVirtiofs { source, .. }
@@ -528,6 +657,18 @@ impl std::error::Error for InitError {
             | Self::ContractNotVisible { source, .. }
             | Self::ReadContract { source, .. }
             | Self::SpawnCommand { source, .. }
+            | Self::OpenCommandPty { source }
+            | Self::DuplicatePtySlave { source }
+            | Self::DuplicatePtyMaster { source }
+            | Self::DuplicatePtyMasterForControl { source }
+            | Self::ConnectCommandPtyData { source, .. }
+            | Self::ConnectCommandPtyControl { source, .. }
+            | Self::CloneCommandPtyDataStream { source }
+            | Self::ReadCommandPtyControl { source }
+            | Self::ResizeCommandPty { source }
+            | Self::SignalCommandProcessGroup { source, .. }
+            | Self::SpawnPtyCommand { source, .. }
+            | Self::WaitPtyCommand { source, .. }
             | Self::OpenGuestStdin { source, .. }
             | Self::CreateCommandStdioFile { source, .. }
             | Self::StatCommandStdioFile { source, .. }
@@ -544,6 +685,7 @@ impl std::error::Error for InitError {
             Self::ParseContract { source, .. } | Self::SerializeGuestResult { source, .. } => {
                 Some(source)
             }
+            Self::InvalidChildPgid { source, .. } => Some(source),
             Self::MissingKernelArg { .. }
             | Self::UnsupportedNetworkMode { .. }
             | Self::ContractNotRegularFile { .. }
@@ -569,6 +711,10 @@ impl std::error::Error for InitError {
             | Self::EmptyAttributionHeaderName
             | Self::EmptyAttributionHeaderValue { .. }
             | Self::GuestNetworkSetup { .. }
+            | Self::CommandPtyMissingStatus
+            | Self::InvalidPtyResizeMessage { .. }
+            | Self::UnsupportedPtyControlMessage { .. }
+            | Self::UnsupportedPtySignal { .. }
             | Self::MissingShareSource { .. }
             | Self::CommandStdioPathWithoutParent { .. }
             | Self::CommandMissingStatus

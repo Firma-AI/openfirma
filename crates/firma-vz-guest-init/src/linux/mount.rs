@@ -2,6 +2,7 @@ use std::ffi::CString;
 use std::fs::{self, File};
 use std::io;
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 use super::contract::Contract;
@@ -11,6 +12,8 @@ use super::log;
 /// Guest root where the host runner's virtiofs shares are mounted.
 pub const SHARE_ROOT: &str = "/firma-shares";
 const MODULE_DIR: &str = "/lib/modules/firma-vz";
+const PTMX_PATH: &str = "/dev/ptmx";
+const PTMX_SYMLINK_SOURCE: &str = "pts/ptmx";
 const REQUIRED_MODULES: &[&str] = &[
     "virtio.ko",
     "virtio_ring.ko",
@@ -51,6 +54,48 @@ pub fn mount_pseudo(
         target,
         source: error,
     })
+}
+
+/// Mounts devpts and provides `/dev/ptmx` for guest command PTYs.
+pub fn setup_pty_devices() -> InitResult<()> {
+    create_dir("/dev/pts")?;
+    mount_pseudo("devpts", "/dev/pts", "devpts")?;
+    ensure_ptmx_symlink(
+        Path::new(PTMX_SYMLINK_SOURCE),
+        Path::new(PTMX_PATH),
+        |path| fs::metadata(path).map(|_| ()),
+        |source, target| symlink(source, target),
+    )?;
+
+    log("mounted devpts for guest command PTYs");
+
+    Ok(())
+}
+
+/// Ensures `/dev/ptmx` exists without hiding metadata failures.
+fn ensure_ptmx_symlink(
+    source: &Path,
+    target: &Path,
+    stat_ptmx: impl FnOnce(&Path) -> io::Result<()>,
+    create_symlink: impl FnOnce(&Path, &Path) -> io::Result<()>,
+) -> InitResult<()> {
+    match stat_ptmx(target) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            create_symlink(source, target).map_err(|error| InitError::CreateSymlink {
+                from: source.to_path_buf(),
+                to: target.to_path_buf(),
+                source: error,
+            })?;
+        }
+        Err(source) => {
+            return Err(InitError::StatPtmx {
+                path: target.to_path_buf(),
+                source,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Mounts the runner-provided virtiofs share at the guest share root.
@@ -351,4 +396,83 @@ pub enum ModuleLoad {
     Loaded,
     /// The kernel reported that the module was already loaded.
     AlreadyLoaded,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::error::Error;
+
+    use super::*;
+
+    type TestResult<T = ()> = Result<T, Box<dyn Error>>;
+
+    #[test]
+    fn ptmx_setup_leaves_existing_device_alone() -> TestResult {
+        let symlink_called = Cell::new(false);
+
+        ensure_ptmx_symlink(
+            Path::new(PTMX_SYMLINK_SOURCE),
+            Path::new(PTMX_PATH),
+            |_target| Ok(()),
+            |_source, _target| {
+                symlink_called.set(true);
+                Ok(())
+            },
+        )?;
+
+        assert!(!symlink_called.get());
+
+        Ok(())
+    }
+
+    #[test]
+    fn ptmx_setup_creates_symlink_when_missing() -> TestResult {
+        let symlink_called = Cell::new(false);
+
+        ensure_ptmx_symlink(
+            Path::new(PTMX_SYMLINK_SOURCE),
+            Path::new(PTMX_PATH),
+            |_target| Err(io::Error::new(io::ErrorKind::NotFound, "missing")),
+            |source, target| {
+                assert_eq!(source, Path::new(PTMX_SYMLINK_SOURCE));
+                assert_eq!(target, Path::new(PTMX_PATH));
+                symlink_called.set(true);
+                Ok(())
+            },
+        )?;
+
+        assert!(symlink_called.get());
+
+        Ok(())
+    }
+
+    #[test]
+    fn ptmx_setup_reports_metadata_errors() -> TestResult {
+        let symlink_called = Cell::new(false);
+        let result = ensure_ptmx_symlink(
+            Path::new(PTMX_SYMLINK_SOURCE),
+            Path::new(PTMX_PATH),
+            |_target| {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "permission denied",
+                ))
+            },
+            |_source, _target| {
+                symlink_called.set(true);
+                Ok(())
+            },
+        );
+
+        let Err(InitError::StatPtmx { path, source }) = result else {
+            return Err(io::Error::other("expected StatPtmx").into());
+        };
+
+        assert_eq!(path, PathBuf::from(PTMX_PATH));
+        assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!symlink_called.get());
+
+        Ok(())
+    }
 }

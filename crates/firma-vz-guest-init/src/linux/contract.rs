@@ -186,13 +186,11 @@ impl TerminalSettings {
     }
 
     /// Returns the accepted terminal row count.
-    #[cfg(test)]
     pub const fn rows(&self) -> Option<u16> {
         self.rows
     }
 
     /// Returns the accepted terminal column count.
-    #[cfg(test)]
     pub const fn cols(&self) -> Option<u16> {
         self.cols
     }
@@ -252,24 +250,6 @@ impl Terminal {
         match self {
             Self::NonInteractive => None,
             Self::Pty(terminal) => terminal.settings().term(),
-        }
-    }
-
-    /// Returns the accepted terminal row count.
-    #[cfg(test)]
-    pub const fn rows(&self) -> Option<u16> {
-        match self {
-            Self::NonInteractive => None,
-            Self::Pty(terminal) => terminal.settings().rows(),
-        }
-    }
-
-    /// Returns the accepted terminal column count.
-    #[cfg(test)]
-    pub const fn cols(&self) -> Option<u16> {
-        match self {
-            Self::NonInteractive => None,
-            Self::Pty(terminal) => terminal.settings().cols(),
         }
     }
 }
