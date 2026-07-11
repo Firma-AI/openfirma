@@ -20,7 +20,7 @@
 
 // M-PANIC-IS-STOP: no unwrap/expect/panic outside tests.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -51,21 +51,22 @@ impl CapabilityRefresher {
     /// Spawn the refresher for a freshly minted seed.
     ///
     /// `initial_expiry` is the expiry of the token just written to `out_path`;
-    /// the first refresh is scheduled from it. `refresh_ratio` (0.0, 1.0) sets
-    /// how far into the remaining lifetime to renew; `grace_seconds` caps the
-    /// schedule so a renewal always fires at least that long before expiry.
+    /// the first refresh is scheduled from it. `capability_lease.refresh_ratio`
+    /// (0.0, 1.0) sets how far into the remaining lifetime to renew;
+    /// `capability_lease.grace()` caps the schedule so a renewal always fires at
+    /// least that long before expiry.
     ///
     /// # Errors
     ///
     /// Returns [`RunError::Capability`] if the refresh thread cannot be spawned.
     pub fn spawn(
         params: IssueParams,
-        out_path: PathBuf,
+        out_path: &Path,
         initial_expiry: DateTime<Utc>,
         capability_lease: &CapabilityLeaseConfig,
     ) -> Result<Self, RunError> {
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
-
+        let out_path = out_path.to_owned();
         let refresh_ratio = capability_lease.refresh_ratio;
         let grace = capability_lease.grace();
         let handle = thread::Builder::new()

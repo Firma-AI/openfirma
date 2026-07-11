@@ -193,8 +193,8 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         };
         // When the user supplies --capability-file, thread the path into the
         // autostart flags so the sidecar loads it as a capability seed.
-        // maybe_mint_capability_seed skips minting (skip_mint=true) but keeps
-        // any capability_seed_path already set here.
+        // prepare_network_runtime does not mint for a File source, so it leaves
+        // this path untouched.
         if let CapabilitySource::File { ref path } = profile.capability.source {
             flags.capability_seed_path = Some(path.clone());
         }
@@ -798,7 +798,6 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
-                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
@@ -858,7 +857,6 @@ mod tests {
                 },
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
-                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
@@ -911,7 +909,6 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
-                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
@@ -979,7 +976,6 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
-                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
@@ -1078,7 +1074,6 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
-                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             use_http_proxy_sidecar: true,
@@ -1147,7 +1142,6 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
-                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             executable_policies: BTreeMap::new(),
@@ -1192,7 +1186,6 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
-                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             use_http_proxy_sidecar: true,
@@ -1264,7 +1257,6 @@ mod tests {
                 source: CapabilitySource::Disabled,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
-                refresh_enabled: true,
             },
             sidecar_local_exec: None,
             use_http_proxy_sidecar: true,

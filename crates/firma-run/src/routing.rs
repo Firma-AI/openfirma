@@ -16,6 +16,7 @@ use std::thread::{self, JoinHandle};
 #[cfg(unix)]
 use crate::backend::{BackendKind, NetworkConfinement};
 use crate::backend::{EnforcementProof, SandboxHandle};
+use crate::capability::refresh::CapabilityRefresher;
 use crate::config::{CapabilityLeaseConfig, CapabilitySource, SidecarEndpoint};
 use crate::error::RunError;
 use crate::identity::RunIdentity;
@@ -287,13 +288,35 @@ pub fn prepare_network_runtime(
     flags
         .authority_credentials
         .clone_from(&authority.credentials_config);
+    let is_source_file = matches!(capability_lease.source, CapabilitySource::File { .. });
+    let should_manage_capability =
+        flags.sidecar_autostart && !is_source_file && authority.pub_key_path.is_some();
 
     // Mint the per-session capability seed before resolving the endpoint so the
     // synthesized sidecar config can reference it. The guard is moved into the
     // returned `NetworkRuntime` so the seed file is removed on Drop — declared
     // last in the struct so it drops AFTER the sidecar supervisor that reads it.
-    let (capability_guard, capability_refresher) =
-        maybe_mint_capability_seed(identity, &mut flags, &authority, capability_lease)?;
+    //
+    // Only firma-minted runs set `capability_seed_path` here; a user-supplied
+    // `--capability-file` path (already threaded into `flags` by the caller)
+    // must survive, so it is left untouched when `should_manage_capability` is
+    // false.
+    let (capability_guard, capability_refresher) = if should_manage_capability {
+        let capability_seed_path =
+            firma_runtime_state::runtime_paths::capability_seed_path(&identity.sandbox_id);
+        flags.capability_seed_path = Some(capability_seed_path.clone());
+        let guard =
+            crate::capability::guard::CapabilityFileGuard::new(capability_seed_path.clone());
+        let refresher = mint_capability_seed(
+            identity,
+            &capability_seed_path,
+            &authority,
+            capability_lease,
+        )?;
+        (Some(guard), Some(refresher))
+    } else {
+        (None, None)
+    };
 
     let (effective_endpoint, sidecar_supervisor) =
         resolve_effective_endpoint(handle, sidecar_endpoint, identity, &flags)?;
@@ -525,43 +548,31 @@ fn start_loopback_guard(
     }
 }
 
-/// Seed-file delete guard plus the optional background re-minter returned by
-/// [`maybe_mint_capability_seed`].
-type MintedCapability = (
-    Option<crate::capability::guard::CapabilityFileGuard>,
-    Option<crate::capability::refresh::CapabilityRefresher>,
-);
-
-/// Mint the per-session capability seed for the autostart path and return a
-/// guard that deletes the seed file on Drop plus, when refresh is enabled, a
-/// background refresher that re-mints the seed before it expires.
+/// Mint the per-session capability seed at `capability_seed_path` and spawn the
+/// background refresher that re-mints it before expiry.
 ///
-/// Returns `(None, None)` (no mint) when not autostarting, when the user
-/// supplied their own capability file (`skip_mint`), or when no authority public
-/// key is available to verify the issued token. On a successful mint the written
-/// seed path is recorded in `flags.capability_seed_path` so synthesis can append
-/// it to `[sidecar.capability_seed].paths`.
-fn maybe_mint_capability_seed(
+/// The caller decides whether to mint (see `should_manage_capability` in
+/// [`prepare_network_runtime`]) and records `capability_seed_path` in
+/// `flags.capability_seed_path` so synthesis can append it to
+/// `[sidecar.capability_seed].paths`.
+///
+/// # Errors
+///
+/// Returns [`RunError`] when the authority public key is missing, the seed
+/// cannot be minted/written, or the refresh thread cannot be spawned.
+fn mint_capability_seed(
     identity: &RunIdentity,
-    flags: &mut AutostartFlags,
+    capability_seed_path: &Path,
     authority: &ResolvedAuthority,
     capability_lease: &CapabilityLeaseConfig,
-) -> Result<MintedCapability, RunError> {
-    let is_source_file = matches!(capability_lease.source, CapabilitySource::File { .. });
-    if !flags.sidecar_autostart || is_source_file || flags.authority_pub_key.is_none() {
-        return Ok((None, None));
-    }
-    let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
-    let cap_dir = firma_runtime_state::runtime_paths::capabilities_dir_from(&runtime_dir);
-    let out_path = cap_dir.join(format!("{}.toml", identity.sandbox_id));
-    let pub_key_path = flags
-        .authority_pub_key
-        .clone()
-        .ok_or_else(|| RunError::Internal("authority pub key missing after gate".into()))?;
+) -> Result<CapabilityRefresher, RunError> {
     let params = crate::capability::issue::IssueParams {
         authority_url: authority.url.clone(),
-        authority_pub_key_path: pub_key_path,
-        authority_ca_cert_path: flags.authority_ca_cert.clone(),
+        authority_pub_key_path: authority
+            .pub_key_path
+            .clone()
+            .ok_or_else(|| RunError::Internal("authority pub key missing after gate".into()))?,
+        authority_ca_cert_path: authority.ca_cert_path.clone(),
         credentials: authority.credentials.clone(),
         agent_id: identity.profile.clone(),
         session_id: identity.session_id.clone(),
@@ -572,25 +583,12 @@ fn maybe_mint_capability_seed(
         resource_scope: crate::capability::issue::DEFAULT_RESOURCE_SCOPE.to_string(),
         ttl_seconds: crate::capability::issue::DEFAULT_TTL_SECONDS,
     };
-    let seed = crate::capability::issue::mint_and_write_seed(&params, &out_path)?;
-    flags.capability_seed_path = Some(out_path.clone());
-    let guard = crate::capability::guard::CapabilityFileGuard::new(out_path.clone());
+    let seed = crate::capability::issue::mint_and_write_seed(&params, capability_seed_path)?;
 
     // Spawn the background re-minter so the token is renewed before it expires.
     // Reuses the same `params` (session identity + credentials) — no interactive
-    // re-auth. Disabled via `[capability] refresh_enabled = false`.
-    let refresher = if capability_lease.refresh_enabled {
-        Some(crate::capability::refresh::CapabilityRefresher::spawn(
-            params,
-            out_path,
-            seed.expiry,
-            capability_lease,
-        )?)
-    } else {
-        None
-    };
-
-    Ok((Some(guard), refresher))
+    // re-auth.
+    CapabilityRefresher::spawn(params, capability_seed_path, seed.expiry, capability_lease)
 }
 
 /// Start a host-side proxy bridge for the non-structural (macOS / proxy-mediated)
@@ -1281,14 +1279,12 @@ mod non_structural_env_tests {
         AutostartFlags, EnvOverrides, ResolvedAuthority, prepare_network_runtime, setup_host_bridge,
     };
 
-    /// Lease config for tests that mint no seed (`skip_mint = true`), so refresh
-    /// settings are irrelevant; disabled to make that explicit.
-    fn no_refresh_lease() -> CapabilityLeaseConfig {
+    /// Default capability-lease config for `prepare_network_runtime` tests.
+    fn capability_lease_conf() -> CapabilityLeaseConfig {
         CapabilityLeaseConfig {
             source: CapabilitySource::Disabled,
             refresh_ratio: 0.60,
             grace_seconds: 30,
-            refresh_enabled: false,
         }
     }
 
@@ -1415,7 +1411,7 @@ mod non_structural_env_tests {
             &identity,
             &flags,
             authority,
-            &no_refresh_lease(),
+            &capability_lease_conf(),
         )
         .expect("prepare_network_runtime should succeed");
 
@@ -1505,7 +1501,7 @@ mod non_structural_env_tests {
                 &identity,
                 &flags,
                 authority,
-                &no_refresh_lease(),
+                &capability_lease_conf(),
             )
             .expect("prepare_network_runtime must succeed for macOS structural proof");
 
@@ -1575,7 +1571,7 @@ mod non_structural_env_tests {
             &identity,
             &flags,
             authority,
-            &no_refresh_lease(),
+            &capability_lease_conf(),
         )
         .expect("prepare_network_runtime must still prepare the host bridge");
 

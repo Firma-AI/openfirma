@@ -89,6 +89,15 @@ fn current_uid() -> u32 {
     0
 }
 
+/// `<runtime>/capabilities/<name>.toml` — the per-sandbox capability seed
+/// file written by `firma run`.
+#[must_use]
+pub fn capability_seed_path(name: impl AsRef<str>) -> PathBuf {
+    let runtime_dir = default_runtime_dir();
+    let cap_dir = capabilities_dir_from(&runtime_dir);
+    cap_dir.join(format!("{}.toml", name.as_ref()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

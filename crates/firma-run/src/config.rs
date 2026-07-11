@@ -240,14 +240,10 @@ pub struct CapabilityLeaseConfig {
     pub source: CapabilitySource,
     pub refresh_ratio: f64,
     pub grace_seconds: u64,
-    /// When `true` (default), `firma run` re-mints the per-session capability
-    /// seed before it expires so long agent sessions never stall on an expired
-    /// token. Only affects the autostart-minted path; the user-supplied
-    /// `--capability-file` source is never re-minted.
-    pub refresh_enabled: bool,
 }
 
 impl CapabilityLeaseConfig {
+    #[must_use]
     pub fn grace(&self) -> Duration {
         Duration::from_secs(self.grace_seconds)
     }
@@ -426,7 +422,6 @@ pub(crate) struct CapabilityLeasePatch {
     pub(crate) path: Option<PathBuf>,
     pub(crate) refresh_ratio: Option<f64>,
     pub(crate) grace_seconds: Option<u64>,
-    pub(crate) refresh_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -717,7 +712,6 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
                 path: None,
                 refresh_ratio: None,
                 grace_seconds: None,
-                refresh_enabled: None,
             }),
         sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
@@ -770,7 +764,6 @@ fn capability_from_patch(patch: CapabilityLeasePatch) -> CapabilityLeaseConfig {
         source,
         refresh_ratio: patch.refresh_ratio.unwrap_or(0.60),
         grace_seconds: patch.grace_seconds.unwrap_or(30),
-        refresh_enabled: patch.refresh_enabled.unwrap_or(true),
     }
 }
 
@@ -788,7 +781,6 @@ fn default_capability_config() -> CapabilityLeaseConfig {
         source: CapabilitySource::Disabled,
         refresh_ratio: 0.60,
         grace_seconds: 30,
-        refresh_enabled: true,
     }
 }
 
