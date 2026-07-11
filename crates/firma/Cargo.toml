@@ -33,6 +33,7 @@ owo-colors = { workspace = true }
 p256 = { workspace = true }
 pasetors = { workspace = true }
 rcgen = { workspace = true }
+same-file = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
@@ -54,7 +55,6 @@ x509-parser = { workspace = true }
 nix = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-same-file = "1"
 windows-sys = { workspace = true }
 
 [dev-dependencies]

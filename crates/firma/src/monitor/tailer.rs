@@ -79,9 +79,9 @@ fn tail_inner(
             std::thread::sleep(Duration::from_millis(200));
             continue;
         };
-        // Capture identity from the file we actually opened. The EOF loop below
-        // compares the current path target against this snapshot to distinguish
-        // "nothing new yet" from "the path now points at a different file".
+        // Snapshot the file we actually opened. The EOF loop compares the
+        // current path target against this handle to distinguish "nothing new
+        // yet" from "the path now points at a different file".
         let initial_id = initial_file_id(&path, &file);
         let mut reader = BufReader::new(file);
         // Seek to EOF only when following without a backfill window: that mode
@@ -157,32 +157,12 @@ fn parse_leading_timestamp(line: &str) -> Option<SystemTime> {
     Some(SystemTime::from(dt))
 }
 
-#[cfg(unix)]
-fn initial_file_id(path: &Path, _file: &File) -> Option<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt;
-
-    let metadata = std::fs::metadata(path).ok()?;
-    Some((metadata.dev(), metadata.ino()))
-}
-
-#[cfg(windows)]
 fn initial_file_id(_path: &Path, file: &File) -> Option<same_file::Handle> {
-    // On Windows, metadata like file length changes on append and cannot be
-    // used as a stable identity. Snapshot the opened file handle instead.
+    // Use the same cross-platform identity check on every platform instead of
+    // mixing raw metadata on Unix and handle snapshots on Windows.
     same_file::Handle::from_file(file.try_clone().ok()?).ok()
 }
 
-#[cfg(unix)]
-fn path_still_matches_file(path: &Path, initial_id: Option<&(u64, u64)>) -> bool {
-    use std::os::unix::fs::MetadataExt;
-
-    let current_id = std::fs::metadata(path)
-        .ok()
-        .map(|metadata| (metadata.dev(), metadata.ino()));
-    current_id.as_ref() == initial_id
-}
-
-#[cfg(windows)]
 fn path_still_matches_file(path: &Path, initial_id: Option<&same_file::Handle>) -> bool {
     let current_id = same_file::Handle::from_path(path).ok();
     current_id.as_ref() == initial_id
