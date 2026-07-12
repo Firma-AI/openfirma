@@ -872,7 +872,7 @@ fn write_resolv_conf(dns_stub_addr: SocketAddr) -> InitResult<()> {
 }
 
 /// Connects to a host service using the Linux `AF_VSOCK` host CID.
-fn connect_vsock_host(port: u32) -> io::Result<File> {
+pub fn connect_vsock_host(port: u32) -> io::Result<File> {
     let socket = open_vsock_socket()?;
     let family = libc::sa_family_t::try_from(AF_VSOCK)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "AF_VSOCK out of range"))?;

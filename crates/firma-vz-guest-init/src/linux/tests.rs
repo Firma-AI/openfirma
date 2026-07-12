@@ -254,8 +254,6 @@ fn contract_accepts_pty_terminal_with_dedicated_vsock_ports() -> TestResult {
     assert_eq!(contract.terminal().pty_vsock_port(), Some(20000));
     assert_eq!(contract.terminal().pty_control_vsock_port(), Some(20001));
     assert_eq!(contract.terminal().term(), Some("xterm-256color"));
-    assert_eq!(contract.terminal().rows(), Some(40));
-    assert_eq!(contract.terminal().cols(), Some(120));
 
     let Some(pty) = contract.terminal().pty_plan() else {
         return Err(io::Error::other("accepted terminal should expose PTY plan").into());
@@ -282,8 +280,7 @@ fn contract_drops_terminal_metadata_for_noninteractive_commands() -> TestResult 
     assert!(!contract.terminal().interactive());
     assert!(!contract.terminal().pty());
     assert_eq!(contract.terminal().term(), None);
-    assert_eq!(contract.terminal().rows(), None);
-    assert_eq!(contract.terminal().cols(), None);
+    assert_eq!(contract.terminal().pty_plan(), None);
 
     Ok(())
 }
@@ -1388,6 +1385,14 @@ fn init_error_display_and_sources_are_stable() -> TestResult {
         true,
     );
     assert_error_display(
+        &InitError::StatPtmx {
+            path: PathBuf::from("/dev/ptmx"),
+            source: io::Error::new(io::ErrorKind::PermissionDenied, "permission denied"),
+        },
+        "inspect /dev/ptmx before PTY setup: permission denied",
+        true,
+    );
+    assert_error_display(
         &InitError::ReadKernelCmdline {
             source: io::Error::new(io::ErrorKind::NotFound, "no such file or directory"),
         },
@@ -1774,6 +1779,129 @@ fn init_error_display_and_sources_are_stable() -> TestResult {
         true,
     );
     assert_error_display(
+        &InitError::OpenCommandPty {
+            source: io::Error::new(io::ErrorKind::PermissionDenied, "permission denied"),
+        },
+        "open command PTY: permission denied",
+        true,
+    );
+    assert_error_display(
+        &InitError::DuplicatePtySlave {
+            source: io::Error::new(io::ErrorKind::InvalidInput, "bad file descriptor"),
+        },
+        "duplicate command PTY slave: bad file descriptor",
+        true,
+    );
+    assert_error_display(
+        &InitError::DuplicatePtyMaster {
+            source: io::Error::new(io::ErrorKind::InvalidInput, "bad file descriptor"),
+        },
+        "duplicate command PTY master: bad file descriptor",
+        true,
+    );
+    assert_error_display(
+        &InitError::DuplicatePtyMasterForControl {
+            source: io::Error::new(io::ErrorKind::InvalidInput, "bad file descriptor"),
+        },
+        "duplicate command PTY master for control: bad file descriptor",
+        true,
+    );
+    assert_error_display(
+        &InitError::ConnectCommandPtyData {
+            port: 20000,
+            source: io::Error::new(io::ErrorKind::ConnectionRefused, "connection refused"),
+        },
+        "connect host command PTY VSOCK port 20000: connection refused",
+        true,
+    );
+    assert_error_display(
+        &InitError::ConnectCommandPtyControl {
+            port: 20001,
+            source: io::Error::new(io::ErrorKind::ConnectionReset, "connection reset by peer"),
+        },
+        "connect host command PTY control VSOCK port 20001: connection reset by peer",
+        true,
+    );
+    assert_error_display(
+        &InitError::CloneCommandPtyDataStream {
+            source: io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"),
+        },
+        "clone command PTY VSOCK stream: broken pipe",
+        true,
+    );
+    assert_error_display(
+        &InitError::ReadCommandPtyControl {
+            source: io::Error::new(io::ErrorKind::UnexpectedEof, "early eof"),
+        },
+        "read command PTY control message: early eof",
+        true,
+    );
+    assert_error_display(
+        &InitError::InvalidChildPgid {
+            pid: u32::MAX,
+            source: invalid_child_pgid_error()?,
+        },
+        "convert child pid 4294967295 to pgid:",
+        true,
+    );
+    assert_error_display(
+        &InitError::CommandPtyMissingStatus,
+        "PTY command ended without exit code or signal",
+        false,
+    );
+    assert_error_display(
+        &InitError::InvalidPtyResizeMessage {
+            message: "resize 0 80".to_string(),
+        },
+        "invalid command PTY resize message \"resize 0 80\"",
+        false,
+    );
+    assert_error_display(
+        &InitError::UnsupportedPtyControlMessage {
+            message: "resize 40 120 ignored".to_string(),
+        },
+        "unsupported command PTY control message \"resize 40 120 ignored\"",
+        false,
+    );
+    assert_error_display(
+        &InitError::UnsupportedPtySignal {
+            signal: "HUP".to_string(),
+        },
+        "unsupported command PTY signal \"HUP\"",
+        false,
+    );
+    assert_error_display(
+        &InitError::ResizeCommandPty {
+            source: io::Error::new(io::ErrorKind::InvalidInput, "invalid argument"),
+        },
+        "resize command PTY: invalid argument",
+        true,
+    );
+    assert_error_display(
+        &InitError::SignalCommandProcessGroup {
+            signal: libc::SIGTERM,
+            source: io::Error::new(io::ErrorKind::PermissionDenied, "operation not permitted"),
+        },
+        "signal command process group with signal 15: operation not permitted",
+        true,
+    );
+    assert_error_display(
+        &InitError::SpawnPtyCommand {
+            executable: "codex".to_string(),
+            source: io::Error::new(io::ErrorKind::NotFound, "no such file or directory"),
+        },
+        "spawn PTY command codex: no such file or directory",
+        true,
+    );
+    assert_error_display(
+        &InitError::WaitPtyCommand {
+            executable: "codex".to_string(),
+            source: io::Error::new(io::ErrorKind::Interrupted, "interrupted"),
+        },
+        "wait for PTY command codex: interrupted",
+        true,
+    );
+    assert_error_display(
         &InitError::OpenGuestStdin {
             path: PathBuf::from("/guest-stdin.bin"),
             source: io::Error::new(io::ErrorKind::PermissionDenied, "permission denied"),
@@ -1998,6 +2126,14 @@ fn malformed_json_error() -> Result<serde_json::Error, Box<dyn Error>> {
 fn invalid_socket_addr_error() -> Result<std::net::AddrParseError, Box<dyn Error>> {
     let Err(error) = "localhost:1053".parse::<std::net::SocketAddr>() else {
         return Err(io::Error::other("invalid socket address fixture unexpectedly parsed").into());
+    };
+
+    Ok(error)
+}
+
+fn invalid_child_pgid_error() -> Result<std::num::TryFromIntError, Box<dyn Error>> {
+    let Err(error) = libc::pid_t::try_from(u32::MAX) else {
+        return Err(io::Error::other("invalid pid fixture unexpectedly converted").into());
     };
 
     Ok(error)

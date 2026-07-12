@@ -21,7 +21,7 @@ use contract::{Contract, accept_contract};
 use error::InitResult;
 use mount::{
     SHARE_ROOT, create_dir, load_required_modules, mount_contract_paths, mount_pseudo,
-    mount_virtiofs,
+    mount_virtiofs, setup_pty_devices,
 };
 use network::{NetworkServicesPlan, start_guest_network_services};
 use result::{
@@ -66,6 +66,7 @@ fn prepare_guest_root() -> InitResult<()> {
     create_dir(SHARE_ROOT)?;
 
     mount_pseudo("devtmpfs", "/dev", "devtmpfs")?;
+    setup_pty_devices()?;
     log("starting VZ guest init");
     mount_pseudo("proc", "/proc", "proc")?;
     mount_pseudo("sysfs", "/sys", "sysfs")?;
