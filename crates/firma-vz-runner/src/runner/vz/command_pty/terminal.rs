@@ -3,6 +3,13 @@ use std::os::fd::{BorrowedFd, OwnedFd, RawFd};
 
 use crate::runner::{RunnerError, RunnerResult};
 
+/// Terminal dimensions accepted for PTY resize forwarding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalSize {
+    pub rows: u16,
+    pub cols: u16,
+}
+
 /// Restores host terminal mode when the PTY bridge exits.
 #[derive(Debug)]
 pub struct RawTerminalMode {
@@ -56,6 +63,63 @@ pub fn duplicate_fd(fd: RawFd) -> RunnerResult<OwnedFd> {
     unsafe { BorrowedFd::borrow_raw(fd) }
         .try_clone_to_owned()
         .map_err(|source| RunnerError::CommandPtyDuplicateFd { fd, source })
+}
+
+/// Reads the current host terminal size for PTY resize forwarding.
+pub fn read_host_terminal_size() -> io::Result<TerminalSize> {
+    let mut winsize = std::mem::MaybeUninit::<libc::winsize>::uninit();
+    if unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, winsize.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let winsize = unsafe { winsize.assume_init() };
+    if winsize.ws_row == 0 || winsize.ws_col == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "host terminal reported zero rows or columns",
+        ));
+    }
+
+    Ok(TerminalSize {
+        rows: winsize.ws_row,
+        cols: winsize.ws_col,
+    })
+}
+
+/// Parses terminal size as `ROWSxCOLS` or `ROWS,COLS`.
+pub fn parse_terminal_size(value: &str) -> io::Result<TerminalSize> {
+    let (rows, cols) = value
+        .split_once('x')
+        .or_else(|| value.split_once(','))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("expected terminal size as ROWSxCOLS, got {value:?}"),
+            )
+        })?;
+
+    let rows = rows.parse::<u16>().map_err(|source| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("parse terminal rows from {value:?}: {source}"),
+        )
+    })?;
+
+    let cols = cols.parse::<u16>().map_err(|source| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("parse terminal cols from {value:?}: {source}"),
+        )
+    })?;
+
+    if rows == 0 || cols == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "terminal startup size must be non-zero",
+        ));
+    }
+
+    Ok(TerminalSize { rows, cols })
 }
 
 /// Ensures command PTY mode only starts with a usable host terminal.

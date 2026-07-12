@@ -9,7 +9,10 @@ use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSError, NSRunLoop};
 use objc2_virtualization::{VZVirtualMachine, VZVirtualMachineState};
 
 use super::super::{RunnerError, RunnerResult};
-use super::command_pty::install_command_pty_bridge;
+use super::command_pty::{
+    host_sigterm_count, install_command_pty_bridge, install_command_pty_control_bridge,
+    install_sigterm_handler, record_host_sigint,
+};
 use super::config::{Vz, ns_error_message};
 use super::sidecar_bridge::{install_vsock_bridges, preflight_sidecar_bridge};
 
@@ -64,6 +67,17 @@ pub fn run_virtual_machine(vz: &Vz, interrupt_rx: &mpsc::Receiver<()>) -> Runner
         }
     };
 
+    let _command_pty_control_bridge =
+        match install_command_pty_control_bridge(&vm, vz.transport.command_pty()) {
+            Ok(bridge) => bridge,
+            Err(error) => {
+                if unsafe { vm.canStop() } {
+                    let _ = stop_vm(&vm);
+                }
+                return Err(error);
+            }
+        };
+
     eprintln!("firma-vz-runner: VM started");
 
     let stop_reason = wait_for_stop(&vm, interrupt_rx)?;
@@ -99,9 +113,18 @@ fn wait_for_stop(
     interrupt_rx: &mpsc::Receiver<()>,
 ) -> RunnerResult<VmStopReason> {
     let mut interrupt_count = 0_u8;
+    let mut last_sigterm = host_sigterm_count();
 
     loop {
         pump_main_run_loop(RUN_LOOP_TICK);
+
+        let next_sigterm = host_sigterm_count();
+        if next_sigterm != last_sigterm {
+            last_sigterm = next_sigterm;
+            interrupt_count = interrupt_count.saturating_add(1);
+            stop_after_interrupt(vm, interrupt_count)?;
+        }
+
         match interrupt_rx.try_recv() {
             Ok(()) => {
                 interrupt_count = interrupt_count.saturating_add(1);
@@ -203,9 +226,15 @@ fn wait_for_operation(
 pub fn install_interrupt_handler() -> RunnerResult<mpsc::Receiver<()>> {
     let (tx, rx) = mpsc::channel();
     ctrlc::set_handler(move || {
+        record_host_sigint();
         let _ = tx.send(());
     })
     .map_err(|source| RunnerError::InterruptHandler { source })?;
+
+    install_sigterm_handler().map_err(|source| RunnerError::HostOperation {
+        action: "install SIGTERM handler for VZ runner",
+        source,
+    })?;
 
     Ok(rx)
 }
