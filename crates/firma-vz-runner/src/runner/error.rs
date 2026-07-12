@@ -1,8 +1,14 @@
 use std::io;
 use std::net::SocketAddr;
+use std::num::NonZeroU32;
+#[cfg(target_os = "macos")]
+use std::os::fd::RawFd;
 use std::path::PathBuf;
 
 use thiserror::Error;
+
+#[cfg(not(target_os = "macos"))]
+type RawFd = i32;
 
 pub type RunnerResult<T> = std::result::Result<T, RunnerError>;
 
@@ -56,6 +62,39 @@ pub enum RunnerError {
 
     #[error("VZ VM plan VSOCK sidecar port must be non-zero")]
     ZeroSidecarPort,
+
+    #[error("terminal.pty=true requires a VM command PTY data port")]
+    CommandPtyMissingPlan,
+
+    #[error(
+        "VZ VM plan command PTY port {pty_port} must be distinct from Sidecar port {sidecar_port}"
+    )]
+    CommandPtyPortConflictsWithSidecar {
+        pty_port: NonZeroU32,
+        sidecar_port: u32,
+    },
+
+    #[error("terminal.pty=true requires host stdin and stdout to be terminals")]
+    CommandPtyHostTerminalUnavailable,
+
+    #[error("enable raw host terminal mode for command PTY: {source}")]
+    CommandPtyRawMode {
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("duplicate command PTY fd {fd}: {source}")]
+    CommandPtyDuplicateFd {
+        fd: RawFd,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("VSOCK connection file descriptor is closed")]
+    CommandPtyClosedConnectionFd,
+
+    #[error("command PTY connection registry is poisoned")]
+    CommandPtyConnectionRegistryPoisoned,
 
     #[error("connect VSOCK bridge upstream {addr}: {source}")]
     SidecarUpstreamConnect {

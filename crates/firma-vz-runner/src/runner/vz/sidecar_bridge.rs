@@ -16,7 +16,6 @@ use objc2_virtualization::{
 };
 
 use super::super::{RunnerError, RunnerResult};
-use crate::vm::{SocketDeviceKind, VmNetworkMode, VmPlan};
 
 const SIDECAR_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -27,33 +26,19 @@ pub struct SidecarBridgePlan {
     sidecar_host_addr: SocketAddr,
 }
 
-impl TryFrom<&VmPlan> for SidecarBridgePlan {
-    type Error = RunnerError;
-
-    /// Accepts exactly one VSOCK sidecar bridge from the VM plan.
-    fn try_from(plan: &VmPlan) -> Result<Self, Self::Error> {
-        if plan.network_mode != VmNetworkMode::VsockSidecar {
-            return Err(RunnerError::InvalidVsockNetworkMode);
-        }
-
-        if plan.socket_devices.len() != 1 {
-            return Err(RunnerError::InvalidSocketDeviceCount {
-                count: plan.socket_devices.len(),
-            });
-        }
-
-        let socket_device = &plan.socket_devices[0];
-        if socket_device.kind != SocketDeviceKind::VirtioVsockSidecar {
-            return Err(RunnerError::InvalidSocketDeviceKind);
-        }
-
-        let guest_port =
-            NonZeroU32::new(socket_device.sidecar_port).ok_or(RunnerError::ZeroSidecarPort)?;
-
+impl SidecarBridgePlan {
+    /// Accepts the sidecar bridge fields after the VSOCK transport shape is known.
+    pub fn from_parts(sidecar_port: u32, sidecar_host_addr: SocketAddr) -> RunnerResult<Self> {
+        let guest_port = NonZeroU32::new(sidecar_port).ok_or(RunnerError::ZeroSidecarPort)?;
         Ok(Self {
             guest_port,
-            sidecar_host_addr: socket_device.sidecar_host_addr,
+            sidecar_host_addr,
         })
+    }
+
+    /// Returns the guest-side VSOCK port used for Sidecar traffic.
+    pub const fn guest_port(&self) -> NonZeroU32 {
+        self.guest_port
     }
 }
 
@@ -282,6 +267,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use super::super::transport::VzTransportPlan;
     use super::*;
     use crate::test_utils::{VZ_TEST_ROOTFS_SIZE_BYTES, vm_plan_fixture};
 
@@ -289,7 +275,8 @@ mod tests {
     fn sidecar_bridge_plan_accepts_vm_plan_socket_device() -> anyhow::Result<()> {
         let (_temp, plan) = vm_plan_fixture(VZ_TEST_ROOTFS_SIZE_BYTES)?;
 
-        let sidecar_bridge = SidecarBridgePlan::try_from(&plan)?;
+        let transport = VzTransportPlan::try_from(&plan)?;
+        let sidecar_bridge = transport.sidecar();
 
         assert_eq!(
             sidecar_bridge.guest_port.get(),
@@ -308,7 +295,7 @@ mod tests {
         let (_temp, mut plan) = vm_plan_fixture(VZ_TEST_ROOTFS_SIZE_BYTES)?;
         plan.socket_devices.clear();
 
-        let error = SidecarBridgePlan::try_from(&plan)
+        let error = VzTransportPlan::try_from(&plan)
             .err()
             .ok_or_else(|| anyhow::anyhow!("missing socket device should fail"))?;
 
@@ -325,7 +312,7 @@ mod tests {
         let extra_socket_device = plan.socket_devices[0].clone();
         plan.socket_devices.push(extra_socket_device);
 
-        let error = SidecarBridgePlan::try_from(&plan)
+        let error = VzTransportPlan::try_from(&plan)
             .err()
             .ok_or_else(|| anyhow::anyhow!("multiple socket devices should fail"))?;
 
@@ -341,7 +328,7 @@ mod tests {
         let (_temp, mut plan) = vm_plan_fixture(VZ_TEST_ROOTFS_SIZE_BYTES)?;
         plan.socket_devices[0].sidecar_port = 0;
 
-        let error = SidecarBridgePlan::try_from(&plan)
+        let error = VzTransportPlan::try_from(&plan)
             .err()
             .ok_or_else(|| anyhow::anyhow!("zero sidecar port should fail"))?;
 

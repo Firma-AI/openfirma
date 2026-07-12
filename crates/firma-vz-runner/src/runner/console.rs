@@ -15,10 +15,20 @@ use crate::guest::{
 use crate::vm::VmPlan;
 
 const SERIAL_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+const SERIAL_LOG_MIRROR_ENV: &str = "FIRMA_VZ_RUNNER_SERIAL_LOG_MIRROR";
 
 /// Host-side forwarding threads attached to the VZ console.
 pub struct StdioForwarders {
     serial_done: mpsc::Receiver<()>,
+}
+
+/// Host input policy for the VM serial console.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SerialInputMode {
+    /// Forward host stdin to the guest serial console.
+    ForwardHostStdin,
+    /// Close serial input because another transport owns host stdin.
+    Closed,
 }
 
 impl StdioForwarders {
@@ -41,14 +51,23 @@ pub fn spawn_stdio_forwarders(
     host_reads_from_vm: OwnedFd,
     host_writes_to_vm: OwnedFd,
     serial_log: File,
+    serial_input_mode: SerialInputMode,
+    mirror_serial_to_stdout: bool,
 ) -> StdioForwarders {
-    thread::spawn(move || {
-        let mut stdin = io::stdin().lock();
-        let mut writer = File::from(host_writes_to_vm);
-        if let Err(error) = io::copy(&mut stdin, &mut writer) {
-            eprintln!("firma-vz-runner: stdin forwarding failed: {error}");
+    match serial_input_mode {
+        SerialInputMode::ForwardHostStdin => {
+            thread::spawn(move || {
+                let mut stdin = io::stdin().lock();
+                let mut writer = File::from(host_writes_to_vm);
+                if let Err(error) = io::copy(&mut stdin, &mut writer) {
+                    eprintln!("firma-vz-runner: stdin forwarding failed: {error}");
+                }
+            });
         }
-    });
+        SerialInputMode::Closed => {
+            drop(host_writes_to_vm);
+        }
+    }
 
     let (serial_done_tx, serial_done_rx) = mpsc::channel();
     thread::spawn(move || {
@@ -60,16 +79,17 @@ pub fn spawn_stdio_forwarders(
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => {
-                    {
+                    if let Err(error) = serial_log.write_all(&buffer[..read]) {
+                        eprintln!("firma-vz-runner: serial log write failed: {error}");
+                        break;
+                    }
+
+                    if mirror_serial_to_stdout {
                         let mut stdout = io::stdout().lock();
                         if let Err(error) = stdout.write_all(&buffer[..read]) {
                             eprintln!("firma-vz-runner: stdout forwarding failed: {error}");
                             break;
                         }
-                    }
-                    if let Err(error) = serial_log.write_all(&buffer[..read]) {
-                        eprintln!("firma-vz-runner: serial log write failed: {error}");
-                        break;
                     }
                 }
                 Err(error) => {
@@ -86,6 +106,26 @@ pub fn spawn_stdio_forwarders(
     StdioForwarders {
         serial_done: serial_done_rx,
     }
+}
+
+/// Returns whether serial diagnostics should also be mirrored to host stdout.
+pub fn should_mirror_serial_to_stdout(pty: bool) -> bool {
+    let env_value = std::env::var(SERIAL_LOG_MIRROR_ENV).ok();
+    should_mirror_serial_to_stdout_with_env(pty, env_value.as_deref())
+}
+
+/// Applies serial mirroring defaults before reading host environment state.
+fn should_mirror_serial_to_stdout_with_env(pty: bool, env_value: Option<&str>) -> bool {
+    if !pty {
+        return true;
+    }
+
+    env_value.is_some_and(serial_log_mirror_env_enabled)
+}
+
+/// Parses the opt-in serial mirror environment value.
+fn serial_log_mirror_env_enabled(value: &str) -> bool {
+    matches!(value.to_ascii_lowercase().as_str(), "1" | "true")
 }
 
 /// Creates the paired descriptors used for serial data flow.
@@ -304,5 +344,24 @@ mod tests {
 
         assert!(output.is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn serial_mirroring_remains_enabled_for_non_pty_runs() {
+        assert!(should_mirror_serial_to_stdout_with_env(false, None));
+        assert!(should_mirror_serial_to_stdout_with_env(false, Some("0")));
+    }
+
+    #[test]
+    fn serial_mirroring_is_opt_in_for_pty_runs() {
+        assert!(!should_mirror_serial_to_stdout_with_env(true, None));
+        assert!(!should_mirror_serial_to_stdout_with_env(true, Some("0")));
+        assert!(!should_mirror_serial_to_stdout_with_env(
+            true,
+            Some("false")
+        ));
+
+        assert!(should_mirror_serial_to_stdout_with_env(true, Some("1")));
+        assert!(should_mirror_serial_to_stdout_with_env(true, Some("true")));
     }
 }

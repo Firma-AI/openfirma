@@ -9,6 +9,7 @@ use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSError, NSRunLoop};
 use objc2_virtualization::{VZVirtualMachine, VZVirtualMachineState};
 
 use super::super::{RunnerError, RunnerResult};
+use super::command_pty::install_command_pty_bridge;
 use super::config::{Vz, ns_error_message};
 use super::sidecar_bridge::{install_vsock_bridges, preflight_sidecar_bridge};
 
@@ -19,7 +20,7 @@ const RUN_LOOP_TICK: Duration = Duration::from_millis(100);
 
 /// Starts the VM and waits until the guest stops or host interruption wins.
 pub fn run_virtual_machine(vz: &Vz, interrupt_rx: &mpsc::Receiver<()>) -> RunnerResult<()> {
-    preflight_sidecar_bridge(&vz.sidecar_bridge)?;
+    preflight_sidecar_bridge(vz.transport.sidecar())?;
 
     let queue = DispatchQueue::main();
     let vm = unsafe {
@@ -43,7 +44,17 @@ pub fn run_virtual_machine(vz: &Vz, interrupt_rx: &mpsc::Receiver<()>) -> Runner
 
     wait_for_start(&rx)?;
 
-    let _vsock_bridges = match install_vsock_bridges(&vm, &vz.sidecar_bridge) {
+    let _vsock_bridges = match install_vsock_bridges(&vm, vz.transport.sidecar()) {
+        Ok(bridge) => bridge,
+        Err(error) => {
+            if unsafe { vm.canStop() } {
+                let _ = stop_vm(&vm);
+            }
+            return Err(error);
+        }
+    };
+
+    let _command_pty_bridge = match install_command_pty_bridge(&vm, vz.transport.command_pty()) {
         Ok(bridge) => bridge,
         Err(error) => {
             if unsafe { vm.canStop() } {

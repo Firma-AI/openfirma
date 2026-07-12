@@ -14,7 +14,8 @@ use objc2_virtualization::{
 };
 
 use super::super::{RunnerError, RunnerResult};
-use super::sidecar_bridge::{SidecarBridgePlan, configure_socket_devices};
+use super::sidecar_bridge::configure_socket_devices;
+use super::transport::VzTransportPlan;
 use crate::vm::{FIRMA_VIRTIOFS_TAG, VmPlan};
 
 // We keep the default VM small and predictable for the local runner path. Two
@@ -32,21 +33,20 @@ const DEFAULT_MEMORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// Host-side VZ state that has passed validation and can be started.
 pub struct Vz {
     pub config: Retained<VZVirtualMachineConfiguration>,
-    pub sidecar_bridge: SidecarBridgePlan,
+    pub transport: VzTransportPlan,
 }
 
 impl Vz {
     /// Builds the accepted VZ configuration boundary from a VM plan.
     pub fn from_plan(
         plan: &VmPlan,
+        transport: VzTransportPlan,
         vm_reads_from: OwnedFd,
         vm_writes_to: OwnedFd,
     ) -> RunnerResult<Self> {
-        let sidecar_bridge = SidecarBridgePlan::try_from(plan)?;
-
         Ok(Self {
-            config: create_vm_configuration(plan, &sidecar_bridge, vm_reads_from, vm_writes_to)?,
-            sidecar_bridge,
+            config: create_vm_configuration(plan, &transport, vm_reads_from, vm_writes_to)?,
+            transport,
         })
     }
 }
@@ -54,7 +54,7 @@ impl Vz {
 /// Creates and validates the host-side Apple VZ machine configuration.
 fn create_vm_configuration(
     plan: &VmPlan,
-    sidecar_bridge: &SidecarBridgePlan,
+    transport: &VzTransportPlan,
     vm_reads_from: OwnedFd,
     vm_writes_to: OwnedFd,
 ) -> RunnerResult<Retained<VZVirtualMachineConfiguration>> {
@@ -78,7 +78,7 @@ fn create_vm_configuration(
         configure_entropy(&config);
         configure_rootfs_storage(&config, &plan.rootfs)?;
         configure_directory_shares(&config, plan)?;
-        configure_socket_devices(&config, sidecar_bridge);
+        configure_socket_devices(&config, transport.sidecar());
         configure_console_stdio(&config, vm_reads_from, vm_writes_to);
 
         config
@@ -339,7 +339,8 @@ mod tests {
 
         let (vm_reads_from, _host_writes_to_vm) = create_pipe()?;
         let (_host_reads_from_vm, vm_writes_to) = create_pipe()?;
-        let vz = match Vz::from_plan(&plan, vm_reads_from, vm_writes_to) {
+        let transport = VzTransportPlan::try_from(&plan)?;
+        let vz = match Vz::from_plan(&plan, transport, vm_reads_from, vm_writes_to) {
             Ok(vz) => vz,
             Err(RunnerError::ConfigurationValidation { reason })
                 if reason.contains("com.apple.security.virtualization") =>
