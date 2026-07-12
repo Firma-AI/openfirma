@@ -4,7 +4,7 @@ Experimental end-to-end `firma run` path for the macOS Apple
 Virtualization.framework backend.
 
 This example is expected to evolve while the VZ guest backend is under active
-development. Its job right now is to provide a repeatable sample that proves the
+development. Its job right now is to provide a sample that proves the
 current development state: the host can build guest artifacts, boot the guest,
 run a noninteractive command through the guest proxy path and recover the command
 result.

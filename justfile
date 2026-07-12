@@ -49,6 +49,9 @@ macos-vz-runner-dev:
 macos-vz-basic-exec:
   just --justfile examples/firma-run/macos-vz-basic-exec/justfile run
 
+macos-vz-codex-pty:
+  just --justfile examples/firma-run/macos-vz-codex-pty/justfile run
+
 e2e:
   cargo nextest run -p firma --test e2e --run-ignored all
 

@@ -1,0 +1,66 @@
+[[rules]]
+method = "CONNECT"
+host = "api.openai.com"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "api.openai.com"
+path = "/v1/*"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "auth.openai.com"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "auth.openai.com"
+path = "/api/accounts/deviceauth/*"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "auth.openai.com"
+path = "/oauth/token"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "auth.openai.com"
+path = "/oauth/*"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "chatgpt.com"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "chatgpt.com"
+path = "/backend-api/*"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "*.chatgpt.com"
+action_class = "communication.external.send"
+
+[[rules]]
+host = "*.chatgpt.com"
+path = "/backend-api/*"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "*.chatgpt.com"
+path = "/otlp/v1/metrics"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "github.com"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "CONNECT"
+host = "api.github.com"
+action_class = "communication.external.send"

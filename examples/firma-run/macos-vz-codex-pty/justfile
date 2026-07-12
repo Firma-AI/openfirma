@@ -1,0 +1,96 @@
+set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
+
+repo_root := justfile_directory() + "/../../.."
+
+default: run
+
+run:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{ repo_root }}"
+  repo_root="$(pwd -P)"
+
+  if [ ! -t 0 ] || [ ! -t 1 ]; then
+    echo "macos-vz-codex-pty must be run from an interactive terminal" >&2
+    exit 1
+  fi
+
+  case "$(uname -m)" in
+    arm64 | aarch64)
+      artifact_arch="aarch64"
+      ;;
+    x86_64)
+      artifact_arch="x86_64"
+      ;;
+    *)
+      echo "unsupported macOS host architecture: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+
+  vz_artifacts="${FIRMA_VZ_CODEX_PTY_ARTIFACTS:-target/firma-vz-guest/$artifact_arch}"
+  kernel="${FIRMA_VZ_CODEX_PTY_KERNEL:-target/firma-vz-guest/kata/vmlinux-6.18.15-186}"
+  initrd="${FIRMA_VZ_CODEX_PTY_INITRD:-$vz_artifacts/initrd.img}"
+  rootfs="${FIRMA_VZ_CODEX_PTY_ROOTFS:-$vz_artifacts/rootfs.img}"
+  manifest="${FIRMA_VZ_CODEX_PTY_MANIFEST:-$vz_artifacts/manifest.txt}"
+  runner="${FIRMA_VZ_CODEX_PTY_RUNNER:-target/macos-vz-runner-dev/firma-vz-runner}"
+  firma="${FIRMA_VZ_CODEX_PTY_FIRMA:-target/debug/firma}"
+  config="${FIRMA_VZ_CODEX_PTY_CONFIG:-examples/firma-run/macos-vz-codex-pty/firma.toml}"
+  codex_home="${FIRMA_VZ_CODEX_PTY_CODEX_HOME:-examples/firma-run/macos-vz-codex-pty/.runtime/codex-home}"
+
+  abs_path() {
+    case "$1" in
+      /*) printf '%s\n' "$1" ;;
+      *) printf '%s\n' "$repo_root/$1" ;;
+    esac
+  }
+
+  vz_artifacts="$(abs_path "$vz_artifacts")"
+  kernel="$(abs_path "$kernel")"
+  initrd="$(abs_path "$initrd")"
+  rootfs="$(abs_path "$rootfs")"
+  manifest="$(abs_path "$manifest")"
+  runner="$(abs_path "$runner")"
+  firma="$(abs_path "$firma")"
+  config="$(abs_path "$config")"
+  codex_home="$(abs_path "$codex_home")"
+
+  if [ ! -f "$kernel" ]; then
+    just macos-vz-kata-kernel
+  fi
+  if [ ! -f "$kernel" ]; then
+    echo "Kata vmlinux does not exist: $kernel" >&2
+    echo "set FIRMA_VZ_CODEX_PTY_KERNEL to an existing Kata vmlinux to override the default" >&2
+    exit 1
+  fi
+
+  just macos-vz-runner-dev
+  cargo build -p firma
+
+  needs_artifacts=0
+  if [ ! -f "$initrd" ] || [ ! -f "$rootfs" ] || [ ! -f "$kernel" ]; then
+    needs_artifacts=1
+  fi
+  if [ ! -f "$manifest" ] || ! grep -q '/usr/bin/codex' "$manifest" || ! grep -q '/opt/openfirma/codex/codex-path/rg' "$manifest"; then
+    needs_artifacts=1
+  fi
+  if [ "$needs_artifacts" -eq 1 ]; then
+    if [ -n "${FIRMA_VZ_CODEX_PTY_INITRD:-}" ] || [ -n "${FIRMA_VZ_CODEX_PTY_ROOTFS:-}" ]; then
+      echo "custom initrd/rootfs paths are missing Codex-capable artifacts" >&2
+      echo "unset custom artifact overrides or rebuild them before running this example" >&2
+      exit 1
+    fi
+    FIRMA_VZ_GUEST_KERNEL="$kernel" ./scripts/macos-vz/build-guest-artifacts.sh "$vz_artifacts"
+  fi
+
+  mkdir -p "$codex_home"
+
+  TERM="${TERM:-xterm-256color}" \
+  CODEX_HOME="$codex_home" \
+  FIRMA_RUN_VZ_GUEST=1 \
+  FIRMA_RUN_VZ_GUEST_RUNNER="$runner" \
+  FIRMA_RUN_VZ_GUEST_KERNEL="$kernel" \
+  FIRMA_RUN_VZ_GUEST_INITRD="$initrd" \
+  FIRMA_RUN_VZ_GUEST_ROOTFS="$rootfs" \
+    "$firma" run --config "$config" --profile codex -- codex
+
