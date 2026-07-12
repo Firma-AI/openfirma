@@ -1,0 +1,48 @@
+# Self-contained config for the macOS VZ interactive Codex PTY example.
+
+[authority]
+listen_addr = "127.0.0.1:0"
+policy_dir = "policies"
+issuance_policy_dir = "issuance-policies"
+revocation_file = "examples/firma-run/macos-vz-codex-pty/.runtime/revocations.txt"
+key_file = ".runtime/authority.key"
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 30
+log_level = "info"
+
+[sidecar]
+mode = "enforce"
+
+[sidecar.interceptor.https_mitm]
+enabled = false
+
+[sidecar.policy]
+dir = "policies"
+
+[sidecar.log]
+level = "info"
+
+[sidecar.mapping]
+rules_path = "mapping-rules.toml"
+default_protected = true
+
+[sidecar.capability_validation]
+clock_skew_tolerance_seconds = 0
+
+[sidecar.constraint_enforcement]
+bundle_ttl_seconds = 3600
+enforcement_timeout_ms = 50
+
+[sidecar.connector]
+default_timeout_ms = 120000
+
+[sidecar.audit]
+sink = "file"
+file_path = ".runtime/audit.jsonl"
+signing_key_path = ".runtime/audit.key"
+
+[run]
+profile = "codex"
+
+[run.profiles.codex]
+backend = "vz"

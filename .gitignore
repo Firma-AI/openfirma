@@ -55,8 +55,8 @@ audit.jsonl
 *.log
 .firma/
 
-# Demo runtime artifacts
-/examples/demos/*/.runtime/*
+# Examples runtime artifacts
+/examples/**/.runtime/
 /examples/generic-agent/workspace/
 .artifacts/
 .cursor/
