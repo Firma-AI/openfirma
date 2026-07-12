@@ -84,9 +84,9 @@ impl<'de> Deserialize<'de> for HeaderName {
 
 #[cfg(feature = "fuzz")]
 impl arbitrary::Arbitrary<'_> for HeaderName {
-    fn arbitrary<'a>(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
         let s = <&str>::arbitrary(u)?;
-        HeaderName::from_str(s).map_err(|_| arbitrary::Error::IncorrectFormat)
+        Self::from_str(s).map_err(|_| arbitrary::Error::IncorrectFormat)
     }
 }
 

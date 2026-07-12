@@ -168,6 +168,8 @@ fn accepts_noninteractive_terminal_metadata() -> Result<()> {
 
     assert!(contract.terminal().interactive());
     assert!(!contract.terminal().pty());
+    assert_eq!(contract.terminal().pty_vsock_port(), None);
+    assert_eq!(contract.terminal().pty_control_vsock_port(), None);
     assert_eq!(contract.terminal().term(), Some("xterm-256color"));
     assert_eq!(contract.terminal().rows(), Some(40));
     assert_eq!(contract.terminal().cols(), Some(120));
@@ -176,18 +178,76 @@ fn accepts_noninteractive_terminal_metadata() -> Result<()> {
 }
 
 #[test]
-fn rejects_pty_terminal_until_bridge_exists() -> Result<()> {
+fn accepts_pty_terminal_with_dedicated_vsock_ports() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let mut json = valid_contract_json(temp.path())?;
     json["terminal"]["interactive"] = json!(true);
     json["terminal"]["pty"] = json!(true);
+    json["terminal"]["pty_vsock_port"] = json!(18081);
+    json["terminal"]["pty_control_vsock_port"] = json!(18082);
+
+    let contract = parse_contract(&json)?;
+
+    assert!(contract.terminal().interactive());
+    assert!(contract.terminal().pty());
+    assert_eq!(contract.terminal().pty_vsock_port(), Some(18081));
+    assert_eq!(contract.terminal().pty_control_vsock_port(), Some(18082));
+
+    Ok(())
+}
+
+#[test]
+fn rejects_pty_terminal_without_vsock_port() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["terminal"]["interactive"] = json!(true);
+    json["terminal"]["pty"] = json!(true);
+    json["terminal"]["pty_control_vsock_port"] = json!(18082);
 
     let document = parse_contract_document(&json)?;
     let error = document.validate();
 
     assert!(matches!(
         error,
-        Err(ContractValidationError::UnsupportedTerminalPty)
+        Err(ContractValidationError::TerminalPtyRequiresVsockPort)
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn rejects_pty_terminal_without_control_vsock_port() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["terminal"]["interactive"] = json!(true);
+    json["terminal"]["pty"] = json!(true);
+    json["terminal"]["pty_vsock_port"] = json!(18081);
+
+    let document = parse_contract_document(&json)?;
+    let error = document.validate();
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::TerminalPtyRequiresControlVsockPort)
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn rejects_pty_terminal_without_interactive_mode() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["terminal"]["pty"] = json!(true);
+    json["terminal"]["pty_vsock_port"] = json!(18081);
+    json["terminal"]["pty_control_vsock_port"] = json!(18082);
+
+    let document = parse_contract_document(&json)?;
+    let error = document.validate();
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::TerminalPtyRequiresInteractive)
     ));
 
     Ok(())
@@ -195,25 +255,79 @@ fn rejects_pty_terminal_until_bridge_exists() -> Result<()> {
 
 #[test]
 fn rejects_pty_ports_without_pty() -> Result<()> {
-    for field in ["pty_vsock_port", "pty_control_vsock_port"] {
-        let temp = tempfile::tempdir()?;
-        let mut json = valid_contract_json(temp.path())?;
-        json["terminal"][field] = json!(18081);
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["terminal"]["pty_vsock_port"] = json!(18081);
 
-        let document = parse_contract_document(&json)?;
-        let error = document.validate();
-        let expected = if field == "pty_vsock_port" {
-            "terminal.pty_vsock_port"
-        } else {
-            "terminal.pty_control_vsock_port"
-        };
+    let document = parse_contract_document(&json)?;
+    let error = document.validate();
 
-        assert!(matches!(
-            error,
-            Err(ContractValidationError::TerminalPtyPortWithoutPty { field })
-                if field == expected
-        ));
-    }
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::TerminalPtyPortRequiresPty)
+    ));
+
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["terminal"]["pty_control_vsock_port"] = json!(18082);
+
+    let document = parse_contract_document(&json)?;
+    let error = document.validate();
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::TerminalPtyControlPortRequiresPty)
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn rejects_pty_ports_reusing_network_or_each_other() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["terminal"]["interactive"] = json!(true);
+    json["terminal"]["pty"] = json!(true);
+    json["terminal"]["pty_vsock_port"] = json!(18080);
+    json["terminal"]["pty_control_vsock_port"] = json!(18082);
+
+    let document = parse_contract_document(&json)?;
+    let error = document.validate();
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::TerminalPtyPortConflictsWithSidecar)
+    ));
+
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["terminal"]["interactive"] = json!(true);
+    json["terminal"]["pty"] = json!(true);
+    json["terminal"]["pty_vsock_port"] = json!(18081);
+    json["terminal"]["pty_control_vsock_port"] = json!(18080);
+
+    let document = parse_contract_document(&json)?;
+    let error = document.validate();
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::TerminalPtyControlPortConflictsWithSidecar)
+    ));
+
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["terminal"]["interactive"] = json!(true);
+    json["terminal"]["pty"] = json!(true);
+    json["terminal"]["pty_vsock_port"] = json!(18081);
+    json["terminal"]["pty_control_vsock_port"] = json!(18081);
+
+    let document = parse_contract_document(&json)?;
+    let error = document.validate();
+
+    assert!(matches!(
+        error,
+        Err(ContractValidationError::TerminalPtyControlPortConflictsWithDataPort)
+    ));
 
     Ok(())
 }

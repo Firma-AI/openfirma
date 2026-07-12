@@ -110,6 +110,20 @@ impl CommandNetworkEnv {
             "FIRMA_VSOCK_SIDECAR_PORT".to_string(),
             network.vsock_sidecar_port().to_string(),
         );
+        if let Some(term) = contract.terminal().term() {
+            values.insert("TERM".to_string(), term.to_string());
+        }
+
+        if let Some(port) = contract.terminal().pty_vsock_port() {
+            values.insert("FIRMA_VSOCK_COMMAND_PTY_PORT".to_string(), port.to_string());
+        }
+
+        if let Some(port) = contract.terminal().pty_control_vsock_port() {
+            values.insert(
+                "FIRMA_VSOCK_COMMAND_PTY_CONTROL_PORT".to_string(),
+                port.to_string(),
+            );
+        }
 
         Self { values }
     }
@@ -1045,6 +1059,33 @@ mod tests {
             Some("18080")
         );
         assert_eq!(env.get("CUSTOM_ENV").map(String::as_str), Some("kept"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn command_env_exports_terminal_pty_ports_when_accepted() -> TestResult {
+        let mut launch = valid_launch_contract()?;
+        launch.terminal.interactive = true;
+        launch.terminal.pty = true;
+        launch.terminal.pty_vsock_port = Some(18_081);
+        launch.terminal.pty_control_vsock_port = Some(18_082);
+        launch.terminal.term = Some("xterm-256color".to_string());
+        let contract: Contract = launch.try_into()?;
+
+        let plan = NetworkServicesPlan::try_from(&contract)?;
+        let env = plan.command_env().as_map();
+
+        assert_eq!(env.get("TERM").map(String::as_str), Some("xterm-256color"));
+        assert_eq!(
+            env.get("FIRMA_VSOCK_COMMAND_PTY_PORT").map(String::as_str),
+            Some("18081")
+        );
+        assert_eq!(
+            env.get("FIRMA_VSOCK_COMMAND_PTY_CONTROL_PORT")
+                .map(String::as_str),
+            Some("18082")
+        );
 
         Ok(())
     }

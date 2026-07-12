@@ -57,12 +57,24 @@ pub enum InitError {
     RelativeCommandCwd { path: PathBuf },
     /// The contract environment contains a host-only secret key.
     SecretEnvKey { key: &'static str },
-    /// The contract requested PTY mode before guest PTY execution is supported.
-    UnsupportedTerminalPty,
-    /// The contract requested interactive mode before guest terminal handling is supported.
+    /// The contract requested interactive mode without a supported terminal runtime.
     UnsupportedTerminalInteractive,
+    /// The contract requested PTY mode without a usable PTY VSOCK port.
+    TerminalPtyPortRequired,
     /// The contract provided a PTY VSOCK port while PTY mode was disabled.
-    TerminalPtyPortWithoutPty { field: &'static str },
+    TerminalPtyPortWithoutPty,
+    /// The contract requested PTY mode without interactive mode.
+    TerminalPtyRequiresInteractive,
+    /// The PTY VSOCK port conflicts with the network sidecar port.
+    TerminalPtyPortConflictsWithNetwork,
+    /// The contract requested PTY mode without a usable control VSOCK port.
+    TerminalPtyControlPortRequired,
+    /// The contract provided a PTY control VSOCK port while PTY mode was disabled.
+    TerminalPtyControlPortWithoutPty,
+    /// The PTY control VSOCK port conflicts with the network sidecar port.
+    TerminalPtyControlPortConflictsWithNetwork,
+    /// The PTY control VSOCK port conflicts with the PTY data port.
+    TerminalPtyControlPortConflictsWithPtyPort,
     /// The contract provided an empty terminal type.
     EmptyTerminalTerm,
     /// The contract provided a zero terminal dimension.
@@ -258,15 +270,32 @@ impl fmt::Display for InitError {
             Self::SecretEnvKey { key } => {
                 write!(formatter, "command.env contains secret key {key}")
             }
-            Self::UnsupportedTerminalPty => {
-                formatter.write_str("terminal.pty is not supported by this guest init yet")
-            }
             Self::UnsupportedTerminalInteractive => {
-                formatter.write_str("terminal.interactive is not supported by this guest init yet")
+                formatter.write_str("terminal.interactive requires terminal.pty=true")
             }
-            Self::TerminalPtyPortWithoutPty { field } => {
-                write!(formatter, "{field} requires terminal.pty=true")
+            Self::TerminalPtyPortRequired => {
+                formatter.write_str("terminal.pty=true requires non-zero terminal.pty_vsock_port")
             }
+            Self::TerminalPtyPortWithoutPty => {
+                formatter.write_str("terminal.pty_vsock_port requires terminal.pty=true")
+            }
+            Self::TerminalPtyRequiresInteractive => {
+                formatter.write_str("terminal.pty=true requires terminal.interactive=true")
+            }
+            Self::TerminalPtyPortConflictsWithNetwork => formatter.write_str(
+                "terminal.pty_vsock_port must be distinct from network.vsock_sidecar_port",
+            ),
+            Self::TerminalPtyControlPortRequired => formatter
+                .write_str("terminal.pty=true requires non-zero terminal.pty_control_vsock_port"),
+            Self::TerminalPtyControlPortWithoutPty => {
+                formatter.write_str("terminal.pty_control_vsock_port requires terminal.pty=true")
+            }
+            Self::TerminalPtyControlPortConflictsWithNetwork => formatter.write_str(
+                "terminal.pty_control_vsock_port must be distinct from network.vsock_sidecar_port",
+            ),
+            Self::TerminalPtyControlPortConflictsWithPtyPort => formatter.write_str(
+                "terminal.pty_control_vsock_port must be distinct from terminal.pty_vsock_port",
+            ),
             Self::EmptyTerminalTerm => formatter.write_str("terminal.term must not be empty"),
             Self::ZeroTerminalDimension { field } => {
                 write!(formatter, "{field} must be greater than zero")
@@ -522,9 +551,15 @@ impl std::error::Error for InitError {
             | Self::EmptyExecutable
             | Self::RelativeCommandCwd { .. }
             | Self::SecretEnvKey { .. }
-            | Self::UnsupportedTerminalPty
             | Self::UnsupportedTerminalInteractive
-            | Self::TerminalPtyPortWithoutPty { .. }
+            | Self::TerminalPtyPortRequired
+            | Self::TerminalPtyPortWithoutPty
+            | Self::TerminalPtyRequiresInteractive
+            | Self::TerminalPtyPortConflictsWithNetwork
+            | Self::TerminalPtyControlPortRequired
+            | Self::TerminalPtyControlPortWithoutPty
+            | Self::TerminalPtyControlPortConflictsWithNetwork
+            | Self::TerminalPtyControlPortConflictsWithPtyPort
             | Self::EmptyTerminalTerm
             | Self::ZeroTerminalDimension { .. }
             | Self::RelativeMountTarget { .. }

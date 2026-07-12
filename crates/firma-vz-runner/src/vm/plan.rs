@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::num::NonZeroU32;
 use std::path::{Component, Path, PathBuf};
 
 use crate::contract::{Contract, NetworkMode};
@@ -109,6 +110,7 @@ impl VmPlan {
                 sidecar_host_addr: contract
                     .sidecar_host_addr()
                     .map_err(|source| VmPlanError::SidecarHostAddr { source })?,
+                command_pty: CommandPtyPlan::from_contract(contract)?,
             }],
             network_mode,
         })
@@ -130,6 +132,41 @@ pub struct SocketDevicePlan {
     pub kind: SocketDeviceKind,
     pub sidecar_port: u32,
     pub sidecar_host_addr: SocketAddr,
+    pub command_pty: Option<CommandPtyPlan>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandPtyPlan {
+    pub data_port: NonZeroU32,
+    pub control_port: NonZeroU32,
+}
+
+impl CommandPtyPlan {
+    /// Accepts command PTY ports from the validated launch contract.
+    fn from_contract(contract: &Contract) -> VmPlanResult<Option<Self>> {
+        match (
+            contract.command_pty_vsock_port(),
+            contract.command_pty_control_vsock_port(),
+        ) {
+            (Some(data_port), Some(control_port)) => {
+                let data_port =
+                    NonZeroU32::new(data_port).ok_or(VmPlanError::InvalidCommandPtyPort {
+                        field: "terminal.pty_vsock_port",
+                    })?;
+                let control_port =
+                    NonZeroU32::new(control_port).ok_or(VmPlanError::InvalidCommandPtyPort {
+                        field: "terminal.pty_control_vsock_port",
+                    })?;
+
+                Ok(Some(Self {
+                    data_port,
+                    control_port,
+                }))
+            }
+            (None, None) => Ok(None),
+            _ => Err(VmPlanError::IncompleteCommandPtyPlan),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

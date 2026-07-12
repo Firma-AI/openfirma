@@ -98,8 +98,8 @@ impl Contract {
     }
 
     /// Returns the accepted terminal mode.
-    pub fn terminal(&self) -> Terminal {
-        self.terminal
+    pub fn terminal(&self) -> &Terminal {
+        &self.terminal
     }
 }
 
@@ -108,9 +108,7 @@ impl TryFrom<LaunchContract> for Contract {
 
     /// Accepts a parsed launch contract after guest-side validation.
     fn try_from(contract: LaunchContract) -> Result<Self, Self::Error> {
-        validate_contract(&contract)?;
-        let terminal = accept_terminal_contract(&contract.terminal)?;
-        let network = accept_network_contract(&contract.network)?;
+        let (terminal, network) = accept_contract_boundary(&contract)?;
 
         Ok(Self {
             command: contract.command,
@@ -122,31 +120,156 @@ impl TryFrom<LaunchContract> for Contract {
 }
 
 /// Terminal mode accepted for this guest init stage.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Terminal {
     /// Noninteractive command execution without a guest PTY bridge.
     NonInteractive,
+    /// Interactive command execution behind a guest PTY bridge.
+    Pty(PtyPlan),
+}
+
+/// Accepted PTY terminal plan used by the guest command runtime.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PtyPlan {
+    data_port: NonZeroU32,
+    control_port: NonZeroU32,
+    settings: TerminalSettings,
+}
+
+impl PtyPlan {
+    /// Builds a PTY terminal plan from validated VSOCK ports and terminal settings.
+    pub fn new(
+        data_port: NonZeroU32,
+        control_port: NonZeroU32,
+        settings: TerminalSettings,
+    ) -> Self {
+        Self {
+            data_port,
+            control_port,
+            settings,
+        }
+    }
+
+    /// Returns the host VSOCK port used for command PTY data.
+    pub const fn data_port(&self) -> NonZeroU32 {
+        self.data_port
+    }
+
+    /// Returns the host VSOCK port used for command PTY control messages.
+    pub const fn control_port(&self) -> NonZeroU32 {
+        self.control_port
+    }
+
+    /// Returns accepted terminal settings for the PTY session.
+    pub const fn settings(&self) -> &TerminalSettings {
+        &self.settings
+    }
+}
+
+/// Terminal settings accepted for a PTY command.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TerminalSettings {
+    term: Option<String>,
+    rows: Option<u16>,
+    cols: Option<u16>,
+}
+
+impl TerminalSettings {
+    /// Builds terminal settings from validated raw contract metadata.
+    pub fn new(term: Option<String>, rows: Option<u16>, cols: Option<u16>) -> Self {
+        Self { term, rows, cols }
+    }
+
+    /// Returns the terminal type exported to the guest command.
+    pub fn term(&self) -> Option<&str> {
+        self.term.as_deref()
+    }
+
+    /// Returns the accepted terminal row count.
+    #[cfg(test)]
+    pub const fn rows(&self) -> Option<u16> {
+        self.rows
+    }
+
+    /// Returns the accepted terminal column count.
+    #[cfg(test)]
+    pub const fn cols(&self) -> Option<u16> {
+        self.cols
+    }
 }
 
 impl Terminal {
     /// Returns the stable terminal mode label used in guest diagnostics.
-    pub const fn mode(self) -> &'static str {
+    pub const fn mode(&self) -> &'static str {
         match self {
             Self::NonInteractive => "noninteractive",
+            Self::Pty(_) => "pty",
         }
     }
 
     /// Returns whether the accepted command requires interactive terminal handling.
-    pub const fn interactive(self) -> bool {
+    pub const fn interactive(&self) -> bool {
         match self {
             Self::NonInteractive => false,
+            Self::Pty(_) => true,
         }
     }
 
     /// Returns whether the accepted command requires a guest PTY bridge.
-    pub const fn pty(self) -> bool {
+    pub const fn pty(&self) -> bool {
         match self {
             Self::NonInteractive => false,
+            Self::Pty(_) => true,
+        }
+    }
+
+    /// Returns the accepted PTY data VSOCK port.
+    pub const fn pty_vsock_port(&self) -> Option<u32> {
+        match self {
+            Self::NonInteractive => None,
+            Self::Pty(terminal) => Some(terminal.data_port().get()),
+        }
+    }
+
+    /// Returns the accepted PTY control VSOCK port.
+    pub const fn pty_control_vsock_port(&self) -> Option<u32> {
+        match self {
+            Self::NonInteractive => None,
+            Self::Pty(terminal) => Some(terminal.control_port().get()),
+        }
+    }
+
+    /// Returns the accepted PTY terminal plan.
+    pub const fn pty_plan(&self) -> Option<&PtyPlan> {
+        match self {
+            Self::NonInteractive => None,
+            Self::Pty(terminal) => Some(terminal),
+        }
+    }
+
+    /// Returns the accepted terminal type.
+    pub fn term(&self) -> Option<&str> {
+        match self {
+            Self::NonInteractive => None,
+            Self::Pty(terminal) => terminal.settings().term(),
+        }
+    }
+
+    /// Returns the accepted terminal row count.
+    #[cfg(test)]
+    pub const fn rows(&self) -> Option<u16> {
+        match self {
+            Self::NonInteractive => None,
+            Self::Pty(terminal) => terminal.settings().rows(),
+        }
+    }
+
+    /// Returns the accepted terminal column count.
+    #[cfg(test)]
+    pub const fn cols(&self) -> Option<u16> {
+        match self {
+            Self::NonInteractive => None,
+            Self::Pty(terminal) => terminal.settings().cols(),
         }
     }
 }
@@ -324,12 +447,21 @@ pub fn accept_contract(contract_path: &Path) -> InitResult<Contract> {
 }
 
 /// Validates contract schema semantics before guest execution can start.
+#[cfg(test)]
 pub fn validate_contract(contract: &LaunchContract) -> InitResult<()> {
-    validate_contract_header(contract)?;
-    let _terminal = accept_terminal_contract(&contract.terminal)?;
-    let _network = accept_network_contract(&contract.network)?;
+    accept_contract_boundary(contract)?;
 
     Ok(())
+}
+
+/// Accepts the launch contract boundary before moving executable fields.
+fn accept_contract_boundary(contract: &LaunchContract) -> InitResult<(Terminal, Network)> {
+    validate_contract_header(contract)?;
+    let terminal = accept_terminal_contract(&contract.terminal)?;
+    let network = accept_network_contract(&contract.network)?;
+    validate_terminal_network_port_conflicts(&terminal, &network)?;
+
+    Ok((terminal, network))
 }
 
 /// Validates top-level contract fields before accepting substructures.
@@ -397,25 +529,7 @@ fn observe_host_launch_metadata(contract: &LaunchContract) {
 
 /// Accepts terminal metadata into the executable guest shape.
 fn accept_terminal_contract(terminal: &TerminalContract) -> InitResult<Terminal> {
-    if terminal.pty {
-        return Err(InitError::UnsupportedTerminalPty);
-    }
-
-    if terminal.interactive {
-        return Err(InitError::UnsupportedTerminalInteractive);
-    }
-
-    if terminal.pty_vsock_port.is_some() {
-        return Err(InitError::TerminalPtyPortWithoutPty {
-            field: "terminal.pty_vsock_port",
-        });
-    }
-
-    if terminal.pty_control_vsock_port.is_some() {
-        return Err(InitError::TerminalPtyPortWithoutPty {
-            field: "terminal.pty_control_vsock_port",
-        });
-    }
+    validate_terminal_dimensions(terminal)?;
 
     if let Some(term) = &terminal.term
         && term.trim().is_empty()
@@ -423,6 +537,61 @@ fn accept_terminal_contract(terminal: &TerminalContract) -> InitResult<Terminal>
         return Err(InitError::EmptyTerminalTerm);
     }
 
+    if !terminal.pty {
+        validate_terminal_without_pty(terminal)?;
+        return Ok(Terminal::NonInteractive);
+    }
+
+    if !terminal.interactive {
+        return Err(InitError::TerminalPtyRequiresInteractive);
+    }
+
+    let pty_vsock_port = require_terminal_pty_port(terminal.pty_vsock_port)?;
+    let pty_control_vsock_port =
+        require_terminal_pty_control_port(terminal.pty_control_vsock_port)?;
+
+    Ok(Terminal::Pty(PtyPlan::new(
+        pty_vsock_port,
+        pty_control_vsock_port,
+        TerminalSettings::new(terminal.term.clone(), terminal.rows, terminal.cols),
+    )))
+}
+
+/// Rejects terminal settings that only make sense with PTY mode.
+fn validate_terminal_without_pty(terminal: &TerminalContract) -> InitResult<()> {
+    if terminal.pty_vsock_port.is_some() {
+        return Err(InitError::TerminalPtyPortWithoutPty);
+    }
+
+    if terminal.pty_control_vsock_port.is_some() {
+        return Err(InitError::TerminalPtyControlPortWithoutPty);
+    }
+
+    if terminal.interactive {
+        return Err(InitError::UnsupportedTerminalInteractive);
+    }
+
+    Ok(())
+}
+
+/// Accepts the PTY data VSOCK port required by interactive terminal mode.
+fn require_terminal_pty_port(port: Option<u32>) -> InitResult<NonZeroU32> {
+    let Some(port) = port else {
+        return Err(InitError::TerminalPtyPortRequired);
+    };
+    NonZeroU32::new(port).ok_or(InitError::TerminalPtyPortRequired)
+}
+
+/// Accepts the PTY control VSOCK port required by interactive terminal mode.
+fn require_terminal_pty_control_port(port: Option<u32>) -> InitResult<NonZeroU32> {
+    let Some(port) = port else {
+        return Err(InitError::TerminalPtyControlPortRequired);
+    };
+    NonZeroU32::new(port).ok_or(InitError::TerminalPtyControlPortRequired)
+}
+
+/// Validates optional terminal dimensions before accepting terminal mode.
+fn validate_terminal_dimensions(terminal: &TerminalContract) -> InitResult<()> {
     if terminal.rows.is_some_and(|rows| rows == 0) {
         return Err(InitError::ZeroTerminalDimension {
             field: "terminal.rows",
@@ -435,7 +604,31 @@ fn accept_terminal_contract(terminal: &TerminalContract) -> InitResult<Terminal>
         });
     }
 
-    Ok(Terminal::NonInteractive)
+    Ok(())
+}
+
+/// Validates terminal VSOCK ports do not collide with network VSOCK ports.
+fn validate_terminal_network_port_conflicts(
+    terminal: &Terminal,
+    network: &Network,
+) -> InitResult<()> {
+    let Some(pty) = terminal.pty_plan() else {
+        return Ok(());
+    };
+
+    if pty.data_port() == network.vsock_sidecar_port() {
+        return Err(InitError::TerminalPtyPortConflictsWithNetwork);
+    }
+
+    if pty.control_port() == network.vsock_sidecar_port() {
+        return Err(InitError::TerminalPtyControlPortConflictsWithNetwork);
+    }
+
+    if pty.control_port() == pty.data_port() {
+        return Err(InitError::TerminalPtyControlPortConflictsWithPtyPort);
+    }
+
+    Ok(())
 }
 
 /// Accepts the guest network envelope into parsed addresses and ports.

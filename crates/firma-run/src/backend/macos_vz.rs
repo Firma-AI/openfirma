@@ -433,22 +433,18 @@ struct VzGuestTerminalContract {
 }
 
 impl VzGuestTerminalContract {
-    /// Captures the host terminal shape that the guest runner should preserve.
+    /// Captures host terminal shape only when a launch explicitly requests PTY.
     fn from_launch(launch: &LaunchSpec) -> Self {
-        let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-        let pty = interactive && command_requests_guest_pty(launch);
-        let (rows, cols) = if interactive {
-            terminal_size()
-        } else {
-            (None, None)
-        };
+        let host_interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+        let pty = host_interactive && command_requests_guest_pty(launch);
+        let (rows, cols) = if pty { terminal_size() } else { (None, None) };
 
         Self {
-            interactive,
+            interactive: pty,
             pty,
             pty_vsock_port: pty.then_some(VZ_GUEST_COMMAND_PTY_VSOCK_PORT),
             pty_control_vsock_port: pty.then_some(VZ_GUEST_COMMAND_PTY_CONTROL_VSOCK_PORT),
-            term: interactive.then(terminal_type).flatten(),
+            term: pty.then(terminal_type).flatten(),
             rows,
             cols,
         }
@@ -457,17 +453,14 @@ impl VzGuestTerminalContract {
 
 /// Returns whether this launch should ask the guest runner for PTY mode.
 ///
-/// This is intentionally Codex-only for now because we mean to proves the
-/// real Codex TUI path.
-///
-/// TODO: we should make PTY mode profile-driven.
+/// PTY contract parsing lands before the host and guest PTY runtime.
+/// we keep automatic PTY requests disabled until the data/control VSOCK channels are
+/// available, otherwise normal codex launches would serialize contracts that
+/// this stack cannot execute yet.
 fn command_requests_guest_pty(launch: &LaunchSpec) -> bool {
-    let profile = launch.env.get("FIRMA_RUN_PROFILE").map(String::as_str);
-    let executable_name = Path::new(&launch.executable)
-        .file_name()
-        .and_then(std::ffi::OsStr::to_str);
+    let _ = launch;
 
-    profile == Some("codex") && executable_name == Some("codex")
+    false
 }
 
 /// Reads the host terminal type to carry into the launch contract.
@@ -965,10 +958,10 @@ mod tests {
     }
 
     #[test]
-    fn codex_profile_command_requests_guest_pty() {
+    fn codex_profile_does_not_request_guest_pty_before_runtime_lands() {
         let mut codex = test_launch("codex");
         codex.executable = "codex".to_string();
-        assert!(command_requests_guest_pty(&codex));
+        assert!(!command_requests_guest_pty(&codex));
 
         let mut codex_version = test_launch("codex");
         codex_version.executable = "/usr/bin/true".to_string();
@@ -977,6 +970,49 @@ mod tests {
         let mut generic_codex = test_launch("generic");
         generic_codex.executable = "codex".to_string();
         assert!(!command_requests_guest_pty(&generic_codex));
+    }
+
+    #[test]
+    fn codex_vz_launch_contract_stays_noninteractive_before_pty_runtime_lands() {
+        let identity = RunIdentity::new("codex");
+        let handle = SandboxHandle {
+            backend: BackendKind::Vz,
+            runtime_dir: PathBuf::from("/tmp/firma-test-vz-guest"),
+            identity,
+            mounts: vec![],
+            network_policy: NetworkPolicy {
+                enforce_network_namespace: false,
+                fail_closed: true,
+            },
+        };
+
+        let mut launch = test_launch("codex");
+        launch.executable = "codex".to_string();
+
+        let contract = VzGuestLaunchContract::from_launch(
+            &handle,
+            &launch,
+            VzGuestLaunchInputs {
+                runner: PathBuf::from("/Applications/Firma/vz-runner"),
+                kernel: PathBuf::from("/var/lib/firma/vz/vmlinuz"),
+                initrd: PathBuf::from("/var/lib/firma/vz/initrd.img"),
+                rootfs: PathBuf::from("/var/lib/firma/vz/rootfs.img"),
+            },
+        )
+        .expect("guest contract should build from prepared launch");
+
+        let json = serde_json::to_value(&contract).expect("serialize contract");
+        assert_eq!(json["command"]["executable"], "codex");
+        assert_eq!(json["terminal"]["interactive"], false);
+        assert_eq!(json["terminal"]["pty"], false);
+        assert_eq!(json["terminal"]["pty_vsock_port"], serde_json::Value::Null);
+        assert_eq!(
+            json["terminal"]["pty_control_vsock_port"],
+            serde_json::Value::Null
+        );
+        assert_eq!(json["terminal"]["term"], serde_json::Value::Null);
+        assert_eq!(json["terminal"]["rows"], serde_json::Value::Null);
+        assert_eq!(json["terminal"]["cols"], serde_json::Value::Null);
     }
 
     #[cfg(unix)]

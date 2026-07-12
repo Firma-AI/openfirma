@@ -236,17 +236,55 @@ fn contract_rejects_secret_env_key() -> TestResult {
 }
 
 #[test]
-fn contract_rejects_unsupported_terminal_pty() -> TestResult {
+fn contract_accepts_pty_terminal_with_dedicated_vsock_ports() -> TestResult {
     let mut contract = valid_launch_contract();
     contract.terminal.interactive = true;
     contract.terminal.pty = true;
+    contract.terminal.pty_vsock_port = Some(20000);
+    contract.terminal.pty_control_vsock_port = Some(20001);
+    contract.terminal.term = Some("xterm-256color".to_string());
+    contract.terminal.rows = Some(40);
+    contract.terminal.cols = Some(120);
 
-    let error = expect_init_error(
-        validate_contract(&contract),
-        "contract should reject PTY before the guest PTY runtime exists",
-    )?;
+    let contract: Contract = contract.try_into()?;
 
-    assert!(matches!(error, InitError::UnsupportedTerminalPty));
+    assert_eq!(contract.terminal().mode(), "pty");
+    assert!(contract.terminal().interactive());
+    assert!(contract.terminal().pty());
+    assert_eq!(contract.terminal().pty_vsock_port(), Some(20000));
+    assert_eq!(contract.terminal().pty_control_vsock_port(), Some(20001));
+    assert_eq!(contract.terminal().term(), Some("xterm-256color"));
+    assert_eq!(contract.terminal().rows(), Some(40));
+    assert_eq!(contract.terminal().cols(), Some(120));
+
+    let Some(pty) = contract.terminal().pty_plan() else {
+        return Err(io::Error::other("accepted terminal should expose PTY plan").into());
+    };
+    assert_eq!(pty.data_port().get(), 20000);
+    assert_eq!(pty.control_port().get(), 20001);
+    assert_eq!(pty.settings().term(), Some("xterm-256color"));
+    assert_eq!(pty.settings().rows(), Some(40));
+    assert_eq!(pty.settings().cols(), Some(120));
+
+    Ok(())
+}
+
+#[test]
+fn contract_drops_terminal_metadata_for_noninteractive_commands() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.terminal.term = Some("xterm-256color".to_string());
+    contract.terminal.rows = Some(40);
+    contract.terminal.cols = Some(120);
+
+    let contract: Contract = contract.try_into()?;
+
+    assert_eq!(contract.terminal().mode(), "noninteractive");
+    assert!(!contract.terminal().interactive());
+    assert!(!contract.terminal().pty());
+    assert_eq!(contract.terminal().term(), None);
+    assert_eq!(contract.terminal().rows(), None);
+    assert_eq!(contract.terminal().cols(), None);
+
     Ok(())
 }
 
@@ -275,12 +313,7 @@ fn contract_rejects_pty_port_without_pty_mode() -> TestResult {
         "contract should reject PTY port without PTY mode",
     )?;
 
-    assert!(matches!(
-        error,
-        InitError::TerminalPtyPortWithoutPty {
-            field: "terminal.pty_vsock_port",
-        }
-    ));
+    assert!(matches!(error, InitError::TerminalPtyPortWithoutPty));
 
     Ok(())
 }
@@ -295,11 +328,110 @@ fn contract_rejects_pty_control_port_without_pty_mode() -> TestResult {
         "contract should reject PTY control port without PTY mode",
     )?;
 
+    assert!(matches!(error, InitError::TerminalPtyControlPortWithoutPty));
+
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_pty_without_vsock_port() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.terminal.interactive = true;
+    contract.terminal.pty = true;
+    contract.terminal.pty_control_vsock_port = Some(20001);
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject PTY without a VSOCK port",
+    )?;
+
+    assert!(matches!(error, InitError::TerminalPtyPortRequired));
+
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_pty_without_control_vsock_port() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.terminal.interactive = true;
+    contract.terminal.pty = true;
+    contract.terminal.pty_vsock_port = Some(20000);
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject PTY without a control VSOCK port",
+    )?;
+
+    assert!(matches!(error, InitError::TerminalPtyControlPortRequired));
+
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_pty_without_interactive_mode() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.terminal.pty = true;
+    contract.terminal.pty_vsock_port = Some(20000);
+    contract.terminal.pty_control_vsock_port = Some(20001);
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject PTY without interactive mode",
+    )?;
+
+    assert!(matches!(error, InitError::TerminalPtyRequiresInteractive));
+
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_pty_ports_reusing_network_or_each_other() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.terminal.interactive = true;
+    contract.terminal.pty = true;
+    contract.terminal.pty_vsock_port = Some(contract.network.vsock_sidecar_port);
+    contract.terminal.pty_control_vsock_port = Some(20001);
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject PTY port that reuses the Sidecar port",
+    )?;
+
     assert!(matches!(
         error,
-        InitError::TerminalPtyPortWithoutPty {
-            field: "terminal.pty_control_vsock_port",
-        }
+        InitError::TerminalPtyPortConflictsWithNetwork
+    ));
+
+    let mut contract = valid_launch_contract();
+    contract.terminal.interactive = true;
+    contract.terminal.pty = true;
+    contract.terminal.pty_vsock_port = Some(20000);
+    contract.terminal.pty_control_vsock_port = Some(contract.network.vsock_sidecar_port);
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject PTY control port that reuses the Sidecar port",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::TerminalPtyControlPortConflictsWithNetwork
+    ));
+
+    let mut contract = valid_launch_contract();
+    contract.terminal.interactive = true;
+    contract.terminal.pty = true;
+    contract.terminal.pty_vsock_port = Some(20000);
+    contract.terminal.pty_control_vsock_port = Some(20000);
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject PTY control port that reuses the data port",
+    )?;
+
+    assert!(matches!(
+        error,
+        InitError::TerminalPtyControlPortConflictsWithPtyPort
     ));
 
     Ok(())
@@ -1368,20 +1500,48 @@ fn init_error_display_and_sources_are_stable() -> TestResult {
         false,
     );
     assert_error_display(
-        &InitError::UnsupportedTerminalPty,
-        "terminal.pty is not supported by this guest init yet",
-        false,
-    );
-    assert_error_display(
         &InitError::UnsupportedTerminalInteractive,
-        "terminal.interactive is not supported by this guest init yet",
+        "terminal.interactive requires terminal.pty=true",
         false,
     );
     assert_error_display(
-        &InitError::TerminalPtyPortWithoutPty {
-            field: "terminal.pty_vsock_port",
-        },
+        &InitError::TerminalPtyPortRequired,
+        "terminal.pty=true requires non-zero terminal.pty_vsock_port",
+        false,
+    );
+    assert_error_display(
+        &InitError::TerminalPtyPortWithoutPty,
         "terminal.pty_vsock_port requires terminal.pty=true",
+        false,
+    );
+    assert_error_display(
+        &InitError::TerminalPtyRequiresInteractive,
+        "terminal.pty=true requires terminal.interactive=true",
+        false,
+    );
+    assert_error_display(
+        &InitError::TerminalPtyPortConflictsWithNetwork,
+        "terminal.pty_vsock_port must be distinct from network.vsock_sidecar_port",
+        false,
+    );
+    assert_error_display(
+        &InitError::TerminalPtyControlPortRequired,
+        "terminal.pty=true requires non-zero terminal.pty_control_vsock_port",
+        false,
+    );
+    assert_error_display(
+        &InitError::TerminalPtyControlPortWithoutPty,
+        "terminal.pty_control_vsock_port requires terminal.pty=true",
+        false,
+    );
+    assert_error_display(
+        &InitError::TerminalPtyControlPortConflictsWithNetwork,
+        "terminal.pty_control_vsock_port must be distinct from network.vsock_sidecar_port",
+        false,
+    );
+    assert_error_display(
+        &InitError::TerminalPtyControlPortConflictsWithPtyPort,
+        "terminal.pty_control_vsock_port must be distinct from terminal.pty_vsock_port",
         false,
     );
     assert_error_display(
