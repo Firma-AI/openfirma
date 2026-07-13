@@ -1,4 +1,4 @@
-use firma_core::Method;
+use firma_http::Method;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 

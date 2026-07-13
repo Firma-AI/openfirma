@@ -10,7 +10,7 @@
 //! be deterministically mapped to a registry entry fail closed with
 //! `DENY: UNCLASSIFIED_INTENT` (FEP \[I-N1\]).
 
-use firma_core::Method;
+use firma_http::Method;
 
 use crate::config::{MappingRuleConfig, MappingRulesFile};
 use crate::enforcement::registry::ActionClassRegistry;

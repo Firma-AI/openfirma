@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
-use firma_core::Method;
+use firma_http::Method;
 use firma_sidecar::config::MappingRuleConfig;
 use wiremock::{Mock, MockServer};
 

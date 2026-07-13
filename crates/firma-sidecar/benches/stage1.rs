@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use chrono::Utc;
 use criterion::{Criterion, criterion_group, criterion_main};
-use firma_core::{CapabilityClaims, Method, RevocationStore, TokenError, TokenId, TokenVerifier};
+use firma_core::{CapabilityClaims, RevocationStore, TokenError, TokenId, TokenVerifier};
+use firma_http::Method;
 use firma_sidecar::config::{MappingRuleConfig, MappingRulesFile, TenancyMode};
 use firma_sidecar::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
 use firma_sidecar::enforcement::capability_validation::CapabilityValidator;

@@ -1289,7 +1289,7 @@ fn provider_to_profile(provider: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use firma_core::Method;
+    use firma_http::Method;
     use strum::IntoEnumIterator;
 
     use super::*;

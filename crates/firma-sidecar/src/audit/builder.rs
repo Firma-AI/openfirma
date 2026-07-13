@@ -195,8 +195,9 @@ mod tests {
     use ecdsa::signature::Verifier;
     use firma_core::{
         ActionParams, CapabilityClaims, DenyReason, ExecutionEnvelope, ExecutionIntent,
-        ExecutionMetadata, HttpMethod, HttpParams, Method,
+        ExecutionMetadata, HttpMethod, HttpParams,
     };
+    use firma_http::Method;
     use p256::ecdsa::VerifyingKey;
 
     use crate::audit::Decision;

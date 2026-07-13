@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use firma_core::{HeaderName, Method};
+use firma_http::{HeaderName, Method};
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 

@@ -20,7 +20,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use firma_core::{AbortReason, DenyReason, HeaderName, Method};
+use firma_core::{AbortReason, DenyReason};
+use firma_http::{HeaderName, Method};
 use http_body::Body as _;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};

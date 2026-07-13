@@ -24,7 +24,8 @@ mod mapping;
 use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
-use firma_core::{ActionParams, ExecutionIntent, HeaderName, HttpMethod, HttpParams, Method};
+use firma_core::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
+use firma_http::{HeaderName, Method};
 use unicode_normalization::UnicodeNormalization;
 
 /// Hosts whose traffic earns the `provider = "github"` resource tag.

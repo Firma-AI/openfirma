@@ -20,8 +20,9 @@ use std::time::Duration;
 
 use firma_core::{
     AbortReason, CapabilityClaims, DenyReason, ExecutionEnvelope, ExecutionMetadata,
-    InjectedCredentials, Method,
+    InjectedCredentials,
 };
+use firma_http::Method;
 
 use std::sync::Arc;
 
@@ -896,6 +897,7 @@ mod tests {
     use crate::normalizer::MappingTable;
     use chrono::Utc;
     use firma_core::*;
+    use firma_http::HeaderName;
     use std::collections::HashMap;
     use std::time::Duration;
 

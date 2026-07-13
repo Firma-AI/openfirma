@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use arbitrary::Arbitrary;
-use firma_core::{HeaderName, Method};
+use firma_http::{HeaderName, Method};
 use firma_sidecar::{
     config::{MappingRuleConfig, MappingRulesFile},
     enforcement::registry::ActionClassRegistry,

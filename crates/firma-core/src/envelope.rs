@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use chrono::{DateTime, Utc};
+use firma_http::{HeaderName, Method};
 use serde::{Deserialize, Serialize};
 
-use crate::{HeaderName, Method, agent::AgentId, session::SessionId, token::TokenId};
+use crate::{agent::AgentId, session::SessionId, token::TokenId};
 
 /// The core protocol unit wrapping each outbound agent call.
 ///

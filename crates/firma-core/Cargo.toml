@@ -15,6 +15,7 @@ arbitrary = { workspace = true, optional = true }
 async-trait = { workspace = true }
 cedar-policy = { workspace = true }
 chrono = { workspace = true }
+firma-http = { workspace = true }
 http = { workspace = true }
 pasetors = { workspace = true }
 regex = { workspace = true }

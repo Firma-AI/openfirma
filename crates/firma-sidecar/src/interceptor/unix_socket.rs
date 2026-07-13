@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use firma_core::{HeaderName, Method};
+use firma_http::{HeaderName, Method};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;

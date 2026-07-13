@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use crate::HeaderName;
+use firma_http::HeaderName;
 
 /// Read-only bundle of headers injected into an outbound request after
 /// enforcement passes.
@@ -28,7 +28,8 @@ use crate::HeaderName;
 ///
 /// ```
 /// use std::collections::HashMap;
-/// use firma_core::{HeaderName, InjectedCredentials};
+/// use firma_core::InjectedCredentials;
+/// use firma_http::HeaderName;
 ///
 /// let mut creds = InjectedCredentials::empty();
 /// creds.insert(HeaderName::from_static("authorization"), "Bearer tok".to_string());

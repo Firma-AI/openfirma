@@ -48,9 +48,8 @@ impl CredentialInjector for CompositeCredentialInjector {
 mod tests {
     use super::*;
     use crate::credential::provider::VaultSecretEntry;
-    use firma_core::{
-        ActionParams, ExecutionIntent, ExecutionMetadata, HeaderName, HttpMethod, HttpParams,
-    };
+    use firma_core::{ActionParams, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams};
+    use firma_http::HeaderName;
     use std::collections::HashMap;
     use std::io::Write as _;
     use std::path::PathBuf;

@@ -886,9 +886,10 @@ pub(crate) mod tests {
     use async_trait::async_trait;
     use chrono::Utc;
     use firma_core::{
-        CapabilityClaims, Connector, Method, RevocationStore, TokenError, TokenId, TokenVerifier,
+        CapabilityClaims, Connector, RevocationStore, TokenError, TokenId, TokenVerifier,
         TransportView,
     };
+    use firma_http::Method;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio_util::sync::CancellationToken;

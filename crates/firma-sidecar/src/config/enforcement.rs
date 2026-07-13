@@ -5,7 +5,7 @@
     reason = "Authority-wired capability manifest support is defined now but not consumed yet"
 )]
 
-use firma_core::Method;
+use firma_http::Method;
 use serde::{Deserialize, Serialize};
 
 const VALID_HTTP_METHODS: &[&str] = &[

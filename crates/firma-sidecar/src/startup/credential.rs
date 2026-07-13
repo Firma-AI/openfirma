@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use firma_core::HeaderName;
+use firma_http::HeaderName;
 
 use crate::config;
 use crate::credential;
