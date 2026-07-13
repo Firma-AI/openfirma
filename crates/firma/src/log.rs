@@ -10,30 +10,80 @@
 //!   `output::{ok,info,warn,err}` helpers — `[INFO]` / `[WARN]` / `[ERR]`
 //!   prefix, TTY-gated ANSI color, no timestamp/target/line. Span close
 //!   events are dropped so the interactive surface stays clean.
+//!
+//! In stderr mode the layer writes through a swappable sink. [`init`] hands
+//! back a [`ForegroundLog`] so `firma run` can redirect the surface to
+//! `<dir>/run.log` while a wrapped agent's TUI owns the terminal — keeping the
+//! full log record while leaving the terminal clean — then restore it to
+//! stderr for teardown output. In file mode (`--log-file`) the handle is inert.
+//!
+//! The pure, sink-swapping core lives in [`firma_run::log`]; this module owns
+//! the `tracing` glue (compact formatter + `MakeWriter`) that drives it.
 
 use std::fmt;
 use std::fs::OpenOptions;
-use std::io::IsTerminal as _;
+use std::io::{self, IsTerminal as _};
 use std::path::Path;
+use std::sync::Arc;
 
+use firma_run::log::ForegroundState;
 use owo_colors::{OwoColorize as _, Stream};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::{FmtSpan, Writer};
-use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
+use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, MakeWriter};
+use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::util::SubscriberInitExt as _;
+
+pub use firma_run::log::ForegroundLog;
+
+/// `MakeWriter` that dispatches each event to the foreground's active sink.
+#[derive(Clone)]
+struct ForegroundWriter {
+    state: Arc<ForegroundState>,
+}
+
+impl<'a> MakeWriter<'a> for ForegroundWriter {
+    type Writer = ForegroundGuard;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        ForegroundGuard {
+            state: self.state.clone(),
+        }
+    }
+}
+
+/// Per-event writer that resolves the active sink lazily on each write.
+struct ForegroundGuard {
+    state: Arc<ForegroundState>,
+}
+
+impl io::Write for ForegroundGuard {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.state.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.state.flush()
+    }
+}
 
 /// Initialize the global tracing subscriber.
 ///
 /// `filter` is an `EnvFilter` directive (e.g. `"info,firma=debug"`).
 /// `file` writes logs to the given path (truncated on open) instead of stderr.
 ///
+/// Returns an active [`ForegroundLog`] in the default stderr mode so the caller
+/// can redirect the foreground surface off the terminal (see [`ForegroundLog`]);
+/// returns an inert idle handle in file mode, where stderr is never written.
+///
 /// # Errors
 ///
 /// Returns an error if `filter` is not a valid `EnvFilter` directive,
 /// the log file cannot be opened, or a global subscriber is already set.
-pub fn init(filter: &str, file: Option<&Path>) -> anyhow::Result<()> {
+pub fn init(filter: &str, file: Option<&Path>) -> anyhow::Result<ForegroundLog> {
     let env_filter = EnvFilter::try_new(filter)
         .map_err(|e| anyhow::anyhow!("invalid log filter `{filter}`: {e}"))?;
 
@@ -53,26 +103,41 @@ pub fn init(filter: &str, file: Option<&Path>) -> anyhow::Result<()> {
             .with_writer(std::sync::Mutex::new(f))
             .try_init()
             .map_err(|e| anyhow::anyhow!("failed to set tracing subscriber: {e}"))?;
+        Ok(ForegroundLog::idle())
     } else {
         // Compact CLI format on stderr. Drops `FmtSpan::CLOSE` because span
         // open/close pairs are diagnostic noise in interactive use.
         // `CompactFormatter` renders fields itself (without ANSI) so the
         // default field formatter cannot leak italic codes into piped output.
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .event_format(CompactFormatter)
-            .with_writer(std::io::stderr)
+        //
+        // The layer writes through a swappable `ForegroundState` sink so
+        // `firma run` can redirect it to a per-run log file while a wrapped
+        // agent's TUI owns the terminal, then restore it to stderr.
+        let handle = ForegroundLog::active();
+        let state = handle.state();
+        let stderr_layer = tracing_subscriber::fmt::layer()
+            .event_format(CompactFormatter {
+                state: state.clone(),
+            })
+            .with_writer(ForegroundWriter { state });
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(stderr_layer)
             .try_init()
             .map_err(|e| anyhow::anyhow!("failed to set tracing subscriber: {e}"))?;
+
+        Ok(handle)
     }
-    Ok(())
 }
 
 /// Minimal `FormatEvent` impl that renders each event as `[LEVEL] message
 /// key=value …`, matching the `output::*` prefix scheme. Color is gated on
 /// stderr being a TTY through owo-colors, so piped output / log capture stays
-/// plain ASCII and existing test/script grep patterns keep working.
-struct CompactFormatter;
+/// plain ASCII and existing test/script grep patterns keep working. Color is
+/// additionally suppressed while the foreground is redirected to a file.
+struct CompactFormatter {
+    state: Arc<ForegroundState>,
+}
 
 impl<S, N> FormatEvent<S, N> for CompactFormatter
 where
@@ -87,7 +152,9 @@ where
     ) -> fmt::Result {
         let level = *event.metadata().level();
         let prefix = compact_prefix(level);
-        let tty = std::io::stderr().is_terminal();
+        // Color only when writing to a real stderr TTY; redirected file output
+        // must stay plain.
+        let tty = self.state.is_stderr() && std::io::stderr().is_terminal();
         if tty {
             // Match output.rs: green/cyan/yellow/bright_red, dim for debug/trace.
             match level {

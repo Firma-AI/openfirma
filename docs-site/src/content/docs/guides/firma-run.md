@@ -249,6 +249,18 @@ firma run --log-filter warn -- my-agent
 firma run --log-file /tmp/firma.log -- my-agent
 ```
 
+Once the wrapped agent starts and its TUI takes over the terminal, `firma run`
+stops writing its own log lines to stderr so they cannot corrupt the agent's
+interface. In the default (stderr) mode it redirects them to `run.log` inside
+the per-run marker directory —
+`<runtime>/run/<sandbox_id>/run.log`, alongside `sidecar.log` and
+`authority.log` — for the duration of the session, then restores stderr for
+teardown notices after the agent exits. With `--log-file` this redirect does
+nothing: logs already go to your file, so there is nothing on stderr to hide.
+The marker directory is removed on teardown, so treat `run.log` as a live,
+per-session record rather than a durable archive; use `--log-file` for a log
+that outlives the run.
+
 ## Step 4: What `firma run` does
 
 Everything after `--` is the command and its arguments.
