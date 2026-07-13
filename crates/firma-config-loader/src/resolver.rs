@@ -101,15 +101,6 @@ impl ConfigResolver {
             .map(PathBuf::from)
     }
 
-    fn home_dir() -> Option<PathBuf> {
-        #[cfg(windows)]
-        let home = std::env::var_os("USERPROFILE");
-        #[cfg(unix)]
-        let home = std::env::var_os("HOME");
-
-        home.filter(|path| !path.is_empty()).map(PathBuf::from)
-    }
-
     /// Resolve and load the config file.
     ///
     /// We check these sources, in priority order:
@@ -158,11 +149,7 @@ impl ConfigResolver {
             }
             walk_ceiling
         };
-        let home_dir = Self::home_dir();
         for dir in cwd.ancestors() {
-            if home_dir.as_deref().is_some_and(|home| dir == home) {
-                break;
-            }
             let candidate = dir.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME);
             match fs::read_to_string(&candidate) {
                 Ok(text) => {
