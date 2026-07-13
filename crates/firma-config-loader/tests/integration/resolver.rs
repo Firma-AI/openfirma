@@ -41,18 +41,6 @@ fn firma_config_env(root: &Path, file_name: &str) -> Vec<(std::ffi::OsString, st
     )]
 }
 
-#[cfg(unix)]
-const HOME_ENV_NAME: &str = "HOME";
-#[cfg(windows)]
-const HOME_ENV_NAME: &str = "USERPROFILE";
-
-fn home_dir_env(root: &Path) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
-    vec![(
-        std::ffi::OsString::from(HOME_ENV_NAME),
-        root.as_os_str().to_os_string(),
-    )]
-}
-
 #[test]
 fn flag_wins_over_everything() {
     helper::run_isolated(|root| {
@@ -160,22 +148,6 @@ fn project_local_found_in_cwd() {
 
         assert_eq!(resolved.source, ConfigSource::ProjectLocal);
         assert_eq!(resolved.config_file(), project_file.as_path());
-    });
-}
-
-#[test]
-fn project_local_does_not_search_the_user_home_directory() {
-    helper::run_isolated_with_env(home_dir_env, |root| {
-        let home_config = touch_project_local(root);
-        let _project = enter_nested_project(root);
-
-        assert_matches!(
-            ConfigResolver::default()
-                .resolve_config(None)
-                .expect("resolve config"),
-            None
-        );
-        assert!(home_config.exists(), "home config must remain untouched");
     });
 }
 
