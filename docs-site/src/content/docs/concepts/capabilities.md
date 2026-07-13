@@ -63,6 +63,46 @@ signed token, writes it to
 `$XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml`, and the autostarted
 sidecar loads it — no operator action required.
 
+## Staying alive: automatic refresh
+
+Capabilities are deliberately short-lived (the `firma run` default TTL is 15
+minutes) so a leaked seed file is worthless within minutes. On its own, that
+would stall a long agent session: once the token expires, Stage 1 denies every
+protected call and the agent grinds to a halt.
+
+`firma run` closes that gap with a background refresher. It re-calls the
+Authority's `IssueCapability` RPC before the token expires — reusing the same
+session identity and credentials it was launched with, so **no interactive
+re-login ever happens** — and atomically rewrites the seed file with the fresh
+token. Renewal fires partway through the token's life (by default at 60% of the
+remaining lifetime, and always at least a grace window before expiry), never at
+the moment of expiry.
+
+The sidecar, in turn, **watches the seed file** and hot-swaps its in-memory
+`CapabilityMap` the instant a new token lands — no restart, no dropped requests.
+Reads on the hot path stay lock-free.
+
+The whole loop is **fail-closed**. If the Authority is unreachable, the
+refresher retries with backoff but never serves a stale token; the old one
+simply expires and the sidecar denies until a refresh succeeds. If a rewritten
+seed fails verification, the sidecar keeps the previous valid map rather than
+installing an unverified one. And because every refresh is a fresh
+`IssueCapability` call, the Authority's issuance policy (and any revocation) is
+re-evaluated each cycle — a session that should lose access does, on the next
+renewal.
+
+Tuning knobs:
+
+| Setting | Where | Default | Effect |
+| ------- | ----- | ------- | ------ |
+| `capability.refresh_ratio`   | `firma run` profile | `0.60`  | Fraction of remaining lifetime before renewing. |
+| `capability.grace_seconds`   | `firma run` profile | `30`    | Renew no later than this many seconds before expiry. |
+| `capability_seed.hot_reload` | sidecar config      | `true`  | Watch the seed file and hot-swap the map on change. |
+
+There is intentionally no hard session-lifetime cap: the Authority's issuance
+policy is the authority on whether a session may continue, and it is re-checked
+on every refresh. If you need a fixed ceiling, enforce it there.
+
 For the legacy operator path (pre-provisioning a fixed, long-lived session
 without `firma run`), the CLI subcommand is available:
 

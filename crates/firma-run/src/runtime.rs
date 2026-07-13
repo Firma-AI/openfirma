@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::backend::{LaunchSpec, PrepareRequest, build_backend};
-use crate::capability::CapabilityLeaseManager;
+use crate::capability::read_capability_token;
 use crate::config::{
     CaTrustMode, CapabilitySource, ResolvedProfile, SidecarEndpoint, resolve_profile,
 };
@@ -37,7 +37,8 @@ pub struct RunInput {
     pub backend: Option<crate::backend::BackendKind>,
     /// CLI value of `--sidecar` (`local` | `<tcp://...|unix:///...>` | unset).
     pub sidecar_cli: crate::sidecar::SidecarCli,
-    /// Optional capability token file path for runtime lease refresh.
+    /// Optional operator-supplied capability token file, injected into the
+    /// agent environment at launch (bring-your-own token).
     pub capability_file: Option<PathBuf>,
     /// Override sandbox identity mode.
     pub identity_mode: Option<crate::config::SandboxIdentityMode>,
@@ -99,7 +100,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
     let identity = RunIdentity::new(profile.id.clone());
     log_run_start(&identity, &profile);
 
-    let lease = CapabilityLeaseManager::new(&profile.capability)?;
+    let capability_token = read_capability_token(&profile.capability.source)?;
     let working_dir = resolve_working_dir()?;
 
     let backend = build_backend(profile.backend);
@@ -197,8 +198,8 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         };
         // When the user supplies --capability-file, thread the path into the
         // autostart flags so the sidecar loads it as a capability seed.
-        // maybe_mint_capability_seed skips minting (skip_mint=true) but keeps
-        // any capability_seed_path already set here.
+        // prepare_network_runtime does not mint for a File source, so it leaves
+        // this path untouched.
         if let CapabilitySource::File { ref path } = profile.capability.source {
             flags.capability_seed_path = Some(path.clone());
         }
@@ -218,9 +219,6 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             &mut prompt,
         )?;
 
-        // When the user supplied their own capability file, `firma run` must
-        // not mint a per-session seed during autostart.
-        let skip_mint = matches!(profile.capability.source, CapabilitySource::File { .. });
         let network_runtime = prepare_network_runtime(
             handle_ref,
             &proof,
@@ -228,7 +226,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             &identity,
             &flags,
             authority,
-            skip_mint,
+            &profile.capability,
         )?;
         let effective_endpoint = network_runtime.sidecar_endpoint().clone();
         let effective_seccomp = resolve_effective_seccomp(&profile)?;
@@ -246,7 +244,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         let mut env = build_execution_env(
             &profile,
             &identity,
-            &lease,
+            capability_token.as_deref(),
             &effective_endpoint,
             network_runtime.env_overrides(),
         );
@@ -510,7 +508,7 @@ fn enforce_known_executable_policy(
 fn build_execution_env(
     profile: &ResolvedProfile,
     identity: &RunIdentity,
-    lease: &CapabilityLeaseManager,
+    capability_token: Option<&str>,
     sidecar_endpoint: &SidecarEndpoint,
     network_overrides: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
@@ -560,8 +558,8 @@ fn build_execution_env(
         serde_json::to_string(&attr_headers).unwrap_or_else(|_| "{}".to_string()),
     );
 
-    if let Some(token) = lease.token() {
-        env.insert("FIRMA_CAPABILITY_TOKEN".to_string(), token);
+    if let Some(token) = capability_token {
+        env.insert("FIRMA_CAPABILITY_TOKEN".to_string(), token.to_string());
     }
 
     if let CapabilitySource::File { path } = &profile.capability.source {
@@ -841,13 +839,13 @@ mod tests {
         };
 
         let identity = RunIdentity::new("generic");
-        let lease = crate::capability::CapabilityLeaseManager::new(&profile.capability)
+        let capability_token = crate::capability::read_capability_token(&profile.capability.source)
             .unwrap_or_else(|e| panic!("{e}"));
 
         let env = build_execution_env(
             &profile,
             &identity,
-            &lease,
+            capability_token.as_deref(),
             &profile.sidecar_endpoint,
             &BTreeMap::default(),
         );
@@ -900,13 +898,13 @@ mod tests {
         };
 
         let identity = RunIdentity::new("generic");
-        let lease = crate::capability::CapabilityLeaseManager::new(&profile.capability)
+        let capability_token = crate::capability::read_capability_token(&profile.capability.source)
             .unwrap_or_else(|e| panic!("{e}"));
 
         let env = build_execution_env(
             &profile,
             &identity,
-            &lease,
+            capability_token.as_deref(),
             &profile.sidecar_endpoint,
             &BTreeMap::default(),
         );
@@ -952,12 +950,12 @@ mod tests {
         };
 
         let identity = RunIdentity::new("generic");
-        let lease = crate::capability::CapabilityLeaseManager::new(&profile.capability)
+        let capability_token = crate::capability::read_capability_token(&profile.capability.source)
             .unwrap_or_else(|e| panic!("{e}"));
         let env = build_execution_env(
             &profile,
             &identity,
-            &lease,
+            capability_token.as_deref(),
             &profile.sidecar_endpoint,
             &BTreeMap::default(),
         );
@@ -1029,8 +1027,10 @@ mod tests {
         );
 
         let identity = RunIdentity::new("copilot");
-        let lease = crate::capability::CapabilityLeaseManager::new(
-            &make_profile(crate::config::CaTrustMode::Sole).capability,
+        let capability_token = crate::capability::read_capability_token(
+            &make_profile(crate::config::CaTrustMode::Sole)
+                .capability
+                .source,
         )
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1038,7 +1038,7 @@ mod tests {
         let sole_env = build_execution_env(
             &sole_profile,
             &identity,
-            &lease,
+            capability_token.as_deref(),
             &sole_profile.sidecar_endpoint,
             &overrides,
         );
@@ -1052,7 +1052,7 @@ mod tests {
         let append_env = build_execution_env(
             &append_profile,
             &identity,
-            &lease,
+            capability_token.as_deref(),
             &append_profile.sidecar_endpoint,
             &overrides,
         );
@@ -1182,12 +1182,12 @@ mod tests {
             ca_trust_mode: crate::config::CaTrustMode::Sole,
         };
         let identity = RunIdentity::new("codex");
-        let lease = crate::capability::CapabilityLeaseManager::new(&profile.capability)
+        let capability_token = crate::capability::read_capability_token(&profile.capability.source)
             .unwrap_or_else(|e| panic!("{e}"));
         let env = build_execution_env(
             &profile,
             &identity,
-            &lease,
+            capability_token.as_deref(),
             &profile.sidecar_endpoint,
             &BTreeMap::default(),
         );

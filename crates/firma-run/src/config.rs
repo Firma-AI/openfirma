@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Duration;
 
 use firma_config_loader::AgentProfile;
 use serde::{Deserialize, Serialize};
@@ -239,6 +240,13 @@ pub struct CapabilityLeaseConfig {
     pub source: CapabilitySource,
     pub refresh_ratio: f64,
     pub grace_seconds: u64,
+}
+
+impl CapabilityLeaseConfig {
+    #[must_use]
+    pub fn grace(&self) -> Duration {
+        Duration::from_secs(self.grace_seconds)
+    }
 }
 
 /// Per-executable CLI argument policy injected by `firma run`.
