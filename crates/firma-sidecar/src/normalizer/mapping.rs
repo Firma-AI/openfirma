@@ -10,6 +10,8 @@
 //! be deterministically mapped to a registry entry fail closed with
 //! `DENY: UNCLASSIFIED_INTENT` (FEP \[I-N1\]).
 
+use firma_http::Method;
+
 use crate::config::{MappingRuleConfig, MappingRulesFile};
 use crate::enforcement::registry::ActionClassRegistry;
 
@@ -25,7 +27,7 @@ pub enum MappingTableError {
     /// makes classification ambiguous.
     #[error(
         "rule {index}: duplicate mapping tuple method={:?} host={:?} path={:?}",
-        rule.method.as_deref().unwrap_or_default(),
+        rule.method.as_ref().map(|method| method.as_str()).unwrap_or_default(),
         rule.host,
         rule.path.as_deref().unwrap_or_default()
     )]
@@ -53,7 +55,7 @@ pub enum MappingTableError {
 /// A validated mapping rule ready for matching.
 #[derive(Debug, Clone)]
 pub struct MappingRule {
-    pub method: Option<String>,
+    pub method: Option<Method>,
     pub host_pattern: String,
     pub path_pattern: Option<String>,
     pub action_class: String,
@@ -81,7 +83,7 @@ pub enum MatchResult<'a> {
 }
 
 impl MappingRule {
-    fn compute_specificity(method: Option<&String>, host: &str, path: Option<&String>) -> u32 {
+    fn compute_specificity(method: Option<&Method>, host: &str, path: Option<&String>) -> u32 {
         let mut score = 0u32;
 
         // Exact host > wildcard host
@@ -131,11 +133,11 @@ impl MappingTable {
         // Duplicate (method, host, path) tuple detection. Two rules
         // with the same triple across merged mapping files produces
         // ambiguous classification — fail-closed at startup.
-        let mut seen: std::collections::HashSet<(String, String, String)> =
+        let mut seen: std::collections::HashSet<(Option<Method>, String, String)> =
             std::collections::HashSet::new();
         for (i, rule_cfg) in file.rules.iter().enumerate() {
             let key = (
-                rule_cfg.method.clone().unwrap_or_default().to_uppercase(),
+                rule_cfg.method.clone(),
                 rule_cfg.host.clone(),
                 rule_cfg.path.clone().unwrap_or_default(),
             );
@@ -183,7 +185,7 @@ impl MappingTable {
 
     /// Find the first (most specific) matching rule for a request.
     #[must_use]
-    pub fn find_match<'a>(&'a self, method: &str, host: &str, path: &str) -> MatchResult<'a> {
+    pub fn find_match<'a>(&'a self, method: &Method, host: &str, path: &str) -> MatchResult<'a> {
         for rule in &self.rules {
             if Self::rule_matches(rule, method, host, path) {
                 return MatchResult::Matched(rule);
@@ -197,10 +199,12 @@ impl MappingTable {
         }
     }
 
-    fn rule_matches(rule: &MappingRule, method: &str, host: &str, path: &str) -> bool {
+    fn rule_matches(rule: &MappingRule, method: &Method, host: &str, path: &str) -> bool {
         // Check method (None = any method)
-        if let Some(ref rule_method) = rule.method
-            && !rule_method.eq_ignore_ascii_case(method)
+        if rule
+            .method
+            .as_ref()
+            .is_some_and(|rule_method| rule_method != method)
         {
             return false;
         }
@@ -304,13 +308,13 @@ mod tests {
         let file = MappingRulesFile {
             rules: vec![
                 MappingRuleConfig {
-                    method: Some("GET".to_string()),
+                    method: Some(Method::GET),
                     host: "api.github.com".to_string(),
                     path: Some("/repos/*/*".to_string()),
                     action_class: "code.read".to_string(),
                 },
                 MappingRuleConfig {
-                    method: Some("GET".to_string()),
+                    method: Some(Method::GET),
                     host: "api.github.com".to_string(),
                     path: Some("/repos/*/*".to_string()),
                     action_class: "code.review.read".to_string(),
@@ -331,13 +335,13 @@ mod tests {
         let file = MappingRulesFile {
             rules: vec![
                 MappingRuleConfig {
-                    method: Some("POST".to_string()),
+                    method: Some(Method::POST),
                     host: "*".to_string(),
                     path: None,
                     action_class: "communication.internal.send".to_string(),
                 },
                 MappingRuleConfig {
-                    method: Some("POST".to_string()),
+                    method: Some(Method::POST),
                     host: "api.openai.com".to_string(),
                     path: Some("/v1/chat/completions".to_string()),
                     action_class: "communication.external.send".to_string(),
@@ -346,7 +350,7 @@ mod tests {
         };
         let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).unwrap();
 
-        match table.find_match("POST", "api.openai.com", "/v1/chat/completions") {
+        match table.find_match(&Method::POST, "api.openai.com", "/v1/chat/completions") {
             MatchResult::Matched(rule) => {
                 assert_eq!(rule.action_class, "communication.external.send");
             }
@@ -359,13 +363,13 @@ mod tests {
         let file = MappingRulesFile {
             rules: vec![
                 MappingRuleConfig {
-                    method: Some("GET".to_string()),
+                    method: Some(Method::GET),
                     host: "api.other.com".to_string(),
                     path: None,
                     action_class: "communication.internal.send".to_string(),
                 },
                 MappingRuleConfig {
-                    method: Some("GET".to_string()),
+                    method: Some(Method::GET),
                     host: "*".to_string(),
                     path: None,
                     action_class: "filesystem.read".to_string(),
@@ -374,7 +378,7 @@ mod tests {
         };
         let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).unwrap();
 
-        match table.find_match("GET", "api.weather.com", "/forecast") {
+        match table.find_match(&Method::GET, "api.weather.com", "/forecast") {
             MatchResult::Matched(rule) => assert_eq!(rule.action_class, "filesystem.read"),
             other => panic!("expected Matched, got {other:?}"),
         }
@@ -385,7 +389,7 @@ mod tests {
         // Table with only specific rules, no wildcard
         let file = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("POST".to_string()),
+                method: Some(Method::POST),
                 host: "api.openai.com".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -394,7 +398,7 @@ mod tests {
         let table = MappingTable::from_config(&file, &ActionClassRegistry::v0_1(), true).unwrap();
 
         assert!(matches!(
-            table.find_match("GET", "unknown.host", "/"),
+            table.find_match(&Method::GET, "unknown.host", "/"),
             MatchResult::UnclassifiedProtected
         ));
     }

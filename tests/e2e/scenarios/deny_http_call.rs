@@ -1,3 +1,4 @@
+use firma_http::Method;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -17,7 +18,7 @@ impl EnforcementScenario for DenyHttpCall {
         ctx.firma_config().run()?;
         ctx.add_mapping_rule(
             &ctx.mock_server.address().to_string(),
-            "POST",
+            Method::POST,
             "*",
             "communication.internal.send",
         )?;

@@ -95,10 +95,10 @@ impl TransportView {
 
 #[cfg(test)]
 mod tests {
+    use firma_http::HeaderName;
+
     use super::*;
-    use crate::{
-        ActionParams, ExecutionIntent, ExecutionMetadata, HeaderName, HttpMethod, HttpParams,
-    };
+    use crate::{ActionParams, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams};
     use std::collections::HashMap;
 
     fn sample_envelope() -> ExecutionEnvelope {

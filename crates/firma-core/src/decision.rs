@@ -556,11 +556,11 @@ mod tests {
 
         let mut headers = std::collections::HashMap::new();
         headers.insert(
-            crate::HeaderName::from_static("authorization"),
+            firma_http::HeaderName::from_static("authorization"),
             "Bearer secret".to_string(),
         );
         headers.insert(
-            crate::HeaderName::from_static("x-trace-id"),
+            firma_http::HeaderName::from_static("x-trace-id"),
             "abc".to_string(),
         );
         let mut envelope = ExecutionEnvelope::new(

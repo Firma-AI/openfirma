@@ -8,6 +8,7 @@ members = [
   "crates/firma-demo-tui",
   "crates/firma-fs",
   "crates/firma-grpc-interceptor-proto",
+  "crates/firma-http",
   "crates/firma-protobuf",
   "crates/firma-run",
   "crates/firma-runtime-state",
@@ -64,6 +65,7 @@ firma-config-loader = { path = "crates/firma-config-loader", version = "0.1.2" }
 firma-core = { path = "crates/firma-core", version = "0.1.2" }
 firma-fs = { path = "crates/firma-fs", version = "0.1.2" }
 firma-grpc-interceptor-proto = { path = "crates/firma-grpc-interceptor-proto", version = "0.1.2" }
+firma-http = { path = "crates/firma-http", version = "0.1.2" }
 firma-protobuf = { path = "crates/firma-protobuf", version = "0.2.0" }
 firma-run = { path = "crates/firma-run", version = "0.1.2" }
 firma-runtime-state = { path = "crates/firma-runtime-state", version = "0.1.2" }

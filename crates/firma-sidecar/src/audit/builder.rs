@@ -197,6 +197,7 @@ mod tests {
         ActionParams, CapabilityClaims, DenyReason, ExecutionEnvelope, ExecutionIntent,
         ExecutionMetadata, HttpMethod, HttpParams,
     };
+    use firma_http::Method;
     use p256::ecdsa::VerifyingKey;
 
     use crate::audit::Decision;
@@ -288,7 +289,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         latency: Duration,
     ) -> AuditPayload {
         let request = crate::normalizer::RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),

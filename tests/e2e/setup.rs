@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
+use firma_http::Method;
 use firma_sidecar::config::MappingRuleConfig;
 use wiremock::{Mock, MockServer};
 
@@ -39,7 +40,7 @@ impl ScenarioSetup {
     pub fn add_mapping_rule(
         &self,
         host_port: &str,
-        method: &str,
+        method: Method,
         path: &str,
         action_class: &str,
     ) -> Result<(), anyhow::Error> {
@@ -47,14 +48,14 @@ impl ScenarioSetup {
             &self.config_dir,
             vec![
                 MappingRuleConfig {
-                    method: Some(method.to_string()),
+                    method: Some(method),
                     host: host_port.to_string(),
                     path: Some(path.to_string()),
                     action_class: action_class.to_string(),
                 },
                 // Companion CONNECT rule so the TLS tunnel itself is classified.
                 MappingRuleConfig {
-                    method: Some("CONNECT".to_string()),
+                    method: Some(Method::CONNECT),
                     host: host_port.to_string(),
                     path: Some(String::new()),
                     action_class: action_class.to_string(),

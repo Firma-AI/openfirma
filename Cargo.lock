@@ -1333,6 +1333,7 @@ dependencies = [
  "firma-config-loader",
  "firma-core",
  "firma-fs",
+ "firma-http",
  "firma-run",
  "firma-runtime-state",
  "firma-sidecar",
@@ -1435,6 +1436,7 @@ dependencies = [
  "cedar-policy",
  "chrono",
  "criterion",
+ "firma-http",
  "http",
  "pasetors",
  "pretty_assertions",
@@ -1504,6 +1506,15 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+]
+
+[[package]]
+name = "firma-http"
+version = "0.1.2"
+dependencies = [
+ "arbitrary",
+ "http",
+ "serde",
 ]
 
 [[package]]
@@ -1584,6 +1595,7 @@ dependencies = [
  "firma-core",
  "firma-fs",
  "firma-grpc-interceptor-proto",
+ "firma-http",
  "firma-protobuf",
  "firma-runtime-state",
  "governor",

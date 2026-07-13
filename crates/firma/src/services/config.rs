@@ -1289,6 +1289,7 @@ fn provider_to_profile(provider: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use firma_http::Method;
     use strum::IntoEnumIterator;
 
     use super::*;
@@ -1569,9 +1570,10 @@ mod tests {
         let files = make_files(&Posture::Dev, &[], &extra);
         let rules = parse_rules(get(&files, "mapping-rules.toml")).rules;
         assert!(
-            rules
-                .iter()
-                .any(|r| r.host == "api.example.com:443" && r.method.as_deref() == Some("CONNECT")),
+            rules.iter().any(|r| r.host == "api.example.com:443"
+                && r.method
+                    .as_ref()
+                    .is_some_and(|method| *method == Method::CONNECT)),
             "CONNECT rule for extra host missing"
         );
         assert!(
@@ -1598,9 +1600,10 @@ mod tests {
     fn anthropic_mapping_has_connect_rule() {
         let rules = parse_rules(Mapping::Anthropic.static_content()).rules;
         assert!(
-            rules
-                .iter()
-                .any(|r| r.host == "*.anthropic.com" && r.method.as_deref() == Some("CONNECT")),
+            rules.iter().any(|r| r.host == "*.anthropic.com"
+                && r.method
+                    .as_ref()
+                    .is_some_and(|method| *method == Method::CONNECT)),
             "expected *.anthropic.com CONNECT rule"
         );
     }
@@ -1609,9 +1612,10 @@ mod tests {
     fn openai_mapping_has_connect_rule() {
         let rules = parse_rules(Mapping::Openai.static_content()).rules;
         assert!(
-            rules
-                .iter()
-                .any(|r| r.host == "*.openai.com" && r.method.as_deref() == Some("CONNECT")),
+            rules.iter().any(|r| r.host == "*.openai.com"
+                && r.method
+                    .as_ref()
+                    .is_some_and(|method| *method == Method::CONNECT)),
             "expected *.openai.com:443 CONNECT rule"
         );
     }
@@ -1620,9 +1624,10 @@ mod tests {
     fn github_mapping_has_connect_and_rest_rules() {
         let rules = parse_rules(Mapping::Github.static_content()).rules;
         assert!(
-            rules
-                .iter()
-                .any(|r| r.host == "api.github.com" && r.method.as_deref() == Some("CONNECT")),
+            rules.iter().any(|r| r.host == "api.github.com"
+                && r.method
+                    .as_ref()
+                    .is_some_and(|method| *method == Method::CONNECT)),
             "CONNECT rule missing from github mapping"
         );
         assert!(
@@ -1637,9 +1642,10 @@ mod tests {
     fn gmail_mapping_has_connect_and_rest_rules() {
         let rules = parse_rules(Mapping::Gmail.static_content()).rules;
         assert!(
-            rules
-                .iter()
-                .any(|r| r.host == "gmail.googleapis.com" && r.method.as_deref() == Some("CONNECT")),
+            rules.iter().any(|r| r.host == "gmail.googleapis.com"
+                && r.method
+                    .as_ref()
+                    .is_some_and(|method| *method == Method::CONNECT)),
             "CONNECT rule missing from gmail mapping"
         );
         assert!(
@@ -1654,9 +1660,10 @@ mod tests {
     fn stripe_mapping_has_connect_and_rest_rules() {
         let rules = parse_rules(Mapping::Stripe.static_content()).rules;
         assert!(
-            rules
-                .iter()
-                .any(|r| r.host == "api.stripe.com:443" && r.method.as_deref() == Some("CONNECT")),
+            rules.iter().any(|r| r.host == "api.stripe.com:443"
+                && r.method
+                    .as_ref()
+                    .is_some_and(|method| *method == Method::CONNECT)),
             "CONNECT rule missing from stripe mapping"
         );
         assert!(

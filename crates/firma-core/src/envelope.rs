@@ -2,12 +2,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use chrono::{DateTime, Utc};
+use firma_http::{HeaderName, Method};
 use serde::{Deserialize, Serialize};
 
-use crate::HeaderName;
-use crate::agent::AgentId;
-use crate::session::SessionId;
-use crate::token::TokenId;
+use crate::{agent::AgentId, session::SessionId, token::TokenId};
 
 /// The core protocol unit wrapping each outbound agent call.
 ///
@@ -188,9 +186,31 @@ impl HttpMethod {
     }
 }
 
+impl<'a> TryFrom<&'a Method> for HttpMethod {
+    type Error = InvalidMethod<'a>;
+
+    fn try_from(value: &'a Method) -> Result<Self, Self::Error> {
+        match *value {
+            Method::GET => Ok(Self::GET),
+            Method::POST => Ok(Self::POST),
+            Method::PUT => Ok(Self::PUT),
+            Method::DELETE => Ok(Self::DELETE),
+            Method::PATCH => Ok(Self::PATCH),
+            Method::HEAD => Ok(Self::HEAD),
+            Method::OPTIONS => Ok(Self::OPTIONS),
+            Method::CONNECT => Ok(Self::CONNECT),
+            _ => Err(InvalidMethod(value)),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Invalid method {0}")]
+pub struct InvalidMethod<'a>(&'a Method);
+
 impl fmt::Display for HttpMethod {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str((*self).as_str())
+        f.write_str(self.as_str())
     }
 }
 /// Parameters for an outbound HTTP request.

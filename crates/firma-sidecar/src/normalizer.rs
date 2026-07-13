@@ -24,7 +24,8 @@ mod mapping;
 use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
-use firma_core::{ActionParams, ExecutionIntent, HeaderName, HttpMethod, HttpParams};
+use firma_core::{ActionParams, ExecutionIntent, HttpMethod, HttpParams};
+use firma_http::{HeaderName, Method};
 use unicode_normalization::UnicodeNormalization;
 
 /// Hosts whose traffic earns the `provider = "github"` resource tag.
@@ -114,7 +115,7 @@ pub struct RawRequest {
     ///
     /// Together with `host` and `path`, determines the canonical
     /// `action_class` via the mapping table.
-    pub method: String,
+    pub method: Method,
     /// Target host or domain (e.g. `api.stripe.com`).
     ///
     /// Maps to the `resource` sub-field of the normalized intent.
@@ -248,7 +249,7 @@ impl IntentNormalizer {
 
         match match_result {
             MatchResult::Matched(rule) => {
-                let raw_action_ref = format!("{} {}", request.method.to_uppercase(), request.path);
+                let raw_action_ref = format!("{} {}", request.method, request.path);
                 let raw_transport = if request.is_https { "https" } else { "http" };
                 let mut resource = BTreeMap::new();
                 resource.insert("host".to_string(), normalized_host.clone());
@@ -257,7 +258,7 @@ impl IntentNormalizer {
                     resource.insert("provider".to_string(), provider.to_string());
                 }
 
-                let Some(http_method) = parse_http_method(&request.method) else {
+                let Ok(http_method) = HttpMethod::try_from(&request.method) else {
                     let detail = format!(
                         "unrecognized HTTP method: {} {} (host: {})",
                         request.method, request.path, request.host
@@ -306,20 +307,6 @@ fn sanitize_headers(headers: &HashMap<HeaderName, String>) -> HashMap<HeaderName
         .filter(|(k, _)| !SENSITIVE_HEADERS.contains(&k.as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
-}
-
-fn parse_http_method(method: &str) -> Option<HttpMethod> {
-    match method.to_uppercase().as_str() {
-        "GET" => Some(HttpMethod::GET),
-        "POST" => Some(HttpMethod::POST),
-        "PUT" => Some(HttpMethod::PUT),
-        "DELETE" => Some(HttpMethod::DELETE),
-        "PATCH" => Some(HttpMethod::PATCH),
-        "HEAD" => Some(HttpMethod::HEAD),
-        "OPTIONS" => Some(HttpMethod::OPTIONS),
-        "CONNECT" => Some(HttpMethod::CONNECT),
-        _ => None,
-    }
 }
 
 fn sanitize_query_string(query: &str, sensitive_params: &[&str]) -> String {
@@ -466,6 +453,8 @@ fn resolve_dot_segments(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
     use crate::config::{MappingRuleConfig, MappingRulesFile};
     use crate::enforcement::registry::ActionClassRegistry;
@@ -475,19 +464,19 @@ mod tests {
         let file = MappingRulesFile {
             rules: vec![
                 MappingRuleConfig {
-                    method: Some("POST".to_string()),
+                    method: Some(Method::POST),
                     host: "api.openai.com".to_string(),
                     path: Some("/v1/chat/completions".to_string()),
                     action_class: "communication.external.send".to_string(),
                 },
                 MappingRuleConfig {
-                    method: Some("GET".to_string()),
+                    method: Some(Method::GET),
                     host: "*".to_string(),
                     path: None,
                     action_class: "filesystem.read".to_string(),
                 },
                 MappingRuleConfig {
-                    method: Some("GET".to_string()),
+                    method: Some(Method::GET),
                     host: "api.github.com".to_string(),
                     path: Some("/repos/*/*".to_string()),
                     action_class: "code.read".to_string(),
@@ -499,9 +488,9 @@ mod tests {
         IntentNormalizer::new(table)
     }
 
-    fn make_request(method: &str, host: &str, path: &str) -> RawRequest {
+    fn make_request(method: Method, host: &str, path: &str) -> RawRequest {
         RawRequest {
-            method: method.to_string(),
+            method,
             host: host.to_string(),
             path: path.to_string(),
             headers: HashMap::new(),
@@ -676,7 +665,7 @@ mod tests {
     fn test_normalize_openai_chat() {
         let normalizer = test_normalizer();
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -708,7 +697,7 @@ mod tests {
         headers.insert(HeaderName::from_static("cookie"), "session=abc".to_string());
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers,
@@ -742,7 +731,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let file = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("POST".to_string()),
+                method: Some(Method::POST),
                 host: "api.openai.com".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -753,7 +742,7 @@ mod tests {
         let normalizer = IntentNormalizer::new(table);
 
         let request = RawRequest {
-            method: "GET".to_string(),
+            method: Method::GET,
             host: "not-protected.example.com".to_string(),
             path: "/any".to_string(),
             headers: HashMap::new(),
@@ -771,7 +760,7 @@ mod tests {
     fn test_normalize_unclassified_protected() {
         let normalizer = test_normalizer();
         let request = RawRequest {
-            method: "DELETE".to_string(),
+            method: Method::DELETE,
             host: "api.openai.com".to_string(),
             path: "/v1/files/abc".to_string(),
             headers: HashMap::new(),
@@ -793,7 +782,7 @@ mod tests {
     fn test_normalize_unrecognized_method_denied() {
         let normalizer = test_normalizer();
         let request = RawRequest {
-            method: "FROBNICATE".to_string(),
+            method: Method(http::Method::from_str("FROBNICATE").unwrap()),
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -825,7 +814,7 @@ mod tests {
         );
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers,
@@ -867,7 +856,7 @@ mod tests {
         );
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers,
@@ -901,7 +890,7 @@ mod tests {
         let body_bytes = b"{\"model\":\"gpt-4\"}".to_vec();
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -927,7 +916,7 @@ mod tests {
     fn test_normalize_http_transport() {
         let normalizer = test_normalizer();
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -945,7 +934,7 @@ mod tests {
     fn test_normalize_resource_format() {
         let normalizer = test_normalizer();
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "api.openai.com".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -974,7 +963,11 @@ mod tests {
     fn test_normalize_github_tags_provider() {
         let normalizer = test_normalizer();
         let envelope = normalizer
-            .normalize(&make_request("GET", "api.github.com", "/repos/acme/widget"))
+            .normalize(&make_request(
+                Method::GET,
+                "api.github.com",
+                "/repos/acme/widget",
+            ))
             .unwrap_or_else(|_| panic!("ok"));
         assert_eq!(envelope.intent.action_class, "code.read");
         assert_eq!(
@@ -992,7 +985,7 @@ mod tests {
         let normalizer = test_normalizer();
         let envelope = normalizer
             .normalize(&make_request(
-                "POST",
+                Method::POST,
                 "api.openai.com",
                 "/v1/chat/completions",
             ))
@@ -1004,7 +997,7 @@ mod tests {
     fn test_normalize_github_typosquat_no_provider() {
         let normalizer = test_normalizer();
         if let Ok(envelope) = normalizer.normalize(&make_request(
-            "GET",
+            Method::GET,
             "api.github.com.evil.example",
             "/repos/x/y",
         )) {
@@ -1021,7 +1014,11 @@ mod tests {
     fn test_normalize_mixed_case_host_matches_rule_not_passthrough() {
         let normalizer = github_normalizer();
         let envelope = normalizer
-            .normalize(&make_request("GET", "API.GITHUB.COM", "/repos/acme/widget"))
+            .normalize(&make_request(
+                Method::GET,
+                "API.GITHUB.COM",
+                "/repos/acme/widget",
+            ))
             .unwrap_or_else(|_| panic!("mixed-case host must match the github rule"));
         assert_eq!(envelope.intent.action_class, "code.read");
         assert_eq!(
@@ -1042,12 +1039,16 @@ mod tests {
     fn test_normalize_trailing_dot_and_default_port_match_rule() {
         let normalizer = github_normalizer();
         let env_dot = normalizer
-            .normalize(&make_request("GET", "api.github.com.", "/repos/x/y"))
+            .normalize(&make_request(Method::GET, "api.github.com.", "/repos/x/y"))
             .unwrap_or_else(|_| panic!("trailing-dot host must match"));
         assert_eq!(env_dot.intent.action_class, "code.read");
 
         let env_port = normalizer
-            .normalize(&make_request("GET", "api.github.com:443", "/repos/x/y"))
+            .normalize(&make_request(
+                Method::GET,
+                "api.github.com:443",
+                "/repos/x/y",
+            ))
             .unwrap_or_else(|_| panic!("default-port host must match"));
         assert_eq!(env_port.intent.action_class, "code.read");
     }
@@ -1061,7 +1062,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let file = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("POST".to_string()),
+                method: Some(Method::POST),
                 host: "api.openai.com".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -1073,7 +1074,7 @@ mod tests {
         let normalizer = IntentNormalizer::new(table);
 
         let request = RawRequest {
-            method: "POST".to_string(),
+            method: Method::POST,
             host: "API.OPENAI.COM".to_string(),
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -1101,14 +1102,14 @@ mod tests {
             rules: vec![
                 // Permissive rule that the un-resolved path would match.
                 MappingRuleConfig {
-                    method: Some("POST".to_string()),
+                    method: Some(Method::POST),
                     host: "api.example.com".to_string(),
                     path: Some("/v1/chat/*".to_string()),
                     action_class: "communication.external.send".to_string(),
                 },
                 // Strict rule the resolved path *should* match.
                 MappingRuleConfig {
-                    method: Some("POST".to_string()),
+                    method: Some(Method::POST),
                     host: "api.example.com".to_string(),
                     path: Some("/v1/admin/*".to_string()),
                     action_class: "account.permission.change".to_string(),
@@ -1121,7 +1122,7 @@ mod tests {
 
         let envelope = normalizer
             .normalize(&make_request(
-                "POST",
+                Method::POST,
                 "api.example.com",
                 "/v1/chat/../admin/users",
             ))
@@ -1145,7 +1146,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let file = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("POST".to_string()),
+                method: Some(Method::POST),
                 host: "api.example.com".to_string(),
                 path: Some("/v1/admin/*".to_string()),
                 action_class: "account.permission.change".to_string(),
@@ -1157,7 +1158,7 @@ mod tests {
 
         let envelope = normalizer
             .normalize(&make_request(
-                "POST",
+                Method::POST,
                 "api.example.com",
                 "/v1/chat/../admin/users?x=1",
             ))
@@ -1182,7 +1183,11 @@ mod tests {
     fn test_github_get_pulls_is_code_review_read() {
         let normalizer = github_normalizer();
         let env = normalizer
-            .normalize(&make_request("GET", "api.github.com", "/repos/x/y/pulls"))
+            .normalize(&make_request(
+                Method::GET,
+                "api.github.com",
+                "/repos/x/y/pulls",
+            ))
             .unwrap_or_else(|_| panic!("ok"));
         assert_eq!(env.intent.action_class, "code.review.read");
     }
@@ -1191,7 +1196,11 @@ mod tests {
     fn test_github_post_pulls_is_code_write() {
         let normalizer = github_normalizer();
         let env = normalizer
-            .normalize(&make_request("POST", "api.github.com", "/repos/x/y/pulls"))
+            .normalize(&make_request(
+                Method::POST,
+                "api.github.com",
+                "/repos/x/y/pulls",
+            ))
             .unwrap_or_else(|_| panic!("ok"));
         assert_eq!(env.intent.action_class, "code.write");
     }
@@ -1201,7 +1210,7 @@ mod tests {
         let normalizer = github_normalizer();
         let env = normalizer
             .normalize(&make_request(
-                "PUT",
+                Method::PUT,
                 "api.github.com",
                 "/repos/x/y/pulls/1/merge",
             ))
@@ -1214,7 +1223,7 @@ mod tests {
         let normalizer = github_normalizer();
         let env = normalizer
             .normalize(&make_request(
-                "DELETE",
+                Method::DELETE,
                 "api.github.com",
                 "/repos/x/y/contents/foo.txt",
             ))
@@ -1227,7 +1236,7 @@ mod tests {
         let normalizer = github_normalizer();
         let env = normalizer
             .normalize(&make_request(
-                "GET",
+                Method::GET,
                 "api.github.com",
                 "/repos/x/y/branches/main/protection/restrictions",
             ))
@@ -1250,7 +1259,7 @@ mod tests {
     fn test_normalize_stripe_tags_provider() {
         let normalizer = stripe_normalizer();
         let envelope = normalizer
-            .normalize(&make_request("GET", "api.stripe.com", "/v1/balance"))
+            .normalize(&make_request(Method::GET, "api.stripe.com", "/v1/balance"))
             .unwrap_or_else(|_| panic!("ok"));
         assert_eq!(envelope.intent.action_class, "payment.read");
         assert_eq!(
@@ -1264,7 +1273,7 @@ mod tests {
         let normalizer = stripe_normalizer();
         let env = normalizer
             .normalize(&make_request(
-                "POST",
+                Method::POST,
                 "api.stripe.com",
                 "/v1/payment_intents",
             ))
@@ -1277,7 +1286,7 @@ mod tests {
         let normalizer = stripe_normalizer();
         let env = normalizer
             .normalize(&make_request(
-                "POST",
+                Method::POST,
                 "api.stripe.com",
                 "/v1/payment_intents/pi_123/cancel",
             ))
@@ -1289,7 +1298,7 @@ mod tests {
     fn test_stripe_post_refund_is_payment_refund() {
         let normalizer = stripe_normalizer();
         let env = normalizer
-            .normalize(&make_request("POST", "api.stripe.com", "/v1/refunds"))
+            .normalize(&make_request(Method::POST, "api.stripe.com", "/v1/refunds"))
             .unwrap_or_else(|_| panic!("ok"));
         assert_eq!(env.intent.action_class, "payment.refund");
     }
@@ -1298,7 +1307,7 @@ mod tests {
     fn test_stripe_post_payout_is_payment_payout() {
         let normalizer = stripe_normalizer();
         let env = normalizer
-            .normalize(&make_request("POST", "api.stripe.com", "/v1/payouts"))
+            .normalize(&make_request(Method::POST, "api.stripe.com", "/v1/payouts"))
             .unwrap_or_else(|_| panic!("ok"));
         assert_eq!(env.intent.action_class, "payment.payout");
     }
@@ -1308,7 +1317,7 @@ mod tests {
         let normalizer = stripe_normalizer();
         let env = normalizer
             .normalize(&make_request(
-                "GET",
+                Method::GET,
                 "api.stripe.com",
                 "/v1/customers/search",
             ))
@@ -1321,7 +1330,7 @@ mod tests {
         let normalizer = stripe_normalizer();
         let env = normalizer
             .normalize(&make_request(
-                "POST",
+                Method::POST,
                 "api.stripe.com",
                 "/v1/webhook_endpoints",
             ))
@@ -1345,7 +1354,7 @@ mod tests {
         let normalizer = gmail_normalizer();
         let envelope = normalizer
             .normalize(&make_request(
-                "GET",
+                Method::GET,
                 "gmail.googleapis.com",
                 "/gmail/v1/users/me/profile",
             ))
@@ -1362,7 +1371,7 @@ mod tests {
         let normalizer = gmail_normalizer();
         let env = normalizer
             .normalize(&make_request(
-                "POST",
+                Method::POST,
                 "gmail.googleapis.com",
                 "/gmail/v1/users/me/messages/send",
             ))
@@ -1375,7 +1384,7 @@ mod tests {
         let normalizer = gmail_normalizer();
         let env = normalizer
             .normalize(&make_request(
-                "POST",
+                Method::POST,
                 "gmail.googleapis.com",
                 "/gmail/v1/users/me/drafts",
             ))
@@ -1388,7 +1397,7 @@ mod tests {
         let normalizer = gmail_normalizer();
         let env = normalizer
             .normalize(&make_request(
-                "POST",
+                Method::POST,
                 "gmail.googleapis.com",
                 "/gmail/v1/users/me/messages/abc123/modify",
             ))
@@ -1401,7 +1410,7 @@ mod tests {
         let normalizer = gmail_normalizer();
         let env = normalizer
             .normalize(&make_request(
-                "DELETE",
+                Method::DELETE,
                 "gmail.googleapis.com",
                 "/gmail/v1/users/me/messages/abc123",
             ))
@@ -1414,7 +1423,7 @@ mod tests {
         let normalizer = gmail_normalizer();
         let env = normalizer
             .normalize(&make_request(
-                "POST",
+                Method::POST,
                 "gmail.googleapis.com",
                 "/gmail/v1/users/me/settings/filters",
             ))
@@ -1427,7 +1436,7 @@ mod tests {
         let normalizer = gmail_normalizer();
         let env = normalizer
             .normalize(&make_request(
-                "POST",
+                Method::POST,
                 "gmail.googleapis.com",
                 "/gmail/v1/users/me/settings/delegates",
             ))
@@ -1439,7 +1448,7 @@ mod tests {
     fn test_gmail_typosquat_no_provider() {
         let normalizer = test_normalizer();
         if let Ok(envelope) = normalizer.normalize(&make_request(
-            "GET",
+            Method::GET,
             "gmail.googleapis.com.evil.example",
             "/gmail/v1/users/me/profile",
         )) {
@@ -1451,7 +1460,7 @@ mod tests {
     fn test_normalize_none_body_for_get() {
         let normalizer = test_normalizer();
         let request = RawRequest {
-            method: "GET".to_string(),
+            method: Method::GET,
             host: "api.example.com".to_string(),
             path: "/data".to_string(),
             headers: HashMap::new(),

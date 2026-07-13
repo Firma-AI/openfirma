@@ -1,3 +1,4 @@
+use firma_http::Method;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -16,7 +17,7 @@ impl EnforcementScenario for DenyForbiddenHttpResource {
         ctx.git_init_workspace()?;
         ctx.firma_config().run()?;
         let addr = ctx.mock_server.address().to_string();
-        ctx.add_mapping_rule(&addr, "POST", "*", "communication.external.send")?;
+        ctx.add_mapping_rule(&addr, Method::POST, "*", "communication.external.send")?;
         let paste_resource = format!("{addr}{MOCK_PATH}");
         ctx.policy()
             .named("deny-forbidden-http-resource")

@@ -5,8 +5,10 @@
 //! payload emission.
 
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::sync::Arc;
 
+use firma_core::envelope::InvalidMethod;
 use firma_core::{
     AbortReason, ActionParams, AgentId, ConnectorError, ConnectorResponse, DenyReason,
     ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams,
@@ -349,16 +351,21 @@ impl RequestHandler {
                 .await
             }
             EnforcementDecision::Passthrough { .. } => {
-                let envelope = passthrough_envelope(&request, session_id);
-                let (response, outcome) =
-                    self.dispatch(envelope, InjectedCredentials::empty()).await;
-                outcome.enrich(&mut audit_payload);
-                // Re-wrap Ok as Passthrough so callers can distinguish
-                // authorized traffic from forwarded non-protected
-                // traffic. Deny / Aborted pass through unchanged.
-                match response {
-                    HandledResponse::Ok(dispatched) => HandledResponse::Passthrough(dispatched),
-                    other => other,
+                match passthrough_envelope(&request, session_id) {
+                    Ok(envelope) => {
+                        let (response, outcome) =
+                            self.dispatch(envelope, InjectedCredentials::empty()).await;
+                        outcome.enrich(&mut audit_payload);
+                        // Re-wrap Ok as Passthrough so callers can distinguish
+                        // authorized traffic from forwarded non-protected
+                        // traffic. Deny / Aborted pass through unchanged.
+                        if let HandledResponse::Ok(dispatched) = response {
+                            HandledResponse::Passthrough(dispatched)
+                        } else {
+                            response
+                        }
+                    }
+                    Err(err) => handle_error(err),
                 }
             }
             EnforcementDecision::Deny {
@@ -769,6 +776,13 @@ impl RequestHandler {
     }
 }
 
+fn handle_error(err: impl Display) -> HandledResponse {
+    HandledResponse::Aborted {
+        reason: firma_core::AbortReason::ConnectorInvalidRequest,
+        detail: err.to_string(),
+    }
+}
+
 fn hydrate_dispatch_http_fields(envelope: &mut ExecutionEnvelope, request: &RawRequest) {
     let ActionParams::Http(http) = &mut envelope.intent.params else {
         return;
@@ -801,8 +815,11 @@ fn apply_modification_to_request(
 ///
 /// No capability token is present for passthrough calls; the envelope
 /// carries an empty capability string and a synthetic action class.
-fn passthrough_envelope(request: &RawRequest, session_id: &str) -> ExecutionEnvelope {
-    let method = parse_http_method(&request.method);
+fn passthrough_envelope<'a>(
+    request: &'a RawRequest,
+    session_id: &str,
+) -> Result<ExecutionEnvelope, InvalidMethod<'a>> {
+    let method = HttpMethod::try_from(&request.method)?;
     let scheme = if request.is_https { "https" } else { "http" };
     let mut resource = std::collections::BTreeMap::new();
     resource.insert("host".to_string(), request.host.clone());
@@ -822,7 +839,7 @@ fn passthrough_envelope(request: &RawRequest, session_id: &str) -> ExecutionEnve
     let session_id = session_id
         .parse::<SessionId>()
         .unwrap_or_else(|_| passthrough_session_id());
-    ExecutionEnvelope::new(
+    Ok(ExecutionEnvelope::new(
         intent,
         String::new(),
         ExecutionMetadata {
@@ -836,7 +853,7 @@ fn passthrough_envelope(request: &RawRequest, session_id: &str) -> ExecutionEnve
             parent_action_id: None,
         },
         None,
-    )
+    ))
 }
 
 #[expect(
@@ -859,19 +876,6 @@ fn passthrough_session_id() -> SessionId {
         .expect("literal passthrough session id is non-empty")
 }
 
-fn parse_http_method(method: &str) -> HttpMethod {
-    match method.to_ascii_uppercase().as_str() {
-        "POST" => HttpMethod::POST,
-        "PUT" => HttpMethod::PUT,
-        "DELETE" => HttpMethod::DELETE,
-        "PATCH" => HttpMethod::PATCH,
-        "HEAD" => HttpMethod::HEAD,
-        "OPTIONS" => HttpMethod::OPTIONS,
-        "CONNECT" => HttpMethod::CONNECT,
-        _ => HttpMethod::GET,
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use std::collections::HashMap;
@@ -885,6 +889,7 @@ pub(crate) mod tests {
         CapabilityClaims, Connector, RevocationStore, TokenError, TokenId, TokenVerifier,
         TransportView,
     };
+    use firma_http::Method;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio_util::sync::CancellationToken;
@@ -1071,7 +1076,7 @@ pub(crate) mod tests {
 
     fn allow_rule() -> MappingRuleConfig {
         MappingRuleConfig {
-            method: Some("POST".to_string()),
+            method: Some(Method::POST),
             host: "*".to_string(),
             path: Some("/v1/chat/completions".to_string()),
             action_class: "communication.external.send".to_string(),
@@ -1105,9 +1110,9 @@ pub(crate) mod tests {
         (addr, cancel)
     }
 
-    fn raw_request(host: String, method: &str) -> RawRequest {
+    fn raw_request(host: String, method: Method) -> RawRequest {
         RawRequest {
-            method: method.to_string(),
+            method,
             host,
             path: "/v1/chat/completions".to_string(),
             headers: HashMap::new(),
@@ -1128,7 +1133,7 @@ pub(crate) mod tests {
 
         let response = handler
             .handle(
-                raw_request(format!("127.0.0.1:{}", upstream_addr.port()), "POST"),
+                raw_request(format!("127.0.0.1:{}", upstream_addr.port()), Method::POST),
                 "sess_allow",
             )
             .await;
@@ -1161,7 +1166,10 @@ pub(crate) mod tests {
         );
 
         let response = handler
-            .handle(raw_request("127.0.0.1:9".to_string(), "POST"), "sess_deny")
+            .handle(
+                raw_request("127.0.0.1:9".to_string(), Method::POST),
+                "sess_deny",
+            )
             .await;
 
         match response {
@@ -1200,7 +1208,7 @@ pub(crate) mod tests {
 
         let _ = handler
             .handle(
-                raw_request(format!("127.0.0.1:{}", upstream_addr.port()), "POST"),
+                raw_request(format!("127.0.0.1:{}", upstream_addr.port()), Method::POST),
                 "sess_audit",
             )
             .await;
@@ -1229,7 +1237,7 @@ pub(crate) mod tests {
         );
 
         let _ = handler
-            .handle(raw_request("127.0.0.1:9".to_string(), "POST"), "sess")
+            .handle(raw_request("127.0.0.1:9".to_string(), Method::POST), "sess")
             .await;
 
         let payload = rx
@@ -1253,7 +1261,7 @@ pub(crate) mod tests {
         let response = handler
             .handle(
                 // Port 1 is reserved — connect attempt fails reliably.
-                raw_request("127.0.0.1:1".to_string(), "POST"),
+                raw_request("127.0.0.1:1".to_string(), Method::POST),
                 "sess_net",
             )
             .await;
@@ -1339,7 +1347,7 @@ pub(crate) mod tests {
 
         let modifications =
             ModificationSpec::parse("redact_header:x-sensitive").expect("valid redact_header spec");
-        let request = raw_request("127.0.0.1:9".to_string(), "POST");
+        let request = raw_request("127.0.0.1:9".to_string(), Method::POST);
 
         let response = handler
             .dispatch_modify(
@@ -1414,7 +1422,7 @@ pub(crate) mod tests {
         );
 
         let response = handler
-            .handle(raw_request(host, "POST"), "sess_timeout")
+            .handle(raw_request(host, Method::POST), "sess_timeout")
             .await;
 
         match response {
@@ -1450,7 +1458,7 @@ pub(crate) mod tests {
 
         let response = handler
             .handle(
-                raw_request("api.invalid-request.test".to_string(), "POST"),
+                raw_request("api.invalid-request.test".to_string(), Method::POST),
                 "sess_invalid",
             )
             .await;
@@ -1494,7 +1502,7 @@ pub(crate) mod tests {
         let addr = server.address();
         let response = handler
             .handle(
-                raw_request(format!("127.0.0.1:{}", addr.port()), "POST"),
+                raw_request(format!("127.0.0.1:{}", addr.port()), Method::POST),
                 "sess_5xx",
             )
             .await;
@@ -1697,7 +1705,7 @@ pub(crate) mod tests {
 
         let response = handler
             .handle(
-                raw_request(format!("127.0.0.1:{}", upstream_addr.port()), "GET"),
+                raw_request(format!("127.0.0.1:{}", upstream_addr.port()), Method::GET),
                 "sess_passthrough",
             )
             .await;
@@ -1826,7 +1834,7 @@ pub(crate) mod tests {
         let handler = RequestHandler::new(
             test_pipeline(
                 vec![MappingRuleConfig {
-                    method: Some("CONNECT".to_string()),
+                    method: Some(Method::CONNECT),
                     host: "*".to_string(),
                     path: Some("/".to_string()),
                     action_class: "communication.external.send".to_string(),
@@ -1841,7 +1849,7 @@ pub(crate) mod tests {
         let outcome = handler
             .handle_connect(
                 RawRequest {
-                    method: "CONNECT".to_string(),
+                    method: Method::CONNECT,
                     host: "api.openai.com:443".to_string(),
                     path: "/".to_string(),
                     headers: HashMap::new(),
@@ -1867,7 +1875,7 @@ pub(crate) mod tests {
         let handler = RequestHandler::new(
             test_pipeline(
                 vec![MappingRuleConfig {
-                    method: Some("CONNECT".to_string()),
+                    method: Some(Method::CONNECT),
                     host: "*".to_string(),
                     path: Some("/".to_string()),
                     action_class: "communication.external.send".to_string(),
@@ -1882,7 +1890,7 @@ pub(crate) mod tests {
         let outcome = handler
             .handle_connect(
                 RawRequest {
-                    method: "CONNECT".to_string(),
+                    method: Method::CONNECT,
                     host: "api.openai.com:443".to_string(),
                     path: "/".to_string(),
                     headers: HashMap::new(),
@@ -1913,7 +1921,7 @@ pub(crate) mod tests {
         let handler = RequestHandler::new(
             test_pipeline_with_failing_credentials(
                 vec![MappingRuleConfig {
-                    method: Some("CONNECT".to_string()),
+                    method: Some(Method::CONNECT),
                     host: "*".to_string(),
                     path: Some("/".to_string()),
                     action_class: "communication.external.send".to_string(),
@@ -1927,7 +1935,7 @@ pub(crate) mod tests {
         let outcome = handler
             .handle_connect(
                 RawRequest {
-                    method: "CONNECT".to_string(),
+                    method: Method::CONNECT,
                     host: "api.openai.com:443".to_string(),
                     path: "/".to_string(),
                     headers: HashMap::new(),
@@ -1972,7 +1980,7 @@ pub(crate) mod tests {
 
         let authorization = handler
             .authorize_upgrade(
-                raw_request("api.openai.com".to_string(), "POST"),
+                raw_request("api.openai.com".to_string(), Method::POST),
                 "sess_upgrade_abort",
             )
             .await;

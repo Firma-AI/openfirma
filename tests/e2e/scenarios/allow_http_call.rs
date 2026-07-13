@@ -1,3 +1,4 @@
+use firma_http::Method;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -36,7 +37,7 @@ impl EnforcementScenario for AllowHttpCall {
             "*",
             3600,
         )?;
-        ctx.add_mapping_rule(&addr, "POST", "*", "repo.lifecycle")?;
+        ctx.add_mapping_rule(&addr, Method::POST, "*", "repo.lifecycle")?;
         ctx.mocks.push(
             Mock::given(method("POST"))
                 .and(path(MOCK_PATH))

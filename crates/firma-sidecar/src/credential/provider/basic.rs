@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use firma_core::{ExecutionEnvelope, HeaderName, InjectedCredentials};
+use firma_core::{ExecutionEnvelope, InjectedCredentials};
+use firma_http::HeaderName;
 
 use crate::credential::{CredentialInjectionError, CredentialInjector};
 

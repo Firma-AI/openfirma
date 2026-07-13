@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use firma_core::HeaderName;
+use firma_http::{HeaderName, Method};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
@@ -193,7 +193,7 @@ fn dispatched_response(response: DispatchedResponse) -> Response<Full<Bytes>> {
 /// Returns a detail string suitable for a `MALFORMED_REQUEST` denial when the
 /// host cannot be resolved or the body cannot be read.
 async fn build_raw_request(req: Request<Incoming>) -> Result<RawRequest, String> {
-    let method = req.method().to_string();
+    let method = Method(req.method().clone());
     let path = req
         .uri()
         .path_and_query()
@@ -347,7 +347,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("POST".to_string()),
+                method: Some(Method::POST),
                 host: "*".to_string(),
                 path: Some(path.to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -387,7 +387,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("POST".to_string()),
+                method: Some(Method::POST),
                 host: "api.openai.com".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -441,7 +441,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("POST".to_string()),
+                method: Some(Method::POST),
                 host: "*".to_string(),
                 path: Some(path.to_string()),
                 action_class: "communication.external.send".to_string(),
@@ -481,7 +481,7 @@ mod tests {
         let registry = ActionClassRegistry::v0_1();
         let rules = MappingRulesFile {
             rules: vec![MappingRuleConfig {
-                method: Some("POST".to_string()),
+                method: Some(Method::POST),
                 host: "api.openai.com".to_string(),
                 path: Some("/v1/chat/completions".to_string()),
                 action_class: "communication.external.send".to_string(),

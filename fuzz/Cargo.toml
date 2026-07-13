@@ -15,7 +15,8 @@ cargo-fuzz = true
 [dependencies]
 arbitrary = { version = "1", features = ["derive"] }
 chrono = "0.4"
-firma-core = { path = "../crates/firma-core", features = ["fuzz"] }
+firma-core = { path = "../crates/firma-core" }
+firma-http = { path = "../crates/firma-http", features = ["fuzz"] }
 firma-sidecar = { path = "../crates/firma-sidecar" }
 libfuzzer-sys = "0.4"
 toml = "0.8"

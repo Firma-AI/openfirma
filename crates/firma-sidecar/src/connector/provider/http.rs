@@ -407,9 +407,10 @@ mod tests {
     use std::sync::{Arc, Mutex, MutexGuard};
 
     use firma_core::{
-        ActionParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HeaderName,
-        HttpMethod, HttpParams, InjectedCredentials,
+        ActionParams, ExecutionEnvelope, ExecutionIntent, ExecutionMetadata, HttpMethod,
+        HttpParams, InjectedCredentials,
     };
+    use firma_http::HeaderName;
     use tracing_subscriber::fmt::MakeWriter;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};

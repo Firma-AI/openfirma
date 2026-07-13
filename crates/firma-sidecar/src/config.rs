@@ -37,7 +37,7 @@ use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
-use firma_core::HeaderName;
+use firma_http::HeaderName;
 use hyper::Uri;
 use serde::Deserialize;
 

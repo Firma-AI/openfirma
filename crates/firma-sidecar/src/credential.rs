@@ -64,9 +64,8 @@ impl CredentialInjector for NullCredentialInjector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use firma_core::{
-        ActionParams, ExecutionIntent, ExecutionMetadata, HeaderName, HttpMethod, HttpParams,
-    };
+    use firma_core::{ActionParams, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams};
+    use firma_http::HeaderName;
     use std::collections::HashMap;
 
     fn sample_envelope() -> ExecutionEnvelope {

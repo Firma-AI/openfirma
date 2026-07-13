@@ -5,6 +5,7 @@
     reason = "Authority-wired capability manifest support is defined now but not consumed yet"
 )]
 
+use firma_http::Method;
 use serde::{Deserialize, Serialize};
 
 const VALID_HTTP_METHODS: &[&str] = &[
@@ -170,7 +171,7 @@ pub enum SessionStateBackend {
 pub struct MappingRuleConfig {
     /// HTTP method to match (`None` = any method).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub method: Option<String>,
+    pub method: Option<Method>,
     /// Host pattern to match (supports `*` wildcard).
     pub host: String,
     /// Path pattern to match (supports `*` wildcard).
@@ -194,7 +195,7 @@ impl MappingRuleConfig {
             return Err("action_class must not be empty".into());
         }
         if let Some(ref method) = self.method
-            && !VALID_HTTP_METHODS.contains(&method.to_uppercase().as_str())
+            && !VALID_HTTP_METHODS.contains(&method.as_str())
         {
             return Err(format!(
                 "invalid HTTP method '{}'; expected one of: {}",
@@ -306,6 +307,8 @@ const fn default_session_state_capacity() -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
 
     // -- MappingRuleConfig --------------------------------------------------
@@ -313,7 +316,7 @@ mod tests {
     #[test]
     fn test_valid_mapping_rule() {
         let rule = MappingRuleConfig {
-            method: Some("POST".to_string()),
+            method: Some(Method::POST),
             host: "api.openai.com".to_string(),
             path: Some("/v1/chat/completions".to_string()),
             action_class: "communication.external.send".to_string(),
@@ -324,7 +327,7 @@ mod tests {
     #[test]
     fn test_valid_connect_mapping_rule() {
         let rule = MappingRuleConfig {
-            method: Some("CONNECT".to_string()),
+            method: Some(Method::CONNECT),
             host: "api.openai.com:443".to_string(),
             path: Some("/".to_string()),
             action_class: "communication.external.send".to_string(),
@@ -362,7 +365,7 @@ mod tests {
     #[test]
     fn test_invalid_http_method_rejected() {
         let rule = MappingRuleConfig {
-            method: Some("YEET".to_string()),
+            method: Some(Method(http::Method::from_str("YEET").unwrap())),
             host: "api.example.com".to_string(),
             path: None,
             action_class: "filesystem.read".to_string(),
