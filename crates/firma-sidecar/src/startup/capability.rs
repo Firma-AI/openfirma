@@ -7,12 +7,17 @@
 
 use std::path::Path;
 
+use crate::config;
+use crate::config::{CapabilitySeedConfig, SeedFile};
+use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
+use crate::enforcement::capability_validation::CapabilityMapHandle;
 use anyhow::Context;
 use firma_core::token::paseto::PasetoV4Verifier;
 use firma_core::{AgentId, CapabilityClaims, SessionId, TokenError, TokenId, TokenVerifier};
-
-use crate::config::{CapabilitySeedConfig, SeedFile};
-use crate::enforcement::capability_map::{CapabilityEntry, CapabilityMap};
+use notify::Watcher as _;
+use std::collections::HashSet;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 /// True when `path` is an operator-configured seed (NOT under the runtime
 /// capabilities dir written by `firma run`), and therefore should emit the
@@ -152,6 +157,131 @@ impl TokenVerifier for RejectAllVerifier {
     }
 }
 
+/// Owns the file watcher and reload task. Dropping it stops the watch and the
+/// reload task.
+pub struct CapabilityReloader {
+    _watcher: notify::RecommendedWatcher,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for CapabilityReloader {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+impl CapabilityReloader {
+    /// Spawn the capability seed-file watcher.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the OS file watcher cannot be created or registered.
+    pub fn spawn(
+        config: &config::CapabilitySeedConfig,
+        token_verifier: Arc<dyn TokenVerifier + Send + Sync>,
+        capability_handle: CapabilityMapHandle,
+        cancel: CancellationToken,
+    ) -> anyhow::Result<Self> {
+        let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
+        let capabilities_dir =
+            firma_runtime_state::runtime_paths::capabilities_dir_from(&runtime_dir);
+        let seed_config = config.clone();
+        let (tx_signal, mut rx_signal) = tokio::sync::mpsc::channel::<()>(16);
+        let event_handler = move |res: notify::Result<notify::Event>| match res {
+            Ok(event)
+                if matches!(
+                    event.kind,
+                    notify::event::EventKind::Modify(_)
+                        | notify::event::EventKind::Create(_)
+                        | notify::event::EventKind::Remove(_)
+                ) =>
+            {
+                // Coalesced by the bounded channel; a full buffer already means a
+                // reload is pending, so dropping the extra signal is harmless.
+                let _ = tx_signal.try_send(());
+            }
+            Err(error) => tracing::error!(?error, "capability seed watch error"),
+            _ => {}
+        };
+
+        let mut watcher = notify::recommended_watcher(event_handler)
+            .context("failed to create capability seed watcher")?;
+
+        // The seed is written via a temp-file + atomic rename into its parent
+        // directory, so watch the parent directories (deduplicated) non-recursively
+        // rather than the files themselves — the rename target may not exist yet.
+        let mut watched_dirs = HashSet::new();
+        for path in &seed_config.paths {
+            let Some(dir) = path.parent() else {
+                continue;
+            };
+            if watched_dirs.insert(dir.to_path_buf()) {
+                watcher
+                    .watch(dir, notify::RecursiveMode::NonRecursive)
+                    .with_context(|| {
+                        format!(
+                            "failed to watch capability seed directory {}",
+                            dir.display()
+                        )
+                    })?;
+            }
+        }
+
+        let task = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    () = cancel.cancelled() => break,
+                    recv = rx_signal.recv() => {
+                        if recv.is_none() {
+                            break;
+                        }
+                        // Drain coalesced signals so a burst of events triggers a
+                        // single rebuild.
+                        while rx_signal.try_recv().is_ok() {}
+
+                        match load_capability_map(&seed_config, token_verifier.as_ref(), &capabilities_dir) {
+                            Ok(map) => {
+                                capability_handle.store(Arc::new(map));
+                                tracing::info!(
+                                    "capability map hot-reloaded from updated seed file(s)"
+                                );
+                            }
+                            Err(error) => {
+                                // A missing seed file is expected on teardown:
+                                // `firma run`'s guard deletes it, which fires a
+                                // Remove event. Log that at debug; surface real
+                                // reload failures (e.g. a bad re-minted token)
+                                // at error.
+                                if seed_config.paths.iter().any(|p| !p.exists()) {
+                                    tracing::debug!(
+                                        %error,
+                                        "capability seed file absent on reload; keeping previous map"
+                                    );
+                                } else {
+                                    tracing::error!(
+                                        %error,
+                                        "capability seed reload failed; keeping previous map \
+                                         (it will fail closed on its own expiry)"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        tracing::debug!(
+            directories = watched_dirs.len(),
+            "capability seed hot-reload watcher started"
+        );
+        Ok(Self {
+            _watcher: watcher,
+            task,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +311,7 @@ mod tests {
     fn rejects_unreadable_path() {
         let seed = CapabilitySeedConfig {
             paths: vec![PathBuf::from("/definitely/not/here.toml")],
+            hot_reload: true,
         };
         let verifier = build_token_verifier(None).unwrap();
         let err = load_capability_map(

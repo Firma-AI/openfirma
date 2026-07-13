@@ -1027,6 +1027,7 @@ mod tests {
         let config = SidecarConfig {
             capability_seed: CapabilitySeedConfig {
                 paths: vec![std::path::PathBuf::from("./capability.toml")],
+                hot_reload: true,
             },
             ..SidecarConfig::default()
         };
@@ -1042,6 +1043,7 @@ mod tests {
         let mut config = SidecarConfig {
             capability_seed: CapabilitySeedConfig {
                 paths: vec![std::path::PathBuf::from("./capability.toml")],
+                hot_reload: true,
             },
             ..SidecarConfig::default()
         };

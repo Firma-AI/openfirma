@@ -15,13 +15,33 @@ pub use firma_core::CapabilitySeed as SeedFile;
 ///
 /// Lists pre-issued capability seed files that the sidecar loads at
 /// startup to pre-populate its `CapabilityMap`. Empty by default.
-#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct CapabilitySeedConfig {
     /// Paths to seed TOML files produced by `firma-authority issue`.
     /// Empty list means no static seeding (Stage 1 will deny every
     /// protected request).
     #[serde(default)]
     pub paths: Vec<PathBuf>,
+    /// When `true` (default), the sidecar watches the seed file(s) and hot-swaps
+    /// its `CapabilityMap` when they change, so a token re-minted by `firma run`
+    /// is picked up without a restart. Set `false` to pin the map loaded at
+    /// startup.
+    #[serde(default = "default_hot_reload")]
+    pub hot_reload: bool,
+}
+
+/// Default for [`CapabilitySeedConfig::hot_reload`].
+const fn default_hot_reload() -> bool {
+    true
+}
+
+impl Default for CapabilitySeedConfig {
+    fn default() -> Self {
+        Self {
+            paths: Vec::new(),
+            hot_reload: default_hot_reload(),
+        }
+    }
 }
 
 impl CapabilitySeedConfig {
@@ -91,6 +111,7 @@ budget_ceiling = 1.5
     fn rejects_empty_path() {
         let cfg = CapabilitySeedConfig {
             paths: vec![PathBuf::new()],
+            hot_reload: true,
         };
         let err = cfg.validate().unwrap_err();
         assert!(err.contains("paths[0]"));

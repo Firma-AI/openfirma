@@ -87,7 +87,7 @@ fn build_pipeline() -> EnforcementPipeline {
             raw_token: "v4.public.bench".to_string(),
             claims: claims.clone(),
         }]),
-        Box::new(MockVerifier { claims }),
+        Arc::new(MockVerifier { claims }),
         Arc::new(NoRevocations),
         Duration::from_secs(0),
         TenancyMode::SingleAgent,

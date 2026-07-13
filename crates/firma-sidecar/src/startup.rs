@@ -27,7 +27,9 @@ pub mod pipeline;
 
 pub use self::audit::{load_audit_event_builder, spawn_audit_sink};
 pub use self::authority::spawn_authority_client;
-pub use self::capability::{build_token_verifier, load_capability_map, seed_into_entry};
+pub use self::capability::{
+    CapabilityReloader, build_token_verifier, load_capability_map, seed_into_entry,
+};
 pub use self::connector::build_connector_registry;
 pub use self::interceptor::{SpawnedInterceptor, spawn_interceptor};
 pub use self::local_exec::spawn_local_exec_endpoint;

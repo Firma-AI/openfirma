@@ -1609,6 +1609,7 @@ dependencies = [
  "loom",
  "lru 0.17.0",
  "nix 0.31.3",
+ "notify",
  "p256",
  "pasetors",
  "pretty_assertions",

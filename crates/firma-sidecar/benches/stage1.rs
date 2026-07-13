@@ -83,7 +83,7 @@ fn bench_stage1_validate(c: &mut Criterion) {
             raw_token: "v4.public.bench_token".to_string(),
             claims: claims.clone(),
         }]),
-        Box::new(MockVerifier { claims }),
+        Arc::new(MockVerifier { claims }),
         revocations,
         Duration::from_secs(0),
         TenancyMode::SingleAgent,
