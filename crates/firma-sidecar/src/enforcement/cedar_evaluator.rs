@@ -187,7 +187,7 @@ impl CedarPolicyEvaluator {
         principal: &AgentId,
         action: &str,
         resource: &str,
-        context: &serde_json::Value,
+        context: serde_json::Value,
     ) -> Result<Response, CedarEvaluatorError> {
         let principal_uid: EntityUid = FirmaEntityUid::Agent(principal.clone())
             .try_into()
@@ -199,9 +199,8 @@ impl CedarPolicyEvaluator {
             .try_into()
             .map_err(CedarEvaluatorError::EntityUidParse)?;
 
-        let cedar_context =
-            Context::from_json_value(context.clone(), Some((&self.schema, &action_uid)))
-                .map_err(|e| CedarEvaluatorError::ContextBuild(Box::new(e)))?;
+        let cedar_context = Context::from_json_value(context, Some((&self.schema, &action_uid)))
+            .map_err(|e| CedarEvaluatorError::ContextBuild(Box::new(e)))?;
 
         let request = Request::new(
             Some(principal_uid),
@@ -380,7 +379,7 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
         principal: &AgentId,
         action: &str,
         resource: &str,
-        context: &serde_json::Value,
+        context: serde_json::Value,
     ) -> Result<bool, String> {
         self.evaluate_response(principal, action, resource, context)
             .map(|response| matches!(response.decision(), Decision::Allow))
@@ -402,7 +401,7 @@ impl PolicyEvaluation for CedarPolicyEvaluator {
         principal: &AgentId,
         action: &str,
         resource: &str,
-        context: &serde_json::Value,
+        context: serde_json::Value,
     ) -> Result<PolicyVerdict, String> {
         let response = self
             .evaluate_response(principal, action, resource, context)
@@ -558,7 +557,7 @@ namespace Firma {
                 &agent("agent_test"),
                 "communication.external.send",
                 "api.openai.com",
-                &test_context(),
+                test_context(),
             )
             .unwrap();
         assert!(result);
@@ -572,7 +571,7 @@ namespace Firma {
                 &agent("agent_test"),
                 "communication.external.send",
                 "api.openai.com",
-                &test_context(),
+                test_context(),
             )
             .unwrap();
         assert!(!result);
@@ -637,7 +636,7 @@ namespace Firma {
                 &agent("agent_test"),
                 "communication.external.send",
                 "api.openai.com",
-                &test_context(),
+                test_context(),
             )
             .unwrap();
         assert!(allow);
@@ -656,7 +655,7 @@ namespace Firma {
                 &agent("agent_test"),
                 "communication.external.send",
                 "api.openai.com",
-                &deny_context,
+                deny_context,
             )
             .unwrap();
         assert!(!deny);
@@ -681,7 +680,7 @@ namespace Firma {
                 &agent("agent_test"),
                 "communication.external.send",
                 "api.openai.com",
-                &full_context(),
+                full_context(),
             )
             .unwrap();
         assert!(result);
@@ -696,7 +695,7 @@ namespace Firma {
             &agent("agent_test"),
             "unknown.action",
             "api.openai.com",
-            &full_context(),
+            full_context(),
         );
         assert!(
             result.is_err(),
@@ -717,7 +716,7 @@ namespace Firma {
             &agent("agent_test"),
             "communication.external.send",
             "api.openai.com",
-            &incomplete_context,
+            incomplete_context,
         );
         assert!(
             result.is_err(),
@@ -738,7 +737,7 @@ namespace Firma {
                 &agent("agent_test"),
                 "communication.external.send",
                 "api.openai.com",
-                &full_context(),
+                full_context(),
             )
             .unwrap();
         assert!(allow);
@@ -768,7 +767,7 @@ namespace Firma {
                 &agent("agent_test"),
                 "communication.external.send",
                 "api.openai.com/v1/chat/completions",
-                &context,
+                context,
             )
             .unwrap();
 
@@ -799,7 +798,7 @@ namespace Firma {
                 &agent("agent_test"),
                 "communication.external.send",
                 "api.openai.com/v1/chat/completions",
-                &context,
+                context,
             )
             .unwrap();
 
@@ -926,7 +925,7 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
             })
             .unwrap();
             let allowed = evaluator
-                .evaluate(&subject, "payment.transfer", resource, &ctx)
+                .evaluate(&subject, "payment.transfer", resource, ctx)
                 .unwrap();
             assert!(
                 allowed,
@@ -943,7 +942,7 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
         })
         .unwrap();
         let allowed = evaluator
-            .evaluate(&subject, "payment.transfer", resource, &ctx)
+            .evaluate(&subject, "payment.transfer", resource, ctx)
             .unwrap();
         assert!(
             !allowed,
@@ -965,7 +964,7 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
                 &agent("example-agent"),
                 "payment.transfer",
                 "payments.example.com",
-                &ctx,
+                ctx,
             )
             .unwrap();
         assert!(
@@ -989,7 +988,7 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
                 &agent("example-agent"),
                 "payment.transfer",
                 "payments.example.com",
-                &ctx,
+                ctx,
             )
             .unwrap();
         assert!(!allowed, "same-payee concentration >= 3 must be denied");
@@ -1009,7 +1008,7 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
                 &agent("example-agent"),
                 "payment.transfer",
                 "payments.example.com",
-                &ctx,
+                ctx,
             )
             .unwrap();
         assert!(allowed, "transfer within all limits must be permitted");
@@ -1032,7 +1031,7 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
                 &agent("agent_test"),
                 "communication.external.send",
                 "api.openai.com",
-                &test_context(),
+                test_context(),
             )
             .unwrap_or_else(|e| panic!("evaluate_verdict failed: {e}"))
     }
@@ -1060,7 +1059,7 @@ forbid(principal, action, resource);"#,
                     &agent("agent_test"),
                     "communication.external.send",
                     "api.openai.com",
-                    &test_context(),
+                    test_context(),
                 )
                 .unwrap()
         );

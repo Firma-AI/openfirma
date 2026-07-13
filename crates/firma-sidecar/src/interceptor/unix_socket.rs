@@ -293,7 +293,7 @@ mod tests {
             _: &AgentId,
             _: &str,
             _: &str,
-            _: &serde_json::Value,
+            _: serde_json::Value,
         ) -> Result<bool, String> {
             Ok(true)
         }

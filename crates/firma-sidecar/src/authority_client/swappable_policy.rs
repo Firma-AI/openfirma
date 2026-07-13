@@ -52,7 +52,7 @@ impl PolicyEvaluation for SwappablePolicyEvaluation {
         principal: &AgentId,
         action: &str,
         resource: &str,
-        context: &serde_json::Value,
+        context: serde_json::Value,
     ) -> Result<bool, String> {
         self.inner
             .load()
@@ -68,7 +68,7 @@ impl PolicyEvaluation for SwappablePolicyEvaluation {
         principal: &AgentId,
         action: &str,
         resource: &str,
-        context: &serde_json::Value,
+        context: serde_json::Value,
     ) -> Result<PolicyVerdict, String> {
         self.inner
             .load()
@@ -108,7 +108,7 @@ impl PolicyEvaluation for DenyAllPolicyEvaluation {
         _principal: &AgentId,
         _action: &str,
         _resource: &str,
-        _context: &serde_json::Value,
+        _context: serde_json::Value,
     ) -> Result<bool, String> {
         Ok(false)
     }

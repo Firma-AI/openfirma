@@ -413,7 +413,7 @@ impl PolicyEvaluation for DenyAllEvaluation {
         _principal: &AgentId,
         _action: &str,
         _resource: &str,
-        _context: &serde_json::Value,
+        _context: serde_json::Value,
     ) -> Result<bool, String> {
         Ok(false)
     }
@@ -831,7 +831,7 @@ async fn sequential_valid_bundles_swap_observed_by_evaluate() -> anyhow::Result<
     // v1 permits everything, so evaluate should ALLOW.
     let allowed_v1 = harness
         .swappable_policy
-        .evaluate(&agent, "test.action", "resource", &ctx)
+        .evaluate(&agent, "test.action", "resource", ctx.clone())
         .expect("cedar evaluator returns Ok for valid request");
     assert!(
         allowed_v1,
@@ -853,7 +853,7 @@ async fn sequential_valid_bundles_swap_observed_by_evaluate() -> anyhow::Result<
 
     let allowed_v2 = harness
         .swappable_policy
-        .evaluate(&agent, "test.action", "resource", &ctx)
+        .evaluate(&agent, "test.action", "resource", ctx)
         .expect("cedar evaluator returns Ok for valid request");
     assert!(!allowed_v2, "v2 forbid(...) must DENY on the next evaluate");
 
@@ -892,7 +892,7 @@ async fn cold_boot_without_bundle_stays_not_ready() -> anyhow::Result<()> {
     let ctx = serde_json::json!({});
     let allowed = harness
         .swappable_policy
-        .evaluate(&agent, "test.action", "resource", &ctx)
+        .evaluate(&agent, "test.action", "resource", ctx)
         .expect("sentinel evaluator returns Ok(false)");
     assert!(!allowed, "sentinel DenyAll must refuse every evaluate()");
 
@@ -980,7 +980,7 @@ async fn tls_handshake_fails_with_wrong_ca_cert_stays_not_ready() -> anyhow::Res
     let ctx = serde_json::json!({});
     let allowed = harness
         .swappable_policy
-        .evaluate(&agent, "test.action", "resource", &ctx)
+        .evaluate(&agent, "test.action", "resource", ctx)
         .expect("sentinel evaluator returns Ok(false)");
     assert!(
         !allowed,

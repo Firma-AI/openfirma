@@ -4,7 +4,7 @@
 
 use std::hint::black_box;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use firma_core::AgentId;
 use firma_sidecar::enforcement::cedar_evaluator::CedarPolicyEvaluator;
 use firma_sidecar::enforcement::constraint_enforcement::PolicyEvaluation;
@@ -26,14 +26,18 @@ fn bench_allow(c: &mut Criterion) {
     let p = agent();
     let ctx = ctx();
     c.bench_function("cedar_evaluate_allow", |b| {
-        b.iter(|| {
-            let _ = black_box(ev.evaluate(
-                black_box(&p),
-                black_box("bench.action.allow"),
-                black_box("resource-1"),
-                black_box(&ctx),
-            ));
-        });
+        b.iter_batched(
+            || ctx.clone(),
+            |ctx| {
+                let _ = black_box(ev.evaluate(
+                    black_box(&p),
+                    black_box("bench.action.allow"),
+                    black_box("resource-1"),
+                    black_box(ctx),
+                ));
+            },
+            BatchSize::SmallInput,
+        );
     });
 }
 
@@ -43,14 +47,18 @@ fn bench_deny(c: &mut Criterion) {
     let p = agent();
     let ctx = ctx();
     c.bench_function("cedar_evaluate_deny", |b| {
-        b.iter(|| {
-            let _ = black_box(ev.evaluate(
-                black_box(&p),
-                black_box("bench.action.deny"),
-                black_box("resource-1"),
-                black_box(&ctx),
-            ));
-        });
+        b.iter_batched(
+            || ctx.clone(),
+            |ctx| {
+                let _ = black_box(ev.evaluate(
+                    black_box(&p),
+                    black_box("bench.action.deny"),
+                    black_box("resource-1"),
+                    black_box(ctx),
+                ));
+            },
+            BatchSize::SmallInput,
+        );
     });
 }
 
@@ -60,14 +68,18 @@ fn bench_context(c: &mut Criterion) {
     let p = agent();
     let ctx = ctx();
     c.bench_function("cedar_evaluate_context", |b| {
-        b.iter(|| {
-            let _ = black_box(ev.evaluate(
-                black_box(&p),
-                black_box("bench.action.ctx"),
-                black_box("resource-1"),
-                black_box(&ctx),
-            ));
-        });
+        b.iter_batched(
+            || ctx.clone(),
+            |ctx| {
+                let _ = black_box(ev.evaluate(
+                    black_box(&p),
+                    black_box("bench.action.ctx"),
+                    black_box("resource-1"),
+                    black_box(ctx),
+                ));
+            },
+            BatchSize::SmallInput,
+        );
     });
 }
 

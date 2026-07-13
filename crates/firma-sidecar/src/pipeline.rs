@@ -908,7 +908,7 @@ mod tests {
             _: &AgentId,
             _: &str,
             _: &str,
-            _: &serde_json::Value,
+            _: serde_json::Value,
         ) -> Result<bool, String> {
             Ok(true)
         }
@@ -1209,7 +1209,7 @@ mod tests {
                 _: &AgentId,
                 action: &str,
                 _: &str,
-                _: &serde_json::Value,
+                _: serde_json::Value,
             ) -> Result<bool, String> {
                 Ok(action != "filesystem.delete")
             }
@@ -1285,7 +1285,7 @@ mod tests {
                 _: &AgentId,
                 _: &str,
                 _: &str,
-                _: &serde_json::Value,
+                _: serde_json::Value,
             ) -> Result<bool, String> {
                 Ok(false)
             }
@@ -1774,7 +1774,7 @@ mod tests {
                 _: &AgentId,
                 _: &str,
                 _: &str,
-                _: &serde_json::Value,
+                _: serde_json::Value,
             ) -> Result<bool, String> {
                 Ok(true)
             }
