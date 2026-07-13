@@ -11,6 +11,7 @@ targets = []
 version = 2
 # All licenses that appear in the dependency tree must be explicitly allowed.
 allow = [
+  "GPL-3.0-only",
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
   "MIT",
