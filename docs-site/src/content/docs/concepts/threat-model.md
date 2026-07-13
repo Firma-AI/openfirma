@@ -67,6 +67,11 @@ OpenFirma has six layers between an agent and an upstream system. Each one has i
 
 **Mitigations:** keep your sandbox backend patched. Use `firma run` for any agent you don't fully trust. Don't rely on `HTTP_PROXY` alone for hostile workloads.
 
+**WSL2 compatibility limit:** the managed `vscode` profile is not supported
+with the `wsl2` backend. Firma rejects this combination before launch because
+its Windows VS Code shim would run on the host instead of following the WSL
+guest launch path.
+
 ### Layer 2: Interception
 
 **Provides:** capture of outbound HTTP traffic.

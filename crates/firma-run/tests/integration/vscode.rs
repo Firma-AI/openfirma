@@ -3,6 +3,11 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
+use firma_run::backend::{BackendKind, PrepareRequest, SandboxBackend, Wsl2Backend};
+use firma_run::config::resolve_profile;
+use firma_run::error::RunError;
+use firma_run::identity::RunIdentity;
+use firma_run::runtime::RunInput;
 use firma_run::runtime::vscode::testing;
 use tempfile::TempDir;
 
@@ -11,6 +16,56 @@ fn host_bin_with_code(tmpdir: &TempDir) -> Result<PathBuf, Box<dyn std::error::E
     fs::create_dir(&host_bin)?;
     fs::write(host_bin.join("code"), "#!/bin/sh\nexit 0\n")?;
     Ok(host_bin)
+}
+
+fn vscode_run_input() -> RunInput {
+    RunInput {
+        profile: "vscode".to_string(),
+        config: None,
+        backend: None,
+        sidecar_cli: firma_run::sidecar::SidecarCli::Unset,
+        capability_file: None,
+        identity_mode: None,
+        preserve_host_user: false,
+        print_effective_config: false,
+        no_autostart: false,
+        sidecar_template_path: None,
+        sidecar_startup_timeout_secs: 10,
+        command: vec!["code".to_string(), ".".to_string()],
+        authority_cli: firma_run::authority::AuthorityCli::Unset,
+        authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
+        user_config_path: None,
+        allow_non_structural: true,
+        monitor_mode: false,
+    }
+}
+
+#[test]
+fn wsl2_backend_rejects_vscode_profile_before_preparing_runtime()
+-> Result<(), Box<dyn std::error::Error>> {
+    let tmpdir = tempfile::tempdir()?;
+    let mut profile = resolve_profile(&vscode_run_input())?;
+    profile.backend = BackendKind::Wsl2;
+    let request = PrepareRequest {
+        identity: RunIdentity::new("vscode"),
+        profile,
+        working_dir: tmpdir.path().to_path_buf(),
+    };
+
+    let error = Wsl2Backend::new()
+        .prepare(&request)
+        .expect_err("WSL2 must reject the managed VS Code host shim");
+
+    assert!(matches!(
+        error,
+        RunError::UnsupportedProfileBackend {
+            ref profile,
+            ref backend,
+            ..
+        } if profile == "vscode" && backend == "wsl2"
+    ));
+    assert!(error.to_string().contains("runs on the Windows host"));
+    Ok(())
 }
 
 #[test]
