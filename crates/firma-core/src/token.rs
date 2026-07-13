@@ -183,9 +183,18 @@ pub fn matches_resource_scope(scope: &str, resource: &str) -> bool {
         return true;
     }
     if let Some(prefix) = scope.strip_suffix("/*") {
-        return resource == prefix || resource.starts_with(&format!("{prefix}/"));
+        return resource == prefix || starts_with_plus_slash(resource, prefix);
     }
-    resource == scope || resource.starts_with(&format!("{scope}/"))
+    resource == scope || starts_with_plus_slash(resource, scope)
+}
+
+#[inline]
+fn starts_with_plus_slash(resource: &str, scope: &str) -> bool {
+    resource.len() > scope.len()
+        && resource
+            .chars()
+            .zip(scope.chars().chain("/".chars()))
+            .all(|(a, b)| a == b)
 }
 
 #[cfg(test)]
