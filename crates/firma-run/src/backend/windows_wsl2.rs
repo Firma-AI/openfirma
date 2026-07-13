@@ -32,6 +32,15 @@ impl SandboxBackend for Wsl2Backend {
     }
 
     fn prepare(&self, request: &PrepareRequest) -> Result<SandboxHandle, RunError> {
+        if request.profile.id == "vscode" {
+            return Err(RunError::UnsupportedProfileBackend {
+                profile: request.profile.id.clone(),
+                backend: BackendKind::Wsl2.to_string(),
+                reason: "the managed VS Code launcher runs on the Windows host rather than inside WSL; VS Code is not currently supported by the WSL2 backend"
+                    .to_string(),
+            });
+        }
+
         if current_host_mode() == Wsl2HostMode::Unsupported {
             return Err(RunError::UnsupportedBackend {
                 backend: BackendKind::Wsl2.to_string(),
@@ -302,8 +311,11 @@ mod tests {
     }
 
     #[test]
-    fn build_windows_wsl_command_includes_env_and_exec() {
-        let launch = sample_launch();
+    fn windows_wsl_command_keeps_cmd_scripts_inside_wsl_launch_path() {
+        let launch = LaunchSpec {
+            executable: r"C:\temp\wrapper.cmd".to_string(),
+            ..sample_launch()
+        };
         let cmd = build_windows_wsl_command(&launch, "/mnt/c/work".to_string());
         assert_eq!(cmd.get_program().to_string_lossy(), "wsl.exe");
         let args = cmd
@@ -317,7 +329,7 @@ mod tests {
             "env".to_string()
         ]));
         assert!(args.iter().any(|arg| arg == "FIRMA_TEST=1"));
-        assert!(args.contains(&"/bin/echo".to_string()));
+        assert!(args.contains(&r"C:\temp\wrapper.cmd".to_string()));
         assert!(args.ends_with(&["hello".to_string(), "world".to_string()]));
     }
 }

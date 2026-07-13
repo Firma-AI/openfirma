@@ -18,6 +18,9 @@ use crate::seccomp::resolve_effective_seccomp;
 use crate::sidecar::supervisor::DEFAULT_STARTUP_TIMEOUT_SECS;
 use crate::supervisor::wait_with_signal_forwarding;
 
+#[doc(hidden)]
+pub mod vscode;
+
 /// Lib-level input for [`execute_run`]. The CLI layer (in the `firma`
 /// host crate) builds this from its `clap`-derived args struct.
 #[derive(Debug, Clone)]
@@ -172,8 +175,10 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         let user_config_dir = resolved_user_config
             .as_ref()
             .map(firma_config_loader::ResolvedConfig::config_dir);
-        let sidecar_template_path =
-            resolve_sidecar_template_path(args, user_config_path.as_deref());
+        let sidecar_template_path = resolve_sidecar_template_path(
+            args.sidecar_template_path.as_deref(),
+            user_config_path.as_deref(),
+        );
         let mut flags = AutostartFlags {
             sidecar_autostart: matches!(
                 profile.sidecar_selection,
@@ -238,7 +243,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
                 "resolved managed static seccomp artifact"
             );
         }
-        let env = build_execution_env(
+        let mut env = build_execution_env(
             &profile,
             &identity,
             &lease,
@@ -246,7 +251,7 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             network_runtime.env_overrides(),
         );
 
-        let executable = args
+        let mut executable = args
             .command
             .first()
             .cloned()
@@ -256,11 +261,36 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             &executable,
             args.command.iter().skip(1).cloned().collect(),
         );
-        let launch_args =
+        let mut launch_args =
             maybe_apply_claude_settings(handle_ref, &profile, &executable, launch_args)?;
+        let vscode_state_dir = if vscode::should_apply_vscode_shim(&profile, &executable) {
+            let state_dir = vscode::resolve_vscode_state_dir(
+                user_config_path.as_deref(),
+                &handle_ref.runtime_dir,
+            )?;
+            let prepared = vscode::prepare_vscode_shim(
+                &handle_ref.runtime_dir,
+                &state_dir,
+                &executable,
+                launch_args,
+                &mut env,
+                std::env::var_os("PATH").as_deref(),
+            )?;
+            executable = prepared.executable.display().to_string();
+            launch_args = prepared.args;
+            Some(state_dir)
+        } else {
+            None
+        };
         if let Some(mediator) = &profile.sidecar_local_exec {
             let canonical = resolve_governed_executable(mediator, &executable)?;
             enforce_local_command_governance(mediator, &identity, &canonical, &launch_args)?;
+        }
+        if let Some(state_dir) = vscode_state_dir {
+            let handle_mut = handle
+                .as_mut()
+                .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
+            vscode::ensure_vscode_state_mount(handle_mut, &state_dir);
         }
         let launch = LaunchSpec {
             executable,
@@ -272,7 +302,12 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
             identity_mode: profile.identity_mode,
         };
 
-        let child = backend.start_agent(handle_ref, &launch)?;
+        let child = {
+            let handle_ref = handle
+                .as_ref()
+                .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
+            backend.start_agent(handle_ref, &launch)?
+        };
         wait_with_signal_forwarding(child, backend.kind())
     })();
 
@@ -284,17 +319,14 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
 }
 
 fn resolve_sidecar_template_path(
-    args: &RunInput,
+    sidecar_template_path: Option<&Path>,
     user_config_path: Option<&Path>,
 ) -> Option<PathBuf> {
-    args.sidecar_template_path
-        .clone()
-        .or_else(|| args.config.clone())
-        .or_else(|| {
-            user_config_path
-                .filter(|p| p.is_file())
-                .map(Path::to_path_buf)
-        })
+    sidecar_template_path.map(Path::to_path_buf).or_else(|| {
+        user_config_path
+            .filter(|p| p.is_file())
+            .map(Path::to_path_buf)
+    })
 }
 
 fn log_run_start(identity: &RunIdentity, profile: &ResolvedProfile) {
@@ -1302,28 +1334,241 @@ mod tests {
     }
 
     #[test]
-    fn resolve_sidecar_template_prefers_explicit_sidecar_config() {
-        let args = super::RunInput {
-            profile: "codex".to_string(),
-            config: Some(PathBuf::from("/tmp/from-run-config.toml")),
-            backend: None,
-            sidecar_cli: crate::sidecar::SidecarCli::Unset,
-            capability_file: None,
-            identity_mode: None,
-            preserve_host_user: false,
-            print_effective_config: false,
-            no_autostart: false,
-            sidecar_template_path: Some(PathBuf::from("/tmp/from-sidecar-config.toml")),
-            sidecar_startup_timeout_secs: 10,
-            command: vec!["codex".to_string()],
-            authority_cli: crate::authority::AuthorityCli::Unset,
-            authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
-            user_config_path: None,
-            allow_non_structural: true,
-            monitor_mode: false,
+    fn vscode_shim_creates_runtime_wrapper_and_prepends_path() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let host_bin = tmp.path().join("host-bin");
+        fs::create_dir(&host_bin).unwrap_or_else(|e| panic!("{e}"));
+        let real_code = host_bin.join("code");
+        fs::write(&real_code, "#!/bin/sh\nexit 0\n").unwrap_or_else(|e| panic!("{e}"));
+
+        let mut env = BTreeMap::from([("PATH".to_string(), host_bin.display().to_string())]);
+        let state_dir = tmp.path().join(".firma").join("vscode");
+        let prepared = super::vscode::prepare_vscode_shim(
+            tmp.path(),
+            &state_dir,
+            "code",
+            vec![".".to_string()],
+            &mut env,
+            Some(host_bin.as_os_str()),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        let shim = super::vscode::vscode_shim_path(&tmp.path().join("bin"));
+        assert_eq!(prepared.args, vec![".".to_string()]);
+        assert_eq!(prepared.executable, shim);
+        assert!(shim.is_file());
+        let script = fs::read_to_string(&shim).unwrap_or_else(|e| panic!("{e}"));
+        assert!(script.contains("--no-sandbox"));
+        assert!(script.contains("--wait"));
+        assert!(script.contains("--new-window"));
+        assert!(script.contains("--user-data-dir"));
+        assert!(script.contains("--extensions-dir"));
+        assert!(script.contains(&real_code.display().to_string()));
+        assert_eq!(
+            env.get("FIRMA_RUN_VSCODE_USER_DATA_DIR"),
+            Some(&state_dir.join("user-data").display().to_string())
+        );
+        assert_eq!(
+            env.get("FIRMA_RUN_VSCODE_EXTENSIONS_DIR"),
+            Some(&state_dir.join("extensions").display().to_string())
+        );
+        let settings_path = state_dir
+            .join("user-data")
+            .join("User")
+            .join("settings.json");
+        let settings = fs::read_to_string(&settings_path).unwrap_or_else(|e| panic!("{e}"));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&settings).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            parsed.get("github-authentication.preferDeviceCodeFlow"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert!(
+            env.get("PATH")
+                .is_some_and(|path| path.starts_with(&tmp.path().join("bin").display().to_string()))
+        );
+        assert_eq!(
+            env.get("TMPDIR"),
+            Some(
+                &tmp.path()
+                    .join("vscode")
+                    .join("xdg-runtime")
+                    .display()
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            env.get("XDG_RUNTIME_DIR"),
+            Some(
+                &tmp.path()
+                    .join("vscode")
+                    .join("xdg-runtime")
+                    .display()
+                    .to_string()
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vscode_shim_invokes_fake_code_with_managed_contract() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let host_bin = tmp.path().join("host-bin");
+        fs::create_dir(&host_bin).unwrap_or_else(|e| panic!("{e}"));
+        let real_code = host_bin.join("code");
+        let record_path = tmp.path().join("vscode-invocation.txt");
+        fs::write(
+            &real_code,
+            "#!/bin/sh\n\
+             set -eu\n\
+             {\n\
+             printf 'USER_DATA=%s\\n' \"$FIRMA_RUN_VSCODE_USER_DATA_DIR\"\n\
+             printf 'EXTENSIONS=%s\\n' \"$FIRMA_RUN_VSCODE_EXTENSIONS_DIR\"\n\
+             i=0\n\
+             for arg in \"$@\"; do\n\
+             printf 'ARG_%s=%s\\n' \"$i\" \"$arg\"\n\
+             i=$((i + 1))\n\
+             done\n\
+             } > \"$FIRMA_TEST_VSCODE_RECORD\"\n",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let mut permissions = fs::metadata(&real_code)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&real_code, permissions).unwrap_or_else(|e| panic!("{e}"));
+
+        let state_dir = tmp.path().join(".firma").join("vscode");
+        let mut env = BTreeMap::from([
+            ("PATH".to_string(), host_bin.display().to_string()),
+            (
+                "FIRMA_TEST_VSCODE_RECORD".to_string(),
+                record_path.display().to_string(),
+            ),
+        ]);
+        let prepared = super::vscode::prepare_vscode_shim(
+            tmp.path(),
+            &state_dir,
+            "code",
+            vec![".".to_string()],
+            &mut env,
+            Some(host_bin.as_os_str()),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        let output = Command::new(&prepared.executable)
+            .args(&prepared.args)
+            .env_clear()
+            .envs(&env)
+            .output()
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            output.status.success(),
+            "shim failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let user_data_dir = state_dir.join("user-data").display().to_string();
+        let extensions_dir = state_dir.join("extensions").display().to_string();
+        let record = fs::read_to_string(&record_path).unwrap_or_else(|e| panic!("{e}"));
+        let expected = [
+            format!("USER_DATA={user_data_dir}"),
+            format!("EXTENSIONS={extensions_dir}"),
+            "ARG_0=--no-sandbox".to_string(),
+            "ARG_1=--wait".to_string(),
+            "ARG_2=--new-window".to_string(),
+            "ARG_3=--user-data-dir".to_string(),
+            format!("ARG_4={user_data_dir}"),
+            "ARG_5=--extensions-dir".to_string(),
+            format!("ARG_6={extensions_dir}"),
+            "ARG_7=.".to_string(),
+        ]
+        .join("\n");
+        assert_eq!(record.trim_end(), expected);
+    }
+
+    #[test]
+    fn vscode_state_dir_uses_config_parent_when_available() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let config_path = tmp.path().join(".firma").join("firma.toml");
+        let runtime_dir = tmp.path().join("runtime");
+
+        let state_dir = super::vscode::resolve_vscode_state_dir(Some(&config_path), &runtime_dir)
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        assert_eq!(state_dir, tmp.path().join(".firma").join("vscode"));
+    }
+
+    #[test]
+    fn vscode_state_mount_is_added_once() {
+        let state_dir = PathBuf::from("/workspace/.firma/vscode");
+        let mut handle = crate::backend::SandboxHandle {
+            backend: crate::backend::BackendKind::Bwrap,
+            runtime_dir: PathBuf::from("/tmp/firma-run/session"),
+            identity: crate::identity::RunIdentity::new("vscode".to_string()),
+            mounts: Vec::new(),
+            network_policy: crate::config::NetworkPolicy {
+                enforce_network_namespace: true,
+                fail_closed: true,
+            },
         };
+
+        super::vscode::ensure_vscode_state_mount(&mut handle, &state_dir);
+        super::vscode::ensure_vscode_state_mount(&mut handle, &state_dir);
+
+        assert_eq!(handle.mounts.len(), 1);
+        assert_eq!(handle.mounts[0].source, state_dir);
+        assert!(!handle.mounts[0].read_only);
+    }
+
+    #[test]
+    fn vscode_shim_rejects_state_and_window_conflicts() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let mut env = BTreeMap::new();
+        let error = super::vscode::prepare_vscode_shim(
+            tmp.path(),
+            &tmp.path().join("vscode"),
+            "code",
+            vec!["--user-data-dir".to_string(), "/tmp/code".to_string()],
+            &mut env,
+            Some(std::ffi::OsStr::new("/usr/bin")),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("--user-data-dir"));
+
+        let error = super::vscode::prepare_vscode_shim(
+            tmp.path(),
+            &tmp.path().join("vscode"),
+            "code",
+            vec!["--reuse-window".to_string()],
+            &mut env,
+            Some(std::ffi::OsStr::new("/usr/bin")),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("--reuse-window"));
+    }
+
+    #[test]
+    fn vscode_host_executable_resolution_uses_supplied_path() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let host_bin = tmp.path().join("host-bin");
+        fs::create_dir(&host_bin).unwrap_or_else(|e| panic!("{e}"));
+        let real_code = host_bin.join("code");
+        fs::write(&real_code, "#!/bin/sh\nexit 0\n").unwrap_or_else(|e| panic!("{e}"));
+
+        let resolved = super::vscode::resolve_host_executable("code", Some(host_bin.as_os_str()))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(resolved, real_code);
+    }
+
+    #[test]
+    fn resolve_sidecar_template_prefers_explicit_sidecar_config() {
         let resolved = super::resolve_sidecar_template_path(
-            &args,
+            Some(PathBuf::from("/tmp/from-sidecar-config.toml").as_path()),
             Some(PathBuf::from("/tmp/user.toml").as_path()),
         );
         assert_eq!(
@@ -1338,26 +1583,7 @@ mod tests {
         let user_cfg = tmp.path().join(CONFIG_FILE_NAME);
         fs::write(&user_cfg, "[sidecar]\n").unwrap_or_else(|e| panic!("{e}"));
 
-        let args = super::RunInput {
-            profile: "codex".to_string(),
-            config: None,
-            backend: None,
-            sidecar_cli: crate::sidecar::SidecarCli::Unset,
-            capability_file: None,
-            identity_mode: None,
-            preserve_host_user: false,
-            print_effective_config: false,
-            no_autostart: false,
-            sidecar_template_path: None,
-            sidecar_startup_timeout_secs: 10,
-            command: vec!["codex".to_string()],
-            authority_cli: crate::authority::AuthorityCli::Unset,
-            authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
-            user_config_path: None,
-            allow_non_structural: true,
-            monitor_mode: false,
-        };
-        let resolved = super::resolve_sidecar_template_path(&args, Some(user_cfg.as_path()));
+        let resolved = super::resolve_sidecar_template_path(None, Some(user_cfg.as_path()));
         assert_eq!(resolved, Some(user_cfg));
     }
 

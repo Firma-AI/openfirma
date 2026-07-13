@@ -12,3 +12,4 @@ mod sidecar_autostart_monitor_env;
 mod sidecar_autostart_ready_scrape;
 mod sidecar_autostart_timeout;
 mod sidecar_config_merge;
+mod vscode;

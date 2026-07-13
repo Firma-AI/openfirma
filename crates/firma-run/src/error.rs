@@ -18,6 +18,13 @@ pub enum RunError {
     #[error("backend error ({backend}): {reason}")]
     Backend { backend: String, reason: String },
 
+    #[error("profile '{profile}' is incompatible with backend '{backend}': {reason}")]
+    UnsupportedProfileBackend {
+        profile: String,
+        backend: String,
+        reason: String,
+    },
+
     #[error("capability lease error: {0}")]
     Capability(String),
 
