@@ -21,7 +21,7 @@ Policy in, signed decision out. Deterministic. At call-level.
 <div align="center">
 
 [![CI](https://github.com/Firma-AI/openfirma/actions/workflows/ci.yml/badge.svg)](https://github.com/Firma-AI/openfirma/actions/workflows/ci.yml)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![License: GPL 3.0](https://img.shields.io/badge/License-GPL_3.0-blue.svg)](https://opensource.org/licenses/GPL-3.0)
 [![Built with Rust](https://img.shields.io/badge/Built_with-Rust-orange.svg)](https://www.rust-lang.org)
 
 </div>
@@ -330,4 +330,4 @@ The Authority can be the Mini Authority included in this repo or your own implem
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE)
+GPL 3.0. See [LICENSE](LICENSE)

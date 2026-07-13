@@ -45,4 +45,4 @@ Running this before you create the PR will help reduce back and forth during rev
 
 ## License
 
-By contributing to OpenFirma, you agree that your contributions will be licensed under the [Apache License 2.0](LICENSE).
+By contributing to OpenFirma, you agree that your contributions will be licensed under the [GPL License 3.0](LICENSE).
