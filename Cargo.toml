@@ -22,7 +22,7 @@ resolver = "3"
 [workspace.package]
 version = "0.1.2"
 edition = "2024"
-license = "Apache-2.0"
+license = "GPL-3.0-only"
 repository = "https://github.com/Firma-AI/openfirma"
 rust-version = "1.96"
 
