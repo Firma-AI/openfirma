@@ -175,8 +175,10 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         let user_config_dir = resolved_user_config
             .as_ref()
             .map(firma_config_loader::ResolvedConfig::config_dir);
-        let sidecar_template_path =
-            resolve_sidecar_template_path(args, user_config_path.as_deref());
+        let sidecar_template_path = resolve_sidecar_template_path(
+            args.sidecar_template_path.as_deref(),
+            user_config_path.as_deref(),
+        );
         let mut flags = AutostartFlags {
             sidecar_autostart: matches!(
                 profile.sidecar_selection,
@@ -262,8 +264,10 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
         let mut launch_args =
             maybe_apply_claude_settings(handle_ref, &profile, &executable, launch_args)?;
         let vscode_state_dir = if vscode::should_apply_vscode_shim(&profile, &executable) {
-            let state_dir =
-                vscode::resolve_vscode_state_dir(args.config.as_deref(), &handle_ref.runtime_dir)?;
+            let state_dir = vscode::resolve_vscode_state_dir(
+                user_config_path.as_deref(),
+                &handle_ref.runtime_dir,
+            )?;
             let prepared = vscode::prepare_vscode_shim(
                 &handle_ref.runtime_dir,
                 &state_dir,
@@ -315,17 +319,14 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
 }
 
 fn resolve_sidecar_template_path(
-    args: &RunInput,
+    sidecar_template_path: Option<&Path>,
     user_config_path: Option<&Path>,
 ) -> Option<PathBuf> {
-    args.sidecar_template_path
-        .clone()
-        .or_else(|| args.config.clone())
-        .or_else(|| {
-            user_config_path
-                .filter(|p| p.is_file())
-                .map(Path::to_path_buf)
-        })
+    sidecar_template_path.map(Path::to_path_buf).or_else(|| {
+        user_config_path
+            .filter(|p| p.is_file())
+            .map(Path::to_path_buf)
+    })
 }
 
 fn log_run_start(identity: &RunIdentity, profile: &ResolvedProfile) {
@@ -1566,27 +1567,8 @@ mod tests {
 
     #[test]
     fn resolve_sidecar_template_prefers_explicit_sidecar_config() {
-        let args = super::RunInput {
-            profile: "codex".to_string(),
-            config: Some(PathBuf::from("/tmp/from-run-config.toml")),
-            backend: None,
-            sidecar_cli: crate::sidecar::SidecarCli::Unset,
-            capability_file: None,
-            identity_mode: None,
-            preserve_host_user: false,
-            print_effective_config: false,
-            no_autostart: false,
-            sidecar_template_path: Some(PathBuf::from("/tmp/from-sidecar-config.toml")),
-            sidecar_startup_timeout_secs: 10,
-            command: vec!["codex".to_string()],
-            authority_cli: crate::authority::AuthorityCli::Unset,
-            authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
-            user_config_path: None,
-            allow_non_structural: true,
-            monitor_mode: false,
-        };
         let resolved = super::resolve_sidecar_template_path(
-            &args,
+            Some(PathBuf::from("/tmp/from-sidecar-config.toml").as_path()),
             Some(PathBuf::from("/tmp/user.toml").as_path()),
         );
         assert_eq!(
@@ -1601,26 +1583,7 @@ mod tests {
         let user_cfg = tmp.path().join(CONFIG_FILE_NAME);
         fs::write(&user_cfg, "[sidecar]\n").unwrap_or_else(|e| panic!("{e}"));
 
-        let args = super::RunInput {
-            profile: "codex".to_string(),
-            config: None,
-            backend: None,
-            sidecar_cli: crate::sidecar::SidecarCli::Unset,
-            capability_file: None,
-            identity_mode: None,
-            preserve_host_user: false,
-            print_effective_config: false,
-            no_autostart: false,
-            sidecar_template_path: None,
-            sidecar_startup_timeout_secs: 10,
-            command: vec!["codex".to_string()],
-            authority_cli: crate::authority::AuthorityCli::Unset,
-            authority_profile: firma_authority::DEFAULT_PROFILE.to_string(),
-            user_config_path: None,
-            allow_non_structural: true,
-            monitor_mode: false,
-        };
-        let resolved = super::resolve_sidecar_template_path(&args, Some(user_cfg.as_path()));
+        let resolved = super::resolve_sidecar_template_path(None, Some(user_cfg.as_path()));
         assert_eq!(resolved, Some(user_cfg));
     }
 
