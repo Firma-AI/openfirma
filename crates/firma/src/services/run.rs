@@ -5,20 +5,24 @@ use std::process::ExitCode;
 
 use firma_config_loader::CONFIG_DIR_NAME;
 use firma_run::authority::AuthorityPromptIo;
-use firma_run::runtime::{RunInput, execute_run};
+use firma_run::runtime::{LaunchHooks, RunInput, execute_run};
 use tracing::{info, warn};
 
 use crate::args::run::RunArgs;
+use crate::log::ForegroundLog;
 use crate::services::config::{AuthorityShape, ScaffoldPlan, scaffold_from_plan};
 
 /// Run the `firma run` subcommand. Sync — must not be called from inside
 /// a tokio runtime.
 ///
+/// `foreground` is the foreground log handle from [`crate::log::init`]; it is
+/// redirected off the terminal while the wrapped agent's TUI owns it.
+///
 /// # Errors
 ///
 /// Returns an error if `firma_run` fails to launch or supervise the
 /// wrapped command.
-pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
+pub fn run(args: RunArgs, foreground: &ForegroundLog) -> anyhow::Result<ExitCode> {
     if args.no_autostart && args.authority.as_deref() == Some("local") {
         anyhow::bail!(
             "--no-autostart is incompatible with --authority local; pass --authority <url> or omit --no-autostart"
@@ -76,7 +80,16 @@ pub fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         allow_non_structural: args.allow_non_structural,
         monitor_mode: args.monitor,
     };
-    match execute_run(&input) {
+    // Redirect the stderr log surface into the per-run marker dir once the
+    // wrapped agent's TUI owns the terminal, and restore it to stderr after the
+    // agent exits for teardown output. `execute_run` supplies the marker dir.
+    let on_launch = |marker_dir: &std::path::Path| foreground.redirect(marker_dir);
+    let on_exit = || foreground.restore();
+    let hooks = LaunchHooks {
+        on_agent_launch: Some(&on_launch),
+        on_agent_exit: Some(&on_exit),
+    };
+    match execute_run(&input, &hooks) {
         Ok(code) => Ok(exit_code(code)),
         Err(error) => Err(anyhow::anyhow!("{error}")),
     }

@@ -93,7 +93,7 @@ impl<'de> Deserialize<'de> for Method {
 
 #[cfg(feature = "fuzz")]
 impl arbitrary::Arbitrary<'_> for Method {
-    fn arbitrary<'a>(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
         let s = <&str>::arbitrary(u)?;
         http::Method::from_str(s)
             .map(Method)

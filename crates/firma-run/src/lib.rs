@@ -12,6 +12,7 @@ pub mod dns_stub;
 pub mod egress_guard;
 pub mod error;
 pub mod identity;
+pub mod log;
 pub mod mediator;
 pub mod profile;
 pub mod proxy_bridge;

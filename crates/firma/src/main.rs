@@ -14,10 +14,13 @@ use crate::args::Command;
 fn main() -> ExitCode {
     let cli = args::parse();
 
-    if let Err(e) = log::init(&cli.log_filter, cli.log_file.as_deref()) {
-        output::err(format!("{e}"));
-        return ExitCode::from(1);
-    }
+    let foreground = match log::init(&cli.log_filter, cli.log_file.as_deref()) {
+        Ok(handle) => handle,
+        Err(e) => {
+            output::err(format!("{e}"));
+            return ExitCode::from(1);
+        }
+    };
 
     let result = match cli.command {
         Command::Authority(a) => block_on_async(services::authority::run(a)),
@@ -29,7 +32,7 @@ fn main() -> ExitCode {
         Command::Policy(a) => services::policy::run(a),
         Command::Monitor(a) => Ok(services::monitor::run(&a)),
         Command::ProxyBridge(a) => services::proxy_bridge::run(a),
-        Command::Run(a) => services::run::run(a),
+        Command::Run(a) => services::run::run(a, &foreground),
         Command::Sidecar(a) => block_on_async(services::sidecar::run(a)),
         Command::Supervise(a) => Ok(services::supervise::run(a)),
         Command::Token(a) => services::token::run(a),

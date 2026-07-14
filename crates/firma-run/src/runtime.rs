@@ -72,6 +72,18 @@ pub struct RunInput {
     pub monitor_mode: bool,
 }
 
+/// Callbacks fired around the tty-handoff to the wrapped agent. Both hooks are
+/// optional; the default is a no-op on each.
+#[derive(Clone, Copy, Default)]
+pub struct LaunchHooks<'a> {
+    /// Invoked immediately after the agent process is spawned and owns the
+    /// terminal, before the supervisor blocks waiting on it. Receives the
+    /// per-run marker directory.
+    pub on_agent_launch: Option<&'a (dyn Fn(&Path) + Sync)>,
+    /// Invoked once the agent has been reaped, before teardown runs.
+    pub on_agent_exit: Option<&'a (dyn Fn() + Sync)>,
+}
+
 /// Execute `firma run`.
 ///
 /// # Errors
@@ -82,7 +94,7 @@ pub struct RunInput {
     clippy::too_many_lines,
     reason = "step-0 authority resolution + sidecar autostart + sandbox lifecycle are sequential and read more clearly inline"
 )]
-pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
+pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunError> {
     if args.command.is_empty() {
         return Err(RunError::MissingCommand);
     }
@@ -306,7 +318,21 @@ pub fn execute_run(args: &RunInput) -> Result<i32, RunError> {
                 .ok_or_else(|| RunError::Internal("sandbox handle missing".to_string()))?;
             backend.start_agent(handle_ref, &launch)?
         };
-        wait_with_signal_forwarding(child, backend.kind())
+        // Per-run marker dir under the persistent runtime root, alongside
+        // `sidecar.log` / `authority.log`. The caller redirects its foreground
+        // logs here while the agent's TUI owns the terminal.
+        let marker_dir = firma_runtime_state::runtime_paths::run_entry_from(
+            &firma_runtime_state::runtime_paths::default_runtime_dir(),
+            &identity.sandbox_id,
+        );
+        if let Some(hook) = hooks.on_agent_launch {
+            hook(&marker_dir);
+        }
+        let wait_result = wait_with_signal_forwarding(child, backend.kind());
+        if let Some(hook) = hooks.on_agent_exit {
+            hook();
+        }
+        wait_result
     })();
 
     let teardown_result = handle
