@@ -2150,6 +2150,7 @@ mod tests {
                 vec![crate::credential::provider::VaultSecretEntry {
                     header_name: HeaderName::from_static("authorization"),
                     value_prefix: Some("Bearer ".to_string()),
+                    value_transform: None,
                     secret_path: std::path::PathBuf::from("/nonexistent/secret"),
                 }],
             )]));

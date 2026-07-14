@@ -77,7 +77,7 @@ OpenFirma ships three default mapping files under `crates/firma-sidecar/config/m
 
 | File          | Covers                                       |
 | ------------- | -------------------------------------------- |
-| `github.toml` | 44 GitHub REST endpoints → 12 action classes |
+| `github.toml` | GitHub REST + smart HTTP → 12 action classes |
 | `stripe.toml` | 88 Stripe REST endpoints → 14 action classes |
 | `gmail.toml`  | 41 Gmail REST endpoints → 7 action classes   |
 
@@ -97,6 +97,26 @@ default_protected = true
 
 For a hands-on walkthrough of writing your own rules, see [Extend the action-class mapping](../../guides/extend-mapping/).
 
+### GitHub smart HTTP
+
+GitHub HTTPS git uses smart-HTTP endpoints on `github.com`, not the REST API host:
+
+```toml
+[[rules]]
+method       = "POST"
+host         = "github.com"
+path         = "/*/*.git/git-receive-pack"
+action_class = "code.write"
+```
+
+`git clone` and `git fetch` use `git-upload-pack` and map to `code.read`. `git push` uses `git-receive-pack` and maps to `code.write`; if the receive-pack body deletes a ref, the normalizer promotes the action to `code.destructive`. GitHub accepts both `https://github.com/owner/repo` and `https://github.com/owner/repo.git`; the shipped mapping covers both smart-HTTP path forms.
+
+A receive-pack request must update exactly one ref. The Sidecar denies multi-ref
+pushes because policy context contains one `git_ref`; split those updates into
+separate pushes so every ref is evaluated.
+
+These rules require HTTPS MITM for `github.com`. In CONNECT-only mode the Sidecar only sees `CONNECT github.com`, so branch/ref enforcement and git credential injection are not available.
+
 ## Resources: the other half of the picture
 
 A class tells the policy *what kind of action*. The **resource** tells the policy *what it's acting on*. The Sidecar attaches a resource to every envelope as a small key-value map:
@@ -109,11 +129,11 @@ provider: "github"
 
 `host` and `path` are always present. `provider` is set only when the request host **exact-matches a known allowlist**:
 
-| Host pattern                            | `provider` |
-| --------------------------------------- | ---------- |
-| `api.github.com` / `github.com`         | `github`   |
-| `api.stripe.com`                        | `stripe`   |
-| `gmail.googleapis.com`                  | `gmail`    |
+| Host pattern                    | `provider` |
+| ------------------------------- | ---------- |
+| `api.github.com` / `github.com` | `github`   |
+| `api.stripe.com`                | `stripe`   |
+| `gmail.googleapis.com`          | `gmail`    |
 
 This split is intentional. Identifying the provider lets policies write rules like "no Stripe transfers above a threshold" without binding the rule to a specific URL path. Not setting it for unknown hosts keeps the namespace honest — the Sidecar refuses to guess.
 

@@ -501,24 +501,70 @@ impl ConstraintEnforcer {
             .history
             .last()
             .map_or_else(String::new, |o| o.resource.clone());
-        Ok(serde_json::json!({
-            "session_id": claims.session_id,
-            "timestamp_ms": timestamp_ms,
-            "params": params,
-            "risk_score": signals.risk_score_long(),
-            "budget_remaining": signals.budget_remaining_long(claims.budget_ceiling),
-            "session_duration_s": session_duration_s,
-            "action_count": i64::try_from(signals.action_count).unwrap_or(i64::MAX),
-            "raw_transport": envelope.intent.raw_transport,
-            "transfer_amount": 0i64,
-            "daily_cumulative_amount": 0i64,
-            "transfers_last_10m": 0i64,
-            "same_payee_count_30m": 0i64,
-            "session_transfer_count": 0i64,
-            "deny_count": i64::try_from(signals.deny_count).unwrap_or(i64::MAX),
-            "prior_action_classes": prior_action_classes,
-            "last_resource": last_resource,
-        }))
+        let mut context = serde_json::Map::new();
+        context.insert(
+            "session_id".to_string(),
+            serde_json::json!(claims.session_id),
+        );
+        context.insert("timestamp_ms".to_string(), serde_json::json!(timestamp_ms));
+        context.insert("params".to_string(), serde_json::json!(params));
+        context.insert(
+            "risk_score".to_string(),
+            serde_json::json!(signals.risk_score_long()),
+        );
+        context.insert(
+            "budget_remaining".to_string(),
+            serde_json::json!(signals.budget_remaining_long(claims.budget_ceiling)),
+        );
+        context.insert(
+            "session_duration_s".to_string(),
+            serde_json::json!(session_duration_s),
+        );
+        context.insert(
+            "action_count".to_string(),
+            serde_json::json!(i64::try_from(signals.action_count).unwrap_or(i64::MAX)),
+        );
+        context.insert(
+            "raw_transport".to_string(),
+            serde_json::json!(envelope.intent.raw_transport),
+        );
+        context.insert("transfer_amount".to_string(), serde_json::json!(0i64));
+        context.insert(
+            "daily_cumulative_amount".to_string(),
+            serde_json::json!(0i64),
+        );
+        context.insert("transfers_last_10m".to_string(), serde_json::json!(0i64));
+        context.insert("same_payee_count_30m".to_string(), serde_json::json!(0i64));
+        context.insert(
+            "session_transfer_count".to_string(),
+            serde_json::json!(0i64),
+        );
+        context.insert(
+            "deny_count".to_string(),
+            serde_json::json!(i64::try_from(signals.deny_count).unwrap_or(i64::MAX)),
+        );
+        context.insert(
+            "prior_action_classes".to_string(),
+            serde_json::json!(prior_action_classes),
+        );
+        context.insert(
+            "last_resource".to_string(),
+            serde_json::json!(last_resource),
+        );
+        for key in [
+            "git_provider",
+            "git_owner",
+            "git_repo",
+            "git_ref",
+            "git_ref_type",
+            "git_operation",
+        ] {
+            if let Some(value) = envelope.intent.resource.get(key) {
+                context.insert(key.to_string(), serde_json::json!(value));
+            }
+        }
+
+        Ok(serde_json::Value::Object(context))
     }
 }
 
@@ -839,6 +885,49 @@ mod tests {
         assert!(context.get("resource").is_none());
         assert!(context.get("agent_id").is_none());
         assert!(context.get("timestamp").is_none());
+    }
+
+    #[test]
+    fn test_build_context_includes_git_metadata_when_present() {
+        let evaluator = ConstraintEnforcer::new(Arc::new(AllowAllPolicy));
+        let mut envelope =
+            test_envelope_with_resource("code.write", "github.com/owner/repo.git/git-receive-pack");
+        envelope
+            .intent
+            .resource
+            .insert("git_provider".to_string(), "github".to_string());
+        envelope
+            .intent
+            .resource
+            .insert("git_owner".to_string(), "firma-ai".to_string());
+        envelope
+            .intent
+            .resource
+            .insert("git_repo".to_string(), "openfirma".to_string());
+        envelope
+            .intent
+            .resource
+            .insert("git_ref".to_string(), "refs/heads/fir-413".to_string());
+        envelope
+            .intent
+            .resource
+            .insert("git_ref_type".to_string(), "branch".to_string());
+        envelope
+            .intent
+            .resource
+            .insert("git_operation".to_string(), "write".to_string());
+        let claims = test_claims(vec!["code.write"]);
+
+        let context = evaluator
+            .build_context(&envelope, &claims, &test_signals())
+            .expect("build_context must succeed for valid envelopes");
+
+        assert_eq!(context["git_provider"], "github");
+        assert_eq!(context["git_owner"], "firma-ai");
+        assert_eq!(context["git_repo"], "openfirma");
+        assert_eq!(context["git_ref"], "refs/heads/fir-413");
+        assert_eq!(context["git_ref_type"], "branch");
+        assert_eq!(context["git_operation"], "write");
     }
 
     #[test]

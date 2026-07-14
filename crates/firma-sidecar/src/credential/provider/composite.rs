@@ -122,6 +122,7 @@ mod tests {
             vec![VaultSecretEntry {
                 header_name: HeaderName::from_static("x-api-key"),
                 value_prefix: None,
+                value_transform: None,
                 secret_path: path,
             }],
         )]));
@@ -163,6 +164,7 @@ mod tests {
             vec![VaultSecretEntry {
                 header_name: HeaderName::from_static("authorization"),
                 value_prefix: None,
+                value_transform: None,
                 secret_path: PathBuf::from("/nonexistent/secret"),
             }],
         )]));

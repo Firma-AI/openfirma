@@ -24,6 +24,12 @@
 //   session_duration_s : Long    - seconds since claims.issued_at (non-negative)
 //   action_count       : Long    - monotonic per-session call counter, 1-based
 //   raw_transport      : String  - "http" or "https"; set by the normalizer
+//   git_provider       : String  - optional Git provider tag, currently "github"
+//   git_owner          : String  - optional repository owner or organization
+//   git_repo           : String  - optional repository name
+//   git_ref            : String  - optional full ref name, e.g. "refs/heads/main"
+//   git_ref_type       : String  - optional coarse ref kind: branch, tag, or ref
+//   git_operation      : String  - optional coarse Git operation: read, write, or delete
 namespace Firma {
     entity Agent;
     entity Resource;
@@ -48,6 +54,12 @@ namespace Firma {
     //   transfers_last_10m      : Long   — transfer count in the last 10-minute window
     //   same_payee_count_30m    : Long   — transfers to the same payee in the last 30 minutes
     //   session_transfer_count  : Long   — count of transfers in this session
+    //   git_provider            : String — optional Git provider tag, currently "github"
+    //   git_owner               : String — optional repository owner or organization
+    //   git_repo                : String — optional repository name
+    //   git_ref                 : String — optional full ref name, e.g. "refs/heads/main"
+    //   git_ref_type            : String — optional coarse ref kind: branch, tag, or ref
+    //   git_operation           : String — optional coarse Git operation: read, write, or delete
     type EnforcementContext = {
         session_id: String,
         timestamp_ms: Long,
@@ -64,7 +76,13 @@ namespace Firma {
         daily_cumulative_amount: Long,
         transfers_last_10m: Long,
         same_payee_count_30m: Long,
-        session_transfer_count: Long
+        session_transfer_count: Long,
+        git_provider?: String,
+        git_owner?: String,
+        git_repo?: String,
+        git_ref?: String,
+        git_ref_type?: String,
+        git_operation?: String
     };
 
     action "account.permission.change" appliesTo {

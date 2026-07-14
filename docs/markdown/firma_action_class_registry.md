@@ -185,7 +185,7 @@ Operator-facing mapping files ship under
 
 | File          | Covers                                       |
 | ------------- | -------------------------------------------- |
-| `github.toml` | 44 GitHub REST endpoints → 12 action classes |
+| `github.toml` | GitHub REST + smart HTTP → 12 action classes |
 | `stripe.toml` | 88 Stripe REST endpoints → 14 action classes |
 | `gmail.toml`  | 41 Gmail REST endpoints → 7 action classes   |
 

@@ -76,6 +76,7 @@ impl CredentialInjector for BasicCredentialInjector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::credential::provider::{CredentialValueTransform, render_secret_value};
     use firma_core::{ActionParams, ExecutionIntent, ExecutionMetadata, HttpMethod, HttpParams};
 
     fn sample_envelope() -> ExecutionEnvelope {
@@ -213,6 +214,40 @@ mod tests {
                 .map(String::as_str),
             Some("val")
         );
+    }
+
+    #[test]
+    fn test_github_pat_basic_transform_renders_basic_header() {
+        let rendered = render_secret_value(
+            "ghp_testtoken",
+            None,
+            Some(CredentialValueTransform::GithubPatBasic),
+        );
+        assert_eq!(rendered, "Basic eC1hY2Nlc3MtdG9rZW46Z2hwX3Rlc3R0b2tlbg==");
+    }
+
+    #[tokio::test]
+    async fn test_basic_injector_exact_host_scope_prevents_github_api_leakage() {
+        let injector = BasicCredentialInjector::new(HashMap::from([(
+            "github.com".to_string(),
+            HashMap::from([(
+                HeaderName::from_static("authorization"),
+                render_secret_value(
+                    "ghp_testtoken",
+                    None,
+                    Some(CredentialValueTransform::GithubPatBasic),
+                ),
+            )]),
+        )]));
+
+        let envelope = sample_envelope();
+        let result = injector
+            .inject(&envelope, "api.github.com", "https://api.github.com")
+            .await;
+        assert!(matches!(
+            result,
+            Err(CredentialInjectionError::UnknownConnector { .. })
+        ));
     }
 
     #[test]
