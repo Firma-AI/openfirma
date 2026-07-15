@@ -1,8 +1,8 @@
 //! Intercept transform for a vault CLI's captured output.
 //!
-//! Runs the policy's [`SecretMatcher`] over the plaintext output to extract the
-//! secrets into the firma-run dictionary and rewrite the output so the agent
-//! only ever sees placeholders.
+//! Runs the policy's [`firma_core::SecretMatcher`] over the plaintext output to
+//! extract the secrets into the firma-run dictionary and rewrite the output so
+//! the agent only ever sees placeholders.
 //!
 //! The matcher itself (JSONPath / regex) is compiled and executed by
 //! [`firma_sidecar::secret_matcher`]; this module owns the mint + store

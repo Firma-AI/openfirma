@@ -58,19 +58,19 @@ ciphertext that `bws` decrypts locally, so the cleartext secret exists only on t
 ## Architecture
 
 ```
-                          sandbox boundary
-  agent ── spawns ──▶ shim (fd-courier, no secrets)
-                        │  socketpair + SCM_RIGHTS over UDS bridge
-                        ▼
-                     ┌───────────────────────────────────┐
-                     │  firma-run broker (out-of-sandbox) │
-                     │   • secrets dictionary             │
-                     │   • pluggable transform            │
-                     │   • fd multiplexing / rewrite      │
-                     └───────────────┬───────────────────┘
-                                     │ governance request (per launch)
-                                     ▼
-                             Sidecar (Cedar PDP)
+                        sandbox boundary
+agent ── spawns ──▶ shim (fd-courier, no secrets)
+                      │  socketpair + SCM_RIGHTS over UDS bridge
+                      ▼
+                   ┌───────────────────────────────────┐
+                   │  firma-run broker (out-of-sandbox) │
+                   │   • secrets dictionary             │
+                   │   • pluggable transform            │
+                   │   • fd multiplexing / rewrite      │
+                   └───────────────┬───────────────────┘
+                                   │ governance request (per launch)
+                                   ▼
+                           Sidecar (Cedar PDP)
 ```
 
 Three pieces:
@@ -289,10 +289,10 @@ and merge over `[run.defaults]`.
 
 ```toml
 [run.defaults]
-shims = ["bws"]              # baseline for every profile
+shims = ["bws"] # baseline for every profile
 
 [run.profiles.playwright-agent]
-shims = ["bws", "npx"]       # this profile also shadows npx
+shims = ["bws", "npx"] # this profile also shadows npx
 ```
 
 `shims` is a `Vec<String>` on the profile patch (like `env_passthrough` /
@@ -355,17 +355,17 @@ is not secret-specific and could drive other shim behaviors in future.
 Each phase is an atomic revision that stands on its own, with tests per
 `rust-tests-guidelines`.
 
-| Phase | Scope | Crates | Outcome |
-| ----- | ----- | ------ | ------- |
-| 0 | This design doc; governance-contract extension; placeholder format | docs | Reviewed |
-| 1 | Broker skeleton: dictionary, Aho-Corasick matcher, UDS listener, `SCM_RIGHTS` fd-passing (no rewrite) | firma-run (+core types) | Unit tests: dictionary, matcher |
-| 2 | Cedar: `secret.mediate` action class + `@mode`/`@transform`/`@matcher`/`@match_*`/`@placeholder` annotations (`SecretMediation` enum), load-time validation incl. matcher compile | firma-core (schema), firma-sidecar | Unit tests on annotation parse/validate |
-| 3 | Governance-contract extension: broker → Sidecar decision returning mode + directives; PEP wiring; fail-closed rules | firma-run, firma-sidecar | E2E decision round-trip |
-| 4 | intercept: matcher execution (`json`/`regex` via `secret_matcher`) + minting; vault-CLI shim + broker | firma-run, firma-sidecar | E2E on bwrap with a fake vault CLI |
-| 5 | Transform layer: `raw` streaming rewriter (rehydrate + mask) with overlap buffers; fd-courier shim | firma-run | Property tests on chunk splits |
-| 6 | `mcp-jsonrpc` transform: line framing, JSON-aware rehydrate/mask/escape | firma-run | Unit tests on escaped/split cases |
-| 7 | redact + `shims` config + PATH-shim/bind-over-path injection; Playwright MCP integration; docs (docs-site + llms.txt) | firma-run, config-loader, docs | `just check` green |
-| 8 | Hardening: PTY/interactive, perf, zeroization; later — other backends (macOS vz-guest / WSL) and more vault CLIs | firma-run, backends | — |
+| Phase | Scope                                                                                                                                                                             | Crates                             | Outcome                                 |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- | --------------------------------------- |
+| 0     | This design doc; governance-contract extension; placeholder format                                                                                                                | docs                               | Reviewed                                |
+| 1     | Broker skeleton: dictionary, Aho-Corasick matcher, UDS listener, `SCM_RIGHTS` fd-passing (no rewrite)                                                                             | firma-run (+core types)            | Unit tests: dictionary, matcher         |
+| 2     | Cedar: `secret.mediate` action class + `@mode`/`@transform`/`@matcher`/`@match_*`/`@placeholder` annotations (`SecretMediation` enum), load-time validation incl. matcher compile | firma-core (schema), firma-sidecar | Unit tests on annotation parse/validate |
+| 3     | Governance-contract extension: broker → Sidecar decision returning mode + directives; PEP wiring; fail-closed rules                                                               | firma-run, firma-sidecar           | E2E decision round-trip                 |
+| 4     | intercept: matcher execution (`json`/`regex` via `secret_matcher`) + minting; vault-CLI shim + broker                                                                             | firma-run, firma-sidecar           | E2E on bwrap with a fake vault CLI      |
+| 5     | Transform layer: `raw` streaming rewriter (rehydrate + mask) with overlap buffers; fd-courier shim                                                                                | firma-run                          | Property tests on chunk splits          |
+| 6     | `mcp-jsonrpc` transform: line framing, JSON-aware rehydrate/mask/escape                                                                                                           | firma-run                          | Unit tests on escaped/split cases       |
+| 7     | redact + `shims` config + PATH-shim/bind-over-path injection; Playwright MCP integration; docs (docs-site + llms.txt)                                                             | firma-run, config-loader, docs     | `just check` green                      |
+| 8     | Hardening: PTY/interactive, perf, zeroization; later — other backends (macOS vz-guest / WSL) and more vault CLIs                                                                  | firma-run, backends                | —                                       |
 
 ## Cross-Platform Notes
 

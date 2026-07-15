@@ -38,7 +38,7 @@ pub fn spawn_local_exec_endpoint(
     #[cfg(target_family = "unix")]
     let endpoint = endpoint.with_evaluator(evaluator);
     #[cfg(not(target_family = "unix"))]
-    let _ = evaluator;
+    drop(evaluator);
     let socket_path = le_config.socket_path.display().to_string();
 
     tracing::info!(

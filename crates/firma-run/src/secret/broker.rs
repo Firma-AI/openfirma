@@ -4,11 +4,6 @@
 //! over the file descriptors of the wrapped tool using `SCM_RIGHTS`, together
 //! with a small JSON handshake describing the launch.
 //!
-//! Phase 1b provides only the transport skeleton — bind/accept, the handshake
-//! wire type, and descriptor passing. Policy evaluation (Cedar) and stream
-//! rewriting arrive in later phases; [`BrokerListener::accept`] simply returns
-//! the decoded handshake and the received descriptors.
-//!
 //! See `docs/architecture/secrets-interception.md`.
 
 #![expect(

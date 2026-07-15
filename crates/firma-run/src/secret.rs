@@ -36,6 +36,11 @@ pub mod pep;
 /// it so the agent sees placeholders.
 pub mod intercept;
 
+/// Broker-side application of a secret-mediation decision to a wrapped launch's
+/// captured output (fail-closed).
+#[cfg(unix)]
+pub mod session;
+
 /// URI scheme that prefixes every placeholder token.
 pub const PLACEHOLDER_SCHEME: &str = "firma-secret://";
 

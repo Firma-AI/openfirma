@@ -540,8 +540,8 @@ fn pick_remediation(candidates: &[&Remediation]) -> Option<Remediation> {
 
 impl PolicyEvaluation for CedarPolicyEvaluator {
     /// Evaluate the `secret.mediate` action for a shimmed launch, exposing the
-    /// [`Self::secret_decision`] logic through the trait with a stringified
-    /// error for the swap-boundary surface.
+    /// internal logic through the trait with a stringified error for the
+    /// swap-boundary surface.
     fn evaluate_secret_mediation(
         &self,
         principal: &AgentId,
