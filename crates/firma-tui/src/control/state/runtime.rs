@@ -9,7 +9,7 @@ pub enum ControlRuntimeState {
     Running,
     /// A blocking editor temporarily owns the terminal.
     EditingPolicy,
-    /// At least one policy operation is queued or in progress.
+    /// At least one policy rewrite is queued or in progress.
     Rewriting,
     /// Shutdown has been requested and the runner should stop.
     ShuttingDown,

@@ -195,41 +195,21 @@ impl PoliciesState {
             return Vec::new();
         }
 
-        let requested = self.requested_all_toggle_state();
-        self.queue_all_toggle_batches(requested)
+        self.queue_all_toggle_batches(self.requested_all_toggle_state())
     }
 
     pub fn finish_rewrite(&mut self, completion: &PolicyRewriteCompletion) {
-        let previous_error = self.error.clone();
-
         self.refresh_states_for_file(&completion.file, &completion.ids);
 
         match &completion.result {
+            Ok(()) if self.mark_state_mismatches(completion).is_empty() => self.error = None,
             Ok(()) => {
-                let mismatched_ids = self.mark_state_mismatches(
-                    &completion.file,
-                    &completion.ids,
-                    completion.requested,
-                );
-                if mismatched_ids.is_empty() {
-                    self.error = None;
-                } else {
-                    let error = policy_state_mismatch_error(
-                        &completion.file,
-                        mismatched_ids,
-                        completion.requested,
-                    );
-                    self.set_error(error);
-                }
+                self.error = Some(policy_state_mismatch_error(completion));
             }
             Err(error) => {
                 self.mark_rewrite_error(&completion.file, &completion.ids);
-                self.set_error(error.clone());
+                self.error = Some(error.clone());
             }
-        }
-
-        if self.error.is_none() {
-            self.last_error = previous_error;
         }
     }
 
@@ -241,66 +221,58 @@ impl PoliciesState {
         let ids: Vec<String> = self
             .rows
             .iter()
-            .filter(|row| row.file == file)
-            .map(|row| row.id.clone())
+            .filter(|policy| policy.file == file)
+            .map(|policy| policy.id.clone())
             .collect();
 
         let states = self.state_reader.read(file, &ids);
         let completed_ids = id_set(completed_ids);
 
-        for row in self.rows.iter_mut().filter(|row| row.file == file) {
-            row.state = states
-                .get(&row.id)
+        for policy in &mut self.rows {
+            if policy.file != file {
+                continue;
+            }
+
+            let completed = completed_ids.contains(policy.id.as_str());
+            let preserve_pending = policy.status.rewrite_pending() && !completed;
+            policy.state = states
+                .get(&policy.id)
                 .copied()
                 .unwrap_or(PolicyState::InvalidPolicy);
-            if completed_ids.contains(row.id.as_str()) || !row.status.rewrite_pending() {
-                row.status = PolicyRowStatus::State(row.state);
+
+            if !preserve_pending {
+                policy.status = PolicyRowStatus::State(policy.state);
             }
         }
     }
 
-    fn mark_state_mismatches(
-        &mut self,
-        file: &Path,
-        ids: &[String],
-        requested: PolicyState,
-    ) -> Vec<String> {
-        let ids = id_set(ids);
-        let mut mismatched_ids = Vec::new();
+    fn mark_state_mismatches(&mut self, completion: &PolicyRewriteCompletion) -> Vec<String> {
+        let ids = id_set(&completion.ids);
+        let mut mismatches = Vec::new();
+        for policy in &mut self.rows {
+            if policy.file != completion.file || !ids.contains(policy.id.as_str()) {
+                continue;
+            }
 
-        for row in self
-            .rows
-            .iter_mut()
-            .filter(|row| row.file == file && ids.contains(row.id.as_str()))
-        {
-            if row.state != requested {
-                row.status = PolicyRowStatus::Error;
-                mismatched_ids.push(row.id.clone());
+            if policy.state != completion.requested {
+                policy.status = PolicyRowStatus::Error;
+                mismatches.push(policy.id.clone());
             }
         }
 
-        mismatched_ids
+        mismatches
     }
 
     fn mark_rewrite_error(&mut self, file: &Path, ids: &[String]) {
-        let ids = id_set(ids);
-        for row in self
-            .rows
-            .iter_mut()
-            .filter(|row| row.file == file && ids.contains(row.id.as_str()))
-        {
-            row.status = PolicyRowStatus::Error;
-        }
+        self.set_batch_status(file, ids, PolicyRowStatus::Error);
     }
 
     fn set_batch_status(&mut self, file: &Path, ids: &[String], status: PolicyRowStatus) {
         let ids = id_set(ids);
-        for row in self
-            .rows
-            .iter_mut()
-            .filter(|row| row.file == file && ids.contains(row.id.as_str()))
-        {
-            row.status = status;
+        for policy in &mut self.rows {
+            if policy.file == file && ids.contains(policy.id.as_str()) {
+                policy.status = status;
+            }
         }
     }
 
@@ -309,11 +281,7 @@ impl PoliciesState {
     }
 
     fn requested_all_toggle_state(&self) -> PolicyState {
-        if self
-            .rows
-            .iter()
-            .all(|policy| policy.state == PolicyState::Enabled)
-        {
+        if self.rows.iter().all(|policy| policy.state.is_enabled()) {
             PolicyState::Disabled
         } else {
             PolicyState::Enabled
@@ -322,23 +290,17 @@ impl PoliciesState {
 
     fn queue_all_toggle_batches(&mut self, requested: PolicyState) -> Vec<PolicyRewriteRequest> {
         let mut batches = BTreeMap::<PathBuf, Vec<String>>::new();
-        for policy in self
-            .rows
-            .iter_mut()
-            .filter(|policy| policy.state != requested)
-        {
-            policy.status = PolicyRowStatus::Queued;
-            batches
-                .entry(policy.file.clone())
-                .or_default()
-                .push(policy.id.clone());
+        for policy in &mut self.rows {
+            queue_policy_batch(policy, requested, &mut batches);
         }
 
         rewrite_requests_from_batches(batches, requested)
     }
 
     fn any_rewrite_pending(&self) -> bool {
-        self.rows.iter().any(|row| row.status.rewrite_pending())
+        self.rows
+            .iter()
+            .any(|policy| policy.status.rewrite_pending())
     }
 
     fn clamp_selected_index(&mut self) {
@@ -351,16 +313,14 @@ impl PoliciesState {
             return None;
         }
 
-        let requested = match policy.state {
-            PolicyState::Enabled => PolicyState::Disabled,
-            PolicyState::Disabled => PolicyState::Enabled,
-            PolicyState::MissingFile
-            | PolicyState::MissingId
-            | PolicyState::InvalidPolicy
-            | PolicyState::ReadError => return None,
+        let requested = if policy.state.is_enabled() {
+            PolicyState::Disabled
+        } else {
+            PolicyState::Enabled
         };
 
         policy.status = PolicyRowStatus::Queued;
+
         Some(PolicyRewriteRequest {
             file: policy.file.clone(),
             ids: vec![policy.id.clone()],
@@ -424,6 +384,22 @@ fn policy_row(mapping: &PolicyMapping) -> PolicyRow {
     }
 }
 
+fn queue_policy_batch(
+    policy: &mut PolicyRow,
+    requested: PolicyState,
+    batches: &mut BTreeMap<PathBuf, Vec<String>>,
+) {
+    if policy.state == requested {
+        return;
+    }
+
+    policy.status = PolicyRowStatus::Queued;
+    batches
+        .entry(policy.file.clone())
+        .or_default()
+        .push(policy.id.clone());
+}
+
 fn rewrite_requests_from_batches(
     batches: BTreeMap<PathBuf, Vec<String>>,
     requested: PolicyState,
@@ -442,10 +418,12 @@ fn id_set(ids: &[String]) -> HashSet<&str> {
     ids.iter().map(String::as_str).collect()
 }
 
-fn policy_state_mismatch_error(
-    file: &Path,
-    ids: Vec<String>,
-    requested: PolicyState,
-) -> ControlError {
-    ControlError::policy_rewrite(file, ids, PolicyRewriteError::StateMismatch { requested })
+fn policy_state_mismatch_error(completion: &PolicyRewriteCompletion) -> ControlError {
+    ControlError::policy_rewrite(
+        &completion.file,
+        completion.ids.clone(),
+        PolicyRewriteError::StateMismatch {
+            requested: completion.requested,
+        },
+    )
 }

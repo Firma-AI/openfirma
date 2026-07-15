@@ -16,6 +16,6 @@ pub enum ControlAnnouncement {
     FatalError(ControlError),
     /// Request queue diagnostics.
     QueueDumpRequested,
-    /// Reload policy rows from disk after an external source change.
+    /// Reload policy rows from disk after an external edit.
     PolicyReloadRequested,
 }

@@ -1,4 +1,4 @@
-//! Commands and side effects for Policy Control.
+//! User commands for the control surface.
 
 use std::path::PathBuf;
 
@@ -8,71 +8,95 @@ use crate::control::{
     state::{AuditFilter, PolicyRewriteRequest},
 };
 
-/// Selection movement requested by keyboard input.
+/// Row movement requested by keyboard navigation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SelectionMovement {
-    /// Move one row toward the start of the focused pane.
+    /// Move one row toward the start of the focused list.
     Up,
-    /// Move one row toward the end of the focused pane.
+    /// Move one row toward the end of the focused list.
     Down,
-    /// Jump to the first row in the focused pane.
+    /// Move to the first row of the focused list.
     First,
-    /// Jump to the last row in the focused pane.
+    /// Move to the last row of the focused list.
     Last,
 }
 
-/// User command after key bindings have been resolved.
+/// User command after key bindings and UI context have been resolved.
 ///
-/// Commands mutate [`App`] state and may return runner-owned side effects.
-/// Keeping key parsing separate from command application lets the help text and
-/// event loop use the same command vocabulary.
+/// Commands update application state immediately when possible. Work that
+/// needs the runner, such as queueing a rewrite or opening a source file, is
+/// returned as a [`ControlEffect`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ControlCommand {
+    /// Toggle the about overlay.
+    ToggleAbout,
+    /// Close the about overlay.
+    CloseAbout,
     /// Toggle the help overlay.
     ToggleHelp,
     /// Close the help overlay.
     CloseHelp,
-    /// Toggle the selected policy row.
+    /// Close the audit row inspector.
+    CloseAuditInspect,
+    /// Request a rewrite for the selected policy.
     ToggleSelectedPolicy,
-    /// Toggle every policy row that needs to change.
+    /// Request rewrites for every policy that needs to change.
     ToggleAllPolicies,
     /// Change the audit decision filter.
     SetAuditFilter(AuditFilter),
     /// Open the selected policy source in an editor.
     OpenPolicySource,
+    /// Open the selected audit row inspector.
+    InspectAuditRow,
     /// Move selection in the focused pane.
     MoveSelection(SelectionMovement),
-    /// Move focus to the next pane.
+    /// Move focus between panes.
     SwitchPane,
-    /// Request shutdown.
+    /// Request an orderly shutdown.
     Quit,
 }
 
-/// Side effect produced by a command.
+/// Side effect returned by command application.
 ///
-/// Effects are executed by the runner after command application. This keeps
-/// application state free of terminal and process ownership.
+/// Effects are executed by the runner so command handling can stay focused on
+/// state transitions.
 #[derive(Debug)]
 pub enum ControlEffect {
-    /// Runtime announcement to handle at the event-loop boundary.
+    /// Emit a runtime announcement.
     Announce(ControlAnnouncement),
-    /// Policy rewrite request to enqueue on the serialized worker.
+    /// Queue a policy rewrite request.
     EnqueuePolicyRewrite(PolicyRewriteRequest),
     /// Open a policy source path in the operator's editor.
     OpenPolicySource(PathBuf),
 }
 
 impl ControlCommand {
-    /// Applies the command to app state and returns runner-owned effects.
+    /// Applies a command to application state and returns runner-owned work.
+    ///
+    /// Commands that cannot take effect in the current context return no
+    /// effects. For example, opening policy source has no effect when no
+    /// policy file is selected.
     #[must_use]
     pub(crate) fn apply(self, app: &mut App) -> Vec<ControlEffect> {
         match self {
+            Self::ToggleAbout => {
+                app.toggle_about();
+                Vec::new()
+            }
+            Self::CloseAbout => {
+                app.close_about();
+                Vec::new()
+            }
             Self::ToggleHelp => {
                 app.toggle_help();
                 Vec::new()
             }
             Self::CloseHelp => {
                 app.close_help();
+                Vec::new()
+            }
+            Self::CloseAuditInspect => {
+                app.close_audit_inspect();
                 Vec::new()
             }
             Self::ToggleSelectedPolicy => app
@@ -90,6 +114,10 @@ impl ControlCommand {
                 Vec::new()
             }
             Self::OpenPolicySource => open_policy_source_effect(app),
+            Self::InspectAuditRow => {
+                app.open_audit_inspect();
+                Vec::new()
+            }
             Self::MoveSelection(movement) => {
                 apply_selection_movement(app, movement);
                 Vec::new()

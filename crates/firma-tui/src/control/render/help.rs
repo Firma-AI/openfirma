@@ -14,8 +14,8 @@ use crate::control::{
 
 use super::theme::{accent_style, base_style, centered_popup, dim_style, panel};
 
-/// Renders the key binding help overlay.
-pub fn render_help(frame: &mut Frame<'_>, area: Rect, app: &App) {
+/// Draws the help overlay for the current binding context.
+pub fn render_help(frame: &mut Frame, area: Rect, app: &App) {
     let entries = bindings::help_entries(app);
     let footer = bindings::help_footer_entries(app);
     let key_width = help_key_width(&entries);
@@ -24,7 +24,7 @@ pub fn render_help(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let columns = help_columns(area, cell_width, entries.len());
     let rows = entries.len().div_ceil(columns);
 
-    let mut body = Vec::with_capacity(rows.saturating_add(2));
+    let mut body = Vec::with_capacity(rows + 2);
     for row in 0..rows {
         let mut spans = Vec::new();
         for column in 0..columns {
@@ -50,7 +50,7 @@ pub fn render_help(frame: &mut Frame<'_>, area: Rect, app: &App) {
     );
 }
 
-/// Renders compact key hints for the outer frame footer.
+/// Builds the compact key hint line rendered in the bottom frame.
 pub fn key_hints(app: &App) -> Line<'static> {
     let entries = bindings::footer_entries(app);
     let mut spans = Vec::with_capacity(entries.len().saturating_mul(4).saturating_add(1));
