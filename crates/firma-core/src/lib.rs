@@ -23,7 +23,8 @@ pub use connector::{Connector, ConnectorError, ConnectorResponse};
 pub use credential::InjectedCredentials;
 pub use decision::{
     AbortReason, Decision, DeferDuration, DenyReason, ModificationError, ModificationSpec,
-    SecretDecision, SecretMediation, SecretMediationError, SecretMode, SecretTransform, StepUpSpec,
+    SecretDecision, SecretMatcher, SecretMediation, SecretMediationError, SecretTransform,
+    StepUpSpec,
 };
 pub use envelope::{
     ActionParams, DbQueryParams, ExecutionContext, ExecutionEnvelope, ExecutionIntent,

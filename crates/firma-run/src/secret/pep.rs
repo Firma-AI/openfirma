@@ -183,12 +183,14 @@ mod tests {
     fn mediate_decision_maps_to_mediate() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gov.sock");
-        let directive = SecretMediation::from_annotations(
-            Some("intercept"),
-            None,
-            Some("bws"),
-            Some("firma-secret://bitwarden/{name}"),
-        )
+        let directive = SecretMediation::from_annotations(|key| match key {
+            "mode" => Some("intercept"),
+            "matcher" => Some("json"),
+            "match_value" => Some("$[*].value"),
+            "match_name" => Some("$[*].key"),
+            "placeholder" => Some("firma-secret://bitwarden/{name}"),
+            _ => None,
+        })
         .expect("valid directive");
         let response = serde_json::to_string(&SecretDecision::Mediate(directive.clone()))
             .expect("serialize decision");

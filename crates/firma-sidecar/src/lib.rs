@@ -46,4 +46,5 @@ pub mod normalizer;
 pub mod pipeline;
 #[cfg(unix)]
 pub mod run_audit;
+pub mod secret_matcher;
 pub mod startup;

@@ -632,7 +632,9 @@ mod tests {
 
         let policy = br#"
             @mode("intercept")
-            @adapter("bws")
+            @matcher("json")
+            @match_value("$[*].value")
+            @match_name("$[*].key")
             @placeholder("firma-secret://bitwarden/{name}")
             permit(principal, action == Firma::Action::"secret.mediate", resource)
             when { resource.id like "bws*" };
@@ -667,7 +669,9 @@ mod tests {
         .await;
 
         match serde_json::from_str::<SecretDecision>(&response) {
-            Ok(SecretDecision::Mediate(m)) => assert_eq!(m.adapter.as_deref(), Some("bws")),
+            Ok(SecretDecision::Mediate(m)) => {
+                assert!(matches!(m, firma_core::SecretMediation::Intercept { .. }));
+            }
             other => panic!("expected Mediate; got {other:?} (raw: {response})"),
         }
         cancel.cancel();

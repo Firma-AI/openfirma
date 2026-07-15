@@ -38,11 +38,13 @@ p256 = { workspace = true }
 prost-types = { workspace = true }
 rand = { workspace = true }
 rcgen = { workspace = true }
+regex = { workspace = true }
 reqwest = { workspace = true }
 rustls = { workspace = true }
 rustls-platform-verifier = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_json_path = { workspace = true }
 serde_repr = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }

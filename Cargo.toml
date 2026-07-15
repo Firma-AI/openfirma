@@ -107,6 +107,7 @@ rustls-platform-verifier = "0.7"
 same-file = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_json_path = "0.7"
 serde_repr = "0.1"
 serde_yaml = "0.9"
 serial_test = "3"

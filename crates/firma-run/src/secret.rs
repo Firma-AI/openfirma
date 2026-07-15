@@ -32,8 +32,16 @@ pub mod broker;
 #[cfg(unix)]
 pub mod pep;
 
+/// Intercept transform: extract secrets from a vault CLI's output and rewrite
+/// it so the agent sees placeholders.
+pub mod intercept;
+
 /// URI scheme that prefixes every placeholder token.
 pub const PLACEHOLDER_SCHEME: &str = "firma-secret://";
+
+/// Marker in a `@placeholder` template that mint substitutes with the secret
+/// key (percent-encoded).
+pub const PLACEHOLDER_NAME_MARKER: &str = "{name}";
 
 /// A placeholder token of the form `firma-secret://<provider>/<name>`.
 ///
@@ -56,6 +64,19 @@ impl Placeholder {
         token.push('/');
         encode_segment(name, &mut token);
         Self(token)
+    }
+
+    /// Mint a placeholder by substituting [`PLACEHOLDER_NAME_MARKER`] in a
+    /// `@placeholder` template with the percent-encoded secret key.
+    ///
+    /// The template is expected to be pre-validated (scheme + `{name}` marker),
+    /// as enforced at Cedar bundle load. The key is percent-encoded to the token
+    /// charset so the result round-trips.
+    #[must_use]
+    pub fn from_template(template: &str, name: &str) -> Self {
+        let mut encoded = String::new();
+        encode_segment(name, &mut encoded);
+        Self(template.replace(PLACEHOLDER_NAME_MARKER, &encoded))
     }
 
     /// Wrap an existing token, validating the scheme and token charset.

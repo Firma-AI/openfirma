@@ -190,8 +190,12 @@ mod tests {
 
     #[test]
     fn swapped_snapshot_secret_mediation_is_forwarded() {
-        let directive = SecretMediation::from_annotations(Some("redact"), Some("raw"), None, None)
-            .expect("valid directive");
+        let directive = SecretMediation::from_annotations(|key| match key {
+            "mode" => Some("redact"),
+            "transform" => Some("raw"),
+            _ => None,
+        })
+        .expect("valid directive");
         let swap = SwappablePolicyEvaluation::new(Box::new(DenyAllPolicyEvaluation));
         swap.swap(
             Box::new(MediatePolicy(directive.clone())),

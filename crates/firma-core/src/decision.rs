@@ -377,34 +377,6 @@ impl From<DeferDuration> for Duration {
     }
 }
 
-/// Mode of a secret-mediation directive, from the `@mode(...)` annotation on a
-/// `secret.mediate` policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SecretMode {
-    /// Wrap a vault CLI: capture its stdout, extract the secret(s), and mint
-    /// placeholders (populates the dictionary).
-    Intercept,
-    /// Wrap a target tool: rehydrate placeholders on stdin and mask secrets on
-    /// stdout (consumes the dictionary).
-    Redact,
-}
-
-impl SecretMode {
-    /// Parse a `@mode(...)` annotation value.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SecretMediationError::UnknownMode`] for an unrecognised value.
-    pub fn parse(value: &str) -> Result<Self, SecretMediationError> {
-        match value.trim() {
-            "intercept" => Ok(Self::Intercept),
-            "redact" => Ok(Self::Redact),
-            other => Err(SecretMediationError::UnknownMode(other.to_string())),
-        }
-    }
-}
-
 /// Stream transform for a redact directive, from the `@transform(...)`
 /// annotation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -451,18 +423,27 @@ pub enum SecretMediationError {
     /// `@mode("redact")` requires a `@transform`.
     #[error("@mode(\"redact\") requires a @transform annotation")]
     MissingTransform,
-    /// `@mode("intercept")` requires an `@adapter`.
-    #[error("@mode(\"intercept\") requires an @adapter annotation")]
-    MissingAdapter,
-    /// `@adapter` value was empty.
-    #[error("@adapter annotation must not be empty")]
-    EmptyAdapter,
+    /// `@mode("intercept")` requires a `@matcher`.
+    #[error("@mode(\"intercept\") requires a @matcher annotation")]
+    MissingMatcher,
+    /// `@matcher` value was not recognised.
+    #[error("unknown @matcher `{0}`; expected `json` or `regex`")]
+    UnknownMatcher(String),
+    /// `@matcher("json")` requires a non-empty `@match_value`.
+    #[error("@matcher(\"json\") requires a non-empty @match_value annotation")]
+    MissingMatchValue,
+    /// `@matcher("json")` requires a non-empty `@match_name`.
+    #[error("@matcher(\"json\") requires a non-empty @match_name annotation")]
+    MissingMatchName,
+    /// `@matcher("regex")` requires a non-empty `@match_pattern`.
+    #[error("@matcher(\"regex\") requires a non-empty @match_pattern annotation")]
+    MissingMatchPattern,
     /// `@transform` present but the mode is `intercept`.
     #[error("@transform is only valid with @mode(\"redact\")")]
     UnexpectedTransform,
-    /// `@adapter` present but the mode is `redact`.
-    #[error("@adapter is only valid with @mode(\"intercept\")")]
-    UnexpectedAdapter,
+    /// A matcher annotation present but the mode is `redact`.
+    #[error("@matcher / @match_* are only valid with @mode(\"intercept\")")]
+    UnexpectedMatcher,
     /// `@placeholder` present but the mode is `redact`.
     #[error("@placeholder is only valid with @mode(\"intercept\")")]
     UnexpectedPlaceholder,
@@ -476,24 +457,52 @@ pub enum SecretMediationError {
     },
 }
 
+/// How to extract secrets from a vault CLI's stdout, assembled from the
+/// intercept matcher annotations.
+///
+/// This is transport-agnostic spec data; the execution (`JSONPath` / `Regex`
+/// compilation and rewrite) lives in the firma-run broker.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SecretMatcher {
+    /// `JSONPath` extraction over structured output.
+    Json {
+        /// `JSONPath` selecting each secret value (`@match_value`).
+        value_path: String,
+        /// `JSONPath` selecting the matching name (`@match_name`), aligned by
+        /// document order with the value path.
+        name_path: String,
+    },
+    /// `Regex` extraction over text output. The pattern carries a required
+    /// `value` and optional `name` named capture group (`@match_pattern`).
+    Regex {
+        /// The `Regex` source.
+        pattern: String,
+    },
+}
+
 /// A validated secret-mediation directive assembled from a `secret.mediate`
 /// policy's annotations.
 ///
-/// Sourced from `@mode`, `@transform`, `@adapter`, and `@placeholder` on a
-/// `permit` policy for the `secret.mediate` action, assembled and validated at
-/// bundle load; the broker copies it out per launch. See
+/// Sourced from `@mode` plus mode-specific annotations on a `permit` policy for
+/// the `secret.mediate` action, assembled and validated at bundle load; the
+/// broker copies it out per launch. See
 /// `docs/architecture/secrets-interception.md`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SecretMediation {
-    /// Interception mode.
-    pub mode: SecretMode,
-    /// Stream transform; `Some` if and only if `mode == Redact`.
-    pub transform: Option<SecretTransform>,
-    /// Vault-output adapter name; `Some` if and only if `mode == Intercept`.
-    pub adapter: Option<String>,
-    /// Placeholder template (e.g. `firma-secret://bitwarden/{name}`) used to
-    /// mint tokens; `Some` if and only if `mode == Intercept`.
-    pub placeholder: Option<String>,
+pub enum SecretMediation {
+    /// Wrap a vault CLI: extract secrets with `matcher` and mint placeholders
+    /// from `placeholder`.
+    Intercept {
+        /// How to extract `(name, value)` pairs from the tool's output.
+        matcher: SecretMatcher,
+        /// Placeholder template, e.g. `firma-secret://bitwarden/{name}`.
+        placeholder: String,
+    },
+    /// Wrap a target tool: rehydrate placeholders on stdin and mask secrets on
+    /// stdout with `transform`.
+    Redact {
+        /// Stream transform codec.
+        transform: SecretTransform,
+    },
 }
 
 /// Scheme every placeholder token begins with. Must match
@@ -503,61 +512,85 @@ const PLACEHOLDER_TEMPLATE_SCHEME: &str = "firma-secret://";
 const PLACEHOLDER_NAME_MARKER: &str = "{name}";
 
 impl SecretMediation {
-    /// Assemble and validate a directive from raw annotation values.
+    /// Assemble and validate a directive from a policy's annotations.
     ///
-    /// Each argument is the raw annotation value, or `None` if the annotation
-    /// is absent.
+    /// `get` returns the raw value of an annotation by key (`mode`,
+    /// `transform`, `matcher`, `match_value`, `match_name`, `match_pattern`,
+    /// `placeholder`), or `None` when absent.
     ///
     /// # Errors
     ///
     /// Returns the first [`SecretMediationError`] encountered. `@mode` is always
-    /// required. `redact` requires `@transform` and rejects `@adapter` and
-    /// `@placeholder`; `intercept` requires a non-empty `@adapter` and a
+    /// required. `redact` requires `@transform` and rejects the matcher and
+    /// `@placeholder` annotations; `intercept` requires a valid `@matcher` and a
     /// well-formed `@placeholder`, and rejects `@transform`.
-    pub fn from_annotations(
-        mode: Option<&str>,
-        transform: Option<&str>,
-        adapter: Option<&str>,
-        placeholder: Option<&str>,
+    pub fn from_annotations<'a>(
+        get: impl Fn(&'a str) -> Option<&'a str> + 'a,
     ) -> Result<Self, SecretMediationError> {
-        let mode = SecretMode::parse(mode.ok_or(SecretMediationError::MissingMode)?)?;
-        let transform = transform.map(SecretTransform::parse).transpose()?;
-        let adapter = adapter.map(|value| value.trim().to_string());
-
-        match mode {
-            SecretMode::Redact => {
-                if adapter.is_some() {
-                    return Err(SecretMediationError::UnexpectedAdapter);
+        let mode = get("mode").ok_or(SecretMediationError::MissingMode)?;
+        match mode.trim() {
+            "redact" => {
+                if get("matcher").is_some()
+                    || get("match_value").is_some()
+                    || get("match_name").is_some()
+                    || get("match_pattern").is_some()
+                {
+                    return Err(SecretMediationError::UnexpectedMatcher);
                 }
-                if placeholder.is_some() {
+                if get("placeholder").is_some() {
                     return Err(SecretMediationError::UnexpectedPlaceholder);
                 }
-                let transform = transform.ok_or(SecretMediationError::MissingTransform)?;
-                Ok(Self {
-                    mode,
-                    transform: Some(transform),
-                    adapter: None,
-                    placeholder: None,
-                })
+                let transform = SecretTransform::parse(
+                    get("transform").ok_or(SecretMediationError::MissingTransform)?,
+                )?;
+                Ok(Self::Redact { transform })
             }
-            SecretMode::Intercept => {
-                if transform.is_some() {
+            "intercept" => {
+                if get("transform").is_some() {
                     return Err(SecretMediationError::UnexpectedTransform);
                 }
-                let placeholder = placeholder.ok_or(SecretMediationError::MissingPlaceholder)?;
+                let placeholder =
+                    get("placeholder").ok_or(SecretMediationError::MissingPlaceholder)?;
                 validate_placeholder_template(placeholder)?;
-                let adapter = adapter.ok_or(SecretMediationError::MissingAdapter)?;
-                if adapter.is_empty() {
-                    return Err(SecretMediationError::EmptyAdapter);
-                }
-                Ok(Self {
-                    mode,
-                    transform: None,
-                    adapter: Some(adapter),
-                    placeholder: Some(placeholder.to_string()),
+                let matcher = parse_matcher(&get)?;
+                Ok(Self::Intercept {
+                    matcher,
+                    placeholder: placeholder.to_owned(),
                 })
             }
+            other => Err(SecretMediationError::UnknownMode(other.to_string())),
         }
+    }
+}
+
+fn parse_matcher<'a>(
+    get: &impl Fn(&'a str) -> Option<&'a str>,
+) -> Result<SecretMatcher, SecretMediationError> {
+    let kind = get("matcher").ok_or(SecretMediationError::MissingMatcher)?;
+    match kind.trim() {
+        "json" => {
+            let value_path = get("match_value")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .ok_or(SecretMediationError::MissingMatchValue)?;
+            let name_path = get("match_name")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .ok_or(SecretMediationError::MissingMatchName)?;
+            Ok(SecretMatcher::Json {
+                value_path,
+                name_path,
+            })
+        }
+        "regex" => {
+            let pattern = get("match_pattern")
+                .filter(|value| !value.trim().is_empty())
+                .ok_or(SecretMediationError::MissingMatchPattern)?;
+            Ok(SecretMatcher::Regex {
+                pattern: pattern.to_owned(),
+            })
+        }
+        other => Err(SecretMediationError::UnknownMatcher(other.to_string())),
     }
 }
 
@@ -594,16 +627,6 @@ mod tests {
     use std::fmt::Display;
 
     #[test]
-    fn secret_mode_parse_accepts_known_and_rejects_unknown() {
-        assert_eq!(SecretMode::parse("intercept"), Ok(SecretMode::Intercept));
-        assert_eq!(SecretMode::parse("  redact  "), Ok(SecretMode::Redact));
-        assert_eq!(
-            SecretMode::parse("bogus"),
-            Err(SecretMediationError::UnknownMode("bogus".to_string()))
-        );
-    }
-
-    #[test]
     fn secret_transform_parse_accepts_known_and_rejects_unknown() {
         assert_eq!(SecretTransform::parse("raw"), Ok(SecretTransform::Raw));
         assert_eq!(
@@ -616,125 +639,191 @@ mod tests {
         );
     }
 
+    /// Build an annotation accessor from `(key, value)` pairs.
+    fn ann(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<&str> {
+        move |key| pairs.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
+    }
+
     #[test]
-    fn secret_mediation_redact_requires_transform_and_rejects_adapter_and_placeholder() {
-        let directive =
-            SecretMediation::from_annotations(Some("redact"), Some("mcp-jsonrpc"), None, None)
-                .expect("valid redact directive");
-        assert_eq!(directive.mode, SecretMode::Redact);
-        assert_eq!(directive.transform, Some(SecretTransform::McpJsonRpc));
-        assert_eq!(directive.adapter, None);
-        assert_eq!(directive.placeholder, None);
+    fn secret_mediation_redact_requires_transform_and_rejects_matcher_and_placeholder() {
+        let directive = SecretMediation::from_annotations(ann(&[
+            ("mode", "redact"),
+            ("transform", "mcp-jsonrpc"),
+        ]))
+        .expect("valid redact directive");
+        assert_eq!(
+            directive,
+            SecretMediation::Redact {
+                transform: SecretTransform::McpJsonRpc
+            }
+        );
 
         assert_eq!(
-            SecretMediation::from_annotations(Some("redact"), None, None, None),
+            SecretMediation::from_annotations(ann(&[("mode", "redact")])),
             Err(SecretMediationError::MissingTransform)
         );
         assert_eq!(
-            SecretMediation::from_annotations(Some("redact"), Some("raw"), Some("bws"), None),
-            Err(SecretMediationError::UnexpectedAdapter)
+            SecretMediation::from_annotations(ann(&[("mode", "bogus")])),
+            Err(SecretMediationError::UnknownMode("bogus".to_string()))
         );
         assert_eq!(
-            SecretMediation::from_annotations(
-                Some("redact"),
-                Some("raw"),
-                None,
-                Some("firma-secret://x/{name}")
-            ),
+            SecretMediation::from_annotations(ann(&[
+                ("mode", "redact"),
+                ("transform", "raw"),
+                ("matcher", "json"),
+            ])),
+            Err(SecretMediationError::UnexpectedMatcher)
+        );
+        assert_eq!(
+            SecretMediation::from_annotations(ann(&[
+                ("mode", "redact"),
+                ("transform", "raw"),
+                ("placeholder", "firma-secret://x/{name}"),
+            ])),
             Err(SecretMediationError::UnexpectedPlaceholder)
         );
     }
 
     #[test]
-    fn secret_mediation_intercept_requires_adapter_and_rejects_transform() {
-        let directive = SecretMediation::from_annotations(
-            Some("intercept"),
-            None,
-            Some("bws"),
-            Some("firma-secret://bitwarden/{name}"),
-        )
+    fn secret_mediation_intercept_json_matcher() {
+        let directive = SecretMediation::from_annotations(ann(&[
+            ("mode", "intercept"),
+            ("matcher", "json"),
+            ("match_value", "$[*].value"),
+            ("match_name", "$[*].key"),
+            ("placeholder", "firma-secret://bitwarden/{name}"),
+        ]))
         .expect("valid intercept directive");
-        assert_eq!(directive.mode, SecretMode::Intercept);
-        assert_eq!(directive.adapter.as_deref(), Some("bws"));
-        assert_eq!(directive.transform, None);
         assert_eq!(
-            directive.placeholder.as_deref(),
-            Some("firma-secret://bitwarden/{name}")
+            directive,
+            SecretMediation::Intercept {
+                matcher: SecretMatcher::Json {
+                    value_path: "$[*].value".to_string(),
+                    name_path: "$[*].key".to_string(),
+                },
+                placeholder: "firma-secret://bitwarden/{name}".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn secret_mediation_intercept_regex_matcher_and_errors() {
+        let directive = SecretMediation::from_annotations(ann(&[
+            ("mode", "intercept"),
+            ("matcher", "regex"),
+            ("match_pattern", "(?P<name>[^=]+)=(?P<value>.+)"),
+            ("placeholder", "firma-secret://env/{name}"),
+        ]))
+        .expect("valid regex intercept directive");
+        assert_eq!(
+            directive,
+            SecretMediation::Intercept {
+                matcher: SecretMatcher::Regex {
+                    pattern: "(?P<name>[^=]+)=(?P<value>.+)".to_string(),
+                },
+                placeholder: "firma-secret://env/{name}".to_string(),
+            }
         );
 
+        // intercept + @transform is rejected.
         assert_eq!(
-            SecretMediation::from_annotations(
-                Some("intercept"),
-                None,
-                None,
-                Some("firma-secret://x/{name}")
-            ),
-            Err(SecretMediationError::MissingAdapter)
-        );
-        assert_eq!(
-            SecretMediation::from_annotations(
-                Some("intercept"),
-                Some("raw"),
-                Some("bws"),
-                Some("firma-secret://x/{name}")
-            ),
+            SecretMediation::from_annotations(ann(&[
+                ("mode", "intercept"),
+                ("transform", "raw"),
+                ("matcher", "json"),
+                ("match_value", "$.value"),
+                ("placeholder", "firma-secret://x/{name}"),
+            ])),
             Err(SecretMediationError::UnexpectedTransform)
         );
+        // intercept with no matcher is rejected.
         assert_eq!(
-            SecretMediation::from_annotations(
-                Some("intercept"),
-                None,
-                Some("  "),
-                Some("firma-secret://x/{name}")
-            ),
-            Err(SecretMediationError::EmptyAdapter)
+            SecretMediation::from_annotations(ann(&[
+                ("mode", "intercept"),
+                ("placeholder", "firma-secret://x/{name}"),
+            ])),
+            Err(SecretMediationError::MissingMatcher)
+        );
+        // json matcher without a value path is rejected.
+        assert_eq!(
+            SecretMediation::from_annotations(ann(&[
+                ("mode", "intercept"),
+                ("matcher", "json"),
+                ("placeholder", "firma-secret://x/{name}"),
+            ])),
+            Err(SecretMediationError::MissingMatchValue)
+        );
+        // json matcher without a name path is rejected.
+        assert_eq!(
+            SecretMediation::from_annotations(ann(&[
+                ("mode", "intercept"),
+                ("matcher", "json"),
+                ("match_value", "$.value"),
+                ("placeholder", "firma-secret://x/{name}"),
+            ])),
+            Err(SecretMediationError::MissingMatchName)
+        );
+        // unknown matcher kind is rejected.
+        assert_eq!(
+            SecretMediation::from_annotations(ann(&[
+                ("mode", "intercept"),
+                ("matcher", "xml"),
+                ("placeholder", "firma-secret://x/{name}"),
+            ])),
+            Err(SecretMediationError::UnknownMatcher("xml".to_string()))
         );
     }
 
     #[test]
     fn secret_mediation_requires_mode_and_well_formed_placeholder() {
         assert_eq!(
-            SecretMediation::from_annotations(
-                None,
-                None,
-                Some("bws"),
-                Some("firma-secret://x/{name}")
-            ),
+            SecretMediation::from_annotations(ann(&[
+                ("matcher", "json"),
+                ("match_value", "$.value"),
+                ("placeholder", "firma-secret://x/{name}"),
+            ])),
             Err(SecretMediationError::MissingMode)
         );
         assert_eq!(
-            SecretMediation::from_annotations(Some("intercept"), None, Some("bws"), None),
+            SecretMediation::from_annotations(ann(&[
+                ("mode", "intercept"),
+                ("matcher", "json"),
+                ("match_value", "$.value"),
+            ])),
             Err(SecretMediationError::MissingPlaceholder)
         );
         // Wrong scheme and missing `{name}` marker are both rejected.
         assert!(matches!(
-            SecretMediation::from_annotations(
-                Some("intercept"),
-                None,
-                Some("bws"),
-                Some("https://x/{name}")
-            ),
+            SecretMediation::from_annotations(ann(&[
+                ("mode", "intercept"),
+                ("matcher", "json"),
+                ("match_value", "$.value"),
+                ("placeholder", "https://x/{name}"),
+            ])),
             Err(SecretMediationError::InvalidPlaceholder { .. })
         ));
         assert!(matches!(
-            SecretMediation::from_annotations(
-                Some("intercept"),
-                None,
-                Some("bws"),
-                Some("firma-secret://x/no-marker")
-            ),
+            SecretMediation::from_annotations(ann(&[
+                ("mode", "intercept"),
+                ("matcher", "json"),
+                ("match_value", "$.value"),
+                ("placeholder", "firma-secret://x/no-marker"),
+            ])),
             Err(SecretMediationError::InvalidPlaceholder { .. })
         ));
     }
 
     #[test]
     fn secret_mediation_serde_round_trip() {
-        let directive =
-            SecretMediation::from_annotations(Some("redact"), Some("mcp-jsonrpc"), None, None)
-                .expect("valid directive");
+        let directive = SecretMediation::from_annotations(ann(&[
+            ("mode", "intercept"),
+            ("matcher", "json"),
+            ("match_value", "$[*].value"),
+            ("match_name", "$[*].key"),
+            ("placeholder", "firma-secret://bitwarden/{name}"),
+        ]))
+        .expect("valid directive");
         let json = serde_json::to_string(&directive).expect("serialize");
-        // The wire form uses the hyphenated transform name.
-        assert!(json.contains("mcp-jsonrpc"));
         let restored: SecretMediation = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(directive, restored);
     }

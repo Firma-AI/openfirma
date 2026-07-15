@@ -127,7 +127,9 @@ A single action expresses "may this shimmed launch be mediated, and how":
 
 ```cedar
 @mode("intercept")
-@adapter("bws")
+@matcher("json")
+@match_value("$[*].value")
+@match_name("$[*].key")
 @placeholder("firma-secret://bitwarden/{name}")
 permit(principal, action == Firma::Action::"secret.mediate", resource)
 when { resource.id like "bws *" };
@@ -142,17 +144,25 @@ when { resource.id like "npx @playwright/mcp*" };
   request), enabling `like` prefix/glob matching. The secret-mediation eval
   path **binds the resource entity's `id` attribute** so this resolves at
   runtime.
-- Annotations carry the behavior, parsed at bundle-load into the remediation map
-  exactly as `@modify`/`@step_up`/`@defer` are today:
+- Annotations carry the behavior, parsed and validated at bundle-load (a bad
+  JSONPath/regex fails the bundle closed), alongside the AARM R4
+  `@modify`/`@step_up`/`@defer` annotations:
   - `@mode("intercept"|"redact")` — selects the broker topology.
   - `@transform("raw"|"mcp-jsonrpc")` — stream codec (redact-only).
-  - `@adapter("<name>")` — vault-output parser (intercept-only), e.g. `bws`.
+  - `@matcher("json"|"regex")` — how to extract secrets from the tool's output
+    (intercept-only):
+    - `json`: `@match_value("<jsonpath>")` and `@match_name("<jsonpath>")`
+      (both required), aligned by document order;
+    - `regex`: `@match_pattern("<regex>")` with required `value` and `name`
+      named capture groups.
   - `@placeholder("…")` — placeholder mint template (intercept-only).
 
-  Each mode takes exactly its own directives: `intercept` requires `@adapter`
-  and `@placeholder` and rejects `@transform`; `redact` requires `@transform`
-  and rejects `@adapter` and `@placeholder` (redaction mints nothing — it
-  resolves tokens from the shared dictionary).
+  Each mode takes exactly its own directives: `intercept` requires a `@matcher`
+  (plus its paths/pattern) and `@placeholder` and rejects `@transform`; `redact`
+  requires `@transform` and rejects the matcher and `@placeholder` annotations
+  (redaction mints nothing — it resolves tokens from the shared dictionary). This
+  maps to the `SecretMediation` enum (`Intercept { matcher, placeholder }` /
+  `Redact { transform }`) — no illegal combinations are representable.
 
 ### Decision semantics (fail-closed)
 
@@ -160,8 +170,8 @@ when { resource.id like "npx @playwright/mcp*" };
 - **Sidecar returns forbid / no matching policy** → transparent **passthrough**:
   the binary is a shim candidate but is not governed, so it runs untouched.
 - **Malformed or incomplete annotations** (e.g. `@mode("redact")` without
-  `@transform`, or `@mode("intercept")` without `@adapter`) → **reject the
-  bundle at load**, like a malformed `@modify` today.
+  `@transform`, `@mode("intercept")` without a `@matcher`, or a matcher whose
+  JSONPath/regex does not compile) → **reject the bundle at load**.
 - **Different `@placeholder` templates are allowed** across policies: the
   dictionary is keyed by the full token, so tokens minted by different vault
   providers (e.g. `bitwarden` vs `1password`) coexist and redaction resolves any
@@ -182,18 +192,32 @@ firma-secret://<provider>/<name>
 - Legible: the agent and operators can see which secret a reference points to.
 - Fail-closed: a mangled token yields no dictionary hit, so the literal passes
   through and the tool receives no secret — never a leak.
-- `<name>` is the secret's **key** as read from the vault CLI's output. Vault
-  CLIs commonly address secrets by an opaque id (e.g. `bws secret get <uuid>`),
-  so the adapter records an id→key mapping when minting; key collisions are
-  disambiguated only if they actually occur.
+- `<name>` is the secret's **key**, produced by the intercept `@matcher` — a
+  JSONPath `@match_name` node or a regex `name` capture group. Cross-key
+  collisions are disambiguated only if they actually occur.
 
 The full token (including prefix) is the dictionary key; the rewriter never has
 to parse `<name>` semantically.
 
-## Transform Layer
+## Matcher (intercept) and Transform (redact)
 
-The broker applies the transform named by the decision's `@transform` (redact)
-or the `@adapter`'s built-in output handling (intercept):
+**Intercept extraction** is driven by the `@matcher`, compiled and executed by
+`firma-sidecar`'s `secret_matcher` module (shared with the broker) and validated
+at bundle-load:
+
+- **`json`** — JSONPath (`serde_json_path`). `@match_value` / `@match_name`
+  select aligned value/name nodes; the value nodes are replaced **structurally**
+  (via JSON pointer), so escaping is never an issue. Handles single objects,
+  arrays, and nested shapes.
+- **`regex`** — the `@match_pattern`'s `value` / `name` named groups extract each
+  secret from text output; the `value` spans are replaced in place.
+
+Each extracted `(name, value)` is minted into a placeholder (from the
+`@placeholder` template) and stored; the value is replaced by the placeholder in
+the returned output. A tool is never special-cased in code — a new vault CLI is
+just a new `@matcher` policy.
+
+**Redact rewriting** is driven by the `@transform` codec:
 
 - **`raw`** — streaming byte matcher. Carries an overlap buffer of
   `maxTokenLen - 1` (rehydration) or `maxSecretLen - 1` (masking) across reads so
@@ -217,12 +241,13 @@ agent: `<vault-cli> get <ref>`          # e.g. `bws secret get <uuid>`
   └─ shim: execs the real vault CLI in-sandbox,
        wires its stdout → socketpair → SCM_RIGHTS → broker
   └─ broker: reads the plaintext stdout,
-       extracts value(s) via the @adapter parser,
+       extracts value(s) via the @matcher (JSONPath / regex),
        stores value ↔ firma-secret://<provider>/<name>,
        forwards placeholder-substituted output → agent
 ```
 
-The adapter is tool- and subcommand-aware. Only **stdout** is transformed.
+The matcher is policy-defined (`@matcher` + `@match_*`); no tool is special-cased
+in code. Only **stdout** is transformed.
 
 ## Mode: redact
 
@@ -334,9 +359,9 @@ Each phase is an atomic revision that stands on its own, with tests per
 | ----- | ----- | ------ | ------- |
 | 0 | This design doc; governance-contract extension; placeholder format | docs | Reviewed |
 | 1 | Broker skeleton: dictionary, Aho-Corasick matcher, UDS listener, `SCM_RIGHTS` fd-passing (no rewrite) | firma-run (+core types) | Unit tests: dictionary, matcher |
-| 2 | Cedar: `secret.mediate` action class + `@mode`/`@transform`/`@adapter`/`@placeholder` annotations, remediation-map parsing, load-time validation | firma-core (schema), firma-sidecar | Unit tests on annotation parse/validate |
+| 2 | Cedar: `secret.mediate` action class + `@mode`/`@transform`/`@matcher`/`@match_*`/`@placeholder` annotations (`SecretMediation` enum), load-time validation incl. matcher compile | firma-core (schema), firma-sidecar | Unit tests on annotation parse/validate |
 | 3 | Governance-contract extension: broker → Sidecar decision returning mode + directives; PEP wiring; fail-closed rules | firma-run, firma-sidecar | E2E decision round-trip |
-| 4 | intercept: vault-CLI shim + broker + first adapter (`bws`) + minting | firma-run | E2E on bwrap with a fake vault CLI |
+| 4 | intercept: matcher execution (`json`/`regex` via `secret_matcher`) + minting; vault-CLI shim + broker | firma-run, firma-sidecar | E2E on bwrap with a fake vault CLI |
 | 5 | Transform layer: `raw` streaming rewriter (rehydrate + mask) with overlap buffers; fd-courier shim | firma-run | Property tests on chunk splits |
 | 6 | `mcp-jsonrpc` transform: line framing, JSON-aware rehydrate/mask/escape | firma-run | Unit tests on escaped/split cases |
 | 7 | redact + `shims` config + PATH-shim/bind-over-path injection; Playwright MCP integration; docs (docs-site + llms.txt) | firma-run, config-loader, docs | `just check` green |
@@ -351,7 +376,8 @@ rewrite still host-side. WSL2-from-Windows can pipe `wsl.exe` stdio. Post-v1.
 
 ## Open Follow-ups
 
-- Additional vault CLIs (`bw`, `op`, `vault`) via new `@adapter` values.
+- Additional vault CLIs (`bw`, `op`, `vault`) are just new `@matcher` policies —
+  no code changes.
 - HTTP-transport MCP (SSE) would instead traverse the Sidecar and hit the
   response-path-enforcement gap tracked in `docs/security/bypass-risks.md`.
 - Whether `secret.mediate` should split into `secret.resolve` / `secret.inject`
