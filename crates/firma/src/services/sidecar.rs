@@ -111,11 +111,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     let resolved = firma_config_loader::ConfigResolver::default()
         .resolve_config(args.config.as_deref())?
         .ok_or_else(|| anyhow::anyhow!("no firma.toml found for `sidecar`"))?;
-    info!(
-        path = %resolved.config_file().display(),
-        source = ?resolved.source,
-        "config resolved"
-    );
+    info!(path = %resolved.config_file().display(), source = ?resolved.source, "config resolved");
     let config = read_config(&resolved)?;
     debug!("configuration loaded successfully");
 
@@ -167,7 +163,12 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     debug!(mode = %config.interceptor.mode, "starting interceptor");
     let interceptor = startup::spawn_interceptor(&config, handler, exit.clone())?;
 
-    let local_exec_handle = startup::spawn_local_exec_endpoint(&config, sandbox_id, exit.clone())?;
+    let local_exec_handle = startup::spawn_local_exec_endpoint(
+        &config,
+        sandbox_id,
+        Arc::clone(&pipeline_runtime.swappable_policy),
+        exit.clone(),
+    )?;
 
     let report = build_startup_report(
         resolved.config_file(),

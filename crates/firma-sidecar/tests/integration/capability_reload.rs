@@ -83,10 +83,10 @@ fn write_seed(dir: &Path, target: &Path, seed: &CapabilitySeed) {
 
 fn handle_from(
     seed_config: &CapabilitySeedConfig,
-    verifier: &Arc<dyn TokenVerifier + Send + Sync>,
+    verifier: &(dyn TokenVerifier + Send + Sync),
     dir: &Path,
 ) -> CapabilityMapHandle {
-    let map = load_capability_map(seed_config, verifier.as_ref(), dir).expect("initial map");
+    let map = load_capability_map(seed_config, verifier, dir).expect("initial map");
     CapabilityMapHandle::new(map)
 }
 
@@ -123,7 +123,7 @@ async fn reload_hot_swaps_map_on_seed_rewrite() {
         hot_reload: true,
     };
     let verifier = verifier(&keys.public);
-    let handle = handle_from(&seed_config, &verifier, dir.path());
+    let handle = handle_from(&seed_config, verifier.as_ref(), dir.path());
     assert_eq!(
         selected_raw_token(&handle).as_deref(),
         Some(raw_v1.as_str())
@@ -165,7 +165,7 @@ async fn reload_keeps_previous_map_when_seed_removed() {
         hot_reload: true,
     };
     let verifier = verifier(&keys.public);
-    let handle = handle_from(&seed_config, &verifier, dir.path());
+    let handle = handle_from(&seed_config, verifier.as_ref(), dir.path());
 
     let cancel = CancellationToken::new();
     let _reloader = CapabilityReloader::spawn(
@@ -205,7 +205,7 @@ async fn reload_keeps_previous_map_on_invalid_seed() {
         hot_reload: true,
     };
     let verifier = verifier(&keys.public);
-    let handle = handle_from(&seed_config, &verifier, dir.path());
+    let handle = handle_from(&seed_config, verifier.as_ref(), dir.path());
 
     let cancel = CancellationToken::new();
     let _reloader = CapabilityReloader::spawn(
