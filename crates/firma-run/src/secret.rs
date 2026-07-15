@@ -27,6 +27,11 @@ use zeroize::Zeroizing;
 #[cfg(unix)]
 pub mod broker;
 
+/// Broker → Sidecar policy-enforcement-point client for secret mediation
+/// decisions, with fail-closed semantics.
+#[cfg(unix)]
+pub mod pep;
+
 /// URI scheme that prefixes every placeholder token.
 pub const PLACEHOLDER_SCHEME: &str = "firma-secret://";
 
