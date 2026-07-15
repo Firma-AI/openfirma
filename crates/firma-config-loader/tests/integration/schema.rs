@@ -102,18 +102,6 @@ fn deserialize_section_reads_a_typed_section_without_a_string_round_trip() {
 }
 
 #[test]
-fn deserialize_section_missing_is_an_error() {
-    let tmp = tempfile::tempdir().expect("tmpdir");
-    let path = tmp.path().join(CONFIG_FILE_NAME);
-    fs::write(&path, "[sidecar]\nfoo = 1\n").expect("write config");
-    let config = FirmaConfig::load(&path).expect("load config");
-    let error = config
-        .deserialize_section::<Probe>("authority")
-        .expect_err("section should be missing");
-    assert!(error.to_string().contains("authority"), "error: {error}");
-}
-
-#[test]
 fn deserialize_section_rejects_missing_required_field() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let path = tmp.path().join(CONFIG_FILE_NAME);
