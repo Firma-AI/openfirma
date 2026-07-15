@@ -354,4 +354,13 @@ namespace Firma {
         resource: [Resource],
         context: EnforcementContext
     };
+
+    // OpenFirma secret-mediation grant (firma run broker PEP → Sidecar PDP).
+    // `resource.id` carries the wrapped tool's launch argv; behavior is driven
+    // by @mode/@transform/@adapter/@placeholder annotations.
+    action "secret.mediate" appliesTo {
+        principal: [Agent],
+        resource: [Resource],
+        context: EnforcementContext
+    };
 }
