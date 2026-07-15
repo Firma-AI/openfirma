@@ -22,6 +22,11 @@ use std::fmt;
 use aho_corasick::{AhoCorasick, MatchKind};
 use zeroize::Zeroizing;
 
+/// Out-of-sandbox broker transport (Unix-socket handshake + `SCM_RIGHTS` fd
+/// passing). Unix-only: the primitive is `sendmsg`/`recvmsg` ancillary data.
+#[cfg(unix)]
+pub mod broker;
+
 /// URI scheme that prefixes every placeholder token.
 pub const PLACEHOLDER_SCHEME: &str = "firma-secret://";
 
