@@ -575,6 +575,19 @@ fn validate_placeholder_template(template: &str) -> Result<(), SecretMediationEr
     Ok(())
 }
 
+/// Outcome of evaluating a `secret.mediate` request for a shimmed launch.
+///
+/// Returned by the Sidecar (PDP) to the broker (PEP): either apply a directive
+/// or run the tool untouched. A broker that cannot reach the Sidecar fails
+/// closed to deny on its own — that case is not represented here.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SecretDecision {
+    /// A governing `secret.mediate` policy matched: apply this directive.
+    Mediate(SecretMediation),
+    /// No governing policy matched: run the tool with stdio untouched.
+    Passthrough,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

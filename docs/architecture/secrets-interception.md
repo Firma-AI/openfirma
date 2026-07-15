@@ -139,8 +139,9 @@ when { resource.id like "npx @playwright/mcp*" };
 ```
 
 - `resource.id` is the launch argv (the broker sends it in the governance
-  request); `like` provides prefix/glob matching, as already used for
-  host/path rules.
+  request), enabling `like` prefix/glob matching. The secret-mediation eval
+  path **binds the resource entity's `id` attribute** so this resolves at
+  runtime.
 - Annotations carry the behavior, parsed at bundle-load into the remediation map
   exactly as `@modify`/`@step_up`/`@defer` are today:
   - `@mode("intercept"|"redact")` — selects the broker topology.
