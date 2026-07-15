@@ -8,7 +8,7 @@ use tracing::{debug, info};
 use crate::config::StackConfig;
 use crate::error::{Result, StackError};
 use crate::platform::{Platform, SystemPlatform};
-use crate::readiness::{read_config, wait_for_ca_material, wait_for_tcp};
+use crate::readiness::{FirmaToml, wait_for_ca_material, wait_for_tcp};
 use crate::spawn::{SpawnRequest, spawn_component};
 use crate::supervisor::{Children, block_until_exit};
 use firma_runtime_state::{UserProcessId, pidfile};
@@ -84,7 +84,7 @@ fn spawn_stack_inner(cfg: &StackConfig, state_dir: &Path) -> Result<StackHandle>
     let group = SystemPlatform::new_group()?;
     let exe = cfg.firma_bin.as_deref();
     // Parse the unified firma.toml once; the probes below share it.
-    let config = read_config(&cfg.config_file)?;
+    let config = FirmaToml::read(&cfg.config_file)?;
     debug!(config = %cfg.config_file.display(), exe = ?exe, "spawning authority");
     let auth = spawn_with_config(&group, state_dir, "authority", &cfg.config_file, exe)?;
     info!(pid = %auth.pid, "authority spawned");

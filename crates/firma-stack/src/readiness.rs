@@ -1,9 +1,11 @@
 //! Component readiness probes.
 
 use std::net::{SocketAddr, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
+use firma_authority::AuthorityConfig;
+use firma_config_loader::FirmaConfig;
 use firma_sidecar::config::SidecarConfig;
 
 use crate::error::{Result, StackError};
@@ -43,41 +45,53 @@ pub fn wait_for_ca_material(ca_dir: &Path, timeout: Duration) -> Result<()> {
 }
 
 /// A parsed unified `firma.toml`, read once so the probes below share a single
-/// read instead of each re-reading the file. Retains the source path for error
-/// messages.
+/// read instead of each re-reading the file. Thin wrapper over
+/// [`FirmaConfig`]; each accessor deserializes the relevant `[section]` into
+/// the owning crate's own config type, so the stack shares those wire schemas
+/// and defaults instead of mirroring them.
 #[derive(Debug)]
 pub struct FirmaToml {
-    root: toml::Value,
-    path: PathBuf,
+    config: FirmaConfig,
 }
 
 impl FirmaToml {
-    /// Resolve `[authority].listen_addr`.
+    /// Read `firma.toml` and parse its TOML syntax, wrapping it for the probe
+    /// accessors below. The `[section]` schemas are validated lazily by each
+    /// accessor, not here.
     ///
     /// # Errors
     ///
-    /// Returns [`StackError::Platform`] when the key is missing or is not a
-    /// valid socket address.
+    /// Returns [`StackError::Platform`] when the file cannot be read or is not
+    /// valid TOML.
+    pub fn read(config_path: &Path) -> Result<Self> {
+        let config =
+            FirmaConfig::load(config_path).map_err(|e| StackError::Platform(format!("{e:#}")))?;
+        Ok(Self { config })
+    }
+
+    /// Deserialize the `[authority]` section into firma-authority's own
+    /// [`AuthorityConfig`] and resolve its `listen_addr`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StackError::Platform`] when the `[authority]` section is
+    /// missing, does not deserialize, or holds an invalid socket address.
     pub fn authority_listen_addr(&self) -> Result<SocketAddr> {
-        let raw = self
-            .root
-            .get("authority")
-            .and_then(|node| node.get("listen_addr"))
-            .and_then(toml::Value::as_str)
-            .ok_or_else(|| {
-                StackError::Platform(format!(
-                    "no listen_addr under [authority] in '{}'",
-                    self.path.display()
-                ))
-            })?;
-        raw.parse::<SocketAddr>().map_err(|e| {
-            StackError::Platform(format!("invalid authority listen_addr '{raw}': {e}"))
+        let authority: AuthorityConfig = self
+            .config
+            .deserialize_section("authority")
+            .map_err(|e| StackError::Platform(format!("{e:#}")))?;
+        authority.listen_addr.parse::<SocketAddr>().map_err(|e| {
+            StackError::Platform(format!(
+                "invalid authority listen_addr '{}': {e}",
+                authority.listen_addr
+            ))
         })
     }
 
     /// Deserialize the `[sidecar]` section into firma-sidecar's own
-    /// [`SidecarConfig`], so the stack shares the sidecar's schema, defaults,
-    /// and `HttpsMitmConfig::is_active` semantics rather than mirroring them.
+    /// [`SidecarConfig`], sharing the sidecar's schema, defaults, and
+    /// `HttpsMitmConfig::is_active` semantics rather than mirroring them.
     ///
     /// Callers read `interceptor.listen_addr` for the TCP readiness probe and
     /// `interceptor.https_mitm.is_active()` to gate the CA-material probe.
@@ -87,32 +101,10 @@ impl FirmaToml {
     /// Returns [`StackError::Platform`] when the `[sidecar]` section is missing
     /// or does not deserialize.
     pub fn sidecar_config(&self) -> Result<SidecarConfig> {
-        let section = self.root.get("sidecar").cloned().ok_or_else(|| {
-            StackError::Platform(format!("no [sidecar] section in '{}'", self.path.display()))
-        })?;
-        section.try_into().map_err(|e: toml::de::Error| {
-            StackError::Platform(format!(
-                "invalid [sidecar] config in '{}': {e}",
-                self.path.display()
-            ))
-        })
+        self.config
+            .deserialize_section("sidecar")
+            .map_err(|e| StackError::Platform(format!("{e:#}")))
     }
-}
-
-/// Read and parse the unified `firma.toml` once into a [`FirmaToml`].
-///
-/// # Errors
-///
-/// Returns [`StackError`] when the file cannot be read, or
-/// [`StackError::Platform`] when it is not valid TOML.
-pub fn read_config(config_path: &Path) -> Result<FirmaToml> {
-    let text = std::fs::read_to_string(config_path)?;
-    let root = toml::from_str(&text)
-        .map_err(|e: toml::de::Error| StackError::Platform(format!("firma.toml: {e}")))?;
-    Ok(FirmaToml {
-        root,
-        path: config_path.to_path_buf(),
-    })
 }
 
 #[cfg(test)]
@@ -124,7 +116,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("firma.toml");
         std::fs::write(&path, body).expect("write config");
-        let parsed = read_config(&path);
+        let parsed = FirmaToml::read(&path);
         (dir, parsed)
     }
 
@@ -170,7 +162,7 @@ intercept_hosts = [\"api.anthropic.com\"]
     #[test]
     fn read_config_errors_on_missing_file() {
         // The io read failure is surfaced as a StackError before any parsing.
-        read_config(Path::new("/definitely/not/here/firma.toml"))
+        FirmaToml::read(Path::new("/definitely/not/here/firma.toml"))
             .expect_err("missing file must error");
     }
 
@@ -215,7 +207,7 @@ intercept_hosts = [\"api.anthropic.com\"]
             .sidecar_config()
             .expect_err("bad [sidecar] field must error")
             .to_string();
-        assert!(err.contains("invalid [sidecar] config"), "got: {err}");
+        assert!(err.contains("invalid `[sidecar]` section"), "got: {err}");
     }
 
     #[test]

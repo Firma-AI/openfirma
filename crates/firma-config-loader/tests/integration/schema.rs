@@ -1,7 +1,8 @@
 //! Section extraction behavior through the public schema API.
 
-use firma_config_loader::{CONFIG_FILE_NAME, load_section};
+use firma_config_loader::{CONFIG_FILE_NAME, FirmaConfig, load_section};
 use fs_err as fs;
+use serde::Deserialize;
 use std::assert_matches;
 
 #[test]
@@ -79,6 +80,51 @@ fn dotted_path_missing_is_an_error() {
     let error = load_section(&path, "sidecar.authority").expect_err("section should be missing");
     assert!(
         error.to_string().contains("sidecar.authority"),
+        "error: {error}"
+    );
+}
+
+#[derive(Debug, Deserialize)]
+struct Probe {
+    listen_addr: String,
+}
+
+#[test]
+fn deserialize_section_reads_a_typed_section_without_a_string_round_trip() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let path = tmp.path().join(CONFIG_FILE_NAME);
+    fs::write(&path, "[authority]\nlisten_addr = \"127.0.0.1:50051\"\n").expect("write config");
+    let config = FirmaConfig::load(&path).expect("load config");
+    let probe: Probe = config
+        .deserialize_section("authority")
+        .expect("deserialize section");
+    assert_eq!(probe.listen_addr, "127.0.0.1:50051");
+}
+
+#[test]
+fn deserialize_section_missing_is_an_error() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let path = tmp.path().join(CONFIG_FILE_NAME);
+    fs::write(&path, "[sidecar]\nfoo = 1\n").expect("write config");
+    let config = FirmaConfig::load(&path).expect("load config");
+    let error = config
+        .deserialize_section::<Probe>("authority")
+        .expect_err("section should be missing");
+    assert!(error.to_string().contains("authority"), "error: {error}");
+}
+
+#[test]
+fn deserialize_section_rejects_missing_required_field() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let path = tmp.path().join(CONFIG_FILE_NAME);
+    // `listen_addr` is required by `Probe` but absent here.
+    fs::write(&path, "[authority]\nunexpected = 1\n").expect("write config");
+    let config = FirmaConfig::load(&path).expect("load config");
+    let error = config
+        .deserialize_section::<Probe>("authority")
+        .expect_err("missing required field must error");
+    assert!(
+        error.to_string().contains("invalid `[authority]` section"),
         "error: {error}"
     );
 }

@@ -49,6 +49,41 @@ impl FirmaConfig {
     ///
     /// Returns a "missing section" or serialization error.
     pub fn section(&self, section_path: &str) -> anyhow::Result<String> {
+        let sub = self.section_table(section_path)?;
+        toml::to_string(sub).map_err(|e| anyhow!("{}: {e}", self.origin.display()))
+    }
+
+    /// Deserialize the named `[section]` directly into `T`, without a TOML
+    /// string round-trip.
+    ///
+    /// Supports dotted paths like [`section`](Self::section). A missing
+    /// section at any level is a hard error (fail-closed).
+    ///
+    /// # Errors
+    ///
+    /// Returns a "missing section" or deserialization error.
+    pub fn deserialize_section<T: serde::de::DeserializeOwned>(
+        &self,
+        section_path: &str,
+    ) -> anyhow::Result<T> {
+        // `toml` only deserializes owned `Value`/`Table` (no borrowing
+        // deserializer), so the section subtree is cloned once here.
+        let sub = self.section_table(section_path)?.clone();
+        sub.try_into().map_err(|e: toml::de::Error| {
+            anyhow!(
+                "{}: invalid `[{section_path}]` section: {e}",
+                self.origin.display()
+            )
+        })
+    }
+
+    /// Resolve the sub-table addressed by a dotted `section_path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a "missing section" error when any path segment is absent or is
+    /// not a table.
+    fn section_table(&self, section_path: &str) -> anyhow::Result<&toml::Table> {
         let parts: Vec<&str> = section_path.split('.').collect();
         let mut current = &self.table;
         for &part in &parts[..parts.len() - 1] {
@@ -64,9 +99,7 @@ impl FirmaConfig {
         }
         let last = parts.last().copied().unwrap_or(section_path);
         match current.get(last) {
-            Some(toml::Value::Table(sub)) => {
-                toml::to_string(sub).map_err(|e| anyhow!("{}: {e}", self.origin.display()))
-            }
+            Some(toml::Value::Table(sub)) => Ok(sub),
             _ => bail!(
                 "{}: missing required `[{section_path}]` section",
                 self.origin.display()

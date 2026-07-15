@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 ctrlc = { workspace = true }
+firma-authority = { workspace = true }
 firma-config-loader = { workspace = true }
 firma-fs = { workspace = true }
 firma-runtime-state = { workspace = true }
