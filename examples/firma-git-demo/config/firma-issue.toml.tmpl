@@ -1,0 +1,10 @@
+[authority]
+listen_addr = "{{AUTHORITY_ADDR}}"
+policy_dir = "issuance-policies/"
+revocation_file = "revocations.txt"
+key_file = "firma-authority.key"
+tls_cert_path = "authority.crt"
+tls_key_path = "authority.key"
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 30
+log_level = "info"

@@ -1,0 +1,39 @@
+permit (
+    principal == Firma::Agent::"{{AGENT_ID}}",
+    action == Firma::Action::"code.write",
+    resource == Firma::Resource::"github.com/"
+) when {
+    context.raw_transport == "https"
+};
+
+permit (
+    principal == Firma::Agent::"{{AGENT_ID}}",
+    action == Firma::Action::"code.read",
+    resource
+) when {
+    context has git_provider &&
+    context has git_owner &&
+    context has git_repo &&
+    context has git_operation &&
+    context.git_provider == "github" &&
+    context.git_owner == "{{OWNER}}" &&
+    context.git_repo == "{{REPO}}" &&
+    context.git_operation == "read"
+};
+
+permit (
+    principal == Firma::Agent::"{{AGENT_ID}}",
+    action == Firma::Action::"code.write",
+    resource
+) when {
+    context has git_provider &&
+    context has git_owner &&
+    context has git_repo &&
+    context has git_ref &&
+    context has git_operation &&
+    context.git_provider == "github" &&
+    context.git_owner == "{{OWNER}}" &&
+    context.git_repo == "{{REPO}}" &&
+    context.git_ref == "refs/heads/{{ALLOWED_BRANCH}}" &&
+    context.git_operation == "write"
+};
