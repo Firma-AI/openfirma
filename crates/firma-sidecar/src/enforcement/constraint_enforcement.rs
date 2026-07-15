@@ -34,7 +34,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use firma_core::token::matches_resource_scope;
-use firma_core::{AgentId, CapabilityClaims, DenyReason, ModificationSpec, StepUpSpec};
+use firma_core::{
+    AgentId, CapabilityClaims, DenyReason, ModificationSpec, SecretDecision, StepUpSpec,
+};
 
 use super::decision::{ConstraintEnforcementStage, EnforcementDecision, EnforcementStage};
 use crate::enforcement::session::RuntimeSignals;
@@ -144,6 +146,25 @@ pub trait PolicyEvaluation: Send + Sync {
 
     /// Get the current policy bundle version.
     fn version(&self) -> Option<String>;
+
+    /// Decide secret mediation for a shimmed launch (`secret.mediate`).
+    ///
+    /// The default returns [`SecretDecision::Passthrough`] — no governing
+    /// policy, so the tool runs untouched. The Cedar evaluator overrides this
+    /// to evaluate `secret.mediate` and return a [`SecretDecision::Mediate`]
+    /// directive when a permit fires.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if policy evaluation fails.
+    fn evaluate_secret_mediation(
+        &self,
+        _principal: &AgentId,
+        _argv: &str,
+        _context: serde_json::Value,
+    ) -> Result<SecretDecision, String> {
+        Ok(SecretDecision::Passthrough)
+    }
 }
 
 /// Stage 2: Constraint Enforcement Engine (CEE).
