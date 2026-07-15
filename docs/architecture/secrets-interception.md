@@ -134,7 +134,6 @@ when { resource.id like "bws *" };
 
 @mode("redact")
 @transform("mcp-jsonrpc")
-@placeholder("firma-secret://bitwarden/{name}")
 permit(principal, action == Firma::Action::"secret.mediate", resource)
 when { resource.id like "npx @playwright/mcp*" };
 ```
@@ -145,9 +144,14 @@ when { resource.id like "npx @playwright/mcp*" };
 - Annotations carry the behavior, parsed at bundle-load into the remediation map
   exactly as `@modify`/`@step_up`/`@defer` are today:
   - `@mode("intercept"|"redact")` — selects the broker topology.
-  - `@transform("raw"|"mcp-jsonrpc")` — stream codec (redact).
-  - `@adapter("<name>")` — vault-output parser (intercept), e.g. `bws`.
-  - `@placeholder("…")` — placeholder template.
+  - `@transform("raw"|"mcp-jsonrpc")` — stream codec (redact-only).
+  - `@adapter("<name>")` — vault-output parser (intercept-only), e.g. `bws`.
+  - `@placeholder("…")` — placeholder mint template (intercept-only).
+
+  Each mode takes exactly its own directives: `intercept` requires `@adapter`
+  and `@placeholder` and rejects `@transform`; `redact` requires `@transform`
+  and rejects `@adapter` and `@placeholder` (redaction mints nothing — it
+  resolves tokens from the shared dictionary).
 
 ### Decision semantics (fail-closed)
 
@@ -157,8 +161,10 @@ when { resource.id like "npx @playwright/mcp*" };
 - **Malformed or incomplete annotations** (e.g. `@mode("redact")` without
   `@transform`, or `@mode("intercept")` without `@adapter`) → **reject the
   bundle at load**, like a malformed `@modify` today.
-- **All `@placeholder` values must agree** across policies (validated at load)
-  so dictionary keys stay consistent.
+- **Different `@placeholder` templates are allowed** across policies: the
+  dictionary is keyed by the full token, so tokens minted by different vault
+  providers (e.g. `bitwarden` vs `1password`) coexist and redaction resolves any
+  of them.
 
 ## Placeholder Format
 

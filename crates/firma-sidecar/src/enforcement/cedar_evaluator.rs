@@ -25,7 +25,7 @@ use cedar_policy::{
 };
 use firma_core::AgentId;
 use firma_core::policy::PolicyBundle;
-use firma_core::{DeferDuration, FirmaEntityUid, ModificationSpec, StepUpSpec};
+use firma_core::{DeferDuration, FirmaEntityUid, ModificationSpec, SecretMediation, StepUpSpec};
 
 use super::constraint_enforcement::{PolicyEvaluation, PolicyVerdict};
 
@@ -97,6 +97,19 @@ pub enum CedarEvaluatorError {
         policy_id: String,
         annotations: String,
     },
+
+    /// A `forbid` policy carried secret-mediation annotations (`@mode` /
+    /// `@transform` / `@adapter` / `@placeholder`). These grant behavior on a
+    /// `permit`; a `forbid` cannot mediate, so the bundle is rejected at load.
+    #[error(
+        "policy `{policy_id}` (forbid) carries secret-mediation annotations that only apply to permit policies"
+    )]
+    SecretAnnotationOnForbid { policy_id: String },
+
+    /// A `secret.mediate` policy's annotations could not be assembled into a
+    /// valid directive (e.g. `redact` without `@transform`). Rejected at load.
+    #[error("malformed secret-mediation annotations on policy `{policy_id}`: {reason}")]
+    MalformedSecretMediation { policy_id: String, reason: String },
 }
 
 /// Concrete Cedar policy evaluator for Sidecar Stage 2.
@@ -116,6 +129,10 @@ pub struct CedarPolicyEvaluator {
     /// load time so the hot path only reads `Response::diagnostics().reason()`
     /// and looks up the firing policy here.
     remediation: HashMap<PolicyId, Remediation>,
+    /// `permit` `secret.mediate` policies carrying secret-mediation annotations
+    /// (`@mode` / `@transform` / `@adapter` / `@placeholder`), keyed by
+    /// `PolicyId`. Built once at load; consulted per launch in a later phase.
+    secret: HashMap<PolicyId, SecretMediation>,
 }
 
 /// Remediation directive attached to a `forbid` policy via a Cedar
@@ -138,6 +155,12 @@ enum Remediation {
 const ANNOTATION_MODIFY: &str = "modify";
 const ANNOTATION_STEP_UP: &str = "step_up";
 const ANNOTATION_DEFER: &str = "defer";
+
+/// Annotation keys recognised on `permit` `secret.mediate` policies.
+const ANNOTATION_SECRET_MODE: &str = "mode";
+const ANNOTATION_SECRET_TRANSFORM: &str = "transform";
+const ANNOTATION_SECRET_ADAPTER: &str = "adapter";
+const ANNOTATION_SECRET_PLACEHOLDER: &str = "placeholder";
 
 impl CedarPolicyEvaluator {
     /// Construct from a [`PolicyBundle`] received from the Authority.
@@ -171,6 +194,7 @@ impl CedarPolicyEvaluator {
             .map_err(|e| CedarEvaluatorError::SchemaParse(Box::new(e)))?;
 
         let remediation = build_remediation_map(&policy_set)?;
+        let secret = build_secret_map(&policy_set)?;
 
         Ok(Self {
             policy_set,
@@ -179,7 +203,16 @@ impl CedarPolicyEvaluator {
             received_at: Instant::now(),
             ttl_secs: bundle.ttl_seconds,
             remediation,
+            secret,
         })
+    }
+
+    /// The secret-mediation directive attached to a matched `secret.mediate`
+    /// permit policy, if any. Looked up from the evaluation response's firing
+    /// policy id (wired into the decision path in a later phase).
+    #[must_use]
+    pub fn secret_mediation(&self, policy_id: &PolicyId) -> Option<&SecretMediation> {
+        self.secret.get(policy_id)
     }
 
     fn evaluate_response(
@@ -338,6 +371,57 @@ fn build_remediation_map(
     Ok(map)
 }
 
+/// Scan the parsed `PolicySet` for secret-mediation annotations and build a
+/// `PolicyId -> SecretMediation` map for `permit` `secret.mediate` policies.
+///
+/// A policy carrying any of `@mode` / `@transform` / `@adapter` /
+/// `@placeholder` is treated as a secret-mediation grant. Validation is
+/// fail-fast at load time so the caller keeps the previous good snapshot on any
+/// error:
+/// - annotations on a `forbid` policy are rejected (`SecretAnnotationOnForbid`):
+///   a `forbid` cannot mediate, so the directives are meaningless;
+/// - annotation values that do not assemble into a valid [`SecretMediation`]
+///   are rejected (`MalformedSecretMediation`).
+///
+/// Different `@placeholder` templates across policies are allowed: the
+/// dictionary is keyed by the full token, so tokens minted by different vault
+/// providers (e.g. `bitwarden` vs `1password`) coexist and redaction resolves
+/// any of them.
+fn build_secret_map(
+    policy_set: &PolicySet,
+) -> Result<HashMap<PolicyId, SecretMediation>, CedarEvaluatorError> {
+    let mut map = HashMap::new();
+    for policy in policy_set.policies() {
+        let mode = policy.annotation(ANNOTATION_SECRET_MODE);
+        let transform = policy.annotation(ANNOTATION_SECRET_TRANSFORM);
+        let adapter = policy.annotation(ANNOTATION_SECRET_ADAPTER);
+        let placeholder = policy.annotation(ANNOTATION_SECRET_PLACEHOLDER);
+
+        if mode.is_none() && transform.is_none() && adapter.is_none() && placeholder.is_none() {
+            continue;
+        }
+
+        let id = policy.id().clone();
+
+        // Secret-mediation directives grant behavior on a permit; a forbid
+        // carrying them is a misconfiguration (a deny cannot mediate).
+        if policy.effect() != Effect::Permit {
+            return Err(CedarEvaluatorError::SecretAnnotationOnForbid {
+                policy_id: id.to_string(),
+            });
+        }
+
+        let mediation = SecretMediation::from_annotations(mode, transform, adapter, placeholder)
+            .map_err(|err| CedarEvaluatorError::MalformedSecretMediation {
+                policy_id: id.to_string(),
+                reason: err.to_string(),
+            })?;
+
+        map.insert(id, mediation);
+    }
+    Ok(map)
+}
+
 /// Precedence when multiple remediation annotations fire on the same Deny.
 /// `StepUp` wins over `Defer` over `Modify`: a request needing human
 /// approval should not be silently transformed or merely delayed, and a
@@ -463,6 +547,7 @@ namespace Firma {
     entity Resource;
     action \"communication.external.send\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
     action \"code.write\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
+    action \"secret.mediate\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
 }";
 
     fn schema_bundle(policy_src: &[u8]) -> PolicyBundle {
@@ -520,6 +605,111 @@ namespace Firma {
 
     fn agent() -> AgentId {
         "agt_01j0000000e008000000000001".parse().unwrap()
+    }
+
+    fn secret_bundle(policy_src: &str) -> PolicyBundle {
+        PolicyBundle::new(
+            "secret-v1".to_string(),
+            policy_src.as_bytes().to_vec(),
+            TEST_SCHEMA.as_bytes().to_vec(),
+            30,
+        )
+    }
+
+    #[test]
+    fn build_secret_map_loads_valid_redact_directive() {
+        let src = r#"
+            @mode("redact")
+            @transform("mcp-jsonrpc")
+            permit(principal, action == Firma::Action::"secret.mediate", resource);
+        "#;
+        let policy_set: PolicySet = src.parse().unwrap();
+        let map = build_secret_map(&policy_set).unwrap();
+        assert_eq!(map.len(), 1);
+        let directive = map.values().next().unwrap();
+        assert_eq!(directive.mode, firma_core::SecretMode::Redact);
+        assert_eq!(
+            directive.transform,
+            Some(firma_core::SecretTransform::McpJsonRpc)
+        );
+        assert_eq!(directive.adapter, None);
+    }
+
+    #[test]
+    fn build_secret_map_skips_policies_without_secret_annotations() {
+        let policy_set: PolicySet = "permit(principal, action, resource);".parse().unwrap();
+        assert!(build_secret_map(&policy_set).unwrap().is_empty());
+    }
+
+    #[test]
+    fn build_secret_map_rejects_annotations_on_forbid() {
+        let src = r#"
+            @mode("redact")
+            @transform("raw")
+            @placeholder("firma-secret://x/{name}")
+            forbid(principal, action == Firma::Action::"secret.mediate", resource);
+        "#;
+        let policy_set: PolicySet = src.parse().unwrap();
+        assert!(matches!(
+            build_secret_map(&policy_set),
+            Err(CedarEvaluatorError::SecretAnnotationOnForbid { .. })
+        ));
+    }
+
+    #[test]
+    fn build_secret_map_rejects_malformed_directive() {
+        // `redact` mode without the required @transform annotation.
+        let src = r#"
+            @mode("redact")
+            permit(principal, action == Firma::Action::"secret.mediate", resource);
+        "#;
+        let policy_set: PolicySet = src.parse().unwrap();
+        assert!(matches!(
+            build_secret_map(&policy_set),
+            Err(CedarEvaluatorError::MalformedSecretMediation { .. })
+        ));
+    }
+
+    #[test]
+    fn build_secret_map_allows_different_placeholder_per_policy() {
+        // Two vault providers → two placeholder templates. Both coexist; the
+        // dictionary is keyed by the full token, so redaction resolves either.
+        let src = r#"
+            @mode("intercept")
+            @adapter("bws")
+            @placeholder("firma-secret://bitwarden/{name}")
+            permit(principal, action == Firma::Action::"secret.mediate", resource);
+
+            @mode("intercept")
+            @adapter("op")
+            @placeholder("firma-secret://1password/{name}")
+            permit(principal, action == Firma::Action::"secret.mediate", resource);
+        "#;
+        let policy_set: PolicySet = src.parse().unwrap();
+        let map = build_secret_map(&policy_set).unwrap();
+        assert_eq!(map.len(), 2);
+        let placeholders: std::collections::BTreeSet<&str> = map
+            .values()
+            .filter_map(|m| m.placeholder.as_deref())
+            .collect();
+        assert!(placeholders.contains("firma-secret://bitwarden/{name}"));
+        assert!(placeholders.contains("firma-secret://1password/{name}"));
+    }
+
+    #[test]
+    fn from_bundle_wires_secret_map_and_accessor() {
+        let src = r#"
+            @mode("intercept")
+            @adapter("bws")
+            @placeholder("firma-secret://bitwarden/{name}")
+            permit(principal, action == Firma::Action::"secret.mediate", resource);
+        "#;
+        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
+        assert_eq!(evaluator.secret.len(), 1);
+        let id = evaluator.secret.keys().next().unwrap().clone();
+        let directive = evaluator.secret_mediation(&id).unwrap();
+        assert_eq!(directive.mode, firma_core::SecretMode::Intercept);
+        assert_eq!(directive.adapter.as_deref(), Some("bws"));
     }
 
     #[test]

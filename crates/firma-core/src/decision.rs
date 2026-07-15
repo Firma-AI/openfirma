@@ -445,8 +445,8 @@ pub enum SecretMediationError {
     /// `@transform` value was not recognised.
     #[error("unknown @transform `{0}`; expected `raw` or `mcp-jsonrpc`")]
     UnknownTransform(String),
-    /// `@placeholder` was absent.
-    #[error("@placeholder annotation is required on a secret.mediate policy")]
+    /// `@placeholder` was absent under `@mode("intercept")`.
+    #[error("@mode(\"intercept\") requires a @placeholder annotation")]
     MissingPlaceholder,
     /// `@mode("redact")` requires a `@transform`.
     #[error("@mode(\"redact\") requires a @transform annotation")]
@@ -463,6 +463,9 @@ pub enum SecretMediationError {
     /// `@adapter` present but the mode is `redact`.
     #[error("@adapter is only valid with @mode(\"intercept\")")]
     UnexpectedAdapter,
+    /// `@placeholder` present but the mode is `redact`.
+    #[error("@placeholder is only valid with @mode(\"intercept\")")]
+    UnexpectedPlaceholder,
     /// `@placeholder` template was malformed.
     #[error("invalid @placeholder `{value}`: {reason}")]
     InvalidPlaceholder {
@@ -488,8 +491,9 @@ pub struct SecretMediation {
     pub transform: Option<SecretTransform>,
     /// Vault-output adapter name; `Some` if and only if `mode == Intercept`.
     pub adapter: Option<String>,
-    /// Placeholder template, e.g. `firma-secret://bitwarden/{name}`.
-    pub placeholder: String,
+    /// Placeholder template (e.g. `firma-secret://bitwarden/{name}`) used to
+    /// mint tokens; `Some` if and only if `mode == Intercept`.
+    pub placeholder: Option<String>,
 }
 
 /// Scheme every placeholder token begins with. Must match
@@ -506,11 +510,10 @@ impl SecretMediation {
     ///
     /// # Errors
     ///
-    /// Returns the first [`SecretMediationError`] encountered: a missing or
-    /// unknown `@mode`; a missing or malformed `@placeholder`; or a
-    /// mode/`@transform`/`@adapter` combination that is inconsistent — `redact`
-    /// needs `@transform` and rejects `@adapter`, while `intercept` needs a
-    /// non-empty `@adapter` and rejects `@transform`.
+    /// Returns the first [`SecretMediationError`] encountered. `@mode` is always
+    /// required. `redact` requires `@transform` and rejects `@adapter` and
+    /// `@placeholder`; `intercept` requires a non-empty `@adapter` and a
+    /// well-formed `@placeholder`, and rejects `@transform`.
     pub fn from_annotations(
         mode: Option<&str>,
         transform: Option<&str>,
@@ -518,9 +521,6 @@ impl SecretMediation {
         placeholder: Option<&str>,
     ) -> Result<Self, SecretMediationError> {
         let mode = SecretMode::parse(mode.ok_or(SecretMediationError::MissingMode)?)?;
-        let placeholder = placeholder.ok_or(SecretMediationError::MissingPlaceholder)?;
-        validate_placeholder_template(placeholder)?;
-
         let transform = transform.map(SecretTransform::parse).transpose()?;
         let adapter = adapter.map(|value| value.trim().to_string());
 
@@ -529,18 +529,23 @@ impl SecretMediation {
                 if adapter.is_some() {
                     return Err(SecretMediationError::UnexpectedAdapter);
                 }
+                if placeholder.is_some() {
+                    return Err(SecretMediationError::UnexpectedPlaceholder);
+                }
                 let transform = transform.ok_or(SecretMediationError::MissingTransform)?;
                 Ok(Self {
                     mode,
                     transform: Some(transform),
                     adapter: None,
-                    placeholder: placeholder.to_string(),
+                    placeholder: None,
                 })
             }
             SecretMode::Intercept => {
                 if transform.is_some() {
                     return Err(SecretMediationError::UnexpectedTransform);
                 }
+                let placeholder = placeholder.ok_or(SecretMediationError::MissingPlaceholder)?;
+                validate_placeholder_template(placeholder)?;
                 let adapter = adapter.ok_or(SecretMediationError::MissingAdapter)?;
                 if adapter.is_empty() {
                     return Err(SecretMediationError::EmptyAdapter);
@@ -549,7 +554,7 @@ impl SecretMediation {
                     mode,
                     transform: None,
                     adapter: Some(adapter),
-                    placeholder: placeholder.to_string(),
+                    placeholder: Some(placeholder.to_string()),
                 })
             }
         }
@@ -599,35 +604,31 @@ mod tests {
     }
 
     #[test]
-    fn secret_mediation_redact_requires_transform_and_rejects_adapter() {
-        let directive = SecretMediation::from_annotations(
-            Some("redact"),
-            Some("mcp-jsonrpc"),
-            None,
-            Some("firma-secret://bitwarden/{name}"),
-        )
-        .expect("valid redact directive");
+    fn secret_mediation_redact_requires_transform_and_rejects_adapter_and_placeholder() {
+        let directive =
+            SecretMediation::from_annotations(Some("redact"), Some("mcp-jsonrpc"), None, None)
+                .expect("valid redact directive");
         assert_eq!(directive.mode, SecretMode::Redact);
         assert_eq!(directive.transform, Some(SecretTransform::McpJsonRpc));
         assert_eq!(directive.adapter, None);
+        assert_eq!(directive.placeholder, None);
 
         assert_eq!(
-            SecretMediation::from_annotations(
-                Some("redact"),
-                None,
-                None,
-                Some("firma-secret://x/{name}")
-            ),
+            SecretMediation::from_annotations(Some("redact"), None, None, None),
             Err(SecretMediationError::MissingTransform)
+        );
+        assert_eq!(
+            SecretMediation::from_annotations(Some("redact"), Some("raw"), Some("bws"), None),
+            Err(SecretMediationError::UnexpectedAdapter)
         );
         assert_eq!(
             SecretMediation::from_annotations(
                 Some("redact"),
                 Some("raw"),
-                Some("bws"),
+                None,
                 Some("firma-secret://x/{name}")
             ),
-            Err(SecretMediationError::UnexpectedAdapter)
+            Err(SecretMediationError::UnexpectedPlaceholder)
         );
     }
 
@@ -643,6 +644,10 @@ mod tests {
         assert_eq!(directive.mode, SecretMode::Intercept);
         assert_eq!(directive.adapter.as_deref(), Some("bws"));
         assert_eq!(directive.transform, None);
+        assert_eq!(
+            directive.placeholder.as_deref(),
+            Some("firma-secret://bitwarden/{name}")
+        );
 
         assert_eq!(
             SecretMediation::from_annotations(
@@ -711,13 +716,9 @@ mod tests {
 
     #[test]
     fn secret_mediation_serde_round_trip() {
-        let directive = SecretMediation::from_annotations(
-            Some("redact"),
-            Some("mcp-jsonrpc"),
-            None,
-            Some("firma-secret://bitwarden/{name}"),
-        )
-        .expect("valid directive");
+        let directive =
+            SecretMediation::from_annotations(Some("redact"), Some("mcp-jsonrpc"), None, None)
+                .expect("valid directive");
         let json = serde_json::to_string(&directive).expect("serialize");
         // The wire form uses the hyphenated transform name.
         assert!(json.contains("mcp-jsonrpc"));
