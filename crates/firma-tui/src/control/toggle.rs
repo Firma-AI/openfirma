@@ -33,6 +33,10 @@ use crate::control::error::{ErrorMessage, PolicyRewriteError};
 // while avoiding accidental edits to a user-owned `when { false }` condition.
 const DISABLE_CONDITION: &str = "when { false };";
 const DISABLE_COMMENT: &str = "// openfirma-control:disabled";
+
+// `@id(...)` is the Cedar-owned identity for a policy row. The TUI deliberately
+// does not keep a parallel mapping file, because a second source of truth would
+// let the UI and the Authority policy bundle drift.
 const POLICY_ID_ANNOTATION: &str = "id";
 
 /// State of one Cedar policy as seen by Policy Control.

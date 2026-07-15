@@ -13,12 +13,11 @@ use crate::control::{
 };
 
 use super::theme::{
-    accent_style, base_style, decision_style, dim_style, focused_panel, header_style,
-    selected_style,
+    base_style, decision_style, dim_style, focused_panel, header_style, selected_style,
 };
 
 /// Renders the audit pane using the current filter and viewport mode.
-pub fn render_audit(frame: &mut Frame<'_>, area: Rect, app: &App) {
+pub fn render_audit(frame: &mut Frame, area: Rect, app: &App) {
     let block = audit_panel(app);
     let visible_count = app.visible_audit_rows_len();
 
@@ -52,7 +51,6 @@ pub fn render_audit(frame: &mut Frame<'_>, area: Rect, app: &App) {
             .selected_audit_index()
             .saturating_sub(visible_rows.saturating_sub(1)),
     };
-
     let rows = app
         .visible_audit_rows()
         .skip(skip)
@@ -89,7 +87,7 @@ fn filter_line(selected: AuditFilter) -> Line<'static> {
     spans.push(Span::styled(" Filter:", dim_style()));
     for filter in AuditFilter::ALL {
         let style = if filter == selected {
-            accent_style()
+            super::theme::accent_style()
         } else {
             dim_style()
         };
@@ -109,7 +107,7 @@ fn audit_panel(app: &App) -> ratatui::widgets::Block<'static> {
 }
 
 fn render_audit_message(
-    frame: &mut Frame<'_>,
+    frame: &mut Frame,
     area: Rect,
     block: ratatui::widgets::Block<'static>,
     lines: Vec<Line<'static>>,

@@ -8,16 +8,17 @@ use crate::control::{
     command::{ControlCommand, ControlEffect},
 };
 
-/// Returns the command for one pressed key, if the key is meaningful.
+/// Applies the command represented by a key press.
+///
+/// Keys that do not map to a command in the current UI context leave the app
+/// unchanged and return no effects.
+#[must_use]
+pub fn handle_key(app: &mut App, key: KeyCode) -> Vec<ControlEffect> {
+    command_for_key(app, key).map_or_else(Vec::new, |command| command.apply(app))
+}
+
+/// Converts a key press into a command for the current application state.
 #[must_use]
 pub fn command_for_key(app: &mut App, key: KeyCode) -> Option<ControlCommand> {
     bindings::command_for_key(app, key)
-}
-
-/// Applies the command represented by a key and returns runner side effects.
-#[must_use]
-pub fn handle_key(app: &mut App, key: KeyCode) -> Vec<ControlEffect> {
-    command_for_key(app, key)
-        .map(|command| command.apply(app))
-        .unwrap_or_default()
 }

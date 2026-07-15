@@ -242,6 +242,35 @@ firma monitor --state-dir /var/run/firma \
 are silently ignored for `authority` and `sidecar` log lines. The
 tailer detects log rotation by inode and reopens automatically.
 
+## Open Policy Control
+
+`firma control` opens Policy Control for the selected stack:
+
+```bash
+firma control --config .firma/firma.toml
+```
+
+The policy pane reads Cedar files from the Authority policy directory in
+`firma.toml`. Any policy with an `@id(...)` annotation is shown as a row:
+
+```cedar
+@id("block_payments")
+forbid (
+    principal,
+    action == Firma::Action::"payment.transfer",
+    resource
+);
+```
+
+When a row is toggled, Policy Control rewrites the Cedar file and reloads from
+disk. Disabled policies remain valid Cedar by adding a managed false condition:
+
+```cedar
+when { false }; // openfirma-control:disabled
+```
+
+The Authority picks up the file through its normal policy-dir hot reload path.
+
 Follow vs. one-shot:
 
 - **Follow** (default when stdout is a TTY, or forced with `--tail`) starts at

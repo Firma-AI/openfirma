@@ -1,17 +1,21 @@
 //! State slices for the control surface.
 
 mod audit;
+mod overlay;
 mod policy;
 mod runtime;
 mod status;
 
-pub use audit::{AuditDecision, AuditFilter, AuditRow, AuditState, AuditViewportMode};
+pub use audit::{AuditDecision, AuditFilter, AuditRow, AuditViewportMode};
 pub use policy::{
     PoliciesState, PolicyRewriteCompletion, PolicyRewriteRequest, PolicyRewriteStart, PolicyRow,
     PolicyRowStatus,
 };
 pub use runtime::ControlRuntimeState;
 pub use status::ControlStatus;
+
+pub use audit::AuditState;
+pub use overlay::OverlayState;
 
 /// Top-level pane that currently owns keyboard focus.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

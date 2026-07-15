@@ -9,7 +9,9 @@ use crate::control::error::ControlError;
 ///
 /// The runner refreshes this from app state before drawing so the frame can
 /// show queue length, audit connectivity, and the latest policy error
-/// without querying event sources directly.
+/// without querying event sources directly. Treat this as a display contract:
+/// background sources update the app, the app produces one snapshot, and the
+/// renderer stays a pure view over that snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ControlStatus {
     /// Current lifecycle state.

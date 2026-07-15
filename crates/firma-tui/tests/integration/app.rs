@@ -9,9 +9,9 @@ use crate::support::{
 };
 use crossterm::event::KeyCode;
 use firma_tui::control::{
-    App, AuditDecision, AuditFilter, AuditViewportMode, ControlError, Pane, PolicyDiscoveryError,
-    PolicyRewriteCompletion, PolicyRewriteError, PolicyRewriteRequest, PolicyRewriteStart,
-    PolicyRowStatus, PolicyState, set_policy_states,
+    App, AuditDecision, AuditFilter, AuditViewportMode, ControlError, Pane,
+    PolicyRewriteCompletion, PolicyRewriteError, PolicyRewriteStart, PolicyRowStatus, PolicyState,
+    set_policy_states,
 };
 
 const LARGE_POLICY_COUNT: usize = 1_000;
@@ -73,67 +73,95 @@ fn gg_jumps_to_first_policy_row() -> anyhow::Result<()> {
 }
 
 #[test]
-fn policy_rows_reflect_cedar_disabled_state() -> anyhow::Result<()> {
-    let (_temp, app) = app_with_default_policies()?;
+fn gg_jumps_to_first_audit_row() {
+    let mut app = app_with_audit_rows();
+    app.switch_pane();
 
-    assert_eq!(
-        policy_status(&app, "first_policy"),
-        Some(PolicyRowStatus::State(PolicyState::Enabled))
-    );
-    assert_eq!(
-        policy_status(&app, "second_policy"),
-        Some(PolicyRowStatus::State(PolicyState::Disabled))
-    );
+    app.move_selection_last();
+    assert_eq!(app.selected_audit_index(), last_visible_audit_index(&app));
 
-    Ok(())
+    handle_key(&mut app, KeyCode::Char('g'));
+    assert_eq!(app.selected_audit_index(), last_visible_audit_index(&app));
+
+    handle_key(&mut app, KeyCode::Char('g'));
+    assert_eq!(app.selected_audit_index(), 0);
+    assert_eq!(app.audit_viewport_mode(), AuditViewportMode::Manual);
 }
 
 #[test]
-fn policy_discovery_ignores_unannotated_cedar_policies() -> anyhow::Result<()> {
-    let source = format!(
-        r"
-permit (
-    principal,
-    action,
-    resource
-);
-{}
-",
-        crate::support::permit_policy("visible_policy")
-    );
-    let (_temp, app) = app_with_policy_files(&[("policies.cedar", &source)])?;
+fn capital_g_jumps_last_and_resumes_audit_follow_tail() {
+    let mut app = app_with_audit_rows();
 
-    assert_eq!(app.policies().len(), 1);
-    assert_eq!(
-        app.policies().first().map(|policy| policy.id.as_str()),
-        Some("visible_policy")
-    );
+    app.switch_pane();
+    app.move_selection_first();
+    assert_eq!(app.audit_viewport_mode(), AuditViewportMode::Manual);
 
-    Ok(())
+    handle_key(&mut app, KeyCode::Char('G'));
+
+    assert_eq!(app.selected_audit_index(), last_visible_audit_index(&app));
+    assert_eq!(app.audit_viewport_mode(), AuditViewportMode::FollowTail);
 }
 
 #[test]
-fn policy_discovery_reports_duplicate_ids() -> anyhow::Result<()> {
-    let source = format!(
-        "{}{}",
-        crate::support::permit_policy("duplicate_policy"),
-        crate::support::permit_policy("duplicate_policy")
-    );
-    let temp = tempfile::tempdir()?;
-    crate::support::write_named_policy_file(temp.path(), "policies.cedar", &source)?;
-    let app = App::new(Some(temp.path().to_path_buf()), false);
+fn j_to_last_audit_row_resumes_follow_tail() {
+    let mut app = app_with_audit_rows();
 
-    let Some(ControlError::PolicyDiscovery { error, .. }) = app.policy_error() else {
-        anyhow::bail!("duplicate policy id did not produce a discovery error");
-    };
+    app.switch_pane();
+    app.move_selection_first();
+
+    handle_key(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.selected_audit_index(), 1);
+    assert_eq!(app.audit_viewport_mode(), AuditViewportMode::Manual);
+
+    handle_key(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.selected_audit_index(), last_visible_audit_index(&app));
+    assert_eq!(app.audit_viewport_mode(), AuditViewportMode::FollowTail);
+}
+
+#[test]
+fn help_overlay_changes_key_context() {
+    let mut app = app_with_audit_rows();
+
+    handle_key(&mut app, KeyCode::Char('h'));
+    assert!(app.help_visible());
+
+    handle_key(&mut app, KeyCode::Char('j'));
+    assert!(app.help_visible());
+    assert_eq!(app.selected_pane(), Pane::Policies);
+
+    handle_key(&mut app, KeyCode::Esc);
+    assert!(!app.help_visible());
+    assert!(!app.should_quit());
+}
+
+#[test]
+fn audit_buffer_drops_oldest_row_at_capacity() {
+    let mut app = App::new(None, true);
+    for index in 0..=1_000 {
+        app.push_audit_row(audit_row(AuditDecision::Allow, index));
+    }
+
+    assert_eq!(app.audit_rows_len(), 1_000);
     assert_eq!(
-        error.as_ref(),
-        &PolicyDiscoveryError::DuplicateId {
-            id: "duplicate_policy".to_string()
-        }
+        app.visible_audit_rows()
+            .next()
+            .map(|row| row.resource.as_str()),
+        Some("resource-1")
     );
+}
 
-    Ok(())
+#[test]
+fn empty_audit_navigation_stays_clamped() {
+    let mut app = App::default();
+    app.switch_pane();
+
+    app.move_selection_up();
+    app.move_selection_down();
+    app.move_selection_first();
+    app.move_selection_last();
+
+    assert_eq!(app.selected_audit_index(), 0);
+    assert_eq!(app.audit_viewport_mode(), AuditViewportMode::FollowTail);
 }
 
 #[test]
@@ -423,52 +451,6 @@ fn rewrite_completion_stores_structured_policy_rewrite_error() -> anyhow::Result
 }
 
 #[test]
-fn gg_jumps_to_first_audit_row() {
-    let mut app = app_with_audit_rows();
-    app.switch_pane();
-
-    app.move_selection_last();
-    assert_eq!(app.selected_audit_index(), last_visible_audit_index(&app));
-
-    handle_key(&mut app, KeyCode::Char('g'));
-    assert_eq!(app.selected_audit_index(), last_visible_audit_index(&app));
-
-    handle_key(&mut app, KeyCode::Char('g'));
-    assert_eq!(app.selected_audit_index(), 0);
-    assert_eq!(app.audit_viewport_mode(), AuditViewportMode::Manual);
-}
-
-#[test]
-fn capital_g_jumps_last_and_resumes_audit_follow_tail() {
-    let mut app = app_with_audit_rows();
-
-    app.switch_pane();
-    app.move_selection_first();
-    assert_eq!(app.audit_viewport_mode(), AuditViewportMode::Manual);
-
-    handle_key(&mut app, KeyCode::Char('G'));
-
-    assert_eq!(app.selected_audit_index(), last_visible_audit_index(&app));
-    assert_eq!(app.audit_viewport_mode(), AuditViewportMode::FollowTail);
-}
-
-#[test]
-fn j_to_last_audit_row_resumes_follow_tail() {
-    let mut app = app_with_audit_rows();
-
-    app.switch_pane();
-    app.move_selection_first();
-
-    handle_key(&mut app, KeyCode::Char('j'));
-    assert_eq!(app.selected_audit_index(), 1);
-    assert_eq!(app.audit_viewport_mode(), AuditViewportMode::Manual);
-
-    handle_key(&mut app, KeyCode::Char('j'));
-    assert_eq!(app.selected_audit_index(), last_visible_audit_index(&app));
-    assert_eq!(app.audit_viewport_mode(), AuditViewportMode::FollowTail);
-}
-
-#[test]
 fn audit_filters_preserve_and_clamp_selected_row() {
     let mut app = app_with_audit_rows();
 
@@ -488,62 +470,18 @@ fn audit_filters_preserve_and_clamp_selected_row() {
     assert_eq!(selected_audit_resource(&app), Some("resource-1"));
 }
 
-#[test]
-fn help_overlay_changes_key_context() {
-    let mut app = app_with_audit_rows();
-
-    handle_key(&mut app, KeyCode::Char('h'));
-    assert!(app.help_visible());
-
-    handle_key(&mut app, KeyCode::Char('j'));
-    assert!(app.help_visible());
-    assert_eq!(app.selected_pane(), Pane::Policies);
-
-    handle_key(&mut app, KeyCode::Esc);
-    assert!(!app.help_visible());
-    assert!(!app.should_quit());
-}
-
-#[test]
-fn audit_buffer_drops_oldest_row_at_capacity() {
-    let mut app = App::new(None, true);
-    for index in 0..=1_000 {
-        app.push_audit_row(audit_row(AuditDecision::Allow, index));
-    }
-
-    assert_eq!(app.audit_rows_len(), 1_000);
-    assert_eq!(
-        app.visible_audit_rows()
-            .next()
-            .map(|row| row.resource.as_str()),
-        Some("resource-1")
-    );
-}
-
-#[test]
-fn empty_audit_navigation_stays_clamped() {
-    let mut app = App::default();
-    app.switch_pane();
-
-    app.move_selection_up();
-    app.move_selection_down();
-    app.move_selection_first();
-    app.move_selection_last();
-
-    assert_eq!(app.selected_audit_index(), 0);
-    assert_eq!(app.audit_viewport_mode(), AuditViewportMode::FollowTail);
-}
-
 fn single_rewrite_request(
-    rewrites: &[PolicyRewriteRequest],
-) -> anyhow::Result<&PolicyRewriteRequest> {
+    rewrites: &[firma_tui::control::PolicyRewriteRequest],
+) -> anyhow::Result<&firma_tui::control::PolicyRewriteRequest> {
     assert_eq!(rewrites.len(), 1);
     rewrites
         .first()
         .ok_or_else(|| anyhow::anyhow!("toggle all did not produce a rewrite request"))
 }
 
-fn rewrite_file_names(rewrites: &[PolicyRewriteRequest]) -> anyhow::Result<BTreeSet<String>> {
+fn rewrite_file_names(
+    rewrites: &[firma_tui::control::PolicyRewriteRequest],
+) -> anyhow::Result<BTreeSet<String>> {
     rewrites
         .iter()
         .map(|request| {

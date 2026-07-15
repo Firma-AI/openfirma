@@ -7,8 +7,8 @@ use crate::control::{
     policies::PolicyStateReader,
     state::{
         AuditFilter, AuditRow, AuditState, AuditViewportMode, ControlRuntimeState, ControlStatus,
-        Pane, PoliciesState, PolicyRewriteCompletion, PolicyRewriteRequest, PolicyRewriteStart,
-        PolicyRow,
+        OverlayState, Pane, PoliciesState, PolicyRewriteCompletion, PolicyRewriteRequest,
+        PolicyRewriteStart, PolicyRow,
     },
 };
 
@@ -21,11 +21,11 @@ use crate::control::{
 pub struct App {
     runtime_state: ControlRuntimeState,
     selected_pane: Pane,
-    help_visible: bool,
     pending_key_prefix: Option<KeyPrefix>,
     audit_connected: bool,
     rewrite_queue_len: usize,
     audit: AuditState,
+    overlays: OverlayState,
     policies: PoliciesState,
 }
 
@@ -57,47 +57,19 @@ impl App {
         Self {
             runtime_state,
             selected_pane: Pane::Policies,
-            help_visible: false,
             pending_key_prefix: None,
             audit_connected,
             rewrite_queue_len: 0,
             audit: AuditState::default(),
+            overlays: OverlayState::default(),
             policies,
         }
     }
-}
 
-impl Default for App {
-    fn default() -> Self {
-        Self::new(None, false)
-    }
-}
-
-impl App {
-    /// Returns true once the runner should stop processing events.
-    #[must_use]
-    pub const fn should_quit(&self) -> bool {
-        self.runtime_state.is_shutting_down()
-    }
-
-    /// Requests a graceful shutdown.
-    ///
-    /// The runtime state is updated before setting the quit flag so the final
-    /// status snapshot reflects that shutdown has started.
-    pub fn request_quit(&mut self) {
-        self.runtime_state = ControlRuntimeState::ShuttingDown;
-    }
-
-    /// Current lifecycle state.
-    #[must_use]
-    pub const fn runtime_state(&self) -> ControlRuntimeState {
-        self.runtime_state
-    }
-
-    /// Updates status fields owned by runner-managed queues.
+    /// Updates the status fields that are owned by the rewrite queue.
     ///
     /// A shutting-down queue moves the runtime into shutdown. Otherwise the
-    /// runtime state is recalculated from the current app state.
+    /// runtime state is recalculated from policy errors and pending rewrites.
     pub(crate) fn sync_rewrite_queue(&mut self, rewrite_queue_len: usize, shutting_down: bool) {
         self.rewrite_queue_len = rewrite_queue_len;
         if shutting_down {
@@ -122,32 +94,56 @@ impl App {
         }
     }
 
-    /// Records a policy error and marks the runtime as errored.
-    pub(crate) fn set_policy_error(&mut self, error: ControlError) {
-        self.policies.set_error(error);
-        self.runtime_state = ControlRuntimeState::Error;
+    /// Requests shutdown.
+    ///
+    /// Once set, the runner will stop processing new events and exit the main
+    /// loop.
+    pub fn request_quit(&mut self) {
+        self.runtime_state = ControlRuntimeState::ShuttingDown;
+    }
+
+    /// Returns true once shutdown has been requested.
+    #[must_use]
+    pub fn should_quit(&self) -> bool {
+        self.runtime_state.is_shutting_down()
+    }
+
+    /// Current lifecycle state.
+    #[must_use]
+    pub const fn runtime_state(&self) -> ControlRuntimeState {
+        self.runtime_state
     }
 
     /// Toggles the help overlay.
-    pub const fn toggle_help(&mut self) {
-        self.help_visible = !self.help_visible;
+    pub fn toggle_help(&mut self) {
+        self.overlays.toggle_help();
     }
 
     /// Closes the help overlay.
-    pub(crate) const fn close_help(&mut self) {
-        self.help_visible = false;
+    pub(crate) fn close_help(&mut self) {
+        self.overlays.close_help();
     }
 
     /// Returns true when the help overlay is visible.
     #[must_use]
-    pub const fn help_visible(&self) -> bool {
-        self.help_visible
+    pub fn help_visible(&self) -> bool {
+        self.overlays.help_visible()
     }
 
-    /// Pane currently receiving navigation commands.
+    /// Toggles the about overlay.
+    pub(crate) fn toggle_about(&mut self) {
+        self.overlays.toggle_about();
+    }
+
+    /// Closes the about overlay.
+    pub(crate) fn close_about(&mut self) {
+        self.overlays.close_about();
+    }
+
+    /// Returns true when the about overlay is visible.
     #[must_use]
-    pub const fn selected_pane(&self) -> Pane {
-        self.selected_pane
+    pub(crate) fn about_visible(&self) -> bool {
+        self.overlays.about_visible()
     }
 
     /// Moves focus to the next pane.
@@ -198,11 +194,42 @@ impl App {
     pub fn policy_dir(&self) -> Option<&Path> {
         self.policies.dir()
     }
+    /// Changes the audit decision filter.
+    ///
+    /// Selection is clamped to the filtered row set and follows the tail again
+    /// if the viewport is already in follow-tail mode.
+    pub fn set_audit_filter(&mut self, audit_filter: AuditFilter) {
+        self.audit.set_filter(audit_filter);
+    }
+
+    /// Pane currently receiving navigation commands.
+    #[must_use]
+    pub fn selected_pane(&self) -> Pane {
+        self.selected_pane
+    }
 
     /// Index of the selected policy row.
     #[must_use]
     pub fn selected_policy_index(&self) -> usize {
         self.policies.selected_index()
+    }
+
+    /// Index of the selected audit row in the filtered view.
+    #[must_use]
+    pub fn selected_audit_index(&self) -> usize {
+        self.audit.selected_index()
+    }
+
+    /// Current audit decision filter.
+    #[must_use]
+    pub fn audit_filter(&self) -> AuditFilter {
+        self.audit.filter()
+    }
+
+    /// Current audit viewport tracking mode.
+    #[must_use]
+    pub fn audit_viewport_mode(&self) -> AuditViewportMode {
+        self.audit.viewport_mode()
     }
 
     /// Policy rows currently rendered by the policies pane.
@@ -211,10 +238,22 @@ impl App {
         self.policies.rows()
     }
 
-    /// Current policy load error.
+    /// Selected audit row, if the filtered view contains one.
+    #[must_use]
+    pub(crate) fn selected_audit_row(&self) -> Option<&AuditRow> {
+        self.audit.selected_row()
+    }
+
+    /// Current policy load or rewrite error.
     #[must_use]
     pub fn policy_error(&self) -> Option<&ControlError> {
         self.policies.error()
+    }
+
+    /// Records a policy error and marks the runtime as errored.
+    pub(crate) fn set_policy_error(&mut self, error: ControlError) {
+        self.policies.set_error(error);
+        self.runtime_state = ControlRuntimeState::Error;
     }
 
     /// Source file for the selected policy row.
@@ -256,30 +295,40 @@ impl App {
         self.refresh_runtime_state();
     }
 
-    /// Changes the audit decision filter.
+    /// Opens the audit inspector for the selected audit row.
     ///
-    /// Selection is clamped to the filtered row set and follows the tail again
-    /// if the viewport is already in follow-tail mode.
-    pub fn set_audit_filter(&mut self, audit_filter: AuditFilter) {
-        self.audit.set_filter(audit_filter);
+    /// This has no effect unless the audit pane is focused and a filtered row
+    /// is selected.
+    pub(crate) fn open_audit_inspect(&mut self) {
+        if self.selected_pane == Pane::Audit && self.selected_audit_row().is_some() {
+            self.overlays.open_audit_inspect();
+        }
     }
 
-    /// Current audit decision filter.
-    #[must_use]
-    pub const fn audit_filter(&self) -> AuditFilter {
-        self.audit.filter()
+    /// Closes the audit inspector.
+    pub(crate) fn close_audit_inspect(&mut self) {
+        self.overlays.close_audit_inspect();
     }
 
     /// Current audit viewport tracking mode.
     #[must_use]
-    pub const fn audit_viewport_mode(&self) -> AuditViewportMode {
-        self.audit.viewport_mode()
+    pub(crate) fn audit_inspect_visible(&self) -> bool {
+        self.overlays.audit_inspect_visible()
     }
 
-    /// Index of the selected audit row in the filtered view.
-    #[must_use]
-    pub fn selected_audit_index(&self) -> usize {
-        self.audit.selected_index()
+    /// Starts a pending `g` prefix for `gg` navigation.
+    pub(crate) fn start_g_prefix(&mut self) {
+        self.pending_key_prefix = Some(KeyPrefix::G);
+    }
+
+    /// Consumes the pending `g` prefix and reports whether it was set.
+    pub(crate) fn take_g_prefix(&mut self) -> bool {
+        matches!(self.pending_key_prefix.take(), Some(KeyPrefix::G))
+    }
+
+    /// Clears any pending multi-key prefix.
+    pub(crate) fn clear_g_prefix(&mut self) {
+        self.pending_key_prefix = None;
     }
 
     /// Number of audit rows retained in the bounded buffer.
@@ -348,21 +397,6 @@ impl App {
         self.runtime_state = ControlRuntimeState::Rewriting;
     }
 
-    /// Starts a pending `g` prefix for `gg` navigation.
-    pub(crate) fn start_g_prefix(&mut self) {
-        self.pending_key_prefix = Some(KeyPrefix::G);
-    }
-
-    /// Consumes the pending `g` prefix and reports whether it was set.
-    pub(crate) fn take_g_prefix(&mut self) -> bool {
-        matches!(self.pending_key_prefix.take(), Some(KeyPrefix::G))
-    }
-
-    /// Clears any pending multi-key prefix.
-    pub(crate) fn clear_g_prefix(&mut self) {
-        self.pending_key_prefix = None;
-    }
-
     fn refresh_runtime_state(&mut self) {
         if self.runtime_state == ControlRuntimeState::ShuttingDown {
             return;
@@ -381,4 +415,10 @@ impl App {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum KeyPrefix {
     G,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self::new(None, false)
+    }
 }

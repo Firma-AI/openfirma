@@ -4,6 +4,10 @@
 //! Authority loads. Each discovered policy must carry an `@id(...)`
 //! annotation; that id becomes the stable row identity and the display label is
 //! derived later by the renderer.
+//!
+//! Discovery is intentionally read-only. The state reader is injectable so the
+//! app can use the Cedar source reader while tests can count reads or provide
+//! controlled states without touching the filesystem more than needed.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -19,6 +23,10 @@ use crate::control::{
     toggle::{self, PolicyState},
 };
 
+// Discovery follows the Authority policy directory rather than a separate TUI
+// settings file. Only Cedar sources are scanned, and each visible row must come
+// from the Cedar-native `@id(...)` annotation so the policy file remains the
+// single source of truth for both enforcement and control.
 const CEDAR_EXTENSION: &str = "cedar";
 const POLICY_ID_ANNOTATION: &str = "id";
 
@@ -116,7 +124,6 @@ pub fn discover(
             path: file.clone(),
             source: ErrorMessage::capture(error),
         })?;
-
         let policy_set =
             source
                 .parse::<PolicySet>()
@@ -130,12 +137,10 @@ pub fn discover(
             let Some(id) = policy.annotation(POLICY_ID_ANNOTATION) else {
                 continue;
             };
-
             let id = id.trim();
             if id.is_empty() {
                 return Err(PolicyDiscoveryError::EmptyId { path: file });
             }
-
             if !ids.insert(id.to_string()) {
                 return Err(PolicyDiscoveryError::DuplicateId { id: id.to_string() });
             }
