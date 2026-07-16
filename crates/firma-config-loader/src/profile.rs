@@ -14,6 +14,12 @@ pub enum AgentProfile {
     Copilot,
     /// General-purpose sandbox, no agent-specific defaults.
     Generic,
+    /// `OpenCode` terminal coding agent.
+    #[cfg_attr(feature = "clap", value(name = "opencode"))]
+    OpenCode,
+    /// Pi terminal coding agent.
+    #[cfg_attr(feature = "clap", value(name = "pi"))]
+    Pi,
     /// Visual Studio Code desktop.
     #[cfg_attr(feature = "clap", value(name = "vscode", alias = "code"))]
     Vscode,
@@ -28,6 +34,8 @@ impl AgentProfile {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude-code",
             Self::Copilot => "copilot",
+            Self::OpenCode => "opencode",
+            Self::Pi => "pi",
             Self::Vscode => "vscode",
         }
     }
@@ -40,6 +48,8 @@ impl AgentProfile {
             "codex" => Some(Self::Codex),
             "claude-code" | "claude" => Some(Self::ClaudeCode),
             "copilot" | "copilot-cli" => Some(Self::Copilot),
+            "opencode" => Some(Self::OpenCode),
+            "pi" => Some(Self::Pi),
             "vscode" | "code" => Some(Self::Vscode),
             _ => None,
         }
@@ -49,7 +59,7 @@ impl AgentProfile {
     #[must_use]
     pub fn provider(self) -> &'static str {
         match self {
-            Self::Generic | Self::ClaudeCode => "anthropic",
+            Self::Generic | Self::ClaudeCode | Self::OpenCode | Self::Pi => "anthropic",
             Self::Codex => "openai",
             Self::Copilot => "github",
             Self::Vscode => "vscode",
@@ -65,6 +75,12 @@ impl AgentProfile {
             Self::ClaudeCode => "Anthropic Claude Code — sets up Anthropic mapping by default",
             Self::Copilot => {
                 "GitHub Copilot CLI — sets up Copilot mapping and github MITM bypass by default"
+            }
+            Self::OpenCode => {
+                "OpenCode terminal coding agent — model-agnostic; sets up Anthropic mapping by default"
+            }
+            Self::Pi => {
+                "Pi terminal coding agent — model-agnostic; sets up Anthropic mapping by default"
             }
             Self::Vscode => {
                 "Visual Studio Code — sets up VS Code, marketplace, account, and GitHub mapping by default"
@@ -105,5 +121,24 @@ mod tests {
                 .description()
                 .contains("Visual Studio Code")
         );
+    }
+
+    #[test]
+    fn opencode_round_trips_name_and_provider() {
+        assert_eq!(AgentProfile::OpenCode.as_str(), "opencode");
+        assert_eq!(AgentProfile::OpenCode.provider(), "anthropic");
+        assert_eq!(
+            AgentProfile::from_name("opencode"),
+            Some(AgentProfile::OpenCode)
+        );
+        assert!(AgentProfile::OpenCode.description().contains("OpenCode"));
+    }
+
+    #[test]
+    fn pi_round_trips_name_and_provider() {
+        assert_eq!(AgentProfile::Pi.as_str(), "pi");
+        assert_eq!(AgentProfile::Pi.provider(), "anthropic");
+        assert_eq!(AgentProfile::from_name("pi"), Some(AgentProfile::Pi));
+        assert!(AgentProfile::Pi.description().contains("Pi"));
     }
 }

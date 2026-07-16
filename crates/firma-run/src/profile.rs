@@ -16,9 +16,11 @@ pub(crate) fn built_in_profile(profile: &str) -> Result<ProfilePatch, RunError> 
         Some(AgentProfile::Codex) => Ok(codex_profile()),
         Some(AgentProfile::ClaudeCode) => Ok(claude_code_profile()),
         Some(AgentProfile::Copilot) => Ok(copilot_profile()),
+        Some(AgentProfile::OpenCode) => Ok(opencode_profile()),
+        Some(AgentProfile::Pi) => Ok(pi_profile()),
         Some(AgentProfile::Vscode) => Ok(vscode_profile()),
         None => Err(RunError::ConfigValidation(format!(
-            "unknown profile '{profile}'; supported profiles: generic, codex, claude-code, copilot, vscode"
+            "unknown profile '{profile}'; supported profiles: generic, codex, claude-code, copilot, opencode, pi, vscode"
         ))),
     }
 }
@@ -176,6 +178,49 @@ fn copilot_profile() -> ProfilePatch {
     base
 }
 
+fn opencode_profile() -> ProfilePatch {
+    let mut base = generic_profile();
+    base.env_set
+        .insert("FIRMA_RUN_PROFILE".to_string(), "opencode".to_string());
+    // OpenCode is model-agnostic: the provider is chosen at runtime, so pass
+    // through the common provider keys and let the demo mapping decide which
+    // host is reachable. Sidecar-injected `NODE_EXTRA_CA_CERTS` (see
+    // `inject_sidecar_ca_trust_env`) makes the Node runtime trust firma-ca for
+    // intercepted hosts, so the default `Sole` CA trust is sufficient when the
+    // sidecar MITMs the model endpoint.
+    base.env_passthrough.extend([
+        "ANTHROPIC_API_KEY".to_string(),
+        "OPENAI_API_KEY".to_string(),
+        "OPENCODE_CONFIG".to_string(),
+        "XDG_CONFIG_HOME".to_string(),
+        "XDG_DATA_HOME".to_string(),
+    ]);
+    // OpenCode runs a client/server split: the TUI spawns a local `opencode
+    // serve` process. As a child of the harness root it inherits the sandbox
+    // network namespace, so its traffic funnels to the sidecar rather than
+    // detaching to the host. The spike validates this holds in practice.
+    base.use_http_proxy_sidecar = true;
+    base
+}
+
+fn pi_profile() -> ProfilePatch {
+    let mut base = generic_profile();
+    base.env_set
+        .insert("FIRMA_RUN_PROFILE".to_string(), "pi".to_string());
+    // Pi is a single-process, model-agnostic TUI. Like OpenCode it relies on the
+    // sidecar-injected `NODE_EXTRA_CA_CERTS` for firma-ca trust on the Node
+    // runtime, so the default `Sole` CA trust is sufficient under MITM.
+    base.env_passthrough.extend([
+        "ANTHROPIC_API_KEY".to_string(),
+        "OPENAI_API_KEY".to_string(),
+        "PI_CONFIG".to_string(),
+        "XDG_CONFIG_HOME".to_string(),
+        "XDG_DATA_HOME".to_string(),
+    ]);
+    base.use_http_proxy_sidecar = true;
+    base
+}
+
 fn vscode_profile() -> ProfilePatch {
     let mut base = generic_profile();
     base.env_set
@@ -239,6 +284,44 @@ mod tests {
             patch
                 .env_passthrough
                 .contains(&"XDG_RUNTIME_DIR".to_string())
+        );
+    }
+
+    #[test]
+    fn opencode_profile_sets_provider_env_and_http_proxy() {
+        let patch = built_in_profile("opencode").unwrap();
+        assert!(patch.use_http_proxy_sidecar);
+        // Default CA trust is Sole (None patch) — firma-ca via NODE_EXTRA_CA_CERTS.
+        assert_eq!(patch.ca_trust_mode, None);
+        assert_eq!(
+            patch.env_set.get("FIRMA_RUN_PROFILE"),
+            Some(&"opencode".to_string())
+        );
+        assert!(
+            patch
+                .env_passthrough
+                .contains(&"ANTHROPIC_API_KEY".to_string())
+        );
+        assert!(
+            patch
+                .env_passthrough
+                .contains(&"OPENAI_API_KEY".to_string())
+        );
+    }
+
+    #[test]
+    fn pi_profile_sets_provider_env_and_http_proxy() {
+        let patch = built_in_profile("pi").unwrap();
+        assert!(patch.use_http_proxy_sidecar);
+        assert_eq!(patch.ca_trust_mode, None);
+        assert_eq!(
+            patch.env_set.get("FIRMA_RUN_PROFILE"),
+            Some(&"pi".to_string())
+        );
+        assert!(
+            patch
+                .env_passthrough
+                .contains(&"ANTHROPIC_API_KEY".to_string())
         );
     }
 

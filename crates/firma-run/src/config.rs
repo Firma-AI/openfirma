@@ -1164,7 +1164,15 @@ mod tests {
 
     #[test]
     fn managed_seccomp_applies_to_all_recognized_bwrap_profiles() {
-        for profile in ["generic", "codex", "claude-code", "copilot", "vscode"] {
+        for profile in [
+            "generic",
+            "codex",
+            "claude-code",
+            "copilot",
+            "opencode",
+            "pi",
+            "vscode",
+        ] {
             assert!(
                 super::managed_seccomp_applies(profile, BackendKind::Bwrap),
                 "managed seccomp must apply to profile '{profile}' on bwrap"
