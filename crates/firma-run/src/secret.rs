@@ -251,6 +251,14 @@ impl SecretStore {
             .map(SecretValue::expose)
     }
 
+    /// Iterate stored `(placeholder, secret bytes)` pairs, ordered by
+    /// placeholder.
+    pub fn iter(&self) -> impl Iterator<Item = (&Placeholder, &[u8])> {
+        self.by_placeholder
+            .iter()
+            .map(|(placeholder, value)| (placeholder, value.expose()))
+    }
+
     /// Number of stored secrets.
     #[must_use]
     pub fn len(&self) -> usize {
