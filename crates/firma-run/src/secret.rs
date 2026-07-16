@@ -56,6 +56,14 @@ pub mod redact;
 #[cfg(unix)]
 pub mod serve;
 
+/// In-sandbox shim: courier the wrapped tool's descriptors to the broker.
+#[cfg(unix)]
+pub mod shim;
+
+/// Broker accept loop: accept shim connections, decide, and serve them.
+#[cfg(unix)]
+pub mod accept;
+
 /// URI scheme that prefixes every placeholder token.
 pub const PLACEHOLDER_SCHEME: &str = "firma-secret://";
 

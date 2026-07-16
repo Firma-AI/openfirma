@@ -8,6 +8,10 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[[bin]]
+name = "firma-secret-shim"
+path = "src/bin/firma-secret-shim.rs"
+
 [dependencies]
 aho-corasick.workspace = true
 anyhow.workspace = true
