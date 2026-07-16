@@ -19,6 +19,7 @@
 use std::io::{self, Read, Write};
 
 use aho_corasick::{AhoCorasick, MatchKind};
+use arc_swap::ArcSwap;
 
 use super::Direction;
 use crate::secret::{Placeholder, SecretStore};
@@ -36,7 +37,7 @@ use crate::secret::{Placeholder, SecretStore};
 pub fn stream_mcp_jsonrpc<R: Read, W: Write>(
     reader: &mut R,
     writer: &mut W,
-    store: &SecretStore,
+    store: &ArcSwap<SecretStore>,
     direction: Direction,
 ) -> io::Result<()> {
     let mask_table = match direction {
@@ -83,7 +84,7 @@ pub fn stream_mcp_jsonrpc<R: Read, W: Write>(
 
 /// Rewrite a single framed line into `out` (without the trailing newline).
 fn rewrite_line(
-    store: &SecretStore,
+    store: &ArcSwap<SecretStore>,
     direction: Direction,
     mask_table: Option<&MaskTable>,
     line: &[u8],
@@ -92,7 +93,7 @@ fn rewrite_line(
     match direction {
         Direction::Rehydrate => {
             let mut cursor = 0;
-            for m in store.rehydrate_matches(line) {
+            for m in store.load().rehydrate_matches(line) {
                 out.extend_from_slice(&line[cursor..m.start]);
                 out.extend_from_slice(&json_escape(m.secret));
                 cursor = m.end;
@@ -115,10 +116,10 @@ struct MaskTable {
 
 impl MaskTable {
     /// Build the escaped-secret automaton, or `None` if there is nothing to mask.
-    fn build(store: &SecretStore) -> io::Result<Option<Self>> {
+    fn build(store: &ArcSwap<SecretStore>) -> io::Result<Option<Self>> {
         let mut patterns: Vec<Vec<u8>> = Vec::new();
         let mut placeholders: Vec<Placeholder> = Vec::new();
-        for (placeholder, secret) in store.iter() {
+        for (placeholder, secret) in store.load().iter() {
             if secret.is_empty() {
                 continue;
             }
@@ -200,7 +201,12 @@ mod tests {
         }
     }
 
-    fn run(store: &SecretStore, direction: Direction, input: &[u8], chunk: usize) -> Vec<u8> {
+    fn run(
+        store: &ArcSwap<SecretStore>,
+        direction: Direction,
+        input: &[u8],
+        chunk: usize,
+    ) -> Vec<u8> {
         let mut reader = ChunkReader {
             data: input,
             pos: 0,
@@ -211,14 +217,14 @@ mod tests {
         out
     }
 
-    fn store_with(entries: &[(&str, &str)]) -> SecretStore {
+    fn store_with(entries: &[(&str, &str)]) -> ArcSwap<SecretStore> {
         let mut store = SecretStore::new();
         for (name, value) in entries {
             store
                 .insert(Placeholder::mint("bw", name), SecretValue::from(*value))
                 .expect("insert secret");
         }
-        store
+        ArcSwap::from_pointee(store)
     }
 
     #[test]
@@ -304,7 +310,7 @@ mod tests {
 
     #[test]
     fn empty_store_passes_through_both_directions() {
-        let store = SecretStore::new();
+        let store = store_with(&[]);
         let input = b"{\"x\":\"firma-secret://bw/pw\"}\nplain\n";
         assert_eq!(run(&store, Direction::Rehydrate, input, 5), input);
         assert_eq!(run(&store, Direction::Mask, input, 5), input);

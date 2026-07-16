@@ -19,6 +19,7 @@
 use std::io::{self, Read, Write};
 use std::thread;
 
+use arc_swap::ArcSwap;
 use firma_core::{SecretMediation, SecretTransform};
 
 use super::SecretStore;
@@ -62,7 +63,7 @@ pub fn run_redact<AR, TW, TR, AW>(
     tool_stdin: TW,
     tool_stdout: TR,
     agent_stdout: AW,
-    store: &SecretStore,
+    store: &ArcSwap<SecretStore>,
 ) -> Result<(), RedactError>
 where
     AR: Read + Send,
@@ -120,7 +121,7 @@ fn pump<R: Read, W: Write>(
     direction: Direction,
     reader: &mut R,
     writer: &mut W,
-    store: &SecretStore,
+    store: &ArcSwap<SecretStore>,
 ) -> io::Result<()> {
     match transform {
         None => {
@@ -139,13 +140,13 @@ mod tests {
     use super::*;
     use crate::secret::{Placeholder, SecretValue};
 
-    fn store_with(name: &str, value: &str) -> (SecretStore, Placeholder) {
+    fn store_with(name: &str, value: &str) -> (ArcSwap<SecretStore>, Placeholder) {
         let mut store = SecretStore::new();
         let placeholder = Placeholder::mint("bw", name);
         store
             .insert(placeholder.clone(), SecretValue::from(value))
             .expect("insert secret");
-        (store, placeholder)
+        (ArcSwap::from_pointee(store), placeholder)
     }
 
     fn redact(transform: SecretTransform) -> SecretPepOutcome {
@@ -210,7 +211,7 @@ mod tests {
 
     #[test]
     fn passthrough_copies_both_directions_unchanged() {
-        let store = SecretStore::new();
+        let store = ArcSwap::from_pointee(SecretStore::new());
         let mut tool_stdin = Vec::new();
         let mut agent_stdout = Vec::new();
 
@@ -230,7 +231,7 @@ mod tests {
 
     #[test]
     fn deny_touches_no_stream_and_fails_closed() {
-        let store = SecretStore::new();
+        let store = ArcSwap::from_pointee(SecretStore::new());
         let mut tool_stdin = Vec::new();
         let mut agent_stdout = Vec::new();
 
@@ -257,7 +258,7 @@ mod tests {
 
     #[test]
     fn intercept_decision_is_rejected_on_redact_path() {
-        let store = SecretStore::new();
+        let store = ArcSwap::from_pointee(SecretStore::new());
         let outcome = SecretPepOutcome::Mediate(SecretMediation::Intercept {
             matcher: firma_core::SecretMatcher::Regex {
                 pattern: "(?P<name>.)(?P<value>.)".to_string(),

@@ -1546,6 +1546,7 @@ version = "0.1.4"
 dependencies = [
  "aho-corasick",
  "anyhow",
+ "arc-swap",
  "chrono",
  "ctrlc",
  "dialoguer",

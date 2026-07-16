@@ -125,7 +125,7 @@ impl CompiledMatcher {
     pub fn rewrite(
         &self,
         output: &[u8],
-        mint: &mut dyn FnMut(&str, &str) -> String,
+        mint: &mut impl FnMut(&str, &str) -> String,
     ) -> Result<Vec<u8>, MatcherError> {
         match self {
             Self::Json { value, name } => rewrite_json(output, value, name, mint),
@@ -138,7 +138,7 @@ fn rewrite_json(
     output: &[u8],
     value_path: &JsonPath,
     name_path: &JsonPath,
-    mint: &mut dyn FnMut(&str, &str) -> String,
+    mint: &mut impl FnMut(&str, &str) -> String,
 ) -> Result<Vec<u8>, MatcherError> {
     let mut root: Value =
         serde_json::from_slice(output).map_err(|error| MatcherError::Json(error.to_string()))?;
@@ -179,7 +179,7 @@ fn rewrite_json(
 fn rewrite_regex(
     output: &[u8],
     pattern: &Regex,
-    mint: &mut dyn FnMut(&str, &str) -> String,
+    mint: &mut impl FnMut(&str, &str) -> String,
 ) -> Result<Vec<u8>, MatcherError> {
     let text = std::str::from_utf8(output).map_err(|_| MatcherError::NotUtf8)?;
     let mut result = String::with_capacity(text.len());

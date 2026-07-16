@@ -227,7 +227,7 @@ pub enum SecretStoreError {
 /// SECURITY: the masking automaton holds internal copies of the secret bytes
 /// that are not zeroized (they live for the store's lifetime and are freed with
 /// it). Tightening this is tracked as hardening in the design doc.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct SecretStore {
     by_placeholder: BTreeMap<Placeholder, SecretValue>,
     matcher: Option<AhoCorasick>,

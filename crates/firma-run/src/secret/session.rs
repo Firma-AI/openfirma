@@ -15,6 +15,7 @@
 
 use std::io::{self, Read, Write};
 
+use arc_swap::ArcSwap;
 use firma_core::SecretMediation;
 
 use super::SecretStore;
@@ -57,7 +58,7 @@ pub fn run_intercept<R: Read, W: Write>(
     outcome: &SecretPepOutcome,
     tool_output: &mut R,
     agent_output: &mut W,
-    store: &mut SecretStore,
+    store: &ArcSwap<SecretStore>,
 ) -> Result<(), SessionError> {
     match outcome {
         SecretPepOutcome::Deny(reason) => Err(SessionError::Denied(reason.clone())),
@@ -103,11 +104,11 @@ mod tests {
 
     #[test]
     fn intercept_rewrites_output_and_populates_store() {
-        let mut store = SecretStore::new();
+        let store = ArcSwap::from_pointee(SecretStore::new());
         let mut tool = &br#"[{"key":"db","value":"s3cr3t"}]"#[..];
         let mut agent = Vec::new();
 
-        run_intercept(&intercept_outcome(), &mut tool, &mut agent, &mut store).unwrap();
+        run_intercept(&intercept_outcome(), &mut tool, &mut agent, &store).unwrap();
 
         let seen: serde_json::Value = serde_json::from_slice(&agent).unwrap();
         assert_eq!(
@@ -115,14 +116,14 @@ mod tests {
             serde_json::json!("firma-secret://bitwarden/db")
         );
         assert_eq!(
-            store.resolve("firma-secret://bitwarden/db"),
+            store.load().resolve("firma-secret://bitwarden/db"),
             Some(&b"s3cr3t"[..])
         );
     }
 
     #[test]
     fn passthrough_copies_output_unchanged() {
-        let mut store = SecretStore::new();
+        let store = ArcSwap::from_pointee(SecretStore::new());
         let mut tool = &b"plain output"[..];
         let mut agent = Vec::new();
 
@@ -130,16 +131,16 @@ mod tests {
             &SecretPepOutcome::Passthrough,
             &mut tool,
             &mut agent,
-            &mut store,
+            &store,
         )
         .unwrap();
         assert_eq!(agent, b"plain output");
-        assert!(store.is_empty());
+        assert!(store.load().is_empty());
     }
 
     #[test]
     fn deny_writes_nothing_and_fails_closed() {
-        let mut store = SecretStore::new();
+        let store = ArcSwap::from_pointee(SecretStore::new());
         let mut tool = &b"secret output"[..];
         let mut agent = Vec::new();
 
@@ -147,7 +148,7 @@ mod tests {
             &SecretPepOutcome::Deny("blocked".to_string()),
             &mut tool,
             &mut agent,
-            &mut store,
+            &store,
         )
         .unwrap_err();
         assert!(matches!(error, SessionError::Denied(_)));
@@ -159,12 +160,11 @@ mod tests {
 
     #[test]
     fn intercept_failure_writes_nothing() {
-        let mut store = SecretStore::new();
+        let store = ArcSwap::from_pointee(SecretStore::new());
         let mut tool = &b"not json"[..];
         let mut agent = Vec::new();
 
-        let error =
-            run_intercept(&intercept_outcome(), &mut tool, &mut agent, &mut store).unwrap_err();
+        let error = run_intercept(&intercept_outcome(), &mut tool, &mut agent, &store).unwrap_err();
         assert!(matches!(error, SessionError::Intercept(_)));
         assert!(
             agent.is_empty(),
@@ -174,14 +174,14 @@ mod tests {
 
     #[test]
     fn redact_decision_is_rejected_on_intercept_path() {
-        let mut store = SecretStore::new();
+        let store = ArcSwap::from_pointee(SecretStore::new());
         let mut tool = &b""[..];
         let mut agent = Vec::new();
         let outcome = SecretPepOutcome::Mediate(SecretMediation::Redact {
             transform: SecretTransform::Raw,
         });
 
-        let error = run_intercept(&outcome, &mut tool, &mut agent, &mut store).unwrap_err();
+        let error = run_intercept(&outcome, &mut tool, &mut agent, &store).unwrap_err();
         assert!(matches!(error, SessionError::UnexpectedRedact));
     }
 }

@@ -12,6 +12,7 @@
 
 use std::io::{self, Read, Write};
 
+use arc_swap::ArcSwap;
 use either::Either;
 
 use super::Direction;
@@ -36,9 +37,10 @@ struct Replacement<'a> {
 pub fn stream_raw<R: Read, W: Write>(
     reader: &mut R,
     writer: &mut W,
-    store: &SecretStore,
+    store: &ArcSwap<SecretStore>,
     direction: Direction,
 ) -> io::Result<()> {
+    let store = store.load();
     let max_pattern_len = match direction {
         Direction::Rehydrate => store.max_placeholder_len(),
         Direction::Mask => store.max_secret_len(),
@@ -53,12 +55,12 @@ pub fn stream_raw<R: Read, W: Write>(
             break;
         }
         out.clear();
-        state.push(&chunk[..read], store, direction, &mut out);
+        state.push(&chunk[..read], &store, direction, &mut out);
         writer.write_all(&out)?;
     }
 
     out.clear();
-    state.finish(store, direction, &mut out);
+    state.finish(&store, direction, &mut out);
     writer.write_all(&out)?;
     writer.flush()
 }
@@ -190,21 +192,26 @@ mod tests {
         }
     }
 
-    fn run(store: &SecretStore, direction: Direction, input: &[u8], sizes: Vec<usize>) -> Vec<u8> {
+    fn run(
+        store: &ArcSwap<SecretStore>,
+        direction: Direction,
+        input: &[u8],
+        sizes: Vec<usize>,
+    ) -> Vec<u8> {
         let mut reader = ChunkReader::new(input, sizes);
         let mut out = Vec::new();
         stream_raw(&mut reader, &mut out, store, direction).expect("stream rewrite");
         out
     }
 
-    fn store_with(entries: &[(&str, &str)]) -> SecretStore {
+    fn store_with(entries: &[(&str, &str)]) -> ArcSwap<SecretStore> {
         let mut store = SecretStore::new();
         for (name, value) in entries {
             store
                 .insert(Placeholder::mint("bw", name), SecretValue::from(*value))
                 .expect("insert secret");
         }
-        store
+        ArcSwap::from_pointee(store)
     }
 
     #[test]
@@ -236,7 +243,7 @@ mod tests {
 
     #[test]
     fn empty_store_passes_through_both_directions() {
-        let store = SecretStore::new();
+        let store = store_with(&[]);
         let input = b"firma-secret://bw/db and plain text";
         assert_eq!(
             run(&store, Direction::Rehydrate, input, vec![3]),
@@ -307,10 +314,11 @@ mod tests {
     }
 
     /// Whole-input reference rewrite: splice non-overlapping matches in order.
-    fn reference_impl(store: &SecretStore, direction: Direction, input: &[u8]) -> Vec<u8> {
+    fn reference_impl(store: &ArcSwap<SecretStore>, direction: Direction, input: &[u8]) -> Vec<u8> {
+        let store = store.load();
         let mut out = Vec::new();
         let mut cursor = 0;
-        for replacement in matches(store, direction, input) {
+        for replacement in matches(&store, direction, input) {
             out.extend_from_slice(&input[cursor..replacement.start]);
             out.extend_from_slice(replacement.with);
             cursor = replacement.end;

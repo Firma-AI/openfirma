@@ -13,7 +13,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
 
 use crate::backend::SandboxHandle;
 use crate::config::{CommandMediatorConfig, MountSpec, ResolvedProfile};
@@ -165,7 +167,7 @@ fn start_broker(
             sock.display()
         ))
     })?;
-    let store = Arc::new(RwLock::new(SecretStore::new()));
+    let store = Arc::new(ArcSwap::from_pointee(SecretStore::new()));
     let session_id = identity.session_id.clone();
     let decide =
         Arc::new(move |argv: &[String]| decide_secret(mediator.as_ref(), &session_id, argv));

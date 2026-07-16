@@ -15,6 +15,7 @@ path = "src/bin/firma-secret-shim.rs"
 [dependencies]
 aho-corasick.workspace = true
 anyhow.workspace = true
+arc-swap.workspace = true
 chrono.workspace = true
 ctrlc.workspace = true
 dialoguer.workspace = true

@@ -17,9 +17,9 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io;
 use std::os::fd::OwnedFd;
-use std::sync::RwLock;
 use std::thread;
 
+use arc_swap::ArcSwap;
 use firma_core::SecretMediation;
 
 use super::SecretStore;
@@ -74,7 +74,7 @@ pub enum ServeError {
 pub fn serve_connection(
     accepted: AcceptedHandshake,
     outcome: &SecretPepOutcome,
-    store: &RwLock<SecretStore>,
+    store: &ArcSwap<SecretStore>,
 ) -> Result<(), ServeError> {
     let mut fds = accepted.into_by_role()?;
 
@@ -87,14 +87,13 @@ pub fn serve_connection(
             let tool_stdout = take(&mut fds, FdRole::ToolStdoutSource)?;
             let agent_stdout = take(&mut fds, FdRole::AgentStdoutSink)?;
 
-            let guard = store.read().map_err(|_| ServeError::StorePoisoned)?;
             run_redact(
                 outcome,
                 agent_stdin,
                 tool_stdin,
                 tool_stdout,
                 agent_stdout,
-                &guard,
+                store,
             )?;
             Ok(())
         }
@@ -106,13 +105,11 @@ pub fn serve_connection(
             // agent→tool leg, copy it through unchanged (no rehydration).
             let stdin_leg = pair(&mut fds, FdRole::AgentStdinSource, FdRole::ToolStdinSink);
 
-            let mut guard = store.write().map_err(|_| ServeError::StorePoisoned)?;
             thread::scope(|scope| {
                 let passthrough = stdin_leg.map(|(mut reader, mut writer)| {
                     scope.spawn(move || io::copy(&mut reader, &mut writer).map(drop))
                 });
-                let intercept =
-                    run_intercept(outcome, &mut tool_stdout, &mut agent_stdout, &mut guard);
+                let intercept = run_intercept(outcome, &mut tool_stdout, &mut agent_stdout, store);
                 if let Some(handle) = passthrough {
                     handle.join().map_err(|_| ServeError::Thread)??;
                 }
@@ -176,13 +173,13 @@ mod tests {
         (OwnedFd::from(reader), OwnedFd::from(writer))
     }
 
-    fn store_with(name: &str, value: &str) -> (RwLock<SecretStore>, Placeholder) {
+    fn store_with(name: &str, value: &str) -> (ArcSwap<SecretStore>, Placeholder) {
         let mut store = SecretStore::new();
         let placeholder = Placeholder::mint("bw", name);
         store
             .insert(placeholder.clone(), SecretValue::from(value))
             .expect("insert secret");
-        (RwLock::new(store), placeholder)
+        (ArcSwap::from_pointee(store), placeholder)
     }
 
     #[test]
@@ -247,7 +244,7 @@ mod tests {
 
     #[test]
     fn intercept_extracts_stdout_into_store() {
-        let store = RwLock::new(SecretStore::new());
+        let store = ArcSwap::from_pointee(SecretStore::new());
 
         let (tool_stdout_r, tool_stdout_w) = os_pipe();
         let (agent_stdout_r, agent_stdout_w) = os_pipe();
@@ -284,14 +281,14 @@ mod tests {
         assert_eq!(seen[0]["value"], "firma-secret://bitwarden/db");
         // The extracted secret is now resolvable from the shared store.
         assert_eq!(
-            store.read().unwrap().resolve("firma-secret://bitwarden/db"),
+            store.load().resolve("firma-secret://bitwarden/db"),
             Some(&b"s3cr3t"[..])
         );
     }
 
     #[test]
     fn deny_wires_nothing_and_fails_closed() {
-        let store = RwLock::new(SecretStore::new());
+        let store = ArcSwap::from_pointee(SecretStore::new());
         let (tool_stdout_r, _tool_stdout_w) = os_pipe();
         let (_agent_stdout_r, agent_stdout_w) = os_pipe();
 
@@ -314,7 +311,7 @@ mod tests {
 
     #[test]
     fn missing_required_descriptor_fails_closed() {
-        let store = RwLock::new(SecretStore::new());
+        let store = ArcSwap::from_pointee(SecretStore::new());
         let (tool_stdout_r, _w) = os_pipe();
 
         // A redact decision but only one of the four required descriptors.

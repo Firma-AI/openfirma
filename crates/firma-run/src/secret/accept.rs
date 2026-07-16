@@ -7,8 +7,10 @@
 //!
 //! See `docs/architecture/secrets-interception.md`.
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::thread;
+
+use arc_swap::ArcSwap;
 
 use super::SecretStore;
 use super::broker::BrokerListener;
@@ -24,7 +26,7 @@ use super::serve::{ServeError, serve_connection};
 /// Returns [`ServeError`] if accepting, decoding, or serving fails.
 pub fn accept_and_serve<D>(
     listener: &BrokerListener,
-    store: &RwLock<SecretStore>,
+    store: &ArcSwap<SecretStore>,
     decide: &D,
 ) -> Result<(), ServeError>
 where
@@ -41,7 +43,7 @@ where
 /// (an MCP server) does not block new intercept launches. Per-connection errors
 /// are logged and do not stop the loop; the loop ends when `accept` fails (for
 /// example when the listener is dropped at teardown).
-pub fn serve_forever<D>(listener: BrokerListener, store: Arc<RwLock<SecretStore>>, decide: Arc<D>)
+pub fn serve_forever<D>(listener: BrokerListener, store: Arc<ArcSwap<SecretStore>>, decide: Arc<D>)
 where
     D: Fn(&[String]) -> SecretPepOutcome + Send + Sync + 'static,
 {
@@ -89,7 +91,7 @@ mod tests {
         store
             .insert(token.clone(), SecretValue::from("s3cr3t"))
             .expect("insert");
-        let store = RwLock::new(store);
+        let store = ArcSwap::from_pointee(store);
 
         // Peer ends the "agent" and "tool" drive; broker ends are couriered.
         let (agent_stdin_r, agent_stdin_w) = std::io::pipe().expect("pipe");

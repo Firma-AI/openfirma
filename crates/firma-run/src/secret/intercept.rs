@@ -9,6 +9,7 @@
 //! orchestration. It is the producer half of the secret machinery (the consumer
 //! is redaction rehydration). See `docs/architecture/secrets-interception.md`.
 
+use arc_swap::ArcSwap;
 use firma_core::SecretMatcher;
 use firma_sidecar::secret_matcher::{CompiledMatcher, MatcherError};
 
@@ -42,7 +43,7 @@ pub fn intercept(
     matcher: &SecretMatcher,
     output: &[u8],
     placeholder_template: &str,
-    store: &mut SecretStore,
+    store: &ArcSwap<SecretStore>,
 ) -> Result<Vec<u8>, InterceptError> {
     let compiled = CompiledMatcher::compile(matcher)?;
 
@@ -51,9 +52,13 @@ pub fn intercept(
     let mut store_error: Option<SecretStoreError> = None;
     let rewritten = compiled.rewrite(output, &mut |name, value| {
         let placeholder = Placeholder::from_template(placeholder_template, name);
-        if let Err(error) = store.insert(placeholder.clone(), SecretValue::from(value)) {
-            store_error = Some(error);
-        }
+        store.rcu(|store| {
+            let mut store = SecretStore::clone(store);
+            if let Err(error) = store.insert(placeholder.clone(), SecretValue::from(value)) {
+                store_error = Some(error);
+            }
+            store
+        });
         placeholder.as_str().to_owned()
     })?;
 
@@ -80,15 +85,14 @@ mod tests {
 
     #[test]
     fn json_matcher_rewrites_each_secret_and_stores() {
-        let mut store = SecretStore::new();
+        let store = ArcSwap::from_pointee(SecretStore::new());
         let output = json!([
             { "key": "db_password", "value": "s3cr3t" },
             { "key": "api_key", "value": "AAA" },
         ])
         .to_string();
 
-        let rewritten =
-            intercept(&json_matcher(), output.as_bytes(), TEMPLATE, &mut store).unwrap();
+        let rewritten = intercept(&json_matcher(), output.as_bytes(), TEMPLATE, &store).unwrap();
         let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
 
         assert_eq!(
@@ -100,15 +104,15 @@ mod tests {
             json!("firma-secret://bitwarden/api_key")
         );
         assert_eq!(
-            store.resolve("firma-secret://bitwarden/db_password"),
+            store.load().resolve("firma-secret://bitwarden/db_password"),
             Some(&b"s3cr3t"[..])
         );
-        assert_eq!(store.mask_matches(b"echo s3cr3t").count(), 1);
+        assert_eq!(store.load().mask_matches(b"echo s3cr3t").count(), 1);
     }
 
     #[test]
     fn regex_matcher_rewrites_env_style_values() {
-        let mut store = SecretStore::new();
+        let store = ArcSwap::from_pointee(SecretStore::new());
         let matcher = SecretMatcher::Regex {
             pattern: r"(?m)^(?P<name>[^=]+)=(?P<value>.+)$".to_string(),
         };
@@ -117,7 +121,7 @@ mod tests {
             &matcher,
             b"DB=s3cr3t\nAPI=AAA\n",
             "firma-secret://env/{name}",
-            &mut store,
+            &store,
         )
         .unwrap();
 
@@ -125,17 +129,20 @@ mod tests {
             rewritten,
             b"DB=firma-secret://env/DB\nAPI=firma-secret://env/API\n"
         );
-        assert_eq!(store.resolve("firma-secret://env/DB"), Some(&b"s3cr3t"[..]));
+        assert_eq!(
+            store.load().resolve("firma-secret://env/DB"),
+            Some(&b"s3cr3t"[..])
+        );
     }
 
     #[test]
     fn invalid_json_is_rejected() {
-        let mut store = SecretStore::new();
-        let error = intercept(&json_matcher(), b"not json", TEMPLATE, &mut store).unwrap_err();
+        let store = ArcSwap::from_pointee(SecretStore::new());
+        let error = intercept(&json_matcher(), b"not json", TEMPLATE, &store).unwrap_err();
         assert!(matches!(
             error,
             InterceptError::Matcher(MatcherError::Json(_))
         ));
-        assert!(store.is_empty());
+        assert!(store.load().is_empty());
     }
 }
