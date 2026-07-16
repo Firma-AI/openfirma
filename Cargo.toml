@@ -60,6 +60,7 @@ dialoguer = "0.11"
 dirs = "6"
 dispatch2 = "0.3"
 ecdsa = { version = "0.16", features = ["signing", "verifying"] }
+either = { version = "1.16" }
 elliptic-curve = { version = "0.13", features = ["pem"] }
 firma-authority = { path = "crates/firma-authority", version = "0.1.4" }
 firma-config-loader = { path = "crates/firma-config-loader", version = "0.1.4" }

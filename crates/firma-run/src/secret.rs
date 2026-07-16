@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use aho_corasick::{AhoCorasick, MatchKind};
+use either::Either;
 use zeroize::Zeroizing;
 
 /// Out-of-sandbox broker transport (Unix-socket handshake + `SCM_RIGHTS` fd
@@ -35,6 +36,10 @@ pub mod pep;
 /// Intercept transform: extract secrets from a vault CLI's output and rewrite
 /// it so the agent sees placeholders.
 pub mod intercept;
+
+/// Streaming byte-level rewriters (the `raw` redact transform): rehydrate
+/// placeholders into secrets on stdin and mask secrets back on stdout.
+pub mod transform;
 
 /// Broker-side application of a secret-mediation decision to a wrapped launch's
 /// captured output (fail-closed).
@@ -166,13 +171,27 @@ impl fmt::Debug for SecretValue {
 /// `start..end` are byte offsets into the searched haystack; `placeholder` is
 /// the token the value should be masked to.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MaskMatch {
+pub struct MaskMatch<'a> {
     /// Inclusive start offset of the match.
     pub start: usize,
     /// Exclusive end offset of the match.
     pub end: usize,
     /// Placeholder the matched value maps to.
-    pub placeholder: Placeholder,
+    pub placeholder: &'a Placeholder,
+}
+
+/// A located occurrence of a placeholder token inside a buffer.
+///
+/// `start..end` are byte offsets into the searched haystack; `secret` is the
+/// value the placeholder should be rehydrated to (borrowed from the store).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RehydrateMatch<'a> {
+    /// Inclusive start offset of the match.
+    pub start: usize,
+    /// Exclusive end offset of the match.
+    pub end: usize,
+    /// Secret bytes the matched placeholder resolves to.
+    pub secret: &'a [u8],
 }
 
 /// Errors from mutating the [`SecretStore`].
@@ -194,8 +213,12 @@ pub enum SecretStoreError {
 pub struct SecretStore {
     by_placeholder: BTreeMap<Placeholder, SecretValue>,
     matcher: Option<AhoCorasick>,
-    /// Placeholder for each matcher pattern, aligned by pattern index.
+    /// Placeholder for each masking-matcher pattern, aligned by pattern index.
     pattern_placeholders: Vec<Placeholder>,
+    rehydrate_matcher: Option<AhoCorasick>,
+    /// Placeholder for each rehydration-matcher pattern, aligned by pattern
+    /// index; used to resolve the secret the token maps to.
+    rehydrate_placeholders: Vec<Placeholder>,
 }
 
 impl SecretStore {
@@ -246,31 +269,88 @@ impl SecretStore {
     /// longest secret wins, so a secret that is a substring of a longer one does
     /// not produce a spurious inner match. Returns an empty vector when the
     /// store is empty.
-    #[must_use]
-    pub fn mask_matches(&self, haystack: &[u8]) -> Vec<MaskMatch> {
+    pub fn mask_matches<'a>(
+        &'a self,
+        haystack: &'a [u8],
+    ) -> impl Iterator<Item = MaskMatch<'a>> + 'a {
         let Some(matcher) = self.matcher.as_ref() else {
-            return Vec::new();
+            return Either::Left(None.into_iter());
         };
-        matcher
-            .find_iter(haystack)
-            .filter_map(|m| {
-                self.pattern_placeholders
-                    .get(m.pattern().as_usize())
-                    .map(|placeholder| MaskMatch {
-                        start: m.start(),
-                        end: m.end(),
-                        placeholder: placeholder.clone(),
-                    })
-            })
-            .collect()
+        Either::Right(matcher.find_iter(haystack).filter_map(|m| {
+            self.pattern_placeholders
+                .get(m.pattern().as_usize())
+                .map(|placeholder| MaskMatch {
+                    start: m.start(),
+                    end: m.end(),
+                    placeholder,
+                })
+        }))
     }
 
-    /// Rebuild the masking automaton from the current value set.
+    /// Find every occurrence of a stored placeholder token in `haystack`.
+    ///
+    /// The inverse of [`SecretStore::mask_matches`]: matches are leftmost-longest
+    /// and non-overlapping, and each carries the secret bytes the token resolves
+    /// to. Tokens that are not in the store never match, so an unknown
+    /// placeholder passes through untouched (the caller substitutes nothing —
+    /// fail closed). Returns an empty vector when the store is empty.
+    pub fn rehydrate_matches<'a>(
+        &'a self,
+        haystack: &'a [u8],
+    ) -> impl Iterator<Item = RehydrateMatch<'a>> + 'a {
+        let Some(matcher) = self.rehydrate_matcher.as_ref() else {
+            return Either::Left(None.into_iter());
+        };
+        Either::Right(matcher.find_iter(haystack).filter_map(|m| {
+            let placeholder = self.rehydrate_placeholders.get(m.pattern().as_usize())?;
+            let secret = self.by_placeholder.get(placeholder)?.expose();
+            Some(RehydrateMatch {
+                start: m.start(),
+                end: m.end(),
+                secret,
+            })
+        }))
+    }
+
+    /// Length in bytes of the longest stored secret value (0 if empty).
+    ///
+    /// The masking overlap buffer must retain `max_secret_len - 1` bytes so a
+    /// secret split across reads is not missed.
+    #[must_use]
+    pub fn max_secret_len(&self) -> usize {
+        self.by_placeholder
+            .values()
+            .map(SecretValue::len)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Length in bytes of the longest stored placeholder token (0 if empty).
+    ///
+    /// The rehydration overlap buffer must retain `max_placeholder_len - 1`
+    /// bytes so a token split across reads is not missed.
+    #[must_use]
+    pub fn max_placeholder_len(&self) -> usize {
+        self.by_placeholder
+            .keys()
+            .map(|placeholder| placeholder.as_str().len())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Rebuild both the masking and rehydration automatons after a change.
+    fn rebuild_matcher(&mut self) -> Result<(), SecretStoreError> {
+        self.rebuild_mask_matcher()?;
+        self.rebuild_rehydrate_matcher()
+    }
+
+    /// Rebuild the masking automaton (secret value → placeholder) from the
+    /// current value set.
     ///
     /// Empty secret values are skipped (an empty pattern has no meaningful
     /// match). Patterns are ordered by placeholder for deterministic pattern
     /// indices and tie-breaking.
-    fn rebuild_matcher(&mut self) -> Result<(), SecretStoreError> {
+    fn rebuild_mask_matcher(&mut self) -> Result<(), SecretStoreError> {
         let mut entries: Vec<(&Placeholder, &[u8])> = self
             .by_placeholder
             .iter()
@@ -296,6 +376,33 @@ impl SecretStore {
             .map(|(placeholder, _)| (*placeholder).clone())
             .collect();
         self.matcher = Some(matcher);
+        Ok(())
+    }
+
+    /// Rebuild the rehydration automaton (placeholder token → secret value).
+    ///
+    /// Every placeholder is a non-empty token, so all keys are included; the
+    /// resolved secret may itself be empty, which rehydrates to nothing. Keys
+    /// come from a `BTreeMap`, so pattern indices are already deterministic.
+    fn rebuild_rehydrate_matcher(&mut self) -> Result<(), SecretStoreError> {
+        if self.by_placeholder.is_empty() {
+            self.rehydrate_matcher = None;
+            self.rehydrate_placeholders = Vec::new();
+            return Ok(());
+        }
+
+        let placeholders: Vec<&Placeholder> = self.by_placeholder.keys().collect();
+        let patterns: Vec<&[u8]> = placeholders
+            .iter()
+            .map(|placeholder| placeholder.as_str().as_bytes())
+            .collect();
+        let matcher = AhoCorasick::builder()
+            .match_kind(MatchKind::LeftmostLongest)
+            .build(&patterns)
+            .map_err(|error| SecretStoreError::Matcher(error.to_string()))?;
+
+        self.rehydrate_placeholders = placeholders.into_iter().cloned().collect();
+        self.rehydrate_matcher = Some(matcher);
         Ok(())
     }
 }
@@ -380,10 +487,12 @@ mod tests {
         assert_eq!(store.len(), 1);
         assert_eq!(store.resolve(placeholder.as_str()), Some(&b"new-value"[..]));
         // The stale value is no longer matched; the current one is.
-        assert!(store.mask_matches(b"has old-value here").is_empty());
-        let matches = store.mask_matches(b"has new-value here");
+        assert_eq!(store.mask_matches(b"has old-value here").count(), 0);
+        let matches = store
+            .mask_matches(b"has new-value here")
+            .collect::<Vec<_>>();
         assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].placeholder, placeholder);
+        assert_eq!(matches[0].placeholder, &placeholder);
     }
 
     #[test]
@@ -395,11 +504,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            store.mask_matches(b"xxabcyy"),
+            store.mask_matches(b"xxabcyy").collect::<Vec<_>>(),
             vec![MaskMatch {
                 start: 2,
                 end: 5,
-                placeholder,
+                placeholder: &placeholder,
             }]
         );
     }
@@ -416,11 +525,11 @@ mod tests {
 
         // The longer secret contains the shorter one; only the longest match at the
         // position is reported.
-        let matches = store.mask_matches(b"_abcdef_");
+        let matches = store.mask_matches(b"_abcdef_").collect::<Vec<_>>();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].start, 1);
         assert_eq!(matches[0].end, 7);
-        assert_eq!(matches[0].placeholder, long);
+        assert_eq!(matches[0].placeholder, &long);
     }
 
     #[test]
@@ -429,17 +538,72 @@ mod tests {
         let placeholder = Placeholder::mint("bitwarden", "token");
         store.insert(placeholder, SecretValue::from("abc")).unwrap();
 
-        let matches = store.mask_matches(b"abc-abc");
+        let matches = store.mask_matches(b"abc-abc").collect::<Vec<_>>();
         assert_eq!(matches.len(), 2);
         assert_eq!((matches[0].start, matches[0].end), (0, 3));
         assert_eq!((matches[1].start, matches[1].end), (4, 7));
     }
 
     #[test]
+    fn rehydrate_matches_locates_known_token_and_ignores_unknown() {
+        let mut store = SecretStore::new();
+        let placeholder = Placeholder::mint("bitwarden", "token");
+        store
+            .insert(placeholder.clone(), SecretValue::from("s3cr3t"))
+            .unwrap();
+
+        let haystack = format!("login={placeholder} other=firma-secret://bitwarden/absent");
+        let matches = store
+            .rehydrate_matches(haystack.as_bytes())
+            .collect::<Vec<_>>();
+        // Only the known token resolves; the unknown one is left for passthrough.
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].secret, b"s3cr3t");
+        assert_eq!(
+            &haystack.as_bytes()[matches[0].start..matches[0].end],
+            placeholder.as_str().as_bytes()
+        );
+    }
+
+    #[test]
+    fn rehydrate_matches_is_leftmost_longest() {
+        let mut store = SecretStore::new();
+        let short = Placeholder::mint("bw", "a");
+        let long = Placeholder::mint("bw", "abc");
+        store.insert(short, SecretValue::from("S")).unwrap();
+        store
+            .insert(long.clone(), SecretValue::from("LONG"))
+            .unwrap();
+
+        let matches = store
+            .rehydrate_matches(long.as_str().as_bytes())
+            .collect::<Vec<_>>();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].secret, b"LONG");
+    }
+
+    #[test]
+    fn max_lengths_track_longest_entries() {
+        let mut store = SecretStore::new();
+        assert_eq!(store.max_secret_len(), 0);
+        assert_eq!(store.max_placeholder_len(), 0);
+
+        let short = Placeholder::mint("bw", "a");
+        let long = Placeholder::mint("bw", "longer-name");
+        store.insert(short, SecretValue::from("ab")).unwrap();
+        store
+            .insert(long.clone(), SecretValue::from("abcdef"))
+            .unwrap();
+
+        assert_eq!(store.max_secret_len(), 6);
+        assert_eq!(store.max_placeholder_len(), long.as_str().len());
+    }
+
+    #[test]
     fn mask_matches_empty_store_returns_nothing() {
         let store = SecretStore::new();
         assert!(store.is_empty());
-        assert!(store.mask_matches(b"anything at all").is_empty());
+        assert_eq!(store.mask_matches(b"anything at all").count(), 0);
     }
 
     #[test]
@@ -453,7 +617,7 @@ mod tests {
             .unwrap();
 
         // An empty value must not match at every position (or anywhere).
-        assert!(store.mask_matches(b"non-empty haystack").is_empty());
+        assert_eq!(store.mask_matches(b"non-empty haystack").count(), 0);
     }
 
     #[test]

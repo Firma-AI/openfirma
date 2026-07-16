@@ -103,7 +103,7 @@ mod tests {
             store.resolve("firma-secret://bitwarden/db_password"),
             Some(&b"s3cr3t"[..])
         );
-        assert_eq!(store.mask_matches(b"echo s3cr3t").len(), 1);
+        assert_eq!(store.mask_matches(b"echo s3cr3t").count(), 1);
     }
 
     #[test]

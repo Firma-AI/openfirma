@@ -1549,6 +1549,7 @@ dependencies = [
  "chrono",
  "ctrlc",
  "dialoguer",
+ "either",
  "firma-authority",
  "firma-config-loader",
  "firma-core",
