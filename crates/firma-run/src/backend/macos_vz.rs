@@ -572,8 +572,8 @@ impl TerminalSize {
 fn terminal_type() -> Option<String> {
     std::env::var("TERM")
         .ok()
+        .filter(|term| !term.trim().is_empty())
         .map(|term| term.trim().to_string())
-        .filter(|term| !term.is_empty())
 }
 
 /// Parses one non-zero terminal dimension from the host environment.

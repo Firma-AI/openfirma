@@ -570,12 +570,12 @@ fn parse_matcher<'a>(
     match kind.trim() {
         "json" => {
             let value_path = get("match_value")
+                .filter(|value| !value.trim().is_empty())
                 .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
                 .ok_or(SecretMediationError::MissingMatchValue)?;
             let name_path = get("match_name")
+                .filter(|value| !value.trim().is_empty())
                 .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
                 .ok_or(SecretMediationError::MissingMatchName)?;
             Ok(SecretMatcher::Json {
                 value_path,

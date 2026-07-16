@@ -35,6 +35,11 @@ pub struct ResolvedProfile {
     pub capability: CapabilityLeaseConfig,
     pub sidecar_local_exec: Option<CommandMediatorConfig>,
     pub executable_policies: BTreeMap<String, ExecutableLaunchPolicy>,
+    /// Executables to interpose on with a secret-mediation shim (stdio routed
+    /// through the firma-run broker). This carries no behavior — Cedar policy
+    /// decides intercept vs redact and all directives; see the secrets design
+    /// doc. Merged across `[run.defaults]` and the active profile.
+    pub shims: BTreeSet<String>,
     /// When `true`, the autostarted sidecar is configured in HTTP proxy
     /// interceptor mode (TCP listener). When `false`, UDS interceptor mode.
     /// Set for profiles whose agent tool uses standard HTTP proxy env vars.
@@ -387,6 +392,10 @@ pub(crate) struct ProfilePatch {
     pub(crate) sidecar_local_exec: Option<CommandMediatorPatch>,
     #[serde(default)]
     pub(crate) executable_policies: BTreeMap<String, ExecutableLaunchPolicyPatch>,
+    /// Executables to interpose on with a secret-mediation shim. Additive across
+    /// `[run.defaults]` and the active profile (like `env_passthrough`).
+    #[serde(default)]
+    pub(crate) shims: Vec<String>,
     #[serde(default)]
     pub(crate) codex_cli: Option<ExecutableLaunchPolicyPatch>,
     /// Configure the autostarted sidecar in HTTP proxy interceptor mode.
@@ -501,6 +510,8 @@ impl ProfilePatch {
         env_passthrough.extend(higher.env_passthrough);
         let mut executable_policies = self.executable_policies;
         executable_policies.extend(higher.executable_policies);
+        let mut shims = self.shims;
+        shims.extend(higher.shims);
 
         let mounts = if higher.mounts.is_empty() {
             self.mounts
@@ -530,6 +541,7 @@ impl ProfilePatch {
             },
             sidecar_local_exec: higher.sidecar_local_exec.or(self.sidecar_local_exec),
             executable_policies,
+            shims,
             codex_cli: higher.codex_cli.or(self.codex_cli),
             use_http_proxy_sidecar: higher.use_http_proxy_sidecar || self.use_http_proxy_sidecar,
             allow_non_structural: higher.allow_non_structural || self.allow_non_structural,
@@ -596,7 +608,14 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
     let env_passthrough = patch
         .env_passthrough
         .into_iter()
-        .filter(|item: &String| !item.trim().is_empty())
+        .filter(|item| !item.trim().is_empty())
+        .collect::<BTreeSet<_>>();
+
+    let shims = patch
+        .shims
+        .into_iter()
+        .filter(|item| !item.trim().is_empty())
+        .map(|item| item.trim().to_string())
         .collect::<BTreeSet<_>>();
 
     let mut env_set = patch.env_set;
@@ -665,6 +684,7 @@ pub fn resolve_profile(args: &RunInput) -> Result<ResolvedProfile, RunError> {
         capability,
         sidecar_local_exec,
         executable_policies,
+        shims,
         use_http_proxy_sidecar: patch.use_http_proxy_sidecar,
         allow_non_structural: patch.allow_non_structural,
         ca_trust_mode: patch.ca_trust_mode.unwrap_or_default(),
@@ -766,6 +786,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
             }),
         sidecar_local_exec: None,
         executable_policies: BTreeMap::new(),
+        shims: Vec::new(),
         codex_cli: None,
         use_http_proxy_sidecar: false,
         allow_non_structural: args.allow_non_structural,
@@ -1378,6 +1399,36 @@ path = "/tmp/capability.token"
                 path: PathBuf::from("/tmp/capability.token")
             }
         );
+    }
+
+    #[test]
+    fn shims_merge_across_defaults_and_profile() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join(CONFIG_FILE_NAME);
+
+        let toml = r#"
+[run.defaults]
+shims = ["bws", "  "]
+
+[run.profiles.codex]
+shims = ["npx"]
+"#;
+        fs::write(&config_path, toml).unwrap();
+
+        let mut run_args = args("codex");
+        run_args.config = Some(config_path);
+
+        let resolved = resolve_profile(&run_args).unwrap();
+        // Defaults and profile are additive; blank entries are dropped.
+        assert!(resolved.shims.contains("bws"));
+        assert!(resolved.shims.contains("npx"));
+        assert!(!resolved.shims.iter().any(|s| s.trim().is_empty()));
+    }
+
+    #[test]
+    fn shims_default_to_empty() {
+        let resolved = resolve_profile(&args("codex")).unwrap();
+        assert!(resolved.shims.is_empty());
     }
 
     #[test]
