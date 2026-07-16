@@ -46,6 +46,11 @@ pub mod transform;
 #[cfg(unix)]
 pub mod session;
 
+/// Broker-side application of a redact decision to a wrapped tool's
+/// bidirectional streams (fail-closed).
+#[cfg(unix)]
+pub mod redact;
+
 /// URI scheme that prefixes every placeholder token.
 pub const PLACEHOLDER_SCHEME: &str = "firma-secret://";
 
