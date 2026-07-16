@@ -1,0 +1,77 @@
+# `firma run` profile for the secret interception & redaction demo.
+#
+# `shims` is the ONLY secret-specific config here: it lists the executables to
+# interpose on (route their stdio through the firma-run broker). What each shim
+# does — intercept vs redact, matcher, placeholder, transform — is decided by
+# the Cedar policy in policies/secret-mediation.cedar, loaded by the auto-started
+# Authority and evaluated in the Sidecar.
+
+[authority]
+listen_addr = "127.0.0.1:0"
+policy_dir = "policies"
+issuance_policy_dir = "issuance-policies"
+revocation_file = "examples/firma-run/secret-redaction/.runtime/revocations.txt"
+key_file = ".runtime/authority.key"
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 30
+log_level = "info"
+
+[run]
+profile = "generic"
+# Signals that `firma run` should auto-start a per-process Authority + Sidecar.
+# The authority loads Cedar policies from policies/ (the default policy_dir,
+# relative to this file) and streams them to the Sidecar for enforcement.
+# The signing key is generated on demand; override its location with:
+#   FIRMA_AUTHORITY_KEY_FILE=/path/to/authority.key
+
+[run.defaults]
+# mock-vault is the vault CLI stand-in (intercept); mock-mcp-server is the MCP
+# server stand-in (redact). Keep this list tight: every launch of a shimmed
+# executable pays a broker round-trip even when the policy leaves it untouched.
+shims = ["mock-vault", "mock-mcp-server"]
+
+[run.profiles.generic]
+backend = "bwrap"
+
+# secret.mediate decisions travel over the Sidecar's local-exec governance
+# socket (a per-launch call on a local socket, off the network hot path). The
+# endpoint is derived automatically from the auto-started Sidecar's unix socket
+# (appends -tools.sock to its basename); no explicit path needed.
+[run.profiles.generic.sidecar_local_exec]
+timeout_ms = 600
+
+[run.profiles.generic.env_set]
+FIRMA_RUN_BWRAP_ROOTFS_MODE = "readonly"
+FIRMA_RUN_BWRAP_RUNTIME_HOME = "false"
+FIRMA_RUN_BWRAP_MASK_HOME_PATHS = ".ssh,.gnupg,.aws,.config/gcloud,.env"
+
+[sidecar]
+mode = "enforce"
+
+[sidecar.interceptor]
+mode = "http_proxy"
+listen_addr = "127.0.0.1:8080"
+
+[sidecar.interceptor.https_mitm]
+enabled = false
+
+[sidecar.policy]
+dir = "policies"
+
+[sidecar.log]
+level = "info"
+
+[sidecar.capability_validation]
+clock_skew_tolerance_seconds = 0
+
+[sidecar.constraint_enforcement]
+bundle_ttl_seconds = 3600
+enforcement_timeout_ms = 50
+
+[sidecar.connector]
+default_timeout_ms = 120000
+
+[sidecar.audit]
+sink = "file"
+file_path = ".runtime/audit.jsonl"
+signing_key_path = ".runtime/audit.key"

@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""Mock vault CLI for the firma run secret-redaction demo.
+
+Simulates `bws secret list` JSON output. The firma run broker intercepts
+stdout: it extracts each value via the configured JSONPath matcher, stores the
+real value out-of-sandbox, and replaces it with a firma-secret:// placeholder
+before the agent process sees it.
+"""
+import json
+import sys
+
+SECRETS = [
+    {"key": "login-password", "value": "S3cr3tP%40ssw0rd!"},
+    {"key": "api-token", "value": "tok_live_abc123def456"},
+    {"key": "db-url", "value": "postgres://user:hunter2@db.internal/prod"},
+]
+
+json.dump(SECRETS, sys.stdout, indent=2)
+sys.stdout.write("\n")

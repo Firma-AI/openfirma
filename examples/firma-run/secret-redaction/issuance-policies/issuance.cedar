@@ -1,0 +1,6 @@
+permit (
+    principal,
+    action,
+    resource
+);
+
