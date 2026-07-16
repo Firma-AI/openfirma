@@ -11,6 +11,7 @@
     reason = "descriptors received via SCM_RIGHTS have no safe nix wrapper into OwnedFd; each unsafe is a thin, checked shim taking sole ownership of a just-transferred fd"
 )]
 
+use std::collections::BTreeMap;
 use std::io::{self, IoSlice, IoSliceMut};
 use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -25,19 +26,23 @@ const MAX_FDS: usize = 8;
 /// Maximum handshake payload size (length-prefixed JSON), in bytes.
 const MAX_HANDSHAKE_LEN: usize = 64 * 1024;
 
-/// Role of a descriptor handed to the broker.
+/// Purpose of a single descriptor handed to the broker.
 ///
-/// Roles are listed in the handshake in the same order the descriptors are
-/// passed via `SCM_RIGHTS`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Each role names exactly one descriptor, in the same order the descriptors
+/// are passed via `SCM_RIGHTS` (strict 1 role : 1 fd). A redact launch couriers
+/// all four; an intercept launch couriers `[ToolStdoutSource, AgentStdoutSink]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FdRole {
-    /// Stream carrying bytes from the agent toward the wrapped tool — the
-    /// rehydration target (placeholder → secret).
-    AgentToTool,
-    /// Stream carrying bytes from the wrapped tool toward the agent — the
-    /// masking target (secret → placeholder).
-    ToolToAgent,
+    /// Bytes from the agent toward the tool — rehydration **reads** here.
+    AgentStdinSource,
+    /// The tool's stdin — rehydration **writes** here (placeholder → secret).
+    ToolStdinSink,
+    /// The tool's stdout — masking/extraction **reads** here.
+    ToolStdoutSource,
+    /// Bytes toward the agent — masking/extraction **writes** here
+    /// (secret → placeholder).
+    AgentStdoutSink,
 }
 
 /// Shim → broker handshake, sent once per wrapped-tool launch.
@@ -57,6 +62,27 @@ pub struct AcceptedHandshake {
     /// Descriptors received via `SCM_RIGHTS`, in the order declared by
     /// [`Handshake::fds`].
     pub fds: Vec<OwnedFd>,
+}
+
+impl AcceptedHandshake {
+    /// Consume into a `role → descriptor` map.
+    ///
+    /// The handshake's declared roles are zipped with the received descriptors
+    /// in order (their counts were already checked equal by [`recv_handshake`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a role is declared more than once, which would make
+    /// the descriptor for that role ambiguous (fail closed).
+    pub fn into_by_role(self) -> io::Result<BTreeMap<FdRole, OwnedFd>> {
+        let mut by_role = BTreeMap::new();
+        for (role, fd) in self.handshake.fds.into_iter().zip(self.fds) {
+            if by_role.insert(role, fd).is_some() {
+                return Err(io::Error::other(format!("duplicate fd role: {role:?}")));
+            }
+        }
+        Ok(by_role)
+    }
 }
 
 /// Broker-side listener for shim handshakes on a Unix domain socket.
@@ -235,7 +261,8 @@ mod tests {
     fn handshake_and_descriptor_roundtrip() {
         let (client, server) = UnixStream::pair().expect("socketpair");
         let (mut reader, writer) = std::io::pipe().expect("pipe");
-        let handshake = sample_handshake(vec![FdRole::ToolToAgent]);
+        // A single write-sink descriptor exercises the transport roundtrip.
+        let handshake = sample_handshake(vec![FdRole::AgentStdoutSink]);
 
         send_handshake(&client, &handshake, &[writer.as_fd()]).expect("send handshake");
         let accepted = recv_handshake(&server).expect("recv handshake");
@@ -288,7 +315,7 @@ mod tests {
     fn send_rejects_declared_role_and_fd_count_mismatch() {
         let (client, _server) = UnixStream::pair().expect("socketpair");
         // Declares one role but passes zero descriptors.
-        let handshake = sample_handshake(vec![FdRole::ToolToAgent]);
+        let handshake = sample_handshake(vec![FdRole::ToolStdoutSource]);
         let error = send_handshake(&client, &handshake, &[]).expect_err("count mismatch");
         assert_eq!(error.kind(), io::ErrorKind::Other);
     }

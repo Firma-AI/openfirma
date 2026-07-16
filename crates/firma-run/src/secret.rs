@@ -51,6 +51,11 @@ pub mod session;
 #[cfg(unix)]
 pub mod redact;
 
+/// Per-connection broker dispatch: route a shim handshake's descriptors to an
+/// intercept or redact session by decision (fail-closed).
+#[cfg(unix)]
+pub mod serve;
+
 /// URI scheme that prefixes every placeholder token.
 pub const PLACEHOLDER_SCHEME: &str = "firma-secret://";
 
