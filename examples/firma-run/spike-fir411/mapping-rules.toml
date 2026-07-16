@@ -1,0 +1,18 @@
+# Destination mapping for the FIR-411 spike.
+#
+# Only approved-api.localhost is classified. exfil-sink.localhost is
+# deliberately omitted: with `default_protected = true` the sidecar fails it
+# closed to DENY. The host pattern is matched against the envelope's
+# host:port, so the fixed demo port (8081) is part of the rule.
+
+[[rules]]
+method = "GET"
+host = "approved-api.localhost:8081"
+path = "/*"
+action_class = "communication.external.send"
+
+[[rules]]
+method = "POST"
+host = "approved-api.localhost:8081"
+path = "/*"
+action_class = "communication.external.send"

@@ -1,0 +1,61 @@
+# Self-contained config for the FIR-411 boundary spike (Linux / bwrap).
+#
+# Throwaway proof-of-concept. Wires a local Authority, an enforcing Sidecar,
+# destination mapping, a Cedar policy bundle, and one bearer-injection
+# credential so the demos can run bare vs boxed against local fake services.
+#
+# No cloud, no real secrets: the "real" bearer is a fixed string supplied in
+# the environment (APPROVED_API_REAL_TOKEN) by the runner scripts.
+
+[authority]
+listen_addr = "127.0.0.1:0"
+policy_dir = "policies"
+issuance_policy_dir = "issuance-policies"
+revocation_file = ".runtime/revocations.txt"
+key_file = ".runtime/authority.key"
+max_ttl_seconds = 3600
+bundle_ttl_seconds = 30
+log_level = "info"
+
+[sidecar]
+mode = "enforce"
+
+# Cleartext HTTP through the proxy is enough for the demos: the sidecar sees the
+# full request and can inject the bearer without minting a MITM certificate.
+[sidecar.interceptor.https_mitm]
+enabled = false
+
+[sidecar.policy]
+dir = "policies"
+
+[sidecar.log]
+level = "info"
+
+# Fail closed: any host not named here is DENY. exfil-sink.localhost is
+# intentionally absent, so the sidecar denies it by default.
+[sidecar.mapping]
+rules_path = "mapping-rules.toml"
+default_protected = true
+
+[sidecar.audit]
+sink = "file"
+file_path = ".runtime/audit.jsonl"
+signing_key_path = ".runtime/audit.key"
+
+# Bearer brokering (demo 1): the agent only ever holds a placeholder. On a
+# request to approved-api.localhost the sidecar overwrites Authorization with
+# the real token read from APPROVED_API_REAL_TOKEN at startup.
+[sidecar.credentials.approved-api]
+mode = "basic"
+# The connector id is the envelope host *including port*, so the demo port
+# (8081) is part of the match — same reason the mapping rule carries it.
+target_host = "approved-api.localhost:8081"
+header = "authorization"
+prefix = "Bearer "
+value_from_env = "APPROVED_API_REAL_TOKEN"
+
+[run]
+profile = "generic"
+
+[run.profiles.generic]
+backend = "bwrap"
