@@ -38,7 +38,7 @@ use anyhow::{Result, bail};
 use firma_core::AgentId;
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value, value};
 
-use crate::args::config::Mode;
+use crate::args::config::{Mode, Posture};
 
 /// Inputs flattened for document emission. Self-contained — no template
 /// engine, no `CollectedInputs` reference, so the doc layer can be unit
@@ -64,6 +64,7 @@ pub struct DocInputs<'a> {
     pub mitm_bypass_hosts: &'a [&'a str],
     pub workspace: &'a str,
     pub extra_hosts: &'a [String],
+    pub posture: &'a Posture,
 }
 
 impl DocInputs<'_> {
@@ -351,6 +352,18 @@ fn ensure_run_profiles_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) ->
 
     let mounts = ensure_array_of_tables(profile_table, "mounts")?;
     replace_workspace_mount(mounts, inputs.workspace);
+
+    // Capability token scope tracks the posture: the auto-minted token must be
+    // able to carry every action class the posture permits, or matching calls
+    // fail closed at token selection. Replaced (not seeded) on every run so a
+    // posture change re-narrows the requested set rather than leaving stale,
+    // over-broad entries behind.
+    let capability = ensure_table(profile_table, "capability")?;
+    let mut actions = Array::new();
+    for class in inputs.posture.requested_actions() {
+        actions.push(class.as_str());
+    }
+    capability["requested_actions"] = value(actions);
     Ok(())
 }
 
@@ -603,6 +616,7 @@ mod tests {
             mitm_bypass_hosts: &[],
             workspace: "/workspace",
             extra_hosts: &[],
+            posture: &Posture::Dev,
         }
     }
 

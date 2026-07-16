@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use firma_core::token::paseto::PasetoV4Verifier;
-use firma_core::{AgentId, CapabilitySeed, TokenVerifier};
+use firma_core::{ActionClass, AgentId, CapabilitySeed, TokenVerifier};
 use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
 use firma_protobuf::v1::{IssueCapabilityRequest, IssueCapabilityResponse, IssueDecision};
 use firma_sidecar::authority_client::channel::build_channel;
@@ -56,11 +56,16 @@ pub struct IssueParams {
 /// - `code.read` classifies decrypted `GET /repos/...` reads under MITM.
 /// - `code.write` classifies the `CONNECT github.com` Git HTTPS transport
 ///   (clone/fetch/push).
-pub const DEFAULT_REQUESTED_ACTIONS: &[&str] = &[
-    "communication.external.send",
-    "code.read",
-    "code.review.read",
-    "code.write",
+///
+/// This is only the fallback used when a run profile does not set
+/// `[run.profiles.<name>.capability] requested_actions`. Projects whose mapping
+/// rules emit other action classes (e.g. `communication.internal.send` for a
+/// local Ollama server on loopback) override it in `firma.toml`.
+pub const DEFAULT_REQUESTED_ACTIONS: &[ActionClass] = &[
+    ActionClass::CommunicationExternalSend,
+    ActionClass::CodeRead,
+    ActionClass::CodeReviewRead,
+    ActionClass::CodeWrite,
 ];
 
 /// Default resource scope.

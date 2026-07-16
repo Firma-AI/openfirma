@@ -301,6 +301,7 @@ fn generate_files(inputs: &CollectedInputs) -> Result<Vec<(String, String)>> {
         mitm_bypass_hosts: &mitm_bypass_hosts,
         workspace: &workspace_display,
         extra_hosts: &inputs.sidecar.extra_hosts,
+        posture: &inputs.sidecar.posture,
     };
 
     let firma_toml = render_for(&inputs.config_dir, CONFIG_FILE_NAME, |text| {
@@ -1793,6 +1794,48 @@ mod tests {
         assert_eq!(mounts[0]["source"].as_str(), Some(TEST_WORKSPACE));
         assert_eq!(mounts[0]["target"].as_str(), Some(TEST_WORKSPACE));
         assert_eq!(mounts[0]["read_only"].as_bool(), Some(false));
+    }
+
+    #[test]
+    fn run_profile_capability_requested_actions_track_posture() {
+        // Strict permits communication only — the minted token must request both
+        // external and internal send, but no code.* classes.
+        let strict = make_files(&Posture::Strict, &[], &[]);
+        let t: toml::Value = toml::from_str(get(&strict, CONFIG_FILE_NAME)).unwrap();
+        let actions: Vec<&str> = t["run"]["profiles"]["generic"]["capability"]["requested_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(actions.contains(&"communication.external.send"));
+        assert!(actions.contains(&"communication.internal.send"));
+        assert!(
+            !actions.iter().any(|a| a.starts_with("code.")),
+            "strict posture must not request code.* classes: {actions:?}"
+        );
+
+        // Dev adds code operations on top.
+        let dev = make_files(&Posture::Dev, &[], &[]);
+        let t: toml::Value = toml::from_str(get(&dev, CONFIG_FILE_NAME)).unwrap();
+        let actions: Vec<&str> = t["run"]["profiles"]["generic"]["capability"]["requested_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(actions.contains(&"communication.internal.send"));
+        assert!(actions.contains(&"code.write"));
+
+        // DevWithDeleteWatch additionally requests code.destructive.
+        let delete = make_files(&Posture::DevWithDeleteWatch, &[], &[]);
+        let t: toml::Value = toml::from_str(get(&delete, CONFIG_FILE_NAME)).unwrap();
+        let has_destructive = t["run"]["profiles"]["generic"]["capability"]["requested_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str() == Some("code.destructive"));
+        assert!(has_destructive);
     }
 
     #[test]
