@@ -166,6 +166,11 @@ fn run_host_bridge_loop(
         }
         match listener.accept() {
             Ok((client, client_addr)) => {
+                tracing::debug!(
+                    client_addr = %client_addr,
+                    upstream = %upstream,
+                    "host proxy bridge accepted client connection"
+                );
                 // Listener is non-blocking for stop polling; on some platforms
                 // accepted sockets may inherit non-blocking mode. The relay
                 // path relies on blocking I/O, so normalize the accepted
@@ -389,6 +394,11 @@ fn run_proxy_bridge_unix(args: &ProxyBridgeInput) -> Result<(), RunError> {
         let (client_stream, client_addr) = listener
             .accept()
             .map_err(|error| RunError::Spawn(format!("proxy bridge accept failed: {error}")))?;
+        tracing::debug!(
+            client_addr = %client_addr,
+            upstream = %args.upstream_uds.display(),
+            "sandbox proxy bridge accepted client connection"
+        );
         let upstream_path = args.upstream_uds.clone();
         let attribution_headers = attribution_headers.clone();
         let bridge_listen_addr = args.listen.to_string();
@@ -514,6 +524,11 @@ where
         request.truncate(header_end);
 
         let meta = parse_request_metadata(&request)?;
+        tracing::debug!(
+            method = %meta.method,
+            target = %sanitized_request_target_for_log(&meta.target),
+            "proxy bridge forwarding request headers"
+        );
         append_missing_headers(&mut request, attribution_headers)?;
 
         // `request` already ends with \r\n (the CRLF of the last header
@@ -650,6 +665,7 @@ enum BodyKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RequestMetadata {
     method: String,
+    target: String,
     body: BodyKind,
 }
 
@@ -666,11 +682,9 @@ fn parse_request_metadata(header_block: &[u8]) -> io::Result<RequestMetadata> {
     let request_line = lines
         .next()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing request line"))?;
-    let method = request_line
-        .split_whitespace()
-        .next()
-        .unwrap_or_default()
-        .to_string();
+    let mut request_line_parts = request_line.split_whitespace();
+    let method = request_line_parts.next().unwrap_or_default().to_string();
+    let target = request_line_parts.next().unwrap_or_default().to_string();
 
     let mut transfer_chunked = false;
     let mut content_length = None;
@@ -699,7 +713,24 @@ fn parse_request_metadata(header_block: &[u8]) -> io::Result<RequestMetadata> {
         BodyKind::None
     };
 
-    Ok(RequestMetadata { method, body })
+    Ok(RequestMetadata {
+        method,
+        target,
+        body,
+    })
+}
+
+#[cfg(any(unix, test))]
+fn sanitized_request_target_for_log(target: &str) -> &str {
+    let query = target.find('?');
+    let fragment = target.find('#');
+    let end = match (query, fragment) {
+        (Some(query), Some(fragment)) => query.min(fragment),
+        (Some(query), None) => query,
+        (None, Some(fragment)) => fragment,
+        (None, None) => return target,
+    };
+    &target[..end]
 }
 
 #[cfg(unix)]
@@ -811,7 +842,10 @@ fn find_crlf(buffer: &[u8]) -> Option<usize> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{BodyKind, append_missing_headers, find_header_terminator, parse_request_metadata};
+    use super::{
+        BodyKind, append_missing_headers, find_header_terminator, parse_request_metadata,
+        sanitized_request_target_for_log,
+    };
 
     #[test]
     fn finds_header_terminator() {
@@ -830,6 +864,34 @@ mod tests {
         let rendered = String::from_utf8(req_head).expect("utf8");
         assert!(rendered.contains("x-firma-session-id: sess_001\r\n"));
         assert!(rendered.contains("x-firma-profile: claude-code\r\n"));
+    }
+
+    #[test]
+    fn append_missing_headers_does_not_duplicate_existing_names_case_insensitively() {
+        let mut req_head = b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nX-Firma-Session-Id: existing\r\n".to_vec();
+        let mut headers = BTreeMap::new();
+        headers.insert("x-firma-session-id".to_string(), "injected".to_string());
+        headers.insert("x-firma-agent".to_string(), "vscode".to_string());
+
+        append_missing_headers(&mut req_head, &headers).expect("append headers");
+        let rendered = String::from_utf8(req_head).expect("utf8");
+
+        assert!(rendered.contains("X-Firma-Session-Id: existing\r\n"));
+        assert!(!rendered.contains("x-firma-session-id: injected\r\n"));
+        assert!(rendered.contains("x-firma-agent: vscode\r\n"));
+    }
+
+    #[test]
+    fn append_missing_headers_rejects_non_utf8_header_block() {
+        let mut req_head = b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n".to_vec();
+        req_head.push(0xFF);
+        let mut headers = BTreeMap::new();
+        headers.insert("x-firma-session-id".to_string(), "sess_001".to_string());
+
+        let error = append_missing_headers(&mut req_head, &headers)
+            .expect_err("non-utf8 headers must fail closed");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]
@@ -860,7 +922,25 @@ mod tests {
         let req = b"POST http://example.com/upload HTTP/1.1\r\nHost: example.com\r\nContent-Length: 12\r\n\r\n";
         let meta = parse_request_metadata(req).expect("metadata");
         assert_eq!(meta.method, "POST");
+        assert_eq!(meta.target, "http://example.com/upload");
         assert_eq!(meta.body, BodyKind::ContentLength(12));
+    }
+
+    #[test]
+    fn zero_or_invalid_content_length_is_treated_as_no_body() {
+        let zero = b"POST http://example.com/upload HTTP/1.1\r\nContent-Length: 0\r\n\r\n";
+        let invalid = b"POST http://example.com/upload HTTP/1.1\r\nContent-Length: nope\r\n\r\n";
+
+        assert_eq!(
+            parse_request_metadata(zero).expect("zero metadata").body,
+            BodyKind::None
+        );
+        assert_eq!(
+            parse_request_metadata(invalid)
+                .expect("invalid content length metadata")
+                .body,
+            BodyKind::None
+        );
     }
 
     #[test]
@@ -868,6 +948,28 @@ mod tests {
         let req = b"POST http://example.com/upload HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n";
         let meta = parse_request_metadata(req).expect("metadata");
         assert_eq!(meta.body, BodyKind::Chunked);
+    }
+
+    #[test]
+    fn chunked_transfer_encoding_wins_over_content_length() {
+        let req = b"POST http://example.com/upload HTTP/1.1\r\nTransfer-Encoding: gzip, chunked\r\nContent-Length: 12\r\n\r\n";
+        let meta = parse_request_metadata(req).expect("metadata");
+
+        assert_eq!(meta.body, BodyKind::Chunked);
+    }
+
+    #[test]
+    fn sanitizes_request_target_for_debug_logs() {
+        assert_eq!(
+            sanitized_request_target_for_log(
+                "https://github.com/login/oauth/authorize?client_id=abc#state"
+            ),
+            "https://github.com/login/oauth/authorize"
+        );
+        assert_eq!(
+            sanitized_request_target_for_log("github.com:443"),
+            "github.com:443"
+        );
     }
 }
 

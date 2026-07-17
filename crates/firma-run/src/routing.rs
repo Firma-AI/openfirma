@@ -9,7 +9,7 @@ use std::io;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 #[cfg(unix)]
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 #[cfg(unix)]
 use std::thread::{self, JoinHandle};
 
@@ -1101,8 +1101,25 @@ struct SidecarAdapter {
 }
 
 #[cfg(unix)]
+const DEFAULT_SIDECAR_ADAPTER_MAX_CONNECTIONS: usize = 512;
+#[cfg(unix)]
+const DEFAULT_SIDECAR_ADAPTER_IDLE_TIMEOUT: Duration = Duration::from_mins(2);
+
+#[cfg(unix)]
 impl SidecarAdapter {
     fn start(socket_path: &Path, upstream: &SidecarEndpoint) -> Result<Self, RunError> {
+        Self::start_with_connection_limit(
+            socket_path,
+            upstream,
+            DEFAULT_SIDECAR_ADAPTER_MAX_CONNECTIONS,
+        )
+    }
+
+    fn start_with_connection_limit(
+        socket_path: &Path,
+        upstream: &SidecarEndpoint,
+        max_connections: usize,
+    ) -> Result<Self, RunError> {
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| RunError::Backend {
                 backend: "sidecar_adapter".to_string(),
@@ -1131,6 +1148,7 @@ impl SidecarAdapter {
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
         let socket_for_task = socket_path.to_path_buf();
         let upstream_for_task = upstream.clone();
+        let limiter = Arc::new(SidecarAdapterConnectionLimiter::new(max_connections.max(1)));
 
         let task = thread::Builder::new()
             .name("firma-run-sidecar-adapter".to_string())
@@ -1140,19 +1158,33 @@ impl SidecarAdapter {
                         break;
                     }
 
+                    let Some(permit) = limiter.try_acquire() else {
+                        thread::sleep(Duration::from_millis(25));
+                        continue;
+                    };
+
                     match listener.accept() {
                         Ok((client, _)) => {
+                            if let Err(error) = client.set_nonblocking(false) {
+                                tracing::warn!(
+                                    "sidecar adapter failed to set accepted socket blocking mode: {error}"
+                                );
+                                continue;
+                            }
                             let upstream_target = upstream_for_task.clone();
                             thread::spawn(move || {
+                                let _permit = permit;
                                 if let Err(error) = relay_to_sidecar(&client, &upstream_target) {
-                                    tracing::warn!("sidecar adapter relay failed: {error}");
+                                    log_sidecar_adapter_relay_error(&error);
                                 }
                             });
                         }
                         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            drop(permit);
                             thread::sleep(Duration::from_millis(25));
                         }
                         Err(error) => {
+                            drop(permit);
                             tracing::warn!("sidecar adapter accept failed: {error}");
                             thread::sleep(Duration::from_millis(50));
                         }
@@ -1169,6 +1201,72 @@ impl SidecarAdapter {
             stop_tx: Some(stop_tx),
             task: Some(task),
         })
+    }
+}
+
+#[cfg(unix)]
+fn log_sidecar_adapter_relay_error(error: &io::Error) {
+    if is_sidecar_adapter_transient_relay_error(error) {
+        tracing::debug!("sidecar adapter relay closed/transient: {error}");
+    } else {
+        tracing::warn!("sidecar adapter relay failed: {error}");
+    }
+}
+
+#[cfg(unix)]
+fn is_sidecar_adapter_transient_relay_error(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::UnexpectedEof
+    )
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct SidecarAdapterConnectionLimiter {
+    limit: usize,
+    in_flight: Mutex<usize>,
+}
+
+#[cfg(unix)]
+impl SidecarAdapterConnectionLimiter {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            in_flight: Mutex::new(0),
+        }
+    }
+
+    fn try_acquire(self: &Arc<Self>) -> Option<SidecarAdapterConnectionPermit> {
+        let Ok(mut in_flight) = self.in_flight.lock() else {
+            return None;
+        };
+        if *in_flight >= self.limit {
+            return None;
+        }
+        *in_flight += 1;
+        Some(SidecarAdapterConnectionPermit {
+            limiter: Arc::clone(self),
+        })
+    }
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct SidecarAdapterConnectionPermit {
+    limiter: Arc<SidecarAdapterConnectionLimiter>,
+}
+
+#[cfg(unix)]
+impl Drop for SidecarAdapterConnectionPermit {
+    fn drop(&mut self) {
+        if let Ok(mut in_flight) = self.limiter.in_flight.lock() {
+            *in_flight = in_flight.saturating_sub(1);
+        }
     }
 }
 
@@ -1225,48 +1323,109 @@ fn connect_tcp_with_retry(addr: &std::net::SocketAddr) -> io::Result<TcpStream> 
 
 #[cfg(unix)]
 fn relay_unix_to_tcp(client: &UnixStream, target: &TcpStream) -> io::Result<()> {
+    relay_unix_to_tcp_with_idle_timeout(client, target, DEFAULT_SIDECAR_ADAPTER_IDLE_TIMEOUT)
+}
+
+#[cfg(unix)]
+fn relay_unix_to_tcp_with_idle_timeout(
+    client: &UnixStream,
+    target: &TcpStream,
+    idle_timeout: Duration,
+) -> io::Result<()> {
+    client.set_read_timeout(Some(idle_timeout))?;
+    target.set_read_timeout(Some(idle_timeout))?;
     let mut client_read = client.try_clone()?;
+    let client_shutdown_for_upload = client.try_clone()?;
+    let client_shutdown_for_download = client.try_clone()?;
     let mut client_write = client.try_clone()?;
     let mut target_read = target.try_clone()?;
+    let target_shutdown_for_upload = target.try_clone()?;
+    let target_shutdown_for_download = target.try_clone()?;
     let mut target_write = target.try_clone()?;
 
-    let c_to_t = thread::spawn(move || io::copy(&mut client_read, &mut target_write));
-    let t_to_c = thread::spawn(move || io::copy(&mut target_read, &mut client_write));
+    let c_to_t = thread::spawn(move || {
+        let result = io::copy(&mut client_read, &mut target_write);
+        let _ = client_shutdown_for_upload.shutdown(std::net::Shutdown::Both);
+        let _ = target_shutdown_for_upload.shutdown(std::net::Shutdown::Both);
+        result
+    });
+    let t_to_c = thread::spawn(move || {
+        let result = io::copy(&mut target_read, &mut client_write);
+        let _ = target_shutdown_for_download.shutdown(std::net::Shutdown::Both);
+        let _ = client_shutdown_for_download.shutdown(std::net::Shutdown::Both);
+        result
+    });
 
-    c_to_t
-        .join()
-        .map_err(|_| io::Error::other("relay panic"))??;
-    t_to_c
-        .join()
-        .map_err(|_| io::Error::other("relay panic"))??;
-    Ok(())
+    let upload_result = c_to_t.join().map_err(|_| io::Error::other("relay panic"))?;
+    let download_result = t_to_c.join().map_err(|_| io::Error::other("relay panic"))?;
+    finish_sidecar_adapter_relay(upload_result, download_result)
 }
 
 #[cfg(unix)]
 fn relay_unix_to_unix(client: &UnixStream, target: &UnixStream) -> io::Result<()> {
+    relay_unix_to_unix_with_idle_timeout(client, target, DEFAULT_SIDECAR_ADAPTER_IDLE_TIMEOUT)
+}
+
+#[cfg(unix)]
+fn relay_unix_to_unix_with_idle_timeout(
+    client: &UnixStream,
+    target: &UnixStream,
+    idle_timeout: Duration,
+) -> io::Result<()> {
+    client.set_read_timeout(Some(idle_timeout))?;
+    target.set_read_timeout(Some(idle_timeout))?;
     let mut client_read = client.try_clone()?;
+    let client_shutdown_for_upload = client.try_clone()?;
+    let client_shutdown_for_download = client.try_clone()?;
     let mut client_write = client.try_clone()?;
     let mut target_read = target.try_clone()?;
+    let target_shutdown_for_upload = target.try_clone()?;
+    let target_shutdown_for_download = target.try_clone()?;
     let mut target_write = target.try_clone()?;
 
-    let c_to_t = thread::spawn(move || io::copy(&mut client_read, &mut target_write));
-    let t_to_c = thread::spawn(move || io::copy(&mut target_read, &mut client_write));
+    let c_to_t = thread::spawn(move || {
+        let result = io::copy(&mut client_read, &mut target_write);
+        let _ = client_shutdown_for_upload.shutdown(std::net::Shutdown::Both);
+        let _ = target_shutdown_for_upload.shutdown(std::net::Shutdown::Both);
+        result
+    });
+    let t_to_c = thread::spawn(move || {
+        let result = io::copy(&mut target_read, &mut client_write);
+        let _ = target_shutdown_for_download.shutdown(std::net::Shutdown::Both);
+        let _ = client_shutdown_for_download.shutdown(std::net::Shutdown::Both);
+        result
+    });
 
-    c_to_t
-        .join()
-        .map_err(|_| io::Error::other("relay panic"))??;
-    t_to_c
-        .join()
-        .map_err(|_| io::Error::other("relay panic"))??;
+    let upload_result = c_to_t.join().map_err(|_| io::Error::other("relay panic"))?;
+    let download_result = t_to_c.join().map_err(|_| io::Error::other("relay panic"))?;
+    finish_sidecar_adapter_relay(upload_result, download_result)
+}
+
+#[cfg(unix)]
+fn finish_sidecar_adapter_relay(
+    upload_result: io::Result<u64>,
+    download_result: io::Result<u64>,
+) -> io::Result<()> {
+    for result in [upload_result, download_result] {
+        if let Err(error) = result
+            && !is_sidecar_adapter_transient_relay_error(&error)
+        {
+            return Err(error);
+        }
+    }
     Ok(())
 }
 
 #[cfg(test)]
 #[cfg(unix)]
 mod non_structural_env_tests {
+    use std::error::Error;
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::os::unix::net::UnixStream;
     use std::str::FromStr;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use crate::backend::{BackendKind, SandboxHandle};
@@ -1276,7 +1435,8 @@ mod non_structural_env_tests {
     use crate::identity::RunIdentity;
 
     use super::{
-        AutostartFlags, EnvOverrides, ResolvedAuthority, prepare_network_runtime, setup_host_bridge,
+        AutostartFlags, EnvOverrides, ResolvedAuthority, SidecarAdapter, prepare_network_runtime,
+        setup_host_bridge,
     };
 
     /// Default capability-lease config for `prepare_network_runtime` tests.
@@ -1638,6 +1798,27 @@ mod non_structural_env_tests {
     }
 
     #[test]
+    fn sidecar_adapter_disconnect_errors_are_transient() {
+        for kind in [
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::UnexpectedEof,
+        ] {
+            let error = std::io::Error::from(kind);
+            assert!(
+                super::is_sidecar_adapter_transient_relay_error(&error),
+                "{kind:?} should not be logged as an adapter relay warning"
+            );
+        }
+
+        let error = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        assert!(
+            !super::is_sidecar_adapter_transient_relay_error(&error),
+            "connection failures before relay setup should remain warnings"
+        );
+    }
+
+    #[test]
     fn env_overrides_dns_stub_address_is_optional() {
         let absent = EnvOverrides::default().with_dns_stub_address(None);
         assert!(!absent.contains_key("FIRMA_DNS_STUB_ADDR"));
@@ -1668,6 +1849,100 @@ mod non_structural_env_tests {
         let env = EnvOverrides::from(map);
         assert_eq!(env.get("K").map(String::as_str), Some("V"));
         assert_eq!(env.len(), 1);
+    }
+
+    #[test]
+    fn sidecar_adapter_relay_terminates_idle_connections() -> Result<(), Box<dyn Error>> {
+        let (client_for_relay, _client_peer) = UnixStream::pair()?;
+        let upstream_listener = TcpListener::bind("127.0.0.1:0")?;
+        let _upstream_peer = TcpStream::connect(upstream_listener.local_addr()?)?;
+        let (upstream_for_relay, _) = upstream_listener.accept()?;
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let result = super::relay_unix_to_tcp_with_idle_timeout(
+                &client_for_relay,
+                &upstream_for_relay,
+                Duration::from_millis(100),
+            );
+            let _ = done_tx.send(result);
+        });
+
+        let relay_result = done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|_| std::io::Error::other("idle relay did not terminate"))?;
+        relay_result?;
+        Ok(())
+    }
+
+    #[test]
+    fn sidecar_adapter_connection_limit_queues_extra_clients_before_upstream_connect()
+    -> Result<(), Box<dyn Error>> {
+        let tmp = tempfile::tempdir()?;
+        let socket_path = tmp.path().join("sidecar-upstream.sock");
+        let upstream_listener = TcpListener::bind("127.0.0.1:0")?;
+        let upstream_addr = upstream_listener.local_addr()?;
+        upstream_listener.set_nonblocking(true)?;
+        let upstream_connections = Arc::new(AtomicUsize::new(0));
+        let accepted = Arc::clone(&upstream_connections);
+        let upstream_task = std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for _ in 0..100 {
+                match upstream_listener.accept() {
+                    Ok((stream, _)) => {
+                        accepted.fetch_add(1, Ordering::SeqCst);
+                        held.push(stream);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+            held
+        });
+
+        let adapter = SidecarAdapter::start_with_connection_limit(
+            &socket_path,
+            &SidecarEndpoint::Tcp {
+                addr: upstream_addr,
+            },
+            1,
+        )?;
+
+        let first_client = UnixStream::connect(&socket_path)?;
+        for _ in 0..50 {
+            if upstream_connections.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(upstream_connections.load(Ordering::SeqCst), 1);
+
+        let second_client = UnixStream::connect(&socket_path)?;
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            upstream_connections.load(Ordering::SeqCst),
+            1,
+            "adapter must not accept and connect a second relay while the single permit is held"
+        );
+
+        drop(second_client);
+        drop(first_client);
+        drop(adapter);
+        let _held = upstream_task
+            .join()
+            .map_err(|_| std::io::Error::other("upstream task panicked"))?;
+        Ok(())
+    }
+
+    #[test]
+    fn sidecar_adapter_default_limit_supports_browser_like_clients() {
+        let max_connections = std::hint::black_box(super::DEFAULT_SIDECAR_ADAPTER_MAX_CONNECTIONS);
+        assert!(
+            max_connections >= 256,
+            "VS Code can hold many concurrent CONNECT/keep-alive sockets during extension installs"
+        );
     }
 }
 

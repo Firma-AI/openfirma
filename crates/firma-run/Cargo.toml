@@ -45,6 +45,7 @@ libc = { workspace = true }
 [dev-dependencies]
 chrono.workspace = true
 firma-core.workspace = true
+firma-http.workspace = true
 firma-protobuf.workspace = true
 fs-err.workspace = true
 pasetors = { workspace = true }

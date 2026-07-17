@@ -186,9 +186,12 @@ impl AuthoritySupervisor {
                 })?;
             let reader = std::io::BufReader::new(stderr);
             let (tx, rx) = mpsc::sync_channel::<ScrapeResult>(1);
+            let mirror_child_logs = child_log_mirroring_enabled();
             let try_tee_handle = std::thread::Builder::new()
                 .name("firma-authority-tee".into())
-                .spawn(move || run_scraper(reader, log_file, tx))
+                .spawn(move || {
+                    run_scraper(reader, log_file, std::io::stderr(), mirror_child_logs, tx);
+                })
                 .map_err(|e| RunError::AuthorityStartupFailed {
                     reason: format!("spawn scraper thread: {e}"),
                     log_path: log_path.clone(),
@@ -496,10 +499,16 @@ const LISTENING_TOKEN: &str = "listening";
     clippy::needless_pass_by_value,
     reason = "tx is moved into the spawned thread"
 )]
-pub fn run_scraper<R, W>(mut reader: R, mut log: W, tx: mpsc::SyncSender<ScrapeResult>)
-where
+pub fn run_scraper<R, W, M>(
+    mut reader: R,
+    mut log: W,
+    mut mirror: M,
+    mirror_enabled: bool,
+    tx: mpsc::SyncSender<ScrapeResult>,
+) where
     R: BufRead,
     W: Write,
+    M: Write,
 {
     let mut capture = ReadyCapture::default();
     let mut signalled = false;
@@ -515,6 +524,9 @@ where
             }
             Ok(_) => {
                 let _ = log.write_all(buf.as_bytes());
+                if mirror_enabled {
+                    let _ = mirror.write_all(buf.as_bytes());
+                }
                 if !signalled {
                     let plain = strip_ansi(&buf);
                     if plain.contains(LISTENING_TOKEN)
@@ -533,6 +545,56 @@ where
                 }
                 return;
             }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn child_log_mirroring_enabled() -> bool {
+    std::env::var("FIRMA_LOG_FILTER")
+        .or_else(|_| std::env::var("RUST_LOG"))
+        .is_ok_and(|filter| log_filter_requests_child_mirroring(&filter))
+}
+
+#[cfg(unix)]
+fn log_filter_requests_child_mirroring(filter: &str) -> bool {
+    filter
+        .split(',')
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .any(|directive| {
+            directive == "debug"
+                || directive == "trace"
+                || directive.ends_with("=debug")
+                || directive.ends_with("=trace")
+        })
+}
+
+#[cfg(all(test, unix))]
+mod log_filter_tests {
+    #[test]
+    fn debug_and_trace_filters_request_child_log_mirroring() {
+        for filter in [
+            "debug",
+            "trace",
+            "firma_authority=debug",
+            "openfirma=trace",
+            " info , firma_run=debug ",
+        ] {
+            assert!(
+                super::log_filter_requests_child_mirroring(filter),
+                "{filter} should mirror child logs"
+            );
+        }
+    }
+
+    #[test]
+    fn less_verbose_filters_do_not_request_child_log_mirroring() {
+        for filter in ["", "info", "warn,firma=info", "firma_authority=warn"] {
+            assert!(
+                !super::log_filter_requests_child_mirroring(filter),
+                "{filter} should not mirror child logs"
+            );
         }
     }
 }
