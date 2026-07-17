@@ -24,8 +24,8 @@ use pasetors::version4::V4;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 
-use firma_core::token::paseto::PasetoV4Signer;
-use firma_core::{CapabilityClaims, TokenId, TokenSigner};
+use firma_core::token::paseto::{PasetoV4Signer, PasetoV4Verifier};
+use firma_core::{CapabilityClaims, CapabilitySeed, TokenId, TokenSigner, TokenVerifier};
 use firma_protobuf::v1::authority_service_server::{AuthorityService, AuthorityServiceServer};
 use firma_protobuf::v1::{
     CapabilityToken, IssueCapabilityRequest, IssueCapabilityResponse, PolicyBundleUpdate,
@@ -39,6 +39,15 @@ use firma_run::config::{CapabilityLeaseConfig, CapabilitySource};
 /// Mock Authority that signs whatever it is asked to issue with a test key.
 struct MockAuthority {
     signer: PasetoV4Signer,
+    token_kind: MockTokenKind,
+}
+
+#[derive(Clone, Copy)]
+enum MockTokenKind {
+    Valid,
+    Malformed,
+    NonUtf8,
+    Expired,
 }
 
 #[tonic::async_trait]
@@ -49,6 +58,12 @@ impl AuthorityService for MockAuthority {
     ) -> Result<Response<IssueCapabilityResponse>, Status> {
         let req = request.into_inner();
         let now = Utc::now();
+        let expiry = match self.token_kind {
+            MockTokenKind::Valid | MockTokenKind::Malformed | MockTokenKind::NonUtf8 => {
+                now + chrono::Duration::seconds(i64::from(req.requested_ttl_seconds.max(1)))
+            }
+            MockTokenKind::Expired => now - chrono::Duration::seconds(60),
+        };
         let claims = CapabilityClaims {
             token_id: TokenId::new(),
             agent_id: req
@@ -62,18 +77,23 @@ impl AuthorityService for MockAuthority {
             action_set: req.requested_actions,
             resource_scope: req.resource_scope,
             issued_at: now,
-            expiry: now + chrono::Duration::seconds(i64::from(req.requested_ttl_seconds.max(1))),
+            expiry,
             context_hash: String::new(),
             budget_ceiling: None,
         };
-        let raw_token = self
-            .signer
-            .sign(&claims)
-            .map_err(|e| Status::internal(format!("sign: {e}")))?;
+        let signature = match self.token_kind {
+            MockTokenKind::Malformed => b"not-a-paseto-token".to_vec(),
+            MockTokenKind::NonUtf8 => vec![0xff, 0xfe],
+            MockTokenKind::Valid | MockTokenKind::Expired => self
+                .signer
+                .sign(&claims)
+                .map(String::into_bytes)
+                .map_err(|e| Status::internal(format!("sign: {e}")))?,
+        };
         Ok(Response::new(IssueCapabilityResponse {
             granted: true,
             token: Some(CapabilityToken {
-                signature: raw_token.into_bytes(),
+                signature,
                 ..Default::default()
             }),
             deny_reason: String::new(),
@@ -124,6 +144,10 @@ impl Drop for MockServer {
 
 /// Start a mock Authority on a loopback port and write its public key to disk.
 fn start_mock_authority() -> MockServer {
+    start_mock_authority_with(MockTokenKind::Valid)
+}
+
+fn start_mock_authority_with(token_kind: MockTokenKind) -> MockServer {
     let dir = tempfile::tempdir().expect("tempdir");
     let kp = AsymmetricKeyPair::<V4>::generate().expect("keypair");
     let pub_key_path = dir.path().join("authority.pub");
@@ -144,7 +168,7 @@ fn start_mock_authority() -> MockServer {
             .expect("server runtime");
         rt.block_on(async move {
             let signer = PasetoV4Signer::try_new(&secret).expect("signer");
-            let svc = AuthorityServiceServer::new(MockAuthority { signer });
+            let svc = AuthorityServiceServer::new(MockAuthority { signer, token_kind });
             tonic::transport::Server::builder()
                 .add_service(svc)
                 .serve_with_shutdown(addr, async {
@@ -188,13 +212,14 @@ fn params(server: &MockServer) -> IssueParams {
 fn lease() -> CapabilityLeaseConfig {
     CapabilityLeaseConfig {
         source: CapabilitySource::Disabled,
+        public_key_path: None,
         refresh_ratio: 0.60,
         grace_seconds: 30,
     }
 }
 
 #[test]
-fn mint_writes_verified_seed_from_authority() {
+fn firmateam_compatible_token_verifies_with_matching_raw_key() {
     let server = start_mock_authority();
     let dir = tempfile::tempdir().expect("tempdir");
     let seed_path = dir.path().join("seed.toml");
@@ -203,10 +228,71 @@ fn mint_writes_verified_seed_from_authority() {
     assert_eq!(written, seed_path);
 
     let body = std::fs::read_to_string(&seed_path).expect("read seed");
-    let seed: firma_core::CapabilitySeed = toml::from_str(&body).expect("parse seed");
+    let seed: CapabilitySeed = toml::from_str(&body).expect("parse seed");
+    let public_key = std::fs::read(&server.pub_key_path).expect("read public key");
+    let verifier = PasetoV4Verifier::try_new(&public_key).expect("verifier");
+    let claims = verifier
+        .verify(&seed.raw_token)
+        .expect("verify written token");
+    let expected_seed = CapabilitySeed::from_claims(&claims, seed.raw_token.clone());
+
+    assert_eq!(seed, expected_seed);
     assert_eq!(seed.agent_id, "agent_mint");
     assert_eq!(seed.session_id, "sess_mint");
     assert!(!seed.raw_token.is_empty(), "seed carries the signed token");
+}
+
+#[test]
+fn mint_rejects_malformed_token() {
+    let server = start_mock_authority_with(MockTokenKind::Malformed);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let seed_path = dir.path().join("seed.toml");
+
+    let err = mint_and_write(&params(&server), &seed_path).expect_err("malformed token must fail");
+
+    assert!(err.to_string().contains("not a valid PASETO"), "got: {err}");
+    assert!(!seed_path.exists(), "no seed should be written on failure");
+}
+
+#[test]
+fn mint_rejects_non_utf8_token() {
+    let server = start_mock_authority_with(MockTokenKind::NonUtf8);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let seed_path = dir.path().join("seed.toml");
+
+    let err = mint_and_write(&params(&server), &seed_path).expect_err("non-UTF-8 token must fail");
+
+    assert!(err.to_string().contains("not valid UTF-8"), "got: {err}");
+    assert!(!seed_path.exists(), "no seed should be written on failure");
+}
+
+#[test]
+fn mint_rejects_expired_token() {
+    let server = start_mock_authority_with(MockTokenKind::Expired);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let seed_path = dir.path().join("seed.toml");
+
+    let err = mint_and_write(&params(&server), &seed_path).expect_err("expired token must fail");
+
+    assert!(err.to_string().contains("token expired"), "got: {err}");
+    assert!(!seed_path.exists(), "no seed should be written on failure");
+}
+
+#[test]
+fn mint_rejects_token_signed_by_different_key() {
+    let server = start_mock_authority();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let other_keypair = AsymmetricKeyPair::<V4>::generate().expect("other keypair");
+    let other_key_path = dir.path().join("other-authority.pub");
+    std::fs::write(&other_key_path, other_keypair.public.as_bytes()).expect("write other pubkey");
+    let seed_path = dir.path().join("seed.toml");
+    let mut issue_params = params(&server);
+    issue_params.authority_pub_key_path = other_key_path;
+
+    let err = mint_and_write(&issue_params, &seed_path).expect_err("wrong signature must fail");
+
+    assert!(err.to_string().contains("signature invalid"), "got: {err}");
+    assert!(!seed_path.exists(), "no seed should be written on failure");
 }
 
 #[test]

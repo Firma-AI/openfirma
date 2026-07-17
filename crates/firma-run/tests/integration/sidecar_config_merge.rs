@@ -167,6 +167,38 @@ fn missing_template_writes_minimal_config() {
 }
 
 #[test]
+fn effective_capability_key_is_written_to_sidecar_authority_config() {
+    let tmp = TempDir::new().expect("tmp");
+    let template = tmp.path().join("template.toml");
+    fs::write(
+        &template,
+        "[sidecar.authority]\npublic_key_path = \"template.pub\"\n",
+    )
+    .expect("write template");
+    let effective_key = tmp.path().join("firmateam-workspace.pub");
+    let out = tmp.path().join("sidecar.toml");
+    let sock = tmp.path().join("sidecar.sock");
+
+    synthesize(SynthesizeRequest {
+        explicit_template: Some(&template),
+        authority_pub_key: Some(&effective_key),
+        ..req(&sock, &out)
+    })
+    .expect("synthesize");
+
+    let value = read(&out);
+    let configured_key = value
+        .get("sidecar")
+        .and_then(|sidecar| sidecar.get("authority"))
+        .and_then(|authority| authority.get("public_key_path"))
+        .and_then(toml::Value::as_str);
+    assert_eq!(
+        configured_key,
+        Some(effective_key.display().to_string()).as_deref()
+    );
+}
+
+#[test]
 fn explicit_template_overrides_interceptor_section_only() {
     let tmp = TempDir::new().expect("tmp");
     let template = tmp.path().join("template.toml");

@@ -232,13 +232,39 @@ pub struct ResolvedAuthority {
     pub url: String,
     /// CA cert path from `[sidecar.authority]`, if present.
     pub ca_cert_path: Option<PathBuf>,
-    /// Authority public key path from `[sidecar.authority]`, if present.
+    /// Effective Authority public key used to verify issued capabilities.
     pub pub_key_path: Option<PathBuf>,
     /// Resolved credentials used by `firma run` when issuing a capability.
     pub credentials: Option<ResolvedSidecarCredentials>,
     /// Unresolved credentials config passed to an autostarted Sidecar.
     pub credentials_config: Option<SidecarCredentialsConfig>,
     pub supervisor: Option<crate::authority::AuthoritySupervisor>,
+}
+
+/// Inputs used to resolve the Authority for one `firma run` invocation.
+#[derive(Clone, Copy)]
+pub struct ResolveAuthorityRequest<'a> {
+    /// Identity assigned to this run.
+    pub identity: &'a RunIdentity,
+    /// Runtime state directory used for Authority process markers.
+    pub runtime_dir: &'a Path,
+    /// Autostart behavior selected for this run.
+    pub flags: &'a AutostartFlags,
+    /// Authority selection supplied by the CLI.
+    pub cli: &'a crate::authority::AuthorityCli,
+    /// Authority profile used when autostarting a local Authority.
+    pub profile_name: &'a str,
+    /// Resolved `firma.toml` path, when one exists.
+    pub user_config_path: Option<&'a Path>,
+    /// Directory containing the resolved `firma.toml`, when one exists.
+    pub user_config_dir: Option<&'a Path>,
+    /// Current `firma` executable used to autostart the Authority.
+    pub firma_exe: &'a Path,
+    /// Capability-specific verification key, which takes precedence over the
+    /// key configured under `[sidecar.authority]`.
+    pub capability_public_key_path: Option<&'a Path>,
+    /// Working directory used to resolve a relative capability-specific key.
+    pub working_dir: &'a Path,
 }
 
 /// Owned pieces threaded from [`prepare_network_runtime`] into the per-path
@@ -768,31 +794,25 @@ fn autostart_sidecar(
 ///
 /// Propagates any `RunError` raised by selection or spawn paths.
 #[expect(
-    clippy::too_many_arguments,
-    reason = "every input is independent — bundling into a request struct only adds noise here"
-)]
-#[expect(
     clippy::too_many_lines,
     reason = "step-0 selection + plaintext-h2 transport probe + autostart fallback read more clearly inline than split"
 )]
 pub fn resolve_authority(
-    identity: &RunIdentity,
-    runtime_dir: &Path,
-    flags: &AutostartFlags,
-    cli: &crate::authority::AuthorityCli,
-    profile_name: &str,
-    user_config_path: Option<&Path>,
-    user_config_dir: Option<&Path>,
-    firma_exe: &Path,
+    request: ResolveAuthorityRequest<'_>,
     prompt: &mut dyn crate::authority::AuthorityPromptIo,
 ) -> Result<ResolvedAuthority, RunError> {
-    let selection = crate::authority::resolve(cli, flags.no_autostart, user_config_path)?;
+    let selection = crate::authority::resolve(
+        request.cli,
+        request.flags.no_autostart,
+        request.user_config_path,
+    )?;
 
     // Snapshot [authority] / [sidecar.authority] once: we need both the
     // `local` flag (to distinguish a committed local choice from the
     // fall-through default that triggers the first-run prompt) and the
     // connect coordinates (ca/pub key) regardless of selection mode.
-    let section = user_config_path
+    let section = request
+        .user_config_path
         .map(crate::authority::config::read_authority)
         .transpose()?
         .flatten()
@@ -801,19 +821,23 @@ pub fn resolve_authority(
         .connect
         .as_ref()
         .and_then(|c| c.ca_cert_path.as_deref())
-        .map(|path| rebase_config_relative_path(path, user_config_dir));
-    let pub_key_path = section
+        .map(|path| rebase_config_relative_path(path, request.user_config_dir));
+    let authority_pub_key_path = section
         .connect
         .as_ref()
         .and_then(|c| c.public_key_path.as_deref())
-        .map(|path| rebase_config_relative_path(path, user_config_dir));
+        .map(|path| rebase_config_relative_path(path, request.user_config_dir));
+    let capability_pub_key_path = request
+        .capability_public_key_path
+        .map(|path| rebase_relative_path(path, request.working_dir));
+    let pub_key_path = capability_pub_key_path.clone().or(authority_pub_key_path);
     let credentials_config = section
         .connect
         .as_ref()
         .and_then(|connect| connect.credentials.as_ref())
         .cloned()
         .map(|mut credentials| {
-            credentials.rebase_defaults(user_config_dir.unwrap_or_else(|| Path::new(".")));
+            credentials.rebase_defaults(request.user_config_dir.unwrap_or_else(|| Path::new(".")));
             credentials
         });
     let credentials = credentials_config
@@ -825,7 +849,7 @@ pub fn resolve_authority(
         })?;
     let config_committed_local = section.local;
 
-    maybe_regen_tls(ca_cert_path.as_deref(), firma_exe)?;
+    maybe_regen_tls(ca_cert_path.as_deref(), request.firma_exe)?;
 
     match selection {
         crate::authority::AuthoritySelection::Remote(url) => {
@@ -848,7 +872,7 @@ pub fn resolve_authority(
                     });
                 }
                 tracing::info!(
-                    sandbox_id = %identity.sandbox_id,
+                    sandbox_id = %request.identity.sandbox_id,
                     url = %format!("http://{target}"),
                     "authority reused: existing local authority on plaintext loopback"
                 );
@@ -861,37 +885,38 @@ pub fn resolve_authority(
                     supervisor: None,
                 });
             }
-            if flags.no_autostart {
+            if request.flags.no_autostart {
                 return Err(RunError::MissingAuthority);
             }
             // First-run interactive bootstrap: when neither the CLI nor the
             // resolved firma.toml committed to local, prompt before creating
             // the user-global Ed25519 signing key. On `Y`, persist the
             // `[authority]` section so subsequent runs skip the prompt.
-            let cli_committed = !matches!(cli, crate::authority::AuthorityCli::Unset);
+            let cli_committed = !matches!(request.cli, crate::authority::AuthorityCli::Unset);
             if !cli_committed && !config_committed_local {
                 crate::authority::bootstrap::run_prompt(prompt)?;
                 let target_path =
-                    crate::authority::bootstrap::resolve_persist_target(user_config_path)?;
+                    crate::authority::bootstrap::resolve_persist_target(request.user_config_path)?;
                 crate::authority::bootstrap::persist_authority_section(&target_path)?;
             }
-            let marker = run_entry_from(runtime_dir, &identity.sandbox_id).join("authority");
+            let marker =
+                run_entry_from(request.runtime_dir, &request.identity.sandbox_id).join("authority");
             match crate::authority::AuthoritySupervisor::spawn(crate::authority::SpawnRequest {
-                sandbox_id: &identity.sandbox_id,
-                agent_id: &identity.profile,
-                session_id: &identity.session_id,
+                sandbox_id: &request.identity.sandbox_id,
+                agent_id: &request.identity.profile,
+                session_id: &request.identity.session_id,
                 marker_dir: marker,
-                profile_name,
-                firma_exe: firma_exe.to_path_buf(),
-                startup_timeout: flags.startup_timeout,
-                user_config_path: user_config_path.map(Path::to_path_buf),
+                profile_name: request.profile_name,
+                firma_exe: request.firma_exe.to_path_buf(),
+                startup_timeout: request.flags.startup_timeout,
+                user_config_path: request.user_config_path.map(Path::to_path_buf),
             }) {
                 Ok(sup) => {
                     let ephemeral_pub_key = sup.pub_key_path();
                     Ok(ResolvedAuthority {
                         url: sup.url(),
                         ca_cert_path,
-                        pub_key_path: Some(ephemeral_pub_key),
+                        pub_key_path: capability_pub_key_path.or(Some(ephemeral_pub_key)),
                         credentials,
                         credentials_config,
                         supervisor: Some(sup),
@@ -905,7 +930,7 @@ pub fn resolve_authority(
                             });
                         }
                         tracing::info!(
-                            sandbox_id = %identity.sandbox_id,
+                            sandbox_id = %request.identity.sandbox_id,
                             url = %format!("http://{target}"),
                             "authority reused: port became reachable during autostart retry"
                         );
@@ -968,10 +993,14 @@ fn maybe_regen_tls(ca_cert_path: Option<&Path>, firma_exe: &Path) -> Result<(), 
 }
 
 fn rebase_config_relative_path(path: &Path, config_dir: Option<&Path>) -> PathBuf {
+    rebase_relative_path(path, config_dir.unwrap_or_else(|| Path::new(".")))
+}
+
+fn rebase_relative_path(path: &Path, base_dir: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
     } else {
-        config_dir.unwrap_or_else(|| Path::new(".")).join(path)
+        base_dir.join(path)
     }
 }
 
@@ -1440,6 +1469,7 @@ mod non_structural_env_tests {
     fn capability_lease_conf() -> CapabilityLeaseConfig {
         CapabilityLeaseConfig {
             source: CapabilitySource::Disabled,
+            public_key_path: None,
             refresh_ratio: 0.60,
             grace_seconds: 30,
         }

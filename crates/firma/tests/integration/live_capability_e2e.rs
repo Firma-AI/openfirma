@@ -364,14 +364,18 @@ fn no_autostart_unreachable_authority_fails_loudly() {
     let mut prompt = UnreachablePrompt;
 
     let result = firma_run::routing::resolve_authority(
-        &identity,
-        runtime_dir,
-        &flags,
-        &cli,
-        "developer",
-        None,
-        None,
-        &firma_exe,
+        firma_run::routing::ResolveAuthorityRequest {
+            identity: &identity,
+            runtime_dir,
+            flags: &flags,
+            cli: &cli,
+            profile_name: "developer",
+            user_config_path: None,
+            user_config_dir: None,
+            firma_exe: &firma_exe,
+            capability_public_key_path: None,
+            working_dir: state_dir.path(),
+        },
         &mut prompt,
     );
 

@@ -14,7 +14,7 @@ use crate::config::{
 use crate::error::RunError;
 use crate::identity::RunIdentity;
 use crate::mediator::enforce_local_command_governance;
-use crate::routing::{AutostartFlags, prepare_network_runtime};
+use crate::routing::{AutostartFlags, ResolveAuthorityRequest, prepare_network_runtime};
 use crate::seccomp::resolve_effective_seccomp;
 use crate::sidecar::supervisor::DEFAULT_STARTUP_TIMEOUT_SECS;
 use crate::supervisor::wait_with_signal_forwarding;
@@ -223,14 +223,18 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
         let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
         let mut prompt = crate::authority::StdAuthorityPrompt;
         let authority = crate::routing::resolve_authority(
-            &identity,
-            &runtime_dir,
-            &flags,
-            &args.authority_cli,
-            &args.authority_profile,
-            user_config_path.as_deref(),
-            user_config_dir.as_deref(),
-            &firma_exe,
+            ResolveAuthorityRequest {
+                identity: &identity,
+                runtime_dir: &runtime_dir,
+                flags: &flags,
+                cli: &args.authority_cli,
+                profile_name: &args.authority_profile,
+                user_config_path: user_config_path.as_deref(),
+                user_config_dir: user_config_dir.as_deref(),
+                firma_exe: &firma_exe,
+                capability_public_key_path: profile.capability.public_key_path.as_deref(),
+                working_dir: &working_dir,
+            },
             &mut prompt,
         )?;
 
@@ -854,6 +858,7 @@ mod tests {
             identity_mode: SandboxIdentityMode::SandboxUser,
             capability: CapabilityLeaseConfig {
                 source: CapabilitySource::Disabled,
+                public_key_path: None,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
@@ -913,6 +918,7 @@ mod tests {
                 source: CapabilitySource::File {
                     path: token_path.clone(),
                 },
+                public_key_path: None,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
@@ -965,6 +971,7 @@ mod tests {
             identity_mode: SandboxIdentityMode::SandboxUser,
             capability: CapabilityLeaseConfig {
                 source: CapabilitySource::Disabled,
+                public_key_path: None,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
@@ -1032,6 +1039,7 @@ mod tests {
             identity_mode: SandboxIdentityMode::SandboxUser,
             capability: CapabilityLeaseConfig {
                 source: CapabilitySource::Disabled,
+                public_key_path: None,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
@@ -1130,6 +1138,7 @@ mod tests {
             identity_mode: SandboxIdentityMode::SandboxUser,
             capability: CapabilityLeaseConfig {
                 source: CapabilitySource::Disabled,
+                public_key_path: None,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
@@ -1198,6 +1207,7 @@ mod tests {
             identity_mode: SandboxIdentityMode::SandboxUser,
             capability: CapabilityLeaseConfig {
                 source: CapabilitySource::Disabled,
+                public_key_path: None,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
@@ -1242,6 +1252,7 @@ mod tests {
             identity_mode: SandboxIdentityMode::SandboxUser,
             capability: CapabilityLeaseConfig {
                 source: CapabilitySource::Disabled,
+                public_key_path: None,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },
@@ -1313,6 +1324,7 @@ mod tests {
             identity_mode: SandboxIdentityMode::SandboxUser,
             capability: CapabilityLeaseConfig {
                 source: CapabilitySource::Disabled,
+                public_key_path: None,
                 refresh_ratio: 0.60,
                 grace_seconds: 30,
             },

@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use firma_config_loader::CONFIG_FILE_NAME;
 use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
-use firma_run::routing::{AutostartFlags, resolve_authority};
+use firma_run::routing::{AutostartFlags, ResolveAuthorityRequest, resolve_authority};
 
 struct PanicPrompt;
 impl AuthorityPromptIo for PanicPrompt {
@@ -37,16 +37,21 @@ fn pre_bound_port_without_plaintext_h2_fails_closed() {
     let identity = firma_run::identity::RunIdentity::new("test");
     let runtime_dir = tmp.path().join("runtime");
     let flags = AutostartFlags::default();
+    let firma_exe = PathBuf::from("/bin/false");
     let mut prompt = PanicPrompt;
     let result = resolve_authority(
-        &identity,
-        &runtime_dir,
-        &flags,
-        &AuthorityCli::Unset,
-        "developer",
-        Some(&cfg),
-        cfg.parent(),
-        &PathBuf::from("/bin/false"),
+        ResolveAuthorityRequest {
+            identity: &identity,
+            runtime_dir: &runtime_dir,
+            flags: &flags,
+            cli: &AuthorityCli::Unset,
+            profile_name: "developer",
+            user_config_path: Some(&cfg),
+            user_config_dir: cfg.parent(),
+            firma_exe: &firma_exe,
+            capability_public_key_path: None,
+            working_dir: tmp.path(),
+        },
         &mut prompt,
     );
     match result {

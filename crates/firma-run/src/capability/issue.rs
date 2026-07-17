@@ -77,6 +77,9 @@ pub const DEFAULT_TTL_SECONDS: i32 = 900;
 /// from stalling sandbox teardown while its Drop joins the mint thread).
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// `FirmaTeam` exports Ed25519 public keys in their raw 32-byte representation.
+const ED25519_PUBLIC_KEY_LENGTH: usize = 32;
+
 /// Mint a capability and write the seed file. Returns the written path.
 ///
 /// Runs the async RPC inside a scoped current-thread tokio runtime so the
@@ -115,6 +118,15 @@ fn mint(params: &IssueParams) -> Result<CapabilitySeed, RunError> {
             params.authority_pub_key_path.display()
         ))
     })?;
+    let public_key_length = pub_key.len();
+    if public_key_length != ED25519_PUBLIC_KEY_LENGTH {
+        let public_key_path = params.authority_pub_key_path.display();
+        return Err(RunError::Capability(format!(
+            "authority public key '{public_key_path}' must contain exactly \
+             {ED25519_PUBLIC_KEY_LENGTH} raw Ed25519 bytes; found \
+             {public_key_length} bytes"
+        )));
+    }
     let verifier = PasetoV4Verifier::try_new(&pub_key)
         .map_err(|e| RunError::Capability(format!("invalid authority public key: {e}")))?;
 

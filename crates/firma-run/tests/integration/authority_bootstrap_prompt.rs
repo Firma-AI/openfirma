@@ -19,7 +19,7 @@ use firma_config_loader::CONFIG_FILE_NAME;
 use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
 use firma_run::error::RunError;
 use firma_run::identity::RunIdentity;
-use firma_run::routing::{AutostartFlags, resolve_authority};
+use firma_run::routing::{AutostartFlags, ResolveAuthorityRequest, resolve_authority};
 
 struct RecordingPrompt {
     tty: bool,
@@ -51,6 +51,31 @@ fn fake_firma_exe(tmp: &std::path::Path) -> PathBuf {
     tmp.join("does-not-exist-firma")
 }
 
+fn resolve_test_authority(
+    tmp: &tempfile::TempDir,
+    cfg: &std::path::Path,
+    identity: &RunIdentity,
+    runtime_dir: &std::path::Path,
+    cli: &AuthorityCli,
+    prompt: &mut dyn AuthorityPromptIo,
+) -> Result<firma_run::routing::ResolvedAuthority, RunError> {
+    resolve_authority(
+        ResolveAuthorityRequest {
+            identity,
+            runtime_dir,
+            flags: &AutostartFlags::default(),
+            cli,
+            profile_name: "developer",
+            user_config_path: Some(cfg),
+            user_config_dir: cfg.parent(),
+            firma_exe: &fake_firma_exe(tmp.path()),
+            capability_public_key_path: None,
+            working_dir: tmp.path(),
+        },
+        prompt,
+    )
+}
+
 #[test]
 fn prompt_fires_when_no_commit_and_persists_on_yes() {
     let tmp = tempfile::tempdir().unwrap();
@@ -59,15 +84,12 @@ fn prompt_fires_when_no_commit_and_persists_on_yes() {
     let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(true, true);
-    let err = resolve_authority(
+    let err = resolve_test_authority(
+        &tmp,
+        &cfg,
         &identity,
         &runtime_dir,
-        &AutostartFlags::default(),
         &AuthorityCli::Unset,
-        "developer",
-        Some(cfg.as_path()),
-        cfg.parent(),
-        &fake_firma_exe(tmp.path()),
         &mut prompt,
     )
     .err()
@@ -101,15 +123,12 @@ fn prompt_declined_returns_typed_error_and_does_not_persist() {
     let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(true, false);
-    let err = resolve_authority(
+    let err = resolve_test_authority(
+        &tmp,
+        &cfg,
         &identity,
         &runtime_dir,
-        &AutostartFlags::default(),
         &AuthorityCli::Unset,
-        "developer",
-        Some(cfg.as_path()),
-        cfg.parent(),
-        &fake_firma_exe(tmp.path()),
         &mut prompt,
     )
     .err()
@@ -131,15 +150,12 @@ fn no_tty_returns_typed_error_without_calling_confirm() {
     let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(false, true);
-    let err = resolve_authority(
+    let err = resolve_test_authority(
+        &tmp,
+        &cfg,
         &identity,
         &runtime_dir,
-        &AutostartFlags::default(),
         &AuthorityCli::Unset,
-        "developer",
-        Some(cfg.as_path()),
-        cfg.parent(),
-        &fake_firma_exe(tmp.path()),
         &mut prompt,
     )
     .err()
@@ -158,15 +174,12 @@ fn cli_local_skips_prompt_even_without_config() {
     let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(true, false);
-    let err = resolve_authority(
+    let err = resolve_test_authority(
+        &tmp,
+        &cfg,
         &identity,
         &runtime_dir,
-        &AutostartFlags::default(),
         &AuthorityCli::Local,
-        "developer",
-        Some(cfg.as_path()),
-        cfg.parent(),
-        &fake_firma_exe(tmp.path()),
         &mut prompt,
     )
     .err()
@@ -195,15 +208,12 @@ fn config_authority_section_skips_prompt() {
     let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(true, false);
-    let err = resolve_authority(
+    let err = resolve_test_authority(
+        &tmp,
+        &cfg,
         &identity,
         &runtime_dir,
-        &AutostartFlags::default(),
         &AuthorityCli::Unset,
-        "developer",
-        Some(cfg.as_path()),
-        cfg.parent(),
-        &fake_firma_exe(tmp.path()),
         &mut prompt,
     )
     .err()
