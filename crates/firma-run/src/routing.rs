@@ -4,6 +4,8 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use firma_runtime_state::runtime_paths::{default_runtime_dir, run_entry_from};
+
 #[cfg(unix)]
 use std::io;
 #[cfg(unix)]
@@ -713,9 +715,8 @@ fn autostart_sidecar(
     identity: &RunIdentity,
     flags: &AutostartFlags,
 ) -> Result<SidecarSupervisor, RunError> {
-    let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
-    let marker_dir = firma_runtime_state::runtime_paths::run_dir_from(&runtime_dir)
-        .join(identity.sandbox_id.to_string());
+    let runtime_dir = default_runtime_dir();
+    let marker_dir = run_entry_from(&runtime_dir, identity.sandbox_id.to_string());
     let firma_exe = std::env::current_exe().map_err(|error| {
         RunError::Internal(format!(
             "failed to resolve current executable path: {error}"
@@ -874,9 +875,8 @@ pub fn resolve_authority(
                     crate::authority::bootstrap::resolve_persist_target(user_config_path)?;
                 crate::authority::bootstrap::persist_authority_section(&target_path)?;
             }
-            let marker = firma_runtime_state::runtime_paths::run_dir_from(runtime_dir)
-                .join(identity.sandbox_id.to_string())
-                .join("authority");
+            let marker =
+                run_entry_from(runtime_dir, identity.sandbox_id.to_string()).join("authority");
             match crate::authority::AuthoritySupervisor::spawn(crate::authority::SpawnRequest {
                 sandbox_id: &identity.sandbox_id,
                 agent_id: &identity.profile,
