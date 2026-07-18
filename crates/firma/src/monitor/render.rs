@@ -195,12 +195,15 @@ mod tests {
         assert_eq!(buf, b"[authority] authority booted\n");
     }
 
-    const ALLOW_LINE_WITH_SBX: &str = r#"{"event_id":"e4","session_id":"s","token_id":"t","agent_id":"demo-1","action":"github.issue.create","resource":"api.github.com/repos/x/y/issues","decision":1,"deny_reason":"","enforcement_latency_us":150,"context_hash":"","bundle_version":"","timestamp":1715177755000000000,"dispatch_status":201,"dispatch_latency_us":42000,"response_size":128,"sandbox_id":"sbx_xyz","signature":[]}"#;
+    const ALLOW_LINE_WITH_SBX: &str = r#"{"event_id":"e4","session_id":"s","token_id":"t","agent_id":"demo-1","action":"github.issue.create","resource":"api.github.com/repos/x/y/issues","decision":1,"deny_reason":"","enforcement_latency_us":150,"context_hash":"","bundle_version":"","timestamp":1715177755000000000,"dispatch_status":201,"dispatch_latency_us":42000,"response_size":128,"sandbox_id":"01900000-0000-7000-8000-000000000001","signature":[]}"#;
 
     #[test]
     fn pretty_audit_appends_sandbox_when_present() {
         let out = render_to_string(ALLOW_LINE_WITH_SBX, Source::Audit, Format::Pretty);
-        assert!(out.contains("sandbox=sbx_xyz"), "got: {out}");
+        assert!(
+            out.contains("sandbox=01900000-0000-7000-8000-000000000001"),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -222,7 +225,7 @@ mod tests {
             None,
             None,
             None,
-            Some("other"),
+            Some("01900000-0000-7000-8000-000000000002"),
             &mut buf,
         )
         .expect("render");

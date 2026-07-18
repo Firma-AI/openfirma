@@ -106,6 +106,7 @@ fn spawn_capability_reload(
 
 async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode> {
     debug!("firma sidecar starting");
+    let sandbox_id = propagated_sandbox_id()?;
 
     let resolved = firma_config_loader::ConfigResolver::default()
         .resolve_config(args.config.as_deref())?
@@ -136,9 +137,6 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     };
 
     let (audit_payload_tx, audit_payload_rx) = tokio::sync::mpsc::channel(100);
-    // Per-run identity stamped on every emitted audit event (FIR-185).
-    // Set by `firma run`'s SidecarSupervisor; empty in daemon mode.
-    let sandbox_id = std::env::var("FIRMA_RUN_SANDBOX_ID").unwrap_or_default();
     let audit_event_builder =
         startup::load_audit_event_builder(&config.audit)?.with_sandbox_id(sandbox_id);
     let audit_sink = startup::spawn_audit_sink(
@@ -223,6 +221,19 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     debug!("firma sidecar exiting");
 
     Ok(ExitCode::SUCCESS)
+}
+
+fn propagated_sandbox_id() -> anyhow::Result<Option<firma_runtime_state::SandboxId>> {
+    let Some(value) = std::env::var_os("FIRMA_RUN_SANDBOX_ID") else {
+        return Ok(None);
+    };
+    let value = value
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("FIRMA_RUN_SANDBOX_ID must contain a valid UTF-8 UUID v7"))?;
+    value
+        .parse()
+        .map(Some)
+        .map_err(|error| anyhow::anyhow!("invalid FIRMA_RUN_SANDBOX_ID: {error}"))
 }
 
 /// Spawns the `firma run` audit-channel listener when `firma run` provisions a

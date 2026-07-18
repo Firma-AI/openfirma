@@ -363,23 +363,44 @@ mod tests {
     }
 
     /// Realistic event carrying a `sandbox_id` from the autostarted sidecar.
-    const ALLOW_LINE_WITH_SBX: &str = r#"{"event_id":"01900000-0000-7000-8000-000000000004","session_id":"sess_001","token_id":"tok_a","agent_id":"agent_codex","action":"github.issue.create","resource":"api.github.com/repos/x/y/issues","decision":1,"deny_reason":"","enforcement_latency_us":150,"context_hash":"ctx","bundle_version":"v1","timestamp":1715169755000000000,"dispatch_status":201,"dispatch_latency_us":42000,"response_size":128,"sandbox_id":"sbx_abc","signature":[]}"#;
+    const ALLOW_LINE_WITH_SBX: &str = r#"{"event_id":"01900000-0000-7000-8000-000000000004","session_id":"sess_001","token_id":"tok_a","agent_id":"agent_codex","action":"github.issue.create","resource":"api.github.com/repos/x/y/issues","decision":1,"deny_reason":"","enforcement_latency_us":150,"context_hash":"ctx","bundle_version":"v1","timestamp":1715169755000000000,"dispatch_status":201,"dispatch_latency_us":42000,"response_size":128,"sandbox_id":"01900000-0000-7000-8000-000000000001","signature":[]}"#;
 
     #[test]
     fn audit_lite_parses_sandbox_id() {
         let parsed: AuditLite =
             serde_json::from_str(ALLOW_LINE_WITH_SBX).expect("parse with sandbox");
-        assert_eq!(parsed.sandbox_id.as_deref(), Some("sbx_abc"));
+        assert_eq!(
+            parsed.sandbox_id.as_deref(),
+            Some("01900000-0000-7000-8000-000000000001")
+        );
     }
 
     #[test]
     fn sandbox_id_filter_matches_exact() {
-        assert!(audit_passes(ALLOW_LINE_WITH_SBX, None, None, None, Some("sbx_abc")).is_some());
+        assert!(
+            audit_passes(
+                ALLOW_LINE_WITH_SBX,
+                None,
+                None,
+                None,
+                Some("01900000-0000-7000-8000-000000000001")
+            )
+            .is_some()
+        );
         assert!(audit_passes(ALLOW_LINE_WITH_SBX, None, None, None, Some("other")).is_none());
     }
 
     #[test]
     fn sandbox_id_filter_rejects_missing_field() {
-        assert!(audit_passes(ALLOW_LINE, None, None, None, Some("sbx_abc")).is_none());
+        assert!(
+            audit_passes(
+                ALLOW_LINE,
+                None,
+                None,
+                None,
+                Some("01900000-0000-7000-8000-000000000001")
+            )
+            .is_none()
+        );
     }
 }
