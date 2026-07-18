@@ -77,8 +77,8 @@ pub fn run_dir_from(runtime_dir: &Path) -> PathBuf {
 /// `<runtime>/run/<sandbox_id>` — marker directory for a single
 /// per-run sidecar.
 #[must_use]
-pub fn run_entry_from(runtime_dir: &Path, sandbox_id: impl AsRef<Path>) -> PathBuf {
-    run_dir_from(runtime_dir).join(sandbox_id)
+pub fn run_entry_from(runtime_dir: &Path, sandbox_id: &SandboxId) -> PathBuf {
+    run_dir_from(runtime_dir).join(sandbox_id.to_string())
 }
 
 #[cfg(unix)]

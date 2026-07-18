@@ -289,12 +289,15 @@ firma sidecar status [OPTIONS]
 
 | Flag                | Default | Description                                  |
 | ------------------- | ------- | -------------------------------------------- |
-| `--sandbox-id <id>` | —       | Show one entry and probe it for liveness.    |
+| `--sandbox-id <id>` | —       | Probe one Firma-generated UUIDv7 run ID.     |
 | `--json`            | _off_   | Emit a JSON array; empty list prints `[]`.   |
 | `--daemon`          | _off_   | Probe the long-lived daemon sidecar instead. |
 
 State directory resolution: `FIRMA_STATE_DIR` → `$XDG_RUNTIME_DIR/firma` →
 `/tmp/firma-$UID`. Marker directories live under `<state_dir>/run/<sandbox_id>/`.
+Malformed IDs, path components, and UUID versions other than v7 are rejected
+before the marker path is constructed. Use `firma sidecar status --json` or the
+marker's `metadata.toml` to discover a run's full ID.
 
 ### Output columns (table mode)
 

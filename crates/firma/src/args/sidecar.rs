@@ -83,7 +83,7 @@ pub struct StatusArgs {
     /// Restrict the probe to the Sidecar with this sandbox id (set by
     /// `firma run` for per-run Sidecars).
     #[clap(long)]
-    pub sandbox_id: Option<String>,
+    pub sandbox_id: Option<firma_runtime_state::SandboxId>,
     /// Emit machine-readable JSON (one array, one object per Sidecar) instead
     /// of the human-readable table.
     #[clap(long)]

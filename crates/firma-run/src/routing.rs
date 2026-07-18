@@ -714,8 +714,8 @@ fn autostart_sidecar(
     flags: &AutostartFlags,
 ) -> Result<SidecarSupervisor, RunError> {
     let runtime_dir = firma_runtime_state::runtime_paths::default_runtime_dir();
-    let marker_dir = firma_runtime_state::runtime_paths::run_dir_from(&runtime_dir)
-        .join(identity.sandbox_id.to_string());
+    let marker_dir =
+        firma_runtime_state::runtime_paths::run_entry_from(&runtime_dir, &identity.sandbox_id);
     let firma_exe = std::env::current_exe().map_err(|error| {
         RunError::Internal(format!(
             "failed to resolve current executable path: {error}"
@@ -874,9 +874,11 @@ pub fn resolve_authority(
                     crate::authority::bootstrap::resolve_persist_target(user_config_path)?;
                 crate::authority::bootstrap::persist_authority_section(&target_path)?;
             }
-            let marker = firma_runtime_state::runtime_paths::run_dir_from(runtime_dir)
-                .join(identity.sandbox_id.to_string())
-                .join("authority");
+            let marker = firma_runtime_state::runtime_paths::run_entry_from(
+                runtime_dir,
+                &identity.sandbox_id,
+            )
+            .join("authority");
             match crate::authority::AuthoritySupervisor::spawn(crate::authority::SpawnRequest {
                 sandbox_id: &identity.sandbox_id,
                 agent_id: &identity.profile,

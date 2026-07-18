@@ -64,8 +64,11 @@ fn run_dir_appends_run_segment() {
 #[test]
 fn run_entry_joins_sandbox_id() {
     let base = PathBuf::from("/run/user/1000/firma");
+    let sandbox_id = SANDBOX_ID
+        .parse::<SandboxId>()
+        .expect("valid UUID v7 fixture");
     assert_eq!(
-        run_entry_from(&base, SANDBOX_ID),
+        run_entry_from(&base, &sandbox_id),
         PathBuf::from(format!("/run/user/1000/firma/run/{SANDBOX_ID}"))
     );
 }

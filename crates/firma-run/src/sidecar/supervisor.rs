@@ -303,7 +303,7 @@ impl SidecarSupervisor {
         crate::sidecar::metadata::write(
             &metadata_path,
             &crate::sidecar::metadata::Metadata {
-                sandbox_id: req.sandbox_id.to_string(),
+                sandbox_id: *req.sandbox_id,
                 agent_id: req.agent_id.to_string(),
                 session_id: req.session_id.to_string(),
                 authority_url: capture.authority_url,

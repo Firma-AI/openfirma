@@ -217,20 +217,30 @@ mod tests {
 
     #[test]
     fn exit_code_stopped_is_one() {
-        let rows = vec![make_entry("s1", "codex", State::Stopped, None)];
+        let rows = vec![make_entry(
+            "01900000-0000-7000-8000-000000000001",
+            "codex",
+            State::Stopped,
+            None,
+        )];
         assert_eq!(exit_code_for(&rows), 1);
     }
 
     #[test]
     fn render_pretty_contains_expected_fields() {
-        let rows = vec![make_entry("abc123def", "codex", State::Running, Some(862))];
+        let rows = vec![make_entry(
+            "01900000-0000-7000-8000-000000000001",
+            "codex",
+            State::Running,
+            Some(862),
+        )];
         let output = render_pretty(&rows);
 
         assert!(
             output.lines().next().unwrap_or("").contains("SANDBOX_ID"),
             "header must contain SANDBOX_ID"
         );
-        assert!(output.contains("abc123def"), "must contain sandbox_id");
+        assert!(output.contains("01900000"), "must contain sandbox_id");
         assert!(output.contains("codex"), "must contain agent_id");
         assert!(output.contains("running"), "must contain state label");
         assert!(output.contains("00:14:22"), "must contain formatted uptime");
@@ -239,7 +249,12 @@ mod tests {
     #[test]
     fn render_pretty_shows_pid_and_listen_for_normal_entry() {
         // make_entry already uses pid 1234 and /tmp/sidecar.sock.
-        let rows = vec![make_entry("abc123def", "codex", State::Running, Some(0))];
+        let rows = vec![make_entry(
+            "01900000-0000-7000-8000-000000000001",
+            "codex",
+            State::Running,
+            Some(0),
+        )];
         let output = render_pretty(&rows);
         // The data row is line index 1 (0-indexed).
         let data_row = output.lines().nth(1).unwrap_or("");
@@ -256,7 +271,7 @@ mod tests {
     #[test]
     fn render_pretty_dash_for_missing_pid_and_empty_listen() {
         let entry = SidecarEntry {
-            sandbox_id: "s0".to_string(),
+            sandbox_id: "01900000-0000-7000-8000-000000000001".to_string(),
             agent_id: "agent".to_string(),
             session_id: String::new(),
             authority_url: String::new(),
@@ -285,7 +300,12 @@ mod tests {
 
     #[test]
     fn exit_code_unknown_is_one() {
-        let rows = vec![make_entry("s1", "codex", State::Unknown, None)];
+        let rows = vec![make_entry(
+            "01900000-0000-7000-8000-000000000001",
+            "codex",
+            State::Unknown,
+            None,
+        )];
         assert_eq!(exit_code_for(&rows), 1);
     }
 }
