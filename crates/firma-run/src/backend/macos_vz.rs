@@ -152,7 +152,7 @@ impl SandboxBackend for VzBackend {
 
         let runtime_dir = std::env::temp_dir()
             .join("firma-run")
-            .join(&request.identity.sandbox_id);
+            .join(request.identity.sandbox_id.to_string());
 
         create_vz_runtime_dir(&runtime_dir)?;
 
@@ -256,17 +256,7 @@ impl SandboxBackend for VzBackend {
             .get("FIRMA_RUN_PROFILE")
             .is_some_and(|profile| profile == "claude-code");
         if claude_profile {
-            let runtime_home = std::env::temp_dir()
-                .join("firma-run")
-                .join(
-                    launch
-                        .env
-                        .get("FIRMA_RUN_SANDBOX_ID")
-                        .cloned()
-                        .unwrap_or_else(|| "claude-code".to_string()),
-                )
-                .display()
-                .to_string();
+            let runtime_home = handle.runtime_dir.display().to_string();
             command.env("HOME", &runtime_home);
             command.env("XDG_CONFIG_HOME", &runtime_home);
             command.env("XDG_CACHE_HOME", &runtime_home);
@@ -1318,6 +1308,10 @@ mod tests {
         assert_eq!(json["network"]["sidecar_host_addr"], "127.0.0.1:18081");
         assert_eq!(json["network"]["direct_network_devices_allowed"], false);
         assert_eq!(json["network"]["dns_mode"], "confined_stub");
+        assert_eq!(
+            json["network"]["attribution_headers"]["x-firma-sandbox-id"],
+            identity.sandbox_id.to_string()
+        );
         assert!(
             json["command"]["env"]
                 .as_object()

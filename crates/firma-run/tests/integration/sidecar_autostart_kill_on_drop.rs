@@ -44,10 +44,11 @@ fn write_fake_sidecar(dir: &std::path::Path, body: &str) -> PathBuf {
 fn drop_terminates_child_within_grace() {
     let tmp = TempDir::new().expect("tmp");
     let exe = write_fake_sidecar(tmp.path(), READY_SCRIPT);
-    let marker = tmp.path().join("run").join("sandbox-1");
+    let sandbox_id = firma_run::identity::SandboxId::generate();
+    let marker = tmp.path().join("run").join(sandbox_id.to_string());
 
     let supervisor = SidecarSupervisor::spawn(SpawnRequest {
-        sandbox_id: &firma_run::identity::SandboxId::from("sandbox-1"),
+        sandbox_id: &sandbox_id,
         agent_id: "generic",
         session_id: "session-1",
         marker_dir: marker.clone(),
@@ -89,10 +90,12 @@ fn drop_terminates_child_within_grace() {
 fn marker_files_present_between_ready_and_drop() {
     let tmp = TempDir::new().expect("tmp");
     let exe = write_fake_sidecar(tmp.path(), READY_SCRIPT);
-    let marker = tmp.path().join("run").join("sandbox-2");
+    let sandbox_id = firma_run::identity::SandboxId::generate();
+    let sandbox_id_text = sandbox_id.to_string();
+    let marker = tmp.path().join("run").join(&sandbox_id_text);
 
     let supervisor = SidecarSupervisor::spawn(SpawnRequest {
-        sandbox_id: &firma_run::identity::SandboxId::from("sandbox-2"),
+        sandbox_id: &sandbox_id,
         agent_id: "claude-code",
         session_id: "session-7",
         marker_dir: marker,
@@ -123,7 +126,7 @@ fn marker_files_present_between_ready_and_drop() {
 
     assert_eq!(
         table.get("sandbox_id").and_then(|v| v.as_str()),
-        Some("sandbox-2")
+        Some(sandbox_id_text.as_str())
     );
     assert_eq!(
         table.get("agent_id").and_then(|v| v.as_str()),

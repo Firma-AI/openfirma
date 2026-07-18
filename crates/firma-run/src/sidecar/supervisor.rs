@@ -193,7 +193,7 @@ impl SidecarSupervisor {
                 .env("FIRMA_SIDECAR_HEALTH_BIND_ADDR", "127.0.0.1:0")
                 // Per-run identity stamped on every audit ExecutionEvent
                 // (FIR-185). Matches the marker directory name.
-                .env("FIRMA_RUN_SANDBOX_ID", req.sandbox_id)
+                .env("FIRMA_RUN_SANDBOX_ID", req.sandbox_id.to_string())
                 // Control socket for the `firma run` audit channel: out-of-band
                 // reports (e.g. loopback blocks) the Sidecar turns into signed
                 // audit events. Derived via `socket_path_in` so the guard and
@@ -318,7 +318,7 @@ impl SidecarSupervisor {
         )?;
 
         info!(
-            sandbox_id = req.sandbox_id.compact(),
+            sandbox_id = %req.sandbox_id,
             pid = %pid,
             endpoint = %capture.interceptor_addr,
             "sidecar started"

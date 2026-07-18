@@ -48,10 +48,11 @@ fn monitor_mode_opt_in_forwards_allow_env_to_child() {
     let tmp = TempDir::new().expect("tmp");
     let capture_path = tmp.path().join("captured-allow-monitor");
     let exe = write_fake_sidecar(tmp.path(), &capture_path);
-    let marker = tmp.path().join("run").join("monitor-env-1");
+    let sandbox_id = firma_run::identity::SandboxId::generate();
+    let marker = tmp.path().join("run").join(sandbox_id.to_string());
 
     let _supervisor = SidecarSupervisor::spawn(SpawnRequest {
-        sandbox_id: &firma_run::identity::SandboxId::from("monitor-env-1"),
+        sandbox_id: &sandbox_id,
         agent_id: "generic",
         session_id: "session-monitor",
         marker_dir: marker,

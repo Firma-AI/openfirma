@@ -23,6 +23,7 @@ use crate::services::config::{AuthorityShape, ScaffoldPlan, scaffold_from_plan};
 /// Returns an error if `firma_run` fails to launch or supervise the
 /// wrapped command.
 pub fn run(args: RunArgs, foreground: &ForegroundLog) -> anyhow::Result<ExitCode> {
+    firma_run::identity::reject_reserved_sandbox_id_environment()?;
     if args.no_autostart && args.authority.as_deref() == Some("local") {
         anyhow::bail!(
             "--no-autostart is incompatible with --authority local; pass --authority <url> or omit --no-autostart"
