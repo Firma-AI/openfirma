@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use firma_runtime_state::SandboxId;
+
 use super::error::{InitError, InitResult};
 use super::log;
 
@@ -18,8 +20,7 @@ pub struct LaunchContract {
     /// Contract schema version.
     pub version: u32,
     /// Host sandbox id carried for diagnostics and host-side correlation.
-    #[serde(default)]
-    pub sandbox_id: Option<String>,
+    pub sandbox_id: SandboxId,
     /// Host runtime directory. Guest init uses the mounted guest path instead.
     #[serde(default)]
     pub runtime_dir: Option<PathBuf>,
@@ -438,7 +439,7 @@ pub fn validate_contract(contract: &LaunchContract) -> InitResult<()> {
 fn accept_contract_boundary(contract: &LaunchContract) -> InitResult<(Terminal, Network)> {
     validate_contract_header(contract)?;
     let terminal = accept_terminal_contract(&contract.terminal)?;
-    let network = accept_network_contract(&contract.network)?;
+    let network = accept_network_contract(&contract.network, &contract.sandbox_id)?;
     validate_terminal_network_port_conflicts(&terminal, &network)?;
 
     Ok((terminal, network))
@@ -612,7 +613,10 @@ fn validate_terminal_network_port_conflicts(
 }
 
 /// Accepts the guest network envelope into parsed addresses and ports.
-fn accept_network_contract(network: &NetworkContract) -> InitResult<Network> {
+fn accept_network_contract(
+    network: &NetworkContract,
+    sandbox_id: &SandboxId,
+) -> InitResult<Network> {
     match network.mode {
         NetworkMode::VsockSidecar => {}
     }
@@ -648,6 +652,29 @@ fn accept_network_contract(network: &NetworkContract) -> InitResult<Network> {
         if value.trim().is_empty() {
             return Err(InitError::EmptyAttributionHeaderValue { name: name.clone() });
         }
+    }
+
+    let mut sandbox_headers = network
+        .attribution_headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("x-firma-sandbox-id"));
+    let Some((_, value)) = sandbox_headers.next() else {
+        return Err(InitError::MissingSandboxAttribution);
+    };
+    if sandbox_headers.next().is_some() {
+        return Err(InitError::DuplicateSandboxAttribution);
+    }
+    let attributed_id = value
+        .parse()
+        .map_err(|source| InitError::InvalidSandboxAttribution {
+            value: value.clone(),
+            source,
+        })?;
+    if attributed_id != *sandbox_id {
+        return Err(InitError::SandboxAttributionMismatch {
+            expected: *sandbox_id,
+            actual: attributed_id,
+        });
     }
 
     Ok(Network {

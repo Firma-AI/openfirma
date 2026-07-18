@@ -611,6 +611,73 @@ fn contract_rejects_empty_attribution_headers() -> TestResult {
 }
 
 #[test]
+fn contract_rejects_missing_sandbox_attribution_header() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract
+        .network
+        .attribution_headers
+        .remove("x-firma-sandbox-id");
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should require sandbox attribution",
+    )?;
+    assert!(matches!(error, InitError::MissingSandboxAttribution));
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_duplicate_case_insensitive_sandbox_attribution_headers() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.network.attribution_headers.insert(
+        "X-Firma-Sandbox-Id".to_string(),
+        "01900000-0000-7000-8000-000000000001".to_string(),
+    );
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject duplicate sandbox attribution",
+    )?;
+    assert!(matches!(error, InitError::DuplicateSandboxAttribution));
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_invalid_sandbox_attribution_header() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.network.attribution_headers.insert(
+        "x-firma-sandbox-id".to_string(),
+        "550e8400-e29b-41d4-a716-446655440000".to_string(),
+    );
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject non-v7 sandbox attribution",
+    )?;
+    assert!(matches!(error, InitError::InvalidSandboxAttribution { .. }));
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_mismatched_sandbox_attribution_header() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract.network.attribution_headers.insert(
+        "x-firma-sandbox-id".to_string(),
+        "01900000-0000-7000-8000-000000000002".to_string(),
+    );
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should bind sandbox attribution to top-level identity",
+    )?;
+    assert!(matches!(
+        error,
+        InitError::SandboxAttributionMismatch { .. }
+    ));
+    Ok(())
+}
+
+#[test]
 fn read_contract_parses_valid_contract_json() -> TestResult {
     let temp = tempfile::tempdir()?;
     let contract_path = write_contract_json(temp.path(), &valid_contract_json()?)?;
@@ -623,6 +690,36 @@ fn read_contract_parses_valid_contract_json() -> TestResult {
     assert_eq!(contract.mounts.len(), 1);
     assert_eq!(contract.network.vsock_sidecar_port, 18080);
 
+    Ok(())
+}
+
+#[test]
+fn read_contract_rejects_malformed_sandbox_id() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let mut contract = valid_contract_json()?;
+    contract["sandbox_id"] = json!("../outside");
+    let contract_path = write_contract_json(temp.path(), &contract)?;
+
+    let error = expect_init_error(
+        read_contract(&contract_path),
+        "malformed sandbox id should fail during parse",
+    )?;
+    assert!(matches!(error, InitError::ParseContract { .. }));
+    Ok(())
+}
+
+#[test]
+fn read_contract_rejects_non_v7_sandbox_id() -> TestResult {
+    let temp = tempfile::tempdir()?;
+    let mut contract = valid_contract_json()?;
+    contract["sandbox_id"] = json!("550e8400-e29b-41d4-a716-446655440000");
+    let contract_path = write_contract_json(temp.path(), &contract)?;
+
+    let error = expect_init_error(
+        read_contract(&contract_path),
+        "non-v7 sandbox id should fail during parse",
+    )?;
+    assert!(matches!(error, InitError::ParseContract { .. }));
     Ok(())
 }
 
@@ -750,7 +847,7 @@ fn accept_contract_returns_validated_contract() -> TestResult {
             .attribution_headers()
             .get("x-firma-sandbox-id")
             .map(String::as_str),
-        Some("sandbox-test")
+        Some("01900000-0000-7000-8000-000000000001")
     );
     Ok(())
 }
@@ -2042,7 +2139,9 @@ fn write_contract_json(
 fn valid_launch_contract() -> LaunchContract {
     LaunchContract {
         version: 1,
-        sandbox_id: Some("sandbox-test".to_string()),
+        sandbox_id: "01900000-0000-7000-8000-000000000001"
+            .parse()
+            .expect("valid UUID v7 fixture"),
         runtime_dir: Some(PathBuf::from("/runtime")),
         runner: Some(RunnerContract {
             path: PathBuf::from("/firma-vz-runner"),
@@ -2083,7 +2182,7 @@ fn valid_launch_contract() -> LaunchContract {
             dns_mode: DnsMode::ConfinedStub,
             attribution_headers: BTreeMap::from([(
                 "x-firma-sandbox-id".to_string(),
-                "sandbox-test".to_string(),
+                "01900000-0000-7000-8000-000000000001".to_string(),
             )]),
         },
         invariants: vec![InvariantContract {

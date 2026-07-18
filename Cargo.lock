@@ -1670,6 +1670,7 @@ dependencies = [
 name = "firma-vz-guest-init"
 version = "0.1.2"
 dependencies = [
+ "firma-runtime-state",
  "libc",
  "serde",
  "serde_json",

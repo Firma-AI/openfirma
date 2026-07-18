@@ -4,6 +4,8 @@ use std::net::{AddrParseError, SocketAddr};
 use std::num::TryFromIntError;
 use std::path::PathBuf;
 
+use firma_runtime_state::{SandboxId, SandboxIdParseError};
+
 /// Typed failures raised while preparing or running the VZ guest init payload.
 #[derive(Debug)]
 pub enum InitError {
@@ -106,6 +108,21 @@ pub enum InitError {
     EmptyAttributionHeaderName,
     /// The network attribution header map contained an empty value.
     EmptyAttributionHeaderValue { name: String },
+    /// The network attribution headers omitted the sandbox identity.
+    MissingSandboxAttribution,
+    /// The network attribution headers repeated the sandbox identity using
+    /// case variants.
+    DuplicateSandboxAttribution,
+    /// The network sandbox attribution is not a UUID v7.
+    InvalidSandboxAttribution {
+        value: String,
+        source: SandboxIdParseError,
+    },
+    /// The network sandbox attribution does not match the launch contract.
+    SandboxAttributionMismatch {
+        expected: SandboxId,
+        actual: SandboxId,
+    },
     /// The loopback control socket could not be opened.
     LoopbackControlOpen { source: io::Error },
     /// The loopback interface flags could not be read.
@@ -396,6 +413,20 @@ impl fmt::Display for InitError {
                 formatter,
                 "network.attribution_headers[{name}] must not be empty"
             ),
+            Self::MissingSandboxAttribution => {
+                formatter.write_str("network.attribution_headers must contain x-firma-sandbox-id")
+            }
+            Self::DuplicateSandboxAttribution => formatter.write_str(
+                "network.attribution_headers contains duplicate x-firma-sandbox-id names",
+            ),
+            Self::InvalidSandboxAttribution { value, source } => write!(
+                formatter,
+                "network x-firma-sandbox-id value '{value}' is invalid: {source}"
+            ),
+            Self::SandboxAttributionMismatch { expected, actual } => write!(
+                formatter,
+                "network x-firma-sandbox-id {actual} does not match contract sandbox_id {expected}"
+            ),
             Self::LoopbackControlOpen { source } => {
                 write!(formatter, "open loopback control socket: {source}")
             }
@@ -681,6 +712,7 @@ impl std::error::Error for InitError {
             | Self::ModuleParams { source }
             | Self::LoadModule { source, .. } => Some(source),
             Self::InvalidNetworkSocketAddr { source, .. } => Some(source),
+            Self::InvalidSandboxAttribution { source, .. } => Some(source),
             Self::BindMount { error, .. } | Self::RemountReadOnly { error, .. } => Some(error),
             Self::ParseContract { source, .. } | Self::SerializeGuestResult { source, .. } => {
                 Some(source)
@@ -710,6 +742,9 @@ impl std::error::Error for InitError {
             | Self::DirectNetworkDevicesAllowed
             | Self::EmptyAttributionHeaderName
             | Self::EmptyAttributionHeaderValue { .. }
+            | Self::MissingSandboxAttribution
+            | Self::DuplicateSandboxAttribution
+            | Self::SandboxAttributionMismatch { .. }
             | Self::GuestNetworkSetup { .. }
             | Self::CommandPtyMissingStatus
             | Self::InvalidPtyResizeMessage { .. }
