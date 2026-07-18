@@ -42,4 +42,11 @@ if ! command -v dprint >/dev/null 2>&1; then
   curl -fsSL https://dprint.dev/install.sh | sh -s "$DPRINT_VERSION"
 fi
 
+if ! command -v uv >/dev/null 2>&1; then
+  echo "Installing uv..."
+  # shellcheck source=../../tool-versions.env
+  . "$ROOT/tool-versions.env"
+  curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
+fi
+
 corepack enable >/dev/null 2>&1 || echo "warning: 'corepack enable' failed; you may need to run it with sudo"

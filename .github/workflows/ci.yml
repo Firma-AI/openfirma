@@ -88,6 +88,24 @@ jobs:
         with:
           dprint-version: ${{ env.DPRINT_VERSION }}
 
+  skill-scripts:
+    name: Skill Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Load tool versions
+        shell: bash
+        run: grep -E '^[A-Z0-9_]+=' tool-versions.env >> "$GITHUB_ENV"
+      - name: Install uv
+        run: pipx install uv==$UV_VERSION
+      - name: Test skill scripts
+        run: |
+          uv run .skills/edit-pr/scripts/test_inspect_prs.py
+          uv run .skills/open-pr/scripts/test_verify_pr.py
+          uv run .skills/open-pr/scripts/test_wait_ci.py
+
   docs:
     name: Docs
     runs-on: ubuntu-latest
