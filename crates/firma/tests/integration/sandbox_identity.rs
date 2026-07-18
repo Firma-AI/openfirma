@@ -30,3 +30,20 @@ fn firma_run_rejects_empty_reserved_sandbox_id() {
         String::from_utf8_lossy(&out.stderr).contains("reserved for internal child propagation")
     );
 }
+
+#[test]
+fn standalone_sidecar_rejects_non_v7_propagated_id_before_config_discovery() {
+    let out = Command::new(env!("CARGO_BIN_EXE_firma"))
+        .arg("sidecar")
+        .env(
+            "FIRMA_RUN_SANDBOX_ID",
+            "550e8400-e29b-41d4-a716-446655440000",
+        )
+        .output()
+        .expect("spawn firma sidecar");
+
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    insta::assert_snapshot!(stderr, @"[ERR]  invalid FIRMA_RUN_SANDBOX_ID: sandbox id must be a UUID v7");
+    assert!(!stderr.contains("no firma.toml found"));
+}

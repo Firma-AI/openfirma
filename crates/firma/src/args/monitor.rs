@@ -164,8 +164,15 @@ mod tests {
 
     #[test]
     fn sandbox_id_filter_parses() {
-        let args =
-            try_parse(&["firma-monitor", "--sandbox-id", "sbx_1"]).expect("parse sandbox-id");
-        assert_eq!(args.sandbox_id.as_deref(), Some("sbx_1"));
+        let args = try_parse(&[
+            "firma-monitor",
+            "--sandbox-id",
+            "01900000-0000-7000-8000-000000000001",
+        ])
+        .expect("parse sandbox-id");
+        assert_eq!(
+            args.sandbox_id.as_deref(),
+            Some("01900000-0000-7000-8000-000000000001")
+        );
     }
 }
