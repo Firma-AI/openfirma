@@ -97,6 +97,23 @@ def fetch_checks(
     return check_runs, latest_statuses(all_statuses)
 
 
+def revision_errors(
+    pull: Any, expected_head_sha: str, expected_base_sha: str | None = None
+) -> list[str]:
+    if not isinstance(pull, dict):
+        return ["pull response must be an object"]
+    head = pull.get("head")
+    base = pull.get("base")
+    if not isinstance(head, dict) or not isinstance(base, dict):
+        return ["pull base and head must be objects"]
+    errors = []
+    if head.get("sha") != expected_head_sha:
+        errors.append("PR head changed while waiting for CI")
+    if expected_base_sha is not None and base.get("sha") != expected_base_sha:
+        errors.append("PR base changed while waiting for CI")
+    return errors
+
+
 def output(
     status: str,
     *,
@@ -125,6 +142,7 @@ def main() -> int:
     parser.add_argument("--pr", required=True)
     parser.add_argument("--repo")
     parser.add_argument("--expected-head-sha", required=True)
+    parser.add_argument("--expected-base-sha")
     parser.add_argument("--timeout", type=float, default=1800)
     parser.add_argument("--poll-interval", type=float, default=10)
     parser.add_argument("--settle-time", type=float, default=30)
@@ -138,16 +156,19 @@ def main() -> int:
         passing_fingerprint = None
         while True:
             pull = gh_json(f"repos/{repo}/pulls/{number}")
-            actual_sha = pull.get("head", {}).get("sha")
-            if actual_sha != args.expected_head_sha:
+            revision_mismatches = revision_errors(
+                pull, args.expected_head_sha, args.expected_base_sha
+            )
+            if revision_mismatches:
                 output(
                     "blocked",
                     data={
                         "repo": repo,
                         "number": number,
-                        "actual_head_sha": actual_sha,
+                        "actual_head_sha": pull.get("head", {}).get("sha"),
+                        "actual_base_sha": pull.get("base", {}).get("sha"),
                     },
-                    errors=["PR head changed while waiting for CI"],
+                    errors=revision_mismatches,
                 )
                 return 1
 
@@ -197,7 +218,13 @@ def main() -> int:
     except ValueError as error:
         output("error", errors=[str(error)])
         return 2
-    except (OSError, RuntimeError, json.JSONDecodeError) as error:
+    except (
+        AttributeError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        json.JSONDecodeError,
+    ) as error:
         output("error", errors=[str(error)])
         return 3
 

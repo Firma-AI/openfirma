@@ -6,7 +6,7 @@
 
 import unittest
 
-from wait_ci import classify_checks, latest_statuses
+from wait_ci import classify_checks, latest_statuses, revision_errors
 
 
 class ClassifyChecksTests(unittest.TestCase):
@@ -74,6 +74,25 @@ class ClassifyChecksTests(unittest.TestCase):
             {"context": "audit", "state": "failure"},
         ]
         self.assertEqual(latest_statuses(statuses), [statuses[0]])
+
+
+class RevisionErrorsTests(unittest.TestCase):
+    def test_accepts_pinned_base_and_head(self) -> None:
+        pull = {"base": {"sha": "base"}, "head": {"sha": "head"}}
+        self.assertEqual(revision_errors(pull, "head", "base"), [])
+
+    def test_rejects_changed_base_with_unchanged_head(self) -> None:
+        pull = {"base": {"sha": "new-base"}, "head": {"sha": "head"}}
+        self.assertEqual(
+            revision_errors(pull, "head", "old-base"),
+            ["PR base changed while waiting for CI"],
+        )
+
+    def test_rejects_malformed_pull(self) -> None:
+        self.assertEqual(
+            revision_errors({"base": None}, "head", "base"),
+            ["pull base and head must be objects"],
+        )
 
 
 if __name__ == "__main__":

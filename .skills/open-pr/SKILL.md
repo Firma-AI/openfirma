@@ -44,6 +44,33 @@ OpenFirma.
 For `jj` repositories, create or update a bookmark that points at the intended
 review tip before pushing it to the selected remote.
 
+## Stacked PRs
+
+For a linear stack where each PR targets the preceding PR's upstream bookmark,
+use the stack scripts instead of treating each PR independently:
+
+```bash
+uv run .skills/edit-pr/scripts/inspect_stack.py \
+  --repo OWNER/REPO \
+  --tip-ref <any-stack-head> \
+  --manifest <manifest.json>
+
+uv run .skills/open-pr/scripts/verify_stack.py \
+  --manifest <manifest.json>
+```
+
+The manifest verifies each immediate base-to-tip range separately. Descendant
+head rewrites do not propagate protection when that PR's exact aggregate diff
+is unchanged. Keep stack creation, bookmark pushes, PR creation, and retargeting
+as explicit operations; these scripts only inspect and validate them.
+Verification also reconstructs the owner's current open stack and fails if a PR
+closed, merged, or was added to or removed from the recorded graph.
+Manifests with `manual_required` are rejected unless every manual condition is a
+typed protected-rebase diff review and the model passes `--allow-manual`
+explicitly. Structural and stale-check conditions cannot be overridden.
+Stack commands print concise summaries by default; pass `--report <path>` to
+verification or CI waiting when a complete diagnostic artifact is needed.
+
 ## Verify after creation
 
 After creating the PR, run:
@@ -88,6 +115,20 @@ continuing. Passing checks must remain unchanged for 30 seconds so that slower
 workflows have time to register. Repeat `--expected-check` for every check
 required by the repository; missing expected checks remain pending. Use
 `--timeout`, `--poll-interval`, and `--settle-time` to override the defaults.
+
+For a stack manifest, wait for every rewritten PR concurrently:
+
+```bash
+uv run .skills/open-pr/scripts/wait_stack_ci.py \
+  --manifest <manifest.json> \
+  --expected-check <required-check-name>
+```
+
+Repeat `--expected-check` for the complete required set. The aggregate result is
+hard-blocked by any ordinary failure and returns `manual_required` if any PR has
+an interpretation-required signal such as `codecov/patch`. Each waiter pins the
+recorded base and head SHA, and the complete stack is re-verified before and
+after CI waiting.
 
 ## Output
 

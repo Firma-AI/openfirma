@@ -34,8 +34,11 @@ test:
 
 skill-test:
   uv run .skills/edit-pr/scripts/test_inspect_prs.py
+  uv run .skills/edit-pr/scripts/test_inspect_stack.py
   uv run .skills/open-pr/scripts/test_verify_pr.py
+  uv run .skills/open-pr/scripts/test_verify_stack.py
   uv run .skills/open-pr/scripts/test_wait_ci.py
+  uv run .skills/open-pr/scripts/test_wait_stack_ci.py
 
 build:
   cargo build --all-features --all-targets

@@ -33,6 +33,47 @@ branch name shared by multiple fork owners return `manual_required` rather than
 assuming the PR is unprotected. Determining whether the revision contains mixed
 intents remains a manual review step.
 
+## Stacked PRs
+
+When PRs target one another, inspect the complete linear stack after local
+changes but before pushing:
+
+```bash
+uv run .skills/edit-pr/scripts/inspect_stack.py \
+  --repo OWNER/REPO \
+  --tip-ref <any-stack-head> \
+  --manifest <manifest.json>
+```
+
+The script follows GitHub `baseRefName -> headRefName` edges down to `main` and
+up to the stack tip. It compares each published PR's aggregate immediate-base-
+to-tip diff with the candidate local bookmark range. A changed commit ID alone
+does not make a descendant PR content-impacted.
+
+- An exact unchanged diff is a mechanical rewrite for a protected PR only when
+  its base also changed as part of the rebase. Other protected history rewrites
+  return `manual_required`.
+- A changed diff on an unprotected PR is allowed.
+- A changed diff on a protected PR returns `manual_required`. Inspect the old
+  and candidate ranges and decide whether the difference is only required for
+  the rebase or materially changes that PR.
+- An ambiguous, nonlinear, branched, or unavailable stack returns
+  `manual_required`.
+- A changed candidate base without a corresponding head rewrite returns
+  `manual_required`; checks attached to the unchanged head SHA are stale for the
+  new PR range.
+
+Keep the manifest until the pushed stack has passed verification and CI. It is
+the immutable record of the published and candidate SHAs and diff fingerprints.
+The script writes that complete record to `--manifest` and prints only a compact
+PR decision summary to stdout to avoid loading commit and review detail into the
+agent context.
+Post-push verification also requires every recorded PR to remain open and
+unmerged and the owner's complete open stack graph to remain unchanged.
+The script assumes stack heads are pushed to the upstream repository owner and
+that their jj remote is `origin`. Use `--head-owner` and `--remote` to override
+those independently.
+
 If the PR is protected, see [#protected-pr-workflow].
 Otherwise, follow [#non-protected-pr-workflow].
 
@@ -87,6 +128,12 @@ Once the changes you want to push are ready, follow this checklist:
 
    1. Update the PR body and/or title with `gh` if the new changes
       have made the existing one outdated.
+   2. For a stack, verify all pushed base/head edges and per-PR commit ranges:
+
+      ```bash
+      uv run .skills/open-pr/scripts/verify_stack.py \
+        --manifest <manifest.json>
+      ```
 7. Wait for CI on the exact pushed head:
 
    ```bash
@@ -100,6 +147,21 @@ Once the changes you want to push are ready, follow this checklist:
    `codecov/patch` returns `manual_required`, inspect the coverage change and
    affected code, then record why the signal is acceptable or requires more
    tests. All other failures must be triaged and addressed.
+
+   For a stack, monitor every rewritten PR concurrently using the same manifest:
+
+   ```bash
+   uv run .skills/open-pr/scripts/wait_stack_ci.py \
+     --manifest <manifest.json> \
+     --expected-check <required-check-name>
+   ```
+
+   If inspection returned `manual_required` and the model recorded an allowed
+   protected rebase-only diff interpretation, pass `--allow-manual` explicitly
+   to both stack consumers. Structural failures, nonlinear stacks, unknown
+   protection, and base changes without head rewrites cannot be overridden.
+   Stack CI pins both base and head SHAs and re-verifies the complete open graph
+   before and after waiting.
 
 ## Output
 
