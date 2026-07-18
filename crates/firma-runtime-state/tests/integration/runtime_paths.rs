@@ -61,10 +61,10 @@ fn run_dir_appends_run_segment() {
 #[test]
 fn run_entry_joins_sandbox_id() {
     let base = PathBuf::from("/run/user/1000/firma");
-    let sandbox_id = firma_runtime_state::SandboxId::generate().to_string();
+    let sandbox_id = firma_runtime_state::SandboxId::generate();
     assert_eq!(
         run_entry_from(&base, &sandbox_id),
-        base.join("run").join(sandbox_id)
+        base.join("run").join(sandbox_id.to_string())
     );
 }
 

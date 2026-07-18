@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
+use crate::SandboxId;
 use crate::process_id::UserProcessId;
 use crate::runtime_paths::{run_dir_from, run_entry_from};
 
@@ -16,7 +17,7 @@ pub const TCP_PROBE_TIMEOUT: Duration = Duration::from_millis(200);
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MetadataFile {
     /// Sandbox identifier for this run.
-    pub sandbox_id: String,
+    pub sandbox_id: SandboxId,
     /// Agent identifier for this run.
     pub agent_id: String,
     /// Session identifier for this run.
@@ -99,10 +100,7 @@ fn marker_uptime_secs(marker_dir: &Path) -> Option<u64> {
 /// stale: we never delete a directory we cannot understand, since it may belong
 /// to a live sidecar (deleting it would orphan its socket).
 fn is_stale(marker_dir: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(marker_dir.join("metadata.toml")) else {
-        return false;
-    };
-    match toml::from_str::<MetadataFile>(&text) {
+    match read_metadata(marker_dir) {
         Ok(meta) => !meta.pid.is_alive(),
         Err(_) => false,
     }
@@ -171,7 +169,10 @@ pub fn list(runtime_dir: &Path) -> crate::error::Result<Vec<SidecarEntry>> {
         }
         match probe_entry(&path) {
             Ok(entry) => entries.push(entry),
-            Err(RuntimeStateError::MarkerParse { .. }) => {}
+            Err(
+                RuntimeStateError::MarkerParse { .. }
+                | RuntimeStateError::MarkerIdentityMismatch { .. },
+            ) => {}
             Err(RuntimeStateError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(other) => return Err(other),
         }
@@ -187,7 +188,10 @@ pub fn list(runtime_dir: &Path) -> crate::error::Result<Vec<SidecarEntry>> {
 ///
 /// Returns a parse or I/O error from [`probe_entry`] when the marker exists
 /// but is malformed.
-pub fn get(runtime_dir: &Path, sandbox_id: &str) -> crate::error::Result<Option<SidecarEntry>> {
+pub fn get(
+    runtime_dir: &Path,
+    sandbox_id: &SandboxId,
+) -> crate::error::Result<Option<SidecarEntry>> {
     let marker_dir = run_entry_from(runtime_dir, sandbox_id);
     if !marker_dir.is_dir() {
         return Ok(None);
@@ -208,16 +212,9 @@ pub fn get(runtime_dir: &Path, sandbox_id: &str) -> crate::error::Result<Option<
 /// (fail-closed: an unreadable marker is surfaced, never silently treated as
 /// healthy).
 pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
-    use crate::error::RuntimeStateError;
     use crate::status::State;
 
-    let meta_path = marker_dir.join("metadata.toml");
-    let text = std::fs::read_to_string(&meta_path)?;
-    let meta: MetadataFile =
-        toml::from_str(&text).map_err(|source| RuntimeStateError::MarkerParse {
-            path: meta_path.clone(),
-            source: Box::new(source),
-        })?;
+    let meta = read_metadata(marker_dir)?;
 
     // Legacy markers (pre-FIR-195) record no `listen`; fall back to the
     // conventional UDS path so their probe behavior is unchanged.
@@ -235,7 +232,7 @@ pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
     };
 
     Ok(SidecarEntry {
-        sandbox_id: meta.sandbox_id,
+        sandbox_id: meta.sandbox_id.to_string(),
         agent_id: meta.agent_id,
         session_id: meta.session_id,
         authority_url: meta.authority_url,
@@ -246,4 +243,28 @@ pub fn probe_entry(marker_dir: &Path) -> crate::error::Result<SidecarEntry> {
         listen,
         uptime_secs: marker_uptime_secs(marker_dir),
     })
+}
+
+fn read_metadata(marker_dir: &Path) -> crate::error::Result<MetadataFile> {
+    use crate::error::RuntimeStateError;
+
+    let meta_path = marker_dir.join("metadata.toml");
+    let text = std::fs::read_to_string(&meta_path)?;
+    let meta: MetadataFile =
+        toml::from_str(&text).map_err(|source| RuntimeStateError::MarkerParse {
+            path: meta_path,
+            source: Box::new(source),
+        })?;
+    let directory = marker_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if directory != meta.sandbox_id.to_string() {
+        return Err(RuntimeStateError::MarkerIdentityMismatch {
+            path: marker_dir.to_path_buf(),
+            directory: directory.to_string(),
+            metadata: meta.sandbox_id.to_string(),
+        });
+    }
+    Ok(meta)
 }

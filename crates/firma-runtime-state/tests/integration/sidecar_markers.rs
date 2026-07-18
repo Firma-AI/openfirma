@@ -5,10 +5,15 @@
     reason = "integration-test setup uses expect to fail fast on fixture construction"
 )]
 
+use std::assert_matches;
 use std::fs;
 use std::path::Path;
 
-use firma_runtime_state::MetadataFile;
+use firma_runtime_state::{MetadataFile, RuntimeStateError};
+
+const ID_1: &str = "01900000-0000-7000-8000-000000000001";
+const ID_2: &str = "01900000-0000-7000-8000-000000000002";
+const ID_3: &str = "01900000-0000-7000-8000-000000000003";
 
 fn write_marker(run_dir: &Path, sandbox_id: &str, pid: u32) {
     write_marker_with_listen(run_dir, sandbox_id, pid, None);
@@ -39,12 +44,12 @@ fn write_marker_with_listen(run_dir: &Path, sandbox_id: &str, pid: u32, listen: 
 fn metadata_file_parses_all_fields() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let run_dir = tmp.path().join("run");
-    write_marker(&run_dir, "abc123def", 4242);
+    write_marker(&run_dir, ID_1, 4242);
 
-    let text = fs::read_to_string(run_dir.join("abc123def/metadata.toml")).expect("read");
+    let text = fs::read_to_string(run_dir.join(ID_1).join("metadata.toml")).expect("read");
     let meta: MetadataFile = toml::from_str(&text).expect("parse metadata");
 
-    assert_eq!(meta.sandbox_id, "abc123def");
+    assert_eq!(meta.sandbox_id.to_string(), ID_1);
     assert_eq!(meta.agent_id, "codex");
     assert_eq!(meta.session_id, "sess-1");
     assert_eq!(meta.authority_url, "https://authority.local");
@@ -61,16 +66,16 @@ fn live_pid_no_socket_is_unhealthy() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let run_dir = tmp.path().join("run");
     let me = std::process::id();
-    write_marker(&run_dir, "live-no-sock", me);
+    write_marker(&run_dir, ID_1, me);
 
-    let entry = probe_entry(&run_dir.join("live-no-sock")).expect("probe");
-    assert_eq!(entry.sandbox_id, "live-no-sock");
+    let entry = probe_entry(&run_dir.join(ID_1)).expect("probe");
+    assert_eq!(entry.sandbox_id, ID_1);
     assert_eq!(
         entry.pid.map(firma_runtime_state::UserProcessId::get),
         Some(me)
     );
     assert_eq!(entry.state, State::Unhealthy);
-    assert_eq!(entry.listen, run_dir.join("live-no-sock/sidecar.sock"));
+    assert_eq!(entry.listen, run_dir.join(ID_1).join("sidecar.sock"));
 }
 
 /// Spawn and immediately reap a child, returning its now-dead PID.
@@ -97,9 +102,9 @@ fn reaped_dead_pid() -> u32 {
 fn dead_pid_is_stopped() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let run_dir = tmp.path().join("run");
-    write_marker(&run_dir, "dead", reaped_dead_pid());
+    write_marker(&run_dir, ID_1, reaped_dead_pid());
 
-    let entry = probe_entry(&run_dir.join("dead")).expect("probe");
+    let entry = probe_entry(&run_dir.join(ID_1)).expect("probe");
     assert_eq!(entry.state, State::Stopped);
 }
 
@@ -114,9 +119,9 @@ fn exited_unreaped_child_is_stopped() {
         .spawn()
         .expect("spawn throwaway child");
     let pid = child.id();
-    write_marker(&run_dir, "zombie", pid);
+    write_marker(&run_dir, ID_1, pid);
 
-    let marker_dir = run_dir.join("zombie");
+    let marker_dir = run_dir.join(ID_1);
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut observed = None;
     while Instant::now() < deadline {
@@ -138,10 +143,10 @@ fn uptime_secs_is_some_when_pid_file_exists() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let run_dir = tmp.path().join("run");
     let me = std::process::id();
-    write_marker(&run_dir, "uptime-check", me);
+    write_marker(&run_dir, ID_1, me);
 
     // Write sidecar.pid so marker_uptime_secs finds a file to stat.
-    let marker_dir = run_dir.join("uptime-check");
+    let marker_dir = run_dir.join(ID_1);
     fs::write(marker_dir.join("sidecar.pid"), me.to_string()).expect("write sidecar.pid");
 
     let entry = probe_entry(&marker_dir).expect("probe");
@@ -163,9 +168,9 @@ fn http_proxy_listen_with_listening_port_is_running() {
     // Unix socket. Keep a listener bound so the probe's connect succeeds.
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind tcp");
     let addr = listener.local_addr().expect("local addr");
-    write_marker_with_listen(&run_dir, "http-running", me, Some(&addr.to_string()));
+    write_marker_with_listen(&run_dir, ID_1, me, Some(&addr.to_string()));
 
-    let entry = probe_entry(&run_dir.join("http-running")).expect("probe");
+    let entry = probe_entry(&run_dir.join(ID_1)).expect("probe");
     assert_eq!(
         entry.state,
         State::Running,
@@ -185,7 +190,7 @@ fn http_proxy_listen_with_closed_port_is_unhealthy() {
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind tcp");
     let addr = listener.local_addr().expect("local addr");
-    write_marker_with_listen(&run_dir, "http-closed", me, Some(&addr.to_string()));
+    write_marker_with_listen(&run_dir, ID_1, me, Some(&addr.to_string()));
     drop(listener);
 
     // macOS may briefly accept TCP handshakes on a recently
@@ -198,7 +203,7 @@ fn http_proxy_listen_with_closed_port_is_unhealthy() {
         std::thread::sleep(Duration::from_millis(5));
     }
 
-    let entry = probe_entry(&run_dir.join("http-closed")).expect("probe");
+    let entry = probe_entry(&run_dir.join(ID_1)).expect("probe");
     assert_eq!(entry.state, State::Unhealthy);
 }
 
@@ -210,12 +215,19 @@ fn live_pid_with_listening_socket_is_running() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let run_dir = tmp.path().join("run");
     let me = std::process::id();
-    write_marker(&run_dir, "running", me);
-    let sock = run_dir.join("running/sidecar.sock");
+    let sock = std::path::PathBuf::from(format!("/tmp/firma-status-{}.sock", std::process::id()));
+    let _ = fs::remove_file(&sock);
+    write_marker_with_listen(
+        &run_dir,
+        ID_1,
+        me,
+        Some(sock.to_str().expect("ASCII socket path")),
+    );
     let _listener = UnixListener::bind(&sock).expect("bind uds");
 
-    let entry = probe_entry(&run_dir.join("running")).expect("probe");
+    let entry = probe_entry(&run_dir.join(ID_1)).expect("probe");
     assert_eq!(entry.state, State::Running);
+    let _ = fs::remove_file(sock);
 }
 
 use firma_runtime_state::sidecar_markers::{gc_stale, get, list};
@@ -226,15 +238,15 @@ fn list_skips_and_gcs_dead_markers() {
     let runtime_dir = tmp.path();
     let run_dir = runtime_dir.join("run");
     let me = std::process::id();
-    write_marker(&run_dir, "alive", me);
-    write_marker(&run_dir, "dead", reaped_dead_pid());
+    write_marker(&run_dir, ID_1, me);
+    write_marker(&run_dir, ID_2, reaped_dead_pid());
 
     let entries = list(runtime_dir).expect("list");
     let ids: Vec<&str> = entries.iter().map(|e| e.sandbox_id.as_str()).collect();
-    assert_eq!(ids, vec!["alive"]);
+    assert_eq!(ids, vec![ID_1]);
 
-    assert!(!run_dir.join("dead").exists());
-    assert!(run_dir.join("alive").exists());
+    assert!(!run_dir.join(ID_2).exists());
+    assert!(run_dir.join(ID_1).exists());
 }
 
 #[test]
@@ -248,24 +260,49 @@ fn list_on_missing_run_dir_is_empty() {
 fn get_returns_single_entry_or_none() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let runtime_dir = tmp.path();
-    write_marker(&runtime_dir.join("run"), "only", std::process::id());
+    write_marker(&runtime_dir.join("run"), ID_1, std::process::id());
 
-    let found = get(runtime_dir, "only").expect("get");
+    let id = ID_1.parse().expect("valid UUID v7 fixture");
+    let found = get(runtime_dir, &id).expect("get");
     assert!(found.is_some());
-    assert_eq!(found.expect("some").sandbox_id, "only");
+    assert_eq!(found.expect("some").sandbox_id, ID_1);
 
-    assert!(get(runtime_dir, "missing").expect("get").is_none());
+    let missing = ID_3.parse().expect("valid UUID v7 fixture");
+    assert!(get(runtime_dir, &missing).expect("get").is_none());
+}
+
+#[test]
+fn marker_metadata_id_must_match_directory_name() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let run_dir = tmp.path().join("run");
+    write_marker(&run_dir, ID_1, std::process::id());
+    fs::rename(run_dir.join(ID_1), run_dir.join(ID_2)).expect("rename marker directory");
+
+    let marker_dir = run_dir.join(ID_2);
+    let error = probe_entry(&marker_dir).expect_err("mismatched marker must fail");
+    assert_matches!(
+        &error,
+        RuntimeStateError::MarkerIdentityMismatch {
+            path,
+            directory,
+            metadata,
+        } if path == &marker_dir && directory == ID_2 && metadata == ID_1
+    );
+    let rendered = error
+        .to_string()
+        .replace(marker_dir.to_string_lossy().as_ref(), "<marker>");
+    insta::assert_snapshot!(rendered, @"sidecar marker identity mismatch at '<marker>': directory is '01900000-0000-7000-8000-000000000002', metadata is '01900000-0000-7000-8000-000000000001'");
 }
 
 #[test]
 fn gc_stale_returns_removed_ids() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let runtime_dir = tmp.path();
-    write_marker(&runtime_dir.join("run"), "dead", reaped_dead_pid());
-    write_marker(&runtime_dir.join("run"), "alive", std::process::id());
+    write_marker(&runtime_dir.join("run"), ID_1, reaped_dead_pid());
+    write_marker(&runtime_dir.join("run"), ID_2, std::process::id());
 
     let removed = gc_stale(runtime_dir).expect("gc");
-    assert_eq!(removed, vec!["dead".to_string()]);
+    assert_eq!(removed, vec![ID_1.to_string()]);
 }
 
 /// A corrupt marker (unparseable `metadata.toml`) must be skipped by `list`
@@ -283,12 +320,12 @@ fn corrupt_marker_is_not_gcd_and_skipped_by_list() {
 
     // Write a healthy live marker alongside it.
     let me = std::process::id();
-    write_marker(&run_dir, "good", me);
+    write_marker(&run_dir, ID_1, me);
 
     // list() must succeed and return only the good entry.
     let entries = list(runtime_dir).expect("list should succeed despite corrupt marker");
     let ids: Vec<&str> = entries.iter().map(|e| e.sandbox_id.as_str()).collect();
-    assert_eq!(ids, vec!["good"], "corrupt marker must be silently skipped");
+    assert_eq!(ids, vec![ID_1], "corrupt marker must be silently skipped");
 
     // The corrupt marker directory must still exist (not GC'd).
     assert!(
