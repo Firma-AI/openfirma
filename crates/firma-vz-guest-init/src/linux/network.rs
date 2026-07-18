@@ -469,7 +469,7 @@ where
         request.truncate(header_end);
 
         let meta = parse_request_metadata(&request)?;
-        append_missing_headers(&mut request, attribution_headers)?;
+        replace_attribution_headers(&mut request, attribution_headers)?;
 
         upstream.write_all(&request)?;
         upstream.write_all(b"\r\n")?;
@@ -505,8 +505,8 @@ where
     }
 }
 
-/// Adds attribution headers that are not already present in the request head.
-fn append_missing_headers(
+/// Replaces untrusted attribution headers with the contract-bound values.
+fn replace_attribution_headers(
     header_block: &mut Vec<u8>,
     attribution_headers: &BTreeMap<String, String>,
 ) -> io::Result<()> {
@@ -521,30 +521,32 @@ fn append_missing_headers(
         return Ok(());
     };
 
-    let existing = lines
-        .filter_map(|line| {
-            line.split_once(':')
-                .map(|(name, _)| name.trim().to_ascii_lowercase())
-        })
+    let authoritative_names = attribution_headers
+        .keys()
+        .map(|name| name.to_ascii_lowercase())
         .collect::<BTreeSet<_>>();
 
     let mut rebuilt = String::new();
     rebuilt.push_str(request_line);
     rebuilt.push_str("\r\n");
     for line in head_str.split("\r\n").skip(1) {
-        if !line.is_empty() {
-            rebuilt.push_str(line);
-            rebuilt.push_str("\r\n");
+        if line.is_empty() {
+            continue;
         }
+        if line.split_once(':').is_some_and(|(name, _)| {
+            authoritative_names.contains(&name.trim().to_ascii_lowercase())
+        }) {
+            continue;
+        }
+        rebuilt.push_str(line);
+        rebuilt.push_str("\r\n");
     }
 
     for (name, value) in attribution_headers {
-        if !existing.contains(&name.to_ascii_lowercase()) {
-            rebuilt.push_str(name);
-            rebuilt.push_str(": ");
-            rebuilt.push_str(value);
-            rebuilt.push_str("\r\n");
-        }
+        rebuilt.push_str(name);
+        rebuilt.push_str(": ");
+        rebuilt.push_str(value);
+        rebuilt.push_str("\r\n");
     }
 
     *header_block = rebuilt.into_bytes();
@@ -977,11 +979,11 @@ mod tests {
     use super::{
         BodyKind, CommandNetworkEnv, DnsPlan, GuestDnsListener, GuestDnsListeners,
         GuestNetworkListeners, GuestProxyListener, IfReq, NetworkServicesPlan, ProxyPlan,
-        append_missing_headers, copy_exact_bytes, dns_refused_response, ensure_buffered, find_crlf,
-        find_header_terminator, forward_requests_with_header_injection,
-        handle_guest_proxy_connection, handle_tcp_dns_stub_connection, parse_request_metadata,
-        read_until_crlf, read_until_header_block, start_guest_http_proxy, tcp_dns_stub_loop,
-        udp_dns_stub_loop,
+        copy_exact_bytes, dns_refused_response, ensure_buffered, find_crlf, find_header_terminator,
+        forward_requests_with_header_injection, handle_guest_proxy_connection,
+        handle_tcp_dns_stub_connection, parse_request_metadata, read_until_crlf,
+        read_until_header_block, replace_attribution_headers, start_guest_http_proxy,
+        tcp_dns_stub_loop, udp_dns_stub_loop,
     };
 
     type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -1360,21 +1362,27 @@ mod tests {
     }
 
     #[test]
-    fn appends_missing_attribution_headers_without_duplicates() -> TestResult {
-        let mut request =
-            b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nX-Firma-Session: existing\r\n"
-                .to_vec();
+    fn replaces_untrusted_attribution_headers_case_insensitively() -> TestResult {
+        let mut request = b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nX-Firma-Sandbox-Id: spoofed\r\nx-firma-session: spoofed\r\nX-Firma-Agent: spoofed\r\nX-Unrelated: retained\r\n".to_vec();
         let headers = BTreeMap::from([
+            (
+                "x-firma-sandbox-id".to_string(),
+                "01900000-0000-7000-8000-000000000001".to_string(),
+            ),
             ("X-Firma-Agent".to_string(), "guest".to_string()),
             ("X-Firma-Session".to_string(), "new".to_string()),
         ]);
 
-        append_missing_headers(&mut request, &headers)?;
+        replace_attribution_headers(&mut request, &headers)?;
 
         let request = String::from_utf8(request)?;
         assert!(request.contains("\r\nX-Firma-Agent: guest\r\n"));
-        assert!(request.contains("\r\nX-Firma-Session: existing\r\n"));
-        assert!(!request.contains("\r\nX-Firma-Session: new\r\n"));
+        assert!(request.contains("\r\nX-Firma-Session: new\r\n"));
+        assert!(
+            request.contains("\r\nx-firma-sandbox-id: 01900000-0000-7000-8000-000000000001\r\n")
+        );
+        assert!(request.contains("\r\nX-Unrelated: retained\r\n"));
+        assert!(!request.contains("spoofed"));
 
         Ok(())
     }
@@ -1484,11 +1492,11 @@ mod tests {
     }
 
     #[test]
-    fn append_missing_headers_rejects_non_utf8_requests() {
+    fn replace_attribution_headers_rejects_non_utf8_requests() {
         let mut request = vec![0xff, b'\r', b'\n'];
         let headers = BTreeMap::from([("X-Firma-Agent".to_string(), "guest".to_string())]);
 
-        let error = append_missing_headers(&mut request, &headers);
+        let error = replace_attribution_headers(&mut request, &headers);
 
         assert!(matches!(error, Err(error) if error.kind() == io::ErrorKind::InvalidData));
     }
