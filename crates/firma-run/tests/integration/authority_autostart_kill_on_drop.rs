@@ -42,7 +42,9 @@ fn drop_reaps_child_within_grace() {
     std::fs::set_permissions(&fake, p).unwrap();
 
     let sup = AuthoritySupervisor::spawn(SpawnRequest {
-        sandbox_id: &firma_run::identity::SandboxId::from("sb1"),
+        sandbox_id: &"01900000-0000-7000-8000-000000000001"
+            .parse()
+            .expect("valid UUID v7 fixture"),
         agent_id: "agent",
         session_id: "sess",
         marker_dir: tmp.path().join("marker/authority"),

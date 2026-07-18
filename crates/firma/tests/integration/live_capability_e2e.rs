@@ -235,10 +235,10 @@ fn parse_listening_addr(line: &str) -> Option<String> {
 fn live_mint_writes_seed_and_admits_stage1() {
     let authority = spawn_live_authority();
 
-    // Pin the runtime dir and sandbox id so the seed path is deterministic and
-    // matches what `firma run`'s autostart mint would compute.
+    // Pin the runtime dir and use a deterministic UUID v7 fixture so the seed
+    // path matches what `firma run`'s autostart mint would compute.
     let state_dir = tempfile::tempdir().unwrap();
-    let sandbox_id = "live-mint-sandbox";
+    let sandbox_id = "01900000-0000-7000-8000-000000000001";
     let runtime_dir = state_dir.path();
     let seed_path = runtime_dir
         .join("capabilities")

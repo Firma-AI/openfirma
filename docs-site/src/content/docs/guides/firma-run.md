@@ -237,6 +237,13 @@ On exit, each autostarted component logs a stopping notice:
 | `listen_addr` / `endpoint` | Address the component is reachable at |
 | `url` | Full URL (authority reuse path) |
 
+Firma generates one UUIDv7 `sandbox_id` for each invocation and reuses it for
+all marker, capability, subprocess, Sidecar, governance, and audit metadata.
+`FIRMA_RUN_SANDBOX_ID` is reserved for propagation to Firma-managed children;
+if it is already set when `firma run` starts, the command fails with guidance
+to unset it. Discover the full ID with `firma sidecar status --json`, the run
+marker's `metadata.toml`, or an audit event.
+
 **Controlling log visibility:**
 
 Log output goes to stderr by default. Use `--log-filter` (or `FIRMA_LOG_FILTER`) to adjust verbosity. Use `--log-file` (or `FIRMA_LOG_FILE`) to redirect logs to a file:

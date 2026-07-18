@@ -475,7 +475,7 @@ fn create_bwrap_runtime_dir(sandbox_id: &crate::identity::SandboxId) -> Result<P
             runtime_root.display()
         ),
     })?;
-    let runtime_dir = runtime_root.join(sandbox_id);
+    let runtime_dir = runtime_root.join(sandbox_id.to_string());
     firma_fs::create_private_dir_all(&runtime_dir).map_err(|error| RunError::Backend {
         backend: BackendKind::Bwrap.to_string(),
         reason: format!(
@@ -595,8 +595,9 @@ mod tests {
     fn create_bwrap_runtime_dir_creates_private_sandbox_dir() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let sandbox_id =
-            crate::identity::SandboxId::from(format!("coverage-{}", uuid::Uuid::now_v7()));
+        let sandbox_id = "01900000-0000-7000-8000-000000000001"
+            .parse()
+            .expect("valid UUID v7 fixture");
 
         let runtime_dir =
             super::create_bwrap_runtime_dir(&sandbox_id).expect("create bwrap runtime dir");

@@ -6,6 +6,11 @@ pub enum RunError {
     #[error("invalid command: no executable was provided")]
     MissingCommand,
 
+    #[error(
+        "FIRMA_RUN_SANDBOX_ID is reserved for internal child propagation; unset it before starting `firma run`"
+    )]
+    ReservedSandboxIdEnvironment,
+
     #[error("failed to parse config at {path}: {reason}")]
     ConfigParse { path: PathBuf, reason: String },
 

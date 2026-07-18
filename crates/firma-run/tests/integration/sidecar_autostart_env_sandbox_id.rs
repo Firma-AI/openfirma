@@ -46,10 +46,15 @@ fn spawned_sidecar_inherits_sandbox_id_env() {
     let tmp = TempDir::new().expect("tmp");
     let capture_path = tmp.path().join("captured-sandbox-id");
     let exe = write_fake_sidecar(tmp.path(), &capture_path);
-    let marker = tmp.path().join("run").join("sandbox-env-1");
+    let marker = tmp
+        .path()
+        .join("run")
+        .join("01900000-0000-7000-8000-000000000001");
 
     let _supervisor = SidecarSupervisor::spawn(SpawnRequest {
-        sandbox_id: &firma_run::identity::SandboxId::from("sandbox-env-1"),
+        sandbox_id: &"01900000-0000-7000-8000-000000000001"
+            .parse()
+            .expect("valid UUID v7 fixture"),
         agent_id: "generic",
         session_id: "session-env",
         marker_dir: marker,
@@ -70,5 +75,5 @@ fn spawned_sidecar_inherits_sandbox_id_env() {
     .expect("supervisor spawned");
 
     let captured = fs::read_to_string(&capture_path).expect("capture file written");
-    assert_eq!(captured, "sandbox-env-1");
+    assert_eq!(captured, "01900000-0000-7000-8000-000000000001");
 }

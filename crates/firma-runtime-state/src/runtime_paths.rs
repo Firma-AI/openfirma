@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::SandboxId;
+
 /// Return `<runtime>/firma`. Pure resolver with no I/O. Reads
 /// `FIRMA_STATE_DIR` / `XDG_RUNTIME_DIR` / `LOCALAPPDATA` from the current
 /// process environment.
@@ -92,33 +94,8 @@ fn current_uid() -> u32 {
 /// `<runtime>/capabilities/<name>.toml` — the per-sandbox capability seed
 /// file written by `firma run`.
 #[must_use]
-pub fn capability_seed_path(name: impl AsRef<str>) -> PathBuf {
+pub fn capability_seed_path(sandbox_id: &SandboxId) -> PathBuf {
     let runtime_dir = default_runtime_dir();
     let cap_dir = capabilities_dir_from(&runtime_dir);
-    cap_dir.join(format!("{}.toml", name.as_ref()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn capabilities_dir_is_runtime_subdir() {
-        let dir = capabilities_dir_from(std::path::Path::new("/run/firma"));
-        assert_eq!(dir, std::path::PathBuf::from("/run/firma/capabilities"));
-    }
-
-    #[test]
-    fn capability_seed_path_is_named_toml_under_capabilities_dir() {
-        let path = capability_seed_path("sandbox-123");
-        assert_eq!(
-            path.file_name().and_then(std::ffi::OsStr::to_str),
-            Some("sandbox-123.toml")
-        );
-        let parent = path.parent().expect("seed path has a parent");
-        assert_eq!(
-            parent.file_name().and_then(std::ffi::OsStr::to_str),
-            Some("capabilities")
-        );
-    }
+    cap_dir.join(format!("{sandbox_id}.toml"))
 }

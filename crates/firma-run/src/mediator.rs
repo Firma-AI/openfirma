@@ -376,7 +376,7 @@ fn compute_request_fingerprint(
     }
     hasher.update(session_id.as_bytes());
     hasher.update(b"\0");
-    hasher.update(AsRef::<str>::as_ref(sandbox_id).as_bytes());
+    hasher.update(sandbox_id.to_string().as_bytes());
     hasher.update(b"\0");
     if let Some(aid) = agent_id {
         hasher.update(aid.as_bytes());
@@ -409,7 +409,9 @@ mod tests {
 
     fn identity() -> RunIdentity {
         RunIdentity {
-            sandbox_id: SandboxId::Custom("sbx".to_string()),
+            sandbox_id: "01900000-0000-7000-8000-000000000001"
+                .parse()
+                .expect("valid UUID v7 fixture"),
             session_id: "sess".to_string(),
             profile: "generic".to_string(),
         }

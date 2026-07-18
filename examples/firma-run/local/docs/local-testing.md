@@ -81,8 +81,12 @@ Templates used:
 - `FIRMA_SIDECAR_CA_CERT_PATH`: Explicit path to sidecar MITM CA cert (preferred override)
 - `FIRMA_SIDECAR_CA_DIR`: Directory containing `firma-ca.crt` (fallback override)
 - `FIRMA_RUN_SESSION_ID`: Optional stable session id override (useful when capability tokens are session-bound)
-- `FIRMA_RUN_SANDBOX_ID`: Optional sandbox id override
+- `FIRMA_RUN_SANDBOX_ID`: Reserved for Firma to propagate its generated UUIDv7
+  identity to child processes. Unset it before invoking `firma run`.
 - `FIRMA_RUN_REQUIRE_SESSION_ID`: If `true|1|yes|on`, `firma run` fails fast unless `FIRMA_RUN_SESSION_ID` is set
+
+Discover the generated sandbox ID with `firma sidecar status --json`, from the
+run marker's `metadata.toml`, or from the `sandbox_id` field in audit events.
 
 Example:
 
