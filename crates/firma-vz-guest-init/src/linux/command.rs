@@ -1233,7 +1233,9 @@ mod tests {
     ) -> Result<Contract, Box<dyn Error>> {
         Ok(LaunchContract {
             version: 1,
-            sandbox_id: Some("sandbox-test".to_string()),
+            sandbox_id: "01900000-0000-7000-8000-000000000001"
+                .parse()
+                .expect("valid UUID v7 fixture"),
             runtime_dir: Some(PathBuf::from("/runtime")),
             runner: Some(RunnerContract {
                 path: PathBuf::from("/firma-vz-runner"),
@@ -1266,7 +1268,7 @@ mod tests {
                 dns_mode: DnsMode::ConfinedStub,
                 attribution_headers: BTreeMap::from([(
                     "x-firma-sandbox-id".to_string(),
-                    "sandbox-test".to_string(),
+                    "01900000-0000-7000-8000-000000000001".to_string(),
                 )]),
             },
             invariants: vec![InvariantContract {
