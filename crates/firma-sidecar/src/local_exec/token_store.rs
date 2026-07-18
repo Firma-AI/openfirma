@@ -32,6 +32,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use firma_runtime_state::SandboxId;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -60,7 +61,7 @@ pub enum TokenState {
 struct HitlToken {
     fingerprint: String,
     session_id: String,
-    sandbox_id: String,
+    sandbox_id: SandboxId,
     agent_id: Option<String>,
     expires_at: Instant,
     state: TokenState,
@@ -144,7 +145,7 @@ pub trait TokenStore: Send + Sync {
         &self,
         fingerprint: String,
         session_id: String,
-        sandbox_id: String,
+        sandbox_id: SandboxId,
         agent_id: Option<String>,
     ) -> String;
 
@@ -159,7 +160,7 @@ pub trait TokenStore: Send + Sync {
         token_id: &str,
         fingerprint: &str,
         session_id: &str,
-        sandbox_id: &str,
+        sandbox_id: &SandboxId,
         agent_id: Option<&str>,
     ) -> TokenValidationResult;
 
@@ -227,7 +228,7 @@ impl InMemoryTokenStore {
         &self,
         fingerprint: String,
         session_id: String,
-        sandbox_id: String,
+        sandbox_id: SandboxId,
         agent_id: Option<String>,
     ) -> String {
         let token_id = Uuid::new_v4().to_string();
@@ -260,7 +261,7 @@ impl InMemoryTokenStore {
         token_id: &str,
         fingerprint: &str,
         session_id: &str,
-        sandbox_id: &str,
+        sandbox_id: &SandboxId,
         agent_id: Option<&str>,
     ) -> TokenValidationResult {
         {
@@ -287,7 +288,7 @@ impl InMemoryTokenStore {
             if token.fingerprint != fingerprint {
                 return TokenValidationResult::FingerprintMismatch;
             }
-            if token.session_id != session_id || token.sandbox_id != sandbox_id {
+            if token.session_id != session_id || token.sandbox_id != *sandbox_id {
                 return TokenValidationResult::ContextMismatch;
             }
             if let Some(stored_agent) = &token.agent_id
@@ -392,7 +393,7 @@ impl TokenStore for InMemoryTokenStore {
         &self,
         fingerprint: String,
         session_id: String,
-        sandbox_id: String,
+        sandbox_id: SandboxId,
         agent_id: Option<String>,
     ) -> String {
         self.issue(fingerprint, session_id, sandbox_id, agent_id)
@@ -403,7 +404,7 @@ impl TokenStore for InMemoryTokenStore {
         token_id: &str,
         fingerprint: &str,
         session_id: &str,
-        sandbox_id: &str,
+        sandbox_id: &SandboxId,
         agent_id: Option<&str>,
     ) -> TokenValidationResult {
         self.validate_and_consume(token_id, fingerprint, session_id, sandbox_id, agent_id)
@@ -430,6 +431,18 @@ impl TokenStore for InMemoryTokenStore {
 mod tests {
     use super::*;
 
+    fn sandbox_id() -> SandboxId {
+        "01900000-0000-7000-8000-000000000001"
+            .parse()
+            .expect("valid UUID v7 fixture")
+    }
+
+    fn other_sandbox_id() -> SandboxId {
+        "01900000-0000-7000-8000-000000000002"
+            .parse()
+            .expect("valid UUID v7 fixture")
+    }
+
     fn store() -> InMemoryTokenStore {
         InMemoryTokenStore::new(Duration::from_mins(1))
     }
@@ -438,7 +451,7 @@ mod tests {
         store.issue(
             "fp_abc".to_string(),
             "sess_1".to_string(),
-            "sbx_1".to_string(),
+            sandbox_id(),
             Some("agent_1".to_string()),
         )
     }
@@ -447,7 +460,8 @@ mod tests {
     fn pending_token_not_consumable_without_approval() {
         let s = store();
         let id = issue_token(&s);
-        let result = s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
+        let result =
+            s.validate_and_consume(&id, "fp_abc", "sess_1", &sandbox_id(), Some("agent_1"));
         assert_eq!(result, TokenValidationResult::Pending);
     }
 
@@ -457,10 +471,12 @@ mod tests {
         let id = issue_token(&s);
         assert_eq!(s.approve(&id), ApproveResult::Ok);
 
-        let result = s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
+        let result =
+            s.validate_and_consume(&id, "fp_abc", "sess_1", &sandbox_id(), Some("agent_1"));
         assert_eq!(result, TokenValidationResult::Valid);
 
-        let result = s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
+        let result =
+            s.validate_and_consume(&id, "fp_abc", "sess_1", &sandbox_id(), Some("agent_1"));
         assert_eq!(result, TokenValidationResult::AlreadyConsumed);
     }
 
@@ -477,7 +493,8 @@ mod tests {
         let s = store();
         let id = issue_token(&s);
         assert_eq!(s.revoke(&id), RevokeResult::Ok);
-        let result = s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
+        let result =
+            s.validate_and_consume(&id, "fp_abc", "sess_1", &sandbox_id(), Some("agent_1"));
         assert_eq!(result, TokenValidationResult::Revoked);
     }
 
@@ -487,7 +504,8 @@ mod tests {
         let id = issue_token(&s);
         assert_eq!(s.approve(&id), ApproveResult::Ok);
         assert_eq!(s.revoke(&id), RevokeResult::Ok);
-        let result = s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
+        let result =
+            s.validate_and_consume(&id, "fp_abc", "sess_1", &sandbox_id(), Some("agent_1"));
         assert_eq!(result, TokenValidationResult::Revoked);
     }
 
@@ -504,7 +522,7 @@ mod tests {
         let s = store();
         let id = issue_token(&s);
         s.approve(&id);
-        s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
+        s.validate_and_consume(&id, "fp_abc", "sess_1", &sandbox_id(), Some("agent_1"));
         assert_eq!(s.revoke(&id), RevokeResult::AlreadyConsumed);
     }
 
@@ -513,7 +531,7 @@ mod tests {
         let s = store();
         let id = issue_token(&s);
         s.approve(&id);
-        s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
+        s.validate_and_consume(&id, "fp_abc", "sess_1", &sandbox_id(), Some("agent_1"));
         assert_eq!(s.approve(&id), ApproveResult::AlreadyConsumed);
     }
 
@@ -528,7 +546,7 @@ mod tests {
     #[test]
     fn unknown_token_rejected() {
         let s = store();
-        let result = s.validate_and_consume("no-such-token", "fp", "sess", "sbx", None);
+        let result = s.validate_and_consume("no-such-token", "fp", "sess", &sandbox_id(), None);
         assert_eq!(result, TokenValidationResult::Unknown);
     }
 
@@ -549,7 +567,8 @@ mod tests {
         let s = InMemoryTokenStore::new(Duration::ZERO);
         let id = issue_token(&s);
         std::thread::sleep(Duration::from_millis(1));
-        let result = s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_1"));
+        let result =
+            s.validate_and_consume(&id, "fp_abc", "sess_1", &sandbox_id(), Some("agent_1"));
         assert_eq!(result, TokenValidationResult::Expired);
     }
 
@@ -557,7 +576,8 @@ mod tests {
     fn fingerprint_mismatch_rejected() {
         let s = store();
         let id = issue_token(&s);
-        let result = s.validate_and_consume(&id, "fp_WRONG", "sess_1", "sbx_1", Some("agent_1"));
+        let result =
+            s.validate_and_consume(&id, "fp_WRONG", "sess_1", &sandbox_id(), Some("agent_1"));
         assert_eq!(result, TokenValidationResult::FingerprintMismatch);
     }
 
@@ -565,7 +585,8 @@ mod tests {
     fn session_mismatch_rejected() {
         let s = store();
         let id = issue_token(&s);
-        let result = s.validate_and_consume(&id, "fp_abc", "sess_WRONG", "sbx_1", Some("agent_1"));
+        let result =
+            s.validate_and_consume(&id, "fp_abc", "sess_WRONG", &sandbox_id(), Some("agent_1"));
         assert_eq!(result, TokenValidationResult::ContextMismatch);
     }
 
@@ -573,7 +594,13 @@ mod tests {
     fn sandbox_mismatch_rejected() {
         let s = store();
         let id = issue_token(&s);
-        let result = s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_WRONG", Some("agent_1"));
+        let result = s.validate_and_consume(
+            &id,
+            "fp_abc",
+            "sess_1",
+            &other_sandbox_id(),
+            Some("agent_1"),
+        );
         assert_eq!(result, TokenValidationResult::ContextMismatch);
     }
 
@@ -581,21 +608,17 @@ mod tests {
     fn agent_mismatch_rejected() {
         let s = store();
         let id = issue_token(&s);
-        let result = s.validate_and_consume(&id, "fp_abc", "sess_1", "sbx_1", Some("agent_WRONG"));
+        let result =
+            s.validate_and_consume(&id, "fp_abc", "sess_1", &sandbox_id(), Some("agent_WRONG"));
         assert_eq!(result, TokenValidationResult::ContextMismatch);
     }
 
     #[test]
     fn token_without_agent_id_validates_without_agent() {
         let s = store();
-        let id = s.issue(
-            "fp".to_string(),
-            "sess".to_string(),
-            "sbx".to_string(),
-            None,
-        );
+        let id = s.issue("fp".to_string(), "sess".to_string(), sandbox_id(), None);
         s.approve(&id);
-        let result = s.validate_and_consume(&id, "fp", "sess", "sbx", None);
+        let result = s.validate_and_consume(&id, "fp", "sess", &sandbox_id(), None);
         assert_eq!(result, TokenValidationResult::Valid);
     }
 
