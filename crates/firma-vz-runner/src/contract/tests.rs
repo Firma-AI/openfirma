@@ -16,7 +16,10 @@ fn validates_contract_v1() -> Result<()> {
     let contract = parse_contract(&json)?;
 
     assert_eq!(contract.version(), 1);
-    assert_eq!(contract.sandbox_id(), "sandbox-test");
+    assert_eq!(
+        contract.sandbox_id().to_string(),
+        "01900000-0000-7000-8000-000000000001"
+    );
 
     Ok(())
 }

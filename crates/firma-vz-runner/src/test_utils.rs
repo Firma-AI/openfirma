@@ -4,6 +4,7 @@ use anyhow::{Context as _, Result};
 use serde_json::{Value, json};
 
 use crate::contract::{Contract, ContractDocument};
+#[cfg(target_os = "macos")]
 use crate::vm::VmPlan;
 
 #[cfg(target_os = "macos")]
@@ -79,6 +80,7 @@ pub fn read_contract_without_custody(path: &Path) -> Result<Contract> {
     Ok(ContractDocument::read_fixture_from_path_without_custody(path)?.validate()?)
 }
 
+#[cfg(target_os = "macos")]
 pub fn vm_plan_fixture(rootfs_size: u64) -> Result<(tempfile::TempDir, VmPlan)> {
     let temp = tempfile::tempdir()?;
     let contract_path = write_contract_with_rootfs_size(temp.path(), temp.path(), rootfs_size)?;
