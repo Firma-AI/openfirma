@@ -19,6 +19,9 @@ Requires `protoc` installed for protobuf compilation (`firma-protobuf` and
 `firma-grpc-interceptor-proto` both compile `.proto` files via
 `tonic-prost-build` against a system `protoc`).
 
+Requires `uv` to run the Python tests for skill-local automation scripts. The
+scripts declare Python >=3.12 inline, which `uv` manages automatically.
+
 ## Formatting
 
 `dprint` is the single formatter for the repo. Run `dprint fmt` after modifying

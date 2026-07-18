@@ -32,6 +32,11 @@ test:
   # run separately via `cargo test --doc`.
   cargo test --all-features --doc
 
+skill-test:
+  uv run .skills/edit-pr/scripts/test_inspect_prs.py
+  uv run .skills/open-pr/scripts/test_verify_pr.py
+  uv run .skills/open-pr/scripts/test_wait_ci.py
+
 build:
   cargo build --all-features --all-targets
 
@@ -61,7 +66,7 @@ audit:
 deny:
   cargo deny check licenses bans sources
 
-check: fmt lint test build audit deny
+check: fmt lint test skill-test build audit deny
 
 coverage:
   cargo llvm-cov nextest --workspace --all-features --codecov --output-path codecov.json
