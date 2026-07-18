@@ -529,7 +529,7 @@ where
             target = %sanitized_request_target_for_log(&meta.target),
             "proxy bridge forwarding request headers"
         );
-        append_missing_headers(&mut request, attribution_headers)?;
+        replace_attribution_headers(&mut request, attribution_headers)?;
 
         // `request` already ends with \r\n (the CRLF of the last header
         // line). Write one more \r\n to complete the blank-line terminator.
@@ -571,7 +571,7 @@ where
 }
 
 #[cfg(any(unix, test))]
-fn append_missing_headers(
+fn replace_attribution_headers(
     header_block: &mut Vec<u8>,
     attribution_headers: &BTreeMap<String, String>,
 ) -> io::Result<()> {
@@ -585,30 +585,32 @@ fn append_missing_headers(
     let Some(request_line) = lines.next() else {
         return Ok(());
     };
-    let existing = lines
-        .filter_map(|line| {
-            line.split_once(':')
-                .map(|(name, _)| name.trim().to_ascii_lowercase())
-        })
+    let authoritative_names = attribution_headers
+        .keys()
+        .map(|name| name.to_ascii_lowercase())
         .collect::<std::collections::BTreeSet<_>>();
 
     let mut rebuilt = String::new();
     rebuilt.push_str(request_line);
     rebuilt.push_str("\r\n");
     for line in head_str.split("\r\n").skip(1) {
-        if !line.is_empty() {
-            rebuilt.push_str(line);
-            rebuilt.push_str("\r\n");
+        if line.is_empty() {
+            continue;
         }
+        if line.split_once(':').is_some_and(|(name, _)| {
+            authoritative_names.contains(&name.trim().to_ascii_lowercase())
+        }) {
+            continue;
+        }
+        rebuilt.push_str(line);
+        rebuilt.push_str("\r\n");
     }
 
     for (name, value) in attribution_headers {
-        if !existing.contains(&name.to_ascii_lowercase()) {
-            rebuilt.push_str(name);
-            rebuilt.push_str(": ");
-            rebuilt.push_str(value);
-            rebuilt.push_str("\r\n");
-        }
+        rebuilt.push_str(name);
+        rebuilt.push_str(": ");
+        rebuilt.push_str(value);
+        rebuilt.push_str("\r\n");
     }
 
     *header_block = rebuilt.into_bytes();
@@ -843,7 +845,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        BodyKind, append_missing_headers, find_header_terminator, parse_request_metadata,
+        BodyKind, find_header_terminator, parse_request_metadata, replace_attribution_headers,
         sanitized_request_target_for_log,
     };
 
@@ -860,35 +862,41 @@ mod tests {
         let mut headers = BTreeMap::new();
         headers.insert("x-firma-session-id".to_string(), "sess_001".to_string());
         headers.insert("x-firma-profile".to_string(), "claude-code".to_string());
-        append_missing_headers(&mut req_head, &headers).expect("append headers");
+        replace_attribution_headers(&mut req_head, &headers).expect("replace headers");
         let rendered = String::from_utf8(req_head).expect("utf8");
         assert!(rendered.contains("x-firma-session-id: sess_001\r\n"));
         assert!(rendered.contains("x-firma-profile: claude-code\r\n"));
     }
 
     #[test]
-    fn append_missing_headers_does_not_duplicate_existing_names_case_insensitively() {
-        let mut req_head = b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nX-Firma-Session-Id: existing\r\n".to_vec();
+    fn replaces_untrusted_attr_headers_case_insensitively() {
+        let mut req_head = b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nX-Firma-Sandbox-Id: spoofed\r\nX-Firma-Session-Id: spoofed\r\nX-Firma-Agent: spoofed\r\nX-Unrelated: retained\r\n".to_vec();
         let mut headers = BTreeMap::new();
         headers.insert("x-firma-session-id".to_string(), "injected".to_string());
         headers.insert("x-firma-agent".to_string(), "vscode".to_string());
+        headers.insert(
+            "x-firma-sandbox-id".to_string(),
+            "01900000-0000-7000-8000-000000000001".to_string(),
+        );
 
-        append_missing_headers(&mut req_head, &headers).expect("append headers");
+        replace_attribution_headers(&mut req_head, &headers).expect("replace headers");
         let rendered = String::from_utf8(req_head).expect("utf8");
 
-        assert!(rendered.contains("X-Firma-Session-Id: existing\r\n"));
-        assert!(!rendered.contains("x-firma-session-id: injected\r\n"));
+        assert!(rendered.contains("x-firma-session-id: injected\r\n"));
         assert!(rendered.contains("x-firma-agent: vscode\r\n"));
+        assert!(rendered.contains("x-firma-sandbox-id: 01900000-0000-7000-8000-000000000001\r\n"));
+        assert!(rendered.contains("X-Unrelated: retained\r\n"));
+        assert!(!rendered.contains("spoofed"));
     }
 
     #[test]
-    fn append_missing_headers_rejects_non_utf8_header_block() {
+    fn replace_attribution_headers_rejects_non_utf8_header_block() {
         let mut req_head = b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n".to_vec();
         req_head.push(0xFF);
         let mut headers = BTreeMap::new();
         headers.insert("x-firma-session-id".to_string(), "sess_001".to_string());
 
-        let error = append_missing_headers(&mut req_head, &headers)
+        let error = replace_attribution_headers(&mut req_head, &headers)
             .expect_err("non-utf8 headers must fail closed");
 
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
@@ -896,7 +904,7 @@ mod tests {
 
     #[test]
     fn header_block_ends_with_single_crlf_for_terminator() {
-        // `append_missing_headers` rebuilds the header block and always
+        // `replace_attribution_headers` rebuilds the header block and always
         // ends with `\r\n`. The caller then writes exactly one more `\r\n`
         // to complete the blank-line terminator (`\r\n\r\n` total). Verify
         // that the rebuilt block ends with `\r\n` so that one extra `\r\n`
@@ -906,7 +914,7 @@ mod tests {
             b"CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n".to_vec();
         let mut headers = BTreeMap::new();
         headers.insert("x-firma-session-id".to_string(), "sess_001".to_string());
-        append_missing_headers(&mut req_head, &headers).expect("append headers");
+        replace_attribution_headers(&mut req_head, &headers).expect("replace headers");
         assert!(
             req_head.ends_with(b"\r\n"),
             "header block must end with \\r\\n so caller can append one more \\r\\n"
@@ -1120,10 +1128,9 @@ mod host_bridge_tests {
         );
     }
 
-    /// Verifies that an existing `x-firma-session-id` header is not
-    /// duplicated when the client already carries one.
+    /// Verifies that a client-supplied session ID is replaced, not duplicated.
     #[test]
-    fn host_bridge_does_not_duplicate_existing_session_id() {
+    fn host_bridge_replaces_existing_session_id() {
         let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("upstream bind");
         let upstream_addr: SocketAddr = upstream_listener.local_addr().expect("local_addr");
 
@@ -1158,7 +1165,7 @@ mod host_bridge_tests {
         let bridge = HostBridgeHandle::start(upstream_addr, headers).expect("bridge start");
         let bridge_addr = bridge.listen_addr();
 
-        // Client sends its own session-id; bridge must NOT override it.
+        // Client-supplied attribution is untrusted and must be overridden.
         let request = "GET http://api.anthropic.com/ HTTP/1.1\r\nHost: api.anthropic.com\r\nx-firma-session-id: sess_client_value\r\n\r\n";
         let mut client = TcpStream::connect(bridge_addr).expect("connect");
         client.write_all(request.as_bytes()).expect("write");
@@ -1171,12 +1178,11 @@ mod host_bridge_tests {
 
         let captured = received.lock().expect("lock").clone();
         let captured_str = String::from_utf8_lossy(&captured);
-        // The client's own value must be preserved.
         assert!(
-            captured_str.contains("x-firma-session-id: sess_client_value"),
-            "client's session-id was lost; got:\n{captured_str}"
+            captured_str.contains("x-firma-session-id: sess_bridge_value"),
+            "trusted session-id was not injected; got:\n{captured_str}"
         );
-        // The bridge's injected value must NOT appear a second time.
+        assert!(!captured_str.contains("sess_client_value"));
         let occurrences = captured_str.matches("x-firma-session-id").count();
         assert_eq!(
             occurrences, 1,
