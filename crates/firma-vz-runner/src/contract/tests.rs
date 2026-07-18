@@ -16,7 +16,10 @@ fn validates_contract_v1() -> Result<()> {
     let contract = parse_contract(&json)?;
 
     assert_eq!(contract.version(), 1);
-    assert_eq!(contract.sandbox_id(), "sandbox-test");
+    assert_eq!(
+        contract.sandbox_id().to_string(),
+        "01900000-0000-7000-8000-000000000001"
+    );
 
     Ok(())
 }
@@ -57,6 +60,96 @@ fn rejects_missing_required_contract_fields() -> Result<()> {
     let error = parse_contract_document(&json);
 
     assert!(error.is_err());
+    Ok(())
+}
+
+#[test]
+fn rejects_malformed_sandbox_id_during_parse() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["sandbox_id"] = json!("../outside");
+
+    assert!(parse_contract_document(&json).is_err());
+    Ok(())
+}
+
+#[test]
+fn rejects_non_v7_sandbox_id_during_parse() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["sandbox_id"] = json!("550e8400-e29b-41d4-a716-446655440000");
+
+    assert!(parse_contract_document(&json).is_err());
+    Ok(())
+}
+
+#[test]
+fn rejects_missing_sandbox_attribution_header() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["network"]["attribution_headers"]
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("attribution_headers must be an object"))?
+        .remove("x-firma-sandbox-id");
+
+    assert!(matches!(
+        parse_contract(&json),
+        Err(error) if matches!(
+            error.downcast_ref::<ContractValidationError>(),
+            Some(ContractValidationError::MissingSandboxAttribution)
+        )
+    ));
+    Ok(())
+}
+
+#[test]
+fn rejects_duplicate_case_insensitive_sandbox_attribution_headers() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["network"]["attribution_headers"]["X-Firma-Sandbox-Id"] =
+        json!("01900000-0000-7000-8000-000000000001");
+
+    assert!(matches!(
+        parse_contract(&json),
+        Err(error) if matches!(
+            error.downcast_ref::<ContractValidationError>(),
+            Some(ContractValidationError::DuplicateSandboxAttribution)
+        )
+    ));
+    Ok(())
+}
+
+#[test]
+fn rejects_invalid_sandbox_attribution_header() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["network"]["attribution_headers"]["x-firma-sandbox-id"] =
+        json!("550e8400-e29b-41d4-a716-446655440000");
+
+    assert!(matches!(
+        parse_contract(&json),
+        Err(error) if matches!(
+            error.downcast_ref::<ContractValidationError>(),
+            Some(ContractValidationError::InvalidSandboxAttribution { .. })
+        )
+    ));
+    Ok(())
+}
+
+#[test]
+fn rejects_mismatched_sandbox_attribution_header() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut json = valid_contract_json(temp.path())?;
+    json["network"]["attribution_headers"]["x-firma-sandbox-id"] =
+        json!("01900000-0000-7000-8000-000000000002");
+
+    assert!(matches!(
+        parse_contract(&json),
+        Err(error) if matches!(
+            error.downcast_ref::<ContractValidationError>(),
+            Some(ContractValidationError::SandboxAttributionMismatch { .. })
+        )
+    ));
     Ok(())
 }
 

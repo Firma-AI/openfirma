@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use firma_runtime_state::SandboxId;
 use serde::Deserialize;
 
 mod custody;
@@ -29,7 +30,7 @@ pub struct ContractDocument {
     #[serde(skip)]
     source_path: Option<PathBuf>,
     version: u32,
-    sandbox_id: String,
+    sandbox_id: SandboxId,
     runtime_dir: PathBuf,
     runner: Runner,
     guest: Guest,
@@ -126,7 +127,6 @@ impl ContractDocument {
 
     /// Validates runtime identity fields and host-side runner paths.
     fn validate_runtime(&self, limits: &ContractValidationLimits) -> ValidationResult<()> {
-        require_non_empty("sandbox_id", &self.sandbox_id)?;
         require_path("runtime_dir", &self.runtime_dir, limits.path_len)?;
         require_path("runner.path", &self.runner.path, limits.path_len)
     }
@@ -256,6 +256,31 @@ impl ContractDocument {
             )?;
         }
 
+        let mut sandbox_headers = self
+            .network
+            .attribution_headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("x-firma-sandbox-id"));
+        let Some((_, value)) = sandbox_headers.next() else {
+            return Err(ContractValidationError::MissingSandboxAttribution);
+        };
+        if sandbox_headers.next().is_some() {
+            return Err(ContractValidationError::DuplicateSandboxAttribution);
+        }
+        let attributed_id =
+            value.parse().map_err(
+                |source| ContractValidationError::InvalidSandboxAttribution {
+                    value: value.clone(),
+                    source,
+                },
+            )?;
+        if attributed_id != self.sandbox_id {
+            return Err(ContractValidationError::SandboxAttributionMismatch {
+                expected: self.sandbox_id,
+                actual: attributed_id,
+            });
+        }
+
         Ok(())
     }
 
@@ -291,7 +316,7 @@ impl Contract {
     }
 
     /// Returns the sandbox id associated with this launch contract.
-    pub fn sandbox_id(&self) -> &str {
+    pub const fn sandbox_id(&self) -> &SandboxId {
         &self.document.sandbox_id
     }
 

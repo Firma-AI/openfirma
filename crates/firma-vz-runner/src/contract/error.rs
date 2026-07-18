@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+use firma_runtime_state::{SandboxId, SandboxIdParseError};
+
 use super::InvariantName;
 
 pub type ValidationResult<T> = std::result::Result<T, ContractValidationError>;
@@ -63,6 +65,20 @@ pub enum ContractValidationError {
     ZeroPort { field: &'static str },
     #[error("network.direct_network_devices_allowed must be false for VZ guest mode")]
     DirectNetworkDevicesAllowed,
+    #[error("network.attribution_headers must contain x-firma-sandbox-id")]
+    MissingSandboxAttribution,
+    #[error("network.attribution_headers contains duplicate x-firma-sandbox-id names")]
+    DuplicateSandboxAttribution,
+    #[error("network x-firma-sandbox-id value '{value}' is invalid: {source}")]
+    InvalidSandboxAttribution {
+        value: String,
+        source: SandboxIdParseError,
+    },
+    #[error("network x-firma-sandbox-id {actual} does not match contract sandbox_id {expected}")]
+    SandboxAttributionMismatch {
+        expected: SandboxId,
+        actual: SandboxId,
+    },
     #[error("duplicate VZ launch invariant {name:?}")]
     DuplicateInvariant { name: InvariantName },
     #[error("VZ launch invariant {name:?} cannot be disabled")]

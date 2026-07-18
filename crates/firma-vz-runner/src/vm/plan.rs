@@ -2,6 +2,8 @@ use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::path::{Component, Path, PathBuf};
 
+use firma_runtime_state::SandboxId;
+
 use crate::contract::{Contract, NetworkMode};
 use crate::vm::{VmPlanError, VmPlanResult};
 
@@ -12,7 +14,7 @@ const VZ_BLOCK_DEVICE_SECTOR_SIZE_BYTES: u64 = 512;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmPlan {
     version: u32,
-    sandbox_id: String,
+    sandbox_id: SandboxId,
     pub runtime_dir: PathBuf,
     pub kernel: PathBuf,
     pub initrd: PathBuf,
@@ -36,7 +38,7 @@ impl VmPlan {
     }
 
     /// Returns the sandbox id that this VM plan will launch.
-    pub fn sandbox_id(&self) -> &str {
+    pub const fn sandbox_id(&self) -> &SandboxId {
         &self.sandbox_id
     }
 
@@ -91,7 +93,7 @@ impl VmPlan {
 
         Ok(Self {
             version: contract.version(),
-            sandbox_id: contract.sandbox_id().to_string(),
+            sandbox_id: *contract.sandbox_id(),
             runtime_dir: contract.runtime_dir().to_path_buf(),
             kernel: contract.guest().kernel().to_path_buf(),
             initrd: contract.guest().initrd().to_path_buf(),

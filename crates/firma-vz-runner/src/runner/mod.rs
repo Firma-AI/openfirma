@@ -54,7 +54,7 @@ mod tests {
         assert!(matches!(
             error,
             RunnerError::UnsupportedHost { version: 1, sandbox_id }
-                if sandbox_id == "sandbox-test"
+                if sandbox_id == "01900000-0000-7000-8000-000000000001"
         ));
 
         Ok(())

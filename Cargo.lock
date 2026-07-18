@@ -1685,6 +1685,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "dispatch2",
+ "firma-runtime-state",
  "libc",
  "objc2",
  "objc2-foundation",
