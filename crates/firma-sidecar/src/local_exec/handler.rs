@@ -25,6 +25,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use firma_runtime_state::SandboxId;
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
@@ -43,7 +44,7 @@ pub struct LocalExecRequest {
     pub executable: String,
     #[serde(default)]
     pub args: Vec<String>,
-    pub sandbox_id: String,
+    pub sandbox_id: SandboxId,
     pub session_id: String,
     #[serde(default)]
     pub agent_id: Option<String>,
@@ -135,6 +136,9 @@ pub enum DefaultAction {
 /// Construction arguments for [`LocalExecHandler`].
 pub struct LocalExecHandlerConfig {
     pub default_action: DefaultAction,
+    /// Sandbox identity this endpoint serves. `None` leaves standalone
+    /// Sidecars unbound.
+    pub expected_sandbox_id: Option<SandboxId>,
     /// Time-to-live for issued approval tokens. Only used by
     /// [`LocalExecHandler::new`] when constructing the default
     /// [`InMemoryTokenStore`]; ignored when using [`LocalExecHandler::with_store`].
@@ -190,6 +194,17 @@ impl LocalExecHandler {
 
     /// Produce a governance decision for one local-exec request.
     pub fn decide(&self, request: &LocalExecRequest) -> LocalExecResponse {
+        if let Some(expected) = self.config.expected_sandbox_id
+            && request.sandbox_id != expected
+        {
+            tracing::warn!(
+                expected_sandbox_id = %expected,
+                request_sandbox_id = %request.sandbox_id,
+                "local-exec sandbox identity mismatch; failing closed"
+            );
+            return deny("sandbox identity does not match this sidecar");
+        }
+
         if request.action != "local.exec" {
             tracing::warn!(
                 action = %request.action,
@@ -280,7 +295,7 @@ impl LocalExecHandler {
                 let token_id = self.token_store.issue(
                     fingerprint,
                     request.session_id.clone(),
-                    request.sandbox_id.clone(),
+                    request.sandbox_id,
                     request.agent_id.clone(),
                 );
                 tracing::info!(
@@ -446,7 +461,7 @@ fn compute_fingerprint(request: &LocalExecRequest) -> String {
     }
     hasher.update(request.session_id.as_bytes());
     hasher.update(b"\0");
-    hasher.update(request.sandbox_id.as_bytes());
+    hasher.update(request.sandbox_id.to_string().as_bytes());
     hasher.update(b"\0");
     if let Some(agent_id) = &request.agent_id {
         hasher.update(agent_id.as_bytes());
@@ -465,6 +480,7 @@ mod tests {
     fn config(action: DefaultAction) -> LocalExecHandlerConfig {
         LocalExecHandlerConfig {
             default_action: action,
+            expected_sandbox_id: None,
             token_ttl: Duration::from_mins(1),
             retry_after_ms: 500,
         }
@@ -475,7 +491,9 @@ mod tests {
             action: "local.exec".to_string(),
             executable: "/usr/bin/python3".to_string(),
             args: vec!["script.py".to_string()],
-            sandbox_id: "sbx_1".to_string(),
+            sandbox_id: "01900000-0000-7000-8000-000000000001"
+                .parse()
+                .expect("valid UUID v7 fixture"),
             session_id: "sess_1".to_string(),
             agent_id: Some("agent_1".to_string()),
             profile: "generic".to_string(),
@@ -578,7 +596,9 @@ mod tests {
 
         let mut retry = request();
         retry.approval_token = Some(token);
-        retry.sandbox_id = "sbx_OTHER".to_string();
+        retry.sandbox_id = "01900000-0000-7000-8000-000000000002"
+            .parse()
+            .expect("valid UUID v7 fixture");
         assert_eq!(h.decide(&retry).decision, LocalExecDecision::Deny);
     }
 

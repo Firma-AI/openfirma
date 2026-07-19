@@ -167,7 +167,7 @@ async fn serve(args: crate::args::sidecar::ServeArgs) -> anyhow::Result<ExitCode
     debug!(mode = %config.interceptor.mode, "starting interceptor");
     let interceptor = startup::spawn_interceptor(&config, handler, exit.clone())?;
 
-    let local_exec_handle = startup::spawn_local_exec_endpoint(&config, exit.clone())?;
+    let local_exec_handle = startup::spawn_local_exec_endpoint(&config, sandbox_id, exit.clone())?;
 
     let report = build_startup_report(
         resolved.config_file(),

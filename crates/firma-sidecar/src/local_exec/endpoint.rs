@@ -383,6 +383,7 @@ mod tests {
         let socket_path = tmp.path().join("test-local-exec.sock");
         let config = LocalExecHandlerConfig {
             default_action: action,
+            expected_sandbox_id: None,
             token_ttl: Duration::from_mins(1),
             retry_after_ms: 500,
         };
@@ -437,7 +438,9 @@ mod tests {
             action: "local.exec".to_string(),
             executable: "/usr/bin/env".to_string(),
             args: vec![],
-            sandbox_id: "sbx_1".to_string(),
+            sandbox_id: "01900000-0000-7000-8000-000000000001"
+                .parse()
+                .expect("valid UUID v7 fixture"),
             session_id: "sess_1".to_string(),
             agent_id: Some("agent_1".to_string()),
             profile: "generic".to_string(),

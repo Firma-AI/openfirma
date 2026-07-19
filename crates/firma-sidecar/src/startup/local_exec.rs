@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
+use firma_runtime_state::SandboxId;
+
 use crate::config::{LocalExecConfig, SidecarConfig};
 use crate::local_exec::{LocalExecEndpoint, LocalExecHandler, LocalExecHandlerConfig};
 
@@ -21,13 +23,14 @@ use crate::local_exec::{LocalExecEndpoint, LocalExecHandler, LocalExecHandlerCon
 /// Returns an error when the socket cannot be bound (bad path, permissions).
 pub fn spawn_local_exec_endpoint(
     config: &SidecarConfig,
+    sandbox_id: Option<SandboxId>,
     cancel: CancellationToken,
 ) -> anyhow::Result<Option<tokio::task::JoinHandle<()>>> {
     let Some(le_config) = &config.local_exec else {
         return Ok(None);
     };
 
-    let handler = build_handler(le_config);
+    let handler = build_handler(le_config, sandbox_id);
     let endpoint = LocalExecEndpoint::new(le_config.socket_path.clone(), handler);
     let socket_path = le_config.socket_path.display().to_string();
 
@@ -47,9 +50,10 @@ pub fn spawn_local_exec_endpoint(
     Ok(Some(handle))
 }
 
-fn build_handler(config: &LocalExecConfig) -> LocalExecHandler {
+fn build_handler(config: &LocalExecConfig, sandbox_id: Option<SandboxId>) -> LocalExecHandler {
     LocalExecHandler::new(LocalExecHandlerConfig {
         default_action: config.default_action,
+        expected_sandbox_id: sandbox_id,
         token_ttl: Duration::from_secs(config.token_ttl_secs),
         retry_after_ms: config.retry_after_ms,
     })
