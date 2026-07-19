@@ -75,7 +75,7 @@ firma monitor --state-dir /var/run/firma --source audit --decision deny
 When several `firma run` invocations share the same audit log, every `ExecutionEvent` carries a `sandbox_id` matching the marker directory under `$XDG_RUNTIME_DIR/firma/run/<sandbox_id>/`. Filter to a single run with:
 
 ```bash
-firma monitor --sandbox-id abc123def --source audit
+firma monitor --sandbox-id 01900000-0000-7000-8000-000000000001 --source audit
 ```
 
 Pretty output appends `sandbox=<id>` after `agent=` when the field is set; passthrough events and externally started Sidecars leave it empty.
