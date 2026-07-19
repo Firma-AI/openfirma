@@ -15,7 +15,7 @@ Write new Rust tests for OpenFirma code.
 ## Instructions
 
 1. Identify the public behavior, branch, or invariant that needs coverage.
-2. Decide whether the test belongs in a crate-level `tests/` integration suite or a `#[cfg(test)]` module.
+2. Place new tests in a crate-level `tests/` integration suite as required by the test guidelines.
 3. Check existing tests before writing anything new.
 4. Add the smallest test set that covers the missing behavior.
 5. Run the relevant tests.
