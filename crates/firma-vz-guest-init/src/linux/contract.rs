@@ -12,6 +12,7 @@ use super::error::{InitError, InitResult};
 use super::log;
 
 const SECRET_ENV_KEYS: &[&str] = &["FIRMA_CAPABILITY_TOKEN"];
+const SANDBOX_ATTRIBUTION_HEADER: &str = "x-firma-sandbox-id";
 
 /// Raw launch contract shape read from the runtime share.
 #[derive(Debug, Deserialize)]
@@ -336,7 +337,7 @@ pub struct Network {
     vsock_sidecar_port: NonZeroU32,
     sidecar_host_addr: SocketAddr,
     dns_mode: DnsMode,
-    attribution_headers: BTreeMap<String, String>,
+    attribution_headers: AttributionHeaders,
 }
 
 impl Network {
@@ -372,7 +373,46 @@ impl Network {
 
     /// Returns the attribution headers accepted for guest proxy injection.
     pub fn attribution_headers(&self) -> &BTreeMap<String, String> {
-        &self.attribution_headers
+        self.attribution_headers.as_map()
+    }
+}
+
+/// Accepted attribution headers for guest proxy injection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AttributionHeaders {
+    headers: BTreeMap<String, String>,
+}
+
+impl AttributionHeaders {
+    /// Accepts attribution headers with canonical names and a bound sandbox id.
+    fn accept(raw: &BTreeMap<String, String>, expected_sandbox_id: SandboxId) -> InitResult<Self> {
+        let mut headers = BTreeMap::new();
+        for (raw_name, raw_value) in raw {
+            let name = accept_attribution_header_name(raw_name)?;
+            let value = accept_attribution_header_value(&name, raw_value)?;
+
+            if headers.insert(name.clone(), value).is_some() {
+                if name == SANDBOX_ATTRIBUTION_HEADER {
+                    return Err(InitError::DuplicateSandboxAttribution);
+                }
+                return Err(InitError::DuplicateAttributionHeaderName { name });
+            }
+        }
+
+        let sandbox_id = accept_sandbox_attribution(&headers)?;
+        if sandbox_id != expected_sandbox_id {
+            return Err(InitError::SandboxAttributionMismatch {
+                expected: expected_sandbox_id,
+                actual: sandbox_id,
+            });
+        }
+
+        Ok(Self { headers })
+    }
+
+    /// Returns the canonical header map used for proxy injection.
+    pub fn as_map(&self) -> &BTreeMap<String, String> {
+        &self.headers
     }
 }
 
@@ -644,38 +684,8 @@ fn accept_network_contract(
         return Err(InitError::DirectNetworkDevicesAllowed);
     }
 
-    for (name, value) in &network.attribution_headers {
-        if name.trim().is_empty() {
-            return Err(InitError::EmptyAttributionHeaderName);
-        }
-
-        if value.trim().is_empty() {
-            return Err(InitError::EmptyAttributionHeaderValue { name: name.clone() });
-        }
-    }
-
-    let mut sandbox_headers = network
-        .attribution_headers
-        .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("x-firma-sandbox-id"));
-    let Some((_, value)) = sandbox_headers.next() else {
-        return Err(InitError::MissingSandboxAttribution);
-    };
-    if sandbox_headers.next().is_some() {
-        return Err(InitError::DuplicateSandboxAttribution);
-    }
-    let attributed_id = value
-        .parse()
-        .map_err(|source| InitError::InvalidSandboxAttribution {
-            value: value.clone(),
-            source,
-        })?;
-    if attributed_id != *sandbox_id {
-        return Err(InitError::SandboxAttributionMismatch {
-            expected: *sandbox_id,
-            actual: attributed_id,
-        });
-    }
+    let attribution_headers =
+        AttributionHeaders::accept(&network.attribution_headers, *sandbox_id)?;
 
     Ok(Network {
         mode: network.mode,
@@ -684,8 +694,42 @@ fn accept_network_contract(
         vsock_sidecar_port,
         sidecar_host_addr,
         dns_mode: network.dns_mode,
-        attribution_headers: network.attribution_headers.clone(),
+        attribution_headers,
     })
+}
+
+/// Accepts one attribution header name using the proxy's canonical casing.
+fn accept_attribution_header_name(name: &str) -> InitResult<String> {
+    if name.trim().is_empty() {
+        return Err(InitError::EmptyAttributionHeaderName);
+    }
+
+    Ok(name.to_ascii_lowercase())
+}
+
+/// Accepts one attribution header value for a canonical header name.
+fn accept_attribution_header_value(name: &str, value: &str) -> InitResult<String> {
+    if value.trim().is_empty() {
+        return Err(InitError::EmptyAttributionHeaderValue {
+            name: name.to_string(),
+        });
+    }
+
+    Ok(value.to_string())
+}
+
+/// Accepts the contract-bound sandbox attribution header.
+fn accept_sandbox_attribution(headers: &BTreeMap<String, String>) -> InitResult<SandboxId> {
+    let value = headers
+        .get(SANDBOX_ATTRIBUTION_HEADER)
+        .ok_or(InitError::MissingSandboxAttribution)?;
+
+    value
+        .parse()
+        .map_err(|source| InitError::InvalidSandboxAttribution {
+            value: value.clone(),
+            source,
+        })
 }
 
 /// Parses and requires a loopback socket address.
