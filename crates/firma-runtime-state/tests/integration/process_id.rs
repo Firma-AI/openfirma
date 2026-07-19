@@ -19,7 +19,7 @@ fn rejects_pid_outside_unix_pid_t_range() {
 fn conversions_match() {
     let pid = UserProcessId::try_from(42).expect("non-zero pid");
 
-    assert_eq!(pid.get(), pid.into());
+    assert_eq!(pid.get(), u32::from(pid));
 }
 
 #[test]

@@ -1575,10 +1575,12 @@ dependencies = [
  "insta",
  "nix 0.31.3",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "toml",
  "tracing",
+ "uuid",
  "windows-sys 0.59.0",
 ]
 
