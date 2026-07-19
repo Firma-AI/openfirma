@@ -1390,7 +1390,7 @@ mod tests {
     #[test]
     fn forwards_content_length_request_with_attribution_headers() -> TestResult {
         let (mut client, mut server) = connected_tcp_pair()?;
-        let headers = BTreeMap::from([("X-Firma-Session".to_string(), "sandbox-test".to_string())]);
+        let headers = BTreeMap::from([("X-Firma-Session".to_string(), "session-test".to_string())]);
         server.write_all(
             b"POST http://example.com/ HTTP/1.1\r\nHost: example.com\r\nContent-Length: 5\r\n\r\nhello",
         )?;
@@ -1400,7 +1400,7 @@ mod tests {
         forward_requests_with_header_injection(&mut client, &mut upstream, &headers)?;
 
         let forwarded = String::from_utf8(upstream)?;
-        assert!(forwarded.contains("\r\nX-Firma-Session: sandbox-test\r\n"));
+        assert!(forwarded.contains("\r\nX-Firma-Session: session-test\r\n"));
         assert!(forwarded.ends_with("\r\n\r\nhello"));
 
         Ok(())
@@ -1409,7 +1409,7 @@ mod tests {
     #[test]
     fn forwards_chunked_request_with_trailers() -> TestResult {
         let (mut client, mut server) = connected_tcp_pair()?;
-        let headers = BTreeMap::from([("X-Firma-Session".to_string(), "sandbox-test".to_string())]);
+        let headers = BTreeMap::from([("X-Firma-Session".to_string(), "session-test".to_string())]);
         server.write_all(
             b"POST http://example.com/ HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nWiki\r\n0\r\nX-Firma-Trailer: yes\r\n\r\n",
         )?;
@@ -1419,7 +1419,7 @@ mod tests {
         forward_requests_with_header_injection(&mut client, &mut upstream, &headers)?;
 
         let forwarded = String::from_utf8(upstream)?;
-        assert!(forwarded.contains("\r\nX-Firma-Session: sandbox-test\r\n"));
+        assert!(forwarded.contains("\r\nX-Firma-Session: session-test\r\n"));
         assert!(forwarded.ends_with("4\r\nWiki\r\n0\r\nX-Firma-Trailer: yes\r\n\r\n"));
 
         Ok(())
@@ -1428,7 +1428,7 @@ mod tests {
     #[test]
     fn forwards_connect_tunnel_bytes_after_headers() -> TestResult {
         let (mut client, mut server) = connected_tcp_pair()?;
-        let headers = BTreeMap::from([("X-Firma-Session".to_string(), "sandbox-test".to_string())]);
+        let headers = BTreeMap::from([("X-Firma-Session".to_string(), "session-test".to_string())]);
         server.write_all(
             b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\ntunnel-bytes",
         )?;
@@ -1438,7 +1438,7 @@ mod tests {
         forward_requests_with_header_injection(&mut client, &mut upstream, &headers)?;
 
         let forwarded = String::from_utf8(upstream)?;
-        assert!(forwarded.contains("\r\nX-Firma-Session: sandbox-test\r\n"));
+        assert!(forwarded.contains("\r\nX-Firma-Session: session-test\r\n"));
         assert!(forwarded.ends_with("\r\n\r\ntunnel-bytes"));
 
         Ok(())
@@ -1447,7 +1447,7 @@ mod tests {
     #[test]
     fn forwards_pipelined_requests_from_buffered_remaining_bytes() -> TestResult {
         let (mut client, mut server) = connected_tcp_pair()?;
-        let headers = BTreeMap::from([("X-Firma-Session".to_string(), "sandbox-test".to_string())]);
+        let headers = BTreeMap::from([("X-Firma-Session".to_string(), "session-test".to_string())]);
         server.write_all(
             b"GET http://example.com/one HTTP/1.1\r\nHost: example.com\r\n\r\n\
               GET http://example.com/two HTTP/1.1\r\nHost: example.com\r\n\r\n",
@@ -1462,7 +1462,7 @@ mod tests {
         assert!(forwarded.contains("GET http://example.com/two HTTP/1.1\r\n"));
         assert_eq!(
             forwarded
-                .matches("\r\nX-Firma-Session: sandbox-test\r\n")
+                .matches("\r\nX-Firma-Session: session-test\r\n")
                 .count(),
             2
         );
