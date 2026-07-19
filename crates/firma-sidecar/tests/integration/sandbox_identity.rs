@@ -12,7 +12,7 @@ use firma_sidecar::local_exec::handler::{
 };
 
 fn sandbox_id(value: &str) -> SandboxId {
-    value.parse().expect("valid UUID v7 fixture")
+    value.parse().expect("valid sandbox ID fixture")
 }
 
 fn request(sandbox_id: SandboxId) -> LocalExecRequest {
@@ -59,11 +59,11 @@ fn local_exec_request_rejects_malformed_sandbox_id() {
 }
 
 #[test]
-fn local_exec_request_accepts_uuid_v7_sandbox_id() {
+fn local_exec_request_accepts_sbx_typeid() {
     let json = r#"{
         "action":"local.exec",
         "executable":"/usr/bin/true",
-        "sandbox_id":"01900000-0000-7000-8000-000000000001",
+        "sandbox_id":"sbx_01j0000000e008000000000001",
         "session_id":"session",
         "profile":"generic",
         "hitl_mode":"sync_wait"
@@ -72,13 +72,13 @@ fn local_exec_request_accepts_uuid_v7_sandbox_id() {
     let request = serde_json::from_str::<LocalExecRequest>(json).expect("valid local-exec request");
     assert_eq!(
         request.sandbox_id.to_string(),
-        "01900000-0000-7000-8000-000000000001"
+        "sbx_01j0000000e008000000000001"
     );
 }
 
 #[test]
 fn bound_local_exec_handler_accepts_matching_sandbox_id() {
-    let id = sandbox_id("01900000-0000-7000-8000-000000000001");
+    let id = sandbox_id("sbx_01j0000000e008000000000001");
     let response = handler(Some(id)).decide(&request(id));
 
     assert_eq!(response.decision, LocalExecDecision::PendingHitl);
@@ -87,8 +87,8 @@ fn bound_local_exec_handler_accepts_matching_sandbox_id() {
 
 #[test]
 fn bound_local_exec_handler_denies_mismatched_sandbox_id_without_approval_token() {
-    let expected = sandbox_id("01900000-0000-7000-8000-000000000001");
-    let other = sandbox_id("01900000-0000-7000-8000-000000000002");
+    let expected = sandbox_id("sbx_01j0000000e008000000000001");
+    let other = sandbox_id("sbx_01j0000000e008000000000002");
     let response = handler(Some(expected)).decide(&request(other));
 
     assert_eq!(response.decision, LocalExecDecision::Deny);
@@ -101,7 +101,7 @@ fn bound_local_exec_handler_denies_mismatched_sandbox_id_without_approval_token(
 
 #[test]
 fn unbound_local_exec_handler_accepts_valid_sandbox_id() {
-    let id = sandbox_id("01900000-0000-7000-8000-000000000002");
+    let id = sandbox_id("sbx_01j0000000e008000000000002");
     let response = handler(None).decide(&request(id));
 
     assert_eq!(response.decision, LocalExecDecision::PendingHitl);

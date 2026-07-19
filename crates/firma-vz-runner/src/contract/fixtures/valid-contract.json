@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sandbox_id": "01900000-0000-7000-8000-000000000001",
+  "sandbox_id": "sbx_01j0000000e008000000000001",
   "runtime_dir": "${ROOT}/runtime",
   "runner": {
     "path": "${ROOT}/firma-vz-runner"
@@ -42,7 +42,7 @@
     "direct_network_devices_allowed": false,
     "dns_mode": "confined_stub",
     "attribution_headers": {
-      "x-firma-sandbox-id": "01900000-0000-7000-8000-000000000001"
+      "x-firma-sandbox-id": "sbx_01j0000000e008000000000001"
     }
   },
   "invariants": [

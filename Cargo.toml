@@ -127,6 +127,7 @@ tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+type-safe-id = { version = "0.3.3", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 wait-timeout = "0.2"
 webpki-roots = "1"

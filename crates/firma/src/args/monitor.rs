@@ -167,12 +167,12 @@ mod tests {
         let args = try_parse(&[
             "firma-monitor",
             "--sandbox-id",
-            "01900000-0000-7000-8000-000000000001",
+            "sbx_01j0000000e008000000000001",
         ])
         .expect("parse sandbox-id");
         assert_eq!(
             args.sandbox_id.as_deref(),
-            Some("01900000-0000-7000-8000-000000000001")
+            Some("sbx_01j0000000e008000000000001")
         );
     }
 }

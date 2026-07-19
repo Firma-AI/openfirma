@@ -4,35 +4,57 @@ use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use uuid::{Uuid, Variant, Version};
+use type_safe_id::{StaticType, TypeSafeId};
+use uuid::{Variant, Version};
 
-/// A Firma-generated UUID v7 identifying one sandbox execution.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct SandboxIdType;
+
+impl StaticType for SandboxIdType {
+    const TYPE: &'static str = "sbx";
+}
+
+/// A Firma-generated, time-ordered identifier for one sandbox execution.
 ///
-/// The inner UUID is private so values can only enter the type through
-/// generation or validated parsing. In particular, this type deliberately
-/// does not implement `AsRef<Path>`.
+/// Its canonical representation is a `sbx` `TypeID` backed by an RFC 9562 UUID
+/// v7. The inner value is private so IDs can only enter through generation or
+/// validated parsing. This type deliberately does not implement `AsRef<Path>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SandboxId(Uuid);
+pub struct SandboxId(TypeSafeId<SandboxIdType>);
 
 /// Error returned when text is not a valid sandbox identifier.
 #[derive(Debug, thiserror::Error)]
 pub enum SandboxIdParseError {
-    /// The input is not a UUID.
-    #[error("sandbox id must be a UUID v7: {0}")]
-    Malformed(#[source] uuid::Error),
-    /// The input is a UUID, but not version 7.
-    #[error("sandbox id must be a UUID v7")]
-    NotVersion7,
-    /// The UUID does not use the RFC 9562 variant.
-    #[error("sandbox id must use the RFC 9562 UUID variant")]
-    NotRfc9562,
+    /// The input does not start with the sandbox ID prefix.
+    #[error(
+        "sandbox id must be a TypeID with `sbx` as prefix: {0} does not start with the expected prefix"
+    )]
+    IncorrectPrefix(String),
+    /// The `TypeID` suffix is malformed.
+    #[error("sandbox id must be a valid TypeID: {0} has an invalid suffix")]
+    InvalidSuffix(String),
+    /// The input is not a canonical `sbx` `TypeID`.
+    #[error("sandbox id must be a valid TypeID: {value} is malformed: {source}")]
+    Malformed {
+        value: String,
+        #[source]
+        source: type_safe_id::Error,
+    },
+    /// The `TypeID` payload is not a UUID v7.
+    #[error("sandbox id must be backed by a UUID v7: {value} is backed by a UUID v{actual}")]
+    NotVersion7 { value: String, actual: usize },
+    /// The `TypeID` payload does not use the RFC 9562 UUID variant.
+    #[error(
+        "sandbox id must be backed by an RFC 9562 UUID: {value} is backed by a UUID with the {actual:?} variant"
+    )]
+    NotRfc9562 { value: String, actual: Variant },
 }
 
 impl SandboxId {
-    /// Generate a new time-ordered UUID v7 sandbox identifier.
+    /// Generate a new time-ordered `sbx` sandbox identifier.
     #[must_use]
     pub fn generate() -> Self {
-        Self(Uuid::now_v7())
+        Self(TypeSafeId::new())
     }
 }
 
@@ -40,14 +62,35 @@ impl FromStr for SandboxId {
     type Err = SandboxIdParseError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let uuid = Uuid::parse_str(value).map_err(SandboxIdParseError::Malformed)?;
-        if uuid.get_variant() != Variant::RFC4122 {
-            return Err(SandboxIdParseError::NotRfc9562);
+        let id = value
+            .parse::<TypeSafeId<SandboxIdType>>()
+            .map_err(|error| {
+                if matches!(&error, type_safe_id::Error::IncorrectType { .. }) {
+                    SandboxIdParseError::IncorrectPrefix(value.to_string())
+                } else if matches!(&error, type_safe_id::Error::InvalidData) {
+                    SandboxIdParseError::InvalidSuffix(value.to_string())
+                } else {
+                    SandboxIdParseError::Malformed {
+                        value: value.to_string(),
+                        source: error,
+                    }
+                }
+            })?;
+        let uuid = id.uuid();
+        let variant = uuid.get_variant();
+        if variant != Variant::RFC4122 {
+            return Err(SandboxIdParseError::NotRfc9562 {
+                value: value.to_string(),
+                actual: variant,
+            });
         }
         if uuid.get_version() != Some(Version::SortRand) {
-            return Err(SandboxIdParseError::NotVersion7);
+            return Err(SandboxIdParseError::NotVersion7 {
+                value: value.to_string(),
+                actual: uuid.get_version_num(),
+            });
         }
-        Ok(Self(uuid))
+        Ok(Self(id))
     }
 }
 

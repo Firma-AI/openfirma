@@ -432,15 +432,15 @@ mod tests {
     use super::*;
 
     fn sandbox_id() -> SandboxId {
-        "01900000-0000-7000-8000-000000000001"
+        "sbx_01j0000000e008000000000001"
             .parse()
-            .expect("valid UUID v7 fixture")
+            .expect("valid sandbox ID fixture")
     }
 
     fn other_sandbox_id() -> SandboxId {
-        "01900000-0000-7000-8000-000000000002"
+        "sbx_01j0000000e008000000000002"
             .parse()
-            .expect("valid UUID v7 fixture")
+            .expect("valid sandbox ID fixture")
     }
 
     fn store() -> InMemoryTokenStore {

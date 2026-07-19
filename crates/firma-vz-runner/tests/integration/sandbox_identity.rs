@@ -11,15 +11,15 @@ const VALID_CONTRACT_JSON: &str = include_str!("../../src/contract/fixtures/vali
 fn rejects_malformed_sandbox_id_during_parse() -> Result<()> {
     let stderr = run_contract_with_sandbox_id("../outside")?;
 
-    insta::assert_snapshot!(stderr, @"firma-vz-runner: parse VZ launch contract [CONTRACT]: sandbox id must be a UUID v7: invalid character: found `.` at 0 at line 3 column 28");
+    insta::assert_snapshot!(stderr, @"firma-vz-runner: parse VZ launch contract [CONTRACT]: sandbox id must be a TypeID with `sbx` as prefix: ../outside does not start with the expected prefix at line 3 column 28");
     Ok(())
 }
 
 #[test]
 fn rejects_non_v7_sandbox_id_during_parse() -> Result<()> {
-    let stderr = run_contract_with_sandbox_id("550e8400-e29b-41d4-a716-446655440000")?;
+    let stderr = run_contract_with_sandbox_id("sbx_2n1t201rmv88eb2sj4cn248g00")?;
 
-    insta::assert_snapshot!(stderr, @"firma-vz-runner: parse VZ launch contract [CONTRACT]: sandbox id must be a UUID v7 at line 3 column 54");
+    insta::assert_snapshot!(stderr, @"firma-vz-runner: parse VZ launch contract [CONTRACT]: sandbox id must be backed by a UUID v7: sbx_2n1t201rmv88eb2sj4cn248g00 is backed by a UUID v4 at line 3 column 48");
     Ok(())
 }
 
@@ -45,7 +45,7 @@ fn rejects_duplicate_case_insensitive_sandbox_attribution_headers() -> Result<()
     let stderr = run_contract(
         |contract| {
             contract["network"]["attribution_headers"]["X-Firma-Sandbox-Id"] =
-                json!("01900000-0000-7000-8000-000000000001");
+                json!("sbx_01j0000000e008000000000001");
             Ok(())
         },
         true,
@@ -60,13 +60,13 @@ fn rejects_invalid_sandbox_attribution_header() -> Result<()> {
     let stderr = run_contract(
         |contract| {
             contract["network"]["attribution_headers"]["x-firma-sandbox-id"] =
-                json!("550e8400-e29b-41d4-a716-446655440000");
+                json!("sbx_2n1t201rmv88eb2sj4cn248g00");
             Ok(())
         },
         true,
     )?;
 
-    insta::assert_snapshot!(stderr, @"firma-vz-runner: network x-firma-sandbox-id value '550e8400-e29b-41d4-a716-446655440000' is invalid: sandbox id must be a UUID v7: sandbox id must be a UUID v7");
+    insta::assert_snapshot!(stderr, @"firma-vz-runner: network x-firma-sandbox-id value 'sbx_2n1t201rmv88eb2sj4cn248g00' is invalid: sandbox id must be backed by a UUID v7: sbx_2n1t201rmv88eb2sj4cn248g00 is backed by a UUID v4");
     Ok(())
 }
 
@@ -75,13 +75,13 @@ fn rejects_mismatched_sandbox_attribution_header() -> Result<()> {
     let stderr = run_contract(
         |contract| {
             contract["network"]["attribution_headers"]["x-firma-sandbox-id"] =
-                json!("01900000-0000-7000-8000-000000000002");
+                json!("sbx_01j0000000e008000000000002");
             Ok(())
         },
         true,
     )?;
 
-    insta::assert_snapshot!(stderr, @"firma-vz-runner: network x-firma-sandbox-id 01900000-0000-7000-8000-000000000002 does not match contract sandbox_id 01900000-0000-7000-8000-000000000001");
+    insta::assert_snapshot!(stderr, @"firma-vz-runner: network x-firma-sandbox-id sbx_01j0000000e008000000000002 does not match contract sandbox_id sbx_01j0000000e008000000000001");
     Ok(())
 }
 
@@ -90,7 +90,7 @@ fn rejects_mismatched_sandbox_attribution_header() -> Result<()> {
 fn rejects_unsupported_host_after_validation() -> Result<()> {
     let stderr = run_contract(|_| Ok(()), false)?;
 
-    insta::assert_snapshot!(stderr, @"firma-vz-runner: firma-vz-runner is macOS-only; parsed contract v1 for sandbox 01900000-0000-7000-8000-000000000001");
+    insta::assert_snapshot!(stderr, @"firma-vz-runner: firma-vz-runner is macOS-only; parsed contract v1 for sandbox sbx_01j0000000e008000000000001");
     Ok(())
 }
 
@@ -130,7 +130,7 @@ fn run_contract_with_sandbox_id(sandbox_id: &str) -> Result<String> {
         .context("test contract root path must be UTF-8")?;
     let contract = VALID_CONTRACT_JSON
         .replace(ROOT_PLACEHOLDER, root)
-        .replacen("01900000-0000-7000-8000-000000000001", sandbox_id, 1);
+        .replacen("sbx_01j0000000e008000000000001", sandbox_id, 1);
     let contract_path = write_contract(temp.path(), contract)?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_firma-vz-runner"))

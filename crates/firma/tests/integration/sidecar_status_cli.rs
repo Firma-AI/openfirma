@@ -53,11 +53,11 @@ fn traversal_id_is_rejected_before_marker_access() {
 
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    insta::assert_snapshot!(stderr, @"
-    error: invalid value '../outside' for '--sandbox-id <SANDBOX_ID>': sandbox id must be a UUID v7: invalid character: found `.` at 0
+    insta::assert_snapshot!(stderr, @r#"
+    error: invalid value '../outside' for '--sandbox-id <SANDBOX_ID>': sandbox id must be a TypeID with `sbx` as prefix: ../outside does not start with the expected prefix
 
     For more information, try '--help'.
-    ");
+    "#);
     assert!(
         !stderr.contains("failed to parse sidecar marker"),
         "lookup touched the escaped marker: {stderr}"
@@ -71,27 +71,27 @@ fn non_v7_status_id_is_rejected() {
             "sidecar",
             "status",
             "--sandbox-id",
-            "550e8400-e29b-41d4-a716-446655440000",
+            "sbx_2n1t201rmv88eb2sj4cn248g00",
         ])
         .output()
         .expect("spawn firma");
     assert_eq!(out.status.code(), Some(2));
     insta::assert_snapshot!(String::from_utf8_lossy(&out.stderr), @"
-    error: invalid value '550e8400-e29b-41d4-a716-446655440000' for '--sandbox-id <SANDBOX_ID>': sandbox id must be a UUID v7
+    error: invalid value 'sbx_2n1t201rmv88eb2sj4cn248g00' for '--sandbox-id <SANDBOX_ID>': sandbox id must be backed by a UUID v7: sbx_2n1t201rmv88eb2sj4cn248g00 is backed by a UUID v4
 
     For more information, try '--help'.
     ");
 }
 
 #[test]
-fn missing_valid_v7_status_id_is_an_empty_result() {
+fn missing_valid_status_id_is_an_empty_result() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let out = Command::new(env!("CARGO_BIN_EXE_firma"))
         .args([
             "sidecar",
             "status",
             "--sandbox-id",
-            "01900000-0000-7000-8000-000000000001",
+            "sbx_01j0000000e008000000000001",
             "--json",
         ])
         .env("FIRMA_STATE_DIR", tmp.path())

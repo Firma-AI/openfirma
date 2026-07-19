@@ -229,9 +229,9 @@ fn propagated_sandbox_id() -> anyhow::Result<Option<firma_runtime_state::Sandbox
     let Some(value) = std::env::var_os("FIRMA_RUN_SANDBOX_ID") else {
         return Ok(None);
     };
-    let value = value
-        .into_string()
-        .map_err(|_| anyhow::anyhow!("FIRMA_RUN_SANDBOX_ID must contain a valid UTF-8 UUID v7"))?;
+    let value = value.into_string().map_err(|_| {
+        anyhow::anyhow!("FIRMA_RUN_SANDBOX_ID must contain a valid UTF-8 sandbox ID")
+    })?;
     value
         .parse()
         .map(Some)

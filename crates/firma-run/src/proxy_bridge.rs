@@ -876,7 +876,7 @@ mod tests {
         headers.insert("x-firma-agent".to_string(), "vscode".to_string());
         headers.insert(
             "x-firma-sandbox-id".to_string(),
-            "01900000-0000-7000-8000-000000000001".to_string(),
+            "sbx_01j0000000e008000000000001".to_string(),
         );
 
         replace_attribution_headers(&mut req_head, &headers).expect("replace headers");
@@ -884,7 +884,7 @@ mod tests {
 
         assert!(rendered.contains("x-firma-session-id: injected\r\n"));
         assert!(rendered.contains("x-firma-agent: vscode\r\n"));
-        assert!(rendered.contains("x-firma-sandbox-id: 01900000-0000-7000-8000-000000000001\r\n"));
+        assert!(rendered.contains("x-firma-sandbox-id: sbx_01j0000000e008000000000001\r\n"));
         assert!(rendered.contains("X-Unrelated: retained\r\n"));
         assert!(!rendered.contains("spoofed"));
     }

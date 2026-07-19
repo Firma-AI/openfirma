@@ -157,6 +157,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayvec"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
+
+[[package]]
 name = "ascii-canvas"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1580,6 +1586,7 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
  "tracing",
+ "type-safe-id",
  "uuid",
  "windows-sys 0.59.0",
 ]
@@ -5358,6 +5365,19 @@ dependencies = [
  "ratatui-core",
  "rstest",
  "tracing",
+]
+
+[[package]]
+name = "type-safe-id"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd9267f90719e0433aae095640b294ff36ccbf89649ecb9ee34464ec504be157"
+dependencies = [
+ "arrayvec",
+ "rand 0.9.4",
+ "serde",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]

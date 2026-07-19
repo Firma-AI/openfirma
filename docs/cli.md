@@ -289,7 +289,7 @@ firma sidecar status [OPTIONS]
 
 | Flag                | Default | Description                                  |
 | ------------------- | ------- | -------------------------------------------- |
-| `--sandbox-id <id>` | —       | Probe one Firma-generated UUIDv7 run ID.     |
+| `--sandbox-id <id>` | —       | Probe one Firma-generated sandbox ID.        |
 | `--json`            | _off_   | Emit a JSON array; empty list prints `[]`.   |
 | `--daemon`          | _off_   | Probe the long-lived daemon sidecar instead. |
 
