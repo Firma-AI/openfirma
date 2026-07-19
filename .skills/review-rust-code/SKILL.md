@@ -111,7 +111,7 @@ Confirm that:
 - docs are updated when the change affects architecture, CLI, configuration, or user-visible behavior
 - `docs-site/public/llms.txt` is updated when discovery or integration guidance changed
 
-Ensure the new code adheres to the policies defined in [`rust-tests-guidelines`](../rust-tests-guidlines/SKILL.md) and [`rust-docs-guidelines`](../rust-docs-guidelines/SKILL.md).
+Ensure the new code adheres to the policies defined in [`rust-tests-guidelines`](../rust-tests-guidelines/SKILL.md) and [`rust-docs-guidelines`](../rust-docs-guidelines/SKILL.md).
 
 ### 3. Emit the report
 
