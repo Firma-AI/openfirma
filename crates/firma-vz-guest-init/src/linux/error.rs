@@ -108,6 +108,9 @@ pub enum InitError {
     EmptyAttributionHeaderName,
     /// The network attribution header map contained an empty value.
     EmptyAttributionHeaderValue { name: String },
+    /// The network attribution header map repeated a header name using case
+    /// variants.
+    DuplicateAttributionHeaderName { name: String },
     /// The network attribution headers omitted the sandbox identity.
     MissingSandboxAttribution,
     /// The network attribution headers repeated the sandbox identity using
@@ -412,6 +415,10 @@ impl fmt::Display for InitError {
             Self::EmptyAttributionHeaderValue { name } => write!(
                 formatter,
                 "network.attribution_headers[{name}] must not be empty"
+            ),
+            Self::DuplicateAttributionHeaderName { name } => write!(
+                formatter,
+                "network.attribution_headers contains duplicate header name {name}"
             ),
             Self::MissingSandboxAttribution => {
                 formatter.write_str("network.attribution_headers must contain x-firma-sandbox-id")
@@ -742,6 +749,7 @@ impl std::error::Error for InitError {
             | Self::DirectNetworkDevicesAllowed
             | Self::EmptyAttributionHeaderName
             | Self::EmptyAttributionHeaderValue { .. }
+            | Self::DuplicateAttributionHeaderName { .. }
             | Self::MissingSandboxAttribution
             | Self::DuplicateSandboxAttribution
             | Self::SandboxAttributionMismatch { .. }

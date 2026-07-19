@@ -612,6 +612,38 @@ fn contract_rejects_empty_attribution_headers() -> TestResult {
 }
 
 #[test]
+fn contract_canonicalizes_attribution_header_names() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract
+        .network
+        .attribution_headers
+        .remove("x-firma-sandbox-id");
+    contract.network.attribution_headers.insert(
+        "X-Firma-Sandbox-Id".to_string(),
+        "01900000-0000-7000-8000-000000000001".to_string(),
+    );
+    contract
+        .network
+        .attribution_headers
+        .insert("X-Firma-Profile".to_string(), "generic".to_string());
+
+    let contract: Contract = contract.try_into()?;
+    let headers = contract.network().attribution_headers();
+
+    assert_eq!(
+        headers.get("x-firma-sandbox-id").map(String::as_str),
+        Some("01900000-0000-7000-8000-000000000001")
+    );
+    assert_eq!(
+        headers.get("x-firma-profile").map(String::as_str),
+        Some("generic")
+    );
+    assert!(!headers.contains_key("X-Firma-Profile"));
+
+    Ok(())
+}
+
+#[test]
 fn contract_rejects_missing_sandbox_attribution_header() -> TestResult {
     let mut contract = valid_launch_contract();
     contract
@@ -625,6 +657,34 @@ fn contract_rejects_missing_sandbox_attribution_header() -> TestResult {
     )?;
     assert_matches!(&error, InitError::MissingSandboxAttribution);
     insta::assert_snapshot!(error.to_string(), @"network.attribution_headers must contain x-firma-sandbox-id");
+
+    Ok(())
+}
+
+#[test]
+fn contract_rejects_duplicate_case_insensitive_attribution_header_names() -> TestResult {
+    let mut contract = valid_launch_contract();
+    contract
+        .network
+        .attribution_headers
+        .insert("X-Firma-Profile".to_string(), "first".to_string());
+    contract
+        .network
+        .attribution_headers
+        .insert("x-firma-profile".to_string(), "second".to_string());
+
+    let error = expect_init_error(
+        validate_contract(&contract),
+        "contract should reject duplicate attribution header names",
+    )?;
+
+    assert_matches!(
+        &error,
+        InitError::DuplicateAttributionHeaderName { name } if name == "x-firma-profile"
+    );
+
+    insta::assert_snapshot!(error.to_string(), @"network.attribution_headers contains duplicate header name x-firma-profile");
+
     Ok(())
 }
 
