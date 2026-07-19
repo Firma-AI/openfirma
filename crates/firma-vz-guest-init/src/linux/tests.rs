@@ -661,14 +661,10 @@ fn contract_rejects_invalid_sandbox_attribution_header() -> TestResult {
         &error,
         InitError::InvalidSandboxAttribution {
             value,
-            source: firma_runtime_state::SandboxIdParseError::NotVersion7 {
-                value: source_value,
-                actual: 4,
-            },
+            ..
         } if value == "sbx_2n1t201rmv88eb2sj4cn248g00"
-            && source_value == "sbx_2n1t201rmv88eb2sj4cn248g00"
     );
-    insta::assert_snapshot!(error.to_string(), @"network x-firma-sandbox-id value 'sbx_2n1t201rmv88eb2sj4cn248g00' is invalid: sandbox id must be backed by a UUID v7: sbx_2n1t201rmv88eb2sj4cn248g00 is backed by a UUID v4");
+    insta::assert_snapshot!(error.to_string(), @"network x-firma-sandbox-id value 'sbx_2n1t201rmv88eb2sj4cn248g00' is invalid: sandbox id must be backed by a UUID v7: `sbx_2n1t201rmv88eb2sj4cn248g00` is backed by a UUID v4");
     Ok(())
 }
 
@@ -754,7 +750,7 @@ fn read_contract_rejects_non_v7_sandbox_id() -> TestResult {
     assert_eq!(path, &contract_path);
     assert_matches!(source.classify(), serde_json::error::Category::Data);
     assert_eq!(source.line(), 3);
-    assert_eq!(source.column(), 54);
+    assert_eq!(source.column(), 48);
     Ok(())
 }
 

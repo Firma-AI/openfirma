@@ -11,7 +11,7 @@ const VALID_CONTRACT_JSON: &str = include_str!("../../src/contract/fixtures/vali
 fn rejects_malformed_sandbox_id_during_parse() -> Result<()> {
     let stderr = run_contract_with_sandbox_id("../outside")?;
 
-    insta::assert_snapshot!(stderr, @"firma-vz-runner: parse VZ launch contract [CONTRACT]: sandbox id must be a TypeID with `sbx` as prefix: ../outside does not start with the expected prefix at line 3 column 28");
+    insta::assert_snapshot!(stderr, @"firma-vz-runner: parse VZ launch contract [CONTRACT]: sandbox id must start with `sbx` as prefix: `../outside` does not at line 3 column 28");
     Ok(())
 }
 
@@ -19,7 +19,7 @@ fn rejects_malformed_sandbox_id_during_parse() -> Result<()> {
 fn rejects_non_v7_sandbox_id_during_parse() -> Result<()> {
     let stderr = run_contract_with_sandbox_id("sbx_2n1t201rmv88eb2sj4cn248g00")?;
 
-    insta::assert_snapshot!(stderr, @"firma-vz-runner: parse VZ launch contract [CONTRACT]: sandbox id must be backed by a UUID v7: sbx_2n1t201rmv88eb2sj4cn248g00 is backed by a UUID v4 at line 3 column 48");
+    insta::assert_snapshot!(stderr, @"firma-vz-runner: parse VZ launch contract [CONTRACT]: sandbox id must be backed by a UUID v7: `sbx_2n1t201rmv88eb2sj4cn248g00` is backed by a UUID v4 at line 3 column 48");
     Ok(())
 }
 
@@ -66,7 +66,7 @@ fn rejects_invalid_sandbox_attribution_header() -> Result<()> {
         true,
     )?;
 
-    insta::assert_snapshot!(stderr, @"firma-vz-runner: network x-firma-sandbox-id value 'sbx_2n1t201rmv88eb2sj4cn248g00' is invalid: sandbox id must be backed by a UUID v7: sbx_2n1t201rmv88eb2sj4cn248g00 is backed by a UUID v4");
+    insta::assert_snapshot!(stderr, @"firma-vz-runner: network x-firma-sandbox-id value 'sbx_2n1t201rmv88eb2sj4cn248g00' is invalid: sandbox id must be backed by a UUID v7: `sbx_2n1t201rmv88eb2sj4cn248g00` is backed by a UUID v4");
     Ok(())
 }
 

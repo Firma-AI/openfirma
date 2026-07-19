@@ -24,28 +24,25 @@ pub struct SandboxId(TypeSafeId<SandboxIdType>);
 
 /// Error returned when text is not a valid sandbox identifier.
 #[derive(Debug, thiserror::Error)]
-pub enum SandboxIdParseError {
-    /// The input does not start with the sandbox ID prefix.
-    #[error(
-        "sandbox id must be a TypeID with `sbx` as prefix: {0} does not start with the expected prefix"
-    )]
+#[error(transparent)]
+pub struct SandboxIdParseError(SandboxIdParseErrorKind);
+
+#[derive(Debug, thiserror::Error)]
+enum SandboxIdParseErrorKind {
+    #[error("sandbox id must start with `sbx` as prefix: `{0}` does not")]
     IncorrectPrefix(String),
-    /// The `TypeID` suffix is malformed.
-    #[error("sandbox id must be a valid TypeID: {0} has an invalid suffix")]
+    #[error("sandbox id must be a valid TypeID: `{0}` has an invalid suffix")]
     InvalidSuffix(String),
-    /// The input is not a canonical `sbx` `TypeID`.
-    #[error("sandbox id must be a valid TypeID: {value} is malformed: {source}")]
+    #[error("sandbox id must be a valid TypeID: `{value}` is malformed: {source}")]
     Malformed {
         value: String,
         #[source]
         source: type_safe_id::Error,
     },
-    /// The `TypeID` payload is not a UUID v7.
-    #[error("sandbox id must be backed by a UUID v7: {value} is backed by a UUID v{actual}")]
+    #[error("sandbox id must be backed by a UUID v7: `{value}` is backed by a UUID v{actual}")]
     NotVersion7 { value: String, actual: usize },
-    /// The `TypeID` payload does not use the RFC 9562 UUID variant.
     #[error(
-        "sandbox id must be backed by an RFC 9562 UUID: {value} is backed by a UUID with the {actual:?} variant"
+        "sandbox id must be backed by an RFC 9562 UUID: `{value}` is backed by a UUID with the {actual:?} variant"
     )]
     NotRfc9562 { value: String, actual: Variant },
 }
@@ -65,30 +62,31 @@ impl FromStr for SandboxId {
         let id = value
             .parse::<TypeSafeId<SandboxIdType>>()
             .map_err(|error| {
-                if matches!(&error, type_safe_id::Error::IncorrectType { .. }) {
-                    SandboxIdParseError::IncorrectPrefix(value.to_string())
+                let kind = if matches!(&error, type_safe_id::Error::IncorrectType { .. }) {
+                    SandboxIdParseErrorKind::IncorrectPrefix(value.to_string())
                 } else if matches!(&error, type_safe_id::Error::InvalidData) {
-                    SandboxIdParseError::InvalidSuffix(value.to_string())
+                    SandboxIdParseErrorKind::InvalidSuffix(value.to_string())
                 } else {
-                    SandboxIdParseError::Malformed {
+                    SandboxIdParseErrorKind::Malformed {
                         value: value.to_string(),
                         source: error,
                     }
-                }
+                };
+                SandboxIdParseError(kind)
             })?;
         let uuid = id.uuid();
         let variant = uuid.get_variant();
         if variant != Variant::RFC4122 {
-            return Err(SandboxIdParseError::NotRfc9562 {
+            return Err(SandboxIdParseError(SandboxIdParseErrorKind::NotRfc9562 {
                 value: value.to_string(),
                 actual: variant,
-            });
+            }));
         }
         if uuid.get_version() != Some(Version::SortRand) {
-            return Err(SandboxIdParseError::NotVersion7 {
+            return Err(SandboxIdParseError(SandboxIdParseErrorKind::NotVersion7 {
                 value: value.to_string(),
                 actual: uuid.get_version_num(),
-            });
+            }));
         }
         Ok(Self(id))
     }

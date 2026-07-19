@@ -54,7 +54,7 @@ fn traversal_id_is_rejected_before_marker_access() {
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
     insta::assert_snapshot!(stderr, @r#"
-    error: invalid value '../outside' for '--sandbox-id <SANDBOX_ID>': sandbox id must be a TypeID with `sbx` as prefix: ../outside does not start with the expected prefix
+    error: invalid value '../outside' for '--sandbox-id <SANDBOX_ID>': sandbox id must start with `sbx` as prefix: `../outside` does not
 
     For more information, try '--help'.
     "#);
@@ -77,7 +77,7 @@ fn non_v7_status_id_is_rejected() {
         .expect("spawn firma");
     assert_eq!(out.status.code(), Some(2));
     insta::assert_snapshot!(String::from_utf8_lossy(&out.stderr), @"
-    error: invalid value 'sbx_2n1t201rmv88eb2sj4cn248g00' for '--sandbox-id <SANDBOX_ID>': sandbox id must be backed by a UUID v7: sbx_2n1t201rmv88eb2sj4cn248g00 is backed by a UUID v4
+    error: invalid value 'sbx_2n1t201rmv88eb2sj4cn248g00' for '--sandbox-id <SANDBOX_ID>': sandbox id must be backed by a UUID v7: `sbx_2n1t201rmv88eb2sj4cn248g00` is backed by a UUID v4
 
     For more information, try '--help'.
     ");

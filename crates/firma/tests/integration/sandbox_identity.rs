@@ -41,6 +41,6 @@ fn standalone_sidecar_rejects_non_v7_propagated_id_before_config_discovery() {
 
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    insta::assert_snapshot!(stderr, @"[ERR]  invalid FIRMA_RUN_SANDBOX_ID: sandbox id must be backed by a UUID v7: sbx_2n1t201rmv88eb2sj4cn248g00 is backed by a UUID v4");
+    insta::assert_snapshot!(stderr, @"[ERR]  invalid FIRMA_RUN_SANDBOX_ID: sandbox id must be backed by a UUID v7: `sbx_2n1t201rmv88eb2sj4cn248g00` is backed by a UUID v4");
     assert!(!stderr.contains("no firma.toml found"));
 }
