@@ -18,6 +18,19 @@ pub enum RuntimeStateError {
         source: Box<toml::de::Error>,
     },
 
+    /// A marker's validated identity does not match its containing directory.
+    #[error(
+        "sidecar marker identity mismatch at '{path}': directory is '{directory}', metadata is '{metadata}'"
+    )]
+    MarkerIdentityMismatch {
+        /// Path of the marker directory.
+        path: PathBuf,
+        /// Marker directory basename.
+        directory: String,
+        /// Sandbox identity declared in metadata.
+        metadata: String,
+    },
+
     /// State-dir resolution chain (flag, env, platform default) produced
     /// no usable path. The string carries a human-readable cause.
     #[error("state dir resolution failed: {0}")]
