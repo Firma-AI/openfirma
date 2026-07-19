@@ -39,10 +39,11 @@ fn returns_ready_timeout_when_no_ready_line_observed() {
          echo 'INFO firma_sidecar::startup::log_contract: mapping table loaded rules=0' 1>&2\n\
          exec sleep 60\n",
     );
-    let marker = tmp.path().join("run").join("sandbox-xyz");
+    let sandbox_id = firma_run::identity::SandboxId::generate();
+    let marker = tmp.path().join("run").join(sandbox_id.to_string());
 
     let result = SidecarSupervisor::spawn(SpawnRequest {
-        sandbox_id: &firma_run::identity::SandboxId::from("sandbox-xyz"),
+        sandbox_id: &sandbox_id,
         agent_id: "generic",
         session_id: "session-1",
         marker_dir: marker.clone(),

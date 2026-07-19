@@ -41,9 +41,10 @@ fn marker_dir_layout_and_developer_cedar() {
     p.set_mode(0o755);
     std::fs::set_permissions(&fake, p).unwrap();
 
+    let sandbox_id = firma_run::identity::SandboxId::generate();
     let marker = tmp.path().join("marker/authority");
     let sup = AuthoritySupervisor::spawn(SpawnRequest {
-        sandbox_id: &firma_run::identity::SandboxId::from("sb1"),
+        sandbox_id: &sandbox_id,
         agent_id: "agent",
         session_id: "sess",
         marker_dir: marker.clone(),
@@ -61,7 +62,10 @@ fn marker_dir_layout_and_developer_cedar() {
     assert!(marker.join("keys/authority.key").is_file());
 
     let meta = std::fs::read_to_string(marker.join("metadata.toml")).unwrap();
-    assert!(meta.contains("sandbox_id = \"sb1\""), "got: {meta}");
+    assert!(
+        meta.contains(&format!("sandbox_id = \"{sandbox_id}\"")),
+        "got: {meta}"
+    );
     assert!(meta.contains("profile = \"developer\""));
     assert!(meta.contains("listen_addr = \"[::1]:50051\""));
 

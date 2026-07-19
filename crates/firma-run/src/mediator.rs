@@ -99,7 +99,7 @@ pub fn enforce_local_command_governance(
             "allow" => {
                 tracing::info!(
                     executable,
-                    sandbox_id = identity.sandbox_id.compact(),
+                    sandbox_id = %identity.sandbox_id,
                     session_id = %identity.session_id,
                     "local command governance: allowed"
                 );
@@ -112,7 +112,7 @@ pub fn enforce_local_command_governance(
                 tracing::warn!(
                     reason = %reason,
                     executable,
-                    sandbox_id = identity.sandbox_id.compact(),
+                    sandbox_id = %identity.sandbox_id,
                     session_id = %identity.session_id,
                     "local command governance: denied"
                 );
@@ -376,7 +376,7 @@ fn compute_request_fingerprint(
     }
     hasher.update(session_id.as_bytes());
     hasher.update(b"\0");
-    hasher.update(AsRef::<str>::as_ref(sandbox_id).as_bytes());
+    hasher.update(sandbox_id.to_string().as_bytes());
     hasher.update(b"\0");
     if let Some(aid) = agent_id {
         hasher.update(aid.as_bytes());
@@ -409,7 +409,7 @@ mod tests {
 
     fn identity() -> RunIdentity {
         RunIdentity {
-            sandbox_id: SandboxId::Custom("sbx".to_string()),
+            sandbox_id: crate::identity::SandboxId::generate(),
             session_id: "sess".to_string(),
             profile: "generic".to_string(),
         }

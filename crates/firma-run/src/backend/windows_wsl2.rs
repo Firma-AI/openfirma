@@ -57,7 +57,7 @@ impl SandboxBackend for Wsl2Backend {
 
         let runtime_dir = std::env::temp_dir()
             .join("firma-run")
-            .join(&request.identity.sandbox_id);
+            .join(request.identity.sandbox_id.to_string());
         std::fs::create_dir_all(&runtime_dir).map_err(|error| RunError::Backend {
             backend: BackendKind::Wsl2.to_string(),
             reason: format!(

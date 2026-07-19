@@ -3,6 +3,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use firma_runtime_state::runtime_paths::{default_runtime_dir, run_entry_from};
 use serde::Serialize;
 
 use crate::backend::{LaunchSpec, PrepareRequest, build_backend};
@@ -98,6 +99,8 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
     if args.command.is_empty() {
         return Err(RunError::MissingCommand);
     }
+
+    crate::identity::reject_reserved_sandbox_id_environment()?;
 
     ensure_required_session_identity()?;
 
@@ -321,10 +324,7 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
         // Per-run marker dir under the persistent runtime root, alongside
         // `sidecar.log` / `authority.log`. The caller redirects its foreground
         // logs here while the agent's TUI owns the terminal.
-        let marker_dir = firma_runtime_state::runtime_paths::run_entry_from(
-            &firma_runtime_state::runtime_paths::default_runtime_dir(),
-            &identity.sandbox_id,
-        );
+        let marker_dir = run_entry_from(&default_runtime_dir(), identity.sandbox_id.to_string());
         if let Some(hook) = hooks.on_agent_launch {
             hook(&marker_dir);
         }
@@ -355,7 +355,7 @@ fn resolve_sidecar_template_path(
 
 fn log_run_start(identity: &RunIdentity, profile: &ResolvedProfile) {
     tracing::info!(
-        sandbox_id = identity.sandbox_id.compact(),
+        sandbox_id = %identity.sandbox_id,
         session_id = %identity.session_id,
         profile = %identity.profile,
         backend = %profile.backend,

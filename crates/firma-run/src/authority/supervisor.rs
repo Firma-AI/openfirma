@@ -262,7 +262,7 @@ impl AuthoritySupervisor {
         crate::authority::metadata::write(
             &metadata_path,
             &crate::authority::metadata::Metadata {
-                sandbox_id: req.sandbox_id.to_string(),
+                sandbox_id: *req.sandbox_id,
                 agent_id: req.agent_id.to_string(),
                 session_id: req.session_id.to_string(),
                 profile: req.profile_name.to_string(),
@@ -273,7 +273,7 @@ impl AuthoritySupervisor {
         )?;
 
         info!(
-            sandbox_id = req.sandbox_id.compact(),
+            sandbox_id = %req.sandbox_id,
             pid = %pid,
             listen_addr = %capture.listen_addr,
             "authority started"

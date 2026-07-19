@@ -13,6 +13,7 @@ mod run_authority_flags;
 mod run_autostart_flags;
 mod run_echo_smoke;
 mod run_implicit_init_prompt;
+mod sandbox_identity;
 mod seeded_capability_e2e;
 mod sidecar_invalid_config;
 mod sidecar_readiness_gate;

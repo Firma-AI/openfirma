@@ -40,9 +40,10 @@ fn drop_reaps_child_within_grace() {
     let mut p = std::fs::metadata(&fake).unwrap().permissions();
     p.set_mode(0o755);
     std::fs::set_permissions(&fake, p).unwrap();
+    let sandbox_id = firma_run::identity::SandboxId::generate();
 
     let sup = AuthoritySupervisor::spawn(SpawnRequest {
-        sandbox_id: &firma_run::identity::SandboxId::from("sb1"),
+        sandbox_id: &sandbox_id,
         agent_id: "agent",
         session_id: "sess",
         marker_dir: tmp.path().join("marker/authority"),
