@@ -16,6 +16,13 @@
 //   action:    Firma::Action::"<action_class>"   (e.g., "communication.external.send")
 //   resource:  Firma::Resource::"<resource_uri>"
 //
+// Resource entity attributes (populated by the evaluator from the normalized
+// resource, see firma_core::cedar::FirmaEntityUid::resource_entity):
+//   id   : String  - full resource display string ("<host><path>")
+//   host : String? - request host, when present (HTTP/CONNECT intents)
+//   path : String? - request path, when present
+// host/path are optional: policies must guard access with `resource has host`.
+//
 // Context attributes populated by ConstraintEnforcer::build_context():
 //   session_id         : String  - enclosing session identity
 //   timestamp_ms       : Long    - Unix epoch milliseconds at evaluation time
@@ -36,7 +43,9 @@
 namespace Firma {
     entity Agent;
     entity Resource {
-        id: String
+        id: String,
+        host?: String,
+        path?: String
     };
 
     // Shared context shape for all canonical enforcement actions.

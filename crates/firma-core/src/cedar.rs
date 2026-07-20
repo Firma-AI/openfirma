@@ -22,14 +22,20 @@
 //! out of the entity binding.  [`AgentId`] additionally enforces
 //! `[a-zA-Z0-9_-]{1,128}` at construction time as a second defence layer.
 
-use std::{fmt, path::PathBuf, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    path::PathBuf,
+    sync::Arc,
+};
 
 use cedar_policy::{
-    EntityId, EntityTypeName, EntityUid, PolicySet, Schema, SourceLocation, ValidationErrorKind,
-    ValidationMode, Validator,
+    Entity, EntityAttrEvaluationError, EntityId, EntityTypeName, EntityUid, PolicySet,
+    RestrictedExpression, Schema, SourceLocation, ValidationErrorKind, ValidationMode, Validator,
 };
 
 use crate::AgentId;
+use crate::ExecutionIntent;
 
 /// Canonical Firma Cedar schema, embedded at compile time.
 ///
@@ -205,6 +211,62 @@ impl TryFrom<FirmaEntityUid> for EntityUid {
         let entity_type = type_name_str.parse::<EntityTypeName>()?;
         let entity_id = EntityId::new(id_string);
         Ok(Self::from_type_name_and_id(entity_type, entity_id))
+    }
+}
+
+/// Failure building a resource [`Entity`] with attributes.
+#[derive(Debug, thiserror::Error)]
+pub enum ResourceEntityError {
+    /// The resource UID string failed to parse into a Cedar entity type name.
+    #[error("invalid resource entity uid: {0}")]
+    Uid(#[from] cedar_policy::ParseErrors),
+    /// Cedar rejected the resource entity's attribute record.
+    #[error("invalid resource entity attributes: {0}")]
+    Attr(#[source] Box<EntityAttrEvaluationError>),
+}
+
+impl FirmaEntityUid {
+    /// Build a Cedar [`Entity`] for the request resource, populating the
+    /// `id`, `host`, and `path` attributes declared by `Firma::Resource` in
+    /// the canonical schema.
+    ///
+    /// Both the Authority (issuance) and the Sidecar (enforcement) call this
+    /// so host-level Cedar rules (`resource.host == "…"`) evaluate identically
+    /// on both sides. Without a populated resource entity in the authorizer's
+    /// entity store, any `resource.<attr>` access errors and the guarded
+    /// condition is skipped — so this is required for `resource.id` rules too,
+    /// not only host/path.
+    ///
+    /// `resource` is the normalizer's display string (`"<host><path>"`, e.g.
+    /// [`ExecutionIntent::resource_display`]). `host` and `path` are recovered
+    /// from it via [`ExecutionIntent::resource_map_from`] and only emitted when
+    /// non-empty, matching the `host?` / `path?` optional schema attributes.
+    /// The id is stored opaquely (see the module-level injection-safety note).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResourceEntityError::Uid`] if the resource UID cannot be
+    /// parsed, or [`ResourceEntityError::Attr`] if Cedar rejects the attribute
+    /// record.
+    pub fn resource_entity(resource: &str) -> Result<Entity, ResourceEntityError> {
+        let uid: EntityUid = Self::Resource(resource.to_string()).try_into()?;
+        let parts = ExecutionIntent::resource_map_from(resource);
+
+        let mut attrs: HashMap<String, RestrictedExpression> = HashMap::new();
+        attrs.insert(
+            "id".to_string(),
+            RestrictedExpression::new_string(resource.to_string()),
+        );
+        for key in ["host", "path"] {
+            if let Some(value) = parts.get(key).filter(|v| !v.is_empty()) {
+                attrs.insert(
+                    key.to_string(),
+                    RestrictedExpression::new_string(value.clone()),
+                );
+            }
+        }
+
+        Entity::new(uid, attrs, HashSet::new()).map_err(|e| ResourceEntityError::Attr(Box::new(e)))
     }
 }
 

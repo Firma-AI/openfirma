@@ -11,8 +11,10 @@
 // extension.
 //
 // Resource: Firma::Resource::"<host><path>" (e.g., "api.example.com/v1/endpoint").
-// The Firma schema exposes no resource attributes, so host/path matching is not
-// available in Cedar; enforce host-level blocks at the network/sandbox layer.
+// The resource entity also exposes optional `host` and `path` attributes, so
+// host-level rules can be written in Cedar (guard access with `resource has host`).
+// Keep network/sandbox-layer blocks as the primary control; Cedar host rules are
+// defense-in-depth.
 //
 // Cedar: no permit = DENY (default-deny). forbid beats permit always.
 // Load alongside provider-specific files (github.cedar, stripe.cedar) as needed,
@@ -35,9 +37,16 @@
 
 // Cloud metadata endpoint — highest-priority deny.
 // A compromised agent can steal the host IAM token with a single unauthenticated
-// GET to 169.254.169.254. The Firma schema has no resource host attribute, so
-// this cannot be expressed in Cedar — block it at the network/sandbox layer
-// (iptables / bwrap --unshare-net), as with the RFC-1918 ranges above.
+// GET to 169.254.169.254. Expressed in Cedar via the resource `host` attribute;
+// keep the network/sandbox-layer block (iptables / bwrap --unshare-net) as the
+// primary control, as with the RFC-1918 ranges above.
+forbid (
+    principal,
+    action,
+    resource
+) when {
+    resource has host && resource.host == "169.254.169.254"
+};
 
 // ─── Package install ──────────────────────────────────────────────────────────
 //

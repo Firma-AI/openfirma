@@ -30,9 +30,8 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use cedar_policy::{Authorizer, Context, Decision, Entities, EntityUid, Request, Schema};
-use firma_core::AgentId;
-use firma_core::FirmaEntityUid;
+use cedar_policy::{Authorizer, Context, Decision, Entities, Entity, EntityUid, Request, Schema};
+use firma_core::{AgentId, FirmaEntityUid};
 
 use crate::policy::bundle;
 use crate::policy::fixture::{Expected, Fixture};
@@ -120,9 +119,22 @@ fn evaluate_to_outcome(path: &Path) -> Outcome {
         }
     };
 
-    let (principal_uid, action_uid, resource_uid) = match build_uids(&fixture) {
+    let (principal_uid, action_uid, resource_entity) = match build_uids(&fixture) {
         Ok(uids) => uids,
         Err(message) => return Outcome::failure(message),
+    };
+    let resource_uid = resource_entity.uid();
+    // Populate the resource entity (host/path attributes) in the store so
+    // `resource.host` / `resource.path` rules evaluate exactly as they do on
+    // the Sidecar hot path. Schema-less store validation (`None`) mirrors the
+    // evaluator.
+    let entities = match Entities::from_entities([resource_entity], None) {
+        Ok(entities) => entities,
+        Err(error) => {
+            return Outcome::failure(format!(
+                "error: failed to build Cedar entity store: {error}\n"
+            ));
+        }
     };
 
     let ctx_value = crate::policy::fixture::merged_context(&fixture.fixture.context);
@@ -148,7 +160,7 @@ fn evaluate_to_outcome(path: &Path) -> Outcome {
         }
     };
 
-    let response = Authorizer::new().is_authorized(&request, &policy_set, &Entities::empty());
+    let response = Authorizer::new().is_authorized(&request, &policy_set, &entities);
 
     let (decision, expected) = (response.decision(), fixture.fixture.expected);
     let decision_label = match decision {
@@ -194,10 +206,11 @@ fn evaluate_to_outcome(path: &Path) -> Outcome {
 ///
 /// Mirrors the Sidecar hot path: the agent id is parsed into an
 /// [`AgentId`] (enforcing the `[a-zA-Z0-9_-]{1,128}` shape) before becoming
-/// a `Firma::Agent` UID; action class and resource host become
-/// `Firma::Action` / `Firma::Resource` UIDs verbatim. Any parse failure is
-/// returned as a ready-to-print fail-closed diagnostic.
-fn build_uids(fixture: &Fixture) -> Result<(EntityUid, EntityUid, EntityUid), String> {
+/// a `Firma::Agent` UID; the action class becomes a `Firma::Action` UID
+/// verbatim; the resource host becomes a full `Firma::Resource` entity with
+/// `host` / `path` attributes (via [`FirmaEntityUid::resource_entity`]). Any
+/// parse failure is returned as a ready-to-print fail-closed diagnostic.
+fn build_uids(fixture: &Fixture) -> Result<(EntityUid, EntityUid, Entity), String> {
     let agent_id = fixture
         .fixture
         .principal
@@ -216,11 +229,10 @@ fn build_uids(fixture: &Fixture) -> Result<(EntityUid, EntityUid, EntityUid), St
     let action_uid: EntityUid = FirmaEntityUid::Action(fixture.fixture.action.class.clone())
         .try_into()
         .map_err(|error| format!("error: invalid action UID: {error}\n"))?;
-    let resource_uid: EntityUid = FirmaEntityUid::Resource(fixture.fixture.resource.host.clone())
-        .try_into()
-        .map_err(|error| format!("error: invalid resource UID: {error}\n"))?;
+    let resource_entity = FirmaEntityUid::resource_entity(&fixture.fixture.resource.host)
+        .map_err(|error| format!("error: invalid resource entity: {error}\n"))?;
 
-    Ok((principal_uid, action_uid, resource_uid))
+    Ok((principal_uid, action_uid, resource_entity))
 }
 
 #[cfg(test)]

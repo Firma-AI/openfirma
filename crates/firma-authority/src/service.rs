@@ -410,13 +410,23 @@ pub(crate) fn evaluate_cedar_policy(
             return CedarDecision::invalid_request(format!("invalid agent_id: {e}"));
         }
     };
-    let resource_entity: cedar_policy::EntityUid =
-        match FirmaEntityUid::Resource(resource.to_string()).try_into() {
-            Ok(uid) => uid,
-            Err(e) => {
-                return CedarDecision::invalid_request(format!("invalid resource: {e}"));
-            }
-        };
+    // Build the resource as a full entity so issuance-time policies can read
+    // `resource.host` / `resource.path` / `resource.id` — evaluated identically
+    // to Sidecar enforcement. A bare UID with an empty store makes every
+    // `resource.<attr>` access error and skips the guarded condition.
+    let resource_entity = match FirmaEntityUid::resource_entity(resource) {
+        Ok(entity) => entity,
+        Err(e) => {
+            return CedarDecision::invalid_request(format!("invalid resource: {e}"));
+        }
+    };
+    let resource_uid = resource_entity.uid();
+    let entities = match Entities::from_entities([resource_entity], None) {
+        Ok(entities) => entities,
+        Err(e) => {
+            return CedarDecision::invalid_request(format!("invalid resource entity store: {e}"));
+        }
+    };
     let authorizer = Authorizer::new();
     let timestamp_ms = Utc::now().timestamp_millis();
 
@@ -457,7 +467,7 @@ pub(crate) fn evaluate_cedar_policy(
         let request = match Request::new(
             Some(principal.clone()),
             Some(action_entity),
-            Some(resource_entity.clone()),
+            Some(resource_uid.clone()),
             cedar_context,
             Some(schema),
         ) {
@@ -467,7 +477,7 @@ pub(crate) fn evaluate_cedar_policy(
             }
         };
 
-        let response = authorizer.is_authorized(&request, policy_set, &Entities::empty());
+        let response = authorizer.is_authorized(&request, policy_set, &entities);
 
         if response.decision() == cedar_policy::Decision::Deny {
             tracing::debug!(
@@ -691,6 +701,46 @@ mod tests {
         assert!(
             matches!(result, CedarDecision::Deny { reason, .. } if reason == "NO_AUTHORIZED_ACTIONS")
         );
+    }
+
+    fn host_forbid() -> PolicySet {
+        "permit(principal, action, resource);\n\
+         forbid(principal, action, resource) \
+         when { resource has host && resource.host == \"169.254.169.254\" };"
+            .parse()
+            .unwrap_or_else(|e| panic!("{e:?}"))
+    }
+
+    #[test]
+    fn evaluate_host_forbid_denies_metadata_endpoint() {
+        // Issuance-time host rule: the resource.host attribute must be populated
+        // in the entity store so the metadata-endpoint forbid fires here exactly
+        // as it does on the Sidecar hot path.
+        let result = evaluate_cedar_policy(
+            &host_forbid(),
+            &firma_schema(),
+            &agent("agt_01j0000000e008000000000001"),
+            &session("sess_1"),
+            &["communication.external.send".to_string()],
+            "169.254.169.254",
+        );
+        assert!(matches!(result, CedarDecision::Deny { .. }));
+    }
+
+    #[test]
+    fn evaluate_host_forbid_allows_other_host() {
+        // Control for the deny above: the same bundle permits a non-metadata
+        // host, proving the deny is driven by resource.host (evaluated, not
+        // erroring the whole request).
+        let result = evaluate_cedar_policy(
+            &host_forbid(),
+            &firma_schema(),
+            &agent("agt_01j0000000e008000000000001"),
+            &session("sess_1"),
+            &["communication.external.send".to_string()],
+            "api.example.com",
+        );
+        assert!(matches!(result, CedarDecision::Allow { .. }));
     }
 
     #[test]

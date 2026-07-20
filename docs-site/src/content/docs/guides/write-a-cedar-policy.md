@@ -185,6 +185,22 @@ A few patterns you'll write over and over:
 
 **Resource UIDs are exact strings.** `paste.rs/` and `paste.rs` are different UIDs. The normalizer always produces `host + path`, with `/` for empty paths. If you're not sure, log the resource from a denied call and copy it into your rule.
 
+**Match on `resource.host` / `resource.path` for host-level rules.** The resource entity also carries optional `host` and `path` attributes, so you can write host rules without pinning the full UID. Guard access with `resource has host` (the attributes are optional — a non-HTTP resource may have neither):
+
+```cedar
+// Block the cloud metadata endpoint for every agent and action —
+// SSRF / IAM-token-theft defense-in-depth.
+forbid (
+    principal,
+    action,
+    resource
+) when {
+    resource has host && resource.host == "169.254.169.254"
+};
+```
+
+The `resource has host` guard is not optional hygiene: an unguarded `resource.host == …` in a **forbid** on a resource that has no `host` attribute makes Cedar error the condition and *skip the forbid* — the deny silently fails open. Always guard, and keep OS/network-layer blocks (iptables, `bwrap --unshare-net`) as the primary control; the Cedar host rule is a second layer. This is the same forbid shipped in the `firma config` posture templates.
+
 **Use context for graduated controls.** `risk_score`, `action_count`, and `session_duration_s` are all in the runtime context. Gate permits with `when { context.field … }` for "permitted up to a point" rules.
 
 **Use Git context for repo and branch scope.** GitHub HTTPS git traffic is classified by the smart-HTTP rules on `github.com`. A `git push` hits `POST /{owner}/{repo}/git-receive-pack` or `POST /{owner}/{repo}.git/git-receive-pack`, which maps to `code.write`; a delete push is promoted to `code.destructive`. These rules require HTTPS MITM for `github.com` because CONNECT-only mode only sees the tunnel.

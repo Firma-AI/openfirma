@@ -106,6 +106,30 @@ fn test_allow_fixture_exits_zero_with_allow() {
 }
 
 #[test]
+fn test_host_forbid_fixture_denies_metadata_endpoint() {
+    // A forbid keyed on `resource.host` must fire in the offline validator,
+    // proving host-attribute parity with the Sidecar hot path. The fixture
+    // expects DENY, so a correctly-firing forbid yields exit 0 + "DENY".
+    let out = Command::new(env!("CARGO_BIN_EXE_firma"))
+        .args(["policy", "test"])
+        .arg(testdata("host_deny.toml"))
+        .output()
+        .expect("spawn firma");
+
+    assert!(
+        out.status.success(),
+        "expected exit 0 (decision matches expected DENY), got {:?}; stderr: {}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.starts_with("DENY"),
+        "stdout should start with DENY: {stdout}"
+    );
+}
+
+#[test]
 fn test_deny_mismatch_fixture_exits_nonzero() {
     let out = Command::new(env!("CARGO_BIN_EXE_firma"))
         .args(["policy", "test"])

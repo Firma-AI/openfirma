@@ -4,9 +4,16 @@
 // file deletion via API (rm / rmdir / unlink equivalent via code path).
 // Use only in sandboxed environments where the filesystem mount is scoped.
 
-// Cloud metadata endpoint (169.254.169.254) must be blocked at the network
-// layer (iptables / bwrap --unshare-net). The Firma schema has no resource
-// host attribute, so the block cannot be expressed in Cedar.
+// Cloud metadata endpoint (169.254.169.254) — SSRF / IAM token theft.
+// Expressed in Cedar via the resource `host` attribute; keep the network/
+// sandbox-layer block (iptables / bwrap --unshare-net) as the primary control.
+forbid (
+    principal,
+    action,
+    resource
+) when {
+    resource has host && resource.host == "169.254.169.254"
+};
 
 // Payment — auto-deny.
 forbid (
