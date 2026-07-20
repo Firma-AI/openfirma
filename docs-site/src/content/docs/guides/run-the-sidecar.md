@@ -262,7 +262,7 @@ deployment probe guidance, see
 
 This setup gives you a Sidecar that audits and enforces against destinations you map, using a hand-written Cedar policy. From here:
 
-- [Inspect live sidecars with `firma sidecar status`](../firma-sidecar-status/) — list and probe per-run sidecars started by `firma run`, with JSON output and stale-marker GC.
+- [Inspect live sidecars with `firma sidecar status`](../firma-sidecar-status/) — check per-run sidecar health with table or JSON output.
 - [Start and monitor the daemon with `firma sidecar` and `firma monitor`](../manage-the-stack/) — supervise Authority + Sidecar as one unit and live-tail decisions, instead of running each binary by hand.
 - [Write your first Cedar policy](../write-a-cedar-policy/) — go beyond the two-rule demo and learn the policy patterns.
 - [Issue capability tokens](../issue-capability-tokens/) — add an Authority and a real Stage 1 layer.
