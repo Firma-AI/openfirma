@@ -116,7 +116,7 @@ pub enum InitError {
     /// The network attribution headers repeated the sandbox identity using
     /// case variants.
     DuplicateSandboxAttribution,
-    /// The network sandbox attribution is not a UUID v7.
+    /// The network sandbox attribution is not a valid sandbox ID.
     InvalidSandboxAttribution {
         value: String,
         source: SandboxIdParseError,

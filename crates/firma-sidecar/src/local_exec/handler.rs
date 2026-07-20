@@ -491,9 +491,9 @@ mod tests {
             action: "local.exec".to_string(),
             executable: "/usr/bin/python3".to_string(),
             args: vec!["script.py".to_string()],
-            sandbox_id: "01900000-0000-7000-8000-000000000001"
+            sandbox_id: "sbx_01j0000000e008000000000001"
                 .parse()
-                .expect("valid UUID v7 fixture"),
+                .expect("valid sandbox ID fixture"),
             session_id: "sess_1".to_string(),
             agent_id: Some("agent_1".to_string()),
             profile: "generic".to_string(),
@@ -596,9 +596,9 @@ mod tests {
 
         let mut retry = request();
         retry.approval_token = Some(token);
-        retry.sandbox_id = "01900000-0000-7000-8000-000000000002"
+        retry.sandbox_id = "sbx_01j0000000e008000000000002"
             .parse()
-            .expect("valid UUID v7 fixture");
+            .expect("valid sandbox ID fixture");
         assert_eq!(h.decide(&retry).decision, LocalExecDecision::Deny);
     }
 

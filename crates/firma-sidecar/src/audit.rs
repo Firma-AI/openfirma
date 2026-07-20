@@ -324,7 +324,7 @@ mod tests {
             dispatch_status: 200,
             dispatch_latency_us: 7,
             response_size: 1024,
-            sandbox_id: "01900000-0000-7000-8000-000000000001".to_string(),
+            sandbox_id: "sbx_01j0000000e008000000000001".to_string(),
             provenance: String::new(),
             thread_id: String::new(),
             parent_action_id: String::new(),

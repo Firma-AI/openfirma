@@ -69,9 +69,10 @@ pub enum ContractValidationError {
     MissingSandboxAttribution,
     #[error("network.attribution_headers contains duplicate x-firma-sandbox-id names")]
     DuplicateSandboxAttribution,
-    #[error("network x-firma-sandbox-id value '{value}' is invalid: {source}")]
+    #[error("network x-firma-sandbox-id value '{value}' is invalid")]
     InvalidSandboxAttribution {
         value: String,
+        #[source]
         source: SandboxIdParseError,
     },
     #[error("network x-firma-sandbox-id {actual} does not match contract sandbox_id {expected}")]

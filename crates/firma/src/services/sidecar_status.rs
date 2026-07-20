@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn exit_code_stopped_is_one() {
         let rows = vec![make_entry(
-            "01900000-0000-7000-8000-000000000001",
+            "sbx_01j0000000e008000000000001",
             "codex",
             State::Stopped,
             None,
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn render_pretty_contains_expected_fields() {
         let rows = vec![make_entry(
-            "01900000-0000-7000-8000-000000000001",
+            "sbx_01j0000000e008000000000001",
             "codex",
             State::Running,
             Some(862),
@@ -240,7 +240,7 @@ mod tests {
             output.lines().next().unwrap_or("").contains("SANDBOX_ID"),
             "header must contain SANDBOX_ID"
         );
-        assert!(output.contains("01900000"), "must contain sandbox_id");
+        assert!(output.contains("sbx_"), "must contain sandbox_id");
         assert!(output.contains("codex"), "must contain agent_id");
         assert!(output.contains("running"), "must contain state label");
         assert!(output.contains("00:14:22"), "must contain formatted uptime");
@@ -250,7 +250,7 @@ mod tests {
     fn render_pretty_shows_pid_and_listen_for_normal_entry() {
         // make_entry already uses pid 1234 and /tmp/sidecar.sock.
         let rows = vec![make_entry(
-            "01900000-0000-7000-8000-000000000001",
+            "sbx_01j0000000e008000000000001",
             "codex",
             State::Running,
             Some(0),
@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn render_pretty_dash_for_missing_pid_and_empty_listen() {
         let entry = SidecarEntry {
-            sandbox_id: "01900000-0000-7000-8000-000000000001".to_string(),
+            sandbox_id: "sbx_01j0000000e008000000000001".to_string(),
             agent_id: "agent".to_string(),
             session_id: String::new(),
             authority_url: String::new(),
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn exit_code_unknown_is_one() {
         let rows = vec![make_entry(
-            "01900000-0000-7000-8000-000000000001",
+            "sbx_01j0000000e008000000000001",
             "codex",
             State::Unknown,
             None,

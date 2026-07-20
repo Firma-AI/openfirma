@@ -465,9 +465,9 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let builder = EventBuilder::new(TEST_KEY_PEM)
             .unwrap_or_else(|e| panic!("{e}"))
             .with_sandbox_id(Some(
-                "01900000-0000-7000-8000-000000000001"
+                "sbx_01j0000000e008000000000001"
                     .parse()
-                    .expect("valid UUID v7 fixture"),
+                    .expect("valid sandbox ID fixture"),
             ));
 
         let decision = EnforcementDecision::Allow {
@@ -479,7 +479,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let payload = payload_from_decision(&decision, "sess_001", Duration::from_micros(100));
         let mut event = builder.build(payload);
 
-        event.sandbox_id = "01900000-0000-7000-8000-000000000002".to_string();
+        event.sandbox_id = "sbx_01j0000000e008000000000002".to_string();
 
         let signing_key: SigningKey = TEST_KEY_PEM
             .parse()
@@ -552,9 +552,9 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let builder = EventBuilder::new(TEST_KEY_PEM)
             .unwrap_or_else(|e| panic!("{e}"))
             .with_sandbox_id(Some(
-                "01900000-0000-7000-8000-000000000001"
+                "sbx_01j0000000e008000000000001"
                     .parse()
-                    .expect("valid UUID v7 fixture"),
+                    .expect("valid sandbox ID fixture"),
             ));
 
         let decision = EnforcementDecision::Allow {
@@ -565,7 +565,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let payload = payload_from_decision(&decision, "sess_001", Duration::from_micros(10));
         let event = builder.build(payload);
 
-        assert_eq!(event.sandbox_id, "01900000-0000-7000-8000-000000000001");
+        assert_eq!(event.sandbox_id, "sbx_01j0000000e008000000000001");
     }
 
     #[test]

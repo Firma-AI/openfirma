@@ -208,17 +208,17 @@ Flags:
 
 ```
 2026-05-27T10:00:01Z  INFO firma_run::authority::supervisor: authority started
-    sandbox_id="01970def" pid=84231 listen_addr="[::1]:54321"
+    sandbox_id="sbx_01j0000000e008000000000001" pid=84231 listen_addr="[::1]:54321"
 
 2026-05-27T10:00:02Z  INFO firma_run::sidecar::supervisor: sidecar started
-    sandbox_id="01970def" pid=84235 endpoint="127.0.0.1:18080"
+    sandbox_id="sbx_01j0000000e008000000000001" pid=84235 endpoint="127.0.0.1:18080"
 ```
 
 If a local authority was already reachable before the run, you see an `INFO` instead:
 
 ```
 2026-05-27T10:00:01Z  INFO firma_run::routing: authority reused: existing local authority on plaintext loopback
-    sandbox_id="01970def" url="http://[::1]:50051"
+    sandbox_id="sbx_01j0000000e008000000000001" url="http://[::1]:50051"
 ```
 
 On exit, each autostarted component logs a stopping notice:
@@ -232,13 +232,13 @@ On exit, each autostarted component logs a stopping notice:
 
 | Field | Meaning |
 |---|---|
-| `sandbox_id` | UUIDv7 run identifier — unique per `firma run` invocation |
+| `sandbox_id` | Firma sandbox ID — unique per `firma run` invocation |
 | `pid` | OS process ID of the autostarted component |
 | `listen_addr` / `endpoint` | Address the component is reachable at |
 | `url` | Full URL (authority reuse path) |
 
-Firma generates one UUIDv7 `sandbox_id` for each invocation and reuses it for
-all marker, capability, subprocess, Sidecar, governance, and audit metadata.
+Firma generates one `sbx_...` sandbox ID for each invocation and uses it
+consistently in status output, logs, and audit events.
 `FIRMA_RUN_SANDBOX_ID` is reserved for propagation to Firma-managed children;
 if it is already set when `firma run` starts, the command fails with guidance
 to unset it. Discover the full ID with `firma sidecar status --json`, the run

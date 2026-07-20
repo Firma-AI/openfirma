@@ -18,7 +18,7 @@ fn validates_contract_v1() -> Result<()> {
     assert_eq!(contract.version(), 1);
     assert_eq!(
         contract.sandbox_id().to_string(),
-        "01900000-0000-7000-8000-000000000001"
+        "sbx_01j0000000e008000000000001"
     );
 
     Ok(())

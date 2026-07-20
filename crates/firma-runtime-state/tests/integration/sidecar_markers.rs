@@ -11,9 +11,9 @@ use std::path::Path;
 
 use firma_runtime_state::{MetadataFile, RuntimeStateError};
 
-const ID_1: &str = "01900000-0000-7000-8000-000000000001";
-const ID_2: &str = "01900000-0000-7000-8000-000000000002";
-const ID_3: &str = "01900000-0000-7000-8000-000000000003";
+const ID_1: &str = "sbx_01j0000000e008000000000001";
+const ID_2: &str = "sbx_01j0000000e008000000000002";
+const ID_3: &str = "sbx_01j0000000e008000000000003";
 
 fn write_marker(run_dir: &Path, sandbox_id: &str, pid: u32) {
     write_marker_with_listen(run_dir, sandbox_id, pid, None);
@@ -262,12 +262,12 @@ fn get_returns_single_entry_or_none() {
     let runtime_dir = tmp.path();
     write_marker(&runtime_dir.join("run"), ID_1, std::process::id());
 
-    let id = ID_1.parse().expect("valid UUID v7 fixture");
+    let id = ID_1.parse().expect("valid sandbox ID fixture");
     let found = get(runtime_dir, &id).expect("get");
     assert!(found.is_some());
     assert_eq!(found.expect("some").sandbox_id, ID_1);
 
-    let missing = ID_3.parse().expect("valid UUID v7 fixture");
+    let missing = ID_3.parse().expect("valid sandbox ID fixture");
     assert!(get(runtime_dir, &missing).expect("get").is_none());
 }
 
@@ -291,7 +291,7 @@ fn marker_metadata_id_must_match_directory_name() {
     let rendered = error
         .to_string()
         .replace(marker_dir.to_string_lossy().as_ref(), "<marker>");
-    insta::assert_snapshot!(rendered, @"sidecar marker identity mismatch at '<marker>': directory is '01900000-0000-7000-8000-000000000002', metadata is '01900000-0000-7000-8000-000000000001'");
+    insta::assert_snapshot!(rendered, @"sidecar marker identity mismatch at '<marker>': directory is 'sbx_01j0000000e008000000000002', metadata is 'sbx_01j0000000e008000000000001'");
 }
 
 #[test]

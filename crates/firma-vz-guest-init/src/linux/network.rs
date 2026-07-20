@@ -1367,7 +1367,7 @@ mod tests {
         let headers = BTreeMap::from([
             (
                 "x-firma-sandbox-id".to_string(),
-                "01900000-0000-7000-8000-000000000001".to_string(),
+                "sbx_01j0000000e008000000000001".to_string(),
             ),
             ("X-Firma-Agent".to_string(), "guest".to_string()),
             ("X-Firma-Session".to_string(), "new".to_string()),
@@ -1378,9 +1378,7 @@ mod tests {
         let request = String::from_utf8(request)?;
         assert!(request.contains("\r\nX-Firma-Agent: guest\r\n"));
         assert!(request.contains("\r\nX-Firma-Session: new\r\n"));
-        assert!(
-            request.contains("\r\nx-firma-sandbox-id: 01900000-0000-7000-8000-000000000001\r\n")
-        );
+        assert!(request.contains("\r\nx-firma-sandbox-id: sbx_01j0000000e008000000000001\r\n"));
         assert!(request.contains("\r\nX-Unrelated: retained\r\n"));
         assert!(!request.contains("spoofed"));
 
