@@ -56,7 +56,7 @@ Emits a single JSON array — one object per sidecar. An empty list prints `[]`.
 [
   {
     "sandbox_id": "sbx_01j0000000e008000000000001",
-    "agent_id": "claude-code",
+    "agent_id": "019abcde-1234-7abc-8def-0123456789ab",
     "session_id": "sess-abc123",
     "authority_url": "http://127.0.0.1:50051",
     "policy_bundle_version": "a1b2c3d4",

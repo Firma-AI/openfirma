@@ -15,6 +15,12 @@ A capability token is what an agent needs to clear [Stage 1](../../concepts/pipe
 > session outside of `firma run` (for example, a daemon or a CI agent with a
 > known identity and scope that does not use the autostart flow).
 
+For automatic issuance, `firma run` reads the registered UUID from
+`[sidecar.authority].agent_id` and uses it for both the initial request and
+every refresh. It never substitutes `[run].profile`. Authority denials with
+`AGENT_NOT_REGISTERED` or `AGENT_PROFILE_MISMATCH` are reported as dedicated
+errors while preserving the Authority's message.
+
 By the end you will have:
 
 - A running Authority with its own signing keypair and issuance policy.

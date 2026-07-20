@@ -125,7 +125,7 @@ fn resolve_remote_authority(
         ),
     )
     .expect("write config");
-    let identity = RunIdentity::new("capability-routing");
+    let identity = RunIdentity::new(super::helper::agent_id().clone(), "capability-routing");
     let mut prompt = NoPrompt;
 
     resolve_authority(
@@ -196,7 +196,7 @@ fn omitted_capability_key_retains_authority_key() {
 #[test]
 fn autostart_with_effective_key_attempts_managed_capability_mint() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let identity = RunIdentity::new("managed-capability");
+    let identity = RunIdentity::new(super::helper::agent_id().clone(), "managed-capability");
     let missing_key = dir.path().join("missing-firmateam.pub");
     let handle = sandbox_handle(&identity, dir.path());
 
@@ -229,7 +229,10 @@ fn autostart_with_effective_key_attempts_managed_capability_mint() {
 #[test]
 fn capability_file_suppresses_mint_and_reaches_sidecar_synthesis() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let identity = RunIdentity::new("external-capability-file");
+    let identity = RunIdentity::new(
+        super::helper::agent_id().clone(),
+        "external-capability-file",
+    );
     let missing_key = dir.path().join("missing-firmateam.pub");
     let seed_path = dir.path().join("existing-capability.toml");
     std::fs::write(&seed_path, "existing seed\n").expect("write seed placeholder");
@@ -286,7 +289,7 @@ fn capability_file_suppresses_mint_and_reaches_sidecar_synthesis() {
 #[test]
 fn autostart_without_effective_key_preserves_no_mint_behavior() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let identity = RunIdentity::new("no-capability-key");
+    let identity = RunIdentity::new(super::helper::agent_id().clone(), "no-capability-key");
     let handle = sandbox_handle(&identity, dir.path());
 
     let error = prepare_network_runtime(

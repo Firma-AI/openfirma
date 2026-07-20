@@ -44,7 +44,8 @@ fn returns_ready_timeout_when_no_ready_line_observed() {
 
     let result = SidecarSupervisor::spawn(SpawnRequest {
         sandbox_id: &sandbox_id,
-        agent_id: "generic",
+        agent_id: super::helper::agent_id(),
+        execution_profile: "generic",
         session_id: "session-1",
         marker_dir: marker.clone(),
         template_path: None,

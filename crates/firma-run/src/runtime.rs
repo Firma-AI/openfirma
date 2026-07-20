@@ -104,15 +104,38 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
 
     ensure_required_session_identity()?;
 
+    let config_override = args.user_config_path.as_deref().or(args.config.as_deref());
+    let resolved_user_config = firma_config_loader::ConfigResolver::default()
+        .resolve_config(config_override)
+        .map_err(|error| RunError::ConfigParse {
+            path: error.path.clone(),
+            reason: error.to_string(),
+        })?;
+    let user_config_path = resolved_user_config
+        .as_ref()
+        .map(firma_config_loader::ResolvedConfig::config_file)
+        .map(Path::to_path_buf);
+    let user_config_dir = resolved_user_config
+        .as_ref()
+        .map(firma_config_loader::ResolvedConfig::config_dir);
+    let agent_id = user_config_path.as_deref().map_or_else(
+        || {
+            Err(RunError::MissingAgentId {
+                path: PathBuf::from("firma.toml"),
+            })
+        },
+        crate::identity::read_configured_agent_id,
+    )?;
+
     let profile = resolve_profile(args)?;
+    let identity = RunIdentity::new(agent_id, profile.id.clone());
     if args.print_effective_config {
-        print_effective_config(&profile)?;
+        print_effective_config(&identity, &profile)?;
     }
 
     let allow_non_structural =
         profile.allow_non_structural || crate::config::env_truthy("FIRMA_RUN_ALLOW_NON_STRUCTURAL");
 
-    let identity = RunIdentity::new(profile.id.clone());
     log_run_start(&identity, &profile);
 
     let capability_token = read_capability_token(&profile.capability.source)?;
@@ -165,32 +188,6 @@ pub fn execute_run(args: &RunInput, hooks: &LaunchHooks<'_>) -> Result<i32, RunE
             );
         }
 
-        // Resolve firma.toml: explicit CLI path > env var > walk up from
-        // cwd for `.firma/firma.toml`. `None` means no config — zero-config
-        // defaults kick in downstream.
-        let resolved_user_config = firma_config_loader::ConfigResolver::default()
-            .resolve_config(args.user_config_path.as_deref())
-            .map_err(|error| RunError::ConfigParse {
-                path: error.path.clone(),
-                reason: error.to_string(),
-            })?;
-        let user_config_path: Option<PathBuf> = resolved_user_config.as_ref().map_or_else(
-            || {
-                tracing::info!("no firma.toml found; using zero-config defaults");
-                None
-            },
-            |resolved| {
-                tracing::info!(
-                    path = %resolved.config_file().display(),
-                    source = ?resolved.source,
-                    "loaded firma.toml"
-                );
-                Some(resolved.config_file().to_path_buf())
-            },
-        );
-        let user_config_dir = resolved_user_config
-            .as_ref()
-            .map(firma_config_loader::ResolvedConfig::config_dir);
         let sidecar_template_path = resolve_sidecar_template_path(
             args.sidecar_template_path.as_deref(),
             user_config_path.as_deref(),
@@ -361,7 +358,8 @@ fn log_run_start(identity: &RunIdentity, profile: &ResolvedProfile) {
     tracing::info!(
         sandbox_id = %identity.sandbox_id,
         session_id = %identity.session_id,
-        profile = %identity.profile,
+        agent_id = %identity.agent_id,
+        profile = %identity.execution_profile,
         backend = %profile.backend,
         "starting firma run"
     );
@@ -773,14 +771,21 @@ fn resolve_sidecar_ca_cert_path(network_overrides: &BTreeMap<String, String>) ->
         .find(|candidate| candidate.is_file())
 }
 
-fn print_effective_config(profile: &ResolvedProfile) -> Result<(), RunError> {
+fn print_effective_config(
+    identity: &RunIdentity,
+    profile: &ResolvedProfile,
+) -> Result<(), RunError> {
     #[derive(Serialize)]
     struct Snapshot<'a> {
+        agent_id: &'a firma_core::AgentId,
+        execution_profile: &'a str,
         profile: &'a ResolvedProfile,
         working_dir: PathBuf,
     }
 
     let snapshot = Snapshot {
+        agent_id: &identity.agent_id,
+        execution_profile: &identity.execution_profile,
         profile,
         working_dir: std::env::current_dir().map_err(|error| {
             RunError::Internal(format!(
@@ -869,7 +874,7 @@ mod tests {
             ca_trust_mode: crate::config::CaTrustMode::Sole,
         };
 
-        let identity = RunIdentity::new("generic");
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "generic");
         let capability_token = crate::capability::read_capability_token(&profile.capability.source)
             .unwrap_or_else(|e| panic!("{e}"));
 
@@ -881,13 +886,21 @@ mod tests {
             &BTreeMap::default(),
         );
         assert!(env.contains_key("HTTP_PROXY"));
+        assert_eq!(
+            env.get("FIRMA_AGENT_ID"),
+            Some(&crate::identity::test_agent_id().to_string())
+        );
         assert_eq!(env.get("FIRMA_RUN_PROFILE"), Some(&"generic".to_string()));
         let headers_json = env
             .get("FIRMA_RUN_ATTR_HEADERS_JSON")
             .unwrap_or_else(|| panic!("missing FIRMA_RUN_ATTR_HEADERS_JSON"));
         let headers: BTreeMap<String, String> =
             serde_json::from_str(headers_json).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(headers.get("x-firma-agent"), Some(&"generic".to_string()));
+        assert_eq!(
+            headers.get("x-firma-agent"),
+            Some(&crate::identity::test_agent_id().to_string())
+        );
+        assert_eq!(headers.get("x-firma-profile"), Some(&"generic".to_string()));
         assert!(headers.contains_key("x-firma-session-id"));
     }
 
@@ -929,7 +942,7 @@ mod tests {
             ca_trust_mode: crate::config::CaTrustMode::Sole,
         };
 
-        let identity = RunIdentity::new("generic");
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "generic");
         let capability_token = crate::capability::read_capability_token(&profile.capability.source)
             .unwrap_or_else(|e| panic!("{e}"));
 
@@ -982,7 +995,7 @@ mod tests {
             ca_trust_mode: crate::config::CaTrustMode::Sole,
         };
 
-        let identity = RunIdentity::new("generic");
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "generic");
         let capability_token = crate::capability::read_capability_token(&profile.capability.source)
             .unwrap_or_else(|e| panic!("{e}"));
         let env = build_execution_env(
@@ -1060,7 +1073,7 @@ mod tests {
             ca_cert.display().to_string(),
         );
 
-        let identity = RunIdentity::new("copilot");
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "copilot");
         let capability_token = crate::capability::read_capability_token(
             &make_profile(crate::config::CaTrustMode::Sole)
                 .capability
@@ -1217,7 +1230,7 @@ mod tests {
             allow_non_structural: false,
             ca_trust_mode: crate::config::CaTrustMode::Sole,
         };
-        let identity = RunIdentity::new("codex");
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "codex");
         let capability_token = crate::capability::read_capability_token(&profile.capability.source)
             .unwrap_or_else(|e| panic!("{e}"));
         let env = build_execution_env(
@@ -1547,7 +1560,10 @@ mod tests {
         let mut handle = crate::backend::SandboxHandle {
             backend: crate::backend::BackendKind::Bwrap,
             runtime_dir: PathBuf::from("/tmp/firma-run/session"),
-            identity: crate::identity::RunIdentity::new("vscode".to_string()),
+            identity: crate::identity::RunIdentity::new(
+                crate::identity::test_agent_id(),
+                "vscode".to_string(),
+            ),
             mounts: Vec::new(),
             network_policy: crate::config::NetworkPolicy {
                 enforce_network_namespace: true,
@@ -1631,7 +1647,7 @@ mod tests {
         let handle = SandboxHandle {
             backend: crate::backend::BackendKind::Bwrap,
             runtime_dir: PathBuf::from("/tmp/firma-test"),
-            identity: RunIdentity::new("generic"),
+            identity: RunIdentity::new(crate::identity::test_agent_id(), "generic"),
             mounts: vec![],
             network_policy: NetworkPolicy {
                 enforce_network_namespace: true,
@@ -1653,7 +1669,7 @@ mod tests {
         let handle = SandboxHandle {
             backend: crate::backend::BackendKind::Vz,
             runtime_dir: PathBuf::from("/tmp/firma-test"),
-            identity: RunIdentity::new("generic"),
+            identity: RunIdentity::new(crate::identity::test_agent_id(), "generic"),
             mounts: vec![],
             network_policy: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -1685,7 +1701,7 @@ mod tests {
         let handle = SandboxHandle {
             backend: crate::backend::BackendKind::Wsl2,
             runtime_dir: PathBuf::from("/tmp/firma-test"),
-            identity: RunIdentity::new("generic"),
+            identity: RunIdentity::new(crate::identity::test_agent_id(), "generic"),
             mounts: vec![],
             network_policy: NetworkPolicy {
                 enforce_network_namespace: false,

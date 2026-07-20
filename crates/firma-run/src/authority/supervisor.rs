@@ -17,6 +17,7 @@ use wait_timeout::ChildExt;
 
 use crate::error::RunError;
 use crate::identity::SandboxId;
+use firma_core::AgentId;
 use firma_runtime_state::UserProcessId;
 
 /// Per-spec default ready-line wait. CLI flag overrides.
@@ -41,7 +42,7 @@ permit(principal, action, resource);
 #[derive(Debug)]
 pub struct SpawnRequest<'a> {
     pub sandbox_id: &'a SandboxId,
-    pub agent_id: &'a str,
+    pub agent_id: &'a AgentId,
     pub session_id: &'a str,
     pub marker_dir: PathBuf,
     pub profile_name: &'a str,
@@ -263,7 +264,7 @@ impl AuthoritySupervisor {
             &metadata_path,
             &crate::authority::metadata::Metadata {
                 sandbox_id: *req.sandbox_id,
-                agent_id: req.agent_id.to_string(),
+                agent_id: req.agent_id.clone(),
                 session_id: req.session_id.to_string(),
                 profile: req.profile_name.to_string(),
                 listen_addr: capture.listen_addr.clone(),

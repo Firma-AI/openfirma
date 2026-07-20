@@ -19,6 +19,8 @@ use std::process::Command;
 
 use firma_config_loader::CONFIG_FILE_NAME;
 
+const REGISTERED_AGENT_ID: &str = "019abcde-1234-7abc-8def-0123456789ab";
+
 fn firma() -> Command {
     Command::new(env!("CARGO_BIN_EXE_firma"))
 }
@@ -52,6 +54,171 @@ fn extract_dry_run_file(stdout: &[u8], file_name: &str) -> String {
     let content = stdout[start..].trim_start_matches('\n');
     let end = content.find("\n=== ").unwrap_or(content.len());
     content[..end].to_string()
+}
+
+#[test]
+fn remote_agent_id_is_canonicalized_and_persisted() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+
+    let output = firma()
+        .args([
+            "config",
+            "--yes",
+            "--mode",
+            "agent-remote",
+            "--agent-id",
+            "019ABCDE-1234-7ABC-8DEF-0123456789AB",
+            "--output-dir",
+        ])
+        .arg(&config_dir)
+        .args(["--state-dir"])
+        .arg(&state_dir)
+        .args([
+            "--authority-url",
+            "https://authority.example.com:9443",
+            "--authority-ca-cert",
+        ])
+        .arg(state_dir.join("remote-ca.crt"))
+        .args(["--authority-pub-key"])
+        .arg(state_dir.join("remote-authority.pub"))
+        .output()
+        .expect("spawn firma config");
+
+    assert!(
+        output.status.success(),
+        "config failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let body = std::fs::read_to_string(config_dir.join(CONFIG_FILE_NAME)).expect("read config");
+    let config: toml::Value = toml::from_str(&body).expect("parse config");
+    assert_eq!(
+        config["sidecar"]["authority"]["agent_id"].as_str(),
+        Some(REGISTERED_AGENT_ID)
+    );
+}
+
+#[test]
+fn new_local_config_generates_uuid_v7_and_rerun_preserves_it() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    let state_dir = tmp.path().join("state");
+
+    run_init(&config_dir, &state_dir);
+    let path = config_dir.join(CONFIG_FILE_NAME);
+    let first_body = std::fs::read_to_string(&path).expect("read first config");
+    let first: toml::Value = toml::from_str(&first_body).expect("parse first config");
+    let generated = first["sidecar"]["authority"]["agent_id"]
+        .as_str()
+        .expect("generated agent id");
+    let parsed = uuid::Uuid::parse_str(generated).expect("generated UUID");
+    assert_eq!(parsed.get_version(), Some(uuid::Version::SortRand));
+
+    run_init(&config_dir, &state_dir);
+    let second_body = std::fs::read_to_string(&path).expect("read second config");
+    let second: toml::Value = toml::from_str(&second_body).expect("parse second config");
+    assert_eq!(
+        second["sidecar"]["authority"]["agent_id"].as_str(),
+        Some(generated)
+    );
+}
+
+#[test]
+fn remote_non_interactive_setup_requires_agent_id() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+
+    let output = firma()
+        .args([
+            "config",
+            "--yes",
+            "--dry-run",
+            "--mode",
+            "agent-remote",
+            "--output-dir",
+        ])
+        .arg(&config_dir)
+        .args([
+            "--authority-url",
+            "https://authority.example.com:9443",
+            "--authority-ca-cert",
+        ])
+        .arg(tmp.path().join("remote-ca.crt"))
+        .args(["--authority-pub-key"])
+        .arg(tmp.path().join("remote-authority.pub"))
+        .output()
+        .expect("spawn firma config");
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--agent-id"),
+        "error must identify the required flag: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn existing_config_without_agent_id_fails_without_mutation() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    let path = config_dir.join(CONFIG_FILE_NAME);
+    let original =
+        "[sidecar.authority]\nurl = \"http://127.0.0.1:50051\"\n\n[run]\nprofile = \"codex\"\n";
+    std::fs::write(&path, original).expect("write legacy config");
+
+    let output = firma()
+        .args(["config", "--yes", "--mode", "agent-local", "--output-dir"])
+        .arg(&config_dir)
+        .output()
+        .expect("spawn firma config");
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--agent-id"));
+    assert_eq!(
+        std::fs::read_to_string(path).expect("read config"),
+        original
+    );
+}
+
+#[test]
+fn explicit_agent_id_replaces_legacy_profile_value() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    let path = config_dir.join(CONFIG_FILE_NAME);
+    std::fs::write(
+        &path,
+        "[sidecar.authority]\nagent_id = \"codex\"\nurl = \"http://127.0.0.1:50051\"\n\n[run]\nprofile = \"codex\"\n",
+    )
+    .expect("write legacy config");
+
+    let output = firma()
+        .args([
+            "config",
+            "--yes",
+            "--mode",
+            "agent-local",
+            "--agent-id",
+            REGISTERED_AGENT_ID,
+            "--output-dir",
+        ])
+        .arg(&config_dir)
+        .output()
+        .expect("spawn firma config");
+
+    assert!(
+        output.status.success(),
+        "config failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let body = std::fs::read_to_string(path).expect("read config");
+    let config: toml::Value = toml::from_str(&body).expect("parse config");
+    assert_eq!(
+        config["sidecar"]["authority"]["agent_id"].as_str(),
+        Some(REGISTERED_AGENT_ID)
+    );
 }
 
 fn assert_unified_config_parses(firma_toml: &Path) {
@@ -246,6 +413,8 @@ fn agent_remote_switch_drops_local_authority_section() {
             "--force",
             "--mode",
             "agent-remote",
+            "--agent-id",
+            REGISTERED_AGENT_ID,
             "--output-dir",
         ])
         .arg(&config_dir)
@@ -297,6 +466,8 @@ fn agent_remote_switch_warns_about_existing_local_authority_without_force() {
             "--dry-run",
             "--mode",
             "agent-remote",
+            "--agent-id",
+            REGISTERED_AGENT_ID,
             "--output-dir",
         ])
         .arg(&config_dir)
@@ -340,6 +511,8 @@ fn agent_remote_requires_connect_material_without_existing_defaults() {
             "--dry-run",
             "--mode",
             "agent-remote",
+            "--agent-id",
+            REGISTERED_AGENT_ID,
             "--output-dir",
         ])
         .arg(&config_dir)
@@ -363,6 +536,8 @@ fn agent_remote_requires_connect_material_without_existing_defaults() {
             "--dry-run",
             "--mode",
             "agent-remote",
+            "--agent-id",
+            REGISTERED_AGENT_ID,
             "--output-dir",
         ])
         .arg(&config_dir)
@@ -386,6 +561,8 @@ fn agent_remote_requires_connect_material_without_existing_defaults() {
             "--dry-run",
             "--mode",
             "agent-remote",
+            "--agent-id",
+            REGISTERED_AGENT_ID,
             "--output-dir",
         ])
         .arg(&config_dir)
@@ -416,7 +593,15 @@ fn agent_remote_to_local_switch_persists_authority_section() {
 
     // Bootstrap as agent-remote first.
     let remote = firma()
-        .args(["config", "--yes", "--mode", "agent-remote", "--output-dir"])
+        .args([
+            "config",
+            "--yes",
+            "--mode",
+            "agent-remote",
+            "--agent-id",
+            REGISTERED_AGENT_ID,
+            "--output-dir",
+        ])
         .arg(&config_dir)
         .args(["--state-dir"])
         .arg(&state_dir)

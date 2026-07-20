@@ -142,6 +142,7 @@ fn maybe_implicit_init(args: &RunArgs) -> anyhow::Result<Option<PathBuf>> {
         workspace: cwd,
         force: false,
         authority_listen: "127.0.0.1:50051".into(),
+        agent_id: uuid::Uuid::now_v7(),
         agent: inferred_profile.unwrap_or("my-agent").to_string(),
         provider: profile_to_provider(inferred_profile),
         authority,

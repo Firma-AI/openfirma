@@ -267,7 +267,9 @@ fn live_mint_writes_seed_and_admits_stage1() {
         authority_pub_key_path: authority.pub_key_path.clone(),
         authority_ca_cert_path: None,
         credentials: None,
-        agent_id: "live-agent".to_string(),
+        agent_id: "019abcde-1234-7abc-8def-0123456789ab"
+            .parse()
+            .expect("valid agent UUID"),
         session_id: "live-session".to_string(),
         requested_actions: firma_run::capability::issue::DEFAULT_REQUESTED_ACTIONS
             .iter()
@@ -316,7 +318,10 @@ fn live_mint_writes_seed_and_admits_stage1() {
     let claims = verifier
         .verify(&entry.raw_token)
         .expect("minted token must verify against the live Authority public key");
-    assert_eq!(claims.agent_id.to_string(), "live-agent");
+    assert_eq!(
+        claims.agent_id.to_string(),
+        "019abcde-1234-7abc-8def-0123456789ab"
+    );
     assert_eq!(claims.session_id.to_string(), "live-session");
     assert_eq!(
         claims.action_set,
@@ -354,7 +359,12 @@ fn no_autostart_unreachable_authority_fails_loudly() {
     let port = pick_free_port();
     let url = format!("http://127.0.0.1:{port}");
 
-    let identity = firma_run::identity::RunIdentity::new("no-autostart-agent");
+    let identity = firma_run::identity::RunIdentity::new(
+        "019abcde-1234-7abc-8def-0123456789ab"
+            .parse()
+            .expect("valid agent UUID"),
+        "no-autostart-agent",
+    );
     let flags = firma_run::routing::AutostartFlags {
         no_autostart: true,
         ..Default::default()

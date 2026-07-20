@@ -12,6 +12,8 @@ mod capability_lease;
 mod capability_mint;
 mod capability_refresh;
 mod capability_routing;
+mod helper;
+mod identity;
 mod log;
 mod profile_alias;
 mod sidecar_autostart_env_sandbox_id;

@@ -147,8 +147,8 @@ policy directories. Three usage shapes:
 firma config                                              # interactive wizard
 firma config --yes                                        # non-interactive defaults
 firma config --output-dir .local                          # specific directory
-firma config --agent codex --provider anthropic \
-           --workspace ./proj --authority local         # scripted full setup
+firma config --mode agent-local --profile codex \
+           --mapping anthropic --workspace ./proj --yes # scripted full setup
 ```
 
 `firma run <agent>` invokes the same scaffold implicitly on first use
@@ -168,22 +168,27 @@ Layout written by `firma config`:
 ```
 
 `firma.toml` is one sectioned file: `[project]`, `[authority]`,
-`[sidecar.*]`. The post-config `next:` hint is `firma run <agent>`
+`[sidecar.*]`, and `[run]`. The post-config `next:` hint is `firma run <agent>`
 (or `firma sidecar start` for the daemon path).
+
+`[sidecar.authority].agent_id` is the Authority-registered UUID. It is
+independent from `[run].profile`, which selects local sandbox and runtime
+behaviour. New local configs generate a UUIDv7. Remote configs require the UUID
+returned by registration, supplied with `--agent-id` or entered interactively.
 
 `firma config` flags:
 
-| Flag                 | Default                     | Description                                           |
-| -------------------- | --------------------------- | ----------------------------------------------------- |
-| `--output-dir <dir>` | current directory           | Where firma.toml, policies, and mappings are written. |
-| `--workspace <dir>`  | _cwd_ (wizard prompt)       | Agent RW access path (bwrap mount).                   |
-| `--name <name>`      | wizard prompt / `my-agent`  | Agent slug — used as `agent_id` in generated config.  |
-| `--posture <val>`    | wizard prompt / `dev`       | Cedar enforcement posture.                            |
-| `--mapping <val>`    | wizard prompt / `anthropic` | Mapping file(s) — repeat for multiple.                |
-| `--yes`              | _off_                       | Skip the wizard; use defaults for any unset flag.     |
-| `--state-dir <dir>`  | `FIRMA_STATE_DIR` / XDG     | State dir (keys, revocations, generated CA).          |
-| `--force`            | _off_                       | Overwrite existing files.                             |
-| `--sidecar-listen`   | `127.0.0.1:8080`            | Sidecar HTTP proxy listen.                            |
+| Flag                  | Default                 | Description                                           |
+| --------------------- | ----------------------- | ----------------------------------------------------- |
+| `--output-dir <dir>`  | `.firma` in current dir | Where firma.toml, policies, and mappings are written. |
+| `--workspace <dir>`   | current directory       | Agent RW access path (bwrap mount).                   |
+| `--profile <profile>` | wizard / `generic`      | Local execution profile written to `[run].profile`.   |
+| `--agent-id <uuid>`   | generated / prompt      | Authority-registered agent UUID.                      |
+| `--posture <val>`     | wizard / `dev`          | Cedar enforcement posture.                            |
+| `--mapping <val>`     | wizard / `anthropic`    | Mapping file(s) — repeat for multiple.                |
+| `--yes`               | _off_                   | Skip the wizard; use defaults for any unset flag.     |
+| `--state-dir <dir>`   | `FIRMA_STATE_DIR` / XDG | State dir (keys, revocations, generated CA).          |
+| `--force`             | _off_                   | Overwrite existing files.                             |
 
 ### `firma sidecar` (daemon lifecycle)
 

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use firma_core::AgentId;
 pub use firma_runtime_state::SandboxId;
 
 /// Stable identity tuple associated with a `firma run` execution.
@@ -13,18 +14,20 @@ pub use firma_runtime_state::SandboxId;
 pub struct RunIdentity {
     pub sandbox_id: SandboxId,
     pub session_id: String,
-    pub profile: String,
+    pub agent_id: AgentId,
+    pub execution_profile: String,
 }
 
 impl RunIdentity {
-    /// Create a new run identity for a profile.
+    /// Create a new run identity for a registered agent and execution profile.
     #[must_use]
-    pub fn new(profile: impl Into<String>) -> Self {
+    pub fn new(agent_id: AgentId, execution_profile: impl Into<String>) -> Self {
         Self {
             sandbox_id: SandboxId::generate(),
             session_id: read_identity_override("FIRMA_RUN_SESSION_ID")
                 .unwrap_or_else(|| Uuid::now_v7().to_string()),
-            profile: profile.into(),
+            agent_id,
+            execution_profile: execution_profile.into(),
         }
     }
 
@@ -38,7 +41,11 @@ impl RunIdentity {
             self.sandbox_id.to_string(),
         );
         pairs.insert("FIRMA_RUN_SESSION_ID".to_string(), self.session_id.clone());
-        pairs.insert("FIRMA_RUN_PROFILE".to_string(), self.profile.clone());
+        pairs.insert("FIRMA_AGENT_ID".to_string(), self.agent_id.to_string());
+        pairs.insert(
+            "FIRMA_RUN_PROFILE".to_string(),
+            self.execution_profile.clone(),
+        );
         pairs
     }
 
@@ -51,7 +58,10 @@ impl RunIdentity {
             self.sandbox_id.to_string(),
         );
         headers.insert("x-firma-session-id".to_string(), self.session_id.clone());
-        headers.insert("x-firma-profile".to_string(), self.profile.clone());
+        headers.insert(
+            "x-firma-profile".to_string(),
+            self.execution_profile.clone(),
+        );
         headers
     }
 
@@ -70,8 +80,7 @@ impl RunIdentity {
             .or_else(|| std::env::var("USER").ok())
             .or_else(|| std::env::var("USERNAME").ok())
             .unwrap_or_else(|| "unknown".to_string());
-        // `profile` equals the resolved `ResolvedProfile::id` (set at construction).
-        headers.insert("x-firma-agent".to_string(), self.profile.clone());
+        headers.insert("x-firma-agent".to_string(), self.agent_id.to_string());
         headers.insert("x-firma-user".to_string(), user);
         headers
     }
@@ -91,6 +100,49 @@ pub fn reject_reserved_sandbox_id_environment() -> Result<(), crate::error::RunE
     Ok(())
 }
 
+/// Read and validate the registered agent UUID from `firma.toml`.
+///
+/// # Errors
+///
+/// Returns a typed missing, legacy-profile, malformed UUID, or config parse
+/// error. The returned [`AgentId`] always contains the canonical hyphenated
+/// lowercase UUID representation.
+pub fn read_configured_agent_id(path: &std::path::Path) -> Result<AgentId, crate::error::RunError> {
+    let text =
+        std::fs::read_to_string(path).map_err(|error| crate::error::RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        })?;
+    let value: toml::Value =
+        toml::from_str(&text).map_err(|error| crate::error::RunError::ConfigParse {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        })?;
+    let raw = value
+        .get("sidecar")
+        .and_then(|sidecar| sidecar.get("authority"))
+        .and_then(|authority| authority.get("agent_id"))
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| crate::error::RunError::MissingAgentId {
+            path: path.to_path_buf(),
+        })?;
+    if firma_config_loader::AgentProfile::from_name(raw).is_some() {
+        return Err(crate::error::RunError::LegacyProfileAgentId {
+            path: path.to_path_buf(),
+            value: raw.to_string(),
+        });
+    }
+    let uuid = Uuid::parse_str(raw).map_err(|_| crate::error::RunError::InvalidAgentId {
+        path: path.to_path_buf(),
+        value: raw.to_string(),
+    })?;
+    uuid.hyphenated().to_string().parse().map_err(|error| {
+        crate::error::RunError::Internal(format!(
+            "canonical UUID failed AgentId validation: {error}"
+        ))
+    })
+}
+
 fn read_identity_override(key: &str) -> Option<String> {
     std::env::var(key)
         .ok()
@@ -99,12 +151,19 @@ fn read_identity_override(key: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+pub(crate) fn test_agent_id() -> AgentId {
+    "019abcde-1234-7abc-8def-0123456789ab"
+        .parse()
+        .expect("valid test agent UUID")
+}
+
+#[cfg(test)]
 mod tests {
     use super::RunIdentity;
 
     #[test]
     fn identity_env_contains_required_fields() {
-        let identity = RunIdentity::new("generic");
+        let identity = RunIdentity::new(super::test_agent_id(), "generic");
         let env = identity.env_pairs();
 
         assert!(env.contains_key("FIRMA_RUN_SANDBOX_ID"));
@@ -114,10 +173,13 @@ mod tests {
 
     #[test]
     fn full_headers_include_agent_user_and_session() {
-        let identity = RunIdentity::new("generic");
+        let identity = RunIdentity::new(super::test_agent_id(), "generic");
         let headers = identity.full_attribution_headers();
 
-        assert_eq!(headers.get("x-firma-agent"), Some(&"generic".to_string()));
+        assert_eq!(
+            headers.get("x-firma-agent"),
+            Some(&super::test_agent_id().to_string())
+        );
         assert!(headers.contains_key("x-firma-session-id"));
         assert!(headers.contains_key("x-firma-user"));
         assert!(!headers["x-firma-user"].trim().is_empty());

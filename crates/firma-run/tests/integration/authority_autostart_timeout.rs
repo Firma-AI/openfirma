@@ -36,7 +36,7 @@ fn timeout_kills_child_and_returns_typed_error() {
 
     let result = AuthoritySupervisor::spawn(SpawnRequest {
         sandbox_id: &sandbox_id,
-        agent_id: "agent",
+        agent_id: super::helper::agent_id(),
         session_id: "sess",
         marker_dir: tmp.path().join("marker/authority"),
         profile_name: "developer",

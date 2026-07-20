@@ -47,11 +47,11 @@ For the conceptual background, read [The sandbox boundary](../../concepts/sandbo
 
 `firma run` uses a different sandbox backend per platform. The defaults are usually right:
 
-| Platform | Default backend | Notes |
-| -------- | --------------- | ----- |
-| Linux    | `bwrap`         | Structural mode; requires unprivileged user namespaces + AppArmor allowance for bwrap. |
+| Platform | Default backend | Notes                                                                                                                                                                                                                        |
+| -------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Linux    | `bwrap`         | Structural mode; requires unprivileged user namespaces + AppArmor allowance for bwrap.                                                                                                                                       |
 | macOS    | `vz`            | Default compatibility mode: host process, `sandbox-exec`, proxy bridge, explicit `--allow-non-structural` opt-in. Experimental structural modes are available via sandbox-exec network-deny or the VZ guest runner contract. |
-| Windows  | `wsl2`          | Current compatibility mode; explicit `--allow-non-structural` opt-in. |
+| Windows  | `wsl2`          | Current compatibility mode; explicit `--allow-non-structural` opt-in.                                                                                                                                                        |
 
 Verify the platform default works on your host. On Linux, the bwrap backend
 needs two things: unprivileged user namespaces enabled, and — on AppArmor
@@ -99,13 +99,13 @@ Guest mode is still under active development. Today it validates those artifact 
 `firma config` creates a complete working configuration directory — sidecar + authority config, Cedar policy, mapping rules, and an authority keypair — in a single step:
 
 ```bash
-firma config --name my-agent --posture dev --mapping anthropic
+firma config --profile generic --posture dev --mapping anthropic
 ```
 
 This writes to the **current directory** by default. To write to a specific directory, pass `--output-dir`:
 
 ```bash
-firma config --name my-agent --posture dev --mapping anthropic --output-dir .local
+firma config --profile generic --posture dev --mapping anthropic --output-dir .local
 ```
 
 Generated layout (default `--output-dir .firma`):
@@ -129,6 +129,24 @@ $XDG_DATA_HOME/firma/          — platform state dir (keys, revocations, CA)
 ```bash
 firma config --dry-run
 ```
+
+`firma run` resolves `[sidecar.authority].agent_id` before it prepares the
+backend or starts an Authority, Sidecar, or capability request. The value must
+be a UUID. New local scaffolds generate a stable UUIDv7; remote configurations
+must use the UUID returned by FirmaTeam registration:
+
+```bash
+firma config --yes --mode agent-remote \
+  --agent-id 019abcde-1234-7abc-8def-0123456789ab \
+  --authority-url https://authority.example.com:9443 \
+  --authority-ca-cert ./authority-ca.crt \
+  --authority-pub-key ./authority.pub
+```
+
+The registered identity is separate from the execution profile. The UUID is
+sent in `IssueCapabilityRequest.agent_id`, `FIRMA_AGENT_ID`, and
+`x-firma-agent`. `[run].profile` remains local and is exposed as
+`FIRMA_RUN_PROFILE` and `x-firma-profile`.
 
 Inspect the generated config:
 
@@ -230,12 +248,14 @@ On exit, each autostarted component logs a stopping notice:
 
 **Key fields:**
 
-| Field | Meaning |
-|---|---|
-| `sandbox_id` | Firma sandbox ID — unique per `firma run` invocation |
-| `pid` | OS process ID of the autostarted component |
-| `listen_addr` / `endpoint` | Address the component is reachable at |
-| `url` | Full URL (authority reuse path) |
+| Field                      | Meaning                                               |
+| -------------------------- | ----------------------------------------------------- |
+| `sandbox_id`               | Firma sandbox ID — unique per `firma run` invocation  |
+| `agent_id`                 | Stable Authority-registered UUID from the config      |
+| `profile`                  | Local execution profile, such as `codex` or `generic` |
+| `pid`                      | OS process ID of the autostarted component            |
+| `listen_addr` / `endpoint` | Address the component is reachable at                 |
+| `url`                      | Full URL (authority reuse path)                       |
 
 Firma generates one `sbx_...` sandbox ID for each invocation and uses it
 consistently in status output, logs, and audit events.
@@ -371,18 +391,18 @@ This prints the resolved profile as JSON: which backend, which env vars are inje
 
 `firma run --help` is the full reference. The flags that come up most often:
 
-| Flag                                        | Effect                                                                                                                                                                                     |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--profile <name>`                          | Pick a runtime profile. `generic` is the default; `codex` adds workspace mounts for coding agents.                                                                                         |
-| `--config <file>`                           | Override profile defaults from a TOML/YAML file.                                                                                                                                           |
-| `--backend <bwrap\|vz\|wsl2\|firecracker>`  | Override the platform default backend.                                                                                                                                                     |
-| `--sidecar <local\|url>`                    | `local` autostarts a per-run Sidecar; a `tcp://host:port` / `unix:///path` value targets an external one and never autostarts. Omitted: persisted `sidecar_endpoint` else local autostart. |
-| `--no-autostart`                            | Disable autostart for any missing component and fail loudly. Incompatible with `--sidecar local` and `--authority local`. CI / production safety net.                                      |
-| `--sidecar-config <path>`                   | Sidecar TOML template for autostart. Falls back to `FIRMA_SIDECAR_CONFIG_FILE`, then the discovered `firma.toml`.                                                                          |
-| `--sidecar-startup-timeout-secs <n>`        | Maximum wait for the autostarted Sidecar's `ready` line (default `10`).                                                                                                                    |
-| `--capability-file <path>`                  | Pre-staged capability seed for this run.                                                                                                                                                   |
-| `--identity-mode <sandbox-user\|host-user>` | Choose whether the sandboxed process runs as the host user or a remapped sandbox user.                                                                                                     |
-| `--print-effective-config`                  | Print resolved config and exit. No agent launched.                                                                                                                                         |
+| Flag                                        | Effect                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--profile <name>`                          | Pick a runtime profile. `generic` is the default; `codex` adds workspace mounts for coding agents.                                                                                                                                                                                                                                                                                    |
+| `--config <file>`                           | Override profile defaults from a TOML/YAML file.                                                                                                                                                                                                                                                                                                                                      |
+| `--backend <bwrap\|vz\|wsl2\|firecracker>`  | Override the platform default backend.                                                                                                                                                                                                                                                                                                                                                |
+| `--sidecar <local\|url>`                    | `local` autostarts a per-run Sidecar; a `tcp://host:port` / `unix:///path` value targets an external one and never autostarts. Omitted: persisted `sidecar_endpoint` else local autostart.                                                                                                                                                                                            |
+| `--no-autostart`                            | Disable autostart for any missing component and fail loudly. Incompatible with `--sidecar local` and `--authority local`. CI / production safety net.                                                                                                                                                                                                                                 |
+| `--sidecar-config <path>`                   | Sidecar TOML template for autostart. Falls back to `FIRMA_SIDECAR_CONFIG_FILE`, then the discovered `firma.toml`.                                                                                                                                                                                                                                                                     |
+| `--sidecar-startup-timeout-secs <n>`        | Maximum wait for the autostarted Sidecar's `ready` line (default `10`).                                                                                                                                                                                                                                                                                                               |
+| `--capability-file <path>`                  | Pre-staged capability seed for this run.                                                                                                                                                                                                                                                                                                                                              |
+| `--identity-mode <sandbox-user\|host-user>` | Choose whether the sandboxed process runs as the host user or a remapped sandbox user.                                                                                                                                                                                                                                                                                                |
+| `--print-effective-config`                  | Print resolved config and exit. No agent launched.                                                                                                                                                                                                                                                                                                                                    |
 | `--monitor`                                 | Run in observe-only mode for this invocation. Every call is allowed through; `firma monitor` shows the original deny reason prefixed with `monitor_mode:`. This flag is the explicit opt-in: it sets `FIRMA_ALLOW_MONITOR_MODE=1` on the autostarted sidecar. A config that sets `mode = "monitor"` without that env var downgrades to `enforce` at startup. Never use in production. |
 
 ## What does and does not pass through

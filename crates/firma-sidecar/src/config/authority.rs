@@ -3,12 +3,16 @@
 use std::path::PathBuf;
 
 use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::authority_credentials::SidecarCredentialsConfig;
 
 /// Tuning for background Authority stream clients.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthorityConfig {
+    /// Authority-registered UUID for the agent represented by this Sidecar.
+    #[serde(default)]
+    pub agent_id: Option<Uuid>,
     /// Authority gRPC URL (e.g. `https://127.0.0.1:9443`). When set, the
     /// sidecar streams policy bundles and revocations from the Authority.
     #[serde(default)]
@@ -125,6 +129,7 @@ impl AuthorityConfig {
 impl Default for AuthorityConfig {
     fn default() -> Self {
         Self {
+            agent_id: None,
             url: None,
             connect_timeout_secs: default_connect_timeout_secs(),
             reconnect_min_backoff_ms: default_min_backoff_ms(),

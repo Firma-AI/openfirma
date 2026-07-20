@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, ValueEnum};
+use uuid::Uuid;
 
 static POSTURE_STRICT: &str = include_str!("../../templates/policies/strict.cedar");
 static POSTURE_DEV: &str = include_str!("../../templates/policies/dev.cedar");
@@ -49,6 +50,10 @@ pub struct InitArgs {
     /// Built-in agent profile written to `[run].profile` in `firma.toml`.
     #[arg(long, value_enum)]
     pub profile: Option<AgentProfile>,
+
+    /// Authority-registered agent UUID written to `[sidecar.authority].agent_id`.
+    #[arg(long)]
+    pub agent_id: Option<Uuid>,
 
     /// Cedar policy posture to write under `policies/`.
     #[arg(long, value_enum)]

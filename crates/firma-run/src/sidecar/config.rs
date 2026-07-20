@@ -17,6 +17,7 @@ use p256::pkcs8::{EncodePrivateKey, LineEnding};
 use sha2::{Digest, Sha256};
 
 use crate::error::RunError;
+use firma_core::AgentId;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
 const MINIMAL_MAPPING_RULES_TOML: &str = "\
@@ -293,8 +294,10 @@ const VSCODE_GITHUB_MITM_BYPASS_HOSTS: &[&str] =
 #[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct SynthesizeRequest<'a> {
-    /// Effective run agent/profile id.
-    pub agent_id: &'a str,
+    /// Authority-registered agent identity.
+    pub agent_id: &'a AgentId,
+    /// Effective execution profile id.
+    pub execution_profile: &'a str,
     /// Effective run session id.
     pub session_id: &'a str,
     /// Highest-priority template path (typically `--sidecar-config`).
@@ -391,6 +394,7 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
     if let Some(url) = req.authority_url {
         override_authority_url(&mut value, url)?;
     }
+    override_authority_agent_id(&mut value, req.agent_id)?;
     if let Some(cert) = req.authority_ca_cert {
         override_authority_ca_cert(&mut value, cert)?;
     }
@@ -415,17 +419,17 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
     ensure_audit_signing_key(&mut value, req.out_path)?;
     // GitHub is strict-MITM by default, which skips CONNECT enforcement. The
     // VS Code profile classifies its GitHub account traffic at CONNECT level.
-    ensure_vscode_github_mitm_bypass(&mut value, req.agent_id)?;
-    ensure_mapping_rules(&mut value, req.out_path, req.agent_id)?;
+    ensure_vscode_github_mitm_bypass(&mut value, req.execution_profile)?;
+    ensure_mapping_rules(&mut value, req.out_path, req.execution_profile)?;
     write_atomic(req.out_path, &value)?;
     Ok(source)
 }
 
 fn ensure_vscode_github_mitm_bypass(
     value: &mut toml::Value,
-    agent_id: &str,
+    execution_profile: &str,
 ) -> Result<(), RunError> {
-    if !is_vscode_agent(agent_id) {
+    if !is_vscode_profile(execution_profile) {
         return Ok(());
     }
 
@@ -458,6 +462,23 @@ fn ensure_vscode_github_mitm_bypass(
             bypass_hosts.push(toml::Value::String((*host).to_string()));
         }
     }
+    Ok(())
+}
+
+fn override_authority_agent_id(
+    value: &mut toml::Value,
+    agent_id: &AgentId,
+) -> Result<(), RunError> {
+    let sidecar = sidecar_table_mut(value)?;
+    let authority = sidecar
+        .entry("authority".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| RunError::Internal("[sidecar.authority] is not a table".into()))?;
+    authority.insert(
+        "agent_id".to_string(),
+        toml::Value::String(agent_id.to_string()),
+    );
     Ok(())
 }
 
@@ -858,7 +879,7 @@ fn generate_ephemeral_audit_key_pem() -> Result<String, RunError> {
 fn ensure_mapping_rules(
     value: &mut toml::Value,
     out_path: &Path,
-    agent_id: &str,
+    execution_profile: &str,
 ) -> Result<(), RunError> {
     let sidecar = sidecar_table_mut(value)?;
     let mapping = sidecar
@@ -875,9 +896,11 @@ fn ensure_mapping_rules(
     })?;
     let rules_path = parent.join("mapping-rules.toml");
     if !rules_path.exists() {
-        std::fs::write(&rules_path, minimal_mapping_rules_for_agent(agent_id)).map_err(
-            |error| RunError::Internal(format!("write {}: {error}", rules_path.display())),
-        )?;
+        std::fs::write(
+            &rules_path,
+            minimal_mapping_rules_for_profile(execution_profile),
+        )
+        .map_err(|error| RunError::Internal(format!("write {}: {error}", rules_path.display())))?;
     }
 
     let has_rules_path = mapping
@@ -897,16 +920,16 @@ fn ensure_mapping_rules(
     Ok(())
 }
 
-fn minimal_mapping_rules_for_agent(agent_id: &str) -> &'static str {
-    if is_vscode_agent(agent_id) {
+fn minimal_mapping_rules_for_profile(execution_profile: &str) -> &'static str {
+    if is_vscode_profile(execution_profile) {
         VSCODE_MINIMAL_MAPPING_RULES_TOML
     } else {
         MINIMAL_MAPPING_RULES_TOML
     }
 }
 
-fn is_vscode_agent(agent_id: &str) -> bool {
-    firma_config_loader::AgentProfile::from_name(agent_id)
+fn is_vscode_profile(execution_profile: &str) -> bool {
+    firma_config_loader::AgentProfile::from_name(execution_profile)
         .is_some_and(|profile| profile == firma_config_loader::AgentProfile::Vscode)
 }
 
@@ -1035,7 +1058,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
         let cfg_path = tmp.path().join("sidecar.toml");
         let source = synthesize(SynthesizeRequest {
-            agent_id: "vscode",
+            agent_id: &crate::identity::test_agent_id(),
+            execution_profile: "vscode",
             session_id: "sess_001",
             explicit_template: None,
             env_template: None,

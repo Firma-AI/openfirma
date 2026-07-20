@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use firma_core::AgentId;
 use serde::Serialize;
 
 use crate::error::RunError;
@@ -10,7 +11,7 @@ use firma_runtime_state::{SandboxId, UserProcessId};
 #[derive(Debug, Clone, Serialize)]
 pub struct Metadata {
     pub sandbox_id: SandboxId,
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub session_id: String,
     pub profile: String,
     pub listen_addr: String,

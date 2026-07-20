@@ -36,6 +36,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value, value};
+use uuid::Uuid;
 
 use crate::args::config::Mode;
 
@@ -46,6 +47,7 @@ pub struct DocInputs<'a> {
     pub mode: &'a Mode,
     pub keep_local_authority: bool,
     pub profile: &'a str,
+    pub agent_id: Option<&'a Uuid>,
     pub authority_listen: &'a str,
     pub authority_url: &'a str,
     pub authority_ca_cert: &'a str,
@@ -254,6 +256,10 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
 
     {
         let auth = ensure_table(sidecar, "authority")?;
+        let agent_id = inputs
+            .agent_id
+            .ok_or_else(|| anyhow::anyhow!("agent config requires an agent UUID"))?;
+        set_str(auth, "agent_id", &agent_id.hyphenated().to_string());
         if inputs.has_connect() {
             set_str(auth, "url", inputs.authority_url);
             set_str(auth, "ca_cert_path", inputs.authority_ca_cert);
@@ -565,13 +571,20 @@ fn set_str_array(table: &mut Table, key: &str, items: &[String]) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::LazyLock;
+
     use super::*;
+
+    static TEST_AGENT_ID: LazyLock<Uuid> = LazyLock::new(|| {
+        Uuid::parse_str("019abcde-1234-7abc-8def-0123456789ab").expect("valid test UUID")
+    });
 
     fn dummy_inputs(mode: &Mode) -> DocInputs<'_> {
         DocInputs {
             mode,
             keep_local_authority: false,
             profile: "generic",
+            agent_id: Some(&TEST_AGENT_ID),
             authority_listen: "127.0.0.1:50051",
             authority_url: "http://127.0.0.1:50051",
             authority_ca_cert: "/state/tls/authority-ca.crt",
