@@ -70,7 +70,7 @@ mod tests {
         let body = r#"
 raw_token = "v4.public.eyJhbGciOiJFZERTQSJ9.test-payload.test-sig"
 token_id = "01J0000000000000000000000Z"
-agent_id = "demo-agent"
+agent_id = "agt_01j0000000e008000000000001"
 session_id = "demo-session"
 action_set = ["communication.external.send"]
 resource_scope = "wttr.in*"
@@ -79,7 +79,7 @@ expiry = "2026-04-29T16:00:00Z"
 context_hash = "deadbeef"
 "#;
         let parsed: SeedFile = toml::from_str(body).unwrap();
-        assert_eq!(parsed.agent_id, "demo-agent");
+        assert_eq!(parsed.agent_id, "agt_01j0000000e008000000000001");
         assert_eq!(parsed.action_set, vec!["communication.external.send"]);
         assert!(parsed.budget_ceiling.is_none());
         assert_eq!(parsed.issued_at.to_rfc3339(), "2026-04-29T15:00:00+00:00");
@@ -93,7 +93,7 @@ context_hash = "deadbeef"
         let body = r#"
 raw_token = "v4.public.test"
 token_id = "01J0000000000000000000000Z"
-agent_id = "demo-agent"
+agent_id = "agt_01j0000000e008000000000001"
 session_id = "demo-session"
 action_set = ["communication.external.send"]
 resource_scope = "*"

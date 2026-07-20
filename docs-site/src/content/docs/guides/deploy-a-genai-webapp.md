@@ -45,13 +45,16 @@ The rest of this guide uses **per-pod sidecar**. The patterns translate to the o
 
 In a multi-tenant web app, "the agent" is not the app. The agent is the **session** — what the app is doing on behalf of one user. The choice that matters most:
 
-| Choice                   | Meaning                                                | Use when                            |
-| ------------------------ | ------------------------------------------------------ | ----------------------------------- |
-| `agent_id = <tenant_id>` | One agent identity per tenant; sessions are sub-units. | Per-tenant policies, shared models. |
-| `agent_id = <user_id>`   | One agent identity per end user.                       | Strict per-user audit isolation.    |
-| `agent_id = <app_name>`  | A single agent identity for the whole app.             | Single-tenant; minimal isolation.   |
+| Choice                        | Meaning                                      | Use when                            |
+| ----------------------------- | -------------------------------------------- | ----------------------------------- |
+| One registered ID per tenant  | Sessions are sub-units of a tenant agent.    | Per-tenant policies, shared models. |
+| One registered ID per user    | Each end user has a distinct agent identity. | Strict per-user audit isolation.    |
+| One registered ID for the app | The whole app shares one agent identity.     | Single-tenant; minimal isolation.   |
 
-This guide uses `agent_id = <tenant_id>` and `session_id = <user-session-uuid>`. That gives you per-tenant policies plus per-session isolation in the audit log.
+This guide stores one Authority-issued `agt_` TypeID for each tenant and uses
+`session_id = <user-session-uuid>`. Do not construct an agent ID from the tenant
+name: keep a tenant-to-agent-ID mapping returned by registration. That gives you
+per-tenant policies plus per-session isolation in the audit log.
 
 ## Step 2: Set up shared infrastructure
 
@@ -87,10 +90,10 @@ permit (
     action == Firma::Action::"communication.external.send",
     resource
 ) when {
-    // tenant ids we recognize
-    principal == Firma::Agent::"tenant-acme" ||
-    principal == Firma::Agent::"tenant-globex" ||
-    principal == Firma::Agent::"tenant-soylent"
+    // Authority-issued agent IDs for tenants we recognize
+    principal == Firma::Agent::"agt_01j0000000e008000000000001" ||
+    principal == Firma::Agent::"agt_01j0000000e008000000000002" ||
+    principal == Firma::Agent::"agt_01j0000000e008000000000003"
 };
 
 // No tenant gets payment classes from this app.
@@ -316,7 +319,7 @@ def issue_capability_for_session(tenant_id: str, user_session_id: str):
     )
     stub = authority_pb2_grpc.AuthorityStub(channel)
     req = authority_pb2.IssuanceRequest(
-        agent_id=f"tenant-{tenant_id}",
+        agent_id=tenant_agent_ids[tenant_id],
         session_id=user_session_id,
         requested_actions=[
             "communication.external.send",
@@ -359,7 +362,10 @@ The app does *not* read `OPENAI_API_KEY` or vendor secrets. They live in Vault, 
 
 ## Step 9: Multi-tenancy in the audit log
 
-Every request the app proxies produces an audit event tagged with `agent_id = tenant-<id>`, `session_id = <user-session>`. Ship those events to your collector keyed on `agent_id` and you have **per-tenant audit by construction** — no app-side instrumentation needed.
+Every request the app proxies produces an audit event tagged with the tenant's
+registered `agt_` agent ID and `session_id = <user-session>`. Ship those events
+to your collector keyed on `agent_id` and you have **per-tenant audit by
+construction** — no app-side instrumentation needed.
 
 For per-user accounting on top of that, the `session_id` is the unit. If you record the mapping `(session_id → user_id)` somewhere, you can join the audit stream against it.
 
@@ -381,10 +387,10 @@ A few practices that come up only at production scale.
 
 Putting it all together, the new-tenant workflow is:
 
-1. Add `Firma::Agent::"tenant-newco"` to the issuance policy.
-2. Add any tenant-specific runtime rules (a `permit` with `principal == Firma::Agent::"tenant-newco"`, etc.).
+1. Register NewCo and store its Authority-issued `agt_` agent ID.
+2. Add that ID to the issuance policy and any tenant-specific runtime rules.
 3. Push the policy bundle. Sidecars pick it up within `bundle_ttl_seconds`.
-4. Configure the app to use `agent_id = "tenant-newco"` for that tenant's sessions.
+4. Configure the app's tenant mapping to use NewCo's registered agent ID.
 5. First session for the tenant: app calls `IssueCapability`, gets a token, app makes calls, Sidecar validates.
 
 Offboarding is the inverse: remove the entries from issuance + runtime policy, push, the Sidecar denies new capabilities and stale ones expire.

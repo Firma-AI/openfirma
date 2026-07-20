@@ -236,7 +236,7 @@ fn params(server: &MockServer) -> IssueParams {
         authority_pub_key_path: server.pub_key_path.clone(),
         authority_ca_cert_path: None,
         credentials: None,
-        agent_id: super::helper::agent_id().clone(),
+        agent_id: *super::helper::agent_id(),
         session_id: "sess_mint".to_string(),
         requested_actions: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),

@@ -178,17 +178,17 @@ returned by registration, supplied with `--agent-id` or entered interactively.
 
 `firma config` flags:
 
-| Flag                  | Default                 | Description                                           |
-| --------------------- | ----------------------- | ----------------------------------------------------- |
-| `--output-dir <dir>`  | `.firma` in current dir | Where firma.toml, policies, and mappings are written. |
-| `--workspace <dir>`   | current directory       | Agent RW access path (bwrap mount).                   |
-| `--profile <profile>` | wizard / `generic`      | Local execution profile written to `[run].profile`.   |
-| `--agent-id <uuid>`   | generated / prompt      | Authority-registered agent UUID.                      |
-| `--posture <val>`     | wizard / `dev`          | Cedar enforcement posture.                            |
-| `--mapping <val>`     | wizard / `anthropic`    | Mapping file(s) — repeat for multiple.                |
-| `--yes`               | _off_                   | Skip the wizard; use defaults for any unset flag.     |
-| `--state-dir <dir>`   | `FIRMA_STATE_DIR` / XDG | State dir (keys, revocations, generated CA).          |
-| `--force`             | _off_                   | Overwrite existing files.                             |
+| Flag                    | Default                 | Description                                           |
+| ----------------------- | ----------------------- | ----------------------------------------------------- |
+| `--output-dir <dir>`    | `.firma` in current dir | Where firma.toml, policies, and mappings are written. |
+| `--workspace <dir>`     | current directory       | Agent RW access path (bwrap mount).                   |
+| `--profile <profile>`   | wizard / `generic`      | Local execution profile written to `[run].profile`.   |
+| `--agent-id <agent-id>` | generated / prompt      | Authority-registered `agt_` TypeID.                   |
+| `--posture <val>`       | wizard / `dev`          | Cedar enforcement posture.                            |
+| `--mapping <val>`       | wizard / `anthropic`    | Mapping file(s) — repeat for multiple.                |
+| `--yes`                 | _off_                   | Skip the wizard; use defaults for any unset flag.     |
+| `--state-dir <dir>`     | `FIRMA_STATE_DIR` / XDG | State dir (keys, revocations, generated CA).          |
+| `--force`               | _off_                   | Overwrite existing files.                             |
 
 ### `firma sidecar` (daemon lifecycle)
 

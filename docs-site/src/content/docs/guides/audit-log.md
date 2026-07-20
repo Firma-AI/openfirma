@@ -31,7 +31,7 @@ A single line of the JSONL log decodes to something like:
   "event_id": "018f5c6d-7a8b-7c9d-8e0f-123456789abc",
   "session_id": "session-001",
   "token_id": "79dd9ffb-ebc8-4883-8f1e-72eb74a26e33",
-  "agent_id": "support-agent",
+  "agent_id": "agt_01j0000000e008000000000001",
   "action": "communication.external.send",
   "resource": "paste.rs/",
   "decision": 2,

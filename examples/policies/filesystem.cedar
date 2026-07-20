@@ -9,14 +9,14 @@
 
 // Reads are always permitted.
 permit (
-    principal == Firma::Agent::"example-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"filesystem.read",
     resource
 );
 
 // Writes are permitted at low risk.
 permit (
-    principal == Firma::Agent::"example-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"filesystem.write",
     resource
 ) when {

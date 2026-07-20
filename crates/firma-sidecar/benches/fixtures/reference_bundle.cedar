@@ -106,5 +106,5 @@ permit(principal == Firma::Agent::"agent-092", action == Firma::Action::"bench.a
 permit(principal == Firma::Agent::"agent-093", action == Firma::Action::"bench.action.allow", resource);
 permit(principal == Firma::Agent::"agent-094", action == Firma::Action::"bench.action.allow", resource);
 permit(principal == Firma::Agent::"agent-095", action == Firma::Action::"bench.action.allow", resource);
-permit(principal == Firma::Agent::"agent-bench", action == Firma::Action::"communication.external.send", resource);
-permit(principal == Firma::Agent::"agent-bench", action == Firma::Action::"bench.action.allow", resource);
+permit(principal == Firma::Agent::"agt_01j0000000e008000000000001", action == Firma::Action::"communication.external.send", resource);
+permit(principal == Firma::Agent::"agt_01j0000000e008000000000001", action == Firma::Action::"bench.action.allow", resource);

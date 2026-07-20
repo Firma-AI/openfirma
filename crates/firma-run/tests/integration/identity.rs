@@ -13,7 +13,7 @@ use firma_core::AgentId;
 use firma_run::error::RunError;
 use firma_run::identity::{RunIdentity, read_configured_agent_id};
 
-const AGENT_ID: &str = "019abcde-1234-7abc-8def-0123456789ab";
+const AGENT_ID: &str = "agt_01j0000000e008000000000001";
 
 #[test]
 fn identity_propagates_registered_id_and_profile_separately() {
@@ -58,7 +58,7 @@ fn configured_agent_id_rejects_missing_legacy_and_malformed_values() {
         Err(RunError::LegacyProfileAgentId { .. })
     ));
 
-    fs::write(&path, "[sidecar.authority]\nagent_id = \"not a UUID\"\n")
+    fs::write(&path, "[sidecar.authority]\nagent_id = \"not a TypeID\"\n")
         .expect("write malformed config");
     assert!(matches!(
         read_configured_agent_id(&path),

@@ -14,7 +14,7 @@ The token's payload is a `CapabilityClaims` struct, defined in `firma-core`:
 ```json
 {
   "token_id":     "79dd9ffb-ebc8-4883-8f1e-72eb74a26e33",
-  "agent_id":     "demo-agent",
+  "agent_id":     "agt_01j0000000e008000000000001",
   "session_id":   "demo-session",
   "action_set":   ["communication.external.send"],
   "resource_scope": "wttr.in*",
@@ -144,7 +144,7 @@ without `firma run`), the CLI subcommand is available:
 
 ```bash
 firma authority issue \
-  --agent-id demo-agent \
+  --agent-id agt_01j0000000e008000000000001 \
   --session-id demo-session \
   --action communication.external.send \
   --resource-scope 'wttr.in*' \

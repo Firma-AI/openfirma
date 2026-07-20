@@ -80,7 +80,7 @@ fn resolve_test_authority(
 fn prompt_fires_when_no_commit_and_persists_on_yes() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
-    let identity = RunIdentity::new(super::helper::agent_id().clone(), "test");
+    let identity = RunIdentity::new(*super::helper::agent_id(), "test");
     let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(true, true);
@@ -119,7 +119,7 @@ fn prompt_fires_when_no_commit_and_persists_on_yes() {
 fn prompt_declined_returns_typed_error_and_does_not_persist() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
-    let identity = RunIdentity::new(super::helper::agent_id().clone(), "test");
+    let identity = RunIdentity::new(*super::helper::agent_id(), "test");
     let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(true, false);
@@ -146,7 +146,7 @@ fn prompt_declined_returns_typed_error_and_does_not_persist() {
 fn no_tty_returns_typed_error_without_calling_confirm() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
-    let identity = RunIdentity::new(super::helper::agent_id().clone(), "test");
+    let identity = RunIdentity::new(*super::helper::agent_id(), "test");
     let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(false, true);
@@ -170,7 +170,7 @@ fn no_tty_returns_typed_error_without_calling_confirm() {
 fn cli_local_skips_prompt_even_without_config() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
-    let identity = RunIdentity::new(super::helper::agent_id().clone(), "test");
+    let identity = RunIdentity::new(*super::helper::agent_id(), "test");
     let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(true, false);
@@ -204,7 +204,7 @@ fn config_authority_section_skips_prompt() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
     std::fs::write(&cfg, "[authority]\nlisten_addr = \"[::1]:0\"\n").unwrap();
-    let identity = RunIdentity::new(super::helper::agent_id().clone(), "test");
+    let identity = RunIdentity::new(*super::helper::agent_id(), "test");
     let runtime_dir = tmp.path().join("runtime");
 
     let mut prompt = RecordingPrompt::new(true, false);

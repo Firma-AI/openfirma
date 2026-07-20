@@ -39,7 +39,7 @@ Config lands in `.firma/` inside the current directory, or an explicit
 ## Flags
 
 ```text
-firma config [--mode <mode>] [--profile <profile>] [--agent-id <uuid>]
+firma config [--mode <mode>] [--profile <profile>] [--agent-id <agent-id>]
              [--posture <posture>] [--mapping <mapping>]
              [--extra-hosts <hosts>]
              [--workspace <dir>] [--output-dir <dir>] [--state-dir <dir>]
@@ -52,7 +52,7 @@ firma config [--mode <mode>] [--profile <profile>] [--agent-id <uuid>]
 | --------------------- | ------------------------ | -------------------------------------------------------------------------- |
 | `--mode`              | wizard / `agent-local`   | What to configure: `agent-local`, `agent-remote`, or `authority`           |
 | `--profile`           | wizard / `generic`       | Execution profile written to `[run].profile`                               |
-| `--agent-id`          | generated / prompt       | Registered UUID written to `[sidecar.authority].agent_id`                  |
+| `--agent-id`          | generated / prompt       | Registered `agt_` TypeID written to `[sidecar.authority].agent_id`         |
 | `--posture`           | wizard / `dev`           | Cedar policy posture written under `policies/`                             |
 | `--mapping`           | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                           |
 | `--extra-hosts`       | none                     | Comma-separated extra hosts the agent may reach                            |
@@ -88,7 +88,7 @@ file. `--force` overwrites the config directly and removes the section.
 
 ```bash
 # Keep everything, explicitly replace the registered identity
-firma config --yes --agent-id 019abcde-1234-7abc-8def-0123456789ab
+firma config --yes --agent-id agt_01j0000000e008000000000001
 
 # Preview what would change without writing
 firma config --yes --dry-run
@@ -127,7 +127,7 @@ key_file      = "/path/to/state/authority.key"
 # ...
 
 [sidecar.authority]           # agent-local and agent-remote modes
-agent_id         = "019abcde-1234-7abc-8def-0123456789ab"
+agent_id         = "agt_01j0000000e008000000000001"
 url             = "http://127.0.0.1:50051"
 ca_cert_path    = "/path/to/state/tls/authority-ca.crt"
 public_key_path = "/path/to/state/authority.pub"
@@ -149,11 +149,11 @@ transport attribution. `[run].profile` selects local execution behavior such
 as mounts and environment variables; it is never sent as the capability
 request's agent identity.
 
-For `agent-local`, a new config generates a UUIDv7 when `--agent-id` is
-omitted. For `agent-remote`, copy the `agent_id` returned by FirmaTeam
-registration and pass it with `--agent-id`; non-interactive setup requires the
-flag. Re-running `firma config` preserves a valid existing UUID unless the flag
-replaces it.
+For `agent-local`, a new config generates an `agt_` TypeID backed by UUIDv7 when
+`--agent-id` is omitted. For `agent-remote`, copy the `agent_id` returned by
+FirmaTeam registration and pass it with `--agent-id`; non-interactive setup
+requires the flag. Re-running `firma config` preserves a valid existing agent
+ID unless the flag replaces it.
 
 ## Implicit init on `firma run`
 
@@ -169,9 +169,9 @@ TTY. Pass `--yes` in non-interactive contexts.
 **`firma.toml` already exists.** By design, existing files are preserved.
 Use `--force` to overwrite, or remove the file by hand for a clean slate.
 
-**An older config has no UUID or uses `agent_id = "codex"`.** OpenFirma does
-not silently migrate existing identity. Run `firma config --agent-id <UUID>`
-with the UUID returned by registration. Keep `codex` under `[run].profile`.
+**An older config has no agent TypeID or uses `agent_id = "codex"`.** OpenFirma does
+not silently migrate existing identity. Run `firma config --agent-id <agent-id>`
+with the ID returned by registration. Keep `codex` under `[run].profile`.
 
 **Keys must not go in the config dir.** Keys live in `<state-dir>`, not
 `<output-dir>`. Do not commit `authority.key`. Add `.firma/*.key` to

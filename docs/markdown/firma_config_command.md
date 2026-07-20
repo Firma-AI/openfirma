@@ -39,7 +39,7 @@ firma config --mode agent-local \
 ## Flags
 
 ```text
-firma config [--mode <mode>] [--profile <profile>] [--agent-id <uuid>]
+firma config [--mode <mode>] [--profile <profile>] [--agent-id <agent-id>]
              [--posture <posture>] [--mapping <mapping>]
              [--extra-hosts <hosts>]
              [--workspace <dir>] [--output-dir <dir>] [--state-dir <dir>]
@@ -52,7 +52,7 @@ firma config [--mode <mode>] [--profile <profile>] [--agent-id <uuid>]
 | ---------------------------- | ----- | ------------------------ | ------------------------------------------------------------------------------- |
 | `--mode <mode>`              |       | wizard / `agent-local`   | What to configure: `agent-local`, `agent-remote`, or `authority`                |
 | `--profile <profile>`        |       | wizard / `generic`       | Execution profile written to `[run].profile`                                    |
-| `--agent-id <uuid>`          |       | generated / prompt       | Registered UUID written to `[sidecar.authority].agent_id`                       |
+| `--agent-id <agent-id>`      |       | generated / prompt       | Registered `agt_` TypeID written to `[sidecar.authority].agent_id`              |
 | `--posture <posture>`        |       | wizard / `dev`           | Cedar policy posture written under `policies/`                                  |
 | `--mapping <mapping>`        |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                                |
 | `--extra-hosts <hosts>`      |       | none                     | Comma-separated extra hosts the agent may reach                                 |
@@ -127,7 +127,7 @@ key_file = "/path/to/state/authority.key"
 # ...
 
 [sidecar.authority] # connect coords for agent-local / agent-remote
-agent_id = "019abcde-1234-7abc-8def-0123456789ab"
+agent_id = "agt_01j0000000e008000000000001"
 url = "https://127.0.0.1:9443"
 ca_cert_path = "/path/to/state/tls/authority-ca.crt"
 public_key_path = "/path/to/state/authority.pub"
@@ -143,15 +143,16 @@ public_key_path = "/path/to/state/authority.pub"
 profile = "codex"
 ```
 
-FirmaTeam registration returns an Authority-assigned agent UUID alongside the
-Sidecar ID and token. Copy that UUID into remote configuration with
-`--agent-id`. New `agent-local` configs generate UUIDv7 when the flag is
-omitted. Existing valid UUIDs survive subsequent runs unless explicitly
-replaced.
+FirmaTeam registration returns an Authority-assigned `agt_` TypeID alongside
+the Sidecar ID and token. Copy that ID into remote configuration with
+`--agent-id`. New `agent-local` configs generate an agent TypeID backed by
+UUIDv7 when the flag is omitted. Existing valid IDs survive subsequent runs
+unless explicitly replaced.
 
 Existing configs are not silently migrated. If the field is absent, or contains
 an old execution-profile value such as `codex`, run
-`firma config --agent-id <UUID>` and leave the profile under `[run].profile`.
+`firma config --agent-id <agent-id>` and leave the profile under
+`[run].profile`.
 
 ## Implicit init on `firma run`
 

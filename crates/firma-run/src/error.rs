@@ -18,17 +18,17 @@ pub enum RunError {
     ConfigValidation(String),
 
     #[error(
-        "missing [sidecar.authority].agent_id in {path}; run `firma config --agent-id <UUID>` or add the registered agent UUID to the configuration"
+        "missing [sidecar.authority].agent_id in {path}; run `firma config --agent-id <AGENT_ID>` or add the registered agent TypeID to the configuration"
     )]
     MissingAgentId { path: PathBuf },
 
     #[error(
-        "[sidecar.authority].agent_id in {path} is the execution profile '{value}', not a registered agent UUID; migrate it with `firma config --agent-id <UUID>` and keep '{value}' under [run].profile"
+        "[sidecar.authority].agent_id in {path} is the execution profile '{value}', not a registered agent TypeID; migrate it with `firma config --agent-id <AGENT_ID>` and keep '{value}' under [run].profile"
     )]
     LegacyProfileAgentId { path: PathBuf, value: String },
 
     #[error(
-        "invalid [sidecar.authority].agent_id '{value}' in {path}: expected a UUID; run `firma config --agent-id <UUID>`"
+        "invalid [sidecar.authority].agent_id '{value}' in {path}: expected an `agt` TypeID backed by UUIDv7; run `firma config --agent-id <AGENT_ID>`"
     )]
     InvalidAgentId { path: PathBuf, value: String },
 

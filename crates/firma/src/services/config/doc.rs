@@ -35,8 +35,8 @@
 use std::path::Path;
 
 use anyhow::{Result, bail};
+use firma_core::AgentId;
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value, value};
-use uuid::Uuid;
 
 use crate::args::config::Mode;
 
@@ -47,7 +47,7 @@ pub struct DocInputs<'a> {
     pub mode: &'a Mode,
     pub keep_local_authority: bool,
     pub profile: &'a str,
-    pub agent_id: Option<&'a Uuid>,
+    pub agent_id: Option<&'a AgentId>,
     pub authority_listen: &'a str,
     pub authority_url: &'a str,
     pub authority_ca_cert: &'a str,
@@ -258,8 +258,8 @@ fn ensure_sidecar_section(doc: &mut DocumentMut, inputs: &DocInputs<'_>) -> Resu
         let auth = ensure_table(sidecar, "authority")?;
         let agent_id = inputs
             .agent_id
-            .ok_or_else(|| anyhow::anyhow!("agent config requires an agent UUID"))?;
-        set_str(auth, "agent_id", &agent_id.hyphenated().to_string());
+            .ok_or_else(|| anyhow::anyhow!("agent config requires an agent TypeID"))?;
+        set_str(auth, "agent_id", &agent_id.to_string());
         if inputs.has_connect() {
             set_str(auth, "url", inputs.authority_url);
             set_str(auth, "ca_cert_path", inputs.authority_ca_cert);
@@ -575,8 +575,10 @@ mod tests {
 
     use super::*;
 
-    static TEST_AGENT_ID: LazyLock<Uuid> = LazyLock::new(|| {
-        Uuid::parse_str("019abcde-1234-7abc-8def-0123456789ab").expect("valid test UUID")
+    static TEST_AGENT_ID: LazyLock<AgentId> = LazyLock::new(|| {
+        "agt_01j0000000e008000000000001"
+            .parse()
+            .expect("valid test agent ID")
     });
 
     fn dummy_inputs(mode: &Mode) -> DocInputs<'_> {

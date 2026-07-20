@@ -137,7 +137,7 @@ must use the UUID returned by FirmaTeam registration:
 
 ```bash
 firma config --yes --mode agent-remote \
-  --agent-id 019abcde-1234-7abc-8def-0123456789ab \
+  --agent-id agt_01j0000000e008000000000001 \
   --authority-url https://authority.example.com:9443 \
   --authority-ca-cert ./authority-ca.crt \
   --authority-pub-key ./authority.pub
@@ -365,7 +365,7 @@ For Stage 1 to allow the call, the Sidecar must have a capability matching `(ses
 
 ```bash
 firma authority -c .firma/firma.toml issue \
-  --agent-id local-dev \
+  --agent-id agt_01j0000000e008000000000001 \
   --session-id $(uuidgen) \
   --action communication.external.send \
   --output .firma/capability-local-dev.toml

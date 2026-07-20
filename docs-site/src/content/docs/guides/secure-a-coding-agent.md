@@ -78,7 +78,7 @@ $XDG_DATA_HOME/firma/          — platform state dir (keys, revocations, CA)
 ## Step 3: Mint a capability for `claude-code`
 
 ```bash
-AGENT_ID="019abcde-1234-7abc-8def-0123456789ab" # copy from .firma/firma.toml
+AGENT_ID="agt_01j0000000e008000000000001" # copy from .firma/firma.toml
 firma authority -c .firma/firma.toml issue \
   --agent-id "$AGENT_ID" \
   --session-id $(uuidgen) \
@@ -102,7 +102,7 @@ Eight hours is a reasonable working session. If you stop and restart the next mo
 
 // Permit talking to Anthropic for the LLM call.
 permit (
-    principal == Firma::Agent::"019abcde-1234-7abc-8def-0123456789ab",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"communication.external.send",
     resource
 ) when {
@@ -226,7 +226,7 @@ Two operational considerations:
 ```bash
 # in ~/.zshrc or wherever
 firma-claude-start() {
-  AGENT_ID="019abcde-1234-7abc-8def-0123456789ab" # copy from .firma/firma.toml
+  AGENT_ID="agt_01j0000000e008000000000001" # copy from .firma/firma.toml
   firma authority -c .firma/firma.toml issue \
     --agent-id "$AGENT_ID" \
     --session-id $(uuidgen) \

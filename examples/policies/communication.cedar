@@ -11,14 +11,14 @@
 
 // Internal sends are always permitted — low blast radius.
 permit (
-    principal == Firma::Agent::"example-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"communication.internal.send",
     resource
 );
 
 // External sends are permitted when risk is acceptable.
 permit (
-    principal == Firma::Agent::"example-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"communication.external.send",
     resource
 ) when {

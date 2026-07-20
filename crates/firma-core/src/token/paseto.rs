@@ -136,6 +136,7 @@ fn build_paseto_claims(claims: &CapabilityClaims) -> Result<Claims, TokenError> 
     let mut pc = Claims::new().map_err(|e| TokenError::Malformed {
         reason: format!("claims creation failed: {e:?}"),
     })?;
+    let agent_id = claims.agent_id.to_string();
 
     // Override registered claims with our values
     pc.expiration(&claims.expiry.to_rfc3339())
@@ -152,7 +153,7 @@ fn build_paseto_claims(claims: &CapabilityClaims) -> Result<Claims, TokenError> 
         .map_err(|e| TokenError::Malformed {
             reason: format!("add token_id: {e:?}"),
         })?;
-    pc.add_additional("agent_id", claims.agent_id.as_ref())
+    pc.add_additional("agent_id", agent_id.as_str())
         .map_err(|e| TokenError::Malformed {
             reason: format!("add agent_id: {e:?}"),
         })?;
@@ -281,7 +282,7 @@ mod tests {
         let now = Utc::now();
         CapabilityClaims {
             token_id: TokenId::new(),
-            agent_id: "agent_abc".parse().unwrap(),
+            agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
             session_id: "sess_xyz".parse().unwrap(),
             action_set: vec!["http:GET".to_string(), "tool:execute".to_string()],
             resource_scope: "https://api.example.com/*".to_string(),

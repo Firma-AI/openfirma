@@ -23,7 +23,7 @@ use cedar_policy::{
     Authorizer, Context, Decision, Effect, Entities, EntityUid, PolicyId, PolicySet, Request,
     Response, Schema,
 };
-use firma_core::agent::AgentId;
+use firma_core::AgentId;
 use firma_core::policy::PolicyBundle;
 use firma_core::{DeferDuration, FirmaEntityUid, ModificationSpec, StepUpSpec};
 
@@ -189,7 +189,7 @@ impl CedarPolicyEvaluator {
         resource: &str,
         context: serde_json::Value,
     ) -> Result<Response, CedarEvaluatorError> {
-        let principal_uid: EntityUid = FirmaEntityUid::Agent(principal.clone())
+        let principal_uid: EntityUid = FirmaEntityUid::Agent(*principal)
             .try_into()
             .map_err(CedarEvaluatorError::EntityUidParse)?;
         let action_uid: EntityUid = FirmaEntityUid::Action(action.to_string())
@@ -521,8 +521,8 @@ namespace Firma {
         })
     }
 
-    fn agent(id: &str) -> AgentId {
-        id.parse().unwrap()
+    fn agent() -> AgentId {
+        "agt_01j0000000e008000000000001".parse().unwrap()
     }
 
     #[test]
@@ -561,7 +561,7 @@ namespace Firma {
         let evaluator = CedarPolicyEvaluator::from_bundle(&permit_all_bundle()).unwrap();
         let result = evaluator
             .evaluate(
-                &agent("agent_test"),
+                &agent(),
                 "communication.external.send",
                 "api.openai.com",
                 test_context(),
@@ -575,7 +575,7 @@ namespace Firma {
         let evaluator = CedarPolicyEvaluator::from_bundle(&forbid_all_bundle()).unwrap();
         let result = evaluator
             .evaluate(
-                &agent("agent_test"),
+                &agent(),
                 "communication.external.send",
                 "api.openai.com",
                 test_context(),
@@ -640,7 +640,7 @@ namespace Firma {
 
         let allow = evaluator
             .evaluate(
-                &agent("agent_test"),
+                &agent(),
                 "communication.external.send",
                 "api.openai.com",
                 test_context(),
@@ -659,7 +659,7 @@ namespace Firma {
         });
         let deny = evaluator
             .evaluate(
-                &agent("agent_test"),
+                &agent(),
                 "communication.external.send",
                 "api.openai.com",
                 deny_context,
@@ -684,7 +684,7 @@ namespace Firma {
         let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
         let result = evaluator
             .evaluate(
-                &agent("agent_test"),
+                &agent(),
                 "communication.external.send",
                 "api.openai.com",
                 full_context(),
@@ -698,12 +698,8 @@ namespace Firma {
         // "unknown.action" is not declared in the schema — Request::new should fail.
         let bundle = schema_bundle(b"permit(principal, action, resource);");
         let evaluator = CedarPolicyEvaluator::from_bundle(&bundle).unwrap();
-        let result = evaluator.evaluate(
-            &agent("agent_test"),
-            "unknown.action",
-            "api.openai.com",
-            full_context(),
-        );
+        let result =
+            evaluator.evaluate(&agent(), "unknown.action", "api.openai.com", full_context());
         assert!(
             result.is_err(),
             "unknown action must fail schema validation"
@@ -720,7 +716,7 @@ namespace Firma {
             // missing: timestamp_ms, params, risk_score
         });
         let result = evaluator.evaluate(
-            &agent("agent_test"),
+            &agent(),
             "communication.external.send",
             "api.openai.com",
             incomplete_context,
@@ -741,7 +737,7 @@ namespace Firma {
 
         let allow = evaluator
             .evaluate(
-                &agent("agent_test"),
+                &agent(),
                 "communication.external.send",
                 "api.openai.com",
                 full_context(),
@@ -754,7 +750,7 @@ namespace Firma {
     fn schema_git_context_attributes_used_in_policy() {
         let src = br#"
             permit (
-                principal == Firma::Agent::"agent_test",
+                principal == Firma::Agent::"agt_01j0000000e008000000000001",
                 action == Firma::Action::"code.write",
                 resource
             ) when {
@@ -777,7 +773,7 @@ namespace Firma {
 
         let allow = evaluator
             .evaluate(
-                &agent("agent_test"),
+                &agent(),
                 "code.write",
                 "github.com/firma-ai/openfirma.git/git-receive-pack",
                 context.clone(),
@@ -788,7 +784,7 @@ namespace Firma {
         context["git_ref"] = json!("refs/heads/main");
         let deny = evaluator
             .evaluate(
-                &agent("agent_test"),
+                &agent(),
                 "code.write",
                 "github.com/firma-ai/openfirma.git/git-receive-pack",
                 context,
@@ -818,7 +814,7 @@ namespace Firma {
 
         let allowed = evaluator
             .evaluate(
-                &agent("agent_test"),
+                &agent(),
                 "communication.external.send",
                 "api.openai.com/v1/chat/completions",
                 context,
@@ -849,7 +845,7 @@ namespace Firma {
 
         let allowed = evaluator
             .evaluate(
-                &agent("agent_test"),
+                &agent(),
                 "communication.external.send",
                 "api.openai.com/v1/chat/completions",
                 context,
@@ -895,7 +891,7 @@ namespace Firma {
     // Payee concentration: < 3 per 30-minute window. Velocity: < 10 per 10-minute window.
     const PAYMENT_POLICY: &str = r#"
 permit (
-    principal == Firma::Agent::"example-agent",
+principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"payment.transfer",
     resource
 ) when {
@@ -967,7 +963,7 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
         // 0 → 200_000 → 400_000 → 600_000 → 800_000 → 1_000_000. All permitted.
         // Transfer 6: cumulative 1_000_000 + 200_000 = 1_200_000 > daily cap → denied.
         let evaluator = CedarPolicyEvaluator::from_bundle(&payment_bundle()).unwrap();
-        let subject = agent("example-agent");
+        let subject = agent();
         let resource = "payments.example.com";
 
         for i in 0..5i64 {
@@ -1014,12 +1010,7 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
         })
         .unwrap();
         let allowed = evaluator
-            .evaluate(
-                &agent("example-agent"),
-                "payment.transfer",
-                "payments.example.com",
-                ctx,
-            )
+            .evaluate(&agent(), "payment.transfer", "payments.example.com", ctx)
             .unwrap();
         assert!(
             !allowed,
@@ -1038,12 +1029,7 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
         })
         .unwrap();
         let allowed = evaluator
-            .evaluate(
-                &agent("example-agent"),
-                "payment.transfer",
-                "payments.example.com",
-                ctx,
-            )
+            .evaluate(&agent(), "payment.transfer", "payments.example.com", ctx)
             .unwrap();
         assert!(!allowed, "same-payee concentration >= 3 must be denied");
     }
@@ -1058,12 +1044,7 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
         })
         .unwrap();
         let allowed = evaluator
-            .evaluate(
-                &agent("example-agent"),
-                "payment.transfer",
-                "payments.example.com",
-                ctx,
-            )
+            .evaluate(&agent(), "payment.transfer", "payments.example.com", ctx)
             .unwrap();
         assert!(allowed, "transfer within all limits must be permitted");
     }
@@ -1082,7 +1063,7 @@ forbid (principal, action == Firma::Action::"payment.transfer", resource)
     fn verdict_for(evaluator: &CedarPolicyEvaluator) -> PolicyVerdict {
         evaluator
             .evaluate_verdict(
-                &agent("agent_test"),
+                &agent(),
                 "communication.external.send",
                 "api.openai.com",
                 test_context(),
@@ -1110,7 +1091,7 @@ forbid(principal, action, resource);"#,
         assert!(
             !evaluator
                 .evaluate(
-                    &agent("agent_test"),
+                    &agent(),
                     "communication.external.send",
                     "api.openai.com",
                     test_context(),

@@ -27,7 +27,7 @@ include!("support/common_fixtures.rs");
 /// Canonical action class emitted by the normalizer for the bench request.
 /// Must be (a) a valid v0.1 `ActionClassRegistry` entry so the mapping
 /// compiles, (b) present in the token's `action_set` so the Stage 2 scope
-/// check passes, and (c) authorised for `agent-bench` in the reference
+/// check passes, and (c) authorised for the benchmark agent in the reference
 /// Cedar bundle so the ALLOW path is exercised.
 const BENCH_ACTION_CLASS: &str = "communication.external.send";
 
@@ -55,7 +55,9 @@ fn claims() -> CapabilityClaims {
         token_id: "3713c5fc-b569-650c-c780-c64051473370"
             .parse()
             .expect("literal token id"),
-        agent_id: "agent-bench".parse().expect("literal agent id"),
+        agent_id: "agt_01j0000000e008000000000001"
+            .parse()
+            .expect("literal agent id"),
         session_id: "sess-bench".parse().expect("literal session id"),
         action_set: vec![BENCH_ACTION_CLASS.to_string()],
         resource_scope: "*".to_string(),

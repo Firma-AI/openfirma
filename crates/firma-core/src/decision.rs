@@ -579,7 +579,7 @@ mod tests {
             "raw-token".to_string(),
             ExecutionMetadata {
                 session_id: "sess".parse().unwrap(),
-                agent_id: "agent".parse().unwrap(),
+                agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
                 timestamp: chrono::Utc::now(),
                 trace_id: None,
                 budget_consumed: 0.0,
@@ -631,7 +631,7 @@ mod tests {
             "raw-token".to_string(),
             ExecutionMetadata {
                 session_id: "sess".parse().unwrap(),
-                agent_id: "agent".parse().unwrap(),
+                agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
                 timestamp: chrono::Utc::now(),
                 trace_id: None,
                 budget_consumed: 0.0,

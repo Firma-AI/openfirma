@@ -100,13 +100,12 @@ pub fn reject_reserved_sandbox_id_environment() -> Result<(), crate::error::RunE
     Ok(())
 }
 
-/// Read and validate the registered agent UUID from `firma.toml`.
+/// Read and validate the registered agent `TypeID` from `firma.toml`.
 ///
 /// # Errors
 ///
-/// Returns a typed missing, legacy-profile, malformed UUID, or config parse
-/// error. The returned [`AgentId`] always contains the canonical hyphenated
-/// lowercase UUID representation.
+/// Returns a typed missing, legacy-profile, malformed `TypeID`, or config parse
+/// error. The returned [`AgentId`] always contains the canonical `agt` `TypeID`.
 pub fn read_configured_agent_id(path: &std::path::Path) -> Result<AgentId, crate::error::RunError> {
     let text =
         std::fs::read_to_string(path).map_err(|error| crate::error::RunError::ConfigParse {
@@ -132,15 +131,11 @@ pub fn read_configured_agent_id(path: &std::path::Path) -> Result<AgentId, crate
             value: raw.to_string(),
         });
     }
-    let uuid = Uuid::parse_str(raw).map_err(|_| crate::error::RunError::InvalidAgentId {
-        path: path.to_path_buf(),
-        value: raw.to_string(),
-    })?;
-    uuid.hyphenated().to_string().parse().map_err(|error| {
-        crate::error::RunError::Internal(format!(
-            "canonical UUID failed AgentId validation: {error}"
-        ))
-    })
+    raw.parse()
+        .map_err(|_| crate::error::RunError::InvalidAgentId {
+            path: path.to_path_buf(),
+            value: raw.to_string(),
+        })
 }
 
 fn read_identity_override(key: &str) -> Option<String> {
@@ -152,9 +147,9 @@ fn read_identity_override(key: &str) -> Option<String> {
 
 #[cfg(test)]
 pub(crate) fn test_agent_id() -> AgentId {
-    "019abcde-1234-7abc-8def-0123456789ab"
+    "agt_01j0000000e008000000000001"
         .parse()
-        .expect("valid test agent UUID")
+        .expect("valid test agent ID")
 }
 
 #[cfg(test)]

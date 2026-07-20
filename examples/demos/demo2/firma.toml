@@ -71,7 +71,7 @@ file_path = ".runtime/audit.jsonl"
 signing_key_path = ".runtime/audit.key"
 
 [sidecar.authority]
-agent_id = "019abcde-1234-7abc-8def-0123456789ab"
+agent_id = "agt_01j0000000e008000000000001"
 url = "http://127.0.0.1:50051"
 connect_timeout_secs = 10
 reconnect_min_backoff_ms = 250
@@ -80,7 +80,7 @@ revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false
 
 [sidecar.preflight]
-agent_id = "demo2-agent"
+agent_id = "agt_01j0000000e008000000000001"
 session_id = "demo2-session-001"
 requested_actions = ["code.review.read", "issue.write"]
 resource_scope = "*"

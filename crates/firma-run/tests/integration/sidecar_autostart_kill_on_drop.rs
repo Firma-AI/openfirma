@@ -50,7 +50,7 @@ fn drop_terminates_child_within_grace() {
     let supervisor = SidecarSupervisor::spawn(SpawnRequest {
         sandbox_id: &sandbox_id,
         agent_id: super::helper::agent_id(),
-        execution_profile: "generic",
+        execution_profile: firma_config_loader::AgentProfile::Generic,
         session_id: "session-1",
         marker_dir: marker.clone(),
         template_path: None,
@@ -98,7 +98,7 @@ fn marker_files_present_between_ready_and_drop() {
     let supervisor = SidecarSupervisor::spawn(SpawnRequest {
         sandbox_id: &sandbox_id,
         agent_id: super::helper::agent_id(),
-        execution_profile: "generic",
+        execution_profile: firma_config_loader::AgentProfile::Generic,
         session_id: "session-7",
         marker_dir: marker,
         template_path: None,
@@ -125,6 +125,7 @@ fn marker_files_present_between_ready_and_drop() {
     let text = fs::read_to_string(&metadata_path).expect("read metadata");
     let parsed: toml::Value = toml::from_str(&text).expect("parse metadata");
     let table = parsed.as_table().expect("table");
+    let agent_id_text = super::helper::agent_id().to_string();
 
     assert_eq!(
         table.get("sandbox_id").and_then(|v| v.as_str()),
@@ -132,7 +133,7 @@ fn marker_files_present_between_ready_and_drop() {
     );
     assert_eq!(
         table.get("agent_id").and_then(|v| v.as_str()),
-        Some(super::helper::agent_id().as_ref())
+        Some(agent_id_text.as_str())
     );
     assert_eq!(
         table.get("session_id").and_then(|v| v.as_str()),
@@ -148,7 +149,7 @@ fn marker_files_present_between_ready_and_drop() {
         toml::from_str(&sidecar_config).expect("parse sidecar config");
     assert_eq!(
         sidecar_config["sidecar"]["authority"]["agent_id"].as_str(),
-        Some(super::helper::agent_id().as_ref())
+        Some(agent_id_text.as_str())
     );
     assert_eq!(
         table.get("authority_url").and_then(|v| v.as_str()),

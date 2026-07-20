@@ -264,7 +264,7 @@ impl AuthoritySupervisor {
             &metadata_path,
             &crate::authority::metadata::Metadata {
                 sandbox_id: *req.sandbox_id,
-                agent_id: req.agent_id.clone(),
+                agent_id: *req.agent_id,
                 session_id: req.session_id.to_string(),
                 profile: req.profile_name.to_string(),
                 listen_addr: capture.listen_addr.clone(),

@@ -5,7 +5,7 @@ pub mod paseto;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::agent::AgentId;
+use crate::AgentId;
 use crate::session::SessionId;
 
 /// Error returned when a [`TokenId`] string fails validation.
@@ -207,7 +207,7 @@ mod tests {
     fn claims_payload_backward_compat() {
         let json = r#"{
             "token_id":      "550e8400-e29b-41d4-a716-446655440000",
-            "agent_id":      "golden-agent",
+            "agent_id":      "agt_01j0000000e008000000000001",
             "session_id":    "golden-sess",
             "action_set":    ["http:GET", "tool:execute"],
             "resource_scope":"https://api.example.com/*",
@@ -220,7 +220,7 @@ mod tests {
 
         let expected = CapabilityClaims {
             token_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
-            agent_id: "golden-agent".parse().unwrap(),
+            agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
             session_id: "golden-sess".parse().unwrap(),
             action_set: vec!["http:GET".to_string(), "tool:execute".to_string()],
             resource_scope: "https://api.example.com/*".to_string(),
@@ -319,7 +319,7 @@ mod tests {
     fn capability_claims_default_budget_ceiling_is_none() {
         let json = serde_json::json!({
             "token_id": "550e8400-e29b-41d4-a716-446655440000",
-            "agent_id": "agent_test",
+            "agent_id": "agt_01j0000000e008000000000001",
             "session_id": "sess_001",
             "action_set": ["http_get"],
             "resource_scope": "api.example.com/*",
@@ -338,7 +338,7 @@ mod tests {
             token_id: "550e8400-e29b-41d4-a716-446655440000"
                 .parse()
                 .expect("uuid"),
-            agent_id: "agent_test".parse().expect("agent_id"),
+            agent_id: "agt_01j0000000e008000000000001".parse().expect("agent_id"),
             session_id: "sess_001".parse().expect("session_id"),
             action_set: vec!["http_get".to_string()],
             resource_scope: "api.example.com/*".to_string(),

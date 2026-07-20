@@ -18,8 +18,9 @@ use std::path::Path;
 use std::process::Command;
 
 use firma_config_loader::CONFIG_FILE_NAME;
+use firma_core::AgentId;
 
-const REGISTERED_AGENT_ID: &str = "019abcde-1234-7abc-8def-0123456789ab";
+const REGISTERED_AGENT_ID: &str = "agt_01j0000000e008000000000001";
 
 fn firma() -> Command {
     Command::new(env!("CARGO_BIN_EXE_firma"))
@@ -57,7 +58,7 @@ fn extract_dry_run_file(stdout: &[u8], file_name: &str) -> String {
 }
 
 #[test]
-fn remote_agent_id_is_canonicalized_and_persisted() {
+fn remote_agent_id_is_persisted() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let config_dir = tmp.path().join("config");
     let state_dir = tmp.path().join("state");
@@ -69,7 +70,7 @@ fn remote_agent_id_is_canonicalized_and_persisted() {
             "--mode",
             "agent-remote",
             "--agent-id",
-            "019ABCDE-1234-7ABC-8DEF-0123456789AB",
+            REGISTERED_AGENT_ID,
             "--output-dir",
         ])
         .arg(&config_dir)
@@ -100,7 +101,7 @@ fn remote_agent_id_is_canonicalized_and_persisted() {
 }
 
 #[test]
-fn new_local_config_generates_uuid_v7_and_rerun_preserves_it() {
+fn new_local_config_generates_agent_id_and_rerun_preserves_it() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let config_dir = tmp.path().join("config");
     let state_dir = tmp.path().join("state");
@@ -112,8 +113,9 @@ fn new_local_config_generates_uuid_v7_and_rerun_preserves_it() {
     let generated = first["sidecar"]["authority"]["agent_id"]
         .as_str()
         .expect("generated agent id");
-    let parsed = uuid::Uuid::parse_str(generated).expect("generated UUID");
-    assert_eq!(parsed.get_version(), Some(uuid::Version::SortRand));
+    generated
+        .parse::<AgentId>()
+        .expect("generated agent ID must be valid");
 
     run_init(&config_dir, &state_dir);
     let second_body = std::fs::read_to_string(&path).expect("read second config");

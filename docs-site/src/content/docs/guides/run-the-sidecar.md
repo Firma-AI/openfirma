@@ -148,7 +148,7 @@ url             = "http://[::1]:50051"
 public_key_path = "/tmp/firma-standalone/authority.pub"
 
 [sidecar.preflight]
-agent_id          = "standalone-demo"
+agent_id          = "agt_01j0000000e008000000000001"
 session_id        = "standalone-session"
 requested_actions = ["communication.external.send"]
 resource_scope    = "*"

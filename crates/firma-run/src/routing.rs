@@ -4,6 +4,7 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use firma_config_loader::AgentProfile;
 use firma_runtime_state::runtime_paths::{default_runtime_dir, run_entry_from};
 
 #[cfg(unix)]
@@ -556,7 +557,7 @@ fn start_loopback_guard(
     let report = sidecar_supervisor.map(|supervisor| crate::egress_guard::AuditChannel {
         socket_path: firma_sidecar::run_audit::socket_path_in(supervisor.marker_dir()),
         session_id: identity.session_id.clone(),
-        agent_id: identity.agent_id.clone(),
+        agent_id: identity.agent_id,
     });
 
     let guard_sock = handle.runtime_dir.join("egress-guard.sock");
@@ -602,7 +603,7 @@ fn mint_capability_seed(
             .ok_or_else(|| RunError::Internal("authority pub key missing after gate".into()))?,
         authority_ca_cert_path: authority.ca_cert_path.clone(),
         credentials: authority.credentials.clone(),
-        agent_id: identity.agent_id.clone(),
+        agent_id: identity.agent_id,
         session_id: identity.session_id.clone(),
         requested_actions: crate::capability::issue::DEFAULT_REQUESTED_ACTIONS
             .iter()
@@ -755,11 +756,18 @@ fn autostart_sidecar(
     let cwd_template = std::env::current_dir()
         .ok()
         .map(|cwd| cwd.join("firma_sidecar.toml"));
+    let execution_profile =
+        AgentProfile::from_name(&identity.execution_profile).ok_or_else(|| {
+            RunError::Internal(format!(
+                "unsupported resolved execution profile '{}'",
+                identity.execution_profile
+            ))
+        })?;
 
     SidecarSupervisor::spawn(SpawnRequest {
         sandbox_id: &identity.sandbox_id,
         agent_id: &identity.agent_id,
-        execution_profile: &identity.execution_profile,
+        execution_profile,
         session_id: &identity.session_id,
         marker_dir,
         template_path: flags.template_path.as_deref(),

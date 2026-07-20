@@ -86,7 +86,7 @@ burst = 50
 timeout_ms = 30000
 
 [sidecar.authority]
-agent_id = "019abcde-1234-7abc-8def-0123456789ab"
+agent_id = "agt_01j0000000e008000000000001"
 url = "https://127.0.0.1:50051"
 public_key_path = "firma-authority.pub"
 ca_cert_path = "authority-ca.crt"

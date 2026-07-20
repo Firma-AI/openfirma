@@ -250,7 +250,7 @@ mod tests {
         let now = chrono::Utc::now();
         let claims = CapabilityClaims {
             token_id: TokenId::new(),
-            agent_id: "codex".parse().unwrap(),
+            agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
             session_id: "sess1".parse().unwrap(),
             action_set: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),

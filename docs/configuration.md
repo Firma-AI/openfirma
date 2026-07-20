@@ -44,7 +44,7 @@ listen_addr = "127.0.0.1:8080"
 authority_url = "http://127.0.0.1:50051"
 
 [sidecar.authority]
-agent_id = "019abcde-1234-7abc-8def-0123456789ab"
+agent_id = "agt_01j0000000e008000000000001"
 url = "http://127.0.0.1:50051"
 public_key_path = '/home/me/.config/firma/authority.pub'
 
@@ -71,26 +71,27 @@ The `[sidecar.*]` tables map onto the per-section reference below
 
 ```toml
 [sidecar.authority]
-agent_id = "019abcde-1234-7abc-8def-0123456789ab"
+agent_id = "agt_01j0000000e008000000000001"
 
 [run]
 profile = "codex"
 ```
 
-`agent_id` is the stable Authority-registered UUID used for capability
+`agent_id` is the stable Authority-registered `agt_` TypeID used for capability
 issuance, audit attribution, component metadata, `FIRMA_AGENT_ID`, and
 `x-firma-agent`. `profile` selects local execution behavior and is exposed as
 `FIRMA_RUN_PROFILE` and `x-firma-profile`; it is not sent as the registered
 identity.
 
-New local scaffolds generate UUIDv7. Remote operators copy the UUID returned by
-FirmaTeam registration and use `firma config --agent-id <UUID>`. Any valid UUID
-is accepted and serialized in canonical lowercase hyphenated form.
+New local scaffolds generate an `agt_` TypeID backed by UUIDv7. Remote operators
+copy the agent ID returned by FirmaTeam registration and use
+`firma config --agent-id <agent-id>`. Raw UUIDs and other prefixes are rejected.
 
 `firma run` never generates or edits identity in an existing config. A missing
-field, a legacy profile value such as `codex`, or another non-UUID value fails
+field, a legacy profile value such as `codex`, or another invalid agent ID fails
 closed before backend or component startup. Migrate with
-`firma config --agent-id <UUID>` and retain the profile under `[run].profile`.
+`firma config --agent-id <agent-id>` and retain the profile under
+`[run].profile`.
 
 ## Config-Relative Resource Resolution
 

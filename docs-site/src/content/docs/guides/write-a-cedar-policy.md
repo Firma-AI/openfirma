@@ -36,7 +36,7 @@ Create `/tmp/firma-standalone/config/policies/support-agent.cedar`:
 
 // Allow OpenAI calls — the agent drafts replies via chat completions.
 permit (
-    principal == Firma::Agent::"support-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"communication.external.send",
     resource
 ) when {
@@ -45,7 +45,7 @@ permit (
 
 // Allow Slack posts — the agent posts ticket updates to a channel.
 permit (
-    principal == Firma::Agent::"support-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"communication.external.send",
     resource
 ) when {
@@ -69,7 +69,7 @@ In the same file, append:
 // Hard rule: this agent never moves money. Forbid wins over any future
 // permit, so you can keep this rule even if you broaden permits later.
 forbid (
-    principal == Firma::Agent::"support-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"payment.transfer",
     resource
 );
@@ -130,7 +130,7 @@ EOF
 
 # Mint a capability for support-agent
 firma authority -c /tmp/firma-standalone/config/firma.toml issue \
-  --agent-id support-agent \
+  --agent-id agt_01j0000000e008000000000001 \
   --session-id session-001 \
   --action communication.external.send \
   --resource-scope '*' \
@@ -191,7 +191,7 @@ A few patterns you'll write over and over:
 
 ```cedar
 permit (
-    principal == Firma::Agent::"coding-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"code.write",
     resource
 ) when {

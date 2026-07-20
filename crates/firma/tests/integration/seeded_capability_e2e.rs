@@ -85,7 +85,7 @@ fn issued_token_seeds_capability_map_and_admits_stage1() {
         .args([
             "issue",
             "--agent-id",
-            "test-agent",
+            "agt_01j0000000e008000000000001",
             "--session-id",
             "test-session",
             "--action",
@@ -131,7 +131,10 @@ fn issued_token_seeds_capability_map_and_admits_stage1() {
     let claims = verifier
         .verify(&entry.raw_token)
         .expect("token must verify against the issued public key");
-    assert_eq!(claims.agent_id.to_string(), "test-agent");
+    assert_eq!(
+        claims.agent_id.to_string(),
+        "agt_01j0000000e008000000000001"
+    );
     assert_eq!(claims.session_id.to_string(), "test-session");
     assert_eq!(claims.action_set, vec!["communication.external.send"]);
 }

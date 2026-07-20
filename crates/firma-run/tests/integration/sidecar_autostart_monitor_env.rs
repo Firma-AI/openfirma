@@ -54,7 +54,7 @@ fn monitor_mode_opt_in_forwards_allow_env_to_child() {
     let _supervisor = SidecarSupervisor::spawn(SpawnRequest {
         sandbox_id: &sandbox_id,
         agent_id: super::helper::agent_id(),
-        execution_profile: "generic",
+        execution_profile: firma_config_loader::AgentProfile::Generic,
         session_id: "session-monitor",
         marker_dir: marker,
         template_path: None,

@@ -31,7 +31,7 @@ firma config [OPTIONS]
 | ---------------------------- | ----- | ------------------------ | -------------------------------------------------------------------------- |
 | `--mode`                     |       | wizard / `agent-local`   | `agent-local`, `agent-remote`, or `authority`                              |
 | `--profile`                  |       | wizard / `generic`       | Execution profile written to `[run].profile`                               |
-| `--agent-id <uuid>`          |       | generated / prompt       | Registered UUID written to `[sidecar.authority].agent_id`                  |
+| `--agent-id <agent-id>`      |       | generated / prompt       | Registered `agt_` TypeID written to `[sidecar.authority].agent_id`         |
 | `--posture`                  |       | wizard / `dev`           | Cedar policy posture written under `policies/`                             |
 | `--mapping`                  |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                           |
 | `--extra-hosts`              |       | none                     | Comma-separated extra hosts the agent may reach                            |
@@ -91,7 +91,7 @@ Agent connecting to a remote authority:
 firma config --yes --mode agent-remote \
   --authority-url https://authority.example.com:9443 \
   --authority-ca-cert /path/to/ca.crt \
-  --agent-id 019abcde-1234-7abc-8def-0123456789ab \
+  --agent-id agt_01j0000000e008000000000001 \
   --profile codex --posture strict --mapping anthropic
 ```
 
@@ -407,7 +407,7 @@ production traffic.
 
 ```bash
 firma authority --config firma.toml issue \
-  --agent-id demo-agent \
+  --agent-id agt_01j0000000e008000000000001 \
   --session-id demo-session \
   --action communication.external.send \
   --resource-scope '*' \

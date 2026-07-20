@@ -17,6 +17,7 @@ use p256::pkcs8::{EncodePrivateKey, LineEnding};
 use sha2::{Digest, Sha256};
 
 use crate::error::RunError;
+use firma_config_loader::AgentProfile;
 use firma_core::AgentId;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
@@ -296,8 +297,8 @@ const VSCODE_GITHUB_MITM_BYPASS_HOSTS: &[&str] =
 pub struct SynthesizeRequest<'a> {
     /// Authority-registered agent identity.
     pub agent_id: &'a AgentId,
-    /// Effective execution profile id.
-    pub execution_profile: &'a str,
+    /// Effective execution profile.
+    pub execution_profile: AgentProfile,
     /// Effective run session id.
     pub session_id: &'a str,
     /// Highest-priority template path (typically `--sidecar-config`).
@@ -427,9 +428,9 @@ pub fn synthesize(req: SynthesizeRequest<'_>) -> Result<TemplateSource, RunError
 
 fn ensure_vscode_github_mitm_bypass(
     value: &mut toml::Value,
-    execution_profile: &str,
+    execution_profile: AgentProfile,
 ) -> Result<(), RunError> {
-    if !is_vscode_profile(execution_profile) {
+    if execution_profile != AgentProfile::Vscode {
         return Ok(());
     }
 
@@ -879,7 +880,7 @@ fn generate_ephemeral_audit_key_pem() -> Result<String, RunError> {
 fn ensure_mapping_rules(
     value: &mut toml::Value,
     out_path: &Path,
-    execution_profile: &str,
+    execution_profile: AgentProfile,
 ) -> Result<(), RunError> {
     let sidecar = sidecar_table_mut(value)?;
     let mapping = sidecar
@@ -920,17 +921,12 @@ fn ensure_mapping_rules(
     Ok(())
 }
 
-fn minimal_mapping_rules_for_profile(execution_profile: &str) -> &'static str {
-    if is_vscode_profile(execution_profile) {
+fn minimal_mapping_rules_for_profile(execution_profile: AgentProfile) -> &'static str {
+    if execution_profile == AgentProfile::Vscode {
         VSCODE_MINIMAL_MAPPING_RULES_TOML
     } else {
         MINIMAL_MAPPING_RULES_TOML
     }
-}
-
-fn is_vscode_profile(execution_profile: &str) -> bool {
-    firma_config_loader::AgentProfile::from_name(execution_profile)
-        .is_some_and(|profile| profile == firma_config_loader::AgentProfile::Vscode)
 }
 
 /// Append the per-session capability seed file to `[capability_seed].paths`
@@ -1059,7 +1055,7 @@ mod tests {
         let cfg_path = tmp.path().join("sidecar.toml");
         let source = synthesize(SynthesizeRequest {
             agent_id: &crate::identity::test_agent_id(),
-            execution_profile: "vscode",
+            execution_profile: firma_config_loader::AgentProfile::Vscode,
             session_id: "sess_001",
             explicit_template: None,
             env_template: None,

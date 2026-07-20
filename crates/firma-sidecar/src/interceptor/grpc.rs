@@ -240,7 +240,9 @@ mod tests {
             token_id: "3713c5fc-b569-650c-c780-c64051473370"
                 .parse()
                 .expect("literal token id"),
-            agent_id: "agent_test".parse().expect("literal agent id"),
+            agent_id: "agt_01j0000000e008000000000001"
+                .parse()
+                .expect("literal agent id"),
             session_id: "_test_".parse().expect("literal session id"),
             action_set: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),

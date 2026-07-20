@@ -730,7 +730,7 @@ impl AuditSink {
     fn report_event(channel: &AuditChannel, addr: SocketAddr) {
         let message = RunAuditMessage {
             session_id: channel.session_id.clone(),
-            agent_id: channel.agent_id.clone(),
+            agent_id: channel.agent_id,
             event: RunAuditEvent::LoopbackBlocked {
                 dst_ip: addr.ip().to_string(),
                 dst_port: addr.port(),
@@ -1241,9 +1241,9 @@ mod tests {
         let channel = AuditChannel {
             socket_path: socket_path.clone(),
             session_id: "sess-1".to_string(),
-            agent_id: "019abcde-1234-7abc-8def-0123456789ab"
+            agent_id: "agt_01j0000000e008000000000001"
                 .parse()
-                .expect("valid agent UUID"),
+                .expect("valid agent ID"),
         };
         let sink = AuditSink::try_new(channel).expect("spawn audit sink");
         sink.send("127.0.0.1:9000".parse().unwrap());
@@ -1257,7 +1257,7 @@ mod tests {
         );
         let value: serde_json::Value = serde_json::from_str(line.trim()).expect("valid JSON");
         assert_eq!(value["session_id"], "sess-1");
-        assert_eq!(value["agent_id"], "019abcde-1234-7abc-8def-0123456789ab");
+        assert_eq!(value["agent_id"], "agt_01j0000000e008000000000001");
         assert_eq!(value["event"]["kind"], "loopback_blocked");
         assert_eq!(value["event"]["dst_ip"], "127.0.0.1");
         assert_eq!(value["event"]["dst_port"], 9000);

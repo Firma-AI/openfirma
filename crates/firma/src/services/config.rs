@@ -9,11 +9,11 @@ use std::process::ExitCode;
 use anyhow::{Context as _, Result};
 use clap::ValueEnum as _;
 use dialoguer::theme::ColorfulTheme;
-use uuid::Uuid;
 
 use crate::args::config::{InitArgs, Mapping, Mode, Posture};
 use doc::DocInputs;
 use firma_config_loader::{AgentProfile, CONFIG_DIR_NAME, CONFIG_FILE_NAME};
+use firma_core::AgentId;
 use firma_fs::create_private_dir_all;
 
 struct AuthorityInputs {
@@ -42,7 +42,7 @@ struct CollectedInputs {
     sidecar: SidecarInputs,
     config_dir: PathBuf,
     state_dir: PathBuf,
-    agent_id: Option<Uuid>,
+    agent_id: Option<AgentId>,
     profile: String,
 }
 
@@ -59,7 +59,7 @@ struct ExistingConfigDefaults {
     mappings: Option<Vec<Mapping>>,
     workspace: Option<PathBuf>,
     profile: Option<String>,
-    agent_id: Option<Uuid>,
+    agent_id: Option<AgentId>,
     invalid_agent_id: Option<String>,
 }
 
@@ -523,7 +523,7 @@ fn load_existing_defaults(config_dir: &Path) -> Result<ExistingConfigDefaults> {
     defaults.workspace = workspace_from_firma_toml(&value);
     defaults.profile = get_str(&value, &["run", "profile"]);
     if let Some(raw) = get_str(&value, &["sidecar", "authority", "agent_id"]) {
-        match Uuid::parse_str(&raw) {
+        match raw.parse() {
             Ok(agent_id) => defaults.agent_id = Some(agent_id),
             Err(_) => defaults.invalid_agent_id = Some(raw),
         }
@@ -538,7 +538,7 @@ fn collect_agent_id(
     mode: &Mode,
     interactive: bool,
     theme: &ColorfulTheme,
-) -> Result<Option<Uuid>> {
+) -> Result<Option<AgentId>> {
     if matches!(mode, Mode::Authority) {
         return Ok(None);
     }
@@ -550,26 +550,29 @@ fn collect_agent_id(
     }
     if let Some(invalid_agent_id) = &existing.invalid_agent_id {
         anyhow::bail!(
-            "existing [sidecar.authority].agent_id {invalid_agent_id:?} is not a valid UUID; re-run firma config with --agent-id <UUID>"
+            "existing [sidecar.authority].agent_id {invalid_agent_id:?} is not a valid agent TypeID; re-run firma config with --agent-id <AGENT_ID>"
         );
     }
     if existing.exists {
         anyhow::bail!(
-            "existing config has no [sidecar.authority].agent_id; re-run firma config with --agent-id <UUID>"
+            "existing config has no [sidecar.authority].agent_id; re-run firma config with --agent-id <AGENT_ID>"
         );
     }
     if matches!(mode, Mode::AgentLocal) {
-        return Ok(Some(Uuid::now_v7()));
+        return Ok(Some(AgentId::generate()));
     }
     if interactive {
         let raw: String = dialoguer::Input::with_theme(theme)
-            .with_prompt("Authority-registered agent UUID")
+            .with_prompt("Authority-registered agent TypeID")
             .interact_text()
             .context("agent ID prompt")?;
-        let agent_id = Uuid::parse_str(raw.trim()).context("agent ID must be a valid UUID")?;
+        let agent_id = raw
+            .trim()
+            .parse()
+            .context("agent ID must be a valid `agt` TypeID backed by UUIDv7")?;
         return Ok(Some(agent_id));
     }
-    anyhow::bail!("--agent-id <UUID> is required when --mode agent-remote")
+    anyhow::bail!("--agent-id <AGENT_ID> is required when --mode agent-remote")
 }
 
 fn get_str(value: &toml::Value, path: &[&str]) -> Option<String> {
@@ -1140,7 +1143,7 @@ pub struct ScaffoldPlan {
     pub workspace: PathBuf,
     pub force: bool,
     pub authority_listen: String,
-    pub agent_id: Uuid,
+    pub agent_id: AgentId,
     pub agent: String,
     pub provider: String,
     pub authority: AuthorityShape,
@@ -1427,7 +1430,7 @@ mod tests {
             },
             config_dir: PathBuf::from(TEST_WORKSPACE),
             state_dir: PathBuf::from("/tmp/test-state"),
-            agent_id: Some(Uuid::parse_str("019abcde-1234-7abc-8def-0123456789ab").unwrap()),
+            agent_id: Some("agt_01j0000000e008000000000001".parse().unwrap()),
             profile: "generic".to_string(),
         };
         generate_files(&inputs).unwrap()
@@ -1806,7 +1809,7 @@ mod tests {
             workspace: workspace.clone(),
             force: false,
             authority_listen: "127.0.0.1:50051".into(),
-            agent_id: Uuid::parse_str("019abcde-1234-7abc-8def-0123456789ab").unwrap(),
+            agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
             agent: "generic".into(),
             provider: "anthropic".into(),
             authority: AuthorityShape::Local,

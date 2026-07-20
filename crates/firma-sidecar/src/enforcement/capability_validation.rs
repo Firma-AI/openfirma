@@ -163,7 +163,7 @@ impl CapabilityValidator {
 
         // Step 3: Enforce single-agent tenancy (V1 ADR §2)
         if self.tenancy_mode == TenancyMode::SingleAgent {
-            let first_agent = self.first_agent_id.get_or_init(|| claims.agent_id.clone());
+            let first_agent = self.first_agent_id.get_or_init(|| claims.agent_id);
             if first_agent != &claims.agent_id {
                 return Err(EnforcementDecision::Deny {
                     reason: firma_core::DenyReason::TenantMismatch,
@@ -316,7 +316,9 @@ mod tests {
             token_id: "3713c5fc-b569-650c-c780-c64051473370"
                 .parse()
                 .expect("literal token id"),
-            agent_id: "agent_test".parse().expect("literal agent id"),
+            agent_id: "agt_01j0000000e008000000000001"
+                .parse()
+                .expect("literal agent id"),
             session_id: "sess_001".parse().expect("literal session id"),
             action_set: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),
@@ -604,7 +606,9 @@ mod tests {
     #[test]
     fn test_enforce_single_agent_tenancy_mismatch_denies() {
         let mut first_claims = valid_claims();
-        first_claims.agent_id = "agent_first".parse().expect("literal agent id");
+        first_claims.agent_id = "agt_01j0000000e008000000000001"
+            .parse()
+            .expect("literal agent id");
         let verifier = MutableVerifier::new(first_claims);
 
         let validator = CapabilityValidator::new(
@@ -634,11 +638,13 @@ mod tests {
         let first = validator.enforce(&envelope, "sess_001");
         assert!(
             first.is_ok(),
-            "first call with agent_first should succeed and establish OnceLock"
+            "first call should succeed and establish OnceLock"
         );
 
         let mut second_claims = valid_claims();
-        second_claims.agent_id = "agent_second".parse().expect("literal agent id");
+        second_claims.agent_id = "agt_01j0000000e008000000000002"
+            .parse()
+            .expect("literal agent id");
         verifier.set(second_claims);
 
         let second = validator.enforce(&envelope, "sess_001");
@@ -667,10 +673,10 @@ mod tests {
                 ..
             } => {
                 let identity = identity.as_ref().expect("deny must carry identity");
-                assert_eq!(identity.agent_id, "agent_second");
+                assert_eq!(identity.agent_id, "agt_01j0000000e008000000000002");
                 assert!(deny_envelope.is_some(), "deny must carry envelope");
-                assert!(detail.contains("agent_first"));
-                assert!(detail.contains("agent_second"));
+                assert!(detail.contains("agt_01j0000000e008000000000001"));
+                assert!(detail.contains("agt_01j0000000e008000000000002"));
             }
             _ => panic!("expected Deny variant"),
         }

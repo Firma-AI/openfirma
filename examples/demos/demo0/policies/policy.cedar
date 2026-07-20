@@ -14,13 +14,13 @@
 // default deny. One policy, one taxonomy, one enforcement point.
 
 permit (
-    principal == Firma::Agent::"demo0-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"code.review.read",
     resource
 );
 
 permit (
-    principal == Firma::Agent::"demo0-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"filesystem.read",
     resource
 );

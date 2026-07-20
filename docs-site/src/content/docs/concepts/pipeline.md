@@ -139,7 +139,7 @@ The proof is a capability token. A capability is a short-lived, signed PASETO to
 ```json
 {
   "token_id": "79dd9ffb-ebc8-4883-8f1e-72eb74a26e33",
-  "agent_id": "demo-agent",
+  "agent_id": "agt_01j0000000e008000000000001",
   "session_id": "demo-session",
   "action_set": ["communication.external.send"],
   "resource_scope": "wttr.in*",
@@ -178,7 +178,7 @@ Before Cedar evaluation, Stage 2 checks that the local policy bundle is fresh. I
 Then Stage 2 evaluates Cedar with the normalized request:
 
 ```text
-principal: Firma::Agent::"demo-agent"
+principal: Firma::Agent::"agt_01j0000000e008000000000001"
 action:    Firma::Action::"communication.external.send"
 resource:  Firma::Resource::"paste.rs/"
 context:   session_id, timestamp_ms, action_count, params, risk_score, ...
@@ -275,14 +275,14 @@ This gives operators a useful answer to "what happened?" without replaying the a
 
 The pipeline is built to short-circuit. Once a stage returns `DENY`, later stages do not run.
 
-| Stage | Why it can stop |
-| ----- | --------------- |
-| Readiness | Required local Authority-backed state is not ready. |
-| Normalization | The protected request cannot be mapped to a known action class. |
+| Stage                 | Why it can stop                                                                    |
+| --------------------- | ---------------------------------------------------------------------------------- |
+| Readiness             | Required local Authority-backed state is not ready.                                |
+| Normalization         | The protected request cannot be mapped to a known action class.                    |
 | Capability validation | No matching token, bad signature, expired token, revoked token, or scope mismatch. |
-| Runtime policy | Stale bundle, policy timeout, evaluator error, or Cedar deny. |
-| Credential injection | Required credential material cannot be fetched safely. |
-| Connector | The request was allowed, but dispatch failed or timed out. |
+| Runtime policy        | Stale bundle, policy timeout, evaluator error, or Cedar deny.                      |
+| Credential injection  | Required credential material cannot be fetched safely.                             |
+| Connector             | The request was allowed, but dispatch failed or timed out.                         |
 
 The connector row is different from the others: by the time connector dispatch happens, enforcement has already allowed the call. A connector failure is recorded as a dispatch outcome, not as a retroactive policy denial.
 
@@ -291,14 +291,14 @@ The connector row is different from the others: by the time connector dispatch h
 The policy engine is capable of producing all five AARM R4 authorization
 decisions for an evaluated action:
 
-| Decision | Wire code | What happens |
-| -------- | --------- | ------------ |
-| `ALLOW`     | `1` | The request is dispatched to the connector as-is. |
-| `DENY`      | `2` | The call is blocked before dispatch; the agent gets a structured 403 with a `DenyReason`. |
-| `ABORT`     | `3` | An already-approved call aborted mid-flight (e.g. credential fetch or connector timeout). |
-| `MODIFY`    | `4` | The named HTTP header is stripped from the request before dispatch; the audit records the applied transformation. |
-| `STEP_UP`   | `5` | The call is blocked pending human approval / stronger auth; `DenyReason::StepUpRequired`. |
-| `DEFER`     | `6` | The call is blocked and deferred for retry; `DenyReason::Deferred`. |
+| Decision  | Wire code | What happens                                                                                                      |
+| --------- | --------- | ----------------------------------------------------------------------------------------------------------------- |
+| `ALLOW`   | `1`       | The request is dispatched to the connector as-is.                                                                 |
+| `DENY`    | `2`       | The call is blocked before dispatch; the agent gets a structured 403 with a `DenyReason`.                         |
+| `ABORT`   | `3`       | An already-approved call aborted mid-flight (e.g. credential fetch or connector timeout).                         |
+| `MODIFY`  | `4`       | The named HTTP header is stripped from the request before dispatch; the audit records the applied transformation. |
+| `STEP_UP` | `5`       | The call is blocked pending human approval / stronger auth; `DenyReason::StepUpRequired`.                         |
+| `DEFER`   | `6`       | The call is blocked and deferred for retry; `DenyReason::Deferred`.                                               |
 
 Cedar natively only produces `Allow`/`Deny`. The three remediation outcomes
 are sourced from annotations on `forbid` policies, evaluated by a post-Cedar

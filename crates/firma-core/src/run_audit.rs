@@ -61,7 +61,7 @@ mod tests {
     fn deserialize_loopback_message() {
         let msg = r#"{
             "session_id": "sess",
-            "agent_id": "019abcde-1234-7abc-8def-0123456789ab",
+            "agent_id": "agt_01j0000000e008000000000001",
             "event": {
                 "kind": "loopback_blocked",
                 "dst_ip": "127.0.0.1",
@@ -72,9 +72,9 @@ mod tests {
         assert_eq!(
             RunAuditMessage {
                 session_id: "sess".to_string(),
-                agent_id: "019abcde-1234-7abc-8def-0123456789ab"
+                agent_id: "agt_01j0000000e008000000000001"
                     .parse()
-                    .expect("valid agent UUID"),
+                    .expect("valid agent ID"),
                 event: RunAuditEvent::LoopbackBlocked {
                     dst_ip: "127.0.0.1".to_string(),
                     dst_port: 6379,

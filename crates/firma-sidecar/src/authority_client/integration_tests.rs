@@ -827,7 +827,9 @@ async fn sequential_valid_bundles_swap_observed_by_evaluate() -> anyhow::Result<
         "v1 bundle did not apply"
     );
 
-    let agent: AgentId = "agent-eval".parse().expect("literal agent id");
+    let agent: AgentId = "agt_01j0000000e008000000000001"
+        .parse()
+        .expect("literal agent id");
     let ctx = serde_json::json!({});
     // v1 permits everything, so evaluate should ALLOW.
     let allowed_v1 = harness
@@ -889,7 +891,9 @@ async fn cold_boot_without_bundle_stays_not_ready() -> anyhow::Result<()> {
         "sentinel DenyAll evaluator must report is_fresh() == false",
     );
 
-    let agent: AgentId = "agent-cold".parse().expect("literal agent id");
+    let agent: AgentId = "agt_01j0000000e008000000000001"
+        .parse()
+        .expect("literal agent id");
     let ctx = serde_json::json!({});
     let allowed = harness
         .swappable_policy
@@ -977,7 +981,9 @@ async fn tls_handshake_fails_with_wrong_ca_cert_stays_not_ready() -> anyhow::Res
         !harness.swappable_policy.is_fresh(),
         "when TLS handshake fails, policy state must stay stale and fail-closed"
     );
-    let agent: AgentId = "agent-tls-mismatch".parse().expect("literal agent id");
+    let agent: AgentId = "agt_01j0000000e008000000000001"
+        .parse()
+        .expect("literal agent id");
     let ctx = serde_json::json!({});
     let allowed = harness
         .swappable_policy

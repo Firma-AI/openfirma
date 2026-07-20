@@ -2,17 +2,17 @@
 
 use std::path::PathBuf;
 
+use firma_core::AgentId;
 use serde::Deserialize;
-use uuid::Uuid;
 
 use crate::authority_credentials::SidecarCredentialsConfig;
 
 /// Tuning for background Authority stream clients.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthorityConfig {
-    /// Authority-registered UUID for the agent represented by this Sidecar.
+    /// Authority-registered `TypeID` for the agent represented by this Sidecar.
     #[serde(default)]
-    pub agent_id: Option<Uuid>,
+    pub agent_id: Option<AgentId>,
     /// Authority gRPC URL (e.g. `https://127.0.0.1:9443`). When set, the
     /// sidecar streams policy bundles and revocations from the Authority.
     #[serde(default)]

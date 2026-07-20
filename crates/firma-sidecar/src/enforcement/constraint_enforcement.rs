@@ -320,7 +320,7 @@ impl ConstraintEnforcer {
         // Step 4: Build context from immutable request + validated claims.
         let context = self.build_context(envelope, claims, signals)?;
         let policy = Arc::clone(&self.policy);
-        let principal = claims.agent_id.clone();
+        let principal = claims.agent_id;
         let action = envelope.intent.action_class.clone();
         let resource = envelope.intent.resource_display();
         let eval_task = tokio::task::spawn_blocking(move || {
@@ -727,7 +727,9 @@ mod tests {
             token_id: "3713c5fc-b569-650c-c780-c64051473370"
                 .parse()
                 .expect("literal token id"),
-            agent_id: "agent_test".parse().expect("literal agent id"),
+            agent_id: "agt_01j0000000e008000000000001"
+                .parse()
+                .expect("literal agent id"),
             session_id: "sess_001".parse().expect("literal session id"),
             action_set: actions.into_iter().map(String::from).collect(),
             resource_scope: resource_scope.to_string(),

@@ -8,9 +8,9 @@ use firma_core::AgentId;
 
 pub fn agent_id() -> &'static AgentId {
     static AGENT_ID: LazyLock<AgentId> = LazyLock::new(|| {
-        "019abcde-1234-7abc-8def-0123456789ab"
+        "agt_01j0000000e008000000000001"
             .parse()
-            .expect("valid test agent UUID")
+            .expect("valid test agent ID")
     });
     &AGENT_ID
 }

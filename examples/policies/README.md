@@ -62,7 +62,7 @@ Prefer semantic fields such as `transfer_amount` or `daily_cumulative_amount` ov
 
 ```cedar
 permit (
-    principal == Firma::Agent::"example-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"communication.external.send",
     resource
 ) when {
@@ -112,7 +112,7 @@ cd examples/e2e && bash run.sh
 Or use the Cedar CLI directly:
 
 ```bash
-cedar authorize   --policies examples/policies/payment.cedar   --schema crates/firma-core/firma.cedarschema   --entities '[]'   --principal 'Firma::Agent::"example-agent"'   --action 'Firma::Action::"payment.transfer"'   --resource 'Firma::Resource::"payments.example.com"'   --context '{
+cedar authorize   --policies examples/policies/payment.cedar   --schema crates/firma-core/firma.cedarschema   --entities '[]'   --principal 'Firma::Agent::"agt_01j0000000e008000000000001"'   --action 'Firma::Action::"payment.transfer"'   --resource 'Firma::Resource::"payments.example.com"'   --context '{
     "session_id":"s1",
     "timestamp_ms":0,
     "params":"{}",

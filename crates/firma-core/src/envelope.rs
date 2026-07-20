@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use firma_http::{HeaderName, Method};
 use serde::{Deserialize, Serialize};
 
-use crate::{agent::AgentId, session::SessionId, token::TokenId};
+use crate::{AgentId, session::SessionId, token::TokenId};
 
 /// The core protocol unit wrapping each outbound agent call.
 ///
@@ -335,7 +335,7 @@ mod tests {
             "capability": "v4.public.golden",
             "metadata": {
                 "session_id": "golden-sess",
-                "agent_id": "golden-agent",
+                "agent_id": "agt_01j0000000e008000000000001",
                 "timestamp": "2024-01-01T00:00:00Z",
                 "trace_id": "golden-trace",
                 "budget_consumed": 0.0,
@@ -367,7 +367,7 @@ mod tests {
             capability: "v4.public.golden".to_string(),
             metadata: ExecutionMetadata {
                 session_id: "golden-sess".parse().unwrap(),
-                agent_id: "golden-agent".parse().unwrap(),
+                agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
                 timestamp: chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
                     .expect("fixed date")
                     .with_timezone(&Utc),

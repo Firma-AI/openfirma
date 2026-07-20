@@ -484,7 +484,9 @@ mod tests {
             token_id: "2acea42e-bb57-44d6-3ad3-aad955ec50af"
                 .parse()
                 .expect("literal token id"),
-            agent_id: "agent-1".parse().expect("literal agent id"),
+            agent_id: "agt_01j0000000e008000000000001"
+                .parse()
+                .expect("literal agent id"),
             action: "http_get".to_string(),
             resource: "https://api.example.com/v1".to_string(),
             decision: Decision::Allow,
