@@ -8,8 +8,7 @@ use firma_config_loader::AgentProfile;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::BackendKind;
-#[cfg(target_os = "linux")]
-use crate::backend::platform::{WslKind, detect_wsl};
+use crate::backend::platform::detect_wsl;
 use crate::error::RunError;
 use crate::profile::built_in_profile;
 use crate::runtime::RunInput;
@@ -675,7 +674,7 @@ fn resolve_backend(configured_backend: Option<BackendKind>) -> BackendKind {
         return backend;
     }
 
-    let fallback = BackendKind::default_for_current_host();
+    let fallback = default_backend_for_host();
     tracing::warn!(
         configured = %backend,
         fallback = %fallback,
@@ -699,12 +698,17 @@ fn backend_supported_on_host(kind: BackendKind) -> bool {
     match kind {
         BackendKind::Bwrap | BackendKind::Firecracker => cfg!(target_os = "linux"),
         BackendKind::Vz => cfg!(target_os = "macos"),
-        BackendKind::Wsl2 => cfg!(target_os = "windows"),
+        BackendKind::Wsl2 => {
+            cfg!(target_os = "windows") || (cfg!(target_os = "linux") && detect_wsl().is_wsl())
+        }
     }
 }
 
 #[cfg(target_os = "linux")]
-fn resolve_backend_for_linux(configured_backend: Option<BackendKind>, wsl: WslKind) -> BackendKind {
+fn resolve_backend_for_linux(
+    configured_backend: Option<BackendKind>,
+    wsl: crate::backend::platform::WslKind,
+) -> BackendKind {
     if let Some(backend) = configured_backend {
         return backend;
     }
