@@ -15,6 +15,9 @@ It is intended to be the common reference for:
 - onboarding and incident response,
 - future extension work (new runtimes, stronger hardening, performance tuning).
 
+The cross-component identity contract is documented separately in
+[Sandbox Identity Boundary Contract](sandbox-identity.md).
+
 ## 2. Scope
 
 In scope:

@@ -14,11 +14,51 @@ impl StaticType for SandboxIdType {
     const TYPE: &'static str = "sbx";
 }
 
-/// A Firma-generated, time-ordered identifier for one sandbox execution.
+/// A validated identifier used to refer to a sandbox execution.
 ///
-/// Its canonical representation is a `sbx` `TypeID` backed by an RFC 9562 UUID
-/// v7. The inner value is private so IDs can only enter through generation or
-/// validated parsing. This type deliberately does not implement `AsRef<Path>`.
+/// A `SandboxId` establishes that an identifier has the canonical sandbox ID
+/// representation. It does not prove that a corresponding managed execution
+/// exists or that the value came from `firma run`.
+///
+/// See the [sandbox identity boundary contract] for the architectural lifecycle,
+/// trust model, and protocol-specific binding rules.
+///
+/// [sandbox identity boundary contract]: https://github.com/Firma-AI/openfirma/blob/main/docs/architecture/sandbox-identity.md
+///
+/// # Architectural roles
+///
+/// The identifier serves three related architectural roles:
+///
+/// - **Runtime namespace.** Runtime state uses validated IDs to name per-run
+///   resources. See [`crate::runtime_paths::run_entry_from`] and
+///   [`crate::runtime_paths::capability_seed_path`].
+/// - **Correlation and attribution.** Components can carry the ID in metadata
+///   and events to associate observations with the same execution.
+/// - **Context key.** Protocols can bind requests or server-side state to the
+///   ID to prevent context from being confused across executions. Each
+///   protocol owns and documents the binding it enforces.
+///
+/// # Representation
+///
+/// The canonical representation is a `sbx` `TypeID` backed by an RFC 9562 UUID
+/// v7. The inner value is private. Text can be parsed through
+/// [`std::str::FromStr`] or [`str::parse`], which returns
+/// [`SandboxIdParseError`] for invalid input. The [`serde::Serialize`] and
+/// [`serde::Deserialize`] implementations preserve the same validated,
+/// canonical representation.
+///
+/// The type deliberately does not implement `AsRef<std::path::Path>`. Callers
+/// should use the runtime-path APIs linked above instead of treating unchecked
+/// text as a sandbox-scoped path component.
+///
+/// # Trust and security
+///
+/// A sandbox ID is neither secret nor a bearer credential. Successful parsing
+/// proves only that text has the expected representation; it does not
+/// authenticate the source or authorize an operation. Any protocol carrying a
+/// sandbox ID must independently establish where the value came from and what,
+/// if any, binding it provides.
+///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SandboxId(TypeSafeId<SandboxIdType>);
 

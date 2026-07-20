@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 pub use firma_runtime_state::SandboxId;
 
-/// Deterministic identity tuple associated with a `firma run` execution.
+/// Stable identity tuple associated with a `firma run` execution.
 ///
 /// Values are generated once per execution and then reused everywhere in the
 /// runtime to keep attribution stable.
