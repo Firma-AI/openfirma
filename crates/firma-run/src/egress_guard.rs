@@ -5,6 +5,13 @@
 //! `connect(2)` the agent makes and block the ones targeting a loopback address
 //! that is not a sanctioned Firma endpoint (the proxy bridge or DNS stub).
 //!
+//! A loopback destination is also allowed when the agent's own network namespace
+//! has a listener on that port — a service the agent started inside its jail
+//! (e.g. a test server binding `127.0.0.1:0`). Because the guard runs only in
+//! structural mode, that namespace is private, so such a listener is by
+//! construction in-jail and reachable only from the agent itself; the
+//! `netns_local_ports` probe reads `/proc/<pid>/net/*` to recognize it.
+//!
 //! ## Two-process design
 //!
 //! seccomp's `user-notify` filter must be installed *inside* the sandbox, on
@@ -48,6 +55,7 @@
     reason = "seccomp user-notify install and the NOTIF_RECV/SEND/ID_VALID ioctls have no safe wrapper in nix or libc; each unsafe call is a thin, checked FFI shim"
 )]
 
+use std::collections::BTreeSet;
 use std::io::{self, IoSlice, IoSliceMut, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -224,6 +232,78 @@ fn read_remote_mem(pid: u32, addr: u64, len: usize) -> io::Result<Vec<u8>> {
         return Err(io::Error::other("short process_vm_readv"));
     }
     Ok(buf)
+}
+
+// ── in-jail listener probe (/proc/<pid>/net) ────────────────────────────────
+
+/// TCP `st` value for `TCP_LISTEN`, as it appears (hex, upper-case) in
+/// `/proc/<pid>/net/{tcp,tcp6}`.
+const PROC_NET_TCP_LISTEN: &str = "0A";
+/// UDP `st` value for a bound socket in `/proc/<pid>/net/{udp,udp6}`.
+const PROC_NET_UDP_BOUND: &str = "07";
+
+/// Reads the set of local ports with a listening TCP socket or a bound UDP
+/// socket in the network namespace of process `pid`, by parsing
+/// `/proc/<pid>/net/{tcp,tcp6,udp,udp6}`.
+///
+/// The supervisor runs on the host in the initial pid namespace, so `pid` (the
+/// `seccomp_notif.pid`, valid there — the same pid the sockaddr is read from via
+/// `process_vm_readv`) resolves to the agent's `/proc` entry, and
+/// `/proc/<pid>/net/*` reflects the agent's private network namespace.
+///
+/// Used to distinguish a loopback `connect(2)` that targets a listener the agent
+/// started inside its own jail (allowed) from one that does not (blocked).
+/// Matching is port-only, consistent with [`classify`]: the connect's protocol
+/// is not knowable from the `sockaddr`, so both TCP-listen and UDP-bound ports
+/// are collected to avoid a false block on an in-jail UDP service.
+///
+/// An absent `tcp6`/`udp6` (IPv6 disabled) is treated as empty; any other read
+/// error propagates so the caller can fail closed.
+fn netns_local_ports(pid: u32) -> io::Result<BTreeSet<u16>> {
+    let mut ports = BTreeSet::new();
+    for (leaf, listen_state) in [
+        ("tcp", PROC_NET_TCP_LISTEN),
+        ("tcp6", PROC_NET_TCP_LISTEN),
+        ("udp", PROC_NET_UDP_BOUND),
+        ("udp6", PROC_NET_UDP_BOUND),
+    ] {
+        let path = format!("/proc/{pid}/net/{leaf}");
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        collect_listening_ports(&content, listen_state, &mut ports);
+    }
+    Ok(ports)
+}
+
+/// Parses one `/proc/<pid>/net/{tcp,tcp6,udp,udp6}` table, inserting the local
+/// port of every row whose socket state equals `listen_state`.
+///
+/// Row layout is `sl local_address rem_address st ...`, where `local_address`
+/// is `HEXIP:HEXPORT` and `st` is the hex socket state. The first line is the
+/// column header (`local_address` in the state column) and simply fails the
+/// state match, so it is skipped without special-casing.
+fn collect_listening_ports(table: &str, listen_state: &str, ports: &mut BTreeSet<u16>) {
+    for line in table.lines() {
+        let mut fields = line.split_whitespace();
+        // token[1] = local_address, then token[3] = state (two positions on).
+        let local = fields.nth(1);
+        let state = fields.nth(1);
+        let (Some(local), Some(state)) = (local, state) else {
+            continue;
+        };
+        if state != listen_state {
+            continue;
+        }
+        let Some(port_hex) = local.rsplit(':').next() else {
+            continue;
+        };
+        if let Ok(port) = u16::from_str_radix(port_hex, 16) {
+            ports.insert(port);
+        }
+    }
 }
 
 // ── BPF program ─────────────────────────────────────────────────────────────
@@ -795,6 +875,11 @@ enum NotifOutcome {
 /// continuing would create a loopback-bypass primitive. Non-IP or malformed
 /// sockaddrs still resolve to `Allow` so `AF_UNIX` and ordinary kernel validation
 /// paths are not governed by this loopback guard.
+///
+/// A loopback destination on a non-sanctioned port is allowed only when the
+/// agent's own network namespace has a listener on that port (a service the
+/// agent started inside its jail, e.g. a test server); otherwise it is blocked.
+/// An unreadable `/proc/<pid>/net` table fails closed to `Block`.
 fn classify_notification(req: &libc::seccomp_notif, allow_ports: &[u16]) -> NotifOutcome {
     // connect(fd, sockaddr_ptr, addrlen): args[1] = pointer, args[2] = len.
     let addr_ptr = req.data.args[1];
@@ -810,7 +895,22 @@ fn classify_notification(req: &libc::seccomp_notif, allow_ports: &[u16]) -> Noti
     };
     match classify(addr, allow_ports) {
         Verdict::Allow => NotifOutcome::Allow,
-        Verdict::Block => NotifOutcome::Block(Some(addr)),
+        // Not a sanctioned Firma endpoint. Allow only if the agent's own network
+        // namespace has a listener on this port (a service it started inside its
+        // jail); otherwise block and audit.
+        Verdict::Block => match netns_local_ports(req.pid) {
+            Ok(ports) if ports.contains(&addr.port()) => {
+                tracing::debug!(dst = %addr, "allowing loopback connect to in-jail listener");
+                NotifOutcome::Allow
+            }
+            Ok(_) => NotifOutcome::Block(Some(addr)),
+            Err(error) => {
+                // Fail closed: an unreadable /proc netns table must not open a
+                // loopback bypass.
+                tracing::debug!(%error, dst = %addr, "netns listener probe failed; blocking");
+                NotifOutcome::Block(Some(addr))
+            }
+        },
     }
 }
 
@@ -918,6 +1018,81 @@ mod tests {
         assert_eq!(prog[4].k, libc::SECCOMP_RET_USER_NOTIF);
         assert_eq!(prog[5].k, SECCOMP_RET_ALLOW);
         assert_eq!(prog[3].k, SYS_CONNECT_NR);
+    }
+
+    // ── in-jail listener probe ──────────────────────────────────────────────
+
+    #[test]
+    fn collect_listening_ports_keeps_tcp_listen_only() {
+        // Header + one LISTEN (0A) on 127.0.0.1:53 + one ESTABLISHED (01) that
+        // must be ignored.
+        let table = "\
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:0035 00000000:0000 0A 00000000:00000000 00:00000000 00000000   101        0 12345 1 0000 100 0 0 10 0
+   1: 0100007F:1F90 0100007F:C000 01 00000000:00000000 00:00000000 00000000  1000        0 67890 1 0000 20 4 30 10 -1
+";
+        let mut ports = BTreeSet::new();
+        collect_listening_ports(table, PROC_NET_TCP_LISTEN, &mut ports);
+        assert!(ports.contains(&0x0035), "LISTEN row port must be collected");
+        assert!(
+            !ports.contains(&0x1F90),
+            "ESTABLISHED row must not be collected"
+        );
+    }
+
+    #[test]
+    fn collect_listening_ports_parses_ipv6_rows() {
+        // tcp6 carries a 32-hex-char local address; only the port after ':'
+        // matters.
+        let table = "\
+  sl  local_address                         remote_address                        st
+   0: 00000000000000000000000001000000:8000 00000000000000000000000000000000:0000 0A
+";
+        let mut ports = BTreeSet::new();
+        collect_listening_ports(table, PROC_NET_TCP_LISTEN, &mut ports);
+        assert!(ports.contains(&0x8000));
+    }
+
+    #[test]
+    fn collect_listening_ports_matches_udp_bound_state() {
+        let table = "\
+  sl  local_address rem_address   st
+   0: 0100007F:0035 00000000:0000 07
+";
+        let mut tcp = BTreeSet::new();
+        collect_listening_ports(table, PROC_NET_TCP_LISTEN, &mut tcp);
+        assert!(tcp.is_empty(), "UDP-bound row must not match TCP_LISTEN");
+
+        let mut udp = BTreeSet::new();
+        collect_listening_ports(table, PROC_NET_UDP_BOUND, &mut udp);
+        assert!(udp.contains(&0x0035), "UDP-bound row must match UDP state");
+    }
+
+    #[test]
+    fn collect_listening_ports_skips_header_and_garbage() {
+        let mut ports = BTreeSet::new();
+        collect_listening_ports(
+            "sl local_address rem_address st\n",
+            PROC_NET_TCP_LISTEN,
+            &mut ports,
+        );
+        collect_listening_ports("garbage\n\n   \n", PROC_NET_TCP_LISTEN, &mut ports);
+        assert!(ports.is_empty());
+    }
+
+    /// `netns_local_ports` reads the caller's own `/proc/self/net/tcp`, so a
+    /// listener bound in this process must appear in the returned set.
+    #[test]
+    fn netns_local_ports_includes_a_bound_listener() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let ports = netns_local_ports(std::process::id()).expect("read own netns ports");
+        assert!(
+            ports.contains(&port),
+            "own listening port {port} must be present in {ports:?}"
+        );
     }
 
     /// `read_remote_mem` recovers bytes from a live process. Reading our own
@@ -1349,11 +1524,16 @@ mod tests {
     fn guard_blocks_and_allows_real_connects() {
         use std::net::{TcpListener, TcpStream};
 
-        // Real loopback listeners: one on a sanctioned port, one not.
+        // A real loopback listener the "agent" started inside its own netns. It
+        // is deliberately NOT placed in allow_ports: the guard must allow the
+        // connect purely because the port has an in-jail listener (Plan B).
         let allowed = TcpListener::bind("127.0.0.1:0").expect("bind allowed");
         let allowed_port = allowed.local_addr().expect("addr").port();
-        let blocked = TcpListener::bind("127.0.0.1:0").expect("bind blocked");
-        let blocked_port = blocked.local_addr().expect("addr").port();
+        // Reserve then release a port so nothing listens on it: a connect here
+        // has no in-jail listener and no sanctioned port, so it must be blocked.
+        let blocked_reservation = TcpListener::bind("127.0.0.1:0").expect("bind blocked");
+        let blocked_port = blocked_reservation.local_addr().expect("addr").port();
+        drop(blocked_reservation);
 
         let dir = std::env::temp_dir().join(format!("firma-egress-e2e-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("mkdir");
@@ -1361,7 +1541,9 @@ mod tests {
 
         let handle = start(SupervisorConfig {
             socket_path: socket_path.clone(),
-            allow_ports: vec![allowed_port],
+            // No sanctioned ports: the allow verdict is proven purely by the
+            // in-jail listener probe.
+            allow_ports: vec![],
             report: None,
         })
         .expect("start guard");
@@ -1388,7 +1570,7 @@ mod tests {
         let allowed_res = TcpStream::connect_timeout(&allow_addr, Duration::from_secs(5));
         assert!(
             allowed_res.is_ok(),
-            "sanctioned port must connect (allow-continue): {allowed_res:?}"
+            "in-jail listener port must connect (allow-continue): {allowed_res:?}"
         );
 
         let blocked_res = TcpStream::connect_timeout(&block_addr, Duration::from_secs(5));
