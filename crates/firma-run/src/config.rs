@@ -238,6 +238,8 @@ pub enum SandboxIdentityMode {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CapabilityLeaseConfig {
     pub source: CapabilitySource,
+    /// Raw Ed25519 public key used to verify Authority-issued capabilities.
+    pub public_key_path: Option<PathBuf>,
     pub refresh_ratio: f64,
     pub grace_seconds: u64,
 }
@@ -420,8 +422,29 @@ pub(crate) struct CapabilityLeasePatch {
     pub(crate) kind: Option<String>,
     #[serde(default)]
     pub(crate) path: Option<PathBuf>,
+    pub(crate) public_key_path: Option<PathBuf>,
     pub(crate) refresh_ratio: Option<f64>,
     pub(crate) grace_seconds: Option<u64>,
+}
+
+impl CapabilityLeasePatch {
+    fn merge(self, higher: Self) -> Self {
+        let (source, kind, path) = if higher.source.is_some() {
+            (higher.source, None, None)
+        } else if higher.kind.is_some() || higher.path.is_some() {
+            (None, higher.kind.or(self.kind), higher.path.or(self.path))
+        } else {
+            (self.source, self.kind, self.path)
+        };
+        Self {
+            source,
+            kind,
+            path,
+            public_key_path: higher.public_key_path.or(self.public_key_path),
+            refresh_ratio: higher.refresh_ratio.or(self.refresh_ratio),
+            grace_seconds: higher.grace_seconds.or(self.grace_seconds),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -483,7 +506,10 @@ impl ProfilePatch {
             allowed_domains,
             network: higher.network.or(self.network),
             identity_mode: higher.identity_mode.or(self.identity_mode),
-            capability: higher.capability.or(self.capability),
+            capability: match (self.capability, higher.capability) {
+                (Some(lower), Some(higher)) => Some(lower.merge(higher)),
+                (lower, higher) => higher.or(lower),
+            },
             sidecar_local_exec: higher.sidecar_local_exec.or(self.sidecar_local_exec),
             executable_policies,
             codex_cli: higher.codex_cli.or(self.codex_cli),
@@ -710,6 +736,7 @@ fn cli_profile_patch(args: &RunInput) -> ProfilePatch {
                 source: Some(CapabilitySourcePatch::File { path: path.clone() }),
                 kind: None,
                 path: None,
+                public_key_path: None,
                 refresh_ratio: None,
                 grace_seconds: None,
             }),
@@ -762,6 +789,7 @@ fn capability_from_patch(patch: CapabilityLeasePatch) -> CapabilityLeaseConfig {
 
     CapabilityLeaseConfig {
         source,
+        public_key_path: patch.public_key_path,
         refresh_ratio: patch.refresh_ratio.unwrap_or(0.60),
         grace_seconds: patch.grace_seconds.unwrap_or(30),
     }
@@ -779,6 +807,7 @@ fn parse_legacy_capability_source(kind: Option<&str>, path: Option<PathBuf>) -> 
 fn default_capability_config() -> CapabilityLeaseConfig {
     CapabilityLeaseConfig {
         source: CapabilitySource::Disabled,
+        public_key_path: None,
         refresh_ratio: 0.60,
         grace_seconds: 30,
     }

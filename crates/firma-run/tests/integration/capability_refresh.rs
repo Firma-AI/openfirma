@@ -26,6 +26,7 @@ use firma_run::config::{CapabilityLeaseConfig, CapabilitySource};
 fn lease() -> CapabilityLeaseConfig {
     CapabilityLeaseConfig {
         source: CapabilitySource::Disabled,
+        public_key_path: None,
         refresh_ratio: 0.60,
         grace_seconds: 30,
     }

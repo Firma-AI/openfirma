@@ -58,7 +58,25 @@ fn mint_fails_when_public_key_missing() {
 }
 
 #[test]
-fn mint_fails_on_invalid_public_key() {
+fn mint_fails_when_public_key_is_unreadable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let seed_path = dir.path().join("seed.toml");
+
+    let err = mint_and_write(
+        &params("http://127.0.0.1:1", dir.path().to_path_buf()),
+        &seed_path,
+    )
+    .expect_err("directory cannot be read as a public-key file");
+
+    assert!(
+        err.to_string().contains("read authority public key"),
+        "got: {err}"
+    );
+    assert!(!seed_path.exists(), "no seed should be written on failure");
+}
+
+#[test]
+fn mint_fails_on_non_32_byte_public_key() {
     let dir = tempfile::tempdir().expect("tempdir");
     let bad_key = dir.path().join("authority.pub");
     // Too short to be an Ed25519 public key.
@@ -69,7 +87,7 @@ fn mint_fails_on_invalid_public_key() {
         .expect_err("invalid public key must fail");
 
     assert!(
-        err.to_string().contains("invalid authority public key"),
+        err.to_string().contains("exactly 32 raw Ed25519 bytes"),
         "got: {err}"
     );
     assert!(!seed_path.exists(), "no seed should be written on failure");

@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use firma_config_loader::CONFIG_FILE_NAME;
 use firma_run::authority::{AuthorityCli, AuthorityPromptIo};
-use firma_run::routing::{AutostartFlags, resolve_authority};
+use firma_run::routing::{AutostartFlags, ResolveAuthorityRequest, resolve_authority};
 
 struct NoPrompt;
 impl AuthorityPromptIo for NoPrompt {
@@ -60,22 +60,35 @@ fn existing_plaintext_h2_authority_is_reused_without_supervisor() {
     let cfg = tmp.path().join(CONFIG_FILE_NAME);
     std::fs::write(
         &cfg,
-        format!("[authority]\nlisten_addr = \"{authority_address}\"\n"),
+        format!(
+            concat!(
+                "[authority]\n",
+                "listen_addr = \"{authority_address}\"\n",
+                "[sidecar.authority]\n",
+                "public_key_path = \"authority.pub\"\n",
+            ),
+            authority_address = authority_address,
+        ),
     )
     .unwrap();
     let identity = firma_run::identity::RunIdentity::new("test");
     let runtime_dir = tmp.path().join("runtime");
     let flags = AutostartFlags::default();
+    let firma_exe = PathBuf::from("/bin/false");
     let mut prompt = NoPrompt;
     let result = resolve_authority(
-        &identity,
-        &runtime_dir,
-        &flags,
-        &AuthorityCli::Unset,
-        "developer",
-        Some(&cfg),
-        cfg.parent(),
-        &PathBuf::from("/bin/false"),
+        ResolveAuthorityRequest {
+            identity: &identity,
+            runtime_dir: &runtime_dir,
+            flags: &flags,
+            cli: &AuthorityCli::Unset,
+            profile_name: "developer",
+            user_config_path: Some(&cfg),
+            user_config_dir: cfg.parent(),
+            firma_exe: &firma_exe,
+            capability_public_key_path: Some(std::path::Path::new("firmateam.pub")),
+            working_dir: &tmp.path().join("workspace"),
+        },
         &mut prompt,
     );
 
@@ -85,4 +98,8 @@ fn existing_plaintext_h2_authority_is_reused_without_supervisor() {
         "reuse path must not spawn a supervisor"
     );
     assert_eq!(resolved.url, format!("http://{authority_address}"));
+    assert_eq!(
+        resolved.pub_key_path,
+        Some(tmp.path().join("workspace/firmateam.pub"))
+    );
 }

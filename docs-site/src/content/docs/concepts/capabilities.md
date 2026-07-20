@@ -63,6 +63,42 @@ signed token, writes it to
 `$XDG_RUNTIME_DIR/firma/capabilities/<sandbox_id>.toml`, and the autostarted
 sidecar loads it — no operator action required.
 
+## Verify FirmaTeam capabilities
+
+When `firma run` obtains capabilities from FirmaTeam, configure the workspace
+public key on the run profile:
+
+```toml
+[run.profiles.codex.capability]
+public_key_path = "/path/to/authority.pub"
+refresh_ratio = 0.60
+grace_seconds = 30
+```
+
+Export that key from FirmaTeam:
+
+```bash
+firma-authority export-workspace-public-key \
+  --workspace-id <workspace> \
+  --out /path/to/authority.pub
+```
+
+The file must contain exactly the 32 raw bytes of an Ed25519 public key. PEM,
+OpenSSH, DER, hex, base64, and TOML encodings are not accepted. A relative
+`public_key_path` is resolved from the `firma run` working directory.
+
+`firma run` reads and validates the key before calling `IssueCapability`, then
+uses it to verify the returned PASETO token. The same effective key is written
+to the autostarted Sidecar's `[sidecar.authority].public_key_path`, so the
+Sidecar verifies the generated capability seed against the same trust root.
+The capability-specific path takes precedence over
+`[sidecar.authority].public_key_path`; omitting it keeps the existing Sidecar
+Authority key behavior.
+
+Key read failures, files that are not exactly 32 bytes, malformed or expired
+tokens, and signature mismatches fail closed with an error. The existing
+`--capability-file` option and capability-seed TOML format are unchanged.
+
 ## Staying alive: automatic refresh
 
 Capabilities are deliberately short-lived (the `firma run` default TTL is 15
@@ -93,11 +129,11 @@ renewal.
 
 Tuning knobs:
 
-| Setting | Where | Default | Effect |
-| ------- | ----- | ------- | ------ |
-| `capability.refresh_ratio`   | `firma run` profile | `0.60`  | Fraction of remaining lifetime before renewing. |
+| Setting                      | Where               | Default | Effect                                               |
+| ---------------------------- | ------------------- | ------- | ---------------------------------------------------- |
+| `capability.refresh_ratio`   | `firma run` profile | `0.60`  | Fraction of remaining lifetime before renewing.      |
 | `capability.grace_seconds`   | `firma run` profile | `30`    | Renew no later than this many seconds before expiry. |
-| `capability_seed.hot_reload` | sidecar config      | `true`  | Watch the seed file and hot-swap the map on change. |
+| `capability_seed.hot_reload` | sidecar config      | `true`  | Watch the seed file and hot-swap the map on change.  |
 
 There is intentionally no hard session-lifetime cap: the Authority's issuance
 policy is the authority on whether a session may continue, and it is re-checked
