@@ -5,6 +5,7 @@ mod authority_autostart_ready_scrape;
 mod authority_autostart_reuse;
 mod authority_autostart_timeout;
 mod authority_bootstrap_prompt;
+mod backend_selection;
 mod capability_config;
 mod capability_issue;
 mod capability_lease;
