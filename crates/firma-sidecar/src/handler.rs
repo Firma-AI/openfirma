@@ -861,9 +861,9 @@ fn passthrough_envelope<'a>(
     reason = "literal passthrough ids are non-empty by construction; parse cannot fail"
 )]
 fn passthrough_agent_id() -> AgentId {
-    "_passthrough_"
+    "agt_01j0000000e008000000000001"
         .parse()
-        .expect("literal passthrough agent id is non-empty")
+        .expect("literal passthrough agent id is valid")
 }
 
 #[expect(
@@ -988,7 +988,9 @@ pub(crate) mod tests {
             token_id: "3713c5fc-b569-650c-c780-c64051473370"
                 .parse()
                 .expect("literal token id"),
-            agent_id: "agent_test".parse().expect("literal agent id"),
+            agent_id: "agt_01j0000000e008000000000001"
+                .parse()
+                .expect("literal agent id"),
             session_id: session_id.parse().expect("literal session id"),
             action_set: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),
@@ -1334,7 +1336,9 @@ pub(crate) mod tests {
             "v4.public.test_token".to_string(),
             ExecutionMetadata {
                 session_id: "sess_modify".parse().expect("literal session id"),
-                agent_id: "agent".parse().expect("literal agent id"),
+                agent_id: "agt_01j0000000e008000000000001"
+                    .parse()
+                    .expect("literal agent id"),
                 timestamp: Utc::now(),
                 trace_id: None,
                 budget_consumed: 0.0,

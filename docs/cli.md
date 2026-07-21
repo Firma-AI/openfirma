@@ -30,10 +30,10 @@ firma config [OPTIONS]
 | Flag                         | Short | Default                  | Description                                                                |
 | ---------------------------- | ----- | ------------------------ | -------------------------------------------------------------------------- |
 | `--mode`                     |       | wizard / `agent-local`   | `agent-local`, `agent-remote`, or `authority`                              |
-| `--name`                     | `-n`  | wizard / `my-agent`      | Agent slug — used as `agent_id` in `[sidecar.preflight]`                   |
+| `--profile`                  |       | wizard / `generic`       | Execution profile written to `[run].profile`                               |
+| `--agent-id <agent-id>`      |       | generated / prompt       | Registered `agt_` TypeID written to `[sidecar.authority].agent_id`         |
 | `--posture`                  |       | wizard / `dev`           | Cedar policy posture written under `policies/`                             |
 | `--mapping`                  |       | wizard / `anthropic`     | Mapping file(s) to include — repeat for multiple                           |
-| `--requested-action`         |       | derived from posture     | Preflight requested actions — repeat or comma-separate                     |
 | `--extra-hosts`              |       | none                     | Comma-separated extra hosts the agent may reach                            |
 | `--workspace`                |       | CWD                      | Agent RW path written to `firma.toml` `[run.profiles.generic]` bwrap mount |
 | `--output-dir`               | `-o`  | `.firma` in CWD          | Config dir — where `firma.toml`, policies, mappings land                   |
@@ -82,7 +82,7 @@ firma config
 Non-interactive agent-local:
 
 ```bash
-firma config --yes --name claude-code --posture dev --mapping anthropic
+firma config --yes --profile codex --posture dev --mapping anthropic
 ```
 
 Agent connecting to a remote authority:
@@ -91,13 +91,14 @@ Agent connecting to a remote authority:
 firma config --yes --mode agent-remote \
   --authority-url https://authority.example.com:9443 \
   --authority-ca-cert /path/to/ca.crt \
-  --name my-agent --posture strict --mapping anthropic
+  --agent-id agt_01j0000000e008000000000001 \
+  --profile codex --posture strict --mapping anthropic
 ```
 
 Multiple mappings:
 
 ```bash
-firma config --name my-agent --posture dev \
+firma config --profile codex --posture dev \
   --mapping anthropic --mapping github --mapping npm
 ```
 
@@ -111,7 +112,7 @@ Re-render an existing scaffold, keeping current values unless a flag overrides:
 
 ```bash
 firma config --yes --dry-run
-firma config --yes --name codex --mapping openai --force
+firma config --yes --profile codex --mapping openai --force
 ```
 
 After scaffolding, run the agent:
@@ -406,7 +407,7 @@ production traffic.
 
 ```bash
 firma authority --config firma.toml issue \
-  --agent-id demo-agent \
+  --agent-id agt_01j0000000e008000000000001 \
   --session-id demo-session \
   --action communication.external.send \
   --resource-scope '*' \
@@ -548,6 +549,15 @@ on `firma run` exit (`SIGTERM` then `SIGKILL` after a 5s grace).
 `--no-autostart` suppresses Authority autostart. With
 `--no-autostart --authority local` `firma run` exits immediately with a
 typed argument-conflict error.
+
+Before resolving the backend or starting any component, `firma run` requires
+`[sidecar.authority].agent_id` to contain a UUID. Missing IDs, legacy profile
+values such as `codex`, and malformed UUIDs fail closed with migration
+guidance. The UUID is used for capability issuance and refresh; `[run].profile`
+remains the independent local execution profile.
+
+`AGENT_NOT_REGISTERED` and `AGENT_PROFILE_MISMATCH` Authority denial reasons
+map to dedicated run errors and retain the Authority's diagnostic message.
 
 ### Authority typed errors
 

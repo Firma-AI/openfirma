@@ -12,7 +12,7 @@
 // the agent is allowed to do, not where the packet may go.
 
 permit (
-    principal == Firma::Agent::"demo1-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"filesystem.read",
     resource
 );

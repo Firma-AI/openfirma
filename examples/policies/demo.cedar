@@ -5,13 +5,13 @@
 // Until then, Stage 1 (empty CapabilityMap) enforces: mapped hosts DENY, all
 // others PASSTHROUGH (because default_protected = false in [sidecar.mapping]).
 //
-// Principal: Firma::Agent::"example-agent"
+// Principal: Firma::Agent::"agt_01j0000000e008000000000001"
 // Actions:   the 15 canonical Firma action classes from FEP v0.1 §2.3.5
 // Resource:  Firma::Resource::"<host/path>"
 
 // Allow external communication (weather, LLM calls, email, Supabase).
 permit (
-    principal == Firma::Agent::"example-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"communication.external.send",
     resource
 ) when {
@@ -20,14 +20,14 @@ permit (
 
 // Allow filesystem reads (Supabase Storage GET).
 permit (
-    principal == Firma::Agent::"example-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"filesystem.read",
     resource
 );
 
 // Allow filesystem writes (Supabase Storage POST/PUT).
 permit (
-    principal == Firma::Agent::"example-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"filesystem.write",
     resource
 ) when {

@@ -51,7 +51,8 @@ fn spawned_sidecar_inherits_sandbox_id_env() {
 
     let _supervisor = SidecarSupervisor::spawn(SpawnRequest {
         sandbox_id: &sandbox_id,
-        agent_id: "generic",
+        agent_id: super::helper::agent_id(),
+        execution_profile: firma_config_loader::AgentProfile::Generic,
         session_id: "session-env",
         marker_dir: marker,
         template_path: None,

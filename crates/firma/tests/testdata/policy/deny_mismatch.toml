@@ -6,7 +6,7 @@
 expected = "DENY"
 
 [fixture.principal]
-agent_id = "integration-agent"
+agent_id = "agt_01j0000000e008000000000001"
 
 [fixture.action]
 class = "code.read"

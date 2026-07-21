@@ -20,7 +20,9 @@ include!("support/common_fixtures.rs");
 
 fn bench_reload(c: &mut Criterion) {
     let bundle = reference_bundle();
-    let principal: AgentId = "agent-bench".parse().expect("literal agent id");
+    let principal: AgentId = "agt_01j0000000e008000000000001"
+        .parse()
+        .expect("literal agent id");
     let ctx = json!({ "budget_remaining": 100, "risk_score": 10 });
 
     c.bench_function("cedar_bundle_reload", |b| {

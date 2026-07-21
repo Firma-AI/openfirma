@@ -401,7 +401,7 @@ mod tests {
         let now = chrono::Utc::now();
         CapabilityClaims {
             token_id: TokenId::new(),
-            agent_id: "agent_abc".parse().unwrap(),
+            agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
             session_id: "sess_xyz".parse().unwrap(),
             action_set: vec!["communication.external.send".to_string()],
             resource_scope: "https://api.example.com/*".to_string(),

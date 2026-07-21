@@ -238,7 +238,9 @@ mod tests {
             token_id: "3713c5fc-b569-650c-c780-c64051473370"
                 .parse()
                 .expect("literal token id"),
-            agent_id: "agent_test".parse().expect("literal agent id"),
+            agent_id: "agt_01j0000000e008000000000001"
+                .parse()
+                .expect("literal agent id"),
             session_id: "sess_001".parse().expect("literal session id"),
             action_set: actions.into_iter().map(String::from).collect(),
             resource_scope: resource_scope.to_string(),
@@ -324,7 +326,9 @@ mod tests {
             raw_token: format!("v4.public.{token_id}"),
             claims: CapabilityClaims {
                 token_id: TokenId::new(),
-                agent_id: "agent_test".parse().expect("literal agent id"),
+                agent_id: "agt_01j0000000e008000000000001"
+                    .parse()
+                    .expect("literal agent id"),
                 session_id: "sess_001".parse().expect("literal session id"),
                 action_set: actions.into_iter().map(String::from).collect(),
                 resource_scope: resource_scope.to_string(),

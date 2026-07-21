@@ -68,7 +68,7 @@ use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use firma_core::{RunAuditEvent, RunAuditMessage};
+use firma_core::{AgentId, RunAuditEvent, RunAuditMessage};
 use nix::sys::socket::{ControlMessage, ControlMessageOwned, MsgFlags, recvmsg, sendmsg};
 use nix::unistd::Pid;
 
@@ -547,7 +547,7 @@ pub struct AuditChannel {
     pub socket_path: PathBuf,
     /// Session and agent identity stamped onto each message.
     pub session_id: String,
-    pub agent_id: String,
+    pub agent_id: AgentId,
 }
 
 /// Inputs to [`start`].
@@ -730,7 +730,7 @@ impl AuditSink {
     fn report_event(channel: &AuditChannel, addr: SocketAddr) {
         let message = RunAuditMessage {
             session_id: channel.session_id.clone(),
-            agent_id: channel.agent_id.clone(),
+            agent_id: channel.agent_id,
             event: RunAuditEvent::LoopbackBlocked {
                 dst_ip: addr.ip().to_string(),
                 dst_port: addr.port(),
@@ -1241,7 +1241,9 @@ mod tests {
         let channel = AuditChannel {
             socket_path: socket_path.clone(),
             session_id: "sess-1".to_string(),
-            agent_id: "agent-1".to_string(),
+            agent_id: "agt_01j0000000e008000000000001"
+                .parse()
+                .expect("valid agent ID"),
         };
         let sink = AuditSink::try_new(channel).expect("spawn audit sink");
         sink.send("127.0.0.1:9000".parse().unwrap());
@@ -1255,7 +1257,7 @@ mod tests {
         );
         let value: serde_json::Value = serde_json::from_str(line.trim()).expect("valid JSON");
         assert_eq!(value["session_id"], "sess-1");
-        assert_eq!(value["agent_id"], "agent-1");
+        assert_eq!(value["agent_id"], "agt_01j0000000e008000000000001");
         assert_eq!(value["event"]["kind"], "loopback_blocked");
         assert_eq!(value["event"]["dst_ip"], "127.0.0.1");
         assert_eq!(value["event"]["dst_port"], 9000);

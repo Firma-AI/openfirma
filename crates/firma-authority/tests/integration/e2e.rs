@@ -100,7 +100,7 @@ async fn issue_capability_e2e() {
         .expect("failed to connect to server");
 
     let request = IssueCapabilityRequest {
-        agent_id: "test_agent".to_string(),
+        agent_id: "agt_01j0000000e008000000000001".to_string(),
         requested_actions: vec!["filesystem.read".to_string()],
         resource_scope: "*".to_string(),
         session_id: "test_session".to_string(),
@@ -113,7 +113,7 @@ async fn issue_capability_e2e() {
 
     assert!(inner.granted);
     let token = inner.token.expect("token missing");
-    assert_eq!(token.agent_id, "test_agent");
+    assert_eq!(token.agent_id, "agt_01j0000000e008000000000001");
     assert!(!token.signature.is_empty());
 
     server.stop();

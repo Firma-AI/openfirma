@@ -78,7 +78,7 @@ bundle_ttl_seconds = 30
         .args([
             "issue",
             "--agent-id",
-            "test-agent",
+            "agt_01j0000000e008000000000001",
             "--session-id",
             "test-session",
             "--action",

@@ -4,6 +4,7 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use firma_config_loader::AgentProfile;
 use firma_runtime_state::runtime_paths::{default_runtime_dir, run_entry_from};
 
 #[cfg(unix)]
@@ -556,7 +557,7 @@ fn start_loopback_guard(
     let report = sidecar_supervisor.map(|supervisor| crate::egress_guard::AuditChannel {
         socket_path: firma_sidecar::run_audit::socket_path_in(supervisor.marker_dir()),
         session_id: identity.session_id.clone(),
-        agent_id: identity.profile.clone(),
+        agent_id: identity.agent_id,
     });
 
     let guard_sock = handle.runtime_dir.join("egress-guard.sock");
@@ -602,7 +603,7 @@ fn mint_capability_seed(
             .ok_or_else(|| RunError::Internal("authority pub key missing after gate".into()))?,
         authority_ca_cert_path: authority.ca_cert_path.clone(),
         credentials: authority.credentials.clone(),
-        agent_id: identity.profile.clone(),
+        agent_id: identity.agent_id,
         session_id: identity.session_id.clone(),
         requested_actions: crate::capability::issue::DEFAULT_REQUESTED_ACTIONS
             .iter()
@@ -755,10 +756,18 @@ fn autostart_sidecar(
     let cwd_template = std::env::current_dir()
         .ok()
         .map(|cwd| cwd.join("firma_sidecar.toml"));
+    let execution_profile =
+        AgentProfile::from_name(&identity.execution_profile).ok_or_else(|| {
+            RunError::Internal(format!(
+                "unsupported resolved execution profile '{}'",
+                identity.execution_profile
+            ))
+        })?;
 
     SidecarSupervisor::spawn(SpawnRequest {
         sandbox_id: &identity.sandbox_id,
-        agent_id: &identity.profile,
+        agent_id: &identity.agent_id,
+        execution_profile,
         session_id: &identity.session_id,
         marker_dir,
         template_path: flags.template_path.as_deref(),
@@ -903,7 +912,7 @@ pub fn resolve_authority(
                 run_entry_from(request.runtime_dir, &request.identity.sandbox_id).join("authority");
             match crate::authority::AuthoritySupervisor::spawn(crate::authority::SpawnRequest {
                 sandbox_id: &request.identity.sandbox_id,
-                agent_id: &request.identity.profile,
+                agent_id: &request.identity.agent_id,
                 session_id: &request.identity.session_id,
                 marker_dir: marker,
                 profile_name: request.profile_name,
@@ -1483,7 +1492,7 @@ mod non_structural_env_tests {
         let fake_sidecar = TcpListener::bind("127.0.0.1:0").expect("bind");
         let sidecar_addr = fake_sidecar.local_addr().expect("local_addr");
         let endpoint = SidecarEndpoint::Tcp { addr: sidecar_addr };
-        let identity = RunIdentity::new("test-agent");
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "test-agent");
 
         let bridge =
             setup_host_bridge(&endpoint, &identity).expect("setup_host_bridge should succeed");
@@ -1530,7 +1539,7 @@ mod non_structural_env_tests {
         let endpoint = SidecarEndpoint::Unix {
             path: std::path::PathBuf::from("/tmp/test.sock"),
         };
-        let identity = RunIdentity::new("test-agent");
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "test-agent");
         let Err(error) = setup_host_bridge(&endpoint, &identity) else {
             panic!("Unix endpoint should fail closed on non-structural path");
         };
@@ -1561,14 +1570,14 @@ mod non_structural_env_tests {
         let handle = SandboxHandle {
             backend: BackendKind::Vz,
             runtime_dir: std::env::temp_dir().join("firma-routing-test-runtime"),
-            identity: RunIdentity::new("test-agent"),
+            identity: RunIdentity::new(crate::identity::test_agent_id(), "test-agent"),
             mounts: Vec::new(),
             network_policy: NetworkPolicy {
                 enforce_network_namespace: false,
                 fail_closed: true,
             },
         };
-        let identity = RunIdentity::new("test-agent");
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "test-agent");
         let flags = AutostartFlags {
             no_autostart: true,
             startup_timeout: Duration::from_secs(1),
@@ -1647,14 +1656,14 @@ mod non_structural_env_tests {
         let handle = SandboxHandle {
             backend: BackendKind::Vz,
             runtime_dir: std::env::temp_dir().join("firma-routing-test-dns-stub"),
-            identity: RunIdentity::new("test-agent"),
+            identity: RunIdentity::new(crate::identity::test_agent_id(), "test-agent"),
             mounts: Vec::new(),
             network_policy: NetworkPolicy {
                 enforce_network_namespace: false,
                 fail_closed: true,
             },
         };
-        let identity = RunIdentity::new("test-agent");
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "test-agent");
         let flags = AutostartFlags {
             no_autostart: true,
             startup_timeout: Duration::from_secs(1),
@@ -1722,14 +1731,14 @@ mod non_structural_env_tests {
         let handle = SandboxHandle {
             backend: BackendKind::Bwrap,
             runtime_dir: std::env::temp_dir().join("firma-routing-test-no-macos-dns-stub"),
-            identity: RunIdentity::new("test-agent"),
+            identity: RunIdentity::new(crate::identity::test_agent_id(), "test-agent"),
             mounts: Vec::new(),
             network_policy: NetworkPolicy {
                 enforce_network_namespace: false,
                 fail_closed: true,
             },
         };
-        let identity = RunIdentity::new("test-agent");
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "test-agent");
         let flags = AutostartFlags {
             no_autostart: true,
             startup_timeout: Duration::from_secs(1),

@@ -26,7 +26,7 @@ fn params(authority_url: &str, pub_key_path: PathBuf) -> IssueParams {
         authority_pub_key_path: pub_key_path,
         authority_ca_cert_path: None,
         credentials: None,
-        agent_id: "agent_issue".to_string(),
+        agent_id: *super::helper::agent_id(),
         session_id: "sess_issue".to_string(),
         requested_actions: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),

@@ -273,7 +273,7 @@ mod tests {
 expected = "ALLOW"
 
 [fixture.principal]
-agent_id = "my-agent"
+agent_id = "agt_01j0000000e008000000000001"
 
 [fixture.action]
 class = "model.inference.chat"
@@ -292,7 +292,10 @@ path = ".firma/policies/"
     fn parses_full_fixture() {
         let fx: Fixture = toml::from_str(SAMPLE).expect("parse fixture");
         assert_eq!(fx.fixture.expected, Expected::Allow);
-        assert_eq!(fx.fixture.principal.agent_id, "my-agent");
+        assert_eq!(
+            fx.fixture.principal.agent_id,
+            "agt_01j0000000e008000000000001"
+        );
         assert_eq!(fx.fixture.action.class, "model.inference.chat");
         assert_eq!(fx.fixture.resource.host, "api.openai.com");
         assert_eq!(fx.bundle.path, ".firma/policies/");

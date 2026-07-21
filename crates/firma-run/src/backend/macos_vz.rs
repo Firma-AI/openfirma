@@ -1027,7 +1027,7 @@ mod tests {
         SandboxHandle {
             backend: BackendKind::Vz,
             runtime_dir,
-            identity: RunIdentity::new("claude-code"),
+            identity: RunIdentity::new(crate::identity::test_agent_id(), "claude-code"),
             mounts: Vec::new(),
             network_policy: NetworkPolicy {
                 enforce_network_namespace: false,
@@ -1149,7 +1149,7 @@ mod tests {
 
     #[test]
     fn guest_pty_launch_stays_noninteractive_without_host_terminal() {
-        let identity = RunIdentity::new("codex");
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "codex");
         let handle = SandboxHandle {
             backend: BackendKind::Vz,
             runtime_dir: PathBuf::from("/tmp/firma-test-vz-guest"),
@@ -1609,7 +1609,7 @@ mod tests {
         reason = "linear contract shape regression test"
     )]
     fn vz_guest_contract_carries_command_mounts_network_and_invariants() {
-        let identity = RunIdentity::new("claude-code");
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "claude-code");
         let handle = SandboxHandle {
             backend: BackendKind::Vz,
             runtime_dir: PathBuf::from("/tmp/firma-test-vz-guest"),
@@ -1810,7 +1810,7 @@ mod tests {
             std::process::id()
         ));
 
-        let identity = RunIdentity::new("claude-code");
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "claude-code");
         let handle = SandboxHandle {
             backend: BackendKind::Vz,
             runtime_dir: runtime_dir.clone(),
@@ -1896,7 +1896,7 @@ mod tests {
         let kernel = write_regular_file(&tempdir.path().join("vmlinuz"), "kernel");
         let initrd = write_regular_file(&tempdir.path().join("initrd.img"), "initrd");
         let rootfs = write_regular_file(&tempdir.path().join("rootfs.img"), "rootfs");
-        let identity = RunIdentity::new("codex");
+        let identity = RunIdentity::new(crate::identity::test_agent_id(), "codex");
         let handle = SandboxHandle {
             backend: BackendKind::Vz,
             runtime_dir: tempdir.path().join("runtime"),
@@ -2044,7 +2044,7 @@ mod tests {
         let handle = SandboxHandle {
             backend: BackendKind::Vz,
             runtime_dir: PathBuf::from("/tmp/firma-test-vz"),
-            identity: RunIdentity::new("generic"),
+            identity: RunIdentity::new(crate::identity::test_agent_id(), "generic"),
             mounts: vec![],
             network_policy: NetworkPolicy {
                 enforce_network_namespace: false,

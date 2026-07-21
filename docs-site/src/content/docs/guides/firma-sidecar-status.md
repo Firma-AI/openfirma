@@ -35,14 +35,14 @@ sbx_01j0000000e008000000000002      codex        51002   stopped    -           
 
 Columns:
 
-| Column       | Description                                         |
-| ------------ | --------------------------------------------------- |
-| `SANDBOX_ID` | The run's sandbox identifier.                       |
-| `AGENT`      | Agent associated with the run.                      |
-| `PID`        | Sidecar process ID, or `-` if absent.               |
-| `STATE`      | `running`, `unhealthy`, `stopped`, or `unknown`.    |
-| `LISTEN`     | Address used to reach the sidecar, or `-`.          |
-| `UPTIME`     | Sidecar uptime as `HH:MM:SS`, or `-`.               |
+| Column       | Description                                      |
+| ------------ | ------------------------------------------------ |
+| `SANDBOX_ID` | The run's sandbox identifier.                    |
+| `AGENT`      | Agent associated with the run.                   |
+| `PID`        | Sidecar process ID, or `-` if absent.            |
+| `STATE`      | `running`, `unhealthy`, `stopped`, or `unknown`. |
+| `LISTEN`     | Address used to reach the sidecar, or `-`.       |
+| `UPTIME`     | Sidecar uptime as `HH:MM:SS`, or `-`.            |
 
 ### JSON (`--json`)
 
@@ -56,7 +56,7 @@ Emits a single JSON array — one object per sidecar. An empty list prints `[]`.
 [
   {
     "sandbox_id": "sbx_01j0000000e008000000000001",
-    "agent_id": "claude-code",
+    "agent_id": "agt_01j0000000e008000000000001",
     "session_id": "sess-abc123",
     "authority_url": "http://127.0.0.1:50051",
     "policy_bundle_version": "a1b2c3d4",
@@ -98,12 +98,12 @@ sidecar started for a specific `firma run` invocation.
 
 ## STATE semantics
 
-| State       | Meaning                                      |
-| ----------- | -------------------------------------------- |
-| `running`   | The sidecar is running and reachable.        |
+| State       | Meaning                                       |
+| ----------- | --------------------------------------------- |
+| `running`   | The sidecar is running and reachable.         |
 | `unhealthy` | The sidecar is running but is not responding. |
-| `stopped`   | The sidecar is no longer running.            |
-| `unknown`   | Firma could not determine the sidecar state. |
+| `stopped`   | The sidecar is no longer running.             |
+| `unknown`   | Firma could not determine the sidecar state.  |
 
 ## Exit codes
 

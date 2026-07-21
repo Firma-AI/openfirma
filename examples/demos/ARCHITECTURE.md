@@ -188,7 +188,7 @@ revocation_readiness_grace_ms = 500
 revocation_fail_closed_on_disconnect = false
 
 [sidecar.preflight]
-agent_id = "demo0-agent"
+agent_id = "agt_01j0000000e008000000000001"
 session_id = "demo0-session-001"
 requested_actions = ["code.review.read", "filesystem.read"]
 resource_scope = "*"
@@ -243,13 +243,13 @@ All tools collapse into a single policy space regardless of provider. Public ser
 // Only code.review.read and filesystem.read are permitted.
 
 permit (
-    principal == Firma::Agent::"demo0-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"code.review.read",
     resource
 );
 
 permit (
-    principal == Firma::Agent::"demo0-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"filesystem.read",
     resource
 );
@@ -385,13 +385,13 @@ Single Cedar policy evaluated by the sidecar on every outbound call:
 
 ```cedar
 permit (
-    principal == Firma::Agent::"demo0-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"code.review.read",
     resource
 );
 
 permit (
-    principal == Firma::Agent::"demo0-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"filesystem.read",
     resource
 );

@@ -72,6 +72,7 @@ file_path = ".runtime/audit.jsonl"
 signing_key_path = ".runtime/audit.key"
 
 [sidecar.authority]
+agent_id = "agt_01j0000000e008000000000001"
 url = "http://127.0.0.1:50051"
 connect_timeout_secs = 10
 reconnect_min_backoff_ms = 250
@@ -114,7 +115,7 @@ FIRMA_RUN_PROFILE = "copilot"
 # ── Sidecar preflight ────────────────────────────────────────────────────────
 
 [sidecar.preflight]
-agent_id = "generic-agent"
+agent_id = "agt_01j0000000e008000000000001"
 session_id = "preflight-session"
 requested_actions = [
   "system.install",

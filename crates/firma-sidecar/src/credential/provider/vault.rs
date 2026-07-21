@@ -142,7 +142,9 @@ mod tests {
             "v4.public.eyJ0...".to_string(),
             ExecutionMetadata {
                 session_id: "sess_001".parse().expect("literal session id"),
-                agent_id: "agent_abc".parse().expect("literal agent id"),
+                agent_id: "agt_01j0000000e008000000000001"
+                    .parse()
+                    .expect("literal agent id"),
                 timestamp: chrono::Utc::now(),
                 trace_id: None,
                 budget_consumed: 0.0,

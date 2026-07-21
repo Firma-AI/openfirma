@@ -83,7 +83,7 @@ evaluates the bundle, and compares the decision to `expected`:
 expected = "ALLOW"
 
 [fixture.principal]
-agent_id = "demo-agent"
+agent_id = "agt_01j0000000e008000000000001"
 
 [fixture.action]
 class = "code.read"
@@ -169,7 +169,7 @@ a payment-cap policy by setting the transfer amount:
 expected = "ALLOW"
 
 [fixture.principal]
-agent_id = "demo-agent"
+agent_id = "agt_01j0000000e008000000000001"
 
 [fixture.action]
 class = "payment.transfer"

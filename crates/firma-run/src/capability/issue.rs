@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use firma_core::token::paseto::PasetoV4Verifier;
-use firma_core::{CapabilitySeed, TokenVerifier};
+use firma_core::{AgentId, CapabilitySeed, TokenVerifier};
 use firma_protobuf::v1::IssueCapabilityRequest;
 use firma_protobuf::v1::authority_service_client::AuthorityServiceClient;
 use firma_sidecar::authority_client::channel::build_channel;
@@ -33,7 +33,7 @@ pub struct IssueParams {
     /// Optional Sidecar credentials for the Authority request.
     pub credentials: Option<ResolvedSidecarCredentials>,
     /// Agent identity to bind into the request.
-    pub agent_id: String,
+    pub agent_id: AgentId,
     /// Session identity to bind into the request.
     pub session_id: String,
     /// Action classes requested.
@@ -88,7 +88,9 @@ const ED25519_PUBLIC_KEY_LENGTH: usize = 32;
 /// # Errors
 ///
 /// - [`RunError::AuthorityUnreachable`] on channel/transport/connect failure.
-/// - [`RunError::CapabilityDenied`] when the Authority returns `granted=false`.
+/// - [`RunError::AgentNotRegistered`] when the Authority does not recognize the UUID.
+/// - [`RunError::AgentProfileMismatch`] when the registration rejects the local profile.
+/// - [`RunError::CapabilityDenied`] for other Authority denials.
 /// - [`RunError::Capability`] on verification, encoding, or file-write failure.
 pub fn mint_and_write(params: &IssueParams, out_path: &Path) -> Result<PathBuf, RunError> {
     let seed = mint(params)?;
@@ -165,7 +167,7 @@ fn mint(params: &IssueParams) -> Result<CapabilitySeed, RunError> {
         // file (see `capability::refresh`); an unbounded RPC would stall sandbox
         // teardown.
         let rpc = client.issue_capability(IssueCapabilityRequest {
-            agent_id: params.agent_id.clone(),
+            agent_id: params.agent_id.to_string(),
             session_id: params.session_id.clone(),
             requested_actions: params.requested_actions.clone(),
             resource_scope: params.resource_scope.clone(),
@@ -192,10 +194,20 @@ fn mint(params: &IssueParams) -> Result<CapabilitySeed, RunError> {
     })?;
 
     if !response.granted {
-        return Err(RunError::CapabilityDenied {
-            agent_id: params.agent_id.clone(),
-            reason: response.deny_reason,
-            message: response.deny_message,
+        return Err(match response.deny_reason.as_str() {
+            "AGENT_NOT_REGISTERED" => RunError::AgentNotRegistered {
+                agent_id: params.agent_id.to_string(),
+                message: response.deny_message,
+            },
+            "AGENT_PROFILE_MISMATCH" => RunError::AgentProfileMismatch {
+                agent_id: params.agent_id.to_string(),
+                message: response.deny_message,
+            },
+            _ => RunError::CapabilityDenied {
+                agent_id: params.agent_id.to_string(),
+                reason: response.deny_reason,
+                message: response.deny_message,
+            },
         });
     }
 
@@ -238,7 +250,7 @@ mod tests {
         let now = chrono::Utc::now();
         let claims = CapabilityClaims {
             token_id: TokenId::new(),
-            agent_id: "codex".parse().unwrap(),
+            agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
             session_id: "sess1".parse().unwrap(),
             action_set: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),

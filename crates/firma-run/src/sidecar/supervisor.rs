@@ -24,6 +24,8 @@ use wait_timeout::ChildExt;
 use crate::config::SidecarEndpoint;
 use crate::error::RunError;
 use crate::identity::SandboxId;
+use firma_config_loader::AgentProfile;
+use firma_core::AgentId;
 use firma_runtime_state::UserProcessId;
 use firma_sidecar::authority_credentials::SidecarCredentialsConfig;
 
@@ -38,7 +40,8 @@ const STOP_GRACE: Duration = Duration::from_secs(5);
 #[derive(Debug)]
 pub struct SpawnRequest<'a> {
     pub sandbox_id: &'a SandboxId,
-    pub agent_id: &'a str,
+    pub agent_id: &'a AgentId,
+    pub execution_profile: AgentProfile,
     pub session_id: &'a str,
     pub marker_dir: PathBuf,
     pub template_path: Option<&'a Path>,
@@ -168,6 +171,7 @@ impl SidecarSupervisor {
             };
             crate::sidecar::config::synthesize(crate::sidecar::config::SynthesizeRequest {
                 agent_id: req.agent_id,
+                execution_profile: req.execution_profile,
                 session_id: req.session_id,
                 explicit_template: req.template_path,
                 env_template: req.env_template.clone(),

@@ -29,7 +29,7 @@ use cedar_policy::{
     ValidationMode, Validator,
 };
 
-use crate::agent::AgentId;
+use crate::AgentId;
 
 /// Canonical Firma Cedar schema, embedded at compile time.
 ///
@@ -197,13 +197,13 @@ impl TryFrom<FirmaEntityUid> for EntityUid {
     /// fails to parse (this should never happen for the static literals used
     /// here, but the error is propagated rather than panicked).
     fn try_from(uid: FirmaEntityUid) -> Result<Self, Self::Error> {
-        let (type_name_str, id_str): (&str, &str) = match &uid {
-            FirmaEntityUid::Agent(id) => ("Firma::Agent", id.as_ref()),
-            FirmaEntityUid::Action(id) => ("Firma::Action", id.as_str()),
-            FirmaEntityUid::Resource(id) => ("Firma::Resource", id.as_str()),
+        let (type_name_str, id_string) = match uid {
+            FirmaEntityUid::Agent(id) => ("Firma::Agent", id.to_string()),
+            FirmaEntityUid::Action(id) => ("Firma::Action", id),
+            FirmaEntityUid::Resource(id) => ("Firma::Resource", id),
         };
         let entity_type = type_name_str.parse::<EntityTypeName>()?;
-        let entity_id = EntityId::new(id_str);
+        let entity_id = EntityId::new(id_string);
         Ok(Self::from_type_name_and_id(entity_type, entity_id))
     }
 }
@@ -211,14 +211,14 @@ impl TryFrom<FirmaEntityUid> for EntityUid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::AgentId;
+    use crate::AgentId;
 
     #[test]
     fn agent_uid_roundtrip() {
-        let agent: AgentId = "agent-001".parse().unwrap();
+        let agent: AgentId = "agt_01j0000000e008000000000001".parse().unwrap();
         let uid = EntityUid::try_from(FirmaEntityUid::Agent(agent)).unwrap();
         assert_eq!(uid.type_name().to_string(), "Firma::Agent");
-        assert_eq!(uid.id().as_ref(), "agent-001");
+        assert_eq!(uid.id().as_ref(), "agt_01j0000000e008000000000001");
     }
 
     #[test]

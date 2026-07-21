@@ -52,7 +52,7 @@ fn claims(expiry: DateTime<Utc>) -> CapabilityClaims {
     let now = Utc::now();
     CapabilityClaims {
         token_id: TokenId::new(),
-        agent_id: "agent_reload".parse().expect("agent id"),
+        agent_id: "agt_01j0000000e008000000000001".parse().expect("agent id"),
         session_id: SESSION.parse().expect("session id"),
         action_set: vec![ACTION.to_string()],
         resource_scope: "*".to_string(),

@@ -15,6 +15,12 @@ A capability token is what an agent needs to clear [Stage 1](../../concepts/pipe
 > session outside of `firma run` (for example, a daemon or a CI agent with a
 > known identity and scope that does not use the autostart flow).
 
+For automatic issuance, `firma run` reads the registered UUID from
+`[sidecar.authority].agent_id` and uses it for both the initial request and
+every refresh. It never substitutes `[run].profile`. Authority denials with
+`AGENT_NOT_REGISTERED` or `AGENT_PROFILE_MISMATCH` are reported as dedicated
+errors while preserving the Authority's message.
+
 By the end you will have:
 
 - A running Authority with its own signing keypair and issuance policy.
@@ -68,8 +74,8 @@ For production, you'd write rules like:
 // Only mint capabilities for agents we know about.
 permit (
     principal in [
-        Firma::Agent::"support-agent",
-        Firma::Agent::"billing-agent"
+        Firma::Agent::"agt_01j0000000e008000000000001",
+        Firma::Agent::"agt_01j0000000e008000000000002"
     ],
     action,
     resource
@@ -77,7 +83,7 @@ permit (
 
 // support-agent is never minted a payment capability.
 forbid (
-    principal == Firma::Agent::"support-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"payment.transfer",
     resource
 );
@@ -152,7 +158,7 @@ The CLI subcommand:
 
 ```bash
 firma authority -c /tmp/firma-standalone/config/firma.toml issue \
-  --agent-id support-agent \
+  --agent-id agt_01j0000000e008000000000001 \
   --session-id session-001 \
   --action communication.external.send \
   --resource-scope '*' \
@@ -220,7 +226,7 @@ The audit event for this call will include the capability identity at the top le
 ```json
 {
   "token_id": "79dd9ffb-ebc8-4883-8f1e-72eb74a26e33",
-  "agent_id": "support-agent",
+  "agent_id": "agt_01j0000000e008000000000001",
   "session_id": "session-001",
   "action": "communication.external.send",
   "resource": "api.openai.com/v1/chat/completions",

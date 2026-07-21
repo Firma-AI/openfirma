@@ -13,7 +13,9 @@ use serde_json::json;
 include!("support/common_fixtures.rs");
 
 fn agent() -> AgentId {
-    "agent-bench".parse().expect("literal agent id")
+    "agt_01j0000000e008000000000001"
+        .parse()
+        .expect("literal agent id")
 }
 
 fn ctx() -> serde_json::Value {

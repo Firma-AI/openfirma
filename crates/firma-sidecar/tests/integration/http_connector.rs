@@ -32,7 +32,7 @@ fn view_for(resource: &str, query: HashMap<String, String>) -> anyhow::Result<Tr
         "v4.public.test".to_string(),
         ExecutionMetadata {
             session_id: "sess_http_connector".parse()?,
-            agent_id: "agent_http_connector".parse()?,
+            agent_id: "agt_01j0000000e008000000000001".parse()?,
             timestamp: chrono::Utc::now(),
             trace_id: None,
             budget_consumed: 0.0,

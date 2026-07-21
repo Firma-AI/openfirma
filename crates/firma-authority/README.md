@@ -72,7 +72,7 @@ cargo run -p firma-authority -- --config firma.toml
 For local demos, you can issue a token into a seed file that the Sidecar loads at startup:
 
 ```bash
-cargo run -p firma-authority -- --config firma.toml issue   --agent-id demo-agent   --session-id demo-session   --action communication.external.send   --resource-scope '*'   --ttl-seconds 3600   --output capability-demo-agent.toml
+cargo run -p firma-authority -- --config firma.toml issue   --agent-id agt_01j0000000e008000000000001   --session-id demo-session   --action communication.external.send   --resource-scope '*'   --ttl-seconds 3600   --output capability-demo-agent.toml
 ```
 
 The output file contains the signed token and matching claims. Configure the Sidecar with the Authority public key and list the seed file under `[capability_seed].paths`.

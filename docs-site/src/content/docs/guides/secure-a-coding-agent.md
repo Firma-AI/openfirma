@@ -27,11 +27,11 @@ For each, OpenFirma's answer is: only the LLM endpoints are reachable, the agent
 
 Before configuring, list the destinations the agent actually has to reach:
 
-| Destination                     | Why                                              |
-| ------------------------------- | ------------------------------------------------ |
-| `api.anthropic.com`             | Claude API                                       |
-| `*.anthropic.com`               | Console, platform, telemetry                     |
-| `claude.ai` / `*.claude.com`    | Web auth flows                                   |
+| Destination                  | Why                          |
+| ---------------------------- | ---------------------------- |
+| `api.anthropic.com`          | Claude API                   |
+| `*.anthropic.com`            | Console, platform, telemetry |
+| `claude.ai` / `*.claude.com` | Web auth flows               |
 
 Keep this list as tight as the agent will tolerate. If the agent reaches for github.com to pull docs, list it and decide whether you want it. If it reaches for "random package registry to install something", almost certainly not — that's a signal something's wrong.
 
@@ -41,7 +41,7 @@ Keep this list as tight as the agent will tolerate. If the agent reaches for git
 
 ```bash
 firma config \
-  --name claude-code \
+  --profile codex \
   --posture strict \
   --mapping anthropic
 ```
@@ -49,8 +49,12 @@ firma config \
 This writes to the **current directory** by default. Pass `--output-dir` to write to a specific path:
 
 ```bash
-firma config --name claude-code --posture strict --mapping anthropic --output-dir .local
+firma config --profile codex --posture strict --mapping anthropic --output-dir .local
 ```
+
+New local configurations generate a stable UUIDv7 at
+`[sidecar.authority].agent_id`. The UUID is the agent's registered identity;
+`codex` is only the local execution profile.
 
 `--posture strict` allows only `communication.external.send` (and `credential.read`), which is the right shape for a coding agent that should reach only the LLM endpoint. The `anthropic` mapping classifies `CONNECT` tunnels to `*.anthropic.com`. Credential injection in Step 5 requires HTTPS MITM on `api.anthropic.com` — see [Inject credentials](../inject-credentials/).
 
@@ -74,8 +78,9 @@ $XDG_DATA_HOME/firma/          — platform state dir (keys, revocations, CA)
 ## Step 3: Mint a capability for `claude-code`
 
 ```bash
+AGENT_ID="agt_01j0000000e008000000000001" # copy from .firma/firma.toml
 firma authority -c .firma/firma.toml issue \
-  --agent-id claude-code \
+  --agent-id "$AGENT_ID" \
   --session-id $(uuidgen) \
   --action communication.external.send \
   --resource-scope '*.anthropic.com*' \
@@ -97,7 +102,7 @@ Eight hours is a reasonable working session. If you stop and restart the next mo
 
 // Permit talking to Anthropic for the LLM call.
 permit (
-    principal == Firma::Agent::"claude-code",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"communication.external.send",
     resource
 ) when {
@@ -118,7 +123,11 @@ forbid (
 };
 ```
 
-The `permit` is bound to `claude-code` and exact Anthropic API resource UIDs. Add more exact UIDs only after you observe legitimate DENYs. The `forbid` is unbound — applies to every agent, present and future.
+Replace the example UUID with the value from
+`[sidecar.authority].agent_id`. The `permit` is bound to that registered agent
+and exact Anthropic API resource UIDs. Add more exact UIDs only after you
+observe legitimate DENYs. The `forbid` is unbound — applies to every agent,
+present and future.
 
 Save the file to `.firma/policies/strict.cedar`.
 
@@ -217,8 +226,9 @@ Two operational considerations:
 ```bash
 # in ~/.zshrc or wherever
 firma-claude-start() {
+  AGENT_ID="agt_01j0000000e008000000000001" # copy from .firma/firma.toml
   firma authority -c .firma/firma.toml issue \
-    --agent-id claude-code \
+    --agent-id "$AGENT_ID" \
     --session-id $(uuidgen) \
     --action communication.external.send \
     --resource-scope '*.anthropic.com*' \
@@ -238,13 +248,16 @@ firma-claude-start() {
 
 The same shape works for Codex, Cursor, or any LLM coding agent. The pieces that change:
 
-| Variable                     | Claude Code              | Codex                  | Cursor               |
-| ---------------------------- | ------------------------ | ---------------------- | -------------------- |
-| `agent_id` for capability    | `claude-code`            | `codex`                | `cursor`             |
-| `intercept_hosts`            | `*.anthropic.com`, `*.claude.com` | `api.openai.com`, `*.openai.com` | (depends on backend) |
-| Credential header            | `x-api-key`              | `Authorization` + `Bearer ` prefix | varies      |
-| Credential env var           | `ANTHROPIC_API_KEY`      | `OPENAI_API_KEY`       | varies               |
-| `firma run --profile`        | `codex`                  | `codex`                | `codex`              |
+| Variable              | Claude Code                       | Codex                              | Cursor                        |
+| --------------------- | --------------------------------- | ---------------------------------- | ----------------------------- |
+| Registered `agent_id` | UUID returned by registration     | UUID returned by registration      | UUID returned by registration |
+| `intercept_hosts`     | `*.anthropic.com`, `*.claude.com` | `api.openai.com`, `*.openai.com`   | depends on backend            |
+| Credential header     | `x-api-key`                       | `Authorization` + `Bearer ` prefix | varies                        |
+| Credential env var    | `ANTHROPIC_API_KEY`               | `OPENAI_API_KEY`                   | varies                        |
+| `firma run --profile` | `codex`                           | `codex`                            | `codex`                       |
+
+Each registration gets its own UUID; product names such as `codex` and
+`claude-code` are not registered identities.
 
 The codex profile is named for the fact it was originally tuned for codex-style coding agents; despite the name, it's the right profile for any coding agent that needs project workspace mounts.
 

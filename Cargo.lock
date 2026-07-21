@@ -1444,6 +1444,7 @@ dependencies = [
  "criterion",
  "firma-http",
  "http",
+ "insta",
  "pasetors",
  "pretty_assertions",
  "regex",
@@ -1452,6 +1453,7 @@ dependencies = [
  "strum",
  "thiserror 2.0.18",
  "toml",
+ "type-safe-id",
  "uuid",
 ]
 

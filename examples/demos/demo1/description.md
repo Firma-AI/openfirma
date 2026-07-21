@@ -56,7 +56,7 @@ the agent is doing.
 
 ```cedar
 permit (
-    principal == Firma::Agent::"demo1-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"filesystem.read",
     resource
 );

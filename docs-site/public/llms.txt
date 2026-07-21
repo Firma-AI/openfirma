@@ -9,6 +9,9 @@ OpenFirma docs highlights for LLM-based retrieval:
 - Authority allow-list file supports [[authorized]] entries with cn/san identity fields; unknown client identities are rejected at TLS handshake.
 - V1.1 revocation model for mTLS clients is allow-list driven (`authorized_clients` updates) plus cert rotation/expiry; CRL/OCSP revocation checks are not performed by the TLS verifier in this release.
 - `firma run --authority local` is a loopback dev-mode convenience path (`http://`) and is not an mTLS transport-hardening path.
+- Registered agent identity is `[sidecar.authority].agent_id`, an `agt_` TypeID copied from FirmaTeam registration for remote agents; new local scaffolds generate one backed by UUIDv7. `[run].profile` is only the local execution profile. `firma run` fails before backend/Authority/Sidecar/capability startup when the ID is missing, malformed, uses another TypeID prefix, is a raw UUID, or is a legacy profile value such as `codex`; migrate with `firma config --agent-id <agent-id>`.
+- `firma config --agent-id <agent-id>` validates the `agt_` TypeID. Non-interactive `agent-remote` setup requires it, while a new `agent-local` config generates one when omitted. Existing valid IDs are preserved and existing configs are never silently migrated.
+- `firma run` propagates the registered UUID through capability mint/refresh, autostart metadata/config, run-audit records, `FIRMA_AGENT_ID`, and `x-firma-agent`. It preserves the execution profile separately through `FIRMA_RUN_PROFILE`, `x-firma-profile`, runtime selection, and mediator `profile`.
 - Plain http:// authority_url is only allowed by default for loopback hosts; remote plaintext requires explicit authority.allow_insecure_remote_authority = true.
 - TLS mismatch on Authority stream keeps sidecar fail-closed (no policy bundle readiness).
 - On WSL hosts, implicit `firma run` backend selection uses `wsl2` compatibility mode instead of Linux `bwrap`.

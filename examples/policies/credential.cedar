@@ -11,7 +11,7 @@
 
 // Allow credential reads at acceptable risk.
 permit (
-    principal == Firma::Agent::"example-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"credential.read",
     resource
 ) when {
@@ -23,7 +23,7 @@ permit (
 // secrets (e.g., a dedicated secrets-rotation agent with a low risk budget).
 //
 // permit (
-//     principal == Firma::Agent::"provisioner-agent",
+//     principal == Firma::Agent::"agt_01j0000000e008000000000002",
 //     action == Firma::Action::"credential.write",
 //     resource
 // ) when {

@@ -19,7 +19,7 @@
 
 // Allow purchases when budget is available and risk is acceptable.
 permit (
-    principal == Firma::Agent::"example-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"payment.purchase",
     resource
 ) when {
@@ -30,7 +30,7 @@ permit (
 // Allow transfers subject to all Layer 2 counter constraints.
 // Each forbid below also fires independently — forbid beats permit.
 permit (
-    principal == Firma::Agent::"example-agent",
+    principal == Firma::Agent::"agt_01j0000000e008000000000001",
     action == Firma::Action::"payment.transfer",
     resource
 ) when {

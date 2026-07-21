@@ -16,6 +16,7 @@
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -40,6 +41,8 @@ use firma_run::config::{CapabilityLeaseConfig, CapabilitySource};
 struct MockAuthority {
     signer: PasetoV4Signer,
     token_kind: MockTokenKind,
+    denial: Option<(&'static str, &'static str)>,
+    seen_agent_ids: Arc<Mutex<Vec<String>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -57,6 +60,18 @@ impl AuthorityService for MockAuthority {
         request: Request<IssueCapabilityRequest>,
     ) -> Result<Response<IssueCapabilityResponse>, Status> {
         let req = request.into_inner();
+        self.seen_agent_ids
+            .lock()
+            .expect("capture lock")
+            .push(req.agent_id.clone());
+        if let Some((reason, message)) = self.denial {
+            return Ok(Response::new(IssueCapabilityResponse {
+                granted: false,
+                token: None,
+                deny_reason: reason.to_string(),
+                deny_message: message.to_string(),
+            }));
+        }
         let now = Utc::now();
         let expiry = match self.token_kind {
             MockTokenKind::Valid | MockTokenKind::Malformed | MockTokenKind::NonUtf8 => {
@@ -128,6 +143,7 @@ struct MockServer {
     pub_key_path: PathBuf,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     handle: Option<std::thread::JoinHandle<()>>,
+    seen_agent_ids: Arc<Mutex<Vec<String>>>,
     _dir: tempfile::TempDir,
 }
 
@@ -148,11 +164,24 @@ fn start_mock_authority() -> MockServer {
 }
 
 fn start_mock_authority_with(token_kind: MockTokenKind) -> MockServer {
+    start_authority(token_kind, None)
+}
+
+fn start_denying_authority(reason: &'static str, message: &'static str) -> MockServer {
+    start_authority(MockTokenKind::Valid, Some((reason, message)))
+}
+
+fn start_authority(
+    token_kind: MockTokenKind,
+    denial: Option<(&'static str, &'static str)>,
+) -> MockServer {
     let dir = tempfile::tempdir().expect("tempdir");
     let kp = AsymmetricKeyPair::<V4>::generate().expect("keypair");
     let pub_key_path = dir.path().join("authority.pub");
     std::fs::write(&pub_key_path, kp.public.as_bytes()).expect("write pubkey");
     let secret = kp.secret.as_bytes().to_vec();
+    let seen_agent_ids = Arc::new(Mutex::new(Vec::new()));
+    let server_seen_agent_ids = Arc::clone(&seen_agent_ids);
 
     // Reserve a loopback port, then hand its address to the server.
     let addr: SocketAddr = std::net::TcpListener::bind("127.0.0.1:0")
@@ -168,7 +197,12 @@ fn start_mock_authority_with(token_kind: MockTokenKind) -> MockServer {
             .expect("server runtime");
         rt.block_on(async move {
             let signer = PasetoV4Signer::try_new(&secret).expect("signer");
-            let svc = AuthorityServiceServer::new(MockAuthority { signer, token_kind });
+            let svc = AuthorityServiceServer::new(MockAuthority {
+                signer,
+                denial,
+                token_kind,
+                seen_agent_ids: server_seen_agent_ids,
+            });
             tonic::transport::Server::builder()
                 .add_service(svc)
                 .serve_with_shutdown(addr, async {
@@ -191,6 +225,7 @@ fn start_mock_authority_with(token_kind: MockTokenKind) -> MockServer {
         pub_key_path,
         shutdown: Some(shutdown_tx),
         handle: Some(handle),
+        seen_agent_ids,
         _dir: dir,
     }
 }
@@ -201,7 +236,7 @@ fn params(server: &MockServer) -> IssueParams {
         authority_pub_key_path: server.pub_key_path.clone(),
         authority_ca_cert_path: None,
         credentials: None,
-        agent_id: "agent_mint".to_string(),
+        agent_id: *super::helper::agent_id(),
         session_id: "sess_mint".to_string(),
         requested_actions: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),
@@ -237,9 +272,13 @@ fn firmateam_compatible_token_verifies_with_matching_raw_key() {
     let expected_seed = CapabilitySeed::from_claims(&claims, seed.raw_token.clone());
 
     assert_eq!(seed, expected_seed);
-    assert_eq!(seed.agent_id, "agent_mint");
+    assert_eq!(seed.agent_id, super::helper::agent_id().to_string());
     assert_eq!(seed.session_id, "sess_mint");
     assert!(!seed.raw_token.is_empty(), "seed carries the signed token");
+    assert_eq!(
+        *server.seen_agent_ids.lock().expect("capture lock"),
+        vec![super::helper::agent_id().to_string()]
+    );
 }
 
 #[test]
@@ -311,8 +350,59 @@ fn refresher_rewrites_seed_before_expiry() {
 
     let token_id = wait_for_reminted_token(&seed_path);
     assert!(!token_id.is_empty(), "refresher wrote a verified seed");
+    assert!(
+        server
+            .seen_agent_ids
+            .lock()
+            .expect("capture lock")
+            .iter()
+            .all(|agent_id| agent_id == &super::helper::agent_id().to_string()),
+        "initial and refreshed capabilities must retain the registered UUID"
+    );
 
     drop(refresher);
+}
+
+#[test]
+fn agent_not_registered_denial_maps_to_typed_error() {
+    let server = start_denying_authority("AGENT_NOT_REGISTERED", "register this agent");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let error = mint_and_write(&params(&server), &dir.path().join("seed.toml"))
+        .expect_err("denial expected");
+
+    assert!(matches!(
+        error,
+        firma_run::error::RunError::AgentNotRegistered { message, .. }
+            if message == "register this agent"
+    ));
+}
+
+#[test]
+fn agent_profile_mismatch_denial_maps_to_typed_error() {
+    let server = start_denying_authority("AGENT_PROFILE_MISMATCH", "profile is not bound");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let error = mint_and_write(&params(&server), &dir.path().join("seed.toml"))
+        .expect_err("denial expected");
+
+    assert!(matches!(
+        error,
+        firma_run::error::RunError::AgentProfileMismatch { message, .. }
+            if message == "profile is not bound"
+    ));
+}
+
+#[test]
+fn unknown_denial_reason_retains_generic_fallback() {
+    let server = start_denying_authority("SOMETHING_NEW", "future denial");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let error = mint_and_write(&params(&server), &dir.path().join("seed.toml"))
+        .expect_err("denial expected");
+
+    assert!(matches!(
+        error,
+        firma_run::error::RunError::CapabilityDenied { reason, message, .. }
+            if reason == "SOMETHING_NEW" && message == "future denial"
+    ));
 }
 
 /// Poll `seed_path` until it holds a parseable, re-minted seed; return its

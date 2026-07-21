@@ -367,7 +367,7 @@ impl EnforcementPipeline {
             capability.raw_token,
             ExecutionMetadata {
                 session_id: session_id_typed,
-                agent_id: capability.claims.agent_id.clone(),
+                agent_id: capability.claims.agent_id,
                 timestamp: normalized.timestamp,
                 trace_id: None,
                 budget_consumed: signals.budget_consumed,
@@ -944,7 +944,9 @@ mod tests {
             token_id: "3713c5fc-b569-650c-c780-c64051473370"
                 .parse()
                 .expect("literal token id"),
-            agent_id: "agent_test".parse().expect("literal agent id"),
+            agent_id: "agt_01j0000000e008000000000001"
+                .parse()
+                .expect("literal agent id"),
             session_id: "sess_001".parse().expect("literal session id"),
             action_set: vec![
                 "communication.external.send".to_string(),
@@ -1089,8 +1091,14 @@ mod tests {
             claims, envelope, ..
         } = decision
         {
-            assert_eq!(claims.agent_id.as_ref(), "agent_test");
-            assert_eq!(envelope.metadata().agent_id.as_ref(), "agent_test");
+            assert_eq!(
+                claims.agent_id.to_string(),
+                "agt_01j0000000e008000000000001"
+            );
+            assert_eq!(
+                envelope.metadata().agent_id.to_string(),
+                "agt_01j0000000e008000000000001"
+            );
             assert_eq!(envelope.metadata().session_id.as_ref(), "sess_001");
             assert!(
                 !envelope.capability().is_empty(),
@@ -1542,7 +1550,10 @@ mod tests {
 
             // Verify metadata fields
             assert_eq!(envelope.metadata().session_id.as_ref(), "sess_001");
-            assert_eq!(envelope.metadata().agent_id.as_ref(), "agent_test");
+            assert_eq!(
+                envelope.metadata().agent_id.to_string(),
+                "agt_01j0000000e008000000000001"
+            );
             assert!(envelope.metadata().trace_id.is_none());
             assert!((envelope.metadata().budget_consumed - 0.0).abs() < f64::EPSILON);
             assert!(envelope.metadata().risk_score.is_none());
@@ -1566,7 +1577,10 @@ mod tests {
                 claims.token_id.to_string(),
                 "3713c5fc-b569-650c-c780-c64051473370"
             );
-            assert_eq!(claims.agent_id.as_ref(), "agent_test");
+            assert_eq!(
+                claims.agent_id.to_string(),
+                "agt_01j0000000e008000000000001"
+            );
         }
     }
 
@@ -1877,7 +1891,7 @@ mod tests {
         assert_eq!(payload.session_id, "sess_audit");
         assert_eq!(payload.decision, Decision::Allow);
         assert_eq!(payload.token_id, "3713c5fc-b569-650c-c780-c64051473370");
-        assert_eq!(payload.agent_id, "agent_test");
+        assert_eq!(payload.agent_id, "agt_01j0000000e008000000000001");
         assert_eq!(payload.action, "communication.external.send");
         assert!(payload.enforcement_latency_us >= 0);
         assert_eq!(
@@ -2185,14 +2199,14 @@ mod tests {
                 assert_eq!(reason, AbortReason::CredentialInjectionFailed);
                 assert!(detail.contains("connector api.openai.com"));
                 let identity = identity.expect("post-validation abort should carry identity");
-                assert_eq!(identity.agent_id, "agent_test");
+                assert_eq!(identity.agent_id, "agt_01j0000000e008000000000001");
             }
             other => panic!("expected abort decision, got {other:?}"),
         }
 
         assert_eq!(payload.session_id, "sess_fail");
         assert_eq!(payload.decision, Decision::Abort);
-        assert_eq!(payload.agent_id, "agent_test");
+        assert_eq!(payload.agent_id, "agt_01j0000000e008000000000001");
         assert!(
             payload
                 .deny_reason
@@ -2350,7 +2364,7 @@ mod tests {
             "token".to_string(),
             firma_core::ExecutionMetadata {
                 session_id: claims.session_id.clone(),
-                agent_id: claims.agent_id.clone(),
+                agent_id: claims.agent_id,
                 timestamp: chrono::Utc::now(),
                 trace_id: None,
                 budget_consumed: 0.0,

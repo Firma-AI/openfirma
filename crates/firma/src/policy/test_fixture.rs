@@ -31,8 +31,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use cedar_policy::{Authorizer, Context, Decision, Entities, EntityUid, Request, Schema};
+use firma_core::AgentId;
 use firma_core::FirmaEntityUid;
-use firma_core::agent::AgentId;
 
 use crate::policy::bundle;
 use crate::policy::fixture::{Expected, Fixture};
@@ -248,7 +248,7 @@ mod tests {
 [fixture]
 expected = "ALLOW"
 [fixture.principal]
-agent_id = "my-agent"
+agent_id = "agt_01j0000000e008000000000001"
 [fixture.action]
 class = "code.read"
 [fixture.resource]
@@ -280,7 +280,7 @@ path = "."
 [fixture]
 expected = "DENY"
 [fixture.principal]
-agent_id = "my-agent"
+agent_id = "agt_01j0000000e008000000000001"
 [fixture.action]
 class = "code.read"
 [fixture.resource]
@@ -310,7 +310,7 @@ path = "."
 [fixture]
 expected = "ALLOW"
 [fixture.principal]
-agent_id = "my-agent"
+agent_id = "agt_01j0000000e008000000000001"
 [fixture.action]
 class = "code.read"
 [fixture.resource]
@@ -340,7 +340,7 @@ path = "."
 [fixture]
 expected = "DENY"
 [fixture.principal]
-agent_id = "my-agent"
+agent_id = "agt_01j0000000e008000000000001"
 [fixture.action]
 class = "code.read"
 [fixture.resource]
@@ -373,7 +373,7 @@ path = "."
 [fixture]
 expected = "ALLOW"
 [fixture.principal]
-agent_id = "my-agent"
+agent_id = "agt_01j0000000e008000000000001"
 [fixture.action]
 class = "code.read"
 [fixture.resource]

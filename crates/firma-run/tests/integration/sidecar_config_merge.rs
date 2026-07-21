@@ -14,7 +14,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use firma_config_loader::CONFIG_FILE_NAME;
+use firma_config_loader::{AgentProfile, CONFIG_FILE_NAME};
 use firma_http::Method;
 use firma_run::sidecar::config::testing::{SynthesizeRequest, TemplateSource, synthesize};
 use firma_sidecar::enforcement::registry::ActionClassRegistry;
@@ -47,7 +47,8 @@ fn audit_table(value: &toml::Value) -> &toml::value::Table {
 /// struct-update syntax: `SynthesizeRequest { monitor_mode: true, ..req(&sock, &out) }`.
 fn req<'a>(sock: &'a Path, out: &'a Path) -> SynthesizeRequest<'a> {
     SynthesizeRequest {
-        agent_id: "generic",
+        agent_id: super::helper::agent_id(),
+        execution_profile: AgentProfile::Generic,
         session_id: "sess",
         explicit_template: None,
         env_template: None,
@@ -490,7 +491,7 @@ fn vscode_minimal_mapping_covers_github_sign_in_hosts() {
     let out = tmp.path().join("sidecar.toml");
     let sock = tmp.path().join("sidecar.sock");
     synthesize(SynthesizeRequest {
-        agent_id: "vscode",
+        execution_profile: AgentProfile::Vscode,
         listen_addr: Some("127.0.0.1:18080".parse().expect("listen addr")),
         ..req(&sock, &out)
     })

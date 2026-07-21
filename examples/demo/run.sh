@@ -130,7 +130,7 @@ ensure_capability_seed() {
   (cd "$ROOT" && "$TARGET_DIR/firma" authority \
     --config "$DEMO/firma.toml" \
     issue \
-      --agent-id demo-agent \
+      --agent-id agt_01j0000000e008000000000001 \
       --session-id demo-session \
       --action communication.external.send \
       --resource-scope '*' \

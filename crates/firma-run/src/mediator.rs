@@ -158,7 +158,7 @@ fn call_mediator(
         sandbox_id: &identity.sandbox_id,
         session_id: &identity.session_id,
         agent_id: agent_id.map(ToOwned::to_owned),
-        profile: &identity.profile,
+        profile: &identity.execution_profile,
         hitl_mode: hitl_mode_str,
         budget_state_ref: budget_state_ref.map(ToOwned::to_owned),
         request_fingerprint: fingerprint.to_string(),
@@ -411,7 +411,8 @@ mod tests {
         RunIdentity {
             sandbox_id: crate::identity::SandboxId::generate(),
             session_id: "sess".to_string(),
-            profile: "generic".to_string(),
+            agent_id: crate::identity::test_agent_id(),
+            execution_profile: "generic".to_string(),
         }
     }
 

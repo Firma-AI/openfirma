@@ -47,7 +47,7 @@ fn wsl2_backend_rejects_vscode_profile_before_preparing_runtime()
     let mut profile = resolve_profile(&vscode_run_input())?;
     profile.backend = BackendKind::Wsl2;
     let request = PrepareRequest {
-        identity: RunIdentity::new("vscode"),
+        identity: RunIdentity::new(*super::helper::agent_id(), "vscode"),
         profile,
         working_dir: tmpdir.path().to_path_buf(),
     };

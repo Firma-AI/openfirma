@@ -32,7 +32,7 @@ user-global state directory.
 firma config
 
 # Or scripted with every value supplied.
-firma config --name codex --mapping anthropic \
+firma config --profile codex --mapping anthropic \
            --workspace ./proj --output-dir ./proj/.firma --yes
 ```
 

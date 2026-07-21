@@ -44,7 +44,7 @@ fn drop_reaps_child_within_grace() {
 
     let sup = AuthoritySupervisor::spawn(SpawnRequest {
         sandbox_id: &sandbox_id,
-        agent_id: "agent",
+        agent_id: super::helper::agent_id(),
         session_id: "sess",
         marker_dir: tmp.path().join("marker/authority"),
         profile_name: "developer",

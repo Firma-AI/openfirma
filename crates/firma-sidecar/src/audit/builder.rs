@@ -222,7 +222,9 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             token_id: "3713c5fc-b569-650c-c780-c64051473370"
                 .parse()
                 .expect("literal token id"),
-            agent_id: "agent_test".parse().expect("literal agent id"),
+            agent_id: "agt_01j0000000e008000000000001"
+                .parse()
+                .expect("literal agent id"),
             session_id: "sess_001".parse().expect("literal session id"),
             action_set: vec!["communication.external.send".to_string()],
             resource_scope: "*".to_string(),
@@ -252,7 +254,9 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
             "v4.public.test_token".to_string(),
             ExecutionMetadata {
                 session_id: "sess_001".parse().expect("literal session id"),
-                agent_id: "agent_test".parse().expect("literal agent id"),
+                agent_id: "agt_01j0000000e008000000000001"
+                    .parse()
+                    .expect("literal agent id"),
                 timestamp: Utc::now(),
                 trace_id: None,
                 budget_consumed: 0.0,
@@ -317,7 +321,7 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
 
         assert_eq!(event.session_id, "sess_001");
         assert_eq!(event.token_id, "3713c5fc-b569-650c-c780-c64051473370");
-        assert_eq!(event.agent_id, "agent_test");
+        assert_eq!(event.agent_id, "agt_01j0000000e008000000000001");
         assert_eq!(event.action, "communication.external.send");
         assert_eq!(event.resource, "api.openai.com/v1/chat/completions");
         assert_eq!(event.decision, Decision::Allow);
@@ -521,7 +525,9 @@ bXfQcvk+kh+UDhxsRkIm8BsBd4ihRANCAARrNl5iPKSasLwfIihEcv8BeQsqAXMl
         let payload1 = AuditPayload {
             session_id: "s".parse().expect("literal session id"),
             token_id: String::new(),
-            agent_id: "_test_".parse().expect("literal agent id"),
+            agent_id: "agt_01j0000000e008000000000001"
+                .parse()
+                .expect("literal agent id"),
             action: String::new(),
             resource: String::new(),
             decision: Decision::Allow,

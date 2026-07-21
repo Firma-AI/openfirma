@@ -16,7 +16,7 @@ fn sample_claims() -> CapabilityClaims {
     let now = Utc::now();
     CapabilityClaims {
         token_id: firma_core::token::TokenId::new(),
-        agent_id: "agent_bench".parse().unwrap(),
+        agent_id: "agt_01j0000000e008000000000001".parse().unwrap(),
         session_id: "sess_bench".parse().unwrap(),
         action_set: vec!["http:GET".to_string(), "tool:execute".to_string()],
         resource_scope: "https://api.example.com/*".to_string(),

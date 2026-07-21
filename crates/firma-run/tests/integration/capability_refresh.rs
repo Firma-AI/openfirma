@@ -41,7 +41,7 @@ fn dead_params() -> IssueParams {
         authority_pub_key_path: PathBuf::from("/nonexistent/firma-authority.pub"),
         authority_ca_cert_path: None,
         credentials: None,
-        agent_id: "agent_refresh".to_string(),
+        agent_id: *super::helper::agent_id(),
         session_id: "sess_refresh".to_string(),
         requested_actions: vec!["communication.external.send".to_string()],
         resource_scope: "*".to_string(),

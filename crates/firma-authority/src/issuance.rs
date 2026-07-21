@@ -81,8 +81,9 @@ pub async fn issue_capability(
     let expiry = now + Duration::seconds(i64::from(ttl));
     let token_id = TokenId::new();
     let bundle_version = policy_store.bundle().version;
+    let agent_id = req.agent_id.to_string();
     let context_hash = compute_context_hash(
-        req.agent_id.as_ref(),
+        &agent_id,
         req.requested_actions,
         req.resource_scope,
         &bundle_version,
@@ -90,7 +91,7 @@ pub async fn issue_capability(
 
     let claims = CapabilityClaims {
         token_id,
-        agent_id: req.agent_id.clone(),
+        agent_id: *req.agent_id,
         session_id: req.session_id.clone(),
         action_set: req.requested_actions.to_vec(),
         resource_scope: req.resource_scope.to_string(),
@@ -133,7 +134,7 @@ mod tests {
         let store = fixture_policy_store();
         let kp = AsymmetricKeyPair::<V4>::generate().unwrap();
         let signer = Arc::new(PasetoV4Signer::try_new(kp.secret.as_bytes()).unwrap());
-        let agent: AgentId = "agent_1".parse().unwrap();
+        let agent: AgentId = "agt_01j0000000e008000000000001".parse().unwrap();
         let session: SessionId = "sess_1".parse().unwrap();
         let actions = vec!["communication.external.send".to_string()];
         let req = IssuanceRequest {
@@ -164,7 +165,7 @@ mod tests {
 
         let kp = AsymmetricKeyPair::<V4>::generate().unwrap();
         let signer = Arc::new(PasetoV4Signer::try_new(kp.secret.as_bytes()).unwrap());
-        let agent: AgentId = "agent_1".parse().unwrap();
+        let agent: AgentId = "agt_01j0000000e008000000000001".parse().unwrap();
         let session: SessionId = "sess_1".parse().unwrap();
         let actions = vec!["communication.external.send".to_string()];
         let req = IssuanceRequest {

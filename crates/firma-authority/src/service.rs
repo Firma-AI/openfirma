@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use cedar_policy::{Authorizer, Context, Entities, PolicySet, Request, Schema};
 use chrono::{Duration, Utc};
+use firma_core::AgentId;
 use firma_core::FirmaEntityUid;
-use firma_core::agent::AgentId;
 use firma_core::policy::PolicyBundle;
 use firma_core::session::SessionId;
 use firma_core::token::CapabilityClaims;
@@ -375,13 +375,12 @@ pub(crate) fn evaluate_cedar_policy(
         return CedarDecision::no_action();
     }
 
-    let principal: cedar_policy::EntityUid =
-        match FirmaEntityUid::Agent(agent_id.clone()).try_into() {
-            Ok(uid) => uid,
-            Err(e) => {
-                return CedarDecision::invalid_request(format!("invalid agent_id: {e}"));
-            }
-        };
+    let principal: cedar_policy::EntityUid = match FirmaEntityUid::Agent(*agent_id).try_into() {
+        Ok(uid) => uid,
+        Err(e) => {
+            return CedarDecision::invalid_request(format!("invalid agent_id: {e}"));
+        }
+    };
     let resource_entity: cedar_policy::EntityUid =
         match FirmaEntityUid::Resource(resource.to_string()).try_into() {
             Ok(uid) => uid,
@@ -589,7 +588,7 @@ mod tests {
         let result = evaluate_cedar_policy(
             &PolicySet::new(),
             &firma_schema(),
-            &agent("agent_1"),
+            &agent("agt_01j0000000e008000000000001"),
             &session("sess_1"),
             &["filesystem.read".to_string()],
             "api.example.com",
@@ -602,7 +601,7 @@ mod tests {
         let result = evaluate_cedar_policy(
             &permit_all(),
             &firma_schema(),
-            &agent("agent_1"),
+            &agent("agt_01j0000000e008000000000001"),
             &session("sess_1"),
             &[],
             "api.example.com",
@@ -615,7 +614,7 @@ mod tests {
         let result = evaluate_cedar_policy(
             &permit_all(),
             &firma_schema(),
-            &agent("agent_1"),
+            &agent("agt_01j0000000e008000000000001"),
             &session("sess_1"),
             &["filesystem.read".to_string()],
             "api.example.com",
@@ -628,7 +627,7 @@ mod tests {
         let result = evaluate_cedar_policy(
             &forbid_all(),
             &firma_schema(),
-            &agent("agent_1"),
+            &agent("agt_01j0000000e008000000000001"),
             &session("sess_1"),
             &["filesystem.read".to_string()],
             "api.example.com",
@@ -641,7 +640,7 @@ mod tests {
         let result = evaluate_cedar_policy(
             &permit_all(),
             &firma_schema(),
-            &agent("agent_1"),
+            &agent("agt_01j0000000e008000000000001"),
             &session("sess_1"),
             &[
                 "communication.external.send".to_string(),
@@ -658,7 +657,7 @@ mod tests {
         let result = evaluate_cedar_policy(
             &forbid_all(),
             &firma_schema(),
-            &agent("agent_1"),
+            &agent("agt_01j0000000e008000000000001"),
             &session("sess_1"),
             &[
                 "communication.external.send".to_string(),
@@ -675,7 +674,7 @@ mod tests {
         let result = evaluate_cedar_policy(
             &permit_all(),
             &schema,
-            &agent("agent_1"),
+            &agent("agt_01j0000000e008000000000001"),
             &session("sess_1"),
             &["communication.external.send".to_string()],
             "api.example.com",
@@ -690,7 +689,7 @@ mod tests {
         let result = evaluate_cedar_policy(
             &permit_all(),
             &schema,
-            &agent("agent_1"),
+            &agent("agt_01j0000000e008000000000001"),
             &session("sess_1"),
             &["unknown.action".to_string()],
             "api.example.com",
@@ -725,7 +724,7 @@ mod tests {
         let result = evaluate_cedar_policy(
             &permit_all(),
             &schema,
-            &agent("agent_1"),
+            &agent("agt_01j0000000e008000000000001"),
             &session("sess_1"),
             &actions,
             "api.example.com",

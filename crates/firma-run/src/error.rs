@@ -17,6 +17,21 @@ pub enum RunError {
     #[error("config validation failed: {0}")]
     ConfigValidation(String),
 
+    #[error(
+        "missing [sidecar.authority].agent_id in {path}; run `firma config --agent-id <AGENT_ID>` or add the registered agent TypeID to the configuration"
+    )]
+    MissingAgentId { path: PathBuf },
+
+    #[error(
+        "[sidecar.authority].agent_id in {path} is the execution profile '{value}', not a registered agent TypeID; migrate it with `firma config --agent-id <AGENT_ID>` and keep '{value}' under [run].profile"
+    )]
+    LegacyProfileAgentId { path: PathBuf, value: String },
+
+    #[error(
+        "invalid [sidecar.authority].agent_id '{value}' in {path}: expected an `agt` TypeID backed by UUIDv7; run `firma config --agent-id <AGENT_ID>`"
+    )]
+    InvalidAgentId { path: PathBuf, value: String },
+
     #[error("unsupported backend {backend} on this host: {reason}")]
     UnsupportedBackend { backend: String, reason: String },
 
@@ -99,6 +114,12 @@ pub enum RunError {
         reason: String,
         message: String,
     },
+
+    #[error("authority rejected unregistered agent '{agent_id}': {message}")]
+    AgentNotRegistered { agent_id: String, message: String },
+
+    #[error("authority rejected agent/profile binding for '{agent_id}': {message}")]
+    AgentProfileMismatch { agent_id: String, message: String },
 
     #[error(
         "local authority endpoint {endpoint} is reachable but transport could not be identified as plaintext local gRPC; pass an explicit --authority http://... or https://... URL"

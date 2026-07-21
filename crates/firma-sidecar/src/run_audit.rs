@@ -56,7 +56,7 @@ impl From<&RunAuditMessage> for AuditPayload {
         Self {
             session_id: msg.session_id.clone(),
             token_id: String::new(),
-            agent_id: msg.agent_id.clone(),
+            agent_id: msg.agent_id.to_string(),
             action,
             resource,
             decision,
@@ -224,7 +224,9 @@ mod tests {
     fn loopback_msg(dst_ip: &str, dst_port: u16) -> RunAuditMessage {
         RunAuditMessage {
             session_id: "sess-1".to_string(),
-            agent_id: "claude-code".to_string(),
+            agent_id: "agt_01j0000000e008000000000001"
+                .parse()
+                .expect("valid agent ID"),
             event: RunAuditEvent::LoopbackBlocked {
                 dst_ip: dst_ip.to_string(),
                 dst_port,
@@ -240,7 +242,7 @@ mod tests {
         assert_eq!(payload.resource, "tcp://127.0.0.1:6379");
         assert_eq!(payload.deny_reason, "loopback blocked");
         assert_eq!(payload.session_id, "sess-1");
-        assert_eq!(payload.agent_id, "claude-code");
+        assert_eq!(payload.agent_id, "agt_01j0000000e008000000000001");
     }
 
     #[test]
