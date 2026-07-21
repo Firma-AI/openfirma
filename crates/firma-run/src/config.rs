@@ -241,10 +241,12 @@ pub struct CapabilityLeaseConfig {
     pub public_key_path: Option<PathBuf>,
     pub refresh_ratio: f64,
     pub grace_seconds: u64,
-    /// Action classes the auto-minted per-session token requests. Must cover
-    /// every action class the sidecar's mapping rules can emit, or matching
-    /// calls fail closed to DENY at token selection. The Authority's issuance
-    /// Cedar policy remains the real gate on what is grantable.
+    /// Action classes the auto-minted per-session token requests. Defaults to
+    /// every action class (`DEFAULT_REQUESTED_ACTIONS`); the Authority narrows
+    /// the grant to `requested ∩ Cedar-permitted`, so over-requesting is safe
+    /// and the issuance policy stays the source of truth for what is grantable.
+    /// Setting this narrows the request further — an opt-in extra-restriction
+    /// knob for running with fewer permissions than the policy would allow.
     pub requested_actions: Vec<String>,
 }
 
