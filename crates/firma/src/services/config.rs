@@ -1181,7 +1181,7 @@ pub fn resolve_audit_log_path(
     if let Some(resolved) = firma_config_loader::ConfigResolver::default()
         .resolve_config(config_override)
         .map_err(|error| format!("resolve discovered config: {error}"))?
-        && let Ok(body) = resolved.config.section("sidecar.audit")
+        && let Ok(body) = resolved.config.raw_section("sidecar.audit")
     {
         let value: toml::Value = toml::from_str(&body).map_err(|error| {
             format!(

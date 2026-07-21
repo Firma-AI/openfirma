@@ -32,14 +32,14 @@ pub fn check_loaded(parsed: &firma_config_loader::FirmaConfig) -> Check {
     let display = parsed.origin().display().to_string();
 
     // [authority] is optional — agent-remote configs have no server section.
-    if let Ok(body) = parsed.section("authority")
+    if let Ok(body) = parsed.raw_section("authority")
         && let Err(error) = toml::from_str::<firma_authority::AuthorityConfig>(&body)
     {
         return Check::fail("config parsed", format!("[authority]: {display}: {error}"))
             .with_detail("path", display);
     }
 
-    let sidecar_body = match parsed.section("sidecar") {
+    let sidecar_body = match parsed.raw_section("sidecar") {
         Ok(body) => body,
         Err(error) => {
             return Check::fail("config parsed", format!("[sidecar]: {error}"))

@@ -9,7 +9,15 @@ use std::assert_matches;
 fn extracts_named_section() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let path = tmp.path().join(CONFIG_FILE_NAME);
-    fs::write(&path, "[sidecar]\nfoo = 1\n[authority]\nbar = 2\n").expect("write config");
+    fs::write(
+        &path,
+        r"[sidecar]
+          foo = 1
+          [authority]
+          bar = 2
+        ",
+    )
+    .expect("write config");
     let out = load_section(&path, "sidecar").expect("load section");
     let table: toml::Table = out.parse().expect("parse section");
     assert_eq!(table.get("foo").and_then(toml::Value::as_integer), Some(1));
@@ -22,7 +30,11 @@ fn nested_subtables_are_preserved() {
     let path = tmp.path().join(CONFIG_FILE_NAME);
     fs::write(
         &path,
-        "[sidecar.interceptor]\nmode = \"http_proxy\"\n[sidecar.authority]\nurl = \"http://x\"\n",
+        r#"[sidecar.interceptor]
+           mode = "http_proxy"
+           [sidecar.authority]
+           url = "http://x"
+        "#,
     )
     .expect("write config");
     let out = load_section(&path, "sidecar").expect("load section");
@@ -41,7 +53,13 @@ fn nested_subtables_are_preserved() {
 fn missing_section_is_an_error() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let path = tmp.path().join(CONFIG_FILE_NAME);
-    fs::write(&path, "[authority]\nbar = 2\n").expect("write config");
+    fs::write(
+        &path,
+        r"[authority]
+          bar = 2
+        ",
+    )
+    .expect("write config");
     let error = load_section(&path, "sidecar").expect_err("section should be missing");
     assert!(
         error.to_string().contains("sidecar"),
@@ -55,7 +73,11 @@ fn dotted_path_extracts_nested_section() {
     let path = tmp.path().join(CONFIG_FILE_NAME);
     fs::write(
         &path,
-        "[sidecar.policy]\ndir = \".\"\n[sidecar.authority]\nurl = \"https://x\"\n",
+        r#"[sidecar.policy]
+           dir = "."
+           [sidecar.authority]
+           url = "https://x"
+        "#,
     )
     .expect("write config");
     let policy = load_section(&path, "sidecar.policy").expect("load policy section");
@@ -76,7 +98,13 @@ fn dotted_path_extracts_nested_section() {
 fn dotted_path_missing_is_an_error() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let path = tmp.path().join(CONFIG_FILE_NAME);
-    fs::write(&path, "[sidecar.policy]\ndir = \".\"\n").expect("write config");
+    fs::write(
+        &path,
+        r#"[sidecar.policy]
+           dir = "."
+        "#,
+    )
+    .expect("write config");
     let error = load_section(&path, "sidecar.authority").expect_err("section should be missing");
     assert!(
         error.to_string().contains("sidecar.authority"),
@@ -93,11 +121,15 @@ struct Probe {
 fn deserialize_section_reads_a_typed_section_without_a_string_round_trip() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let path = tmp.path().join(CONFIG_FILE_NAME);
-    fs::write(&path, "[authority]\nlisten_addr = \"127.0.0.1:50051\"\n").expect("write config");
+    fs::write(
+        &path,
+        r#"[authority]
+           listen_addr = "127.0.0.1:50051"
+        "#,
+    )
+    .expect("write config");
     let config = FirmaConfig::load(&path).expect("load config");
-    let probe: Probe = config
-        .deserialize_section("authority")
-        .expect("deserialize section");
+    let probe: Probe = config.section("authority").expect("deserialize section");
     assert_eq!(probe.listen_addr, "127.0.0.1:50051");
 }
 
@@ -106,10 +138,16 @@ fn deserialize_section_rejects_missing_required_field() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let path = tmp.path().join(CONFIG_FILE_NAME);
     // `listen_addr` is required by `Probe` but absent here.
-    fs::write(&path, "[authority]\nunexpected = 1\n").expect("write config");
+    fs::write(
+        &path,
+        r"[authority]
+          unexpected = 1
+        ",
+    )
+    .expect("write config");
     let config = FirmaConfig::load(&path).expect("load config");
     let error = config
-        .deserialize_section::<Probe>("authority")
+        .section::<Probe>("authority")
         .expect_err("missing required field must error");
     assert!(
         error.to_string().contains("invalid `[authority]` section"),

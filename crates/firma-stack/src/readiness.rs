@@ -79,7 +79,7 @@ impl FirmaToml {
     pub fn authority_listen_addr(&self) -> Result<SocketAddr> {
         let authority: AuthorityConfig = self
             .config
-            .deserialize_section("authority")
+            .section("authority")
             .map_err(|e| StackError::Platform(format!("{e:#}")))?;
         authority.listen_addr.parse::<SocketAddr>().map_err(|e| {
             StackError::Platform(format!(
@@ -102,7 +102,7 @@ impl FirmaToml {
     /// or does not deserialize.
     pub fn sidecar_config(&self) -> Result<SidecarConfig> {
         self.config
-            .deserialize_section("sidecar")
+            .section("sidecar")
             .map_err(|e| StackError::Platform(format!("{e:#}")))
     }
 }

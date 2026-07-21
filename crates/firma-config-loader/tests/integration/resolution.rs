@@ -21,7 +21,7 @@ fn explicit_flag_sectioned_file_round_trips() {
     assert_eq!(resolved.source, ConfigSource::Flag);
     let body = resolved
         .config
-        .section("sidecar")
+        .raw_section("sidecar")
         .expect("load sidecar section");
     let table: toml::Table = body.parse().expect("parse sidecar section");
     assert_matches!(table.get("policy"), Some(_));
