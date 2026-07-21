@@ -118,7 +118,7 @@ struct Probe {
 }
 
 #[test]
-fn deserialize_section_reads_a_typed_section_without_a_string_round_trip() {
+fn section_reads_a_typed_section_without_a_string_round_trip() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let path = tmp.path().join(CONFIG_FILE_NAME);
     fs::write(
@@ -134,7 +134,7 @@ fn deserialize_section_reads_a_typed_section_without_a_string_round_trip() {
 }
 
 #[test]
-fn deserialize_section_rejects_missing_required_field() {
+fn section_rejects_missing_required_field() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let path = tmp.path().join(CONFIG_FILE_NAME);
     // `listen_addr` is required by `Probe` but absent here.
