@@ -11,8 +11,9 @@
     reason = "test code: panics acceptable on test failure"
 )]
 
+use std::fs::File;
 use std::net::TcpListener;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use firma_config_loader::CONFIG_FILE_NAME;
@@ -61,17 +62,29 @@ fn start_launches_from_anthropic_scaffold() {
     drop(authority_listener);
     drop(interceptor_listener);
 
-    let start = firma()
+    // Redirect start's output to a file and use `.status()` — never `.output()`.
+    // `--detach` forks a supervisor daemon that outlives this call; on Windows it
+    // inherits the write end of an `.output()` stdout pipe, so `wait_with_output`
+    // blocks forever on an EOF the still-running daemon never sends. `.status()`
+    // only waits for the foreground `start` process to exit. (Matches the
+    // spawn+file pattern in sidecar_readiness_gate / sidecar_startup_contract.)
+    std::fs::create_dir_all(&state_dir).expect("state dir");
+    let start_stderr = state_dir.join("start.stderr.log");
+    let start_status = firma()
         .args(["sidecar", "start", "--detach", "--config"])
         .arg(&cfg_path)
         .args(["--state-dir"])
         .arg(&state_dir)
-        .output()
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(
+            File::create(&start_stderr).expect("create start log"),
+        ))
+        .status()
         .expect("run firma sidecar start");
     assert!(
-        start.status.success(),
+        start_status.success(),
         "sidecar start failed (MITM-inactive scaffold must not block on CA material): {}",
-        String::from_utf8_lossy(&start.stderr)
+        std::fs::read_to_string(&start_stderr).unwrap_or_default()
     );
 
     // Detached start returns only after readiness, so the supervisor pidfile
