@@ -360,7 +360,7 @@ fn read_config(
 ) -> anyhow::Result<config::SidecarConfig> {
     let body = resolved
         .config
-        .section("sidecar")
+        .raw_section("sidecar")
         .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;
     let mut config: config::SidecarConfig = toml::from_str(&body)?;
     config.rebase_defaults(&resolved.config_dir());

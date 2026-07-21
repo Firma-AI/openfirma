@@ -39,7 +39,34 @@ impl FirmaConfig {
         &self.origin
     }
 
+    /// Deserialize the named `[section]` directly into `T`, without a TOML
+    /// string round-trip. The preferred entrypoint; reach for
+    /// [`raw_section`](Self::raw_section) only when the raw TOML body is
+    /// needed.
+    ///
+    /// Supports dotted paths (e.g. `"sidecar.authority"`) to address
+    /// sub-tables. A missing section at any level is a hard error
+    /// (fail-closed).
+    ///
+    /// # Errors
+    ///
+    /// Returns a "missing section" or deserialization error.
+    pub fn section<T: serde::de::DeserializeOwned>(&self, section_path: &str) -> anyhow::Result<T> {
+        // `toml` only deserializes owned `Value`/`Table` (no borrowing
+        // deserializer), so the section subtree is cloned once here.
+        let sub = self.section_table(section_path)?.clone();
+        sub.try_into().map_err(|e: toml::de::Error| {
+            anyhow!(
+                "{}: invalid `[{section_path}]` section: {e}",
+                self.origin.display()
+            )
+        })
+    }
+
     /// The named section body re-serialized as standalone TOML.
+    ///
+    /// Prefer [`section`](Self::section) for typed access; this exists for
+    /// callers that need the raw TOML body (e.g. to re-parse or forward it).
     ///
     /// Supports dotted paths (e.g. `"sidecar.authority"`) to address
     /// sub-tables. A missing section at any level is a hard error
@@ -48,7 +75,18 @@ impl FirmaConfig {
     /// # Errors
     ///
     /// Returns a "missing section" or serialization error.
-    pub fn section(&self, section_path: &str) -> anyhow::Result<String> {
+    pub fn raw_section(&self, section_path: &str) -> anyhow::Result<String> {
+        let sub = self.section_table(section_path)?;
+        toml::to_string(sub).map_err(|e| anyhow!("{}: {e}", self.origin.display()))
+    }
+
+    /// Resolve the sub-table addressed by a dotted `section_path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a "missing section" error when any path segment is absent or is
+    /// not a table.
+    fn section_table(&self, section_path: &str) -> anyhow::Result<&toml::Table> {
         let parts: Vec<&str> = section_path.split('.').collect();
         let mut current = &self.table;
         for &part in &parts[..parts.len() - 1] {
@@ -64,9 +102,7 @@ impl FirmaConfig {
         }
         let last = parts.last().copied().unwrap_or(section_path);
         match current.get(last) {
-            Some(toml::Value::Table(sub)) => {
-                toml::to_string(sub).map_err(|e| anyhow!("{}: {e}", self.origin.display()))
-            }
+            Some(toml::Value::Table(sub)) => Ok(sub),
             _ => bail!(
                 "{}: missing required `[{section_path}]` section",
                 self.origin.display()
@@ -84,5 +120,5 @@ impl FirmaConfig {
 ///
 /// Returns the read/parse error, or a "missing section" error.
 pub fn load_section(path: &Path, section: &str) -> anyhow::Result<String> {
-    FirmaConfig::load(path)?.section(section)
+    FirmaConfig::load(path)?.raw_section(section)
 }

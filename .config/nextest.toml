@@ -1,5 +1,8 @@
 # nextest configuration.
-#
+
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 5 }
+
 # Some e2e enforcement scenarios require structural confinement (Linux `bwrap`).
 # On macOS `firma run` falls back to non-structural compatibility mode
 # (sandbox-exec + HTTP_PROXY), so those scenarios cannot assert real

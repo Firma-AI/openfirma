@@ -51,7 +51,7 @@ pub async fn run(args: Args) -> Result<ExitCode> {
     );
     let body = resolved
         .config
-        .section("authority")
+        .raw_section("authority")
         .map_err(|e| anyhow::anyhow!("failed to load authority configuration: {e}"))?;
     let tmp_dir = tempfile::tempdir().context("tempdir for authority config")?;
     let tmp_cfg = tmp_dir.path().join("authority.toml");

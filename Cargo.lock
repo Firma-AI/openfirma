@@ -1662,9 +1662,11 @@ name = "firma-stack"
 version = "0.1.2"
 dependencies = [
  "ctrlc",
+ "firma-authority",
  "firma-config-loader",
  "firma-fs",
  "firma-runtime-state",
+ "firma-sidecar",
  "nix 0.31.3",
  "serde",
  "serial_test",
