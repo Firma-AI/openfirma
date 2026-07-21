@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, ValueEnum};
-use firma_core::{ActionClass, AgentId};
+use firma_core::AgentId;
 
 static POSTURE_STRICT: &str = include_str!("../../templates/policies/strict.cedar");
 static POSTURE_DEV: &str = include_str!("../../templates/policies/dev.cedar");
@@ -155,57 +155,6 @@ impl Posture {
             Self::DevWithDeleteWatch => {
                 "Dev + code.destructive allowed (local-exec / delete-watch)"
             }
-        }
-    }
-
-    /// Action classes the auto-minted capability token should request for this
-    /// posture. Mirrors the `permit` set in the posture's Cedar policy so the
-    /// token can carry every action class the posture allows; the sidecar's
-    /// runtime Cedar evaluation remains the real gate on each call.
-    ///
-    /// Written into `[run.profiles.<name>.capability] requested_actions` by
-    /// `firma config`, overriding the code-level `DEFAULT_REQUESTED_ACTIONS`.
-    pub fn requested_actions(&self) -> &'static [ActionClass] {
-        const STRICT: &[ActionClass] = &[
-            ActionClass::CredentialRead,
-            ActionClass::CommunicationExternalSend,
-            ActionClass::CommunicationInternalSend,
-        ];
-        const DEV: &[ActionClass] = &[
-            ActionClass::CredentialRead,
-            ActionClass::CodeRead,
-            ActionClass::CodeReviewRead,
-            ActionClass::IssueRead,
-            ActionClass::SecurityAlertRead,
-            ActionClass::NotificationManage,
-            ActionClass::CodeWrite,
-            ActionClass::CodeReviewSubmit,
-            ActionClass::IssueWrite,
-            ActionClass::CodeMerge,
-            ActionClass::SystemInstall,
-            ActionClass::CommunicationExternalSend,
-            ActionClass::CommunicationInternalSend,
-        ];
-        const DEV_DELETE: &[ActionClass] = &[
-            ActionClass::CredentialRead,
-            ActionClass::CodeRead,
-            ActionClass::CodeReviewRead,
-            ActionClass::IssueRead,
-            ActionClass::SecurityAlertRead,
-            ActionClass::NotificationManage,
-            ActionClass::CodeWrite,
-            ActionClass::CodeReviewSubmit,
-            ActionClass::IssueWrite,
-            ActionClass::CodeMerge,
-            ActionClass::CodeDestructive,
-            ActionClass::SystemInstall,
-            ActionClass::CommunicationExternalSend,
-            ActionClass::CommunicationInternalSend,
-        ];
-        match self {
-            Self::Strict => STRICT,
-            Self::Dev => DEV,
-            Self::DevWithDeleteWatch => DEV_DELETE,
         }
     }
 }

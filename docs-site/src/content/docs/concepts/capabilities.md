@@ -53,9 +53,11 @@ requested_ttl:      3600
 
 The Authority does three things in order:
 
-1. **Issuance policy evaluation.** The Authority runs the request through a separate Cedar **issuance policy bundle**. This is where decisions like "this agent is not allowed to ever request `payment.transfer`" live. See [Policies](../policies/) for the issuance vs runtime split.
+1. **Issuance policy evaluation and narrowing.** The Authority runs each requested action class through a separate Cedar **issuance policy bundle** and **grants the authorized subset** — the intersection of what was requested and what the policy permits. Unauthorized classes are dropped, not fatal; the resulting `action_set` is exactly what the policy allows. Only if *every* requested class is denied does issuance fail closed. This is where decisions like "this agent is not allowed to ever request `payment.transfer`" live. See [Policies](../policies/) for the issuance vs runtime split.
 2. **TTL clamping.** The requested TTL is clamped to the Authority's `max_ttl_seconds` config (default 3600 in the demo). You cannot mint long-lived tokens by asking for them.
-3. **Signing.** If issuance is allowed, the Authority assembles a `CapabilityClaims`, signs it with its Ed25519 key, and returns the PASETO token + the parsed claims.
+3. **Signing.** If at least one class is authorized, the Authority assembles a `CapabilityClaims` over the granted subset, signs it with its Ed25519 key, and returns the PASETO token + the parsed claims.
+
+Because the Authority narrows, the caller can safely over-request. `firma run` does exactly that: by default it requests **all** action classes and lets the issuance policy decide the grant, so a session is never denied merely because its config omitted a class the mapping rules later emit. The policy — not the request — is the source of truth. Setting `[run.profiles.<name>.capability] requested_actions` in `firma.toml` narrows the request further, an opt-in knob for running with *fewer* permissions than the policy would allow.
 
 In the normal `firma run` flow, this entire sequence happens automatically:
 `firma run` calls the Authority's `IssueCapability` gRPC endpoint, receives the
