@@ -270,12 +270,29 @@ impl CedarPolicyEvaluator {
         let cedar_context = Context::from_json_value(context, Some((&self.schema, &action_uid)))
             .map_err(|e| CedarEvaluatorError::ContextBuild(Box::new(e)))?;
 
-        // Bind `resource.id` so policies can match the launch argv with
-        // `resource.id like "…"`.
+        // Bind resource.id (full joined argv), resource.bin (argv[0] basename),
+        // and resource.args (space-joined argv[1..]) so policies can use either
+        // `resource.id like "bws *"` (legacy) or `resource.bin == "bws"` (new).
+        let (bin, args) = argv
+            .split_once(' ')
+            .map(|(b, a)| (b, a))
+            .unwrap_or((argv, ""));
+        let bin = std::path::Path::new(bin)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(bin);
         let mut attrs = HashMap::new();
         attrs.insert(
             "id".to_string(),
             RestrictedExpression::new_string(argv.to_string()),
+        );
+        attrs.insert(
+            "bin".to_string(),
+            RestrictedExpression::new_string(bin.to_string()),
+        );
+        attrs.insert(
+            "args".to_string(),
+            RestrictedExpression::new_string(args.to_string()),
         );
         let resource_entity = Entity::new(resource_uid.clone(), attrs, HashSet::new())
             .map_err(|e| CedarEvaluatorError::EntityBuild(Box::new(e)))?;
@@ -656,7 +673,7 @@ namespace Firma {
         git_operation?: String
     };
     entity Agent;
-    entity Resource { id: String };
+    entity Resource { id: String, bin?: String, args?: String };
     action \"communication.external.send\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
     action \"code.write\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
     action \"secret.mediate\" appliesTo { principal: [Agent], resource: [Resource], context: EnforcementContext };
@@ -880,6 +897,33 @@ namespace Firma {
             )
             .unwrap();
         assert_eq!(decision, SecretDecision::Passthrough);
+    }
+
+    #[test]
+    fn resource_bin_and_args_are_bound_for_secret_mediation() {
+        let src = r#"
+            @mode("intercept")
+            @matcher("json")
+            @match_value("$[*].value")
+            @match_name("$[*].key")
+            @placeholder("firma-secret://bitwarden/{name}")
+            permit(principal, action == Firma::Action::"secret.mediate", resource)
+            when { resource.bin == "bws" && resource.args like "secret *" };
+        "#;
+        let evaluator = CedarPolicyEvaluator::from_bundle(&secret_bundle(src)).unwrap();
+
+        let permit = evaluator
+            .evaluate_secret_mediation(&agent("a"), "bws secret get abc", full_context())
+            .unwrap();
+        assert!(
+            !matches!(permit, SecretDecision::Passthrough),
+            "expected a match on resource.bin/args"
+        );
+
+        let no_match = evaluator
+            .evaluate_secret_mediation(&agent("a"), "bws list", full_context())
+            .unwrap();
+        assert_eq!(no_match, SecretDecision::Passthrough);
     }
 
     #[test]
