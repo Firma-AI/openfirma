@@ -1344,6 +1344,7 @@ dependencies = [
  "firma-runtime-state",
  "firma-sidecar",
  "firma-stack",
+ "firma-tui",
  "fs-err",
  "guppy",
  "http-body-util",
@@ -1680,6 +1681,16 @@ dependencies = [
  "toml",
  "tracing",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "firma-tui"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "crossterm 0.28.1",
+ "ratatui",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

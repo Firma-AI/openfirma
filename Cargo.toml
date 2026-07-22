@@ -13,6 +13,7 @@ members = [
   "crates/firma-runtime-state",
   "crates/firma-sidecar",
   "crates/firma-stack",
+  "crates/firma-tui",
   "crates/firma-vz-guest-init",
   "crates/firma-vz-runner",
 ]
@@ -70,6 +71,7 @@ firma-run = { path = "crates/firma-run", version = "0.1.2" }
 firma-runtime-state = { path = "crates/firma-runtime-state", version = "0.1.2" }
 firma-sidecar = { path = "crates/firma-sidecar", version = "0.1.2" }
 firma-stack = { path = "crates/firma-stack", version = "0.1.2" }
+firma-tui = { path = "crates/firma-tui", version = "0.1.2" }
 fs-err = "3.3"
 governor = "0.10"
 hex = "0.4"

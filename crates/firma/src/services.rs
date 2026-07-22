@@ -2,6 +2,7 @@
 
 pub mod authority;
 pub mod config;
+pub mod control;
 pub mod dns_stub;
 pub mod doctor;
 #[cfg(target_os = "linux")]
