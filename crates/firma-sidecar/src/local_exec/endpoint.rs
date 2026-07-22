@@ -14,6 +14,9 @@
 //! - `"local.exec.approve"` / `"local.exec.revoke"` — management commands from
 //!   an operator or the `firma token` CLI; responds with
 //!   [`LocalExecManagementResponse`].
+//! - `"secret.store"` — push a placeholder→secret mapping from the broker into
+//!   the Sidecar's [`SidecarSecretStore`]; responds with a `{"ok":true}` or
+//!   `{"ok":false,"error":"..."}` object.
 //!
 //! # Security
 //!
@@ -37,6 +40,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(target_family = "unix")]
+use arc_swap::ArcSwap;
+#[cfg(target_family = "unix")]
+use base64::Engine as _;
+#[cfg(target_family = "unix")]
 use serde::Deserialize;
 #[cfg(target_family = "unix")]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -55,6 +62,8 @@ use firma_core::{AgentId, SecretDecision};
 
 #[cfg(target_family = "unix")]
 use crate::enforcement::constraint_enforcement::PolicyEvaluation;
+#[cfg(target_family = "unix")]
+use crate::secret_store::{SecretValue, SidecarSecretStore};
 
 /// Hard cap on incoming request line length. Protects against memory exhaustion
 /// from a misbehaving same-UID process sending an unbounded line.
@@ -80,6 +89,12 @@ pub struct LocalExecEndpoint {
     /// `secret.mediate` request with no evaluator fails closed.
     #[cfg(target_family = "unix")]
     evaluator: Option<Arc<dyn PolicyEvaluation + Send + Sync>>,
+    /// Shared secret dictionary for `secret.store` push requests from the
+    /// broker. `None` until a caller supplies one via
+    /// [`LocalExecEndpoint::with_secret_store`]; a `secret.store` request
+    /// with no store wired fails closed.
+    #[cfg(target_family = "unix")]
+    secret_store: Option<Arc<ArcSwap<SidecarSecretStore>>>,
 }
 
 impl LocalExecEndpoint {
@@ -99,6 +114,7 @@ impl LocalExecEndpoint {
                 socket_path,
                 handler: Arc::new(handler),
                 evaluator: None,
+                secret_store: None,
             }
         }
         #[cfg(not(target_family = "unix"))]
@@ -114,6 +130,20 @@ impl LocalExecEndpoint {
     #[must_use]
     pub fn with_evaluator(mut self, evaluator: Arc<dyn PolicyEvaluation + Send + Sync>) -> Self {
         self.evaluator = Some(evaluator);
+        self
+    }
+
+    /// Attach the shared secret store used for `secret.store` push requests.
+    ///
+    /// The broker calls `secret.store` after each successful vault CLI intercept
+    /// to register the `(placeholder, secret)` pair so the Sidecar MITM
+    /// pipeline can rehydrate and mask outbound/inbound HTTP bodies.
+    ///
+    /// Without this, `secret.store` requests fail closed with an error.
+    #[cfg(target_family = "unix")]
+    #[must_use]
+    pub fn with_secret_store(mut self, store: Arc<ArcSwap<SidecarSecretStore>>) -> Self {
+        self.secret_store = Some(store);
         self
     }
 
@@ -184,9 +214,15 @@ impl LocalExecEndpoint {
                         Ok((stream, _)) => {
                             let handler = Arc::clone(&self.handler);
                             let evaluator = self.evaluator.clone();
+                            let secret_store = self.secret_store.clone();
                             tokio::spawn(async move {
-                                if let Err(e) =
-                                    handle_connection(stream, &handler, evaluator.as_deref()).await
+                                if let Err(e) = handle_connection(
+                                    stream,
+                                    &handler,
+                                    evaluator.as_deref(),
+                                    secret_store.as_deref(),
+                                )
+                                .await
                                 {
                                     tracing::warn!(error = %e, "local-exec connection error");
                                 }
@@ -234,10 +270,15 @@ struct ActionPeek {
 }
 
 #[cfg(target_family = "unix")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "dispatch fn covers all action variants; extracting branches would obscure the routing logic"
+)]
 async fn handle_connection(
     stream: UnixStream,
     handler: &LocalExecHandler,
     evaluator: Option<&(dyn PolicyEvaluation + Send + Sync)>,
+    secret_store: Option<&ArcSwap<SidecarSecretStore>>,
 ) -> io::Result<()> {
     #[cfg(target_os = "linux")]
     validate_peer_uid(&stream)?;
@@ -331,6 +372,18 @@ async fn handle_connection(
                 .await
             }
         }
+        "secret.store" => {
+            if let Some(store) = secret_store {
+                handle_secret_store(reader.into_inner(), store, trimmed).await
+            } else {
+                tracing::warn!("secret.store requested but no secret store wired; failing closed");
+                send_secret_store_error(
+                    reader.into_inner(),
+                    "secret store is not available on this sidecar",
+                )
+                .await
+            }
+        }
         other => {
             tracing::warn!(action = %other, "local-exec: unknown action; failing closed");
             let response = LocalExecResponse {
@@ -393,6 +446,118 @@ async fn handle_secret_mediation(
             send_secret_error(stream, &reason).await
         }
     }
+}
+
+/// Deserialized `secret.store` push request (broker → Sidecar).
+#[cfg(target_family = "unix")]
+#[derive(Deserialize)]
+struct SecretStoreRequest {
+    placeholder: String,
+    secret_b64: String,
+}
+
+/// Serialized response to a `secret.store` push request.
+///
+/// The enum makes the `{ok:true, error:"..."}` state structurally impossible.
+/// Wire format: `{"ok":true}` on success, `{"ok":false,"error":"..."}` on error.
+#[cfg(target_family = "unix")]
+enum SecretStoreResponse {
+    Ok,
+    Error(String),
+}
+
+#[cfg(target_family = "unix")]
+impl serde::Serialize for SecretStoreResponse {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+        match self {
+            Self::Ok => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("ok", &true)?;
+                map.end()
+            }
+            Self::Error(reason) => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("ok", &false)?;
+                map.serialize_entry("error", reason)?;
+                map.end()
+            }
+        }
+    }
+}
+
+/// Insert a placeholder→secret pair pushed by the broker into the Sidecar's
+/// live `SidecarSecretStore` via copy-on-write swap.
+#[cfg(target_family = "unix")]
+async fn handle_secret_store(
+    stream: UnixStream,
+    store: &ArcSwap<SidecarSecretStore>,
+    trimmed: &str,
+) -> io::Result<()> {
+    let request = match serde_json::from_str::<SecretStoreRequest>(trimmed) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "secret.store: malformed request; failing closed");
+            return send_secret_store_error(
+                stream,
+                &format!("malformed secret.store request: {e}"),
+            )
+            .await;
+        }
+    };
+
+    let secret_bytes = match base64::engine::general_purpose::STANDARD.decode(&request.secret_b64) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, "secret.store: invalid base64; failing closed");
+            return send_secret_store_error(stream, &format!("invalid base64: {e}")).await;
+        }
+    };
+
+    // rcu retries the closure until the CAS succeeds, preventing lost-update
+    // races when two broker connections push secrets concurrently.
+    // On insert failure return Arc::clone(current) so the broken intermediate
+    // state (entry in map, stale matchers) is never swapped in.
+    let placeholder = &request.placeholder;
+    let mut last_err: Option<crate::secret_store::SecretStoreError> = None;
+    store.rcu(|current| {
+        let mut new_store = (**current).clone();
+        match new_store.insert(placeholder.clone(), SecretValue::new(secret_bytes.clone())) {
+            Ok(()) => {
+                last_err = None;
+                Arc::new(new_store)
+            }
+            Err(e) => {
+                last_err = Some(e);
+                Arc::clone(current)
+            }
+        }
+    });
+    if let Some(e) = last_err {
+        tracing::warn!(error = %e, placeholder = %placeholder, "secret.store: matcher rebuild failed");
+        return send_secret_store_error(stream, &format!("store insert failed: {e}")).await;
+    }
+
+    tracing::debug!(placeholder = %placeholder, "secret.store: entry registered");
+    send_secret_store_response(stream, SecretStoreResponse::Ok).await
+}
+
+#[cfg(target_family = "unix")]
+async fn send_secret_store_error(stream: UnixStream, reason: &str) -> io::Result<()> {
+    send_secret_store_response(stream, SecretStoreResponse::Error(reason.to_owned())).await
+}
+
+#[cfg(target_family = "unix")]
+async fn send_secret_store_response(
+    mut stream: UnixStream,
+    response: SecretStoreResponse,
+) -> io::Result<()> {
+    let mut payload = serde_json::to_vec(&response).map_err(|e| {
+        io::Error::other(format!("secret.store: failed to serialize response: {e}"))
+    })?;
+    payload.push(b'\n');
+    stream.write_all(&payload).await?;
+    stream.flush().await
 }
 
 /// Parse the request's agent id, falling back to a fixed sentinel when absent.
@@ -777,6 +942,133 @@ mod tests {
         let denied = send_governance(&path, &retry).await;
         assert_eq!(denied.decision, LocalExecDecision::Deny);
         assert!(denied.reason.unwrap_or_default().contains("revoked"));
+
+        cancel.cancel();
+    }
+
+    async fn send_secret_store_req(socket_path: &PathBuf, req: &serde_json::Value) -> String {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let mut stream = tokio::net::UnixStream::connect(socket_path)
+            .await
+            .expect("connect");
+        stream
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .expect("write");
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.expect("read");
+        line.trim().to_string()
+    }
+
+    #[tokio::test]
+    async fn secret_store_push_registers_entry() {
+        use arc_swap::ArcSwap;
+        use base64::Engine as _;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let socket_path = tmp.path().join("secret-store.sock");
+
+        let store: Arc<ArcSwap<SidecarSecretStore>> =
+            Arc::new(ArcSwap::new(Arc::new(SidecarSecretStore::new())));
+        let endpoint = LocalExecEndpoint::new(socket_path.clone(), deny_handler())
+            .with_secret_store(Arc::clone(&store));
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+        tokio::spawn(async move {
+            endpoint.run(cancel_clone).await.expect("endpoint");
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let secret_b64 = base64::engine::general_purpose::STANDARD.encode(b"s3cr3t");
+        let response = send_secret_store_req(
+            &socket_path,
+            &serde_json::json!({
+                "action": "secret.store",
+                "placeholder": "firma-secret://bw/token",
+                "secret_b64": secret_b64,
+            }),
+        )
+        .await;
+
+        let val: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");
+        assert_eq!(val["ok"], true, "raw: {response}");
+
+        let snapshot = store.load();
+        assert_eq!(
+            snapshot.resolve("firma-secret://bw/token"),
+            Some(b"s3cr3t".as_slice())
+        );
+
+        cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn secret_store_without_wired_store_fails_closed() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let socket_path = tmp.path().join("secret-store-nostore.sock");
+
+        let endpoint = LocalExecEndpoint::new(socket_path.clone(), deny_handler());
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+        tokio::spawn(async move {
+            endpoint.run(cancel_clone).await.expect("endpoint");
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let response = send_secret_store_req(
+            &socket_path,
+            &serde_json::json!({
+                "action": "secret.store",
+                "placeholder": "firma-secret://bw/token",
+                "secret_b64": "c2VjcmV0",
+            }),
+        )
+        .await;
+
+        let val: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");
+        assert_eq!(val["ok"], false, "raw: {response}");
+        assert!(val["error"].as_str().is_some());
+
+        cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn secret_store_rejects_invalid_base64() {
+        use arc_swap::ArcSwap;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let socket_path = tmp.path().join("secret-store-b64err.sock");
+
+        let store: Arc<ArcSwap<SidecarSecretStore>> =
+            Arc::new(ArcSwap::new(Arc::new(SidecarSecretStore::new())));
+        let endpoint = LocalExecEndpoint::new(socket_path.clone(), deny_handler())
+            .with_secret_store(Arc::clone(&store));
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+        tokio::spawn(async move {
+            endpoint.run(cancel_clone).await.expect("endpoint");
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let response = send_secret_store_req(
+            &socket_path,
+            &serde_json::json!({
+                "action": "secret.store",
+                "placeholder": "firma-secret://bw/token",
+                "secret_b64": "not-valid-base64!!!",
+            }),
+        )
+        .await;
+
+        let val: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");
+        assert_eq!(val["ok"], false, "raw: {response}");
+        assert!(
+            val["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("invalid base64")
+        );
 
         cancel.cancel();
     }
